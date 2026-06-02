@@ -58,12 +58,6 @@ export const shopify = shopifyApp({
     },
   },
   isEmbeddedApp: true,
-  // Enable new embedded auth strategy to handle id_token (JWT token exchange)
-  // Shopify passes id_token in the embedded app request for secure token exchange
-  // without requiring a full OAuth redirect flow each time
-  future: {
-    unstable_newEmbeddedAuthStrategy: true,
-  },
 });
 
 export const authenticate = shopify.authenticate;
