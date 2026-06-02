@@ -1,0 +1,87 @@
+{% comment %}
+  Promo Engine — Frequently Bought Together Block
+  Place on product pages to show FBT recommendations.
+  The Preact component is initialized by the app embed runtime.
+{% endcomment %}
+
+<div
+  id="pe-fbt-{{ block.id }}"
+  data-promo-widget="fbt"
+  data-offer-id="{{ block.settings.offer_id }}"
+  data-currency="{{ cart.currency.iso_code }}"
+  {{ block.shopify_attributes }}
+></div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var container = document.getElementById('pe-fbt-{{ block.id }}');
+    if (!container) return;
+
+    // Wait for promo engine runtime to load, then init FBT
+    function tryInit() {
+      if (window.PromoEngine && window.initFbtWidget) {
+        var offerId = container.dataset.offerId;
+        var currency = container.dataset.currency || 'USD';
+        var sessionId = sessionStorage.getItem('promo_engine_session_id') || 'anon';
+
+        // Fetch FBT config from evaluation API
+        fetch('/apps/promo-engine/evaluate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Promo-Shop': window.__promoEngineConfig?.shopDomain || '',
+            'X-Promo-Key': window.__promoEngineConfig?.publicKey || '',
+            'X-Promo-Session': sessionId
+          },
+          body: JSON.stringify({
+            shopDomain: window.__promoEngineConfig?.shopDomain,
+            cart: { token: null, id: null, lines: [], subtotalCents: 0, discountCodes: [], currencyCode: currency, totalQuantity: 0 },
+            customer: null, market: null, locale: window.__promoEngineConfig?.locale || 'en',
+            salesChannel: 'online_store', requestedUrl: window.location.href, sessionId
+          })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(result) {
+          var upsell = result.upsells && result.upsells.find(function(u) { return !offerId || u.offerId === offerId; });
+          if (upsell && window.initFbtWidget) {
+            window.initFbtWidget(container, upsell, currency, sessionId);
+          }
+        })
+        .catch(function() {});
+      } else {
+        setTimeout(tryInit, 200);
+      }
+    }
+    tryInit();
+  });
+</script>
+
+{% schema %}
+{
+  "name": "Frequently Bought Together",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "offer_id",
+      "label": "Offer ID",
+      "info": "The FBT offer UUID. Leave empty for the first active FBT offer."
+    },
+    {
+      "type": "select",
+      "id": "layout",
+      "label": "Layout",
+      "options": [
+        { "value": "amazon", "label": "Amazon style (horizontal)" },
+        { "value": "stacked", "label": "Stacked (vertical)" }
+      ],
+      "default": "amazon"
+    }
+  ],
+  "presets": [
+    {
+      "name": "Frequently Bought Together"
+    }
+  ]
+}
+{% endschema %}

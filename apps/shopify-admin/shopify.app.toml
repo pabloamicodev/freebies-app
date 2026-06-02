@@ -1,0 +1,83 @@
+name = "Promo Engine"
+client_id = "YOUR_SHOPIFY_CLIENT_ID"
+application_url = "https://your-app-url.ngrok.io"
+embedded = true
+handle = "promo-engine"
+
+[build]
+automatically_update_urls_on_dev = true
+dev_store_url = "your-dev-store.myshopify.com"
+include_config_on_deploy = true
+
+[auth]
+redirect_urls = [
+  "https://your-app-url.ngrok.io/auth/callback",
+  "https://your-app-url.ngrok.io/auth/shopify/callback",
+  "https://your-app-url.ngrok.io/api/auth/callback",
+]
+
+[webhooks]
+api_version = "2026-04"
+
+  [[webhooks.subscriptions]]
+  topics = ["products/update", "products/delete", "products/create"]
+  uri = "/webhooks/products"
+
+  [[webhooks.subscriptions]]
+  topics = ["inventory_levels/update", "inventory_levels/connect"]
+  uri = "/webhooks/inventory"
+
+  [[webhooks.subscriptions]]
+  topics = ["orders/paid", "orders/cancelled"]
+  uri = "/webhooks/orders"
+
+  [[webhooks.subscriptions]]
+  topics = ["customers/update"]
+  uri = "/webhooks/customers"
+
+  [[webhooks.subscriptions]]
+  topics = ["markets/create", "markets/update", "markets/delete"]
+  uri = "/webhooks/markets"
+
+  [[webhooks.subscriptions]]
+  topics = ["app/uninstalled", "shop/redact", "customers/redact", "customers/data_request"]
+  uri = "/webhooks/gdpr"
+
+[pos]
+embedded = false
+
+[access_scopes]
+scopes = "read_products,read_product_listings,read_inventory,read_publications,read_markets,read_discounts,write_discounts,read_customers,read_orders,read_all_orders,read_metafields,write_metafields,read_metaobjects,write_metaobjects,read_locales,read_themes"
+
+[app_proxy]
+url = "https://your-app-url.ngrok.io/apps/promo-engine"
+subpath = "promo-engine"
+prefix = "apps"
+
+[extension.theme]
+  [[extension.theme.blocks]]
+  type = "gift_slider"
+  name = "Gift Slider"
+
+  [[extension.theme.blocks]]
+  type = "cart_message"
+  name = "Cart Message"
+
+  [[extension.theme.blocks]]
+  type = "progress_bar"
+  name = "Progress Bar"
+
+  [[extension.theme.blocks]]
+  type = "today_offer"
+  name = "Today Offer"
+
+  [[extension.theme.blocks]]
+  type = "volume_discount"
+  name = "Volume Discount"
+
+  [[extension.theme.blocks]]
+  type = "frequently_bought_together"
+  name = "Frequently Bought Together"
+
+[extension.web_pixel]
+runtime_context = "strict"

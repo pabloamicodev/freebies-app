@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── TypeScript & Unit Tests ──────────────────────────────────────────────────
+  typescript:
+    name: TypeScript + Vitest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm -r typecheck
+      - name: Unit tests
+        run: pnpm test
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage/lcov.info
+
+  # ── Rust Functions ───────────────────────────────────────────────────────────
+  rust-functions:
+    name: Rust Functions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+      - name: Run Rust tests (all functions)
+        run: cargo test --workspace --release
+      - name: Build WASM binaries
+        run: cargo build --workspace --release --target wasm32-wasip1
+      - name: Check binary sizes
+        run: |
+          for wasm in target/wasm32-wasip1/release/*.wasm; do
+            size=$(wc -c < "$wasm")
+            kb=$((size / 1024))
+            name=$(basename "$wasm")
+            echo "${name}: ${kb} KB"
+            if [ "$kb" -gt 256 ]; then
+              echo "❌ ${name} exceeds 256 KB limit"
+              exit 1
+            fi
+          done
+          echo "✅ All binaries within size limits"
+
+  # ── Storefront Bundle Size ───────────────────────────────────────────────────
+  bundle-size:
+    name: Storefront Bundle Size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build storefront runtime
+        run: pnpm --filter @promo/storefront-runtime build
+      - name: Check bundle sizes
+        run: node scripts/check-bundle-sizes.mjs
+
+  # ── ESLint ───────────────────────────────────────────────────────────────────
+  lint:
+    name: ESLint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+
+  # ── E2E Tests (runs on main only) ────────────────────────────────────────────
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Run E2E tests
+        run: pnpm --filter shopify-admin playwright test
+        env:
+          DEV_STORE_URL: ${{ secrets.DEV_STORE_URL }}
+          DEV_STORE_STOREFRONT_TOKEN: ${{ secrets.DEV_STORE_STOREFRONT_TOKEN }}

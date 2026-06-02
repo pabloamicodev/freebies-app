@@ -1,0 +1,15 @@
+[extensions.customer_account_ui_extension]
+name = "Promo Engine Customer Account"
+type = "customer_account_ui_extension"
+api_version = "2026-04"
+
+[[extensions.customer_account_ui_extension.targeting]]
+module = "./src/order-attribution.tsx"
+target = "customer-account.order-index.block.render"
+
+[[extensions.customer_account_ui_extension.targeting]]
+module = "./src/order-attribution.tsx"
+target = "customer-account.order-status.block.render"
+
+[extensions.customer_account_ui_extension.capabilities]
+network_access = true

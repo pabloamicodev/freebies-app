@@ -1,0 +1,15 @@
+export { evaluate } from "./evaluator.js";
+export type { OfferDefinition, ConditionDefinition, RewardDefinition, EvaluatorContext } from "./evaluator.js";
+export { applyPriority, detectConflicts } from "./priority-resolver.js";
+export { buildCartHash, extractGiftLines, extractQualifyingLines, sumQualifyingValue, sumQualifyingQuantity } from "./cart-parser.js";
+export { evaluateCartValue } from "./conditions/cart-value.js";
+export { evaluateCartQuantity } from "./conditions/cart-quantity.js";
+export { evaluateSpecificProduct } from "./conditions/specific-product.js";
+export { evaluateCustomerTags, evaluateOrderHistory, evaluateOneUsePerCustomer, evaluateSalesChannel, evaluateMarket } from "./conditions/customer.js";
+export { evaluateCartValueMultiplier } from "./conditions/cart-value-multiplier.js";
+export { evaluatePack } from "./conditions/pack.js";
+export { evaluateProductQuantityLimits } from "./conditions/product-quantity-limits.js";
+export { evaluateSubscriptionCondition } from "./conditions/subscription.js";
+export { evaluateUrlParam } from "./conditions/url-param.js";
+export { evaluateCountry } from "./conditions/country.js";
+export { evaluateBogo } from "./conditions/bogo.js";

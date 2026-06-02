@@ -1,0 +1,76 @@
+{% comment %}
+  Promo Engine — Gift Slider Block
+  Trigger button or inline block that opens the gift selection popup.
+  The popup is rendered by the app embed runtime (Preact component).
+{% endcomment %}
+
+{%- if block.settings.style == 'button' -%}
+  <button
+    class="pe-gift-slider-trigger"
+    style="
+      background: {{ block.settings.button_color | default: '#111111' }};
+      color: {{ block.settings.text_color | default: '#ffffff' }};
+      border: none; border-radius: 6px; padding: 10px 20px;
+      font-size: 14px; font-weight: 700; cursor: pointer;
+    "
+    onclick="window.PromoEngine?.evaluate()"
+    {{ block.shopify_attributes }}
+  >
+    🎁 {{ block.settings.button_label | default: 'Choose Your Gift' }}
+  </button>
+{%- else -%}
+  {{- 'promo-gift-icon' | nil -}}
+  <promo-gift-icon
+    offer-id="{{ block.settings.offer_id }}"
+    label="{{ block.settings.button_label | default: 'Free Gift' }}"
+    {{ block.shopify_attributes }}
+  ></promo-gift-icon>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Gift Slider",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "offer_id",
+      "label": "Offer ID",
+      "info": "The gift offer UUID. Leave empty to trigger for any active gift offer."
+    },
+    {
+      "type": "select",
+      "id": "style",
+      "label": "Style",
+      "options": [
+        { "value": "button", "label": "Button" },
+        { "value": "icon", "label": "Gift Icon" }
+      ],
+      "default": "button"
+    },
+    {
+      "type": "text",
+      "id": "button_label",
+      "label": "Button label",
+      "default": "Choose Your Gift"
+    },
+    {
+      "type": "color",
+      "id": "button_color",
+      "label": "Button color",
+      "default": "#111111"
+    },
+    {
+      "type": "color",
+      "id": "text_color",
+      "label": "Text color",
+      "default": "#ffffff"
+    }
+  ],
+  "presets": [
+    {
+      "name": "Gift Slider"
+    }
+  ]
+}
+{% endschema %}

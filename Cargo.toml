@@ -1,0 +1,12 @@
+[workspace]
+members = [
+    "extensions/discount-function",
+    "extensions/cart-transform",
+    "extensions/cart-validation",
+]
+resolver = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "symbols"

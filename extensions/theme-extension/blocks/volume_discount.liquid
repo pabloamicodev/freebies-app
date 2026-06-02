@@ -1,0 +1,49 @@
+{% comment %}
+  Promo Engine — Volume Discount Block
+  Place on product pages to show quantity tier discounts.
+  The block reads the current product variant from the page context.
+{% endcomment %}
+
+<promo-volume-discount
+  offer-id="{{ block.settings.offer_id }}"
+  variant-id="{{ product.selected_or_first_available_variant.id | prepend: 'gid://shopify/ProductVariant/' }}"
+  currency="{{ cart.currency.iso_code }}"
+  {{ block.shopify_attributes }}
+></promo-volume-discount>
+
+<script>
+  // Update variant-id when variant selection changes (product page)
+  document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('promo-volume-discount').forEach(function(el) {
+      document.addEventListener('variant:changed', function(e) {
+        var variantId = e.detail && e.detail.variant && e.detail.variant.id;
+        if (variantId) {
+          el.setAttribute('variant-id', 'gid://shopify/ProductVariant/' + variantId);
+          window.dispatchEvent(new CustomEvent('promo-engine:product-changed', {
+            detail: { variantId: 'gid://shopify/ProductVariant/' + variantId }
+          }));
+        }
+      });
+    });
+  });
+</script>
+
+{% schema %}
+{
+  "name": "Volume Discount",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "offer_id",
+      "label": "Offer ID",
+      "info": "The volume discount offer UUID from the admin."
+    }
+  ],
+  "presets": [
+    {
+      "name": "Volume Discount"
+    }
+  ]
+}
+{% endschema %}

@@ -1,0 +1,38 @@
+{% comment %}
+  Promo Engine — Today Offer Block (inline version)
+  Place anywhere in the theme to show a list of active offers.
+  The floating widget is rendered by the app embed (today-offer.tsx).
+  This is the inline/static block version.
+{% endcomment %}
+
+<promo-today-offer-block
+  offer-ids="{{ block.settings.offer_ids }}"
+  title="{{ block.settings.title | default: "Today's Offers" }}"
+  {{ block.shopify_attributes }}
+></promo-today-offer-block>
+
+{% schema %}
+{
+  "name": "Today Offer Block",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "title",
+      "label": "Block title",
+      "default": "Today's Offers"
+    },
+    {
+      "type": "text",
+      "id": "offer_ids",
+      "label": "Offer IDs (comma-separated)",
+      "info": "Leave empty to show all active offers. Paste comma-separated offer UUIDs to show specific offers."
+    }
+  ],
+  "presets": [
+    {
+      "name": "Today Offer"
+    }
+  ]
+}
+{% endschema %}

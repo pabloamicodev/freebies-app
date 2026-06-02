@@ -1,0 +1,25 @@
+[extensions.checkout_ui_extension]
+name = "Promo Engine Checkout Upsell"
+type = "ui_extension"
+api_version = "2026-04"
+
+[[extensions.checkout_ui_extension.targeting]]
+module = "./src/checkout-upsell.tsx"
+target = "purchase.checkout.block.render"
+
+[[extensions.checkout_ui_extension.targeting]]
+module = "./src/checkout-upsell.tsx"
+target = "purchase.thank-you.block.render"
+
+[[extensions.checkout_ui_extension.targeting]]
+module = "./src/checkout-upsell.tsx"
+target = "purchase.checkout.actions.render-before"
+
+[extensions.checkout_ui_extension.settings]
+[extensions.checkout_ui_extension.settings.fields.offer_id]
+type = "single_line_text_field"
+name = "Offer ID"
+description = "The promo engine offer ID for this checkout upsell"
+
+[extensions.checkout_ui_extension.capabilities]
+network_access = true

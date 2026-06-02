@@ -1,0 +1,32 @@
+query CartValidationInput {
+  cart {
+    lines {
+      id
+      quantity
+      merchandise {
+        ... on ProductVariant {
+          id
+          product {
+            id
+            tags
+          }
+        }
+      }
+      attributes {
+        key
+        value
+      }
+      cost {
+        amountPerQuantity {
+          amount
+          currencyCode
+        }
+      }
+    }
+  }
+  validationNode: cart {
+    attribute(key: "_promo_validation_config") {
+      value
+    }
+  }
+}

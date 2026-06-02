@@ -1,0 +1,42 @@
+{
+  "name": "promo-engine",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Internal Shopify promotion engine — BOGOS functional parity",
+  "scripts": {
+    "dev": "pnpm --filter shopify-admin dev",
+    "build": "pnpm -r build",
+    "build:storefront": "node scripts/build-storefront.mjs",
+    "build:admin": "pnpm --filter shopify-admin build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:rust": "bash scripts/benchmark-functions.sh",
+    "test:e2e": "pnpm --filter shopify-admin playwright test",
+    "test:load": "npx tsx apps/shopify-admin/tests/load/evaluation.load.ts",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "pnpm -r typecheck",
+    "setup:rust": "bash scripts/setup-rust.sh",
+    "check:bundles": "node scripts/check-bundle-sizes.mjs",
+    "ci": "pnpm typecheck && pnpm test && pnpm check:bundles",
+    "db:generate": "pnpm --filter @promo/db db:generate",
+    "db:migrate": "pnpm --filter @promo/db db:migrate",
+    "db:studio": "pnpm --filter @promo/db db:studio"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "eslint": "^9.15.0",
+    "prettier": "^3.4.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

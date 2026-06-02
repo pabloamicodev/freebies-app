@@ -1,0 +1,19 @@
+{
+  "name": "@promo/storefront-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile dist/promo-engine.js --minify --target browser",
+    "build:dev": "bun build src/index.ts --outfile dist/promo-engine.dev.js --target browser --sourcemap",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "preact": "^10.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

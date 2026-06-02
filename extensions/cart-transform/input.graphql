@@ -1,0 +1,33 @@
+query CartTransformInput {
+  cart {
+    lines {
+      id
+      quantity
+      merchandise {
+        ... on ProductVariant {
+          id
+          product {
+            id
+            title
+            tags
+          }
+        }
+      }
+      attributes {
+        key
+        value
+      }
+      cost {
+        amountPerQuantity {
+          amount
+          currencyCode
+        }
+      }
+      sellingPlanAllocation {
+        sellingPlan {
+          id
+        }
+      }
+    }
+  }
+}

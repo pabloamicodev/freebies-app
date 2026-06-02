@@ -1,0 +1,38 @@
+{% comment %}
+  Promo Engine — Cart Message Block
+  Place in cart page or cart drawer to show offer qualification messages.
+  e.g. "Spend $25 more for a free gift!"
+{% endcomment %}
+
+{%- if block.settings.offer_id != blank -%}
+  <promo-cart-message
+    offer-id="{{ block.settings.offer_id }}"
+    widget-id="{{ block.id }}"
+    {{ block.shopify_attributes }}
+  ></promo-cart-message>
+{%- else -%}
+  <promo-cart-message
+    widget-id="{{ block.id }}"
+    {{ block.shopify_attributes }}
+  ></promo-cart-message>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Cart Message",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "offer_id",
+      "label": "Offer ID (optional)",
+      "info": "Leave empty to show message for any active offer. Paste the offer UUID from the admin to target a specific offer."
+    }
+  ],
+  "presets": [
+    {
+      "name": "Cart Message"
+    }
+  ]
+}
+{% endschema %}

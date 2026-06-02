@@ -1,0 +1,32 @@
+{% comment %}
+  Promo Engine — Progress Bar Block
+  Shows cart value progress toward a gift/discount threshold.
+  Place in cart page, cart drawer, or any section.
+{% endcomment %}
+
+<promo-progress-bar
+  offer-id="{{ block.settings.offer_id }}"
+  widget-id="{{ block.id }}"
+  currency="{{ cart.currency.iso_code }}"
+  {{ block.shopify_attributes }}
+></promo-progress-bar>
+
+{% schema %}
+{
+  "name": "Progress Bar",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "offer_id",
+      "label": "Offer ID",
+      "info": "The offer UUID from the admin. The progress bar tracks this offer's threshold."
+    }
+  ],
+  "presets": [
+    {
+      "name": "Progress Bar"
+    }
+  ]
+}
+{% endschema %}

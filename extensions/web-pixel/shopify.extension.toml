@@ -1,0 +1,7 @@
+[extensions.web_pixel]
+name = "Promo Engine Analytics Pixel"
+type = "web_pixel"
+
+[extensions.web_pixel.settings]
+type = "object"
+properties = {}

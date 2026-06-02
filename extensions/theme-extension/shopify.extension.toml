@@ -1,0 +1,6 @@
+type = "theme"
+name = "Promo Engine"
+handle = "promo-engine"
+
+[[targeting]]
+target = "section"

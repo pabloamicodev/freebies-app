@@ -1,0 +1,21 @@
+{
+  "name": "@promo/worker-analytics-reconcile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --import tsx/esm src/index.ts",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@promo/db": "workspace:*",
+    "bullmq": "^5.25.0",
+    "ioredis": "^5.4.1",
+    "pino": "^9.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

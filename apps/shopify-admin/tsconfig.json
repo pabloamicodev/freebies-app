@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["@types/node"],
+    "outDir": "./.react-router/types",
+    "rootDir": "."
+  },
+  "include": [".react-router/types/**/*", "app/**/*", "server.ts"],
+  "exclude": ["node_modules", "build"]
+}
