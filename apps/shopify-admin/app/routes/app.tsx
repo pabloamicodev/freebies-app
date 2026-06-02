@@ -1,4 +1,5 @@
 import { Outlet, useLoaderData, useRouteError } from "react-router";
+import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { NavMenu } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server.js";
@@ -25,16 +26,18 @@ export default function AppLayout() {
   const { apiKey } = useLoaderData<typeof loader>();
   return (
     <AppProvider embedded apiKey={apiKey}>
-      <NavMenu>
-        <a href="/app" rel="home">Dashboard</a>
-        <a href="/app/offers">All Offers</a>
-        <a href="/app/boosters">Boosters</a>
-        <a href="/app/customize">Customize</a>
-        <a href="/app/analytics">Analytics</a>
-        <a href="/app/translation">Translation</a>
-        <a href="/app/settings">Settings</a>
-      </NavMenu>
-      <Outlet />
+      <PolarisAppProvider i18n={{}}>
+        <NavMenu>
+          <a href="/app" rel="home">Dashboard</a>
+          <a href="/app/offers">All Offers</a>
+          <a href="/app/boosters">Boosters</a>
+          <a href="/app/customize">Customize</a>
+          <a href="/app/analytics">Analytics</a>
+          <a href="/app/translation">Translation</a>
+          <a href="/app/settings">Settings</a>
+        </NavMenu>
+        <Outlet />
+      </PolarisAppProvider>
     </AppProvider>
   );
 }
