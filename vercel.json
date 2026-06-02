@@ -2,5 +2,8 @@
   "framework": null,
   "installCommand": "pnpm install --frozen-lockfile",
   "buildCommand": "pnpm --filter shopify-admin exec react-router build",
-  "outputDirectory": "apps/shopify-admin/build/client"
+  "outputDirectory": "apps/shopify-admin/build/client",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }
