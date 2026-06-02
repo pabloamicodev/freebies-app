@@ -1,9 +1,11 @@
 import "@shopify/shopify-api/adapters/node";
 import { shopifyApp } from "@shopify/shopify-app-remix/server";
+import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";
 import { ApiVersion } from "@shopify/shopify-api";
-import { getDb } from "@promo/db";
-import { shops } from "@promo/db";
-import { eq } from "drizzle-orm";
+
+const sessionStorage = new PostgreSQLSessionStorage(
+  process.env["DATABASE_URL"] ?? ""
+);
 
 export const shopify = shopifyApp({
   apiKey: process.env["SHOPIFY_API_KEY"] ?? "",
@@ -12,128 +14,54 @@ export const shopify = shopifyApp({
   scopes: process.env["SCOPES"]?.split(",") ?? [],
   appUrl: process.env["SHOPIFY_APP_URL"] ?? "",
   authPathPrefix: "/auth",
-  sessionStorage: {
-    /** Custom session storage backed by PostgreSQL via Drizzle. */
-    storeSession: async (session) => {
-      const db = getDb();
-      const shopDomain = session.shop;
-      const accessToken = session.accessToken ?? "";
-
-      const existing = await db
-        .select({ id: shops.id })
-        .from(shops)
-        .where(eq(shops.myshopifyDomain, shopDomain))
-        .limit(1);
-
-      if (existing.length === 0) {
-        await db.insert(shops).values({
-          shopDomain,
-          myshopifyDomain: shopDomain,
-          // In production: encrypt accessToken with AES-256-GCM before storing
-          accessTokenEncrypted: accessToken,
-          currencyCode: "USD", // will be updated on first sync
-          timezone: "UTC",
-        });
-      } else {
-        await db
-          .update(shops)
-          .set({ accessTokenEncrypted: accessToken, updatedAt: new Date() })
-          .where(eq(shops.myshopifyDomain, shopDomain));
-      }
-
-      return true;
-    },
-
-    loadSession: async (id) => {
-      // Session ID format: {shop}_{token}
-      const [shopDomain] = id.split("_");
-      if (!shopDomain) return undefined;
-
-      const db = getDb();
-      const rows = await db
-        .select()
-        .from(shops)
-        .where(eq(shops.myshopifyDomain, shopDomain))
-        .limit(1);
-
-      const row = rows[0];
-      if (!row) return undefined;
-
-      // Reconstruct Shopify session from DB
-      const session = {
-        id,
-        shop: row.myshopifyDomain,
-        state: "",
-        isOnline: false,
-        accessToken: row.accessTokenEncrypted, // decrypt in production
-        scope: process.env["SCOPES"] ?? "",
-        expires: undefined,
-        isExpired: () => false,
-        toObject: () => ({ id, shop: row.myshopifyDomain }),
-      };
-
-      return session as any;
-    },
-
-    deleteSession: async (id) => {
-      // Mark as uninstalled rather than hard-delete
-      const [shopDomain] = id.split("_");
-      if (!shopDomain) return true;
-      const db = getDb();
-      await db
-        .update(shops)
-        .set({ isActive: false, uninstalledAt: new Date() })
-        .where(eq(shops.myshopifyDomain, shopDomain));
-      return true;
-    },
-
-    deleteSessions: async (ids) => {
-      for (const id of ids) {
-        const [shopDomain] = id.split("_");
-        if (!shopDomain) continue;
-        const db = getDb();
-        await db
-          .update(shops)
-          .set({ isActive: false, uninstalledAt: new Date() })
-          .where(eq(shops.myshopifyDomain, shopDomain));
-      }
-      return true;
-    },
-
-    findSessionsByShop: async (shop) => {
-      const db = getDb();
-      const rows = await db
-        .select()
-        .from(shops)
-        .where(eq(shops.myshopifyDomain, shop))
-        .limit(1);
-
-      return rows.map((row) => ({
-        id: `${row.myshopifyDomain}_session`,
-        shop: row.myshopifyDomain,
-        state: "",
-        isOnline: false,
-        accessToken: row.accessTokenEncrypted,
-        scope: process.env["SCOPES"] ?? "",
-        expires: undefined,
-        isExpired: () => false,
-        toObject: () => ({ id: `${row.myshopifyDomain}_session`, shop: row.myshopifyDomain }),
-      })) as any[];
-    },
-  },
+  sessionStorage,
   hooks: {
     afterAuth: async ({ session }) => {
-      await shopify.registerWebhooks({ session });
+      // Register webhooks
+      try {
+        await shopify.registerWebhooks({ session });
+      } catch (e) {
+        console.error("Webhook registration failed:", e);
+      }
+
+      // Mirror shop record to our PostgreSQL schema for offer management
+      try {
+        const { getDb } = await import("@promo/db");
+        const { shops } = await import("@promo/db");
+        const { eq } = await import("drizzle-orm");
+        const db = getDb();
+        const shopDomain = session.shop;
+        const accessToken = session.accessToken ?? "";
+
+        const existing = await db
+          .select({ id: shops.id })
+          .from(shops)
+          .where(eq(shops.myshopifyDomain, shopDomain))
+          .limit(1);
+
+        if (existing.length === 0) {
+          await db.insert(shops).values({
+            shopDomain,
+            myshopifyDomain: shopDomain,
+            accessTokenEncrypted: accessToken,
+            currencyCode: "USD",
+            timezone: "UTC",
+          });
+        } else {
+          await db
+            .update(shops)
+            .set({ accessTokenEncrypted: accessToken, isActive: true, updatedAt: new Date() })
+            .where(eq(shops.myshopifyDomain, shopDomain));
+        }
+      } catch (dbError) {
+        console.warn("DB mirror after auth failed (non-fatal):", dbError instanceof Error ? dbError.message : dbError);
+      }
     },
   },
   isEmbeddedApp: true,
-  // Note: unstable_newEmbeddedAuthStrategy requires Shopify CLI v3.67+
-  // Enable only after confirming the Shopify Partner Dashboard supports it
-  // future: { unstable_newEmbeddedAuthStrategy: true },
 });
 
 export const authenticate = shopify.authenticate;
 export const unauthenticated = shopify.unauthenticated;
 export const login = shopify.login;
 export const registerWebhooks = shopify.registerWebhooks;
-export const sessionStorage = shopify.sessionStorage;
