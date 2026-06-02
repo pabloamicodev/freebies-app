@@ -1,13 +1,19 @@
 /**
- * Catch-all: /auth/callback and other /auth/* sub-paths.
- * /auth/login → handled by auth.login.tsx (calls shopify.login)
- * /auth        → handled by auth.tsx       (calls shopify.login)
- * /auth/*      → this file                 (calls authenticate.admin for OAuth callback)
+ * Catch-all: /auth, /auth/callback, /auth/shopify/callback, etc.
+ * Single entry point for the entire Shopify OAuth flow.
+ * Must use authenticate.admin() — NOT login(). login() redirects back to
+ * /auth?shop=... creating an infinite loop.
+ * boundary.headers() is required for the embedded app auth frame headers.
  */
+import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
+import { boundary } from "@shopify/shopify-app-remix/server";
 import { authenticate } from "../shopify.server.js";
-import type { LoaderFunctionArgs } from "react-router";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
   return null;
+};
+
+export const headers: HeadersFunction = (headersArgs) => {
+  return boundary.headers(headersArgs);
 };
