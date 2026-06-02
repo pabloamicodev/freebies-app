@@ -3,6 +3,10 @@ import { shopifyApp } from "@shopify/shopify-app-remix/server";
 import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";
 import { ApiVersion } from "@shopify/shopify-api";
 
+// Force SSL for pg connections (required by Neon on Vercel)
+process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
+process.env["PGSSLMODE"] = "require";
+
 const sessionStorage = new PostgreSQLSessionStorage(
   new URL(process.env["DATABASE_URL"] ?? "postgresql://localhost/neondb")
 );
