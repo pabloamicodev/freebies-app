@@ -120,6 +120,8 @@ export default function OfferRewardsPage() {
   const [discountType, setDiscountType] = useState("free");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedGiftGids, setSelectedGiftGids] = useState<string[]>([]);
+  const [currencyCode, setCurrencyCode] = useState("USD");
+  const [giftQuantity, setGiftQuantity] = useState("1");
 
   if (!offer) return <Page title="Not Found" />;
 
@@ -193,7 +195,7 @@ export default function OfferRewardsPage() {
                     <FormLayout.Group>
                       <TextField label="Discount Value" name="discountValue" type="number" autoComplete="off"
                         prefix={discountType === "percentage" ? "%" : "$"} />
-                      <TextField label="Currency Code" name="currencyCode" defaultValue="USD" autoComplete="off" />
+                      <TextField label="Currency Code" name="currencyCode" value={currencyCode} onChange={setCurrencyCode} autoComplete="off" />
                     </FormLayout.Group>
                   )}
                   {(discountType === "free" || discountType === "cheapest_item_free") && (
@@ -229,7 +231,7 @@ export default function OfferRewardsPage() {
                         placeholder={"gid://shopify/ProductVariant/12345"}
                         helpText="Optional: paste GIDs directly if you know them."
                       />
-                      <TextField label="Gift Quantity" name="quantity" type="number" defaultValue="1" autoComplete="off" />
+                      <TextField label="Gift Quantity" name="quantity" type="number" value={giftQuantity} onChange={setGiftQuantity} autoComplete="off" />
                       <Select
                         label="Track Mode"
                         name="trackMode"
@@ -256,5 +258,6 @@ export default function OfferRewardsPage() {
         )}
       </Layout>
     </Page>
+  </>
   );
 }
