@@ -3,14 +3,18 @@ import { shopifyApp } from "@shopify/shopify-app-remix/server";
 import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";
 import { ApiVersion } from "@shopify/shopify-api";
 
-const sessionStorage = new PostgreSQLSessionStorage(
-  process.env["DATABASE_URL"] ?? ""
-);
+const dbUrl = process.env["DATABASE_URL"] ?? "";
+const sessionDbUrl = dbUrl.includes("sslmode=")
+  ? dbUrl
+  : dbUrl.includes("?")
+    ? `${dbUrl}&sslmode=require`
+    : `${dbUrl}?sslmode=require`;
+const sessionStorage = new PostgreSQLSessionStorage(sessionDbUrl);
 
 export const shopify = shopifyApp({
   apiKey: process.env["SHOPIFY_API_KEY"] ?? "",
   apiSecretKey: process.env["SHOPIFY_API_SECRET"] ?? "",
-  apiVersion: ApiVersion.April26,
+  apiVersion: ApiVersion.October25,
   scopes: process.env["SCOPES"]?.split(",") ?? [],
   appUrl: process.env["SHOPIFY_APP_URL"] ?? "",
   authPathPrefix: "/auth",
