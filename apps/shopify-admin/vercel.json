@@ -1,6 +1,6 @@
 {
   "framework": "react-router",
   "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
-  "buildCommand": "react-router build",
+  "buildCommand": "pnpm exec react-router build",
   "outputDirectory": "build/client"
 }
