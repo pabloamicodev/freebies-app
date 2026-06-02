@@ -1,5 +1,5 @@
 import { Outlet, useLoaderData, useRouteError } from "react-router";
-import { AppProvider } from "@shopify/polaris";
+import { AppProvider } from "@shopify/shopify-app-remix/react";
 import { NavMenu } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server.js";
 import type { LoaderFunctionArgs, HeadersFunction } from "react-router";
@@ -15,28 +15,25 @@ export const headers: HeadersFunction = (headersArgs) => {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  return { shopDomain: session.shop };
+  return {
+    shopDomain: session.shop,
+    apiKey: process.env["SHOPIFY_API_KEY"] ?? "",
+  };
 };
 
-function AdminNav() {
-  return (
-    <NavMenu>
-      <a href="/app" rel="home">Dashboard</a>
-      <a href="/app/offers">All Offers</a>
-      <a href="/app/boosters">Boosters</a>
-      <a href="/app/customize">Customize</a>
-      <a href="/app/analytics">Analytics</a>
-      <a href="/app/translation">Translation</a>
-      <a href="/app/settings">Settings</a>
-    </NavMenu>
-  );
-}
-
 export default function AppLayout() {
-  useLoaderData<typeof loader>();
+  const { apiKey } = useLoaderData<typeof loader>();
   return (
-    <AppProvider i18n={{}}>
-      <AdminNav />
+    <AppProvider isEmbeddedApp apiKey={apiKey}>
+      <NavMenu>
+        <a href="/app" rel="home">Dashboard</a>
+        <a href="/app/offers">All Offers</a>
+        <a href="/app/boosters">Boosters</a>
+        <a href="/app/customize">Customize</a>
+        <a href="/app/analytics">Analytics</a>
+        <a href="/app/translation">Translation</a>
+        <a href="/app/settings">Settings</a>
+      </NavMenu>
       <Outlet />
     </AppProvider>
   );
@@ -45,11 +42,9 @@ export default function AppLayout() {
 export function ErrorBoundary() {
   const error = useRouteError();
   return (
-    <AppProvider i18n={{}}>
-      <div style={{ padding: "2rem" }}>
-        <h1>Error</h1>
-        <pre>{error instanceof Error ? error.message : "Unknown error"}</pre>
-      </div>
-    </AppProvider>
+    <div style={{ padding: "2rem" }}>
+      <h1>Error</h1>
+      <pre>{error instanceof Error ? error.message : "Unknown error"}</pre>
+    </div>
   );
 }

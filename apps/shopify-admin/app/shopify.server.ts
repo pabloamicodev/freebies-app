@@ -20,9 +20,6 @@ export const shopify = shopifyApp({
   appUrl: process.env["SHOPIFY_APP_URL"] ?? "",
   authPathPrefix: "/auth",
   sessionStorage,
-  // Required for embedded apps: uses token exchange instead of cookies.
-  // Cookies in iframes are blocked by modern browsers (SameSite=None issues).
-  // Requires Shopify managed install (distribution: "app store" or "custom").
   future: {
     unstable_newEmbeddedAuthStrategy: true,
   },
