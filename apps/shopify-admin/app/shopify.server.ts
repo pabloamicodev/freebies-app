@@ -1,8 +1,5 @@
-// MUST be first: patches pg.Pool to inject SSL before PostgreSQLSessionStorage loads.
-// The session-storage library ignores sslmode in the URL and creates Pool without ssl option.
-// Node.js pg does NOT read PGSSLMODE env var — SSL must be set on the Pool config object.
 import "./lib/pg-ssl-patch.js";
-import "@shopify/shopify-api/adapters/node";
+import "@shopify/shopify-api/adapters/web-api";
 import { shopifyApp } from "@shopify/shopify-app-remix/server";
 import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";
 import { ApiVersion } from "@shopify/shopify-api";
