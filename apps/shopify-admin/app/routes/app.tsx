@@ -5,11 +5,16 @@ import {
   ColorIcon, ThumbsUpIcon, CodeIcon, GlobeIcon,
 } from "@shopify/polaris-icons";
 import { authenticate } from "../shopify.server.js";
-import type { LoaderFunctionArgs } from "react-router";
+import type { LoaderFunctionArgs, HeadersFunction } from "react-router";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 import type { LinksFunction } from "react-router";
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: polarisStyles }];
+
+// Required for Shopify embedded app auth with React Router v7 single-fetch
+export const headers: HeadersFunction = (headersArgs) => {
+  return headersArgs.loaderHeaders;
+};
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);

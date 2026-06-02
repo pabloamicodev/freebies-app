@@ -10,6 +10,8 @@ import { eq, and, gte, count, sql, desc } from "drizzle-orm";
 import { ConversionFunnelChart, CampaignBreakdownChart, MetricLineChart, TopOffersChart } from "../components/AnalyticsCharts.js";
 import type { LoaderFunctionArgs } from "react-router";
 
+export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const db = getDb();

@@ -19,6 +19,8 @@ import {
 import { eq } from "drizzle-orm";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
+export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
   return {};

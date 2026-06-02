@@ -17,14 +17,13 @@ export const shopify = shopifyApp({
   sessionStorage,
   hooks: {
     afterAuth: async ({ session }) => {
-      // Register webhooks
       try {
         await shopify.registerWebhooks({ session });
       } catch (e) {
         console.error("Webhook registration failed:", e);
       }
 
-      // Mirror shop record to our PostgreSQL schema for offer management
+      // Mirror shop record to PostgreSQL for offer management
       try {
         const { getDb } = await import("@promo/db");
         const { shops } = await import("@promo/db");

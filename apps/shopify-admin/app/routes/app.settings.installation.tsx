@@ -149,6 +149,8 @@ export default function InstallationPage() {
 {`import { createPromoClient } from '@promo/headless-sdk';
 import { usePromoOffers } from '@promo/headless-sdk/react';
 
+export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
 const client = createPromoClient({
   storeDomain: '${shopDomain}',
   publicKey: 'YOUR_PUBLIC_KEY',

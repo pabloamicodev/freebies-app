@@ -21,6 +21,8 @@ import { eq, and, count } from "drizzle-orm";
 import { isShadowModeEnabled, setShadowMode } from "../lib/shadow-mode.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
+export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const db = getDb();

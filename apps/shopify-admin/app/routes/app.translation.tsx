@@ -16,6 +16,8 @@ import { eq, and } from "drizzle-orm";
 import { SUPPORTED_LOCALES, type WidgetTranslations } from "@promo/shared-types";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
+export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
 const TRANSLATION_KEYS: Array<{ key: keyof WidgetTranslations; label: string; hint?: string }> = [
   { key: "progress.before_goal", label: "Progress bar — before goal", hint: "Use {{remaining_amount}} for the amount, {{remaining_quantity}} for quantity." },
   { key: "progress.after_goal", label: "Progress bar — after goal" },

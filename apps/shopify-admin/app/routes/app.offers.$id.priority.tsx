@@ -15,6 +15,8 @@ import { eq, and, ne } from "drizzle-orm";
 import { detectConflicts } from "../lib/conflict-detection.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
+export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const db = getDb();

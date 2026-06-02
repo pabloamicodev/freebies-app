@@ -11,6 +11,8 @@ import { getDb } from "@promo/db";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
+export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   return { shopDomain: session.shop };

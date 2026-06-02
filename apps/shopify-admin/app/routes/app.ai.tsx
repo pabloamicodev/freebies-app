@@ -16,6 +16,8 @@ import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
+export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
   return {};

@@ -9,6 +9,8 @@ import { shops, appSettings } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
+export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
 const SETTING_KEYS = [
   "app.enabled",
   "storefront.runtime_enabled",

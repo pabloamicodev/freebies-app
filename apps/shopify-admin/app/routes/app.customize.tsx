@@ -15,6 +15,8 @@ import { getDb, shops, appSettings } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
+export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
 const THEME_SETTINGS_KEY = "widget.global_theme";
 
 const DEFAULTS = {

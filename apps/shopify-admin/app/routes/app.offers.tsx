@@ -10,6 +10,8 @@ import { offers } from "@promo/db";
 import { eq, and, like, desc, sql } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
+export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
 type OfferStatus = "draft" | "active" | "paused" | "scheduled" | "expired" | "archived";
 type OfferType = "gift" | "bundle" | "upsell" | "discount" | "booster";
 

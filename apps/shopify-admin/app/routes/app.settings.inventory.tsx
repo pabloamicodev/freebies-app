@@ -14,6 +14,8 @@ import { shops, appSettings } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
+export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
 const INVENTORY_SETTINGS = [
   "gift.oos_behavior",
   "gift.auto_swap_enabled",

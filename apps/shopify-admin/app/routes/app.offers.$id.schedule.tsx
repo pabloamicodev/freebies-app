@@ -13,6 +13,8 @@ import { offers } from "@promo/db";
 import { eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
+export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
 const TIMEZONES = [
   "UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
   "America/Sao_Paulo", "Europe/London", "Europe/Paris", "Europe/Berlin", "Asia/Tokyo",
