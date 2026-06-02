@@ -35,7 +35,7 @@ webhookApp.post("/products/update", async (c) => {
   const product = JSON.parse(rawBody) as any;
 
   // Enqueue partial sync for this product
-  const { productSyncQueue } = await import("../../workers/product-sync/src/queues.js");
+  const { productSyncQueue } = await import("../lib/queues.server.js");
   const [shop] = await getDb().select({ accessTokenEncrypted: shops.accessTokenEncrypted, myshopifyDomain: shops.myshopifyDomain })
     .from(shops).where(eq(shops.id, shopId)).limit(1);
 
@@ -77,7 +77,7 @@ webhookApp.post("/inventory", async (c) => {
   const rawBody = c.get("rawBody") as string;
   const payload = JSON.parse(rawBody) as { inventory_item_id: number; location_id: number; available: number };
 
-  const { inventorySyncQueue } = await import("../../workers/product-sync/src/queues.js") as any;
+  const { inventorySyncQueue } = await import("../lib/queues.server.js") as any;
   const [shop] = await getDb().select({ accessTokenEncrypted: shops.accessTokenEncrypted, myshopifyDomain: shops.myshopifyDomain })
     .from(shops).where(eq(shops.id, shopId)).limit(1);
 
@@ -116,7 +116,7 @@ webhookApp.post("/orders", async (c) => {
     }
 
     // Enqueue attribution reconciliation
-    const { analyticsReconcileQueue } = await import("../../workers/product-sync/src/queues.js") as any;
+    const { analyticsReconcileQueue } = await import("../lib/queues.server.js") as any;
     if (analyticsReconcileQueue) {
       await analyticsReconcileQueue.add(`order-paid-${order.id}`, {
         shopId,
@@ -158,7 +158,7 @@ webhookApp.post("/customers", async (c) => {
 
   // Invalidate Redis cache for this customer's eligibility data
   try {
-    const { redis } = await import("../../workers/product-sync/src/queues.js");
+    const { redis } = await import("../lib/queues.server.js");
     await redis.del(`customer:${shopId}:${customer.admin_graphql_api_id}`);
   } catch {}
 
@@ -177,7 +177,7 @@ webhookApp.post("/markets", async (c) => {
   await invalidateMarketsCache(shopId);
 
   // Enqueue market sync to update Redis with fresh market data
-  const { redis } = await import("../../workers/product-sync/src/queues.js");
+  const { redis } = await import("../lib/queues.server.js");
   const [shop] = await getDb().select({
     accessTokenEncrypted: shops.accessTokenEncrypted,
     myshopifyDomain: shops.myshopifyDomain,

@@ -34,7 +34,7 @@ export async function replayWebhookTopic(
 
   // Import the queue dynamically to avoid circular dependencies
   const { productSyncQueue, inventorySyncQueue } = await import(
-    "../../workers/product-sync/src/queues.js"
+    "./queues.server.js"
   );
 
   switch (topic) {
@@ -72,7 +72,7 @@ export async function replayProductSync(shopId: string, productGid: string): Pro
   const shop = shopRows[0];
   if (!shop) return;
 
-  const { productSyncQueue } = await import("../../workers/product-sync/src/queues.js");
+  const { productSyncQueue } = await import("./queues.server.js");
   await productSyncQueue.add("replay-single-product", {
     shopId,
     shopDomain: shop.myshopifyDomain,

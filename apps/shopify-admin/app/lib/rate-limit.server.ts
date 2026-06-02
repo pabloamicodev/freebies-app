@@ -26,7 +26,7 @@ let _redis: any = null;
 
 async function getRedis() {
   if (!_redis) {
-    const { redis } = await import("../../workers/product-sync/src/queues.js");
+    const { redis } = await import("./queues.server.js");
     _redis = redis;
   }
   return _redis;

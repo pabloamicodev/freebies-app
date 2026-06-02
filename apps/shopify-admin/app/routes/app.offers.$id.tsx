@@ -71,7 +71,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       // ── CRITICAL: Push compiled config to Shopify Function metafield ──────────
       // Enqueue offer publisher so the Rust Discount Function receives the config.
       try {
-        const { offerPublishQueue } = await import("../../workers/product-sync/src/queues.js") as any;
+        const { offerPublishQueue } = await import("../lib/queues.server.js") as any;
         const shopRows2 = await db.select({
           myshopifyDomain: (await import("@promo/db")).shops.myshopifyDomain,
           accessTokenEncrypted: (await import("@promo/db")).shops.accessTokenEncrypted,
@@ -99,7 +99,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       await db.update(offers).set({ status: "paused", updatedAt: new Date() }).where(eq(offers.id, offerId));
       // Rebuild config with offer removed from active set
       try {
-        const { offerPublishQueue } = await import("../../workers/product-sync/src/queues.js") as any;
+        const { offerPublishQueue } = await import("../lib/queues.server.js") as any;
         const shopRows2 = await db.select({
           myshopifyDomain: (await import("@promo/db")).shops.myshopifyDomain,
           accessTokenEncrypted: (await import("@promo/db")).shops.accessTokenEncrypted,
@@ -122,7 +122,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       await db.update(offers).set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() }).where(eq(offers.id, offerId));
       // Rebuild config without archived offer
       try {
-        const { offerPublishQueue } = await import("../../workers/product-sync/src/queues.js") as any;
+        const { offerPublishQueue } = await import("../lib/queues.server.js") as any;
         const shopRows2 = await db.select({
           myshopifyDomain: (await import("@promo/db")).shops.myshopifyDomain,
           accessTokenEncrypted: (await import("@promo/db")).shops.accessTokenEncrypted,

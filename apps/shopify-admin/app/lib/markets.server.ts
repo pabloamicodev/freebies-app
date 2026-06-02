@@ -104,7 +104,7 @@ export async function fetchMarketsFromShopify(
 export async function getMarketsForShop(shopId: string): Promise<ShopifyMarket[]> {
   // Try Redis cache first
   try {
-    const { redis } = await import("../../workers/product-sync/src/queues.js");
+    const { redis } = await import("./queues.server.js");
     const cacheKey = `markets:${shopId}`;
     const cached = await redis.get(cacheKey);
     if (cached) return JSON.parse(cached) as ShopifyMarket[];
@@ -127,7 +127,7 @@ export async function getMarketsForShop(shopId: string): Promise<ShopifyMarket[]
 
   // Cache in Redis
   try {
-    const { redis } = await import("../../workers/product-sync/src/queues.js");
+    const { redis } = await import("./queues.server.js");
     await redis.setex(`markets:${shopId}`, MARKETS_CACHE_TTL, JSON.stringify(markets));
   } catch {}
 
@@ -139,7 +139,7 @@ export async function getMarketsForShop(shopId: string): Promise<ShopifyMarket[]
  */
 export async function invalidateMarketsCache(shopId: string): Promise<void> {
   try {
-    const { redis } = await import("../../workers/product-sync/src/queues.js");
+    const { redis } = await import("./queues.server.js");
     await redis.del(`markets:${shopId}`);
   } catch {}
 }
