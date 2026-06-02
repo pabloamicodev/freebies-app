@@ -1,6 +1,6 @@
 {
-  "framework": null,
-  "buildCommand": "pnpm --filter shopify-admin exec vite build",
+  "framework": "react-router",
   "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm --filter shopify-admin exec react-router build",
   "outputDirectory": "apps/shopify-admin/build/client"
 }
