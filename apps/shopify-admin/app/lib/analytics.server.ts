@@ -8,8 +8,8 @@
  * - Campaign type breakdown queries
  */
 
-import { getDb, analyticsEvents } from "@promo/db";
-import { eq, and, gte, desc } from "drizzle-orm";
+import { getDb, analyticsEvents, offers } from "@promo/db";
+import { eq, and, gte, desc, sql } from "drizzle-orm";
 
 export interface IngestEventPayload {
   shopId: string;
@@ -173,18 +173,17 @@ export async function getCampaignBreakdown(
 ): Promise<Array<{ type: string; count: number }>> {
   const db = getDb();
 
-  // Join analytics_events with offers to get type
-  const rows = await db.execute(
-    `SELECT o.type, COUNT(ae.id)::int as count
-     FROM analytics_events ae
-     LEFT JOIN offers o ON ae.offer_id = o.id
-     WHERE ae.shop_id = $1
-       AND ae.event_name = 'promo_engine:gift_auto_added'
-       AND ae.occurred_at >= $2
-     GROUP BY o.type
-     ORDER BY count DESC`,
-    [shopId, since],
-  );
+  // Join analytics_events with offers to get type using Drizzle
+  const rows = await db
+    .select({ type: offers.type, count: sql<number>`count(${analyticsEvents.id})::int` })
+    .from(analyticsEvents)
+    .leftJoin(offers, eq(analyticsEvents.offerId, offers.id))
+    .where(and(
+      eq(analyticsEvents.shopId, shopId),
+      eq(analyticsEvents.eventName, "promo_engine:gift_auto_added"),
+      gte(analyticsEvents.occurredAt, since),
+    ))
+    .groupBy(offers.type);
 
-  return (rows as any[]).map((r) => ({ type: r.type ?? "unknown", count: r.count }));
+  return rows.map((r) => ({ type: r.type ?? "unknown", count: r.count ?? 0 }));
 }

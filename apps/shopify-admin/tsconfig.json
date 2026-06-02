@@ -3,8 +3,9 @@
   "compilerOptions": {
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["@types/node", "vite/client"],
+    "rootDir": "../..",
     "outDir": "./.react-router/types",
-    "rootDir": "."
+    "noEmit": true
   },
   "include": [".react-router/types/**/*", "app/**/*", "server.ts"],
   "exclude": ["node_modules", "build"]

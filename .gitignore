@@ -33,3 +33,4 @@ bun.lockb
 
 .vercel
 .env*.local
+apps/shopify-admin/.env.production

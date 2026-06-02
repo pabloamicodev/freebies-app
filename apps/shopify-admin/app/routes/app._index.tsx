@@ -15,36 +15,53 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  const db = getDb();
   const shopDomain = session.shop;
 
-  const shopRows = await db.select({ id: shops.id }).from(shops)
-    .where(eq(shops.myshopifyDomain, shopDomain)).limit(1);
-  const shopId = shopRows[0]?.id ?? "";
+  // Wrap all DB calls — if DB isn't ready the dashboard still renders
+  try {
+    const db = getDb();
 
-  const since30d = new Date(Date.now() - 30 * 86400000);
+    const shopRows = await db.select({ id: shops.id }).from(shops)
+      .where(eq(shops.myshopifyDomain, shopDomain)).limit(1);
+    const shopId = shopRows[0]?.id ?? "";
 
-  const [activeOffersResult, draftOffersResult, scheduledResult, warnings, campaignBreakdown] =
-    await Promise.all([
+    const since30d = new Date(Date.now() - 30 * 86400000);
+
+    const [activeOffersResult, draftOffersResult, scheduledResult] = await Promise.all([
       db.select({ count: count() }).from(offers)
-        .where(and(eq(offers.shopId, shopId), eq(offers.status, "active"))),
+        .where(and(eq(offers.shopId, shopId), eq(offers.status, "active"))).catch(() => [{ count: 0 }]),
       db.select({ count: count() }).from(offers)
-        .where(and(eq(offers.shopId, shopId), eq(offers.status, "draft"))),
+        .where(and(eq(offers.shopId, shopId), eq(offers.status, "draft"))).catch(() => [{ count: 0 }]),
       db.select({ count: count() }).from(offers)
-        .where(and(eq(offers.shopId, shopId), eq(offers.status, "scheduled"))),
-      getDashboardWarnings(shopId, shopDomain),
-      getCampaignBreakdown(shopId, since30d),
+        .where(and(eq(offers.shopId, shopId), eq(offers.status, "scheduled"))).catch(() => [{ count: 0 }]),
     ]);
 
-  return {
-    shopDomain,
-    shopId,
-    activeOffers: activeOffersResult[0]?.count ?? 0,
-    draftOffers: draftOffersResult[0]?.count ?? 0,
-    scheduledOffers: scheduledResult[0]?.count ?? 0,
-    warnings,
-    campaignBreakdown,
-  };
+    // Warnings and analytics are non-critical — skip if they error
+    const warnings = await getDashboardWarnings(shopId, shopDomain).catch(() => []);
+    const campaignBreakdown = await getCampaignBreakdown(shopId, since30d).catch(() => []);
+
+    return {
+      shopDomain,
+      shopId,
+      activeOffers: activeOffersResult[0]?.count ?? 0,
+      draftOffers: draftOffersResult[0]?.count ?? 0,
+      scheduledOffers: scheduledResult[0]?.count ?? 0,
+      warnings,
+      campaignBreakdown,
+    };
+  } catch (err) {
+    console.error("Dashboard loader error:", err);
+    // Return minimal data so the page still renders
+    return {
+      shopDomain,
+      shopId: "",
+      activeOffers: 0,
+      draftOffers: 0,
+      scheduledOffers: 0,
+      warnings: [],
+      campaignBreakdown: [],
+    };
+  }
 };
 
 export default function Dashboard() {

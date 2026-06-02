@@ -6,8 +6,8 @@
 
 import { useLoaderData, Form } from "react-router";
 import {
-  Page, Layout, LegacyCard, FormLayout, TextField, ColorPicker, hsbToHex, hexToHsb,
-  Button, BlockStack, Text, Divider, InlineStack, Select, RangeSlider, Banner,
+  Page, Layout, LegacyCard, FormLayout, TextField,
+  Button, BlockStack, Text, Divider, InlineStack, Select, Banner,
 } from "@shopify/polaris";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";

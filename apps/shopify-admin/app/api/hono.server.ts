@@ -39,13 +39,14 @@ app.use("*", async (c, next) => {
   await next();
 });
 
-// ─── Rate limiting (Redis sliding window) ─────────────────────────────────────
+// ─── Rate limiting (in-memory, per-process) ──────────────────────────────────
+const _rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
 function checkRateLimit(key: string, maxPerMin: number): boolean {
   const now = Date.now();
-  const entry = rateLimitMap.get(key);
+  const entry = _rateLimitMap.get(key);
   if (!entry || entry.resetAt < now) {
-    rateLimitMap.set(key, { count: 1, resetAt: now + 60_000 });
+    _rateLimitMap.set(key, { count: 1, resetAt: now + 60_000 });
     return true;
   }
   if (entry.count >= maxPerMin) return false;
