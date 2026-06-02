@@ -1,8 +1,8 @@
 import { Outlet, useLoaderData, useNavigate, useRouteError } from "react-router";
 import { AppProvider, Frame, Navigation } from "@shopify/polaris";
 import {
-  HomeIcon, OrdersIcon, AnalyticsIcon, SettingsIcon,
-  ColorsMajorIcon, ThumbsUpMajorIcon, CodeMajorIcon, GlobeMajorIcon,
+  HomeIcon, OrderIcon, ChartVerticalFilledIcon, SettingsIcon,
+  ColorIcon, ThumbsUpIcon, CodeIcon, GlobeIcon,
 } from "@shopify/polaris-icons";
 import { authenticate } from "../shopify.server.js";
 import type { LoaderFunctionArgs } from "react-router";
@@ -25,7 +25,7 @@ function AdminNav() {
           { label: "Dashboard", icon: HomeIcon, url: "/app", onClick: () => navigate("/app") },
           {
             label: "All Offers",
-            icon: OrdersIcon,
+            icon: OrderIcon,
             url: "/app/offers",
             onClick: () => navigate("/app/offers"),
             subNavigationItems: [
@@ -37,25 +37,25 @@ function AdminNav() {
           },
           {
             label: "Boosters",
-            icon: ThumbsUpMajorIcon,
+            icon: ThumbsUpIcon,
             url: "/app/boosters",
             onClick: () => navigate("/app/boosters"),
           },
           {
             label: "Customize",
-            icon: ColorsMajorIcon,
+            icon: ColorIcon,
             url: "/app/customize",
             onClick: () => navigate("/app/customize"),
           },
           {
             label: "Analytics",
-            icon: AnalyticsIcon,
+            icon: ChartVerticalFilledIcon,
             url: "/app/analytics",
             onClick: () => navigate("/app/analytics"),
           },
           {
             label: "Translation",
-            icon: GlobeMajorIcon,
+            icon: GlobeIcon,
             url: "/app/translation",
             onClick: () => navigate("/app/translation"),
           },
