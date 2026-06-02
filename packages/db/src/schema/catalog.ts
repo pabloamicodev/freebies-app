@@ -2,7 +2,7 @@ import {
   pgTable, uuid, text, boolean, timestamp, jsonb, bigint,
   numeric, index, unique,
 } from "drizzle-orm/pg-core";
-import { shops } from "./shops.js";
+import { shops } from "./shops";
 
 export const productCache = pgTable(
   "product_cache",

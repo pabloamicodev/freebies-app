@@ -1,7 +1,7 @@
 import {
-  pgTable, uuid, text, timestamp, jsonb, index,
+  pgTable, uuid, text, timestamp, jsonb, index, bigint,
 } from "drizzle-orm/pg-core";
-import { shops } from "./shops.js";
+import { shops } from "./shops";
 
 export const analyticsEvents = pgTable(
   "analytics_events",

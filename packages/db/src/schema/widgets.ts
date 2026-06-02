@@ -1,8 +1,8 @@
 import {
   pgTable, pgEnum, uuid, text, boolean, integer, timestamp, jsonb,
 } from "drizzle-orm/pg-core";
-import { shops } from "./shops.js";
-import { offers } from "./offers.js";
+import { shops } from "./shops";
+import { offers } from "./offers";
 
 export const widgetTypeEnum = pgEnum("widget_type", [
   "gift_slider", "gift_popup", "cart_message", "today_offer_widget",

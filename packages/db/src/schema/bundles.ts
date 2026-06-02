@@ -1,9 +1,9 @@
 import {
   pgTable, uuid, text, integer, boolean, timestamp, jsonb, unique,
 } from "drizzle-orm/pg-core";
-import { shops } from "./shops.js";
-import { offers } from "./offers.js";
-import { discountTypeEnum } from "./offers.js";
+import { shops } from "./shops";
+import { offers } from "./offers";
+import { discountTypeEnum } from "./offers";
 
 export const bundleDefinitions = pgTable(
   "bundle_definitions",

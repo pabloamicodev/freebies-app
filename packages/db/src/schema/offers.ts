@@ -3,7 +3,7 @@ import {
   timestamp, jsonb, unique,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
-import { shops } from "./shops.js";
+import { shops } from "./shops";
 
 export const offerTypeEnum = pgEnum("offer_type", [
   "gift", "bundle", "upsell", "discount", "booster",

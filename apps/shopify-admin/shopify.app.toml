@@ -1,12 +1,12 @@
 name = "Promo Engine"
-client_id = "YOUR_SHOPIFY_CLIENT_ID"
-application_url = "https://your-app-url.ngrok.io"
+client_id = "3a0d24b1406408854e25ed7fdbe4ffdd"
+application_url = "https://freebies-app-shopify-admin.vercel.app"
 embedded = true
 handle = "promo-engine"
 
 [build]
 automatically_update_urls_on_dev = true
-dev_store_url = "your-dev-store.myshopify.com"
+dev_store_url = "hpn-supplements.myshopify.com"
 include_config_on_deploy = true
 
 [auth]
