@@ -41,6 +41,9 @@ importers:
       '@promo/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      '@react-router/node':
+        specifier: ^7.16.0
+        version: 7.16.0(react-router@7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
       '@shopify/app-bridge-react':
         specifier: ^4.1.7
         version: 4.2.10(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -68,6 +71,9 @@ importers:
       ioredis:
         specifier: ^5.4.1
         version: 5.11.0
+      isbot:
+        specifier: ^5
+        version: 5.1.40
       pino:
         specifier: ^9.5.0
         version: 9.14.0
@@ -96,6 +102,9 @@ importers:
       '@react-router/dev':
         specifier: ^7.1.0
         version: 7.16.0(@types/node@22.19.19)(react-router@7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(tsx@4.22.4)(typescript@5.9.3)(vite@6.4.3(@types/node@22.19.19)(tsx@4.22.4))
+      '@react-router/fs-routes':
+        specifier: ^7.16.0
+        version: 7.16.0(@react-router/dev@7.16.0(@types/node@22.19.19)(react-router@7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(tsx@4.22.4)(typescript@5.9.3)(vite@6.4.3(@types/node@22.19.19)(tsx@4.22.4)))(typescript@5.9.3)
       '@types/node':
         specifier: ^22.10.0
         version: 22.19.19
@@ -1391,6 +1400,16 @@ packages:
       typescript:
         optional: true
       wrangler:
+        optional: true
+
+  '@react-router/fs-routes@7.16.0':
+    resolution: {integrity: sha512-MwFtaaRVu2meuydGMgh2xsxnXQ6QAnGwycm9K4HymyHjcAIHUV0Tx9+bDQGxlybd2nafGcmD6H8khGRvobBfuw==}
+    engines: {node: '>=20.0.0'}
+    peerDependencies:
+      '@react-router/dev': ^7.16.0
+      typescript: ^5.1.0 || ^6.0.0
+    peerDependenciesMeta:
+      typescript:
         optional: true
 
   '@react-router/node@7.16.0':
@@ -3915,6 +3934,13 @@ snapshots:
       - terser
       - tsx
       - yaml
+
+  '@react-router/fs-routes@7.16.0(@react-router/dev@7.16.0(@types/node@22.19.19)(react-router@7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(tsx@4.22.4)(typescript@5.9.3)(vite@6.4.3(@types/node@22.19.19)(tsx@4.22.4)))(typescript@5.9.3)':
+    dependencies:
+      '@react-router/dev': 7.16.0(@types/node@22.19.19)(react-router@7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(tsx@4.22.4)(typescript@5.9.3)(vite@6.4.3(@types/node@22.19.19)(tsx@4.22.4))
+      minimatch: 9.0.9
+    optionalDependencies:
+      typescript: 5.9.3
 
   '@react-router/node@7.16.0(react-router@7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)':
     dependencies:

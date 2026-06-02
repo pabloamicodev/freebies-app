@@ -1,0 +1,6 @@
+{
+  "framework": null,
+  "buildCommand": "pnpm --filter shopify-admin exec vite build",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "outputDirectory": "apps/shopify-admin/build/client"
+}
