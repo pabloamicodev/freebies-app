@@ -5,13 +5,14 @@ import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
   plugins: [
-    reactRouter({
-      presets: [vercelPreset()],
-    }),
+    reactRouter(),
     tsconfigPaths(),
   ],
   build: {
     assetsInlineLimit: 0,
+    rollupOptions: {
+      external: ["pg-native", "cloudflare:sockets"],
+    },
   },
   server: {
     port: 3000,
