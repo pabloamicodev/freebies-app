@@ -2,5 +2,19 @@
   "framework": "react-router",
   "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
   "buildCommand": "pnpm exec react-router build",
-  "outputDirectory": "build/client"
+  "outputDirectory": "build/client",
+  "rewrites": [
+    {
+      "source": "/auth/callback",
+      "destination": "/auth/callback"
+    },
+    {
+      "source": "/auth/login",
+      "destination": "/auth/login"
+    },
+    {
+      "source": "/auth",
+      "destination": "/auth"
+    }
+  ]
 }

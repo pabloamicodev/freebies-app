@@ -126,10 +126,10 @@ export const shopify = shopifyApp({
       await shopify.registerWebhooks({ session });
     },
   },
-  future: {
-    unstable_newEmbeddedAuthStrategy: true,
-  },
   isEmbeddedApp: true,
+  // Note: unstable_newEmbeddedAuthStrategy requires Shopify CLI v3.67+
+  // Enable only after confirming the Shopify Partner Dashboard supports it
+  // future: { unstable_newEmbeddedAuthStrategy: true },
 });
 
 export const authenticate = shopify.authenticate;
