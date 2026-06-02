@@ -3,13 +3,9 @@ import { shopifyApp } from "@shopify/shopify-app-remix/server";
 import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";
 import { ApiVersion } from "@shopify/shopify-api";
 
-const dbUrl = process.env["DATABASE_URL"] ?? "";
-const sessionDbUrl = dbUrl.includes("ssl=")
-  ? dbUrl
-  : dbUrl.includes("?")
-    ? `${dbUrl}&ssl=true`
-    : `${dbUrl}?ssl=true`;
-const sessionStorage = new PostgreSQLSessionStorage(sessionDbUrl);
+const sessionStorage = new PostgreSQLSessionStorage(
+  new URL(process.env["DATABASE_URL"] ?? "postgresql://localhost/neondb")
+);
 
 export const shopify = shopifyApp({
   apiKey: process.env["SHOPIFY_API_KEY"] ?? "",
