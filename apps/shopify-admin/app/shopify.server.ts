@@ -4,11 +4,11 @@ import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-p
 import { ApiVersion } from "@shopify/shopify-api";
 
 const dbUrl = process.env["DATABASE_URL"] ?? "";
-const sessionDbUrl = dbUrl.includes("sslmode=")
+const sessionDbUrl = dbUrl.includes("ssl=")
   ? dbUrl
   : dbUrl.includes("?")
-    ? `${dbUrl}&sslmode=require`
-    : `${dbUrl}?sslmode=require`;
+    ? `${dbUrl}&ssl=true`
+    : `${dbUrl}?ssl=true`;
 const sessionStorage = new PostgreSQLSessionStorage(sessionDbUrl);
 
 export const shopify = shopifyApp({
