@@ -1,5 +1,7 @@
 import { Outlet, useLoaderData, useNavigate, useRouteError } from "react-router";
-import { AppProvider, Frame, Navigation } from "@shopify/polaris";
+// Use AppProvider from shopify-app-remix — handles App Bridge host parameter correctly
+import { AppProvider } from "@shopify/shopify-app-remix/react";
+import { Frame, Navigation } from "@shopify/polaris";
 import {
   HomeIcon, OrderIcon, ChartVerticalFilledIcon, SettingsIcon,
   ColorIcon, ThumbsUpIcon, CodeIcon, GlobeIcon,
@@ -18,7 +20,11 @@ export const headers: HeadersFunction = (headersArgs) => {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  return { shopDomain: session.shop };
+  return {
+    shopDomain: session.shop,
+    // Pass API key to AppProvider for App Bridge initialization
+    apiKey: process.env["SHOPIFY_API_KEY"] ?? "",
+  };
 };
 
 function AdminNav() {
@@ -85,9 +91,9 @@ function AdminNav() {
 }
 
 export default function AppLayout() {
-  const { shopDomain } = useLoaderData<typeof loader>();
+  const { apiKey } = useLoaderData<typeof loader>();
   return (
-    <AppProvider i18n={{}}>
+    <AppProvider isEmbeddedApp apiKey={apiKey} i18n={{}}>
       <Frame navigation={<AdminNav />} logo={{ width: 124, contextualSaveBarSource: "/logo.svg" }}>
         <Outlet />
       </Frame>
@@ -98,7 +104,7 @@ export default function AppLayout() {
 export function ErrorBoundary() {
   const error = useRouteError();
   return (
-    <AppProvider i18n={{}}>
+    <AppProvider isEmbeddedApp apiKey={""} i18n={{}}>
       <div style={{ padding: "2rem" }}>
         <h1>Error</h1>
         <pre>{error instanceof Error ? error.message : "Unknown error"}</pre>
