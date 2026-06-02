@@ -32,3 +32,4 @@ bun.lockb
 .pnpm-store/
 
 .vercel
+.env*.local

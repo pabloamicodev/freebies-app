@@ -1,7 +1,7 @@
-import { authenticate } from "../shopify.server.js";
+import { shopify } from "../shopify.server.js";
 import type { LoaderFunctionArgs } from "react-router";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  await shopify.login(request);
   return null;
 };
