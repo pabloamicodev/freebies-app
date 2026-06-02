@@ -1,6 +1,6 @@
 import "./lib/pg-ssl-patch.js";
-import "@shopify/shopify-api/adapters/web-api";
-import { shopifyApp } from "@shopify/shopify-app-remix/server";
+import "@shopify/shopify-app-react-router/adapters/node";
+import { shopifyApp } from "@shopify/shopify-app-react-router/server";
 import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";
 import { ApiVersion } from "@shopify/shopify-api";
 
@@ -21,7 +21,7 @@ export const shopify = shopifyApp({
   authPathPrefix: "/auth",
   sessionStorage,
   future: {
-    unstable_newEmbeddedAuthStrategy: true,
+    // Token exchange strategy is the default in shopify-app-react-router
   },
   hooks: {
     afterAuth: async ({ session }) => {

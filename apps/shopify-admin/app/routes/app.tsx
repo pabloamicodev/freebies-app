@@ -1,5 +1,5 @@
 import { Outlet, useLoaderData, useRouteError } from "react-router";
-import { AppProvider } from "@shopify/shopify-app-remix/react";
+import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { NavMenu } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server.js";
 import type { LoaderFunctionArgs, HeadersFunction } from "react-router";
@@ -24,7 +24,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export default function AppLayout() {
   const { apiKey } = useLoaderData<typeof loader>();
   return (
-    <AppProvider isEmbeddedApp apiKey={apiKey}>
+    <AppProvider embedded apiKey={apiKey}>
       <NavMenu>
         <a href="/app" rel="home">Dashboard</a>
         <a href="/app/offers">All Offers</a>
