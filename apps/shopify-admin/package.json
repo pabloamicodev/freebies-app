@@ -15,6 +15,7 @@
     "@promo/rule-engine": "workspace:*",
     "@promo/shared-types": "workspace:*",
     "drizzle-orm": "^0.38.0",
+    "bullmq": "^5.0.0",
     "@react-router/node": "^7.16.0",
     "@shopify/app-bridge-react": "^4.1.7",
     "@shopify/polaris": "^13.9.0",

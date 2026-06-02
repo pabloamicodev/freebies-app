@@ -21,7 +21,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (!shop) return Response.json({ error: "Shop not found" }, { status: 404 });
 
-  const { productSyncQueue } = await import("../../workers/product-sync/src/queues.js");
+  const redisUrl = process.env["REDIS_URL"];
+  if (!redisUrl || redisUrl.includes("PASSWORD@HOST")) {
+    return Response.json({ error: "Redis not configured" }, { status: 503 });
+  }
+
+  const { Queue } = await import("bullmq");
+  const { default: Redis } = await import("ioredis");
+  const redis = new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false });
+  const productSyncQueue = new Queue("product-sync", { connection: redis });
 
   switch (syncType) {
     case "products":
@@ -31,16 +39,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         accessToken: shop.accessTokenEncrypted,
         mode: "full" as const,
       }, { priority: 2 });
+      await redis.quit();
       return Response.json({ queued: true, type: "products" });
 
     case "markets":
-      // Market sync — enqueue
+      await redis.quit();
       return Response.json({ queued: true, type: "markets" });
 
     case "inventory":
+      await redis.quit();
       return Response.json({ queued: true, type: "inventory" });
 
     default:
+      await redis.quit();
       return Response.json({ error: "Unknown sync type" }, { status: 400 });
   }
 };
