@@ -166,6 +166,8 @@ export default function OfferConditionsPage() {
   const [pickerTarget, setPickerTarget] = useState<"required" | "exclude" | "gift">("required");
   const [requiredVariantGids, setRequiredVariantGids] = useState<string[]>([]);
   const [excludeVariantGids, setExcludeVariantGids] = useState<string[]>([]);
+  const [currencyCode, setCurrencyCode] = useState("USD");
+  const [minQtyPerProduct, setMinQtyPerProduct] = useState("1");
 
   if (!offer) return <Page title="Not Found" />;
 
@@ -206,7 +208,7 @@ export default function OfferConditionsPage() {
                 <Box key={c.id} padding="300" borderWidth="025" borderColor="border" borderRadius="200">
                   <InlineStack align="space-between">
                     <InlineStack gap="300">
-                      <Badge tone={SCOPE_BADGE[c.scope]}>{c.scope}</Badge>
+                      <Badge tone={SCOPE_BADGE[c.scope] ?? "info"}>{c.scope}</Badge>
                       <Text as="p" fontWeight="semibold">{c.conditionType}</Text>
                     </InlineStack>
                     <Form method="POST">
@@ -250,7 +252,7 @@ export default function OfferConditionsPage() {
                   {(selectedType === "cart_value" || selectedType === "cart_value_multiplier") && (
                     <>
                       <TextField label="Threshold ($)" name="threshold" type="number" autoComplete="off" />
-                      <TextField label="Currency Code" name="currencyCode" defaultValue="USD" autoComplete="off" />
+                      <TextField label="Currency Code" name="currencyCode" value={currencyCode} onChange={setCurrencyCode} autoComplete="off" />
                       {selectedType === "cart_value_multiplier" && (
                         <TextField label="Max multiplier (optional)" name="maxMultiplier" type="number" autoComplete="off" />
                       )}
@@ -285,7 +287,8 @@ export default function OfferConditionsPage() {
                         label="Min quantity per product"
                         name="minQtyPerProduct"
                         type="number"
-                        defaultValue="1"
+                        value={minQtyPerProduct}
+                        onChange={setMinQtyPerProduct}
                         autoComplete="off"
                       />
                     </BlockStack>
@@ -347,5 +350,6 @@ export default function OfferConditionsPage() {
         )}
       </Layout>
     </Page>
+  </>
   );
 }
