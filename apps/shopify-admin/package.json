@@ -17,6 +17,8 @@
     "drizzle-orm": "^0.38.0",
     "bullmq": "^5.0.0",
     "@react-router/node": "^7.16.0",
+    "@react-router/dev": "^7.1.0",
+    "@react-router/fs-routes": "^7.16.0",
     "@shopify/app-bridge-react": "^4.1.7",
     "@shopify/polaris": "^13.9.0",
     "@shopify/polaris-icons": "^9.0.0",
@@ -38,8 +40,6 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
-    "@react-router/dev": "^7.1.0",
-    "@react-router/fs-routes": "^7.16.0",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

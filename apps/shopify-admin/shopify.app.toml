@@ -1,83 +1,54 @@
 name = "Promo Engine"
-client_id = "3a0d24b1406408854e25ed7fdbe4ffdd"
+client_id = "e03afab02eae9991483e4bc54d649c3c"
 application_url = "https://freebies-app-shopify-admin.vercel.app"
 embedded = true
-handle = "promo-engine"
+handle = "promo-engine-hpn"
 
 [build]
 automatically_update_urls_on_dev = true
-dev_store_url = "hpn-supplements.myshopify.com"
-include_config_on_deploy = true
 
 [auth]
 redirect_urls = [
-  "https://your-app-url.ngrok.io/auth/callback",
-  "https://your-app-url.ngrok.io/auth/shopify/callback",
-  "https://your-app-url.ngrok.io/api/auth/callback",
+  "https://freebies-app-shopify-admin.vercel.app/auth/callback",
+  "https://freebies-app-shopify-admin.vercel.app/auth/shopify/callback",
+  "https://freebies-app-shopify-admin.vercel.app/api/auth/callback",
 ]
 
 [webhooks]
 api_version = "2026-04"
 
   [[webhooks.subscriptions]]
-  topics = ["products/update", "products/delete", "products/create"]
   uri = "/webhooks/products"
+  topics = [ "products/update", "products/delete", "products/create" ]
 
   [[webhooks.subscriptions]]
-  topics = ["inventory_levels/update", "inventory_levels/connect"]
   uri = "/webhooks/inventory"
+  topics = [ "inventory_levels/update", "inventory_levels/connect" ]
 
   [[webhooks.subscriptions]]
-  topics = ["orders/paid", "orders/cancelled"]
   uri = "/webhooks/orders"
+  topics = [ "orders/paid", "orders/cancelled" ]
 
   [[webhooks.subscriptions]]
-  topics = ["customers/update"]
   uri = "/webhooks/customers"
+  topics = [ "customers/update" ]
 
   [[webhooks.subscriptions]]
-  topics = ["markets/create", "markets/update", "markets/delete"]
   uri = "/webhooks/markets"
+  topics = [ "markets/create", "markets/update", "markets/delete" ]
 
   [[webhooks.subscriptions]]
-  topics = ["app/uninstalled", "shop/redact", "customers/redact", "customers/data_request"]
-  uri = "/webhooks/gdpr"
+  uri = "/webhooks/app-uninstalled"
+  topics = [ "app/uninstalled" ]
+
+[webhooks.privacy_compliance]
+customer_deletion_url = "https://freebies-app-shopify-admin.vercel.app/webhooks/gdpr"
+customer_data_request_url = "https://freebies-app-shopify-admin.vercel.app/webhooks/gdpr"
+shop_deletion_url = "https://freebies-app-shopify-admin.vercel.app/webhooks/gdpr"
+
+[access_scopes]
+scopes = "read_products,read_product_listings,read_inventory,read_publications,read_markets,read_discounts,write_discounts,read_customers,read_orders,read_all_orders,read_metaobjects,write_metaobjects,read_locales,read_themes"
 
 [pos]
 embedded = false
-
-[access_scopes]
-scopes = "read_products,read_product_listings,read_inventory,read_publications,read_markets,read_discounts,write_discounts,read_customers,read_orders,read_all_orders,read_metafields,write_metafields,read_metaobjects,write_metaobjects,read_locales,read_themes"
-
-[app_proxy]
-url = "https://your-app-url.ngrok.io/apps/promo-engine"
-subpath = "promo-engine"
-prefix = "apps"
-
-[extension.theme]
-  [[extension.theme.blocks]]
-  type = "gift_slider"
-  name = "Gift Slider"
-
-  [[extension.theme.blocks]]
-  type = "cart_message"
-  name = "Cart Message"
-
-  [[extension.theme.blocks]]
-  type = "progress_bar"
-  name = "Progress Bar"
-
-  [[extension.theme.blocks]]
-  type = "today_offer"
-  name = "Today Offer"
-
-  [[extension.theme.blocks]]
-  type = "volume_discount"
-  name = "Volume Discount"
-
-  [[extension.theme.blocks]]
-  type = "frequently_bought_together"
-  name = "Frequently Bought Together"
-
-[extension.web_pixel]
 runtime_context = "strict"
