@@ -1,5 +1,5 @@
-import { useLoaderData, useNavigate, useSearchParams, useSubmit, Form } from "react-router";
-import { useState, useRef } from "react";
+import { useLoaderData, useNavigate, useSearchParams } from "react-router";
+import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers } from "@promo/db";
@@ -369,8 +369,7 @@ function Modal2GiftWizard({
   onBack: () => void;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
-  const formRef = useRef<HTMLFormElement>(null);
-  const submit = useSubmit();
+  const navigate = useNavigate();
 
   return (
     <div className="b-modal-overlay" onClick={onClose}>
@@ -422,20 +421,16 @@ function Modal2GiftWizard({
             ))}
           </div>
 
-          {/* Hidden form for submission */}
-          <Form ref={formRef} method="POST" action="/app/offers/new" style={{ display: "none" }}>
-            <input type="hidden" name="offerType" value="gift" />
-            <input type="hidden" name="template" value={selected ?? "scratch"} />
-            <input type="hidden" name="internalName" value={`Gift Offer ${new Date().toLocaleString([], { dateStyle: "short", timeStyle: "short" })}`} />
-            <input type="hidden" name="publicTitle" value="Free Gift with Purchase" />
-            <input type="hidden" name="priority" value="100" />
-          </Form>
         </div>
         <div className="b-modal-footer">
           <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
           <button
             className="b-btn b-btn-dark"
-            onClick={() => { if (formRef.current) void submit(formRef.current); }}
+            onClick={() => {
+              const SLUG: Record<string, string> = { buy_x_get_y: "bxgy", bogo: "bogo", buy_x_gift: "free-sample", cart_value: "cart-value", tiered: "tiered", custom: "scratch" };
+              void navigate(`/app/offers/new/gift/${SLUG[selected ?? "scratch"] ?? selected ?? "scratch"}`);
+              onClose();
+            }}
           >
             Create offer
           </button>
@@ -540,8 +535,8 @@ const BUNDLE_TEMPLATES = [
 
 function Modal2BundleWizard({ onClose, onBack }: { onClose: () => void; onBack: () => void }) {
   const [selected, setSelected] = useState<string>("classic");
-  const formRef = useRef<HTMLFormElement>(null);
-  const submit = useSubmit();
+  const navigate = useNavigate();
+  const BUNDLE_SLUG_MAP: Record<string, string> = { classic: "classic-bundle", mix: "mix-match", build_a_box: "bundle-page" };
   return (
     <div className="b-modal-overlay" onClick={onClose}>
       <div className="b-modal" onClick={(e) => e.stopPropagation()}>
@@ -571,17 +566,10 @@ function Modal2BundleWizard({ onClose, onBack }: { onClose: () => void; onBack: 
               </div>
             ))}
           </div>
-          <Form ref={formRef} method="POST" action="/app/offers/new" style={{ display: "none" }}>
-            <input type="hidden" name="offerType" value="bundle" />
-            <input type="hidden" name="template" value={selected} />
-            <input type="hidden" name="internalName" value={`Bundle Offer ${new Date().toLocaleString([], { dateStyle: "short", timeStyle: "short" })}`} />
-            <input type="hidden" name="publicTitle" value="Bundle Deal" />
-            <input type="hidden" name="priority" value="100" />
-          </Form>
         </div>
         <div className="b-modal-footer">
           <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
-          <button className="b-btn b-btn-dark" onClick={() => { if (formRef.current) void submit(formRef.current); }}>Create bundle</button>
+          <button className="b-btn b-btn-dark" onClick={() => { void navigate(`/app/offers/new/bundle/${BUNDLE_SLUG_MAP[selected] ?? selected}`); onClose(); }}>Create bundle</button>
         </div>
       </div>
     </div>
@@ -677,8 +665,8 @@ const UPSELL_TEMPLATES = [
 
 function Modal2UpsellWizard({ onClose, onBack }: { onClose: () => void; onBack: () => void }) {
   const [selected, setSelected] = useState<string>("fbt");
-  const formRef = useRef<HTMLFormElement>(null);
-  const submit = useSubmit();
+  const navigate = useNavigate();
+  const UPSELL_SLUG_MAP: Record<string, string> = { fbt: "fbt", checkout: "checkout", thank_you: "thank-you" };
   return (
     <div className="b-modal-overlay" onClick={onClose}>
       <div className="b-modal" onClick={(e) => e.stopPropagation()}>
@@ -708,17 +696,10 @@ function Modal2UpsellWizard({ onClose, onBack }: { onClose: () => void; onBack: 
               </div>
             ))}
           </div>
-          <Form ref={formRef} method="POST" action="/app/offers/new" style={{ display: "none" }}>
-            <input type="hidden" name="offerType" value="upsell" />
-            <input type="hidden" name="template" value={selected} />
-            <input type="hidden" name="internalName" value={`Upsell Offer ${new Date().toLocaleString([], { dateStyle: "short", timeStyle: "short" })}`} />
-            <input type="hidden" name="publicTitle" value="Frequently Bought Together" />
-            <input type="hidden" name="priority" value="100" />
-          </Form>
         </div>
         <div className="b-modal-footer">
           <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
-          <button className="b-btn b-btn-dark" onClick={() => { if (formRef.current) void submit(formRef.current); }}>Create upsell</button>
+          <button className="b-btn b-btn-dark" onClick={() => { void navigate(`/app/offers/new/upsell/${UPSELL_SLUG_MAP[selected] ?? selected}`); onClose(); }}>Create upsell</button>
         </div>
       </div>
     </div>
@@ -822,8 +803,8 @@ const DISCOUNT_TEMPLATES = [
 
 function Modal2DiscountWizard({ onClose, onBack }: { onClose: () => void; onBack: () => void }) {
   const [selected, setSelected] = useState<string>("volume");
-  const formRef = useRef<HTMLFormElement>(null);
-  const submit = useSubmit();
+  const navigate = useNavigate();
+  const DISCOUNT_SLUG_MAP: Record<string, string> = { volume: "volume", cheapest: "cheapest", cart: "cart" };
   return (
     <div className="b-modal-overlay" onClick={onClose}>
       <div className="b-modal" onClick={(e) => e.stopPropagation()}>
@@ -850,17 +831,10 @@ function Modal2DiscountWizard({ onClose, onBack }: { onClose: () => void; onBack
               </div>
             ))}
           </div>
-          <Form ref={formRef} method="POST" action="/app/offers/new" style={{ display: "none" }}>
-            <input type="hidden" name="offerType" value="discount" />
-            <input type="hidden" name="template" value={selected} />
-            <input type="hidden" name="internalName" value={`Discount Offer ${new Date().toLocaleString([], { dateStyle: "short", timeStyle: "short" })}`} />
-            <input type="hidden" name="publicTitle" value="Volume Discount" />
-            <input type="hidden" name="priority" value="100" />
-          </Form>
         </div>
         <div className="b-modal-footer">
           <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
-          <button className="b-btn b-btn-dark" onClick={() => { if (formRef.current) void submit(formRef.current); }}>Create discount</button>
+          <button className="b-btn b-btn-dark" onClick={() => { void navigate(`/app/offers/new/discount/${DISCOUNT_SLUG_MAP[selected] ?? selected}`); onClose(); }}>Create discount</button>
         </div>
       </div>
     </div>
