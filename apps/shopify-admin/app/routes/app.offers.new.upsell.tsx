@@ -2,7 +2,7 @@
  * Upsell Offer Builder — FBT, checkout upsell, and thank-you page upsell.
  */
 
-import { Form, useNavigate } from "react-router";
+import { Form, useNavigate, redirect } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
@@ -86,7 +86,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     sortOrder: 0, label: buttonText,
   });
 
-  return Response.redirect(`/app/offers/${newOffer.id}`, 302);
+  return redirect(`/app/offers/${newOffer.id}`);
 };
 
 export default function NewUpsellPage() {

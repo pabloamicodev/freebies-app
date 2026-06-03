@@ -3,7 +3,7 @@
  * Creates a bundle offer with product selections, discount, and optional bundle page.
  */
 
-import { Form, useNavigate } from "react-router";
+import { Form, useNavigate, redirect } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
@@ -127,7 +127,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     label: null,
   });
 
-  return Response.redirect(`/app/offers/${newOffer.id}`, 302);
+  return redirect(`/app/offers/${newOffer.id}`);
 };
 
 export default function NewBundleOfferPage() {

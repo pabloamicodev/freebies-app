@@ -3,7 +3,7 @@
  * Creates offers with discount_type conditions and rewards.
  */
 
-import { Form, useNavigate } from "react-router";
+import { Form, useNavigate, redirect } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
@@ -108,7 +108,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     giftValueCountsForOtherOffers: false,
   });
 
-  return Response.redirect(`/app/offers/${newOffer.id}`, 302);
+  return redirect(`/app/offers/${newOffer.id}`);
 };
 
 export default function NewDiscountOfferPage() {

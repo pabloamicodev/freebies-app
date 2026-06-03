@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, Form } from "react-router";
+import { useNavigate, Form, redirect } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, offerCombinationPolicies, offerConditions, offerRewards, shops } from "@promo/db";
@@ -152,7 +152,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
-  return Response.redirect(`/app/offers/${newOffer.id}`, 302);
+  return redirect(`/app/offers/${newOffer.id}`);
 };
 
 const OFFER_TYPES = [

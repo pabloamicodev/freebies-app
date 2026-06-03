@@ -8,6 +8,11 @@
  */
 import type { HeadersFunction } from "react-router";
 
-export const shopifyHeaders: HeadersFunction = (headersArgs) => {
-  return headersArgs.loaderHeaders;
+export const shopifyHeaders: HeadersFunction = ({ loaderHeaders, actionHeaders }) => {
+  // Merge both: action headers take priority (cover POST/redirect flows)
+  const merged = new Headers(loaderHeaders);
+  for (const [key, value] of actionHeaders.entries()) {
+    merged.set(key, value);
+  }
+  return merged;
 };

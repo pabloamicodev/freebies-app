@@ -1,4 +1,4 @@
-import { useLoaderData, useNavigate, useFetcher } from "react-router";
+import { useLoaderData, useNavigate, useFetcher, redirect } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
@@ -131,7 +131,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
     case "archive": {
       await db.update(offers).set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() }).where(eq(offers.id, offerId));
-      return Response.redirect("/app/offers", 302);
+      return redirect("/app/offers");
     }
     case "duplicate": {
       const originalRows = await db.select().from(offers).where(eq(offers.id, offerId)).limit(1);
@@ -141,7 +141,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         ...original, id: undefined as any, internalName: `${original.internalName}-copy`,
         status: "draft", createdAt: new Date(), updatedAt: new Date(),
       }).returning({ id: offers.id });
-      if (newOffer) return Response.redirect(`/app/offers/${newOffer.id}`, 302);
+      if (newOffer) return redirect(`/app/offers/${newOffer.id}`);
       break;
     }
   }
