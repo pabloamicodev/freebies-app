@@ -97,7 +97,7 @@ fn evaluate_gift_offer(offer: &CompiledOffer, cart: &Cart) -> Vec<Discount> {
             line,
             qty_to_discount,
             offer,
-            &format!("Free gift from offer {}", &offer.id[..8]),
+            &format!("Free gift from offer {}", &offer.id[..offer.id.len().min(8)]),
         );
 
         if let Some(d) = discount {

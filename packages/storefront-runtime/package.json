@@ -5,8 +5,8 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
-    "build": "bun build src/index.ts --outfile dist/promo-engine.js --minify --target browser",
-    "build:dev": "bun build src/index.ts --outfile dist/promo-engine.dev.js --target browser --sourcemap",
+    "build": "node --input-type=module --eval \"import * as esbuild from 'esbuild'; await esbuild.build({ entryPoints: ['src/index.ts'], outfile: 'dist/promo-engine.js', bundle: true, minify: true, platform: 'browser', format: 'iife', globalName: 'PromoEngine' })\"",
+    "build:dev": "node --input-type=module --eval \"import * as esbuild from 'esbuild'; await esbuild.build({ entryPoints: ['src/index.ts'], outfile: 'dist/promo-engine.dev.js', bundle: true, platform: 'browser', format: 'iife', globalName: 'PromoEngine', sourcemap: true })\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -14,6 +14,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "esbuild": "^0.25.0",
     "typescript": "^5.7.0"
   }
 }
