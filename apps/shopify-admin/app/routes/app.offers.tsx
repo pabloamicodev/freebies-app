@@ -426,7 +426,7 @@ function Modal2GiftWizard({
           <Form ref={formRef} method="POST" action="/app/offers/new" style={{ display: "none" }}>
             <input type="hidden" name="offerType" value="gift" />
             <input type="hidden" name="template" value={selected ?? "scratch"} />
-            <input type="hidden" name="internalName" value={`Gift Offer ${new Date().toLocaleDateString()}`} />
+            <input type="hidden" name="internalName" value={`Gift Offer ${new Date().toLocaleString([], { dateStyle: "short", timeStyle: "short" })}`} />
             <input type="hidden" name="publicTitle" value="Free Gift with Purchase" />
             <input type="hidden" name="priority" value="100" />
           </Form>
@@ -574,7 +574,7 @@ function Modal2BundleWizard({ onClose, onBack }: { onClose: () => void; onBack: 
           <Form ref={formRef} method="POST" action="/app/offers/new" style={{ display: "none" }}>
             <input type="hidden" name="offerType" value="bundle" />
             <input type="hidden" name="template" value={selected} />
-            <input type="hidden" name="internalName" value={`Bundle Offer ${new Date().toLocaleDateString()}`} />
+            <input type="hidden" name="internalName" value={`Bundle Offer ${new Date().toLocaleString([], { dateStyle: "short", timeStyle: "short" })}`} />
             <input type="hidden" name="publicTitle" value="Bundle Deal" />
             <input type="hidden" name="priority" value="100" />
           </Form>
@@ -711,7 +711,7 @@ function Modal2UpsellWizard({ onClose, onBack }: { onClose: () => void; onBack: 
           <Form ref={formRef} method="POST" action="/app/offers/new" style={{ display: "none" }}>
             <input type="hidden" name="offerType" value="upsell" />
             <input type="hidden" name="template" value={selected} />
-            <input type="hidden" name="internalName" value={`Upsell Offer ${new Date().toLocaleDateString()}`} />
+            <input type="hidden" name="internalName" value={`Upsell Offer ${new Date().toLocaleString([], { dateStyle: "short", timeStyle: "short" })}`} />
             <input type="hidden" name="publicTitle" value="Frequently Bought Together" />
             <input type="hidden" name="priority" value="100" />
           </Form>
@@ -853,7 +853,7 @@ function Modal2DiscountWizard({ onClose, onBack }: { onClose: () => void; onBack
           <Form ref={formRef} method="POST" action="/app/offers/new" style={{ display: "none" }}>
             <input type="hidden" name="offerType" value="discount" />
             <input type="hidden" name="template" value={selected} />
-            <input type="hidden" name="internalName" value={`Discount Offer ${new Date().toLocaleDateString()}`} />
+            <input type="hidden" name="internalName" value={`Discount Offer ${new Date().toLocaleString([], { dateStyle: "short", timeStyle: "short" })}`} />
             <input type="hidden" name="publicTitle" value="Volume Discount" />
             <input type="hidden" name="priority" value="100" />
           </Form>

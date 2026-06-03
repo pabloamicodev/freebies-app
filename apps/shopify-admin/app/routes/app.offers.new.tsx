@@ -95,21 +95,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const template = (formData.get("template") as string) ?? "scratch";
   const preset = TEMPLATE_PRESETS[template];
 
-  // Names: use preset if available, otherwise form values
-  const formName = formData.get("internalName") as string;
-  const formTitle = formData.get("publicTitle") as string;
-  const internalName = preset ? preset.internalName : formName;
-  const publicTitle = preset ? preset.publicTitle : formTitle;
+  // Names: form values take priority; preset provides fallback defaults
+  const formName = (formData.get("internalName") as string)?.trim();
+  const formTitle = (formData.get("publicTitle") as string)?.trim();
+  const internalName = formName || preset?.internalName || "";
+  const publicTitle = formTitle || preset?.publicTitle || "";
   const priority = parseInt(formData.get("priority") as string, 10) || 100;
 
   if (!internalName || !publicTitle || !offerType) {
     return { error: "Internal name, public title, and type are required" };
   }
 
-  const [newOffer] = await db
-    .insert(offers)
-    .values({ shopId, type: offerType as "gift" | "bundle" | "upsell" | "discount" | "booster", status: "draft", internalName, publicTitle, priority })
-    .returning({ id: offers.id });
+  // Insert with automatic dedup: if (shopId, internalName) already exists, append " (2)", " (3)", etc.
+  let newOffer: { id: string } | undefined;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const candidateName = attempt === 0 ? internalName : `${internalName} (${attempt + 1})`;
+    try {
+      [newOffer] = await db
+        .insert(offers)
+        .values({ shopId, type: offerType as "gift" | "bundle" | "upsell" | "discount" | "booster", status: "draft", internalName: candidateName, publicTitle, priority })
+        .returning({ id: offers.id });
+      break;
+    } catch (err) {
+      if ((err as { code?: string }).code === "23505") continue;
+      throw err;
+    }
+  }
 
   if (!newOffer) return { error: "Failed to create offer" };
 
