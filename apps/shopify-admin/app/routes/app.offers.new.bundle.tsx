@@ -8,7 +8,7 @@ import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import {
-  offers, offerConditions, offerRewards, offerCombinationPolicies,
+  offers, offerRewards, offerCombinationPolicies,
   bundleDefinitions, bundleSteps, bundleTiers,
 } from "@promo/db";
 import { eq } from "drizzle-orm";
@@ -102,7 +102,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           shopId, bundleId: bundleDef.id,
           minQuantity: qty,
           label: tierLabels[i] ?? "",
-          discountType: discountType as any,
+          discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
           value: { amount: parseFloat(tierValues[i] ?? "0"), currencyCode },
           sortOrder: i,
         });
@@ -114,7 +114,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   await db.insert(offerRewards).values({
     shopId, offerId: newOffer.id,
     rewardType: "bundle_discount",
-    discountType: discountType as any,
+    discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
     value: {
       amount: discountType === "percentage" ? discountValue : Math.round(discountValue * 100),
       currencyCode,

@@ -8,36 +8,33 @@ import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
-const SETTING_KEYS = [
-  "app.enabled",
-  "gift.logic_mode",
-  "gift.auto_add",
-  "gift.discount_by",
-  "gift.price_constraint",
-  "gift.selection_limit",
-  "gift.exclude_cart",
-  "gift.remove_on_deactivate",
-  "gift.include_compare_price",
-  "gift.sku_format",
-  "gift.barcode_format",
-  "gift.title_format",
-  "gift.include_product_type",
-  "gift.include_tags",
-  "inventory.method",
-  "inventory.when_out",
-  "fraud.notify_email",
-  "fraud.email_address",
-  "fraud.cart_payment_rule",
-  "fraud.condition_type",
-  "fraud.min_cart_value",
-  "fraud.min_cart_qty",
-  "fraud.max_gifts",
-  "fraud.per_offer_config",
-  "fraud.order_protection",
-  "advanced.draft_order_api",
-] as const;
-
-type SettingKey = (typeof SETTING_KEYS)[number];
+type SettingKey =
+  | "app.enabled"
+  | "gift.logic_mode"
+  | "gift.auto_add"
+  | "gift.discount_by"
+  | "gift.price_constraint"
+  | "gift.selection_limit"
+  | "gift.exclude_cart"
+  | "gift.remove_on_deactivate"
+  | "gift.include_compare_price"
+  | "gift.sku_format"
+  | "gift.barcode_format"
+  | "gift.title_format"
+  | "gift.include_product_type"
+  | "gift.include_tags"
+  | "inventory.method"
+  | "inventory.when_out"
+  | "fraud.notify_email"
+  | "fraud.email_address"
+  | "fraud.cart_payment_rule"
+  | "fraud.condition_type"
+  | "fraud.min_cart_value"
+  | "fraud.min_cart_qty"
+  | "fraud.max_gifts"
+  | "fraud.per_offer_config"
+  | "fraud.order_protection"
+  | "advanced.draft_order_api";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -146,15 +143,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return { success: true };
 };
 
-/* ── Inline icon components ──────────────────────────────── */
-function CheckIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="20 6 9 17 4 12"/>
-    </svg>
-  );
-}
-
 /* ── Section wrapper ─────────────────────────────────────── */
 function Section({ title, desc, children }: { title: string; desc: string; children: React.ReactNode }) {
   return (
@@ -244,7 +232,7 @@ function FunctionIllustration() {
 }
 
 export default function SettingsPage() {
-  const { shop, settings: s } = useLoaderData<typeof loader>();
+  const { settings: s } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
 
   // Local state mirrors

@@ -8,23 +8,16 @@
 import { useLoaderData, Form, Link } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { offers, offerConditions, appSettings } from "@promo/db";
+import { offers, offerConditions } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session, admin } = await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
   const db = getDb();
   const offerId = params["id"]!;
-
-  const shopRows = await db
-    .select({ id: (await import("@promo/db")).shops.id })
-    .from((await import("@promo/db")).shops)
-    .where(eq((await import("@promo/db")).shops.myshopifyDomain, session.shop))
-    .limit(1);
-  const shopId = shopRows[0]?.id ?? "";
 
   const [offerRows, conditionRows] = await Promise.all([
     db.select().from(offers).where(eq(offers.id, offerId)).limit(1),
@@ -43,8 +36,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         }
       }
     `);
-    const marketsData = await marketsRes.json() as any;
-    markets = marketsData.data?.markets?.nodes?.map((m: any) => ({
+    const marketsData = await marketsRes.json() as unknown;
+    const marketsNodes = (marketsData as { data?: { markets?: { nodes?: Array<{ id: string; name: string; handle: string; currencySettings: { baseCurrency: { currencyCode: string } } }> } } }).data?.markets?.nodes;
+    markets = marketsNodes?.map((m) => ({
       id: m.id,
       name: m.name,
       handle: m.handle,
@@ -69,7 +63,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  await authenticate.admin(request);
   const db = getDb();
   const offerId = params["id"]!;
   const formData = await request.formData();
@@ -115,7 +109,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 };
 
 export default function MultiCurrencyPage() {
-  const { offer, offerId, markets, currencyOverrides, baseThresholdCents, baseCurrency } = useLoaderData<typeof loader>();
+  const { offer, markets, currencyOverrides, baseThresholdCents, baseCurrency } = useLoaderData<typeof loader>();
 
   if (!offer) {
     return (

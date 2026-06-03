@@ -12,7 +12,7 @@ import { useLoaderData, Form } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { shops, appSettings, offers } from "@promo/db";
+import { shops, offers } from "@promo/db";
 import { eq, and, count } from "drizzle-orm";
 import { isShadowModeEnabled, setShadowMode } from "../lib/shadow-mode.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";

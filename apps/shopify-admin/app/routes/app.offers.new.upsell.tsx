@@ -78,7 +78,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   await db.insert(offerRewards).values({
     shopId, offerId: newOffer.id,
     rewardType: "upsell_discount",
-    discountType: discountType as any,
+    discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
     value: { amount: discountType === "percentage" ? discountValue : Math.round(discountValue * 100), currencyCode },
     target: { variantIds: upsellVariantGids },
     quantity: null,

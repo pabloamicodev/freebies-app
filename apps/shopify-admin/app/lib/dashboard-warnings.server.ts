@@ -3,7 +3,7 @@
  * Shown prominently in the admin dashboard.
  */
 
-import { getDb, shops, offers, offerRewards, productCache, appSettings } from "@promo/db";
+import { getDb, offers, offerRewards, productCache, appSettings } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 
 export interface DashboardWarning {
@@ -14,7 +14,7 @@ export interface DashboardWarning {
   action?: { label: string; url: string };
 }
 
-export async function getDashboardWarnings(shopId: string, shopDomain: string): Promise<DashboardWarning[]> {
+export async function getDashboardWarnings(shopId: string, _shopDomain: string): Promise<DashboardWarning[]> {
   const db = getDb();
   const warnings: DashboardWarning[] = [];
 
@@ -98,10 +98,7 @@ export async function getDashboardWarnings(shopId: string, shopDomain: string): 
   // (simplified check — full check would require Admin API calls)
 
   // ── 5. Function config stale ──────────────────────────────────────────────────
-  const staleOffers = activeOffers.filter((o) => {
-    // In a real implementation, check if compiledConfig matches current conditions/rewards
-    return false;
-  });
+  // TODO: check if compiledConfig matches current conditions/rewards
 
   // ── 6. No active offers warning ───────────────────────────────────────────────
   if (activeOffers.length === 0) {

@@ -7,7 +7,7 @@
 
 import { Hono } from "hono";
 import { createWebhookHmacMiddleware } from "../lib/hmac.server.js";
-import { getDb, shops, productCache, variantCache, analyticsEvents } from "@promo/db";
+import { getDb, shops, productCache, analyticsEvents } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 
 type WebhookEnv = { Variables: { rawBody: string } };
@@ -34,7 +34,7 @@ webhookApp.post("/products/update", async (c) => {
   if (!shopId) return c.text("OK", 200);
 
   const rawBody = c.get("rawBody") as string;
-  const product = JSON.parse(rawBody) as any;
+  const product = JSON.parse(rawBody) as { id: number; admin_graphql_api_id: string };
 
   // Enqueue partial sync for this product
   const { productSyncQueue } = await import("../lib/queues.server.js");
@@ -79,7 +79,7 @@ webhookApp.post("/inventory", async (c) => {
   const rawBody = c.get("rawBody") as string;
   const payload = JSON.parse(rawBody) as { inventory_item_id: number; location_id: number; available: number };
 
-  const { inventorySyncQueue } = await import("../lib/queues.server.js") as any;
+  const { inventorySyncQueue } = await import("../lib/queues.server.js");
   const [shop] = await getDb().select({ accessTokenEncrypted: shops.accessTokenEncrypted, myshopifyDomain: shops.myshopifyDomain })
     .from(shops).where(eq(shops.id, shopId)).limit(1);
 
@@ -106,19 +106,25 @@ webhookApp.post("/orders", async (c) => {
   if (!shopId) return c.text("OK", 200);
 
   const rawBody = c.get("rawBody") as string;
-  const order = JSON.parse(rawBody) as any;
+  const order = JSON.parse(rawBody) as {
+    id: number;
+    admin_graphql_api_id: string;
+    cart_token?: string;
+    total_price?: string;
+    note_attributes?: Array<{ name: string; value: string }>;
+  };
 
   if (topic === "orders/paid") {
     // Extract offer attribution from note_attributes
     const offerIds: string[] = [];
-    const sessionId = order.note_attributes?.find((a: any) => a.name === "_promo_engine_session_id")?.value ?? null;
-    const offerIdsAttr = order.note_attributes?.find((a: any) => a.name === "_promo_engine_offer_ids")?.value;
+    const sessionId = order.note_attributes?.find((a) => a.name === "_promo_engine_session_id")?.value ?? null;
+    const offerIdsAttr = order.note_attributes?.find((a) => a.name === "_promo_engine_offer_ids")?.value;
     if (offerIdsAttr) {
       try { offerIds.push(...JSON.parse(offerIdsAttr)); } catch {}
     }
 
     // Enqueue attribution reconciliation
-    const { analyticsReconcileQueue } = await import("../lib/queues.server.js") as any;
+    const { analyticsReconcileQueue } = await import("../lib/queues.server.js");
     if (analyticsReconcileQueue) {
       await analyticsReconcileQueue.add(`order-paid-${order.id}`, {
         shopId,

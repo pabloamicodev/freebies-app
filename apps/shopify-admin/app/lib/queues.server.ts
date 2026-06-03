@@ -14,7 +14,7 @@ export const redis = new Redis(redisUrl, {
 });
 
 function createQueue(name: string) {
-  return new Queue(name, { connection: redis as any });
+  return new Queue(name, { connection: redis as Redis });
 }
 
 export const productSyncQueue = createQueue("product-sync");

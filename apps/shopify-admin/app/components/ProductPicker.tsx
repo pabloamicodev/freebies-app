@@ -87,12 +87,12 @@ export function ProductPicker({
   useEffect(() => {
     if (open) {
       setSelected(new Set(selectedIds));
-      fetchProducts("");
+      void fetchProducts("");
     }
   }, [open]);
 
   useEffect(() => {
-    debouncedFetch(query);
+    void debouncedFetch(query);
   }, [query]);
 
   function toggleVariant(variantGid: string) {
@@ -175,8 +175,6 @@ export function ProductPicker({
                 mode === "products"
                   ? selected.has(product.id)
                   : variantGids.length > 0 && variantGids.every((v) => selected.has(v));
-              const someSelected = variantGids.some((v) => selected.has(v));
-
               return (
                 <ResourceItem
                   id={product.id}

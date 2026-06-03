@@ -15,7 +15,7 @@ import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  await authenticate.admin(request);
   const db = getDb();
   const offerId = params["id"]!;
 
@@ -70,8 +70,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     await db.insert(offerRewards).values({
       shopId, offerId,
-      rewardType: rewardType as any,
-      discountType: discountType as any,
+      rewardType: rewardType as "product_gift" | "shipping_discount" | "product_discount" | "order_discount" | "bundle_discount" | "upsell_discount",
+      discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
       value: {
         amount: discountType === "percentage" ? discountValue : Math.round(discountValue * 100),
         currencyCode,

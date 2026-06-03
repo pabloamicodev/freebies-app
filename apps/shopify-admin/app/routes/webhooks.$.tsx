@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm";
  * Each webhook topic is routed to its handler below.
  */
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { topic, shop, session, payload } = await authenticate.webhook(request);
+  const { topic, shop, payload } = await authenticate.webhook(request);
 
   switch (topic) {
     case "PRODUCTS_UPDATE":
@@ -131,7 +131,7 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
       tags: product.tags ? product.tags.split(",").map((t) => t.trim()) : [],
       status: product.status.toUpperCase(),
       imageUrl,
-      raw: product as any,
+      raw: product as unknown,
       syncedAt: new Date(),
     })
     .onConflictDoUpdate({
@@ -144,7 +144,7 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
         tags: product.tags ? product.tags.split(",").map((t) => t.trim()) : [],
         status: product.status.toUpperCase(),
         imageUrl,
-        raw: product as any,
+        raw: product as unknown,
         syncedAt: new Date(),
       },
     });
@@ -168,7 +168,7 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
           inventoryPolicy: variant.inventory_policy.toUpperCase(),
           availableForSale: variant.available,
           requiresSellingPlan: variant.requires_selling_plan,
-          raw: variant as any,
+          raw: variant as unknown,
           syncedAt: new Date(),
         })
         .onConflictDoUpdate({
@@ -181,7 +181,7 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
             inventoryQuantity: variant.inventory_quantity,
             inventoryPolicy: variant.inventory_policy.toUpperCase(),
             availableForSale: variant.available,
-            raw: variant as any,
+            raw: variant as unknown,
             syncedAt: new Date(),
           },
         });
@@ -201,17 +201,17 @@ async function handleProductDelete(shop: string, legacyProductId: number) {
     );
 }
 
-async function handleInventoryUpdate(shop: string, _payload: InventoryWebhookPayload) {
+async function handleInventoryUpdate(_shop: string, _payload: InventoryWebhookPayload) {
   // Enqueue full variant re-sync via BullMQ worker (handled asynchronously)
   // The sync worker will update variantCache.inventoryQuantity via Admin API
 }
 
-async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
+async function handleOrderPaid(_shop: string, _order: OrderWebhookPayload) {
   // Enqueue attribution reconciliation job — match cart_token / note_attributes
   // to analyticsEvents, update offerAttribution records
 }
 
-async function handleOrderCancelled(shop: string, order: OrderWebhookPayload) {
+async function handleOrderCancelled(_shop: string, _order: OrderWebhookPayload) {
   // Reverse attribution for cancelled order
 }
 

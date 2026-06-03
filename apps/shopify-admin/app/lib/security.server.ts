@@ -6,7 +6,6 @@
  * - Input sanitization
  */
 
-import type { AppLoadContext } from "react-router";
 
 /** Content Security Policy headers for the embedded admin app. */
 export const CSP_HEADERS = {

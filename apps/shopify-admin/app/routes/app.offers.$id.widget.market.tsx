@@ -80,7 +80,7 @@ export default function WidgetMarketPage() {
   const { offerId, markets, marketOverrides, baseThresholdCents, widgetId } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
 
-  async function handleSave(overrides: any[]) {
+  async function handleSave(overrides: Array<{ marketId: string; thresholdCents: number | null }>) {
     const form = new FormData();
     form.append("overrides", JSON.stringify(overrides));
     await fetch("", { method: "POST", body: form });
@@ -146,7 +146,7 @@ export default function WidgetMarketPage() {
               </div>
             </div>
           ) : (
-            markets.map((market: any) => (
+            markets.map((market) => (
               <div key={market.id} className="b-card">
                 <div className="b-card-header">
                   <div className="b-row b-gap-3">

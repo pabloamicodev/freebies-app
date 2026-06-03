@@ -19,7 +19,7 @@ const TIMEZONES = [
 ];
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  await authenticate.admin(request);
   const db = getDb();
   const offerId = params["id"]!;
   const offerRows = await db.select().from(offers).where(eq(offers.id, offerId)).limit(1);
@@ -36,7 +36,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  await authenticate.admin(request);
   const db = getDb();
   const offerId = params["id"]!;
   const formData = await request.formData();

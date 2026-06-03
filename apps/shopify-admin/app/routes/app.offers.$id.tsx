@@ -7,13 +7,13 @@ import { eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
   IconChevronLeft, IconChevronDown, IconInfo, IconRefresh,
-  IconPlus, IconCheck, IconBot, IconLink, IconClock, IconCondition,
+  IconPlus, IconCheck, IconBot, IconLink, IconCondition,
 } from "../components/Icons.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  await authenticate.admin(request);
   const db = getDb();
   const offerId = params["id"];
   if (!offerId) throw new Response("Not found", { status: 404 });
@@ -108,7 +108,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const discountValue = parseFloat(formData.get("discountValue") as string) || 100;
       const isAutoAdd = formData.get("isAutoAdd") === "on";
       await db.update(offerRewards).set({
-        discountType: discountType as any,
+        discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
         value: { amount: discountValue, currencyCode: "USD" },
         quantity,
         isAutoAdd,
@@ -118,7 +118,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     case "publish": {
       await db.update(offers).set({ status: "active", updatedAt: new Date() }).where(eq(offers.id, offerId));
       try {
-        const { offerPublishQueue } = await import("../lib/queues.server.js") as any;
+        const { offerPublishQueue } = await import("../lib/queues.server.js") as { offerPublishQueue?: { add: (name: string, data: unknown, opts?: unknown) => Promise<unknown> } };
         if (offerPublishQueue) {
           await offerPublishQueue.add(`publish-${offerId}`, { offerId, shopDomain: session.shop }, { priority: 1 });
         }
@@ -138,7 +138,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const original = originalRows[0];
       if (!original) break;
       const [newOffer] = await db.insert(offers).values({
-        ...original, id: undefined as any, internalName: `${original.internalName}-copy`,
+        ...original, id: undefined as unknown as string, internalName: `${original.internalName}-copy`,
         status: "draft", createdAt: new Date(), updatedAt: new Date(),
       }).returning({ id: offers.id });
       if (newOffer) return redirect(`/app/offers/${newOffer.id}`);
@@ -254,7 +254,7 @@ function ConditionCard({
     fd.append("intent", "update_condition");
     fd.append("conditionId", conditionId);
     fd.append("conditionValue", JSON.stringify(overrideVal ?? val));
-    fetcher.submit(fd, { method: "POST" });
+    void fetcher.submit(fd, { method: "POST" });
   }
 
   const title = CONDITION_TYPE_NAMES[conditionType] ?? conditionType;
@@ -597,12 +597,13 @@ export default function OfferDetailPage() {
   const [endsAt, setEndsAt] = useState(offer.endsAt ? new Date(offer.endsAt).toISOString().slice(0, 16) : "");
 
   const [giftTab, setGiftTab] = useState<"product" | "shipping">("product");
-  const [discountType, setDiscountType] = useState((rewards[0] as any)?.discountType ?? "free");
+  const firstReward = rewards[0] as typeof rewards[0] | undefined;
+  const [discountType, setDiscountType] = useState(firstReward?.discountType ?? "free");
   const [discountValue, setDiscountValue] = useState(
-    String(((rewards[0] as any)?.value as any)?.amount ?? 100)
+    String((firstReward?.value as { amount?: number } | null)?.amount ?? 100)
   );
-  const [receivesAll, setReceivesAll] = useState((rewards[0] as any)?.isAutoAdd !== false);
-  const [giftCount, setGiftCount] = useState(String((rewards[0] as any)?.quantity ?? 1));
+  const [receivesAll, setReceivesAll] = useState(firstReward?.isAutoAdd !== false);
+  const [giftCount, setGiftCount] = useState(String(firstReward?.quantity ?? 1));
 
   const [addingCondition, setAddingCondition] = useState(false);
   const [newCondType, setNewCondType] = useState("");
@@ -623,14 +624,14 @@ export default function OfferDetailPage() {
     fd.append("publicTitle", publicTitle);
     fd.append("startsAt", startsAt);
     fd.append("endsAt", endsAt);
-    fetcher.submit(fd, { method: "POST" });
+    void fetcher.submit(fd, { method: "POST" });
   }
 
   function deleteCondition(conditionId: string) {
     const fd = new FormData();
     fd.append("intent", "delete_condition");
     fd.append("conditionId", conditionId);
-    fetcher.submit(fd, { method: "POST" });
+    void fetcher.submit(fd, { method: "POST" });
   }
 
   function addCondition() {
@@ -646,7 +647,7 @@ export default function OfferDetailPage() {
     fd.append("conditionType", newCondType);
     fd.append("scope", "main");
     fd.append("conditionValue", JSON.stringify(defaults[newCondType] ?? {}));
-    fetcher.submit(fd, { method: "POST" });
+    void fetcher.submit(fd, { method: "POST" });
     setAddingCondition(false);
     setNewCondType("");
   }
@@ -654,7 +655,7 @@ export default function OfferDetailPage() {
   function submitAction(intent: string) {
     const fd = new FormData();
     fd.append("intent", intent);
-    fetcher.submit(fd, { method: "POST" });
+    void fetcher.submit(fd, { method: "POST" });
   }
 
   return (
@@ -836,7 +837,7 @@ export default function OfferDetailPage() {
                   <div className="b-discount-type-row">
                     <div>
                       <div className="b-discount-type-label">Type:</div>
-                      <select className="b-select" value={discountType} onChange={(e) => setDiscountType(e.target.value)}>
+                      <select className="b-select" value={discountType} onChange={(e) => setDiscountType(e.target.value as typeof discountType)}>
                         <option value="free">Percentage</option>
                         <option value="percentage">Fixed amount</option>
                       </select>

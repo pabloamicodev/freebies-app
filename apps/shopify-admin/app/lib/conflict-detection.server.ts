@@ -30,10 +30,8 @@ export async function detectConflicts(shopId: string): Promise<OfferConflict[]> 
 
   if (activeOffers.length < 2) return conflicts;
 
-  const offerIds = activeOffers.map((o) => o.id);
-
   // Load conditions and rewards for all active offers
-  const [conditionRows, rewardRows] = await Promise.all([
+  const [, rewardRows] = await Promise.all([
     db.select().from(offerConditions).where(eq(offerConditions.shopId, shopId)),
     db.select().from(offerRewards).where(eq(offerRewards.shopId, shopId)),
   ]);
@@ -79,10 +77,7 @@ export async function detectConflicts(shopId: string): Promise<OfferConflict[]> 
   }
 
   // Check for stop-lower-priority that may unexpectedly block other offers
-  const stopLowerOffers = activeOffers.filter((o) => {
-    // Check if any condition has stop_lower_priority behavior
-    return false; // Need to check combination policies
-  });
+  // TODO: check combination policies for stop_lower_priority behavior
 
   return conflicts;
 }

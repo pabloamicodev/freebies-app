@@ -111,7 +111,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   };
 };
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
+export const action = async ({ request, params: _params }: ActionFunctionArgs) => {
   await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
@@ -185,7 +185,7 @@ export default function OfferDebugPage() {
                 className="b-btn b-btn-secondary b-btn-sm"
                 onClick={() => {
                   if (offer.compiledConfigJson) {
-                    navigator.clipboard.writeText(offer.compiledConfigJson);
+                    void navigator.clipboard.writeText(offer.compiledConfigJson);
                   }
                 }}
                 disabled={!offer.compiledConfigJson}

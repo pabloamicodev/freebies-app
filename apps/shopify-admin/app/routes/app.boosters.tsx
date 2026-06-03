@@ -6,7 +6,7 @@
 
 import { useLoaderData, useNavigate, Form } from "react-router";
 import { authenticate } from "../shopify.server.js";
-import { getDb, shops, offers, offerRewards, widgets } from "@promo/db";
+import { getDb, shops, offers, widgets } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
@@ -48,7 +48,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  await authenticate.admin(request);
   const db = getDb();
   const formData = await request.formData();
   const intent = formData.get("intent") as string;

@@ -9,7 +9,7 @@
  */
 
 import { getDb, analyticsEvents, offers } from "@promo/db";
-import { eq, and, gte, desc, sql } from "drizzle-orm";
+import { eq, and, gte, sql } from "drizzle-orm";
 
 export interface IngestEventPayload {
   shopId: string;

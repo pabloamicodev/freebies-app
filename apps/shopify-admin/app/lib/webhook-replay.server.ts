@@ -9,7 +9,6 @@
 import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
 
-const SHOPIFY_API_VERSION = "2026-04";
 
 export type ReplayTopic =
   | "products/update"

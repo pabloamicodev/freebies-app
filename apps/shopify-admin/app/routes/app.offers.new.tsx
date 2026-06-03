@@ -108,7 +108,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const [newOffer] = await db
     .insert(offers)
-    .values({ shopId, type: offerType as any, status: "draft", internalName, publicTitle, priority })
+    .values({ shopId, type: offerType as "gift" | "bundle" | "upsell" | "discount" | "booster", status: "draft", internalName, publicTitle, priority })
     .returning({ id: offers.id });
 
   if (!newOffer) return { error: "Failed to create offer" };
@@ -131,7 +131,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       offerId: newOffer.id,
       scope: preset.condition.scope,
       conditionType: preset.condition.conditionType,
-      operator: preset.condition.operator as any,
+      operator: preset.condition.operator as "gte" | "lte" | "eq" | "in",
       value: preset.condition.value,
       sortOrder: 0,
       isEnabled: true,
@@ -140,8 +140,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     await db.insert(offerRewards).values({
       shopId,
       offerId: newOffer.id,
-      rewardType: preset.reward.rewardType as any,
-      discountType: preset.reward.discountType as any,
+      rewardType: preset.reward.rewardType as "product_gift" | "order_discount" | "bundle_discount" | "upsell_discount",
+      discountType: preset.reward.discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
       value: { amount: 100, currencyCode: "USD" },
       target: { scope: "cart" },
       quantity: preset.reward.quantity,

@@ -6,7 +6,7 @@
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { analyticsEvents, offers, cartMutationLogs } from "@promo/db";
+import { analyticsEvents, offers } from "@promo/db";
 import { eq, and, gte, count, sql } from "drizzle-orm";
 import type { LoaderFunctionArgs } from "react-router";
 import "../styles/bogos.css";

@@ -12,7 +12,7 @@ import { productCache, variantCache } from "@promo/db";
 import { eq, and, like, or, sql } from "drizzle-orm";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session, admin } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const q = url.searchParams.get("q") ?? "";
   const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "20", 10), 50);

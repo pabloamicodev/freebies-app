@@ -3,9 +3,8 @@ import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, shops } from "@promo/db";
-import { eq, and, sql, count } from "drizzle-orm";
+import { eq, and, count } from "drizzle-orm";
 import { getDashboardWarnings } from "../lib/dashboard-warnings.server.js";
-import { getCampaignBreakdown } from "../lib/analytics.server.js";
 import type { LoaderFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";

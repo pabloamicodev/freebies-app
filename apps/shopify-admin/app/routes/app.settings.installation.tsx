@@ -25,7 +25,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         }
       }
     `);
-    const data = await res.json() as any;
+    interface ThemeQueryResult {
+      data?: { themes?: { nodes?: Array<{ id: string; name: string; role: string }> } };
+    }
+    const data = await res.json() as ThemeQueryResult;
     const mainTheme = data.data?.themes?.nodes?.[0];
     activeThemeId = mainTheme?.id ?? "";
     // Note: checking actual app embed status requires a separate API call

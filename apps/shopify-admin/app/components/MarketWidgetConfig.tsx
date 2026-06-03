@@ -9,7 +9,7 @@
 import { useState, useEffect } from "react";
 import {
   LegacyCard, BlockStack, InlineStack, Text, Badge, TextField,
-  Spinner, Banner, Collapsible, Button, Box, Divider, Select,
+  Spinner, Banner, Collapsible, Button, Box, Divider,
 } from "@shopify/polaris";
 import type { ShopifyMarket } from "../lib/markets.server.js";
 
@@ -33,7 +33,7 @@ interface MarketWidgetConfigProps {
 }
 
 export function MarketWidgetConfig({
-  widgetId,
+  widgetId: _widgetId,
   baseThresholdCents,
   baseCurrencyCode = "USD",
   defaultOverrides = [],

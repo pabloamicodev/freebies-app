@@ -3,7 +3,7 @@ import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { analyticsEvents, offers, shops } from "@promo/db";
-import { eq, and, gte, count, desc } from "drizzle-orm";
+import { eq, and, gte, desc } from "drizzle-orm";
 import type { LoaderFunctionArgs } from "react-router";
 import {
   IconChevronDown, IconChevronLeft, IconChevronRight,
@@ -153,12 +153,12 @@ function makePlaceholderData(days: number, seed: number) {
 
 export default function AnalyticsPage() {
   const { orders, totalSales, avgOrder, orderCount, days } = useLoaderData<typeof loader>();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
 
   const salesData = makePlaceholderData(days, 1).map((d, i) => ({ x: d.x, y: i % 3 === 0 ? d.y * 1.5 : d.y }));
-  const ordersData = makePlaceholderData(days, 3).map((d, i) => ({ x: d.x, y: Math.round(d.y / 40) + 1 }));
+  const ordersData = makePlaceholderData(days, 3).map((d, _i) => ({ x: d.x, y: Math.round(d.y / 40) + 1 }));
 
   const filteredOrders = orders.filter((o) =>
     !search || o.orderId.toLowerCase().includes(search.toLowerCase()) || o.giftName.toLowerCase().includes(search.toLowerCase()),

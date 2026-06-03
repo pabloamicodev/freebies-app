@@ -6,7 +6,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { getDb, shops, offers, offerConditions, offerRewards, offerCombinationPolicies, analyticsEvents } from "@promo/db";
+import { getDb, shops, offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import { evaluate } from "@promo/rule-engine";
 import { EvaluationInputSchema } from "@promo/shared-types";
 import { eq, and } from "drizzle-orm";
@@ -85,7 +85,6 @@ app.get("/runtime", async (c) => {
 // ─── POST /evaluate ───────────────────────────────────────────────────────────
 app.post("/evaluate", async (c) => {
   const shopDomain = c.req.header("X-Promo-Shop");
-  const sessionId = c.req.header("X-Promo-Session") ?? "anonymous";
 
   if (!shopDomain) return c.json({ error: "Missing X-Promo-Shop header" }, 400);
 
@@ -259,10 +258,14 @@ app.post("/analytics", rateLimitMiddleware("analytics"), async (c) => {
   void ingestEventBatch(shop.id, events).catch(() => {});
 
   // Track attribution for qualification events
+  type AnalyticsEvent = { event_name?: string; session_id?: string; offer_id?: string; cart_token?: string };
   void Promise.all(
     events
-      .filter((e: any) => e?.event_name === "promo_engine:offer_qualified" && e?.session_id && e?.offer_id)
-      .map((e: any) => trackAttribution(shop.id, e.session_id, e.offer_id, e.cart_token ?? null))
+      .filter((e): e is AnalyticsEvent & { session_id: string; offer_id: string } => {
+        const ev = e as AnalyticsEvent;
+        return ev?.event_name === "promo_engine:offer_qualified" && !!ev?.session_id && !!ev?.offer_id;
+      })
+      .map((e) => trackAttribution(shop.id, e.session_id, e.offer_id, e.cart_token ?? null))
   ).catch(() => {});
 
   return c.json({ ok: true }, 200);
@@ -271,7 +274,6 @@ app.post("/analytics", rateLimitMiddleware("analytics"), async (c) => {
 // ─── POST /prepare-checkout ───────────────────────────────────────────────────
 app.post("/prepare-checkout", async (c) => {
   const shopDomain = c.req.header("X-Promo-Shop");
-  const sessionId = c.req.header("X-Promo-Session") ?? "anonymous";
 
   if (!shopDomain) return c.json({ error: "Missing shop" }, 400);
 
@@ -287,13 +289,6 @@ app.post("/prepare-checkout", async (c) => {
   if (!parseResult.success) {
     return c.json({ error: "Invalid input", ready: false }, 400);
   }
-
-  // Forward to evaluate logic
-  const evalRequest = new Request(c.req.url.replace("/prepare-checkout", "/evaluate"), {
-    method: "POST",
-    headers: Object.fromEntries(c.req.raw.headers.entries()),
-    body: JSON.stringify(parseResult.data),
-  });
 
   return c.json({ ready: true, message: "Cart validated" }, 200);
 });

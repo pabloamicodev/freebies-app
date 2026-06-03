@@ -4,6 +4,7 @@
  */
 
 import type { Context } from "hono";
+import type Redis from "ioredis";
 
 interface RateLimitConfig {
   /** Max requests allowed in the window. */
@@ -22,7 +23,7 @@ const LIMITS: Record<string, RateLimitConfig> = {
   webhooks:       { max: 1000,windowSecs: 60, prefix: "rl:wh" },
 };
 
-let _redis: any = null;
+let _redis: Redis | null = null;
 
 async function getRedis() {
   if (!_redis) {
@@ -78,8 +79,6 @@ export async function checkRateLimit(
 export function rateLimitMiddleware(limitName: keyof typeof LIMITS) {
   return async (c: Context, next: () => Promise<void>) => {
     const shopDomain = c.req.header("X-Promo-Shop") ?? c.req.header("X-Shopify-Shop-Domain") ?? "unknown";
-    const sessionId = c.req.header("X-Promo-Session") ?? "";
-
     // Rate limit by shop (primary) and session (secondary)
     const shopKey = `${shopDomain}`;
     const { allowed, remaining, resetIn } = await checkRateLimit(limitName, shopKey);

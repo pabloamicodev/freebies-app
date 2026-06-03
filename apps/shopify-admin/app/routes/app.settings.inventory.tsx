@@ -15,13 +15,6 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const links = () => [{ rel: "stylesheet", href: bogosStyles }];
 
-const INVENTORY_SETTINGS = [
-  "gift.oos_behavior",
-  "gift.auto_swap_enabled",
-  "gift.continue_selling_enabled",
-  "gift.hide_oos_gifts",
-] as const;
-
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const db = getDb();

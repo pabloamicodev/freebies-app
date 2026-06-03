@@ -4,7 +4,7 @@
  * validated form for each condition type.
  */
 
-import { useLoaderData, useNavigate, Form, Link } from "react-router";
+import { useLoaderData, Form, Link } from "react-router";
 import { useState } from "react";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { authenticate } from "../shopify.server.js";
@@ -16,7 +16,7 @@ import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  await authenticate.admin(request);
   const db = getDb();
   const offerId = params["id"]!;
 
@@ -152,7 +152,6 @@ const SUB_CONDITION_TYPES = [
 
 export default function OfferConditionsPage() {
   const { offer, conditions } = useLoaderData<typeof loader>();
-  const navigate = useNavigate();
   const [addingScope, setAddingScope] = useState<"main" | "sub" | null>(null);
   const [selectedType, setSelectedType] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);

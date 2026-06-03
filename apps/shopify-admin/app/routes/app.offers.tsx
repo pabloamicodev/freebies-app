@@ -1,4 +1,4 @@
-import { useLoaderData, useNavigate, useSearchParams, Form } from "react-router";
+import { useLoaderData, useNavigate, useSearchParams, useSubmit, Form } from "react-router";
 import { useState, useRef } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
@@ -15,10 +15,9 @@ import { OfferToggle } from "../components/BogosSwitch.js";
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 type OfferStatus = "draft" | "active" | "paused" | "scheduled" | "expired" | "archived";
-type OfferType = "gift" | "bundle" | "upsell" | "discount" | "booster";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  await authenticate.admin(request);
   const db = getDb();
   const url = new URL(request.url);
   const statusFilter = url.searchParams.get("status") as OfferStatus | "all" | null;
@@ -54,7 +53,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  await authenticate.admin(request);
   const db = getDb();
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
@@ -371,6 +370,7 @@ function Modal2GiftWizard({
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  const submit = useSubmit();
 
   return (
     <div className="b-modal-overlay" onClick={onClose}>
@@ -435,7 +435,7 @@ function Modal2GiftWizard({
           <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
           <button
             className="b-btn b-btn-dark"
-            onClick={() => formRef.current?.submit()}
+            onClick={() => { if (formRef.current) void submit(formRef.current); }}
           >
             Create offer
           </button>
@@ -541,6 +541,7 @@ const BUNDLE_TEMPLATES = [
 function Modal2BundleWizard({ onClose, onBack }: { onClose: () => void; onBack: () => void }) {
   const [selected, setSelected] = useState<string>("classic");
   const formRef = useRef<HTMLFormElement>(null);
+  const submit = useSubmit();
   return (
     <div className="b-modal-overlay" onClick={onClose}>
       <div className="b-modal" onClick={(e) => e.stopPropagation()}>
@@ -580,7 +581,7 @@ function Modal2BundleWizard({ onClose, onBack }: { onClose: () => void; onBack: 
         </div>
         <div className="b-modal-footer">
           <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
-          <button className="b-btn b-btn-dark" onClick={() => formRef.current?.submit()}>Create bundle</button>
+          <button className="b-btn b-btn-dark" onClick={() => { if (formRef.current) void submit(formRef.current); }}>Create bundle</button>
         </div>
       </div>
     </div>
@@ -677,6 +678,7 @@ const UPSELL_TEMPLATES = [
 function Modal2UpsellWizard({ onClose, onBack }: { onClose: () => void; onBack: () => void }) {
   const [selected, setSelected] = useState<string>("fbt");
   const formRef = useRef<HTMLFormElement>(null);
+  const submit = useSubmit();
   return (
     <div className="b-modal-overlay" onClick={onClose}>
       <div className="b-modal" onClick={(e) => e.stopPropagation()}>
@@ -716,7 +718,7 @@ function Modal2UpsellWizard({ onClose, onBack }: { onClose: () => void; onBack: 
         </div>
         <div className="b-modal-footer">
           <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
-          <button className="b-btn b-btn-dark" onClick={() => formRef.current?.submit()}>Create upsell</button>
+          <button className="b-btn b-btn-dark" onClick={() => { if (formRef.current) void submit(formRef.current); }}>Create upsell</button>
         </div>
       </div>
     </div>
@@ -821,6 +823,7 @@ const DISCOUNT_TEMPLATES = [
 function Modal2DiscountWizard({ onClose, onBack }: { onClose: () => void; onBack: () => void }) {
   const [selected, setSelected] = useState<string>("volume");
   const formRef = useRef<HTMLFormElement>(null);
+  const submit = useSubmit();
   return (
     <div className="b-modal-overlay" onClick={onClose}>
       <div className="b-modal" onClick={(e) => e.stopPropagation()}>
@@ -857,7 +860,7 @@ function Modal2DiscountWizard({ onClose, onBack }: { onClose: () => void; onBack
         </div>
         <div className="b-modal-footer">
           <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
-          <button className="b-btn b-btn-dark" onClick={() => formRef.current?.submit()}>Create discount</button>
+          <button className="b-btn b-btn-dark" onClick={() => { if (formRef.current) void submit(formRef.current); }}>Create discount</button>
         </div>
       </div>
     </div>
@@ -1114,7 +1117,7 @@ export default function OffersPage() {
                           <button
                             type="button"
                             className="bogos-action-btn"
-                            onClick={(e) => { e.stopPropagation(); navigate(`/app/offers/${offer.id}`); }}
+                            onClick={(e) => { e.stopPropagation(); void navigate(`/app/offers/${offer.id}`); }}
                             aria-label="Duplicate"
                           >
                             <IconCopy />
@@ -1126,7 +1129,7 @@ export default function OffersPage() {
                           <button
                             type="button"
                             className="bogos-action-btn red"
-                            onClick={(e) => { e.stopPropagation(); deleteOffer(offer.id); }}
+                            onClick={(e) => { e.stopPropagation(); void deleteOffer(offer.id); }}
                             aria-label="Delete"
                           >
                             <IconTrash />

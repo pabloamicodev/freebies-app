@@ -11,12 +11,12 @@ import { offers, offerConditions, offerRewards, offerCombinationPolicies } from 
 import { evaluate } from "@promo/rule-engine";
 import { eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
-import type { EvaluationInput, EvaluationResult } from "@promo/shared-types";
+import type { EvaluationInput } from "@promo/shared-types";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  await authenticate.admin(request);
   const db = getDb();
   const offerId = params["id"];
   if (!offerId) throw new Response("Not found", { status: 404 });
@@ -149,7 +149,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         }
       : null,
     locale: "en",
-    salesChannel: salesChannel as any,
+    salesChannel: salesChannel as "online_store" | "pos" | "mobile_app" | "headless",
     requestedUrl: null,
     sessionId: "preview-session",
   };

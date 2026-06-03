@@ -3,6 +3,8 @@
  * Prevents spoofed requests from hitting our endpoints.
  */
 
+import type { Context } from "hono";
+
 const encoder = new TextEncoder();
 
 /**
@@ -72,7 +74,7 @@ function timingSafeEqual(a: string, b: string): boolean {
  * Usage: app.use("/webhooks/*", webhookHmacMiddleware())
  */
 export function createWebhookHmacMiddleware(secret: string) {
-  return async (c: any, next: () => Promise<void>) => {
+  return async (c: Context, next: () => Promise<void>) => {
     const hmacHeader = c.req.header("X-Shopify-Hmac-Sha256") ?? "";
     const rawBody = await c.req.text();
 
@@ -85,5 +87,6 @@ export function createWebhookHmacMiddleware(secret: string) {
     }
 
     await next();
+    return;
   };
 }

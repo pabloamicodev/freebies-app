@@ -14,7 +14,7 @@ import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  await authenticate.admin(request);
   const db = getDb();
   const offerId = params["id"]!;
 
@@ -53,7 +53,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     const [newWidget] = await db.insert(widgets).values({
       shopId, offerId,
-      type: widgetType as any,
+      type: widgetType as "gift_slider" | "gift_popup" | "cart_message" | "today_offer_widget" | "today_offer_block" | "progress_bar" | "gift_icon" | "gift_thumbnail" | "classic_bundle" | "mix_match_bundle" | "bundle_page" | "checkout_upsell" | "fbt" | "thank_you_upsell" | "volume_discount",
       internalName: `${widgetType}-${offerId.slice(0, 8)}`,
       title: title || null,
       subtitle: subtitle || null,

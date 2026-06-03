@@ -48,7 +48,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const internalName = row["internal_name"];
     const publicTitle = row["public_title"];
-    const offerType = row["type"] as any;
+    const offerType = row["type"] as "gift" | "bundle" | "upsell" | "discount" | "booster";
 
     if (!internalName || !publicTitle || !offerType) {
       errors.push({ row: i + 1, message: "Missing required fields: internal_name, public_title, type" });
@@ -88,8 +88,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         await db.insert(offerRewards).values({
           shopId,
           offerId: newOffer.id,
-          rewardType: row["reward_type"] as any,
-          discountType: row["discount_type"] as any,
+          rewardType: row["reward_type"] as "product_gift" | "order_discount" | "bundle_discount" | "upsell_discount",
+          discountType: row["discount_type"] as "free" | "percentage" | "fixed_amount" | "fixed_price",
           value: { amount: parseFloat(row["reward_value"] ?? "0") || 100 },
           target: { variantIds },
           quantity: parseInt(row["gift_quantity"] ?? "1", 10) || 1,

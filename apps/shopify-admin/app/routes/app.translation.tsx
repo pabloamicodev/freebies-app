@@ -64,7 +64,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const strings: Partial<WidgetTranslations> = { locale };
   for (const { key } of TRANSLATION_KEYS) {
     const val = formData.get(key) as string | null;
-    if (val?.trim()) (strings as any)[key] = val.trim();
+    if (val?.trim()) (strings as Partial<Record<keyof WidgetTranslations, string>>)[key] = val.trim();
   }
 
   // Load existing translations
@@ -166,7 +166,7 @@ export default function TranslationPage() {
                     className="b-input"
                     type="text"
                     name={`${locale}.${key}`}
-                    defaultValue={(translations[locale] as any)?.[key] ?? ""}
+                    defaultValue={translations[locale]?.[key] ?? ""}
                     placeholder="Leave empty to use default English string"
                     autoComplete="off"
                   />

@@ -5,7 +5,7 @@
 
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
-  LineChart, Line, PieChart, Pie, Cell, Legend, FunnelChart, Funnel, LabelList,
+  LineChart, Line, PieChart, Pie, Cell, LabelList,
 } from "recharts";
 import { LegacyCard, Text, InlineStack } from "@shopify/polaris";
 
@@ -31,7 +31,7 @@ export function ConversionFunnelChart({ data }: { data: FunnelStep[] }) {
           <XAxis type="number" domain={[0, max]} tick={{ fontSize: 12 }} />
           <YAxis type="category" dataKey="name" width={150} tick={{ fontSize: 12 }} />
           <Tooltip
-            formatter={(value: number, _name: string, props: any) => {
+            formatter={(value: number, _name: string, props: { payload?: { pct?: number } }) => {
               const pct = props.payload?.pct;
               return [value.toLocaleString() + (pct ? ` (${pct}%)` : ""), ""];
             }}

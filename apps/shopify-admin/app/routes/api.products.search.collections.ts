@@ -30,7 +30,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     variables: { query: q ? `title:*${q}*` : "", first: limit },
   });
 
-  const data = (await response.json()) as any;
+  interface CollectionsQueryResult {
+    data?: {
+      collections?: {
+        nodes?: Array<{ id: string; title: string; handle: string; productsCount: { count: number }; image: { url: string } | null }>;
+      };
+    };
+  }
+  const data = (await response.json()) as CollectionsQueryResult;
   const collections = data.data?.collections?.nodes ?? [];
 
   return Response.json({ collections }, { status: 200 });
