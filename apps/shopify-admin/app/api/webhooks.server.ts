@@ -10,8 +10,10 @@ import { createWebhookHmacMiddleware } from "../lib/hmac.server.js";
 import { getDb, shops, productCache, variantCache, analyticsEvents } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 
+type WebhookEnv = { Variables: { rawBody: string } };
+
 const SECRET = process.env["SHOPIFY_API_SECRET"] ?? "";
-const webhookApp = new Hono();
+const webhookApp = new Hono<WebhookEnv>();
 
 // Apply HMAC validation to ALL webhook routes
 webhookApp.use("*", createWebhookHmacMiddleware(SECRET));

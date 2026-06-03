@@ -160,7 +160,6 @@ export default function WidgetMarketPage() {
                     baseThresholdCents={baseThresholdCents}
                     defaultOverrides={marketOverrides}
                     onSave={handleSave}
-                    market={market}
                   />
                 </div>
               </div>

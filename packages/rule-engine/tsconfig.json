@@ -2,7 +2,10 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src"
+    "paths": {
+      "@promo/shared-types": ["../shared-types/src/index.ts"],
+      "@promo/shared-types/*": ["../shared-types/src/*"]
+    }
   },
   "include": ["src"]
 }

@@ -35,7 +35,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       id: analyticsEvents.id,
       offerId: analyticsEvents.offerId,
       orderId: analyticsEvents.orderId,
-      payload: analyticsEvents.payload,
+      properties: analyticsEvents.properties,
       occurredAt: analyticsEvents.occurredAt,
     })
     .from(analyticsEvents)
@@ -91,7 +91,7 @@ function LineChart({ data, yLabel, color = "#2c6ecb" }: { data: { x: string; y: 
   }));
 
   const pathD = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-  const areaD = `${pathD} L${pts[pts.length - 1].x.toFixed(1)},${(PAD.top + chartH).toFixed(1)} L${pts[0].x.toFixed(1)},${(PAD.top + chartH).toFixed(1)} Z`;
+  const areaD = `${pathD} L${pts[pts.length - 1]!.x.toFixed(1)},${(PAD.top + chartH).toFixed(1)} L${pts[0]!.x.toFixed(1)},${(PAD.top + chartH).toFixed(1)} Z`;
 
   // Y axis labels (3 levels)
   const yTicks = [0, Math.round(maxY / 2), maxY];
@@ -120,8 +120,8 @@ function LineChart({ data, yLabel, color = "#2c6ecb" }: { data: { x: string; y: 
       })}
       {/* X labels */}
       {xIdxs.map((idx) => (
-        <text key={idx} x={pts[idx].x} y={H - 6} fontSize="10" fill="#6d7175" textAnchor="middle">
-          {data[idx].x}
+        <text key={idx} x={pts[idx]!.x} y={H - 6} fontSize="10" fill="#6d7175" textAnchor="middle">
+          {data[idx]!.x}
         </text>
       ))}
       {/* Area fill */}

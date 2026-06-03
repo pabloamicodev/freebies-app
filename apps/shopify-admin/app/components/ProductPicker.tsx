@@ -141,7 +141,6 @@ export function ProductPicker({
       title={title}
       primaryAction={{ content: `Select ${selected.size > 0 ? `(${selected.size})` : ""}`, onAction: handleConfirm, disabled: selected.size === 0 }}
       secondaryActions={[{ content: "Cancel", onAction: onClose }]}
-      large
     >
       <Modal.Section>
         <TextField
@@ -209,7 +208,6 @@ export function ProductPicker({
                         <Checkbox
                           label=""
                           checked={productSelected}
-                          indeterminate={!productSelected && someSelected}
                           onChange={() => {
                             if (product.variants?.length === 1 && mode === "variants") {
                               toggleVariant(product.variants[0]!.id);
@@ -259,8 +257,7 @@ export function ProductPicker({
                       <Button
                         variant="plain"
                         size="micro"
-                        onClick={(e) => {
-                          e.stopPropagation();
+                        onClick={() => {
                           const next = new Set(expandedProducts);
                           isExpanded ? next.delete(product.id) : next.add(product.id);
                           setExpandedProducts(next);

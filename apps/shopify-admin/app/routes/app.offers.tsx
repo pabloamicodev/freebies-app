@@ -21,7 +21,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const db = getDb();
   const url = new URL(request.url);
-  const statusFilter = url.searchParams.get("status") as OfferStatus | null;
+  const statusFilter = url.searchParams.get("status") as OfferStatus | "all" | null;
   const search = url.searchParams.get("q") ?? "";
 
   const conditions = [];

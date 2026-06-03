@@ -145,7 +145,7 @@ export function MarketWidgetConfig({
               <InlineStack align="space-between" blockAlign="center">
                 <InlineStack gap="300" blockAlign="center">
                   <Text as="p" fontWeight="semibold">{market.name}</Text>
-                  <Badge tone={market.enabled ? "success" : "subdued"}>{market.currencyCode}</Badge>
+                  <Badge tone={market.enabled ? "success" : undefined}>{market.currencyCode}</Badge>
                   {market.primary && <Badge tone="info">Primary</Badge>}
                   {hasCustomization && <Badge tone="attention">Customized</Badge>}
                   {!override.enabled && <Badge tone="critical">Disabled</Badge>}

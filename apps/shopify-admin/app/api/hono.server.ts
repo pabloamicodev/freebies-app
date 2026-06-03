@@ -36,7 +36,7 @@ app.use("*", async (c, next) => {
   if (shopDomain && !isValidShopDomain(shopDomain)) {
     return c.json({ error: "Invalid shop domain" }, 400);
   }
-  await next();
+  return await next();
 });
 
 // ─── Rate limiting (in-memory, per-process) ──────────────────────────────────

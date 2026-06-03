@@ -7,8 +7,9 @@
  * - Hourly scheduled refresh
  */
 
-import { Worker, type Job } from "bullmq";
-import Redis from "ioredis";
+import { Worker } from "bullmq";
+import type { Job } from "bullmq";
+import type Redis from "ioredis";
 import pino from "pino";
 import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";

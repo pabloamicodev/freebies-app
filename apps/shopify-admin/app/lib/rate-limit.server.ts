@@ -97,5 +97,6 @@ export function rateLimitMiddleware(limitName: keyof typeof LIMITS) {
     }
 
     await next();
+    return;
   };
 }

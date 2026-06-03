@@ -206,7 +206,7 @@ export default function AiAssistantPage() {
                   </div>
                 </div>
               )}
-              {(!msg.isDraft) && (
+              {(msg.role !== "assistant" || !msg.isDraft) && (
                 <div
                   style={{
                     padding: "10px 14px",

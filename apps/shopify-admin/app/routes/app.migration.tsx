@@ -104,7 +104,7 @@ export default function MigrationPage() {
     setStepStatuses((prev) => {
       const cur = prev[id] ?? "pending";
       const next = order[(order.indexOf(cur) + 1) % order.length];
-      return { ...prev, [id]: next };
+      return { ...prev, [id]: next } as Record<string, StepStatus>;
     });
   }
 
@@ -237,7 +237,7 @@ export default function MigrationPage() {
                     onClick={() => cycleStatus(step.id)}
                     style={{ cursor: "pointer" }}
                   >
-                    <StatusBadge status={stepStatuses[step.id]} />
+                    <StatusBadge status={stepStatuses[step.id] ?? "pending"} />
                   </button>
                 </td>
               </tr>

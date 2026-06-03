@@ -140,11 +140,12 @@ class PromoEngineRuntime {
       try {
         switch (action.action) {
           case "add_line": {
+            if (!action.variantId) break;
             const legacyId = parseInt(action.variantId.split("/").pop() ?? action.variantId, 10);
             await AjaxCartAdapter.addLines([{
               variantId: String(legacyId),
-              quantity: action.quantity,
-              properties: action.properties,
+              quantity: action.quantity ?? 1,
+              properties: action.properties ?? {},
             }]);
             emit(PromoEvents.GiftAutoAdded, {
               variantId: action.variantId,
@@ -170,7 +171,7 @@ class PromoEngineRuntime {
             } else {
               await AjaxCartAdapter.updateLine({
                 key: action.lineKey,
-                quantity: action.quantity,
+                quantity: action.quantity ?? 1,
                 properties: action.properties,
               });
               emit(PromoEvents.GiftUpdated, { lineKey: action.lineKey, quantity: action.quantity });
