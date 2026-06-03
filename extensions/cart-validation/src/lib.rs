@@ -83,7 +83,7 @@ pub struct Metafield {
     pub value: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ValidationConfig {
     /// Map of offerId → max gift quantity allowed
