@@ -4,10 +4,6 @@
  */
 
 import { useLoaderData, Form } from "react-router";
-import {
-  Page, Layout, LegacyCard, FormLayout, TextField, Select,
-  Button, Banner, Text, Tabs, Box,
-} from "@shopify/polaris";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
@@ -15,6 +11,7 @@ import { shops, appSettings } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import { SUPPORTED_LOCALES, type WidgetTranslations } from "@promo/shared-types";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -95,61 +92,96 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 export default function TranslationPage() {
   const { translations } = useLoaderData<typeof loader>();
   const [locale, setLocale] = useState("en");
-  const currentStrings = translations[locale] ?? {};
-
-  const localeOptions = SUPPORTED_LOCALES.map((l) => ({ label: l.toUpperCase(), value: l }));
 
   return (
-    <Page title="Translations" subtitle="Customize widget text per locale">
-      <Layout>
-        <Layout.Section>
-          <LegacyCard sectioned>
-            <Select
-              label="Locale"
-              options={localeOptions}
-              value={locale}
-              onChange={setLocale}
-              helpText="Select the locale to edit. Changes apply to all widgets for that locale."
-            />
-          </LegacyCard>
-        </Layout.Section>
+    <div className="b-page">
+      {/* Header */}
+      <div className="b-page-header">
+        <h1 className="b-page-title">Translation</h1>
+        <div className="b-page-actions">
+          <button type="submit" form="translation-form" className="b-btn b-btn-primary">
+            Save
+          </button>
+        </div>
+      </div>
 
-        <Layout.Section>
-          <LegacyCard title={`Widget strings — ${locale.toUpperCase()}`} sectioned>
-            <Form method="POST">
-              <input type="hidden" name="locale" value={locale} />
-              <FormLayout>
-                {TRANSLATION_KEYS.map(({ key, label, hint }) => (
-                  <TextField
-                    key={key}
-                    label={label}
-                    name={key}
-                    defaultValue={(currentStrings as any)[key] ?? ""}
-                    autoComplete="off"
-                    helpText={hint}
+      {/* Locale selector tabs */}
+      <div className="b-card" style={{ marginBottom: 16 }}>
+        <div className="b-tabs">
+          <ul className="b-tabs-list">
+            {SUPPORTED_LOCALES.map((l) => (
+              <li key={l}>
+                <button
+                  type="button"
+                  className={`b-tab${locale === l ? " active" : ""}`}
+                  onClick={() => setLocale(l)}
+                >
+                  {l.toUpperCase()}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+
+      {/* Translation form */}
+      <Form id="translation-form" method="POST">
+        <input type="hidden" name="locale" value={locale} />
+
+        <div className="b-card">
+          <div className="b-card-header">
+            Widget strings — {locale.toUpperCase()}
+          </div>
+          <div className="b-card-body">
+            <div className="b-stack b-stack-4">
+              {TRANSLATION_KEYS.map(({ key, label, hint }) => (
+                <div key={key}>
+                  <label className="b-label" htmlFor={`field-${key}`}>
+                    {label}
+                  </label>
+                  {hint && (
+                    <p className="b-help" style={{ marginBottom: 6 }}>
+                      {hint.replace(/(\{\{[^}]+\}\})/g, "")}
+                      {hint.match(/\{\{[^}]+\}\}/g)?.map((token) => (
+                        <span
+                          key={token}
+                          style={{
+                            display: "inline-block",
+                            background: "#f3f4f6",
+                            color: "#6d7175",
+                            borderRadius: 3,
+                            padding: "0 4px",
+                            fontFamily: "monospace",
+                            fontSize: 11,
+                            marginLeft: 2,
+                          }}
+                        >
+                          {token}
+                        </span>
+                      ))}
+                    </p>
+                  )}
+                  <input
+                    id={`field-${key}`}
+                    className="b-input"
+                    type="text"
+                    name={`${locale}.${key}`}
+                    defaultValue={(translations[locale] as any)?.[key] ?? ""}
                     placeholder="Leave empty to use default English string"
+                    autoComplete="off"
                   />
-                ))}
-                <Button variant="primary" submit>Save {locale.toUpperCase()} Translations</Button>
-              </FormLayout>
-            </Form>
-          </LegacyCard>
-        </Layout.Section>
+                </div>
+              ))}
+            </div>
 
-        <Layout.Section variant="oneThird">
-          <LegacyCard title="Translation notes" sectioned>
-            <Text as="p" variant="bodySm">
-              Leave a field empty to use the default English string.
-              Variable placeholders like <code>{"{{remaining_amount}}"}</code> are replaced at render time.
-            </Text>
-            <Box paddingBlockStart="300">
-              <Text as="p" variant="bodySm" tone="subdued">
-                Configured locales: {Object.keys(translations).join(", ") || "None"}
-              </Text>
-            </Box>
-          </LegacyCard>
-        </Layout.Section>
-      </Layout>
-    </Page>
+            <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end" }}>
+              <button type="submit" className="b-btn b-btn-primary">
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      </Form>
+    </div>
   );
 }

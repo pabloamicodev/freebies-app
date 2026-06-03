@@ -3,12 +3,7 @@
  * Configure widget type, placement, theme, and copy for each offer.
  */
 
-import { useLoaderData, Form } from "react-router";
-import {
-  Page, Layout, LegacyCard, FormLayout, TextField, Select,
-  Button, BlockStack, InlineStack, Checkbox, Text, ColorPicker,
-  Badge, Box, Divider,
-} from "@shopify/polaris";
+import { useLoaderData, Form, Link } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
@@ -92,6 +87,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
   }
 
+  if (intent === "toggle_widget") {
+    const widgetId = formData.get("widgetId") as string;
+    const isEnabled = formData.get("isEnabled") === "true";
+    await db.update(widgets).set({ isEnabled: !isEnabled }).where(eq(widgets.id, widgetId));
+  }
+
   if (intent === "delete_widget") {
     const widgetId = formData.get("widgetId") as string;
     await db.delete(widgets).where(eq(widgets.id, widgetId));
@@ -100,155 +101,356 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   return null;
 };
 
-const WIDGET_TYPES = {
-  gift: [
-    { label: "Gift Slider — popup for gift selection", value: "gift_slider" },
-    { label: "Cart Message — inline text in cart", value: "cart_message" },
-    { label: "Progress Bar — show cart value progress", value: "progress_bar" },
-    { label: "Gift Icon — icon on product page", value: "gift_icon" },
-    { label: "Gift Thumbnail — product thumbnail on page", value: "gift_thumbnail" },
-    { label: "Today Offer — floating site-wide widget", value: "today_offer_widget" },
-  ],
-  bundle: [
-    { label: "Classic Bundle Block — inline product page", value: "classic_bundle" },
-    { label: "Mix & Match Block — inline product list", value: "mix_match_bundle" },
-  ],
-  upsell: [
-    { label: "Frequently Bought Together Block", value: "fbt" },
-    { label: "Volume Discount Block — product page tiers", value: "volume_discount" },
-  ],
-  discount: [
-    { label: "Progress Bar — show discount threshold", value: "progress_bar" },
-    { label: "Cart Message — show discount message", value: "cart_message" },
-    { label: "Volume Discount Block", value: "volume_discount" },
-  ],
+const WIDGET_TYPE_OPTIONS = [
+  { label: "Gift Slider", value: "gift_slider" },
+  { label: "Progress Bar", value: "progress_bar" },
+  { label: "Today Offer Widget", value: "today_offer_widget" },
+  { label: "Today Offer Block", value: "today_offer_block" },
+];
+
+const PLACEMENT_TYPE_OPTIONS = [
+  { label: "Cart Drawer", value: "cart_drawer" },
+  { label: "Cart Page", value: "cart_page" },
+  { label: "Product Page", value: "product_page" },
+  { label: "Global", value: "global" },
+];
+
+const WIDGET_TYPE_LABELS: Record<string, string> = {
+  gift_slider: "Gift Slider",
+  progress_bar: "Progress Bar",
+  today_offer_widget: "Today Offer Widget",
+  today_offer_block: "Today Offer Block",
+  cart_message: "Cart Message",
+  gift_icon: "Gift Icon",
+  gift_thumbnail: "Gift Thumbnail",
+  classic_bundle: "Classic Bundle Block",
+  mix_match_bundle: "Mix & Match Block",
+  fbt: "Frequently Bought Together",
+  volume_discount: "Volume Discount Block",
 };
-
-const PLACEMENT_TYPES = [
-  { label: "Theme App Block (theme editor)", value: "theme_app_block" },
-  { label: "App Embed (injected on all pages)", value: "app_embed" },
-  { label: "CSS Selector Injection", value: "css_selector_injection" },
-  { label: "Checkout Extension (Plus)", value: "checkout_extension" },
-  { label: "Headless Mount", value: "headless_mount" },
-];
-
-const PAGE_TYPES = [
-  { label: "All pages", value: "all" },
-  { label: "Product pages only", value: "product" },
-  { label: "Cart page only", value: "cart" },
-  { label: "Collection pages", value: "collection" },
-  { label: "Home page", value: "home" },
-  { label: "Custom URL pattern", value: "custom" },
-];
 
 export default function OfferWidgetPage() {
   const { offer, widgets: existingWidgets } = useLoaderData<typeof loader>();
   const [adding, setAdding] = useState(false);
-  const [widgetType, setWidgetType] = useState("");
-  const [placementType, setPlacementType] = useState("theme_app_block");
-  const [pageType, setPageType] = useState("all");
+  const [widgetType, setWidgetType] = useState("gift_slider");
+  const [placementType, setPlacementType] = useState("cart_drawer");
+  const [primaryColor, setPrimaryColor] = useState("#111111");
 
-  if (!offer) return <Page title="Not Found" />;
-
-  const availableWidgets = WIDGET_TYPES[offer.type as keyof typeof WIDGET_TYPES] ?? WIDGET_TYPES.gift;
+  if (!offer) {
+    return (
+      <div className="b-page">
+        <p className="b-text-sub">Offer not found.</p>
+      </div>
+    );
+  }
 
   return (
-    <Page
-      title="Widget & Display Settings"
-      subtitle={offer.internalName}
-      backAction={{ content: "← Rewards", url: `/app/offers/${offer.id}/rewards` }}
-      primaryAction={{ content: "→ Advanced Config", url: `/app/offers/${offer.id}` }}
-      secondaryActions={[
-        { content: "🌍 Per-Market Config", url: `/app/offers/${offer.id}/widget/market` },
-      ]}
-    >
-      <Layout>
-        <Layout.Section>
-          <LegacyCard title="Configured Widgets" sectioned>
-            <BlockStack gap="300">
+    <div className="b-page">
+      {/* ── Header ── */}
+      <div className="b-page-header">
+        <div className="b-page-title-row">
+          <Link
+            to={`/app/offers/${offer.id}`}
+            className="b-btn b-btn-secondary b-btn-sm"
+            style={{ textDecoration: "none" }}
+          >
+            ← Back
+          </Link>
+          <div>
+            <h1 className="b-page-title">Widget Settings</h1>
+            <p className="b-text-sm b-text-sub" style={{ margin: "2px 0 0" }}>
+              {offer.internalName}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Body layout ── */}
+      <div className="b-editor-layout">
+        {/* ── Main column ── */}
+        <div className="b-editor-main">
+
+          {/* Existing widgets */}
+          <div className="b-editor-section">
+            <h2 className="b-editor-section-title">Configured Widgets</h2>
+            <div className="b-editor-section-body">
               {existingWidgets.length === 0 ? (
-                <Text as="p" tone="subdued">No widgets configured. Add a widget to display this offer to customers.</Text>
+                <p className="b-text-sub b-text-sm" style={{ margin: 0 }}>
+                  No widgets configured. Add a widget below to display this offer to customers.
+                </p>
               ) : (
-                existingWidgets.map((w) => (
-                  <Box key={w.id} padding="300" borderWidth="025" borderColor="border" borderRadius="200">
-                    <InlineStack align="space-between">
-                      <InlineStack gap="300">
-                        <Badge tone="success">{w.type}</Badge>
-                        <Text as="p">{w.title ?? w.internalName}</Text>
-                      </InlineStack>
-                      <Form method="POST">
-                        <input type="hidden" name="intent" value="delete_widget" />
-                        <input type="hidden" name="widgetId" value={w.id} />
-                        <Button tone="critical" variant="plain" submit>Remove</Button>
-                      </Form>
-                    </InlineStack>
-                  </Box>
-                ))
+                <div className="b-stack b-stack-3">
+                  {existingWidgets.map((w) => (
+                    <div
+                      key={w.id}
+                      className="b-card"
+                      style={{ boxShadow: "none" }}
+                    >
+                      <div
+                        className="b-card-body"
+                        style={{ padding: "14px 16px" }}
+                      >
+                        <div className="b-row-between">
+                          <div className="b-row b-gap-3">
+                            <span className="b-badge b-badge-blue">
+                              {WIDGET_TYPE_LABELS[w.type] ?? w.type}
+                            </span>
+                            <span className="b-text-sm b-text-bold">
+                              {w.title ?? w.internalName}
+                            </span>
+                          </div>
+                          <div className="b-row b-gap-2">
+                            {/* Toggle enable/disable */}
+                            <Form method="POST" style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                              <input type="hidden" name="intent" value="toggle_widget" />
+                              <input type="hidden" name="widgetId" value={w.id} />
+                              <input type="hidden" name="isEnabled" value={String(w.isEnabled)} />
+                              <label className="b-toggle" title={w.isEnabled ? "Disable" : "Enable"}>
+                                <input
+                                  type="checkbox"
+                                  defaultChecked={w.isEnabled ?? false}
+                                  onChange={(e) => {
+                                    (e.target.closest("form") as HTMLFormElement)?.requestSubmit();
+                                  }}
+                                />
+                                <span className="b-toggle-track" />
+                                <span className="b-toggle-thumb" />
+                              </label>
+                            </Form>
+                            {/* Remove */}
+                            <Form method="POST" style={{ display: "inline-flex" }}>
+                              <input type="hidden" name="intent" value="delete_widget" />
+                              <input type="hidden" name="widgetId" value={w.id} />
+                              <button
+                                type="submit"
+                                className="b-btn-icon b-btn-icon-red"
+                                title="Remove widget"
+                              >
+                                ✕
+                              </button>
+                            </Form>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
+
+              {/* Add Widget toggle */}
               {!adding && (
-                <Button onClick={() => setAdding(true)}>+ Add Widget</Button>
+                <div style={{ marginTop: existingWidgets.length > 0 ? 16 : 0 }}>
+                  <button
+                    type="button"
+                    className="b-btn b-btn-secondary"
+                    onClick={() => setAdding(true)}
+                  >
+                    + Add Widget
+                  </button>
+                </div>
               )}
-            </BlockStack>
-          </LegacyCard>
-        </Layout.Section>
+            </div>
+          </div>
 
-        {adding && (
-          <Layout.Section>
-            <LegacyCard title="Add Widget" sectioned>
-              <Form method="POST">
-                <input type="hidden" name="intent" value="add_widget" />
-                <FormLayout>
-                  <Select label="Widget Type" name="widgetType"
-                    options={[{ label: "— Select —", value: "" }, ...availableWidgets]}
-                    value={widgetType} onChange={setWidgetType} />
+          {/* Add Widget collapsible form */}
+          {adding && (
+            <div className="b-editor-section">
+              <h2 className="b-editor-section-title">Add Widget</h2>
+              <div className="b-editor-section-body">
+                <Form method="POST">
+                  <input type="hidden" name="intent" value="add_widget" />
 
-                  <FormLayout.Group>
-                    <TextField label="Title (optional)" name="widgetTitle" autoComplete="off" placeholder="Your Free Gift" />
-                    <TextField label="Subtitle (optional)" name="widgetSubtitle" autoComplete="off" />
-                  </FormLayout.Group>
+                  <div className="b-stack b-stack-4">
+                    {/* Widget type */}
+                    <div>
+                      <label className="b-label" htmlFor="widgetType">Widget Type</label>
+                      <select
+                        id="widgetType"
+                        name="widgetType"
+                        className="b-select"
+                        value={widgetType}
+                        onChange={(e) => setWidgetType(e.target.value)}
+                      >
+                        {WIDGET_TYPE_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    </div>
 
-                  <TextField label="Button Text" name="buttonText" defaultValue="Add to Cart" autoComplete="off" />
+                    {/* Title + subtitle */}
+                    <div className="b-grid-2">
+                      <div>
+                        <label className="b-label" htmlFor="widgetTitle">Title</label>
+                        <input
+                          id="widgetTitle"
+                          name="widgetTitle"
+                          className="b-input"
+                          type="text"
+                          placeholder="Your Free Gift"
+                          autoComplete="off"
+                        />
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="widgetSubtitle">Subtitle</label>
+                        <input
+                          id="widgetSubtitle"
+                          name="widgetSubtitle"
+                          className="b-input"
+                          type="text"
+                          placeholder="Optional subtitle"
+                          autoComplete="off"
+                        />
+                      </div>
+                    </div>
 
-                  {(widgetType === "gift_slider" || widgetType === "gift_thumbnail") && (
-                    <TextField label="Max Selectable Gifts" name="maxSelectable" type="number" defaultValue="1" autoComplete="off" />
-                  )}
+                    {/* Primary color */}
+                    <div>
+                      <label className="b-label" htmlFor="primaryColor">Primary Color</label>
+                      <div className="b-row b-gap-2">
+                        <input
+                          id="primaryColor"
+                          name="primaryColor"
+                          className="b-input"
+                          type="text"
+                          value={primaryColor}
+                          onChange={(e) => setPrimaryColor(e.target.value)}
+                          placeholder="#111111"
+                          autoComplete="off"
+                          style={{ flex: 1 }}
+                        />
+                        <div
+                          style={{
+                            width: 36,
+                            height: 36,
+                            borderRadius: "var(--r-sm)",
+                            background: primaryColor,
+                            border: "1px solid var(--border)",
+                            flexShrink: 0,
+                          }}
+                          title={primaryColor}
+                        />
+                        <input
+                          type="color"
+                          value={primaryColor.startsWith("#") && primaryColor.length === 7 ? primaryColor : "#111111"}
+                          onChange={(e) => setPrimaryColor(e.target.value)}
+                          style={{
+                            width: 36,
+                            height: 36,
+                            padding: 2,
+                            border: "1px solid var(--border)",
+                            borderRadius: "var(--r-sm)",
+                            cursor: "pointer",
+                            flexShrink: 0,
+                            background: "var(--bg-card)",
+                          }}
+                          title="Pick color"
+                        />
+                      </div>
+                      <p className="b-help">Used for buttons and accents inside the widget.</p>
+                    </div>
 
-                  <Divider />
-                  <Text as="p" fontWeight="semibold">Theme</Text>
-                  <FormLayout.Group>
-                    <TextField label="Primary Color (hex)" name="primaryColor" defaultValue="#111111" autoComplete="off" />
-                    <TextField label="Button Color (hex)" name="buttonColor" defaultValue="#111111" autoComplete="off" />
-                  </FormLayout.Group>
-                  <FormLayout.Group>
-                    <TextField label="Text Color (hex)" name="textColor" defaultValue="#ffffff" autoComplete="off" />
-                    <TextField label="Background Color (hex)" name="backgroundColor" defaultValue="#ffffff" autoComplete="off" />
-                  </FormLayout.Group>
+                    {/* Button text */}
+                    <div>
+                      <label className="b-label" htmlFor="buttonText">Button Text</label>
+                      <input
+                        id="buttonText"
+                        name="buttonText"
+                        className="b-input"
+                        type="text"
+                        defaultValue="Add to Cart"
+                        autoComplete="off"
+                      />
+                    </div>
 
-                  <Divider />
-                  <Text as="p" fontWeight="semibold">Placement</Text>
-                  <Select label="Placement Type" name="placementType" options={PLACEMENT_TYPES}
-                    value={placementType} onChange={setPlacementType} />
-                  <Select label="Show on" name="pageType" options={PAGE_TYPES}
-                    value={pageType} onChange={setPageType} />
-                  {pageType === "custom" && (
-                    <TextField label="URL Pattern (contains)" name="urlPattern" autoComplete="off"
-                      placeholder="/collections/sale" />
-                  )}
-                  {placementType === "css_selector_injection" && (
-                    <TextField label="CSS Selector" name="cssSelector" autoComplete="off"
-                      placeholder=".cart-drawer__footer" />
-                  )}
+                    <hr className="b-divider" />
 
-                  <InlineStack gap="300">
-                    <Button variant="primary" submit>Add Widget</Button>
-                    <Button onClick={() => setAdding(false)}>Cancel</Button>
-                  </InlineStack>
-                </FormLayout>
-              </Form>
-            </LegacyCard>
-          </Layout.Section>
-        )}
-      </Layout>
-    </Page>
+                    {/* Placement type */}
+                    <div>
+                      <label className="b-label" htmlFor="placementType">Placement</label>
+                      <select
+                        id="placementType"
+                        name="placementType"
+                        className="b-select"
+                        value={placementType}
+                        onChange={(e) => setPlacementType(e.target.value)}
+                      >
+                        {PLACEMENT_TYPE_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                      <p className="b-help">Where this widget will appear in the storefront.</p>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="b-row b-gap-2 b-mt-2">
+                      <button type="submit" className="b-btn b-btn-primary">
+                        Add Widget
+                      </button>
+                      <button
+                        type="button"
+                        className="b-btn b-btn-secondary"
+                        onClick={() => setAdding(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </Form>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Sidebar ── */}
+        <div className="b-editor-sidebar">
+          <div className="b-card">
+            <div className="b-card-header">Widget Types</div>
+            <div className="b-card-body">
+              <div className="b-stack b-stack-3">
+                <div>
+                  <p className="b-text-sm b-text-bold" style={{ marginBottom: 2 }}>Gift Slider</p>
+                  <p className="b-text-xs b-text-sub" style={{ margin: 0 }}>
+                    A popup slider where customers pick their free gift. Best placed in the cart drawer or cart page.
+                  </p>
+                </div>
+                <hr className="b-divider" style={{ margin: "4px 0" }} />
+                <div>
+                  <p className="b-text-sm b-text-bold" style={{ marginBottom: 2 }}>Progress Bar</p>
+                  <p className="b-text-xs b-text-sub" style={{ margin: 0 }}>
+                    Shows cart progress toward the free gift threshold. Works on cart page, cart drawer, or globally.
+                  </p>
+                </div>
+                <hr className="b-divider" style={{ margin: "4px 0" }} />
+                <div>
+                  <p className="b-text-sm b-text-bold" style={{ marginBottom: 2 }}>Today Offer Widget</p>
+                  <p className="b-text-xs b-text-sub" style={{ margin: 0 }}>
+                    A floating site-wide widget that highlights the current promotion to every visitor.
+                  </p>
+                </div>
+                <hr className="b-divider" style={{ margin: "4px 0" }} />
+                <div>
+                  <p className="b-text-sm b-text-bold" style={{ marginBottom: 2 }}>Today Offer Block</p>
+                  <p className="b-text-xs b-text-sub" style={{ margin: 0 }}>
+                    An inline content block you can embed on product or collection pages via a theme app block.
+                  </p>
+                </div>
+              </div>
+
+              <hr className="b-divider" />
+
+              <div className="b-banner" style={{ marginBottom: 0 }}>
+                <span className="b-banner-icon">&#9432;</span>
+                <div className="b-banner-body">
+                  <p className="b-banner-title">Multiple widgets</p>
+                  <p className="b-banner-text">
+                    You can add more than one widget per offer to display it in multiple locations at once.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

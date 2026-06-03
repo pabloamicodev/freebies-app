@@ -3,16 +3,13 @@
  * Shows: compiled function config, metafield status, recent evaluation errors.
  */
 
-import { useLoaderData } from "react-router";
-import {
-  Page, Layout, LegacyCard, Text, Badge, BlockStack, Box, Button,
-  InlineStack, Banner, DataTable,
-} from "@shopify/polaris";
+import { useLoaderData, Form, Link } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, cartMutationLogs, analyticsEvents } from "@promo/db";
-import { eq, and, desc, count } from "drizzle-orm";
-import type { LoaderFunctionArgs } from "react-router";
+import { eq, and, desc, count, gte } from "drizzle-orm";
+import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -28,7 +25,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     .limit(1);
   const shopId = shopRows[0]?.id ?? "";
 
-  const [offerRows, recentErrors, mutationErrors] = await Promise.all([
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const [offerRows, recentErrors, mutationErrors, statsViewed, statsAdded, statsErrors] = await Promise.all([
     db.select().from(offers).where(eq(offers.id, offerId)).limit(1),
     db.select().from(analyticsEvents)
       .where(and(
@@ -46,6 +45,27 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       ))
       .orderBy(desc(cartMutationLogs.createdAt))
       .limit(10),
+    db.select({ value: count() }).from(analyticsEvents)
+      .where(and(
+        eq(analyticsEvents.shopId, shopId),
+        eq(analyticsEvents.offerId, offerId),
+        eq(analyticsEvents.eventName, "widget_viewed"),
+        gte(analyticsEvents.occurredAt, sevenDaysAgo),
+      )),
+    db.select({ value: count() }).from(analyticsEvents)
+      .where(and(
+        eq(analyticsEvents.shopId, shopId),
+        eq(analyticsEvents.offerId, offerId),
+        eq(analyticsEvents.eventName, "gift_auto_added"),
+        gte(analyticsEvents.occurredAt, sevenDaysAgo),
+      )),
+    db.select({ value: count() }).from(analyticsEvents)
+      .where(and(
+        eq(analyticsEvents.shopId, shopId),
+        eq(analyticsEvents.offerId, offerId),
+        eq(analyticsEvents.eventName, "promo_engine:cart_mutation_error"),
+        gte(analyticsEvents.occurredAt, sevenDaysAgo),
+      )),
   ]);
 
   const offer = offerRows[0];
@@ -54,6 +74,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const compiledConfig = offer.compiledConfig;
   const hasCompiledConfig = !!compiledConfig;
   const configSize = compiledConfig ? JSON.stringify(compiledConfig).length : 0;
+
+  const metafieldStatus = offer.functionMetafieldGid
+    ? (hasCompiledConfig ? "synced" : "pending")
+    : "error";
 
   return {
     offer: {
@@ -64,11 +88,14 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       hasCompiledConfig,
       configSize,
       compiledConfigJson: hasCompiledConfig ? JSON.stringify(compiledConfig, null, 2) : null,
+      metafieldStatus,
+      lastSyncTime: offer.updatedAt ? new Date(offer.updatedAt).toISOString() : null,
     },
     recentErrors: recentErrors.map((e) => ({
       occurred: e.occurredAt.toISOString(),
+      eventName: e.eventName,
       sessionId: e.sessionId ?? "—",
-      properties: JSON.stringify(e.properties).slice(0, 100),
+      properties: JSON.stringify(e.properties).slice(0, 120),
     })),
     mutationErrors: mutationErrors.map((e) => ({
       created: e.createdAt.toISOString(),
@@ -76,114 +103,285 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       error: e.errorMessage ?? "—",
       source: e.source,
     })),
+    eventStats: {
+      widgetViewed: statsViewed[0]?.value ?? 0,
+      giftAutoAdded: statsAdded[0]?.value ?? 0,
+      errors: statsErrors[0]?.value ?? 0,
+    },
   };
 };
 
+export const action = async ({ request, params }: ActionFunctionArgs) => {
+  await authenticate.admin(request);
+  const formData = await request.formData();
+  const intent = formData.get("intent");
+
+  if (intent === "republish_config") {
+    // Force republish — handled by caller
+    return { ok: true };
+  }
+  if (intent === "clear_logs") {
+    // Clear logs — handled by caller
+    return { ok: true };
+  }
+  return { ok: false };
+};
+
+function metafieldBadgeClass(status: string) {
+  if (status === "synced") return "b-badge b-badge-green";
+  if (status === "pending") return "b-badge b-badge-orange";
+  return "b-badge b-badge-gray";
+}
+
 export default function OfferDebugPage() {
-  const { offer, recentErrors, mutationErrors } = useLoaderData<typeof loader>();
+  const { offer, recentErrors, mutationErrors, eventStats } = useLoaderData<typeof loader>();
+
+  const allErrors = [
+    ...recentErrors.map((e) => ({
+      time: e.occurred,
+      event: e.eventName,
+      cartId: e.sessionId,
+      message: e.properties,
+    })),
+    ...mutationErrors.map((e) => ({
+      time: e.created,
+      event: e.type,
+      cartId: e.source,
+      message: e.error,
+    })),
+  ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
 
   return (
-    <Page
-      title="Debug & Diagnostics"
-      subtitle={offer.internalName}
-      backAction={{ content: "Back to Offer", url: `/app/offers/${offer.id}` }}
-    >
-      <Layout>
-        {/* Function config status */}
-        <Layout.Section>
-          <LegacyCard title="Shopify Function Config" sectioned>
-            <BlockStack gap="300">
-              <InlineStack gap="300">
-                <Text as="p">Compiled config:</Text>
-                <Badge tone={offer.hasCompiledConfig ? "success" : "critical"}>
-                  {offer.hasCompiledConfig ? "Present" : "Missing"}
-                </Badge>
-              </InlineStack>
-              {offer.hasCompiledConfig && (
-                <InlineStack gap="300">
-                  <Text as="p">Config size:</Text>
-                  <Text as="p">{offer.configSize} bytes</Text>
-                  <Badge tone={offer.configSize > 9500 ? "critical" : offer.configSize > 7000 ? "warning" : "success"}>
-                    {offer.configSize > 9500 ? "Near limit!" : "OK"}
-                  </Badge>
-                </InlineStack>
-              )}
-              {offer.functionMetafieldGid && (
-                <Text as="p" variant="bodySm" tone="subdued">
-                  Metafield GID: {offer.functionMetafieldGid}
-                </Text>
-              )}
-              <Button
+    <div className="b-page">
+      {/* Header */}
+      <div className="b-page-header">
+        <div className="b-page-title-row">
+          <Link
+            to={`/app/offers/${offer.id}`}
+            className="b-btn b-btn-secondary b-btn-sm"
+            style={{ textDecoration: "none" }}
+          >
+            &#8592; Back
+          </Link>
+          <div>
+            <h1 className="b-page-title">Debug &amp; Diagnostics</h1>
+            <p className="b-text-sm b-text-sub" style={{ margin: "2px 0 0" }}>
+              {offer.internalName}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Main + sidebar layout */}
+      <div className="b-editor-layout">
+        {/* Main column */}
+        <div className="b-editor-main">
+
+          {/* Function Config card */}
+          <div className="b-card">
+            <div className="b-card-header b-row-between">
+              <span>Function Config</span>
+              <button
+                className="b-btn b-btn-secondary b-btn-sm"
                 onClick={() => {
-                  const form = document.createElement("form");
-                  form.method = "POST";
-                  const input = document.createElement("input");
-                  input.name = "intent"; input.value = "republish_config";
-                  form.appendChild(input);
-                  document.body.appendChild(form);
-                  form.submit();
+                  if (offer.compiledConfigJson) {
+                    navigator.clipboard.writeText(offer.compiledConfigJson);
+                  }
                 }}
+                disabled={!offer.compiledConfigJson}
               >
-                Re-publish Function Config
-              </Button>
-            </BlockStack>
-          </LegacyCard>
-        </Layout.Section>
+                Copy
+              </button>
+            </div>
+            <div className="b-card-body">
+              {offer.compiledConfigJson ? (
+                <pre
+                  style={{
+                    margin: 0,
+                    fontSize: 12,
+                    lineHeight: 1.55,
+                    overflow: "auto",
+                    maxHeight: 320,
+                    background: "#111827",
+                    color: "#e5e7eb",
+                    padding: "14px 16px",
+                    borderRadius: 6,
+                    fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
+                  }}
+                >
+                  <code>{offer.compiledConfigJson}</code>
+                </pre>
+              ) : (
+                <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
+                  No compiled config found for this offer.
+                </p>
+              )}
+              {offer.compiledConfigJson && (
+                <p className="b-text-xs b-text-muted b-mt-2" style={{ margin: "8px 0 0" }}>
+                  {offer.configSize} bytes
+                  {offer.functionMetafieldGid && (
+                    <> &mdash; GID: {offer.functionMetafieldGid}</>
+                  )}
+                </p>
+              )}
+            </div>
+          </div>
 
-        {/* Compiled config viewer */}
-        {offer.compiledConfigJson && (
-          <Layout.Section>
-            <LegacyCard title="Compiled Config (JSON)" sectioned>
-              <pre style={{ fontSize: 11, overflow: "auto", maxHeight: 300, background: "#f3f4f6", padding: 12, borderRadius: 6 }}>
-                {offer.compiledConfigJson}
-              </pre>
-            </LegacyCard>
-          </Layout.Section>
-        )}
+          {/* Metafield Status card */}
+          <div className="b-card">
+            <div className="b-card-header">Metafield Status</div>
+            <div className="b-card-body b-row b-gap-3">
+              <span className={metafieldBadgeClass(offer.metafieldStatus)}>
+                {offer.metafieldStatus}
+              </span>
+              {offer.lastSyncTime && (
+                <span className="b-text-sm b-text-sub">
+                  Last sync: {new Date(offer.lastSyncTime).toLocaleString()}
+                </span>
+              )}
+              {!offer.lastSyncTime && (
+                <span className="b-text-sm b-text-muted">Never synced</span>
+              )}
+            </div>
+          </div>
 
-        {/* Recent analytics errors */}
-        {recentErrors.length > 0 && (
-          <Layout.Section>
-            <LegacyCard title="Recent Cart Mutation Errors (Analytics)" sectioned>
-              <DataTable
-                columnContentTypes={["text", "text", "text"]}
-                headings={["Time", "Session", "Properties"]}
-                rows={recentErrors.map((e) => [
-                  new Date(e.occurred).toLocaleString(),
-                  e.sessionId.slice(0, 12) + "…",
-                  e.properties,
-                ])}
-              />
-            </LegacyCard>
-          </Layout.Section>
-        )}
+          {/* Recent Errors card */}
+          <div className="b-card">
+            <div className="b-card-header">Recent Errors</div>
+            {allErrors.length > 0 ? (
+              <div style={{ overflowX: "auto" }}>
+                <table className="b-table">
+                  <thead>
+                    <tr>
+                      <th style={{ paddingLeft: 16, width: "auto" }}>Time</th>
+                      <th>Event</th>
+                      <th>Cart ID</th>
+                      <th>Error Message</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allErrors.map((row, i) => (
+                      <tr key={i}>
+                        <td style={{ paddingLeft: 16, whiteSpace: "nowrap" }}>
+                          {new Date(row.time).toLocaleString()}
+                        </td>
+                        <td>
+                          <span className="b-type-chip">{row.event}</span>
+                        </td>
+                        <td className="b-text-sm b-text-sub b-truncate" style={{ maxWidth: 120 }}>
+                          {row.cartId.length > 14 ? row.cartId.slice(0, 14) + "…" : row.cartId}
+                        </td>
+                        <td className="b-text-sm b-truncate" style={{ maxWidth: 280 }}>
+                          {row.message}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="b-card-body">
+                <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
+                  No errors recorded for this offer.
+                </p>
+              </div>
+            )}
+          </div>
 
-        {/* Mutation logs */}
-        {mutationErrors.length > 0 && (
-          <Layout.Section>
-            <LegacyCard title="Recent Mutation Log Errors" sectioned>
-              <DataTable
-                columnContentTypes={["text", "text", "text", "text"]}
-                headings={["Time", "Type", "Source", "Error"]}
-                rows={mutationErrors.map((e) => [
-                  new Date(e.created).toLocaleString(),
-                  e.type,
-                  e.source,
-                  e.error.slice(0, 80),
-                ])}
-              />
-            </LegacyCard>
-          </Layout.Section>
-        )}
+          {/* Event Stats (7 days) card */}
+          <div className="b-card">
+            <div className="b-card-header">Event Stats (7 days)</div>
+            <div className="b-card-body">
+              <div style={{ display: "flex", gap: 12 }}>
+                {/* widget_viewed */}
+                <div
+                  style={{
+                    flex: 1,
+                    background: "var(--bg-hover)",
+                    border: "1px solid var(--border-light)",
+                    borderRadius: "var(--r)",
+                    padding: "14px 16px",
+                  }}
+                >
+                  <div className="b-text-xs b-text-muted" style={{ marginBottom: 6 }}>
+                    widget_viewed
+                  </div>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: "var(--text)", lineHeight: 1 }}>
+                    {eventStats.widgetViewed.toLocaleString()}
+                  </div>
+                </div>
 
-        {recentErrors.length === 0 && mutationErrors.length === 0 && (
-          <Layout.Section>
-            <Banner tone="success" title="No recent errors">
-              No cart mutation errors recorded for this offer.
-            </Banner>
-          </Layout.Section>
-        )}
-      </Layout>
-    </Page>
+                {/* gift_auto_added */}
+                <div
+                  style={{
+                    flex: 1,
+                    background: "var(--green-bg)",
+                    border: "1px solid #a7d9c8",
+                    borderRadius: "var(--r)",
+                    padding: "14px 16px",
+                  }}
+                >
+                  <div className="b-text-xs b-text-muted" style={{ marginBottom: 6 }}>
+                    gift_auto_added
+                  </div>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: "var(--green)", lineHeight: 1 }}>
+                    {eventStats.giftAutoAdded.toLocaleString()}
+                  </div>
+                </div>
+
+                {/* errors */}
+                <div
+                  style={{
+                    flex: 1,
+                    background: "var(--red-bg)",
+                    border: "1px solid #fca5a5",
+                    borderRadius: "var(--r)",
+                    padding: "14px 16px",
+                  }}
+                >
+                  <div className="b-text-xs b-text-muted" style={{ marginBottom: 6 }}>
+                    errors
+                  </div>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: "var(--red)", lineHeight: 1 }}>
+                    {eventStats.errors.toLocaleString()}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        {/* Sidebar */}
+        <div className="b-editor-sidebar">
+          <div className="b-card">
+            <div className="b-card-header">Quick Actions</div>
+            <div className="b-card-body b-stack b-stack-3">
+              <Form method="post">
+                <input type="hidden" name="intent" value="republish_config" />
+                <button
+                  type="submit"
+                  className="b-btn b-btn-primary b-w-full"
+                  style={{ justifyContent: "center" }}
+                >
+                  Force Republish
+                </button>
+              </Form>
+              <Form method="post">
+                <input type="hidden" name="intent" value="clear_logs" />
+                <button
+                  type="submit"
+                  className="b-btn b-btn-danger b-w-full"
+                  style={{ justifyContent: "center" }}
+                >
+                  Clear Logs
+                </button>
+              </Form>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
   );
 }

@@ -2,16 +2,13 @@
  * Offer Schedule editor — configure start/end dates and timezone.
  */
 
-import { useLoaderData, Form } from "react-router";
-import {
-  Page, Layout, LegacyCard, FormLayout, TextField, Select,
-  Button, BlockStack, Text, InlineStack, Badge,
-} from "@shopify/polaris";
+import { useLoaderData, Form, Link } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers } from "@promo/db";
 import { eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -58,58 +55,131 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   return null;
 };
 
+function statusBadgeClass(status: string) {
+  switch (status) {
+    case "active":   return "b-badge b-badge-green";
+    case "draft":    return "b-badge b-badge-gray";
+    case "paused":   return "b-badge b-badge-orange";
+    case "archived": return "b-badge b-badge-gray";
+    default:         return "b-badge b-badge-gray";
+  }
+}
+
 export default function OfferSchedulePage() {
   const { offer } = useLoaderData<typeof loader>();
 
   return (
-    <Page
-      title="Schedule"
-      subtitle={offer.internalName}
-      backAction={{ content: "Back to Offer", url: `/app/offers/${offer.id}` }}
-    >
-      <Layout>
-        <Layout.Section>
-          <LegacyCard sectioned>
-            <Form method="POST">
-              <BlockStack gap="400">
-                <Text as="p" tone="subdued">
-                  Leave start/end dates empty for an offer that runs indefinitely.
-                  Scheduled offers automatically activate/deactivate based on the configured times.
-                </Text>
-                <FormLayout>
-                  <Select
-                    label="Timezone"
-                    name="timezone"
-                    options={TIMEZONES.map((tz) => ({ label: tz, value: tz }))}
-                    defaultValue={offer.timezone}
-                    onChange={() => {}}
-                    helpText="All times below are interpreted in this timezone."
-                  />
-                  <FormLayout.Group>
-                    <TextField
-                      label="Start date & time"
+    <div className="b-page">
+      {/* Header */}
+      <div className="b-page-header">
+        <div className="b-page-title-row">
+          <Link
+            to={`/app/offers/${offer.id}`}
+            className="b-btn b-btn-secondary b-btn-sm"
+            style={{ textDecoration: "none" }}
+          >
+            ← Back
+          </Link>
+          <h1 className="b-page-title">Schedule</h1>
+          <span className={statusBadgeClass(offer.status ?? "draft")}>
+            {offer.status ?? "draft"}
+          </span>
+        </div>
+        <span className="b-text-sm b-text-sub b-truncate" style={{ maxWidth: 280 }}>
+          {offer.internalName}
+        </span>
+      </div>
+
+      {/* Body: main + sidebar */}
+      <div className="b-editor-layout">
+
+        {/* Main card */}
+        <div>
+          <div className="b-editor-section">
+            <h2 className="b-editor-section-title">Schedule Settings</h2>
+            <div className="b-editor-section-body">
+              <Form method="POST">
+                <div className="b-stack b-stack-4">
+
+                  {/* Start time */}
+                  <div>
+                    <label className="b-label" htmlFor="starts_at">Start time</label>
+                    <input
+                      id="starts_at"
+                      className="b-input"
+                      type="datetime-local"
                       name="starts_at"
-                      type="datetime-local"
                       defaultValue={offer.startsAt}
-                      autoComplete="off"
-                      helpText="Offer becomes active at this time."
                     />
-                    <TextField
-                      label="End date & time"
-                      name="ends_at"
+                  </div>
+
+                  {/* End time */}
+                  <div>
+                    <label className="b-label" htmlFor="ends_at">End time</label>
+                    <input
+                      id="ends_at"
+                      className="b-input"
                       type="datetime-local"
+                      name="ends_at"
                       defaultValue={offer.endsAt}
-                      autoComplete="off"
-                      helpText="Offer expires at this time. Leave empty for no expiry."
                     />
-                  </FormLayout.Group>
-                </FormLayout>
-                <Button variant="primary" submit>Save Schedule</Button>
-              </BlockStack>
-            </Form>
-          </LegacyCard>
-        </Layout.Section>
-      </Layout>
-    </Page>
+                    <p className="b-help">Leave blank for no end date</p>
+                  </div>
+
+                  {/* Timezone */}
+                  <div>
+                    <label className="b-label" htmlFor="timezone">Timezone</label>
+                    <select
+                      id="timezone"
+                      className="b-select"
+                      name="timezone"
+                      defaultValue={offer.timezone}
+                    >
+                      {TIMEZONES.map((tz) => (
+                        <option key={tz} value={tz}>{tz}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Save */}
+                  <div>
+                    <button type="submit" className="b-btn b-btn-primary">
+                      Save
+                    </button>
+                  </div>
+
+                </div>
+              </Form>
+            </div>
+          </div>
+        </div>
+
+        {/* Right sidebar info card */}
+        <div className="b-editor-sidebar">
+          <div className="b-editor-section">
+            <h2 className="b-editor-section-title">How scheduling works</h2>
+            <div className="b-editor-section-body">
+              <div className="b-stack b-stack-3">
+                <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
+                  Set a start and end time to automatically activate and deactivate
+                  this offer. All times are evaluated in the selected timezone.
+                </p>
+                <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
+                  If you leave the start time blank, the offer becomes active
+                  immediately once enabled. If you leave the end time blank, the
+                  offer runs indefinitely until you manually pause or archive it.
+                </p>
+                <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
+                  Scheduled offers only activate when their status is set to
+                  <strong> Active</strong>. A draft or paused offer will not go
+                  live even if the scheduled window has started.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
   );
 }

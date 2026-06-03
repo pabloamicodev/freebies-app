@@ -4,11 +4,7 @@
  * validated form for each condition type.
  */
 
-import { useLoaderData, useNavigate, Form } from "react-router";
-import {
-  Page, Layout, LegacyCard, FormLayout, TextField, Select,
-  Button, BlockStack, InlineStack, Badge, Text, Box, Divider, Banner, Tag,
-} from "@shopify/polaris";
+import { useLoaderData, useNavigate, Form, Link } from "react-router";
 import { useState } from "react";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { authenticate } from "../shopify.server.js";
@@ -154,11 +150,6 @@ const SUB_CONDITION_TYPES = [
   { label: "Specific Link / Magic URL", value: "specific_link" },
 ];
 
-const SCOPE_BADGE: Record<string, "info" | "attention"> = {
-  main: "info",
-  sub: "attention",
-};
-
 export default function OfferConditionsPage() {
   const { offer, conditions } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
@@ -171,9 +162,14 @@ export default function OfferConditionsPage() {
   const [currencyCode, setCurrencyCode] = useState("USD");
   const [minQtyPerProduct, setMinQtyPerProduct] = useState("1");
 
-  if (!offer) return <Page title="Not Found" />;
+  if (!offer) {
+    return (
+      <div className="b-page">
+        <p className="b-text-sub">Offer not found.</p>
+      </div>
+    );
+  }
 
-  // Render: ProductPicker modal + main page
   return (
     <>
       <ProductPicker
@@ -188,170 +184,428 @@ export default function OfferConditionsPage() {
           else setRequiredVariantGids(gids);
         }}
       />
-    <Page
-      title="Conditions"
-      subtitle={offer.internalName}
-      backAction={{ content: "Back to Offer", url: `/app/offers/${offer.id}` }}
-      primaryAction={{ content: "→ Configure Rewards", url: `/app/offers/${offer.id}/rewards` }}
-    >
-      <Layout>
+
+      <div className="b-page">
+        {/* Page Header */}
+        <div className="b-page-header">
+          <div className="b-page-title-row">
+            <Link
+              to={`/app/offers/${offer.id}`}
+              className="b-btn b-btn-secondary b-btn-sm"
+              style={{ marginRight: 4 }}
+            >
+              &#8592; Back
+            </Link>
+            <div>
+              <h1 className="b-page-title">Conditions</h1>
+              <p className="b-text-sm b-text-sub" style={{ margin: "2px 0 0" }}>
+                {offer.internalName}
+              </p>
+            </div>
+          </div>
+          <div className="b-page-actions">
+            <Link
+              to={`/app/offers/${offer.id}/rewards`}
+              className="b-btn b-btn-primary"
+            >
+              Rewards &#8594;
+            </Link>
+          </div>
+        </div>
+
+        {/* No-conditions warning */}
         {conditions.length === 0 && (
-          <Layout.Section>
-            <Banner tone="warning" title="No conditions — this offer will always qualify">
-              Add at least one main condition before publishing.
-            </Banner>
-          </Layout.Section>
+          <div className="b-banner b-banner-orange b-mb-4">
+            <span className="b-banner-icon">&#9888;</span>
+            <div className="b-banner-body">
+              <p className="b-banner-title">No conditions — this offer will always qualify</p>
+              <p className="b-banner-text">Add at least one main condition before publishing.</p>
+            </div>
+          </div>
         )}
 
-        <Layout.Section>
-          <LegacyCard title="Conditions" sectioned>
-            <BlockStack gap="300">
+        {/* Conditions list card */}
+        <div className="b-card">
+          <div className="b-card-header">Conditions</div>
+          <div className="b-card-body">
+            <div className="b-stack b-stack-3">
               {conditions.map((c) => (
-                <Box key={c.id} padding="300" borderWidth="025" borderColor="border" borderRadius="200">
-                  <InlineStack align="space-between">
-                    <InlineStack gap="300">
-                      <Badge tone={SCOPE_BADGE[c.scope] ?? "info"}>{c.scope}</Badge>
-                      <Text as="p" fontWeight="semibold">{c.conditionType}</Text>
-                    </InlineStack>
-                    <Form method="POST">
-                      <input type="hidden" name="intent" value="delete_condition" />
-                      <input type="hidden" name="conditionId" value={c.id} />
-                      <Button tone="critical" variant="plain" submit>Remove</Button>
-                    </Form>
-                  </InlineStack>
-                  <Text as="p" variant="bodySm" tone="subdued">{JSON.stringify(c.value)}</Text>
-                </Box>
+                <div
+                  key={c.id}
+                  className="b-row-between"
+                  style={{
+                    padding: "12px 16px",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--r)",
+                    background: "var(--bg-card)",
+                  }}
+                >
+                  <div className="b-row b-gap-3">
+                    <span
+                      className={
+                        c.scope === "main"
+                          ? "b-badge b-badge-blue"
+                          : "b-badge b-badge-orange"
+                      }
+                    >
+                      {c.scope}
+                    </span>
+                    <span className="b-text-bold">{c.conditionType}</span>
+                    <span className="b-text-sm b-text-sub">
+                      {JSON.stringify(c.value)}
+                    </span>
+                  </div>
+                  <Form method="POST">
+                    <input type="hidden" name="intent" value="delete_condition" />
+                    <input type="hidden" name="conditionId" value={c.id} />
+                    <button type="submit" className="b-btn b-btn-danger b-btn-sm">
+                      Remove
+                    </button>
+                  </Form>
+                </div>
               ))}
 
-              <InlineStack gap="300">
-                <Button onClick={() => { setAddingScope("main"); setSelectedType(""); }}>
+              {/* Add buttons */}
+              <div className="b-row b-gap-3" style={{ marginTop: 4 }}>
+                <button
+                  type="button"
+                  className="b-btn b-btn-secondary"
+                  onClick={() => { setAddingScope("main"); setSelectedType(""); }}
+                >
                   + Add Main Condition
-                </Button>
-                <Button onClick={() => { setAddingScope("sub"); setSelectedType(""); }}>
+                </button>
+                <button
+                  type="button"
+                  className="b-btn b-btn-secondary"
+                  onClick={() => { setAddingScope("sub"); setSelectedType(""); }}
+                >
                   + Add Sub-Condition
-                </Button>
-              </InlineStack>
-            </BlockStack>
-          </LegacyCard>
-        </Layout.Section>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
 
+        {/* Add condition form card */}
         {addingScope && (
-          <Layout.Section>
-            <LegacyCard title={`Add ${addingScope === "main" ? "Main" : "Sub"} Condition`} sectioned>
+          <div className="b-card b-mt-4">
+            <div className="b-card-header">
+              Add {addingScope === "main" ? "Main" : "Sub"} Condition
+            </div>
+            <div className="b-card-body">
               <Form method="POST">
                 <input type="hidden" name="intent" value="add_condition" />
                 <input type="hidden" name="scope" value={addingScope} />
-                <FormLayout>
-                  <Select
-                    label="Condition Type"
-                    name="conditionType"
-                    options={[{ label: "— Select —", value: "" }, ...(addingScope === "main" ? MAIN_CONDITION_TYPES : SUB_CONDITION_TYPES)]}
-                    value={selectedType}
-                    onChange={setSelectedType}
-                  />
 
-                  {/* Condition-specific fields */}
+                <div className="b-stack b-stack-3">
+                  {/* Condition type select */}
+                  <div>
+                    <label className="b-label" htmlFor="conditionType">
+                      Condition Type
+                    </label>
+                    <select
+                      id="conditionType"
+                      name="conditionType"
+                      className="b-select"
+                      value={selectedType}
+                      onChange={(e) => setSelectedType(e.target.value)}
+                    >
+                      <option value="">— Select —</option>
+                      {(addingScope === "main" ? MAIN_CONDITION_TYPES : SUB_CONDITION_TYPES).map(
+                        (opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        )
+                      )}
+                    </select>
+                  </div>
+
+                  {/* cart_value / cart_value_multiplier fields */}
                   {(selectedType === "cart_value" || selectedType === "cart_value_multiplier") && (
                     <>
-                      <TextField label="Threshold ($)" name="threshold" type="number" autoComplete="off" />
-                      <TextField label="Currency Code" name="currencyCode" value={currencyCode} onChange={setCurrencyCode} autoComplete="off" />
+                      <div>
+                        <label className="b-label" htmlFor="threshold">Threshold ($)</label>
+                        <input
+                          id="threshold"
+                          type="number"
+                          name="threshold"
+                          className="b-input"
+                          autoComplete="off"
+                        />
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="currencyCode">Currency Code</label>
+                        <input
+                          id="currencyCode"
+                          type="text"
+                          name="currencyCode"
+                          className="b-input"
+                          value={currencyCode}
+                          onChange={(e) => setCurrencyCode(e.target.value)}
+                          autoComplete="off"
+                        />
+                      </div>
                       {selectedType === "cart_value_multiplier" && (
-                        <TextField label="Max multiplier (optional)" name="maxMultiplier" type="number" autoComplete="off" />
+                        <div>
+                          <label className="b-label" htmlFor="maxMultiplier">Max multiplier (optional)</label>
+                          <input
+                            id="maxMultiplier"
+                            type="number"
+                            name="maxMultiplier"
+                            className="b-input"
+                            autoComplete="off"
+                          />
+                        </div>
                       )}
                     </>
                   )}
 
+                  {/* cart_quantity fields */}
                   {selectedType === "cart_quantity" && (
                     <>
-                      <TextField label="Min quantity" name="minQty" type="number" autoComplete="off" />
-                      <TextField label="Max quantity (optional)" name="maxQty" type="number" autoComplete="off" />
+                      <div>
+                        <label className="b-label" htmlFor="minQty">Min quantity</label>
+                        <input
+                          id="minQty"
+                          type="number"
+                          name="minQty"
+                          className="b-input"
+                          autoComplete="off"
+                        />
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="maxQty">Max quantity (optional)</label>
+                        <input
+                          id="maxQty"
+                          type="number"
+                          name="maxQty"
+                          className="b-input"
+                          autoComplete="off"
+                        />
+                      </div>
                     </>
                   )}
 
-                  {/* specific_product — product picker */}
+                  {/* specific_product / pack_of_products — product picker */}
                   {(selectedType === "specific_product" || selectedType === "pack_of_products") && (
-                    <BlockStack gap="300">
-                      <Text as="p" fontWeight="semibold">
-                        {selectedType === "specific_product" ? "Required products" : "Pack products (all must be present)"}
-                      </Text>
-                      <InlineStack gap="200" wrap>
+                    <div className="b-stack b-stack-3">
+                      <p className="b-text-bold" style={{ margin: 0 }}>
+                        {selectedType === "specific_product"
+                          ? "Required products"
+                          : "Pack products (all must be present)"}
+                      </p>
+                      <div className="b-row b-gap-2" style={{ flexWrap: "wrap" }}>
                         {requiredVariantGids.map((gid) => (
-                          <Tag key={gid} onRemove={() => setRequiredVariantGids((prev) => prev.filter((g) => g !== gid))}>
+                          <span
+                            key={gid}
+                            className="b-badge b-badge-gray"
+                            style={{ gap: 6 }}
+                          >
                             {gid.split("/").pop()}
-                          </Tag>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setRequiredVariantGids((prev) => prev.filter((g) => g !== gid))
+                              }
+                              style={{
+                                background: "none",
+                                border: "none",
+                                cursor: "pointer",
+                                padding: 0,
+                                lineHeight: 1,
+                                color: "var(--text-sub)",
+                                fontSize: 14,
+                              }}
+                              aria-label="Remove"
+                            >
+                              &times;
+                            </button>
+                          </span>
                         ))}
-                      </InlineStack>
-                      <Button onClick={() => { setPickerTarget("required"); setPickerOpen(true); }}>
+                      </div>
+                      <button
+                        type="button"
+                        className="b-btn b-btn-secondary b-btn-sm"
+                        onClick={() => { setPickerTarget("required"); setPickerOpen(true); }}
+                      >
                         + Select Products
-                      </Button>
+                      </button>
                       <input type="hidden" name="requiredVariantGids" value={requiredVariantGids.join(",")} />
-                      <TextField
-                        label="Min quantity per product"
-                        name="minQtyPerProduct"
-                        type="number"
-                        value={minQtyPerProduct}
-                        onChange={setMinQtyPerProduct}
-                        autoComplete="off"
-                      />
-                    </BlockStack>
+                      <div>
+                        <label className="b-label" htmlFor="minQtyPerProduct">Min quantity per product</label>
+                        <input
+                          id="minQtyPerProduct"
+                          type="number"
+                          name="minQtyPerProduct"
+                          className="b-input"
+                          value={minQtyPerProduct}
+                          onChange={(e) => setMinQtyPerProduct(e.target.value)}
+                          autoComplete="off"
+                        />
+                      </div>
+                    </div>
                   )}
 
                   {/* exclude_products — product picker */}
                   {selectedType === "exclude_products" && (
-                    <BlockStack gap="300">
-                      <Text as="p" fontWeight="semibold">Excluded products</Text>
-                      <InlineStack gap="200" wrap>
+                    <div className="b-stack b-stack-3">
+                      <p className="b-text-bold" style={{ margin: 0 }}>Excluded products</p>
+                      <div className="b-row b-gap-2" style={{ flexWrap: "wrap" }}>
                         {excludeVariantGids.map((gid) => (
-                          <Tag key={gid} onRemove={() => setExcludeVariantGids((prev) => prev.filter((g) => g !== gid))}>
+                          <span
+                            key={gid}
+                            className="b-badge b-badge-gray"
+                            style={{ gap: 6 }}
+                          >
                             {gid.split("/").pop()}
-                          </Tag>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExcludeVariantGids((prev) => prev.filter((g) => g !== gid))
+                              }
+                              style={{
+                                background: "none",
+                                border: "none",
+                                cursor: "pointer",
+                                padding: 0,
+                                lineHeight: 1,
+                                color: "var(--text-sub)",
+                                fontSize: 14,
+                              }}
+                              aria-label="Remove"
+                            >
+                              &times;
+                            </button>
+                          </span>
                         ))}
-                      </InlineStack>
-                      <Button onClick={() => { setPickerTarget("exclude"); setPickerOpen(true); }}>
+                      </div>
+                      <button
+                        type="button"
+                        className="b-btn b-btn-secondary b-btn-sm"
+                        onClick={() => { setPickerTarget("exclude"); setPickerOpen(true); }}
+                      >
                         + Select Products to Exclude
-                      </Button>
+                      </button>
                       <input type="hidden" name="excludeVariantGids" value={excludeVariantGids.join(",")} />
-                    </BlockStack>
+                    </div>
                   )}
 
+                  {/* customer_tags fields */}
                   {selectedType === "customer_tags" && (
                     <>
-                      <TextField label="Include tags (comma-separated)" name="includeTags" autoComplete="off" placeholder="vip, wholesale" />
-                      <TextField label="Exclude tags (comma-separated)" name="excludeTags" autoComplete="off" />
+                      <div>
+                        <label className="b-label" htmlFor="includeTags">Include tags (comma-separated)</label>
+                        <input
+                          id="includeTags"
+                          type="text"
+                          name="includeTags"
+                          className="b-input"
+                          autoComplete="off"
+                          placeholder="vip, wholesale"
+                        />
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="excludeTags">Exclude tags (comma-separated)</label>
+                        <input
+                          id="excludeTags"
+                          type="text"
+                          name="excludeTags"
+                          className="b-input"
+                          autoComplete="off"
+                        />
+                      </div>
                     </>
                   )}
 
+                  {/* customer_location fields */}
                   {selectedType === "customer_location" && (
                     <>
-                      <TextField label="Include country codes (comma-separated)" name="includeCountries" autoComplete="off" placeholder="US, CA, GB" />
-                      <TextField label="Exclude country codes (comma-separated)" name="excludeCountries" autoComplete="off" />
+                      <div>
+                        <label className="b-label" htmlFor="includeCountries">Include country codes (comma-separated)</label>
+                        <input
+                          id="includeCountries"
+                          type="text"
+                          name="includeCountries"
+                          className="b-input"
+                          autoComplete="off"
+                          placeholder="US, CA, GB"
+                        />
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="excludeCountries">Exclude country codes (comma-separated)</label>
+                        <input
+                          id="excludeCountries"
+                          type="text"
+                          name="excludeCountries"
+                          className="b-input"
+                          autoComplete="off"
+                        />
+                      </div>
                     </>
                   )}
 
+                  {/* markets fields */}
                   {selectedType === "markets" && (
                     <>
-                      <TextField label="Include Market IDs (comma-separated)" name="includeMarkets" autoComplete="off" />
-                      <TextField label="Exclude Market IDs (comma-separated)" name="excludeMarkets" autoComplete="off" />
+                      <div>
+                        <label className="b-label" htmlFor="includeMarkets">Include Market IDs (comma-separated)</label>
+                        <input
+                          id="includeMarkets"
+                          type="text"
+                          name="includeMarkets"
+                          className="b-input"
+                          autoComplete="off"
+                        />
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="excludeMarkets">Exclude Market IDs (comma-separated)</label>
+                        <input
+                          id="excludeMarkets"
+                          type="text"
+                          name="excludeMarkets"
+                          className="b-input"
+                          autoComplete="off"
+                        />
+                      </div>
                     </>
                   )}
 
+                  {/* order_history_total_spent field */}
                   {selectedType === "order_history_total_spent" && (
-                    <TextField label="Minimum total spent ($)" name="orderValue" type="number" autoComplete="off" />
+                    <div>
+                      <label className="b-label" htmlFor="orderValue">Minimum total spent ($)</label>
+                      <input
+                        id="orderValue"
+                        type="number"
+                        name="orderValue"
+                        className="b-input"
+                        autoComplete="off"
+                      />
+                    </div>
                   )}
 
+                  {/* Add / Cancel buttons — only shown once a type is selected */}
                   {selectedType && (
-                    <InlineStack gap="300">
-                      <Button variant="primary" submit>Add Condition</Button>
-                      <Button onClick={() => setAddingScope(null)}>Cancel</Button>
-                    </InlineStack>
+                    <div className="b-row b-gap-3" style={{ marginTop: 4 }}>
+                      <button type="submit" className="b-btn b-btn-primary">
+                        Add Condition
+                      </button>
+                      <button
+                        type="button"
+                        className="b-btn b-btn-secondary"
+                        onClick={() => setAddingScope(null)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   )}
-                </FormLayout>
+                </div>
               </Form>
-            </LegacyCard>
-          </Layout.Section>
+            </div>
+          </div>
         )}
-      </Layout>
-    </Page>
-  </>
+      </div>
+    </>
   );
 }

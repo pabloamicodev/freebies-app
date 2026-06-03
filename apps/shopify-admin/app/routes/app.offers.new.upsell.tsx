@@ -3,16 +3,13 @@
  */
 
 import { Form, useNavigate } from "react-router";
-import {
-  Page, Layout, LegacyCard, FormLayout, TextField, Select,
-  RadioButton, Button, Text, BlockStack, InlineStack, Checkbox,
-} from "@shopify/polaris";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import { eq } from "drizzle-orm";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -105,100 +102,259 @@ export default function NewUpsellPage() {
   ];
 
   return (
-    <Page title="New Upsell Offer" backAction={{ content: "All Offers", url: "/app/offers" }}>
-      <Layout>
-        <Layout.Section>
-          <Form method="POST">
-            <BlockStack gap="500">
-              <LegacyCard title="Upsell Type" sectioned>
-                <BlockStack gap="300">
-                  <RadioButton label="Frequently Bought Together — product page widget" checked={upsellType === "fbt"}
-                    onChange={() => setUpsellType("fbt")} id="type-fbt"
-                    helpText="Amazon-style 'frequently bought together' widget on product pages." />
-                  <RadioButton label="Checkout Upsell — inject widget at checkout (Plus)" checked={upsellType === "checkout"}
-                    onChange={() => setUpsellType("checkout")} id="type-checkout"
-                    helpText="Shopify Plus only. Show upsell at any checkout step." />
-                  <RadioButton label="Thank-You Page Upsell — post-purchase (Plus)" checked={upsellType === "thank_you"}
-                    onChange={() => setUpsellType("thank_you")} id="type-ty"
-                    helpText="Shopify Plus only. Show upsell after order is placed." />
-                  <input type="hidden" name="upsellType" value={upsellType} />
-                </BlockStack>
-              </LegacyCard>
+    <div className="b-page">
+      {/* Page header */}
+      <div className="b-page-header">
+        <div className="b-page-title-row">
+          <button
+            type="button"
+            className="b-btn b-btn-secondary b-btn-sm"
+            onClick={() => navigate("/app/offers")}
+          >
+            &larr; All Offers
+          </button>
+          <h1 className="b-page-title">New Upsell Offer</h1>
+        </div>
+      </div>
 
-              <LegacyCard title="Upsell Details" sectioned>
-                <FormLayout>
-                  <TextField label="Internal Name" name="internalName" autoComplete="off" />
-                  <TextField label="Public Title" name="publicTitle" autoComplete="off"
-                    placeholder="You might also like..." />
-                  <TextField label="Button Text" name="buttonText" defaultValue="Add to Cart" autoComplete="off" />
-                  <TextField label="Max Products to Show" name="maxProducts" type="number" defaultValue="3" autoComplete="off" />
-                </FormLayout>
-              </LegacyCard>
+      <Form method="POST">
+        <div className="b-stack b-stack-4">
 
-              {upsellType === "fbt" && (
-                <LegacyCard title="FBT Layout" sectioned>
-                  <FormLayout>
-                    <Select
-                      label="Layout style"
-                      name="fbtLayout"
-                      options={[
-                        { label: "Amazon-style (horizontal)", value: "amazon" },
-                        { label: "Stacked (vertical)", value: "stacked" },
-                      ]}
+          {/* Upsell Type */}
+          <div className="b-card">
+            <div className="b-card-header">Upsell Type</div>
+            <div className="b-card-body b-stack b-stack-3">
+              <label className="b-checkbox-row" style={{ cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="_upsellTypeRadio"
+                  checked={upsellType === "fbt"}
+                  onChange={() => setUpsellType("fbt")}
+                />
+                <div>
+                  <div className="b-checkbox-label">
+                    Frequently Bought Together &mdash; product page widget
+                  </div>
+                  <div className="b-checkbox-help">
+                    Amazon-style &lsquo;frequently bought together&rsquo; widget on product pages.
+                  </div>
+                </div>
+              </label>
+
+              <label className="b-checkbox-row" style={{ cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="_upsellTypeRadio"
+                  checked={upsellType === "checkout"}
+                  onChange={() => setUpsellType("checkout")}
+                />
+                <div>
+                  <div className="b-checkbox-label">
+                    Checkout Upsell &mdash; inject widget at checkout
+                    <span className="b-shopify-plus-badge">Plus</span>
+                  </div>
+                  <div className="b-checkbox-help">
+                    Shopify Plus only. Show upsell at any checkout step.
+                  </div>
+                </div>
+              </label>
+
+              <label className="b-checkbox-row" style={{ cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="_upsellTypeRadio"
+                  checked={upsellType === "thank_you"}
+                  onChange={() => setUpsellType("thank_you")}
+                />
+                <div>
+                  <div className="b-checkbox-label">
+                    Thank-You Page Upsell &mdash; post-purchase
+                    <span className="b-shopify-plus-badge">Plus</span>
+                  </div>
+                  <div className="b-checkbox-help">
+                    Shopify Plus only. Show upsell after order is placed.
+                  </div>
+                </div>
+              </label>
+
+              <input type="hidden" name="upsellType" value={upsellType} />
+            </div>
+          </div>
+
+          {/* Upsell Details */}
+          <div className="b-card">
+            <div className="b-card-header">Upsell Details</div>
+            <div className="b-card-body b-stack b-stack-3">
+              <div>
+                <label className="b-label" htmlFor="internalName">Internal Name</label>
+                <input
+                  id="internalName"
+                  className="b-input"
+                  type="text"
+                  name="internalName"
+                  autoComplete="off"
+                />
+              </div>
+              <div>
+                <label className="b-label" htmlFor="publicTitle">Public Title</label>
+                <input
+                  id="publicTitle"
+                  className="b-input"
+                  type="text"
+                  name="publicTitle"
+                  autoComplete="off"
+                  placeholder="You might also like..."
+                />
+              </div>
+              <div>
+                <label className="b-label" htmlFor="buttonText">Button Text</label>
+                <input
+                  id="buttonText"
+                  className="b-input"
+                  type="text"
+                  name="buttonText"
+                  autoComplete="off"
+                  defaultValue="Add to Cart"
+                />
+              </div>
+              <div>
+                <label className="b-label" htmlFor="maxProducts">Max Products to Show</label>
+                <input
+                  id="maxProducts"
+                  className="b-input"
+                  type="number"
+                  name="maxProducts"
+                  autoComplete="off"
+                  defaultValue="3"
+                  style={{ maxWidth: 120 }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* FBT Layout (conditional) */}
+          {upsellType === "fbt" && (
+            <div className="b-card">
+              <div className="b-card-header">FBT Layout</div>
+              <div className="b-card-body">
+                <label className="b-label" htmlFor="fbtLayout">Layout style</label>
+                <select id="fbtLayout" className="b-select" name="fbtLayout">
+                  <option value="amazon">Amazon-style (horizontal)</option>
+                  <option value="stacked">Stacked (vertical)</option>
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* Checkout Placement (conditional) */}
+          {(upsellType === "checkout" || upsellType === "thank_you") && (
+            <div className="b-card">
+              <div className="b-card-header">
+                Checkout Placement
+                <span className="b-shopify-plus-badge" style={{ marginLeft: 8 }}>Plus</span>
+              </div>
+              <div className="b-card-body">
+                <label className="b-label" htmlFor="checkoutTarget">Target surface</label>
+                <select id="checkoutTarget" className="b-select" name="checkoutTarget">
+                  {CHECKOUT_TARGETS.map((t) => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* Upsell Products */}
+          <div className="b-card">
+            <div className="b-card-header">Upsell Products</div>
+            <div className="b-card-body">
+              <label className="b-label" htmlFor="upsellVariantGids">
+                Product Variant GIDs (one per line)
+              </label>
+              <textarea
+                id="upsellVariantGids"
+                className="b-input"
+                name="upsellVariantGids"
+                rows={4}
+                autoComplete="off"
+                placeholder={"gid://shopify/ProductVariant/12345\ngid://shopify/ProductVariant/67890"}
+                style={{ resize: "vertical" }}
+              />
+              <p className="b-help">Products to recommend. For FBT and checkout upsell.</p>
+            </div>
+          </div>
+
+          {/* Discount */}
+          <div className="b-card">
+            <div className="b-card-header">Discount</div>
+            <div className="b-card-body b-stack b-stack-3">
+              <div>
+                <label className="b-label" htmlFor="discountType">Discount type</label>
+                <select
+                  id="discountType"
+                  className="b-select"
+                  name="discountType"
+                  value={discountType}
+                  onChange={(e) => setDiscountType(e.target.value)}
+                >
+                  <option value="fixed_price">No discount</option>
+                  <option value="percentage">Percentage off</option>
+                  <option value="fixed_amount">Fixed amount off</option>
+                </select>
+              </div>
+
+              {discountType !== "fixed_price" && (
+                <div className="b-grid-2">
+                  <div>
+                    <label className="b-label" htmlFor="discountValue">
+                      {discountType === "percentage" ? "%" : "$"} Discount value
+                    </label>
+                    <input
+                      id="discountValue"
+                      className="b-input"
+                      type="number"
+                      name="discountValue"
+                      autoComplete="off"
+                      min="0"
+                      step="0.01"
                     />
-                  </FormLayout>
-                </LegacyCard>
+                  </div>
+                  <div>
+                    <label className="b-label" htmlFor="currencyCode">Currency</label>
+                    <input
+                      id="currencyCode"
+                      className="b-input"
+                      type="text"
+                      name="currencyCode"
+                      autoComplete="off"
+                      defaultValue="USD"
+                    />
+                  </div>
+                </div>
               )}
 
-              {(upsellType === "checkout" || upsellType === "thank_you") && (
-                <LegacyCard title="Checkout Placement (Shopify Plus)" sectioned>
-                  <FormLayout>
-                    <Select label="Target surface" name="checkoutTarget" options={CHECKOUT_TARGETS} />
-                  </FormLayout>
-                </LegacyCard>
+              {discountType === "fixed_price" && (
+                <input type="hidden" name="discountValue" value="0" />
               )}
+            </div>
+          </div>
 
-              <LegacyCard title="Upsell Products" sectioned>
-                <FormLayout>
-                  <TextField
-                    label="Product Variant GIDs (one per line)"
-                    name="upsellVariantGids"
-                    multiline={4}
-                    autoComplete="off"
-                    placeholder={"gid://shopify/ProductVariant/12345\ngid://shopify/ProductVariant/67890"}
-                    helpText="Products to recommend. For FBT and checkout upsell."
-                  />
-                </FormLayout>
-              </LegacyCard>
+          {/* Form actions */}
+          <div className="b-editor-footer">
+            <button
+              type="button"
+              className="b-btn b-btn-secondary"
+              onClick={() => navigate("/app/offers")}
+            >
+              Cancel
+            </button>
+            <button type="submit" className="b-btn b-btn-primary">
+              Create Upsell Offer
+            </button>
+          </div>
 
-              <LegacyCard title="Discount" sectioned>
-                <FormLayout>
-                  <Select label="Discount type" name="discountType"
-                    options={[
-                      { label: "No discount", value: "fixed_price" },
-                      { label: "Percentage off", value: "percentage" },
-                      { label: "Fixed amount off", value: "fixed_amount" },
-                    ]}
-                    value={discountType} onChange={setDiscountType} />
-                  {discountType !== "fixed_price" && (
-                    <FormLayout.Group>
-                      <TextField label="Discount value" name="discountValue" type="number" autoComplete="off"
-                        prefix={discountType === "percentage" ? "%" : "$"} />
-                      <TextField label="Currency" name="currencyCode" defaultValue="USD" autoComplete="off" />
-                    </FormLayout.Group>
-                  )}
-                  {discountType === "fixed_price" && <input type="hidden" name="discountValue" value="0" />}
-                </FormLayout>
-              </LegacyCard>
-
-              <InlineStack align="end" gap="300">
-                <Button onClick={() => navigate("/app/offers")}>Cancel</Button>
-                <Button variant="primary" submit>Create Upsell Offer</Button>
-              </InlineStack>
-            </BlockStack>
-          </Form>
-        </Layout.Section>
-      </Layout>
-    </Page>
+        </div>
+      </Form>
+    </div>
   );
 }

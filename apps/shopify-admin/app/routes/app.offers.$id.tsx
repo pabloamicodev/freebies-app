@@ -1,15 +1,14 @@
-import { useLoaderData, useNavigate, Form } from "react-router";
-import {
-  Page, Layout, LegacyCard, Badge, Button, ButtonGroup,
-  Banner, Text, InlineStack, Tabs, BlockStack, FormLayout,
-  TextField, Select, Checkbox, Box, Divider,
-} from "@shopify/polaris";
+import { useLoaderData, useNavigate, useFetcher } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
-import { eq, and } from "drizzle-orm";
+import { offers, offerConditions, offerRewards, offerCombinationPolicies, shops } from "@promo/db";
+import { eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import {
+  IconChevronLeft, IconChevronDown, IconInfo, IconRefresh,
+  IconPlus, IconCheck, IconBot, IconLink, IconClock, IconCondition,
+} from "../components/Icons.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -19,12 +18,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const offerId = params["id"];
   if (!offerId) throw new Response("Not found", { status: 404 });
 
-  const offerRows = await db
-    .select()
-    .from(offers)
-    .where(eq(offers.id, offerId))
-    .limit(1);
-
+  const offerRows = await db.select().from(offers).where(eq(offers.id, offerId)).limit(1);
   const offer = offerRows[0];
   if (!offer) throw new Response("Not found", { status: 404 });
 
@@ -42,7 +36,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       createdAt: offer.createdAt.toISOString(),
       updatedAt: offer.updatedAt.toISOString(),
     },
-    conditions,
+    conditions: conditions.map((c) => ({
+      ...c,
+      value: c.value as Record<string, unknown>,
+    })),
     rewards,
     policy: policy[0] ?? null,
   };
@@ -57,107 +54,93 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
 
+  const shopRows = await db
+    .select({ id: shops.id })
+    .from(shops)
+    .where(eq(shops.myshopifyDomain, session.shop))
+    .limit(1);
+  const shopId = shopRows[0]?.id ?? "";
+
   switch (intent) {
     case "update": {
       const publicTitle = formData.get("publicTitle") as string;
       const internalName = formData.get("internalName") as string;
-      const priority = parseInt(formData.get("priority") as string, 10);
-      await db
-        .update(offers)
-        .set({ publicTitle, internalName, priority, updatedAt: new Date() })
-        .where(eq(offers.id, offerId));
+      const startsAt = formData.get("startsAt") as string;
+      const endsAt = formData.get("endsAt") as string;
+      await db.update(offers).set({
+        publicTitle, internalName,
+        startsAt: startsAt ? new Date(startsAt) : null,
+        endsAt: endsAt ? new Date(endsAt) : null,
+        updatedAt: new Date(),
+      }).where(eq(offers.id, offerId));
+      break;
+    }
+    case "update_condition": {
+      const conditionId = formData.get("conditionId") as string;
+      const rawValue = formData.get("conditionValue") as string;
+      let value: Record<string, unknown> = {};
+      try { value = JSON.parse(rawValue); } catch {}
+      await db.update(offerConditions).set({ value }).where(eq(offerConditions.id, conditionId));
+      break;
+    }
+    case "delete_condition": {
+      const conditionId = formData.get("conditionId") as string;
+      await db.delete(offerConditions).where(eq(offerConditions.id, conditionId));
+      break;
+    }
+    case "add_condition": {
+      const conditionType = formData.get("conditionType") as string;
+      const scope = (formData.get("scope") as "main" | "sub") ?? "main";
+      const rawValue = formData.get("conditionValue") as string;
+      let value: Record<string, unknown> = {};
+      try { value = JSON.parse(rawValue); } catch {}
+      const existing = await db.select({ id: offerConditions.id }).from(offerConditions).where(eq(offerConditions.offerId, offerId));
+      await db.insert(offerConditions).values({
+        shopId, offerId, scope, conditionType,
+        operator: "gte", value, sortOrder: existing.length, isEnabled: true,
+      });
+      break;
+    }
+    case "update_reward": {
+      const rewardId = formData.get("rewardId") as string;
+      const quantity = parseInt(formData.get("quantity") as string, 10) || 1;
+      const discountType = formData.get("discountType") as string;
+      const discountValue = parseFloat(formData.get("discountValue") as string) || 100;
+      const isAutoAdd = formData.get("isAutoAdd") === "on";
+      await db.update(offerRewards).set({
+        discountType: discountType as any,
+        value: { amount: discountValue, currencyCode: "USD" },
+        quantity,
+        isAutoAdd,
+      }).where(eq(offerRewards.id, rewardId));
       break;
     }
     case "publish": {
       await db.update(offers).set({ status: "active", updatedAt: new Date() }).where(eq(offers.id, offerId));
-      // ── CRITICAL: Push compiled config to Shopify Function metafield ──────────
-      // Enqueue offer publisher so the Rust Discount Function receives the config.
       try {
         const { offerPublishQueue } = await import("../lib/queues.server.js") as any;
-        const shopRows2 = await db.select({
-          myshopifyDomain: (await import("@promo/db")).shops.myshopifyDomain,
-          accessTokenEncrypted: (await import("@promo/db")).shops.accessTokenEncrypted,
-        })
-          .from((await import("@promo/db")).shops)
-          .where(eq((await import("@promo/db")).shops.myshopifyDomain, session.shop))
-          .limit(1);
-        const shop2 = shopRows2[0];
-        if (shop2 && offerPublishQueue) {
-          await offerPublishQueue.add(`publish-offer-${offerId}`, {
-            shopId: shopId ?? "",
-            shopDomain: shop2.myshopifyDomain,
-            accessToken: shop2.accessTokenEncrypted,
-            offerId,
-          }, { priority: 1, removeOnComplete: 100 });
+        if (offerPublishQueue) {
+          await offerPublishQueue.add(`publish-${offerId}`, { offerId, shopDomain: session.shop }, { priority: 1 });
         }
-      } catch (e) {
-        console.error("Failed to enqueue offer publish:", e);
-        // Do not fail the request — offer is marked active in DB.
-        // The offer-publisher worker will retry on next startup.
-      }
+      } catch {}
       break;
     }
     case "pause": {
       await db.update(offers).set({ status: "paused", updatedAt: new Date() }).where(eq(offers.id, offerId));
-      // Rebuild config with offer removed from active set
-      try {
-        const { offerPublishQueue } = await import("../lib/queues.server.js") as any;
-        const shopRows2 = await db.select({
-          myshopifyDomain: (await import("@promo/db")).shops.myshopifyDomain,
-          accessTokenEncrypted: (await import("@promo/db")).shops.accessTokenEncrypted,
-        })
-          .from((await import("@promo/db")).shops)
-          .where(eq((await import("@promo/db")).shops.myshopifyDomain, session.shop))
-          .limit(1);
-        const shop2 = shopRows2[0];
-        if (shop2 && offerPublishQueue) {
-          await offerPublishQueue.add(`pause-rebuild-${offerId}`, {
-            shopId: shopId ?? "",
-            shopDomain: shop2.myshopifyDomain,
-            accessToken: shop2.accessTokenEncrypted,
-          }, { priority: 2 });
-        }
-      } catch {}
       break;
     }
     case "archive": {
       await db.update(offers).set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() }).where(eq(offers.id, offerId));
-      // Rebuild config without archived offer
-      try {
-        const { offerPublishQueue } = await import("../lib/queues.server.js") as any;
-        const shopRows2 = await db.select({
-          myshopifyDomain: (await import("@promo/db")).shops.myshopifyDomain,
-          accessTokenEncrypted: (await import("@promo/db")).shops.accessTokenEncrypted,
-        })
-          .from((await import("@promo/db")).shops)
-          .where(eq((await import("@promo/db")).shops.myshopifyDomain, session.shop))
-          .limit(1);
-        const shop2 = shopRows2[0];
-        if (shop2 && offerPublishQueue) {
-          await offerPublishQueue.add(`archive-rebuild-${offerId}`, {
-            shopId: shopId ?? "",
-            shopDomain: shop2.myshopifyDomain,
-            accessToken: shop2.accessTokenEncrypted,
-          }, { priority: 2 });
-        }
-      } catch {}
       return Response.redirect("/app/offers", 302);
     }
     case "duplicate": {
       const originalRows = await db.select().from(offers).where(eq(offers.id, offerId)).limit(1);
       const original = originalRows[0];
       if (!original) break;
-      const [newOffer] = await db
-        .insert(offers)
-        .values({
-          ...original,
-          id: undefined as any,
-          internalName: `${original.internalName}-copy`,
-          status: "draft",
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .returning({ id: offers.id });
+      const [newOffer] = await db.insert(offers).values({
+        ...original, id: undefined as any, internalName: `${original.internalName}-copy`,
+        status: "draft", createdAt: new Date(), updatedAt: new Date(),
+      }).returning({ id: offers.id });
       if (newOffer) return Response.redirect(`/app/offers/${newOffer.id}`, 302);
       break;
     }
@@ -166,230 +149,875 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   return null;
 };
 
-const STATUS_CONFIG = {
-  active: { tone: "success" as const, label: "Active" },
-  draft: { tone: "info" as const, label: "Draft" },
-  paused: { tone: "warning" as const, label: "Paused" },
-  scheduled: { tone: "attention" as const, label: "Scheduled" },
-  expired: { tone: "critical" as const, label: "Expired" },
-  archived: { tone: "critical" as const, label: "Archived" },
+
+/* ── Condition type display names ───────────────────────── */
+const CONDITION_TYPE_NAMES: Record<string, string> = {
+  cart_value:            "Condición del valor del carrito",
+  cart_quantity:         "Condición de cantidad del carrito",
+  cart_value_multiplier: "Condición del multiplicador del valor del carrito",
+  specific_product:      "Condición específica del producto",
+  pack_of_products:      "Condición de paquete de productos",
+  customer_tags:         "Etiquetas de cliente",
+  order_history_total_spent: "Historial de pedidos — total gastado",
+  one_use_per_customer:  "Un uso por cliente",
+  markets:               "Shopify Markets",
+  customer_location:     "Ubicación del cliente",
+  sales_channels:        "Canales de venta",
 };
 
+/* ── Currency chips shown on monetary conditions ────────── */
+const CURRENCIES = ["AFN","AUD","AWG","BBD","BZD","CAD","CNY","DJF","EUR","FKP","GBP","HKD","JPY","MXN","USD"];
+
+function CurrencyChips({ selected, onSelect }: { selected: string; onSelect: (c: string) => void }) {
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? CURRENCIES : CURRENCIES.slice(0, 10);
+  return (
+    <div style={{ marginTop: 12 }}>
+      <p style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 6 }}>Add currency</p>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        {visible.map((c) => (
+          <button
+            key={c}
+            type="button"
+            onClick={() => onSelect(c)}
+            style={{
+              padding: "3px 8px",
+              fontSize: 11,
+              border: `1px solid ${selected === c ? "var(--blue)" : "var(--border)"}`,
+              borderRadius: 4,
+              background: selected === c ? "var(--blue-light)" : "transparent",
+              color: selected === c ? "var(--blue)" : "var(--text-sub)",
+              cursor: "pointer",
+              fontWeight: selected === c ? 600 : 400,
+            }}
+          >
+            {c}
+          </button>
+        ))}
+        {!showAll && (
+          <button
+            type="button"
+            onClick={() => setShowAll(true)}
+            style={{ padding: "3px 8px", fontSize: 11, border: "1px solid var(--border)", borderRadius: 4, background: "transparent", color: "var(--text-sub)", cursor: "pointer" }}
+          >
+            …
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Applies-to select ──────────────────────────────────── */
+function AppliesToSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div style={{ marginTop: 14 }}>
+      <label style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
+        La condición se aplicará a:
+      </label>
+      <select
+        className="b-select"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="any_product">cualquier producto</option>
+        <option value="specific_products">productos seleccionados</option>
+        <option value="specific_collection">colección específica</option>
+      </select>
+    </div>
+  );
+}
+
+/* ── Inline condition editor ────────────────────────────── */
+type ConditionValue = Record<string, unknown>;
+
+function ConditionCard({
+  conditionId,
+  conditionType,
+  initialValue,
+  onDelete,
+}: {
+  conditionId: string;
+  conditionType: string;
+  initialValue: ConditionValue;
+  onDelete: () => void;
+}) {
+  const fetcher = useFetcher();
+  const [val, setVal] = useState<ConditionValue>({ ...initialValue });
+
+  function update(patch: Partial<ConditionValue>) {
+    setVal((prev) => ({ ...prev, ...patch }));
+  }
+
+  function save(overrideVal?: ConditionValue) {
+    const fd = new FormData();
+    fd.append("intent", "update_condition");
+    fd.append("conditionId", conditionId);
+    fd.append("conditionValue", JSON.stringify(overrideVal ?? val));
+    fetcher.submit(fd, { method: "POST" });
+  }
+
+  const title = CONDITION_TYPE_NAMES[conditionType] ?? conditionType;
+
+  return (
+    <div style={{
+      background: "white",
+      border: "1px solid var(--border)",
+      borderRadius: "var(--r)",
+      overflow: "hidden",
+      marginBottom: 12,
+    }}>
+      {/* Header */}
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "12px 16px",
+        background: "var(--bg-hover)",
+        borderBottom: "1px solid var(--border-light)",
+      }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{title}</span>
+        <button
+          type="button"
+          onClick={onDelete}
+          style={{
+            background: "none", border: "none", cursor: "pointer",
+            color: "#dc2626", fontSize: 16, lineHeight: 1, padding: "2px 4px",
+          }}
+        >
+          ×
+        </button>
+      </div>
+
+      {/* Body */}
+      <div style={{ padding: "16px" }}>
+        {/* ── Cart value ────────────────────────────────────── */}
+        {conditionType === "cart_value" && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end" }}>
+              <div>
+                <label style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>min.</label>
+                <div style={{ position: "relative" }}>
+                  <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-sub)", fontSize: 13 }}>$</span>
+                  <input
+                    className="b-input"
+                    type="number"
+                    style={{ paddingLeft: 22 }}
+                    value={String((val.thresholdCents as number ?? 50000) / 100)}
+                    onChange={(e) => update({ thresholdCents: Math.round(parseFloat(e.target.value || "0") * 100) })}
+                    onBlur={() => save()}
+                    step="0.01"
+                  />
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>máx.</label>
+                <div style={{ position: "relative" }}>
+                  <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-sub)", fontSize: 13 }}>$</span>
+                  <input
+                    className="b-input"
+                    type="number"
+                    style={{ paddingLeft: 22 }}
+                    value={String((val.maxCents as number ?? 0) / 100)}
+                    onChange={(e) => update({ maxCents: Math.round(parseFloat(e.target.value || "0") * 100) })}
+                    onBlur={() => save()}
+                    step="0.01"
+                  />
+                </div>
+              </div>
+              <div style={{ height: 36, width: 24 }} />
+            </div>
+            <CurrencyChips
+              selected={val.currencyCode as string ?? "USD"}
+              onSelect={(c) => { const next = { ...val, currencyCode: c }; setVal(next); save(next); }}
+            />
+            <AppliesToSelect
+              value={val.appliesTo as string ?? "any_product"}
+              onChange={(v) => { const next = { ...val, appliesTo: v }; setVal(next); save(next); }}
+            />
+          </>
+        )}
+
+        {/* ── Cart value multiplier ──────────────────────────── */}
+        {conditionType === "cart_value_multiplier" && (
+          <>
+            <label style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
+              Multiply base value
+            </label>
+            <div style={{ position: "relative", maxWidth: 200 }}>
+              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-sub)", fontSize: 13 }}>$</span>
+              <input
+                className="b-input"
+                type="number"
+                style={{ paddingLeft: 22 }}
+                value={String((val.thresholdCents as number ?? 50000) / 100)}
+                onChange={(e) => update({ thresholdCents: Math.round(parseFloat(e.target.value || "0") * 100) })}
+                onBlur={() => save()}
+              />
+            </div>
+            <p style={{ fontSize: 12, color: "var(--text-sub)", marginTop: 8, marginBottom: 0 }}>
+              For example: when the base value is set to $100, the customer will receive 1 gift when the cart value is greater than $100, 2 gifts when it exceeds $200.
+            </p>
+            <CurrencyChips
+              selected={val.currencyCode as string ?? "USD"}
+              onSelect={(c) => { const next = { ...val, currencyCode: c }; setVal(next); save(next); }}
+            />
+            <AppliesToSelect
+              value={val.appliesTo as string ?? "any_product"}
+              onChange={(v) => { const next = { ...val, appliesTo: v }; setVal(next); save(next); }}
+            />
+          </>
+        )}
+
+        {/* ── Cart quantity ──────────────────────────────────── */}
+        {conditionType === "cart_quantity" && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div>
+                <label style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Min. quantity</label>
+                <input
+                  className="b-input"
+                  type="number"
+                  min="1"
+                  value={String(val.minQuantity ?? 1)}
+                  onChange={(e) => update({ minQuantity: parseInt(e.target.value, 10) || 1 })}
+                  onBlur={() => save()}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Max. quantity (optional)</label>
+                <input
+                  className="b-input"
+                  type="number"
+                  min="0"
+                  value={String(val.maxQuantity ?? "")}
+                  onChange={(e) => update({ maxQuantity: e.target.value ? parseInt(e.target.value, 10) : undefined })}
+                  onBlur={() => save()}
+                />
+              </div>
+            </div>
+            <AppliesToSelect
+              value={val.appliesTo as string ?? "any_product"}
+              onChange={(v) => { const next = { ...val, appliesTo: v }; setVal(next); save(next); }}
+            />
+          </>
+        )}
+
+        {/* ── Specific product ───────────────────────────────── */}
+        {(conditionType === "specific_product" || conditionType === "pack_of_products") && (
+          <>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
+                Required number of products
+              </label>
+              <input
+                className="b-input"
+                type="number"
+                min="1"
+                style={{ maxWidth: 200 }}
+                value={String(val.minQtyPerProduct ?? 1)}
+                onChange={(e) => update({ minQtyPerProduct: parseInt(e.target.value, 10) || 1 })}
+                onBlur={() => save()}
+              />
+            </div>
+
+            <div className="b-checkbox-row" style={{ marginBottom: 10 }}>
+              <input
+                type="checkbox"
+                id={`multiplyGifts-${conditionId}`}
+                checked={Boolean(val.multiplyGifts)}
+                onChange={(e) => { const next = { ...val, multiplyGifts: e.target.checked }; setVal(next); save(next); }}
+                style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
+              />
+              <div>
+                <label htmlFor={`multiplyGifts-${conditionId}`} className="b-checkbox-label">
+                  Multiply gifts with number of products
+                </label>
+                <div className="b-checkbox-help">
+                  This feature allows customers to get more gifts by buying more products.
+                </div>
+              </div>
+            </div>
+
+            <div className="b-checkbox-row" style={{ marginBottom: val.giftsMatchProducts ? 6 : 14 }}>
+              <input
+                type="checkbox"
+                id={`giftsMatch-${conditionId}`}
+                checked={Boolean(val.giftsMatchProducts)}
+                onChange={(e) => { const next = { ...val, giftsMatchProducts: e.target.checked }; setVal(next); save(next); }}
+                style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
+              />
+              <label htmlFor={`giftsMatch-${conditionId}`} className="b-checkbox-label">
+                Gifts will be the same as selected products.
+              </label>
+            </div>
+
+            {Boolean(val.giftsMatchProducts) && (
+              <div style={{ paddingLeft: 25, marginBottom: 14 }}>
+                {["variant", "product"].map((mode) => (
+                  <div key={mode} className="b-checkbox-row" style={{ marginBottom: 6 }}>
+                    <input
+                      type="radio"
+                      id={`trackMode-${mode}-${conditionId}`}
+                      name={`trackMode-${conditionId}`}
+                      checked={val.trackMode === mode}
+                      onChange={() => { const next = { ...val, trackMode: mode }; setVal(next); save(next); }}
+                      style={{ accentColor: "var(--blue)", width: 14, height: 14 }}
+                    />
+                    <label htmlFor={`trackMode-${mode}-${conditionId}`} className="b-checkbox-label">
+                      {mode === "variant" ? "Track by variant" : "Track by product"}
+                    </label>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
+                The condition applies to:
+              </label>
+              <select
+                className="b-select"
+                value="specific_products"
+                onChange={() => {}}
+                disabled
+              >
+                <option value="specific_products">products selected</option>
+              </select>
+            </div>
+
+            <div className="b-gift-selector-row" style={{ marginTop: 0 }}>
+              <button type="button" className="b-btn b-btn-secondary b-btn-sm">
+                Select products
+              </button>
+              <span className="b-gift-count-text">
+                {Array.isArray(val.variantIds) && (val.variantIds as string[]).length > 0
+                  ? `${(val.variantIds as string[]).length} product(s) selected`
+                  : "0 products selected"}
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Summary sidebar item ────────────────────────────────── */
+function SummaryItem({
+  label,
+  done,
+  details,
+}: {
+  label: string;
+  done: boolean;
+  details?: string[];
+}) {
+  return (
+    <div className="b-summary-item">
+      <div
+        className={`b-summary-circle${done ? " b-summary-circle-done" : ""}`}
+        style={{ flexShrink: 0, marginTop: 2 }}
+      >
+        {done && (
+          <span style={{ color: "var(--green-txt)", display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+            <IconCheck />
+          </span>
+        )}
+      </div>
+      <div style={{ flex: 1 }}>
+        <div className="b-summary-label">{label}</div>
+        {done && details && details.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 4 }}>
+            {details.map((d, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>
+                  {i === 0 ? <IconLink /> : <IconCondition />}
+                </span>
+                <span style={{ fontSize: 12, color: "var(--text-sub)" }}>{d}</span>
+              </div>
+            ))}
+          </div>
+        ) : !done ? (
+          <div className="b-summary-add">
+            <IconPlus /> Click to add
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/* ── Condition summary text from DB value ────────────────── */
+function conditionSummary(conditionType: string, value: ConditionValue): string[] {
+  const v = value;
+  switch (conditionType) {
+    case "cart_value": {
+      const cents = v.thresholdCents as number ?? 50000;
+      const applies = v.appliesTo === "specific_products" ? "specific products" : "any product";
+      return [`Spend from $${(cents / 100).toFixed(2)} to get 1 gift(s)`, `Applies to ${applies}`];
+    }
+    case "cart_value_multiplier": {
+      const cents = v.thresholdCents as number ?? 50000;
+      const applies = v.appliesTo === "specific_products" ? "specific products" : "any product";
+      return [`Spend $${(cents / 100).toFixed(2)} to get 1 gift(s)`, `Applies to ${applies}`];
+    }
+    case "cart_quantity": {
+      const min = v.minQuantity as number ?? 1;
+      return [`Buy at least ${min} item(s)`];
+    }
+    case "specific_product": {
+      const qty = v.minQtyPerProduct as number ?? 1;
+      const ids = Array.isArray(v.variantIds) ? (v.variantIds as string[]).length : 0;
+      return [`Buy ${qty} item(s) of products to get 1 gift(s)`, `Applies to ${ids} products selected`];
+    }
+    default:
+      return [conditionType];
+  }
+}
+
+/* ── Start date display ──────────────────────────────────── */
+function formatStartDate(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `Starts ${d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PAGE COMPONENT
+   ═══════════════════════════════════════════════════════════ */
 export default function OfferDetailPage() {
   const { offer, conditions, rewards, policy } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
-  const [selectedTab, setSelectedTab] = useState(0);
+  const fetcher = useFetcher();
 
-  const statusConfig = STATUS_CONFIG[offer.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.draft;
+  const [internalName, setInternalName] = useState(offer.internalName);
+  const [publicTitle, setPublicTitle] = useState(offer.publicTitle ?? "");
+  const [startsAt, setStartsAt] = useState(offer.startsAt ? new Date(offer.startsAt).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16));
+  const [endsAt, setEndsAt] = useState(offer.endsAt ? new Date(offer.endsAt).toISOString().slice(0, 16) : "");
+
+  const [giftTab, setGiftTab] = useState<"product" | "shipping">("product");
+  const [discountType, setDiscountType] = useState((rewards[0] as any)?.discountType ?? "free");
+  const [discountValue, setDiscountValue] = useState(
+    String(((rewards[0] as any)?.value as any)?.amount ?? 100)
+  );
+  const [receivesAll, setReceivesAll] = useState((rewards[0] as any)?.isAutoAdd !== false);
+  const [giftCount, setGiftCount] = useState(String((rewards[0] as any)?.quantity ?? 1));
+
+  const [addingCondition, setAddingCondition] = useState(false);
+  const [newCondType, setNewCondType] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
   const canPublish = offer.status === "draft" || offer.status === "paused";
+  const hasName = Boolean(internalName.trim());
+  const hasConditions = conditions.length > 0;
+  const hasRewards = rewards.length > 0;
 
-  const tabs = [
-    { id: "conditions", content: `Conditions (${conditions.length})` },
-    { id: "rewards", content: `Rewards (${rewards.length})` },
-    { id: "policy", content: "Combination Policy" },
-    { id: "analytics", content: "Analytics" },
-  ];
+  const mainConditions = conditions.filter((c) => c.scope === "main");
+  const subConditions = conditions.filter((c) => c.scope === "sub");
+
+  function saveInfo() {
+    const fd = new FormData();
+    fd.append("intent", "update");
+    fd.append("internalName", internalName);
+    fd.append("publicTitle", publicTitle);
+    fd.append("startsAt", startsAt);
+    fd.append("endsAt", endsAt);
+    fetcher.submit(fd, { method: "POST" });
+  }
+
+  function deleteCondition(conditionId: string) {
+    const fd = new FormData();
+    fd.append("intent", "delete_condition");
+    fd.append("conditionId", conditionId);
+    fetcher.submit(fd, { method: "POST" });
+  }
+
+  function addCondition() {
+    if (!newCondType) return;
+    const defaults: Record<string, object> = {
+      cart_value: { thresholdCents: 50000, currencyCode: "USD", appliesTo: "any_product" },
+      cart_quantity: { minQuantity: 1, appliesTo: "any_product" },
+      cart_value_multiplier: { thresholdCents: 50000, currencyCode: "USD", appliesTo: "any_product" },
+      specific_product: { minQtyPerProduct: 1, multiplyGifts: false, giftsMatchProducts: false, trackMode: "product", appliesTo: "specific_products", variantIds: [] },
+    };
+    const fd = new FormData();
+    fd.append("intent", "add_condition");
+    fd.append("conditionType", newCondType);
+    fd.append("scope", "main");
+    fd.append("conditionValue", JSON.stringify(defaults[newCondType] ?? {}));
+    fetcher.submit(fd, { method: "POST" });
+    setAddingCondition(false);
+    setNewCondType("");
+  }
+
+  function submitAction(intent: string) {
+    const fd = new FormData();
+    fd.append("intent", intent);
+    fetcher.submit(fd, { method: "POST" });
+  }
 
   return (
-    <Page
-      title={offer.internalName}
-      subtitle={offer.publicTitle}
-      backAction={{ content: "All Offers", url: "/app/offers" }}
-      titleMetadata={<Badge tone={statusConfig.tone}>{statusConfig.label}</Badge>}
-      secondaryActions={[
-        { content: "Duplicate", onAction: () => {} },
-        { content: "Archive", destructive: true, onAction: () => {} },
-      ]}
-      primaryAction={
-        canPublish
-          ? {
-              content: "Publish",
-              onAction: async () => {
-                const fd = new FormData();
-                fd.append("intent", "publish");
-                await fetch("", { method: "POST", body: fd });
-                window.location.reload();
-              },
-            }
-          : {
-              content: "Pause",
-              onAction: async () => {
-                const fd = new FormData();
-                fd.append("intent", "pause");
-                await fetch("", { method: "POST", body: fd });
-                window.location.reload();
-              },
-            }
-      }
-    >
-      <Layout>
-        {/* Warnings */}
-        {conditions.length === 0 && (
-          <Layout.Section>
-            <Banner tone="warning" title="No conditions configured">
-              This offer has no eligibility conditions. Add at least one condition before publishing.
-            </Banner>
-          </Layout.Section>
-        )}
-        {rewards.length === 0 && (
-          <Layout.Section>
-            <Banner tone="warning" title="No rewards configured">
-              This offer has no rewards. Add at least one reward before publishing.
-            </Banner>
-          </Layout.Section>
-        )}
+    <div className="b-page">
+      {/* ── Back + Title ─────────────────────────────────── */}
+      <div style={{ marginBottom: 16 }}>
+        <button
+          type="button"
+          className="b-btn-plain b-text-sm"
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 10 }}
+          onClick={() => navigate("/app/offers")}
+        >
+          <IconChevronLeft />
+          Create gift offer
+        </button>
+      </div>
 
-        {/* Basic info */}
-        <Layout.Section>
-          <LegacyCard title="Offer Details" sectioned>
-            <Form method="POST">
-              <input type="hidden" name="intent" value="update" />
-              <FormLayout>
-                <FormLayout.Group>
-                  <TextField
-                    label="Internal Name"
-                    name="internalName"
-                    defaultValue={offer.internalName}
-                    autoComplete="off"
-                  />
-                  <TextField
-                    label="Public Title"
-                    name="publicTitle"
-                    defaultValue={offer.publicTitle}
-                    autoComplete="off"
-                  />
-                </FormLayout.Group>
-                <FormLayout.Group>
-                  <TextField
-                    label="Priority"
-                    name="priority"
-                    type="number"
-                    defaultValue={String(offer.priority)}
-                    autoComplete="off"
-                    helpText="Lower = evaluated first"
-                  />
-                  <Select
-                    label="Type"
-                    name="type"
-                    options={[
-                      { label: "Gift", value: "gift" },
-                      { label: "Bundle", value: "bundle" },
-                      { label: "Upsell", value: "upsell" },
-                      { label: "Discount", value: "discount" },
-                      { label: "Booster", value: "booster" },
-                    ]}
-                    value={offer.type}
-                    onChange={() => {}}
-                    disabled
-                  />
-                </FormLayout.Group>
-                <InlineStack align="end">
-                  <Button variant="primary" submit>Save Changes</Button>
-                </InlineStack>
-              </FormLayout>
-            </Form>
-          </LegacyCard>
-        </Layout.Section>
+      <div className="b-editor-layout">
+        {/* ── LEFT COLUMN ─────────────────────────────────── */}
+        <div className="b-editor-main">
 
-        {/* Tabs */}
-        <Layout.Section>
-          <LegacyCard>
-            <Tabs tabs={tabs} selected={selectedTab} onSelect={setSelectedTab}>
-              <LegacyCard.Section>
-                {selectedTab === 0 && (
-                  <BlockStack gap="400">
-                    {conditions.length === 0 ? (
-                      <Text as="p" tone="subdued">No conditions yet. Add conditions to control when this offer qualifies.</Text>
-                    ) : (
-                      conditions.map((c) => (
-                        <Box key={c.id} padding="400" borderWidth="025" borderColor="border" borderRadius="200">
-                          <Text as="p" fontWeight="semibold">{c.conditionType}</Text>
-                          <Text as="p" tone="subdued">{c.scope} · {c.operator} · {JSON.stringify(c.value)}</Text>
-                        </Box>
-                      ))
-                    )}
-                    <Button>Add Condition</Button>
-                  </BlockStack>
-                )}
-                {selectedTab === 1 && (
-                  <BlockStack gap="400">
-                    {rewards.length === 0 ? (
-                      <Text as="p" tone="subdued">No rewards yet. Add rewards to define what the customer receives.</Text>
-                    ) : (
-                      rewards.map((r) => (
-                        <Box key={r.id} padding="400" borderWidth="025" borderColor="border" borderRadius="200">
-                          <Text as="p" fontWeight="semibold">{r.rewardType}</Text>
-                          <Text as="p" tone="subdued">
-                            {r.discountType} · qty: {r.quantity ?? "—"} · auto-add: {String(r.isAutoAdd)}
-                          </Text>
-                        </Box>
-                      ))
-                    )}
-                    <Button>Add Reward</Button>
-                  </BlockStack>
-                )}
-                {selectedTab === 2 && policy && (
-                  <BlockStack gap="300">
-                    <Checkbox
-                      label="Combines with order discounts"
-                      checked={policy.combinesWithOrderDiscounts}
-                      onChange={() => {}}
-                    />
-                    <Checkbox
-                      label="Combines with product discounts"
-                      checked={policy.combinesWithProductDiscounts}
-                      onChange={() => {}}
-                    />
-                    <Checkbox
-                      label="Combines with shipping discounts"
-                      checked={policy.combinesWithShippingDiscounts}
-                      onChange={() => {}}
-                    />
-                    <Checkbox
-                      label="Stop lower priority offers"
-                      checked={policy.stopLowerPriority}
-                      onChange={() => {}}
-                      helpText="When this offer qualifies, offers with higher priority numbers will not run."
-                    />
-                  </BlockStack>
-                )}
-                {selectedTab === 3 && (
-                  <Text as="p" tone="subdued">
-                    Analytics for this offer will appear here once it has been active.{" "}
-                    <a href="/app/analytics">View all analytics →</a>
-                  </Text>
-                )}
-              </LegacyCard.Section>
-            </Tabs>
-          </LegacyCard>
-        </Layout.Section>
+          {/* Offer info ──────────────────────────────────── */}
+          <div className="b-editor-section">
+            <p className="b-editor-section-title">Offer information</p>
+            <div className="b-editor-section-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <div>
+                <label className="b-label" htmlFor="internalName">Offer name</label>
+                <input
+                  id="internalName"
+                  className="b-input"
+                  value={internalName}
+                  onChange={(e) => setInternalName(e.target.value)}
+                  onBlur={saveInfo}
+                  placeholder="Enter offer name"
+                  autoComplete="off"
+                />
+                <div className="b-help">For internal use only, not shown to customers..</div>
+              </div>
+              <div>
+                <label className="b-label" htmlFor="publicTitle">Offer title</label>
+                <input
+                  id="publicTitle"
+                  className="b-input"
+                  value={publicTitle}
+                  onChange={(e) => setPublicTitle(e.target.value)}
+                  onBlur={saveInfo}
+                  placeholder="Enter offer title"
+                  autoComplete="off"
+                />
+                <div className="b-help">Shown to customers in the online store.</div>
+              </div>
+              <div className="b-datetime-row">
+                <div>
+                  <label className="b-label">Start time</label>
+                  <input
+                    className="b-input"
+                    type="datetime-local"
+                    value={startsAt}
+                    onChange={(e) => setStartsAt(e.target.value)}
+                    onBlur={saveInfo}
+                  />
+                </div>
+                <div>
+                  <label className="b-label">End time</label>
+                  <input
+                    className="b-input"
+                    type="datetime-local"
+                    value={endsAt}
+                    onChange={(e) => setEndsAt(e.target.value)}
+                    onBlur={saveInfo}
+                    placeholder="End time"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
 
-        {/* Metadata */}
-        <Layout.Section variant="oneThird">
-          <LegacyCard title="Offer Info" sectioned>
-            <BlockStack gap="300">
-              <Box>
-                <Text as="p" variant="bodySm" tone="subdued">Offer ID</Text>
-                <Text as="p" variant="bodySm" breakWord>{offer.id}</Text>
-              </Box>
-              <Box>
-                <Text as="p" variant="bodySm" tone="subdued">Created</Text>
-                <Text as="p" variant="bodySm">{new Date(offer.createdAt).toLocaleDateString()}</Text>
-              </Box>
-              <Box>
-                <Text as="p" variant="bodySm" tone="subdued">Updated</Text>
-                <Text as="p" variant="bodySm">{new Date(offer.updatedAt).toLocaleDateString()}</Text>
-              </Box>
-              {offer.discountTags && offer.discountTags.length > 0 && (
-                <Box>
-                  <Text as="p" variant="bodySm" tone="subdued">Discount Tags</Text>
-                  <Text as="p" variant="bodySm">{offer.discountTags.join(", ")}</Text>
-                </Box>
+          {/* Main condition ──────────────────────────────── */}
+          <div className="b-editor-section">
+            <p className="b-editor-section-title">Offer main condition</p>
+            <div className="b-editor-section-body">
+              {mainConditions.map((c) => (
+                <ConditionCard
+                  key={c.id}
+                  conditionId={c.id}
+                  conditionType={c.conditionType}
+                  initialValue={c.value as ConditionValue}
+                  onDelete={() => deleteCondition(c.id)}
+                />
+              ))}
+
+              {/* Add new condition form */}
+              {addingCondition ? (
+                <div style={{ marginBottom: 12 }}>
+                  <label className="b-label">Condition type</label>
+                  <select
+                    className="b-select"
+                    value={newCondType}
+                    onChange={(e) => setNewCondType(e.target.value)}
+                    style={{ marginBottom: 10 }}
+                  >
+                    <option value="">— Select —</option>
+                    <option value="cart_value">Cart Value — spend threshold</option>
+                    <option value="cart_quantity">Cart Quantity — item count</option>
+                    <option value="cart_value_multiplier">Cart Value Multiplier — earn gifts per $ spent</option>
+                    <option value="specific_product">Specific Product — must contain selected products</option>
+                  </select>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      className="b-btn b-btn-dark b-btn-sm"
+                      onClick={addCondition}
+                      disabled={!newCondType}
+                    >
+                      Add condition
+                    </button>
+                    <button
+                      type="button"
+                      className="b-btn b-btn-secondary b-btn-sm"
+                      onClick={() => { setAddingCondition(false); setNewCondType(""); }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="b-btn-dark"
+                  style={{
+                    marginBottom: 10,
+                    opacity: mainConditions.length >= 2 ? 0.5 : 1,
+                    cursor: mainConditions.length >= 2 ? "not-allowed" : "pointer",
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    background: "#111827", color: "white", border: "none",
+                    padding: "8px 14px", borderRadius: "var(--r-sm)", fontSize: 14, fontWeight: 500,
+                  }}
+                  onClick={() => mainConditions.length < 2 && setAddingCondition(true)}
+                >
+                  <IconPlus /> Add main condition
+                </button>
               )}
-            </BlockStack>
-          </LegacyCard>
-        </Layout.Section>
-      </Layout>
-    </Page>
+
+              <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
+                Cart quantity and cart value conditions can be combined
+              </p>
+            </div>
+          </div>
+
+          {/* Subcondition ────────────────────────────────── */}
+          <div
+            className="b-subcondition-row"
+            style={{ cursor: "default" }}
+          >
+            <IconRefresh />
+            <span style={{ fontSize: 14, color: "var(--text-sub)" }}>
+              {subConditions.length > 0
+                ? `${subConditions.length} subcondition(s) configured`
+                : "Add subcondition (optional)"}
+            </span>
+          </div>
+
+          {/* Select gifts ────────────────────────────────── */}
+          <div className="b-editor-section">
+            <p className="b-editor-section-title">Select gifts</p>
+            <div className="b-editor-section-body">
+              <div className="b-pill-tabs">
+                <button type="button" className={`b-pill-tab${giftTab === "product" ? " active" : ""}`} onClick={() => setGiftTab("product")}>
+                  Product gift
+                </button>
+                <button type="button" className={`b-pill-tab${giftTab === "shipping" ? " active" : ""}`} onClick={() => setGiftTab("shipping")}>
+                  Shipping discount as gift
+                </button>
+              </div>
+
+              {giftTab === "product" && (
+                <>
+                  <p className="b-text-sm b-text-bold" style={{ marginBottom: 10 }}>Gift discount type</p>
+                  <div className="b-discount-type-row">
+                    <div>
+                      <div className="b-discount-type-label">Type:</div>
+                      <select className="b-select" value={discountType} onChange={(e) => setDiscountType(e.target.value)}>
+                        <option value="free">Percentage</option>
+                        <option value="percentage">Fixed amount</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="b-discount-type-label">Value:</div>
+                      <div style={{ position: "relative" }}>
+                        <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-sub)", fontSize: 13, pointerEvents: "none" }}>%</span>
+                        <input
+                          className="b-input"
+                          type="number"
+                          value={discountValue}
+                          onChange={(e) => setDiscountValue(e.target.value)}
+                          style={{ paddingLeft: 26 }}
+                          min="0" max="100"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="b-text-sm b-text-bold" style={{ marginBottom: 10 }}>The customer will receive:</p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+                    <div className="b-checkbox-row">
+                      <input
+                        type="radio"
+                        id="all-gifts"
+                        name="receives"
+                        checked={receivesAll}
+                        onChange={() => setReceivesAll(true)}
+                        style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
+                      />
+                      <label htmlFor="all-gifts" className="b-checkbox-label">
+                        Automatically all gifts
+                      </label>
+                    </div>
+                    <div className="b-checkbox-row" style={{ alignItems: "flex-start" }}>
+                      <input
+                        type="radio"
+                        id="num-gifts"
+                        name="receives"
+                        checked={!receivesAll}
+                        onChange={() => setReceivesAll(false)}
+                        style={{ accentColor: "var(--blue)", width: 15, height: 15, marginTop: 2 }}
+                      />
+                      <div>
+                        <label htmlFor="num-gifts" className="b-checkbox-label">
+                          Number of gifts the customer will receive
+                        </label>
+                        {!receivesAll && (
+                          <input
+                            className="b-input b-mt-2"
+                            type="number"
+                            value={giftCount}
+                            onChange={(e) => setGiftCount(e.target.value)}
+                            min="1"
+                            style={{ maxWidth: 120 }}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="b-gift-selector-row">
+                    <button type="button" className="b-btn b-btn-secondary b-btn-sm">Select gifts</button>
+                    <span className="b-gift-count-text">
+                      {rewards.length > 0 ? `${rewards.length} product(s) configured` : "0 products selected"}
+                    </span>
+                  </div>
+                </>
+              )}
+              {giftTab === "shipping" && (
+                <p className="b-text-sm b-text-sub">Configure a shipping discount as the gift.</p>
+              )}
+            </div>
+          </div>
+
+          {/* Advanced accordion ──────────────────────────── */}
+          <div className="b-accordion">
+            <div className="b-accordion-header" onClick={() => setAdvancedOpen(!advancedOpen)}>
+              <span className="b-accordion-title">
+                <IconInfo />
+                Advanced settings (optional)
+              </span>
+              <span style={{ transform: advancedOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s", color: "var(--text-sub)", display: "flex" }}>
+                <IconChevronDown />
+              </span>
+            </div>
+            {advancedOpen && (
+              <div className="b-accordion-body">
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div className="b-checkbox-row">
+                    <input type="checkbox" id="combine-orders" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} defaultChecked={policy?.combinesWithOrderDiscounts ?? false} />
+                    <label htmlFor="combine-orders" className="b-checkbox-label">Combines with order discounts</label>
+                  </div>
+                  <div className="b-checkbox-row">
+                    <input type="checkbox" id="combine-products" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} defaultChecked={policy?.combinesWithProductDiscounts ?? false} />
+                    <label htmlFor="combine-products" className="b-checkbox-label">Combines with product discounts</label>
+                  </div>
+                  <div className="b-checkbox-row">
+                    <input type="checkbox" id="combine-shipping" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} defaultChecked={policy?.combinesWithShippingDiscounts ?? false} />
+                    <label htmlFor="combine-shipping" className="b-checkbox-label">Combines with shipping discounts</label>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Footer ──────────────────────────────────────── */}
+          <div className="b-editor-footer">
+            <button type="button" className="b-btn b-btn-secondary" onClick={saveInfo}>
+              Save draft
+            </button>
+            {canPublish ? (
+              <button type="button" className="b-btn b-btn-dark" onClick={() => submitAction("publish")}>
+                Publish
+              </button>
+            ) : (
+              <button type="button" className="b-btn b-btn-danger" onClick={() => submitAction("pause")}>
+                Pause offer
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* ── RIGHT SIDEBAR ───────────────────────────────── */}
+        <div className="b-editor-sidebar">
+
+          {/* Support card */}
+          <div className="b-card b-card-body" style={{ textAlign: "center" }}>
+            <div className="b-support-bot-icon" style={{ margin: "0 auto 10px" }}><IconBot /></div>
+            <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 6px" }}>Need help creating offers?</p>
+            <p style={{ fontSize: 13, color: "var(--text-sub)", margin: "0 0 14px" }}>Chat with us to get help</p>
+            <button className="b-btn b-btn-secondary b-w-full">Chat with us</button>
+          </div>
+
+          {/* Summary card */}
+          <div className="b-card b-card-body">
+            <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 12px" }}>Summary</p>
+            <SummaryItem
+              label="Basic information"
+              done={hasName}
+              details={hasName ? [
+                publicTitle || internalName,
+                formatStartDate(offer.startsAt),
+              ].filter(Boolean) as string[] : undefined}
+            />
+            <SummaryItem
+              label="Main condition"
+              done={hasConditions}
+              details={hasConditions
+                ? mainConditions.flatMap((c) => conditionSummary(c.conditionType, c.value as ConditionValue))
+                : undefined}
+            />
+            <SummaryItem
+              label="Subcondition (optional)"
+              done={subConditions.length > 0}
+            />
+            <SummaryItem
+              label="Gift"
+              done={hasRewards}
+              details={hasRewards ? [`${rewards.length} reward(s) configured`] : undefined}
+            />
+          </div>
+
+          {/* Offer metadata */}
+          <div className="b-card b-card-body">
+            <p style={{ fontSize: 11, fontWeight: 600, color: "var(--text-sub)", margin: "0 0 12px", textTransform: "uppercase", letterSpacing: "0.5px" }}>Offer info</p>
+            {[
+              { label: "Status", value: <span className={`b-badge ${offer.status === "active" ? "b-badge-green" : "b-badge-gray"}`}>{offer.status}</span> },
+              { label: "Type", value: offer.type },
+              { label: "Created", value: new Date(offer.createdAt).toLocaleDateString() },
+              { label: "Updated", value: new Date(offer.updatedAt).toLocaleDateString() },
+            ].map((item) => (
+              <div key={item.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border-light)" }}>
+                <span className="b-text-xs b-text-sub">{item.label}</span>
+                <span className="b-text-xs">{item.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

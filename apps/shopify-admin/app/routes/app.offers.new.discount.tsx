@@ -4,17 +4,13 @@
  */
 
 import { Form, useNavigate } from "react-router";
-import {
-  Page, Layout, LegacyCard, FormLayout, TextField, Select,
-  RadioButton, Button, Text, BlockStack, InlineStack, Banner,
-  Checkbox,
-} from "@shopify/polaris";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import { eq } from "drizzle-orm";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -122,156 +118,307 @@ export default function NewDiscountOfferPage() {
   const [tiers, setTiers] = useState([{ qty: "2", label: "Buy 2+", discountType: "percentage", value: "10" }]);
 
   return (
-    <Page
-      title="New Discount Offer"
-      backAction={{ content: "All Offers", url: "/app/offers" }}
-    >
-      <Layout>
-        <Layout.Section>
-          <Form method="POST">
-            <BlockStack gap="500">
-              <LegacyCard title="Discount Type" sectioned>
-                <BlockStack gap="300">
-                  <RadioButton
-                    label="Cart Discount — discount when cart total reaches a threshold"
+    <div className="b-page">
+      {/* Page header */}
+      <div className="b-page-header">
+        <div className="b-page-title-row">
+          <button
+            type="button"
+            className="b-btn b-btn-secondary b-btn-sm"
+            onClick={() => navigate("/app/offers")}
+          >
+            ← All Offers
+          </button>
+          <h1 className="b-page-title">New Discount Offer</h1>
+        </div>
+      </div>
+
+      <Form method="POST">
+        <div className="b-stack b-stack-4">
+
+          {/* Discount Type card */}
+          <div className="b-card">
+            <div className="b-card-header">Discount Type</div>
+            <div className="b-card-body">
+              <div className="b-stack b-stack-3">
+                <label className="b-checkbox-row" style={{ cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="_discountSubtype"
                     checked={discountSubtype === "cart"}
                     onChange={() => setDiscountSubtype("cart")}
-                    id="type-cart"
                   />
-                  <RadioButton
-                    label="Volume Discount — tiered discounts by quantity"
+                  <span>
+                    <span className="b-checkbox-label">Cart Discount</span>
+                    <span className="b-checkbox-help">Discount when cart total reaches a threshold</span>
+                  </span>
+                </label>
+                <label className="b-checkbox-row" style={{ cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="_discountSubtype"
                     checked={discountSubtype === "volume"}
                     onChange={() => setDiscountSubtype("volume")}
-                    id="type-volume"
                   />
-                  <RadioButton
-                    label="Cheapest Item Free / Discounted"
+                  <span>
+                    <span className="b-checkbox-label">Volume Discount</span>
+                    <span className="b-checkbox-help">Tiered discounts by quantity</span>
+                  </span>
+                </label>
+                <label className="b-checkbox-row" style={{ cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="_discountSubtype"
                     checked={discountSubtype === "cheapest_item"}
                     onChange={() => setDiscountSubtype("cheapest_item")}
-                    id="type-cheapest"
                   />
-                  <input type="hidden" name="discountSubtype" value={discountSubtype} />
-                </BlockStack>
-              </LegacyCard>
+                  <span>
+                    <span className="b-checkbox-label">Cheapest Item Free / Discounted</span>
+                    <span className="b-checkbox-help">Apply a discount to the lowest-priced item in cart</span>
+                  </span>
+                </label>
+                <input type="hidden" name="discountSubtype" value={discountSubtype} />
+              </div>
+            </div>
+          </div>
 
-              <LegacyCard title="Offer Details" sectioned>
-                <FormLayout>
-                  <TextField label="Internal Name" name="internalName" autoComplete="off" />
-                  <TextField label="Public Title" name="publicTitle" autoComplete="off" />
-                  <TextField label="Currency Code" name="currencyCode" defaultValue="USD" autoComplete="off" />
-                </FormLayout>
-              </LegacyCard>
+          {/* Offer Details card */}
+          <div className="b-card">
+            <div className="b-card-header">Offer Details</div>
+            <div className="b-card-body">
+              <div className="b-stack b-stack-3">
+                <div>
+                  <label className="b-label" htmlFor="internalName">Internal Name</label>
+                  <input
+                    id="internalName"
+                    className="b-input"
+                    name="internalName"
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <label className="b-label" htmlFor="publicTitle">Public Title</label>
+                  <input
+                    id="publicTitle"
+                    className="b-input"
+                    name="publicTitle"
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <label className="b-label" htmlFor="currencyCode">Currency Code</label>
+                  <input
+                    id="currencyCode"
+                    className="b-input"
+                    name="currencyCode"
+                    defaultValue="USD"
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
 
-              {(discountSubtype === "cart") && (
-                <LegacyCard title="Cart Threshold" sectioned>
-                  <FormLayout>
-                    <TextField
-                      label="Minimum cart value"
-                      name="threshold"
-                      type="number"
-                      prefix="$"
-                      helpText="Cart must reach this value to qualify"
-                      autoComplete="off"
-                    />
-                    <Select
-                      label="Discount type"
+          {/* Cart Threshold card — shown for "cart" subtype */}
+          {discountSubtype === "cart" && (
+            <div className="b-card">
+              <div className="b-card-header">Cart Threshold</div>
+              <div className="b-card-body">
+                <div className="b-stack b-stack-3">
+                  <div>
+                    <label className="b-label" htmlFor="threshold">Minimum cart value</label>
+                    <div className="b-relative" style={{ display: "flex", alignItems: "center" }}>
+                      <span className="b-text-sub" style={{ position: "absolute", left: 12, pointerEvents: "none" }}>$</span>
+                      <input
+                        id="threshold"
+                        className="b-input"
+                        name="threshold"
+                        type="number"
+                        style={{ paddingLeft: 28 }}
+                        autoComplete="off"
+                      />
+                    </div>
+                    <p className="b-help">Cart must reach this value to qualify</p>
+                  </div>
+                  <div>
+                    <label className="b-label" htmlFor="discountType">Discount type</label>
+                    <select
+                      id="discountType"
+                      className="b-select"
                       name="discountType"
-                      options={[
-                        { label: "Percentage off cart", value: "percentage" },
-                        { label: "Fixed amount off cart", value: "fixed_amount" },
-                      ]}
                       value={discountType}
-                      onChange={setDiscountType}
-                    />
-                    <TextField
-                      label={discountType === "percentage" ? "Discount %" : "Discount amount"}
-                      name="discountValue"
-                      type="number"
-                      prefix={discountType === "percentage" ? "%" : "$"}
-                      autoComplete="off"
-                    />
-                  </FormLayout>
-                </LegacyCard>
-              )}
+                      onChange={(e) => setDiscountType(e.target.value)}
+                    >
+                      <option value="percentage">Percentage off cart</option>
+                      <option value="fixed_amount">Fixed amount off cart</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="b-label" htmlFor="discountValue">
+                      {discountType === "percentage" ? "Discount %" : "Discount amount"}
+                    </label>
+                    <div className="b-relative" style={{ display: "flex", alignItems: "center" }}>
+                      <span className="b-text-sub" style={{ position: "absolute", left: 12, pointerEvents: "none" }}>
+                        {discountType === "percentage" ? "%" : "$"}
+                      </span>
+                      <input
+                        id="discountValue"
+                        className="b-input"
+                        name="discountValue"
+                        type="number"
+                        style={{ paddingLeft: 28 }}
+                        autoComplete="off"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
-              {discountSubtype === "cheapest_item" && (
-                <LegacyCard title="Cheapest Item Discount" sectioned>
-                  <FormLayout>
-                    <Select
-                      label="Discount type"
+          {/* Cheapest Item card */}
+          {discountSubtype === "cheapest_item" && (
+            <div className="b-card">
+              <div className="b-card-header">Cheapest Item Discount</div>
+              <div className="b-card-body">
+                <div className="b-stack b-stack-3">
+                  <div>
+                    <label className="b-label" htmlFor="cheapestDiscountType">Discount type</label>
+                    <select
+                      id="cheapestDiscountType"
+                      className="b-select"
                       name="discountType"
-                      options={[
-                        { label: "Cheapest item free (100%)", value: "free" },
-                        { label: "Percentage off cheapest item", value: "percentage" },
-                        { label: "Fixed amount off cheapest item", value: "fixed_amount" },
-                      ]}
                       value={discountType}
-                      onChange={setDiscountType}
-                    />
-                    {discountType !== "free" && (
-                      <TextField
-                        label="Discount value"
+                      onChange={(e) => setDiscountType(e.target.value)}
+                    >
+                      <option value="free">Cheapest item free (100%)</option>
+                      <option value="percentage">Percentage off cheapest item</option>
+                      <option value="fixed_amount">Fixed amount off cheapest item</option>
+                    </select>
+                  </div>
+                  {discountType !== "free" && (
+                    <div>
+                      <label className="b-label" htmlFor="cheapestDiscountValue">Discount value</label>
+                      <input
+                        id="cheapestDiscountValue"
+                        className="b-input"
                         name="discountValue"
                         type="number"
                         autoComplete="off"
                       />
-                    )}
-                    {discountType === "free" && <input type="hidden" name="discountValue" value="100" />}
-                  </FormLayout>
-                </LegacyCard>
-              )}
+                    </div>
+                  )}
+                  {discountType === "free" && (
+                    <input type="hidden" name="discountValue" value="100" />
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
-              {discountSubtype === "volume" && (
-                <LegacyCard title="Volume Discount Tiers" sectioned>
-                  <Text as="p" tone="subdued">
-                    Define quantity tiers. Customers see the applicable tier on the product page.
-                  </Text>
-                  <BlockStack gap="300">
-                    {tiers.map((tier, i) => (
-                      <InlineStack key={i} gap="300" align="start">
-                        <TextField
-                          label="Min qty"
+          {/* Volume Discount Tiers card */}
+          {discountSubtype === "volume" && (
+            <div className="b-card">
+              <div className="b-card-header">Volume Discount Tiers</div>
+              <div className="b-card-body">
+                <p className="b-text-sm b-text-sub b-mb-4">
+                  Define quantity tiers. Customers see the applicable tier on the product page.
+                </p>
+                <div className="b-stack b-stack-3">
+                  {tiers.map((tier, i) => (
+                    <div key={i} className="b-grid-3" style={{ gridTemplateColumns: "100px 1fr 120px 32px", gap: 12 }}>
+                      <div>
+                        <label className="b-label">Min qty</label>
+                        <input
+                          className="b-input"
                           name="tier_qty[]"
                           value={tier.qty}
-                          onChange={(v) => { const t = [...tiers]; t[i] = { ...t[i]!, qty: v }; setTiers(t); }}
                           type="number"
                           autoComplete="off"
+                          onChange={(e) => {
+                            const t = [...tiers];
+                            t[i] = { ...t[i]!, qty: e.target.value };
+                            setTiers(t);
+                          }}
                         />
-                        <TextField
-                          label="Label"
+                      </div>
+                      <div>
+                        <label className="b-label">Label</label>
+                        <input
+                          className="b-input"
                           name="tier_label[]"
                           value={tier.label}
-                          onChange={(v) => { const t = [...tiers]; t[i] = { ...t[i]!, label: v }; setTiers(t); }}
                           autoComplete="off"
+                          onChange={(e) => {
+                            const t = [...tiers];
+                            t[i] = { ...t[i]!, label: e.target.value };
+                            setTiers(t);
+                          }}
                         />
-                        <TextField
-                          label="Discount %"
+                      </div>
+                      <div>
+                        <label className="b-label">Discount %</label>
+                        <input
+                          className="b-input"
                           name="tier_discount_value[]"
                           value={tier.value}
-                          onChange={(v) => { const t = [...tiers]; t[i] = { ...t[i]!, value: v }; setTiers(t); }}
                           type="number"
                           autoComplete="off"
+                          onChange={(e) => {
+                            const t = [...tiers];
+                            t[i] = { ...t[i]!, value: e.target.value };
+                            setTiers(t);
+                          }}
                         />
-                        <input type="hidden" name="tier_discount_type[]" value="percentage" />
-                      </InlineStack>
-                    ))}
-                    <Button onClick={() => setTiers([...tiers, { qty: "", label: "", discountType: "percentage", value: "" }])}>
-                      + Add Tier
-                    </Button>
-                  </BlockStack>
-                  <input type="hidden" name="discountType" value="percentage" />
-                  <input type="hidden" name="discountValue" value="0" />
-                </LegacyCard>
-              )}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "flex-end" }}>
+                        <button
+                          type="button"
+                          className="b-btn-icon b-btn-icon-red"
+                          title="Remove tier"
+                          onClick={() => setTiers(tiers.filter((_, idx) => idx !== i))}
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <input type="hidden" name="tier_discount_type[]" value="percentage" />
+                    </div>
+                  ))}
 
-              <InlineStack align="end" gap="300">
-                <Button onClick={() => navigate("/app/offers")}>Cancel</Button>
-                <Button variant="primary" submit>Create Discount Offer</Button>
-              </InlineStack>
-            </BlockStack>
-          </Form>
-        </Layout.Section>
-      </Layout>
-    </Page>
+                  <div>
+                    <button
+                      type="button"
+                      className="b-btn b-btn-secondary b-btn-sm"
+                      onClick={() =>
+                        setTiers([...tiers, { qty: "", label: "", discountType: "percentage", value: "" }])
+                      }
+                    >
+                      + Add Tier
+                    </button>
+                  </div>
+                </div>
+                <input type="hidden" name="discountType" value="percentage" />
+                <input type="hidden" name="discountValue" value="0" />
+              </div>
+            </div>
+          )}
+
+          {/* Form actions */}
+          <div className="b-editor-footer">
+            <button
+              type="button"
+              className="b-btn b-btn-secondary"
+              onClick={() => navigate("/app/offers")}
+            >
+              Cancel
+            </button>
+            <button type="submit" className="b-btn b-btn-primary">
+              Create Discount Offer
+            </button>
+          </div>
+
+        </div>
+      </Form>
+    </div>
   );
 }

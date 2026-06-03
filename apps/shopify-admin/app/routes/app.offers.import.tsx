@@ -4,11 +4,7 @@
  */
 
 import { Form, useActionData, useNavigate } from "react-router";
-import {
-  Page, Layout, LegacyCard, Button, Text, BlockStack, Banner,
-  DataTable, Badge, InlineStack, DropZone,
-} from "@shopify/polaris";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
@@ -121,108 +117,320 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return { created, errors, error: null };
 };
 
+const COLUMNS = [
+  { col: "internal_name", req: true,  note: "Unique internal identifier" },
+  { col: "public_title",  req: true,  note: "Customer-facing offer name" },
+  { col: "type",          req: true,  note: "gift | bundle | upsell | discount | booster" },
+  { col: "priority",      req: false, note: "Integer, default 100" },
+  { col: "condition_type",req: false, note: "cart_value | cart_quantity" },
+  { col: "condition_value_threshold_cents", req: false, note: "Integer in cents (e.g. 5000 = $50)" },
+  { col: "reward_type",   req: false, note: "product_gift | order_discount" },
+  { col: "discount_type", req: false, note: "free | percentage | fixed_amount" },
+  { col: "reward_value",  req: false, note: "Numeric (e.g. 10 for 10%)" },
+  { col: "gift_variant_gids", req: false, note: "Shopify variant GIDs, pipe-separated" },
+  { col: "gift_quantity", req: false, note: "Integer, default 1" },
+  { col: "is_auto_add",   req: false, note: "true | false" },
+  { col: "track_mode",    req: false, note: "product | variant" },
+  { col: "discount_tags", req: false, note: "Tag strings, pipe-separated" },
+];
+
+const TEMPLATE_CSV = `internal_name,public_title,type,priority,condition_type,condition_value_threshold_cents,reward_type,discount_type,reward_value,gift_variant_gids,gift_quantity,is_auto_add,track_mode,discount_tags
+free-gift-50-usd,Free Gift with $50 Purchase,gift,100,cart_value,5000,product_gift,free,100,gid://shopify/ProductVariant/12345,1,true,product,summer-promo
+volume-discount-3plus,Volume Discount Buy 3+,discount,200,cart_quantity,3,order_discount,percentage,10,,,,, `;
+
 export default function OffersImportPage() {
   const navigate = useNavigate();
   const actionData = useActionData<typeof action>();
   const [csvText, setCsvText] = useState("");
   const [previewRows, setPreviewRows] = useState<string[][]>([]);
-  const [headers, setHeaders] = useState<string[]>([]);
+  const [previewHeaders, setPreviewHeaders] = useState<string[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   function parsePreview(text: string) {
     const lines = text.split("\n").filter((l) => l.trim()).slice(0, 6);
     if (lines.length < 1) return;
     const hdrs = lines[0]!.split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
     const rows = lines.slice(1).map((l) => l.split(",").map((v) => v.trim().replace(/^"|"$/g, "")));
-    setHeaders(hdrs);
+    setPreviewHeaders(hdrs);
     setPreviewRows(rows);
   }
 
-  const TEMPLATE_CSV = `internal_name,public_title,type,priority,condition_type,condition_value_threshold_cents,reward_type,discount_type,reward_value,gift_variant_gids,gift_quantity,is_auto_add,track_mode,discount_tags
-free-gift-50-usd,Free Gift with $50 Purchase,gift,100,cart_value,5000,product_gift,free,100,gid://shopify/ProductVariant/12345,1,true,product,summer-promo
-volume-discount-3plus,Volume Discount Buy 3+,discount,200,cart_quantity,3,order_discount,percentage,10,,,,, `;
+  function handleFile(file: File) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      setCsvText(text);
+      parsePreview(text);
+    };
+    reader.readAsText(file);
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  }
+
+  function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) handleFile(file);
+  }
+
+  function downloadTemplate() {
+    const blob = new Blob([TEMPLATE_CSV], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "offer-import-template.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const hasResult = actionData && !actionData.error;
+  const allOk = hasResult && actionData.errors.length === 0;
 
   return (
-    <Page
-      title="Import Offers from CSV"
-      backAction={{ content: "All Offers", url: "/app/offers" }}
-    >
-      <Layout>
-        {actionData?.error && (
-          <Layout.Section>
-            <Banner tone="critical" title="Import Error">{actionData.error}</Banner>
-          </Layout.Section>
-        )}
+    <div className="b-page">
+      {/* Header */}
+      <div className="b-page-header">
+        <div className="b-page-title-row">
+          <button
+            className="b-btn b-btn-secondary b-btn-sm"
+            onClick={() => navigate("/app/offers")}
+            type="button"
+          >
+            ← All Offers
+          </button>
+          <h1 className="b-page-title">Import Offers</h1>
+        </div>
+        <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
+          Bulk-create draft offers from a CSV file.
+        </p>
+      </div>
 
-        {actionData && !actionData.error && (
-          <Layout.Section>
-            <Banner
-              tone={actionData.errors.length === 0 ? "success" : "warning"}
-              title={`Import complete: ${actionData.created.length} created, ${actionData.errors.length} errors`}
-            >
-              {actionData.errors.map((e) => (
-                <p key={e.row}>Row {e.row}: {e.message}</p>
-              ))}
-            </Banner>
-          </Layout.Section>
-        )}
+      {/* Error banner */}
+      {actionData?.error && (
+        <div className="b-banner b-banner-red b-mb-4">
+          <span className="b-banner-icon">&#9888;</span>
+          <div className="b-banner-body">
+            <p className="b-banner-title">Import error</p>
+            <p className="b-banner-text">{actionData.error}</p>
+          </div>
+        </div>
+      )}
 
-        <Layout.Section>
-          <LegacyCard title="CSV Template" sectioned>
-            <Text as="p" tone="subdued">Download the template, fill it in, then upload below.</Text>
-            <BlockStack gap="300">
-              <Button
-                onClick={() => {
-                  const blob = new Blob([TEMPLATE_CSV], { type: "text/csv" });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url; a.download = "offer-import-template.csv"; a.click();
-                }}
-              >
-                Download Template CSV
-              </Button>
-              <Text as="p" variant="bodySm" tone="subdued">
-                Required fields: internal_name, public_title, type (gift|bundle|upsell|discount|booster).
-                Products are referenced by Shopify variant GID. All created offers start as drafts.
-              </Text>
-            </BlockStack>
-          </LegacyCard>
-        </Layout.Section>
+      {/* Result banner */}
+      {hasResult && (
+        <div className={`b-banner ${allOk ? "" : "b-banner-orange"} b-mb-4`}>
+          <span className="b-banner-icon">{allOk ? "✓" : "⚠"}</span>
+          <div className="b-banner-body">
+            <p className="b-banner-title">
+              {actionData.created.length} offer{actionData.created.length !== 1 ? "s" : ""} created
+              {actionData.errors.length > 0 && `, ${actionData.errors.length} row${actionData.errors.length !== 1 ? "s" : ""} failed`}
+            </p>
+            {actionData.errors.length > 0 && (
+              <ul style={{ margin: "6px 0 0", paddingLeft: 16 }}>
+                {actionData.errors.map((e) => (
+                  <li key={e.row} className="b-text-sm b-text-sub">
+                    Row {e.row}: {e.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
 
-        <Layout.Section>
-          <LegacyCard title="Upload CSV" sectioned>
-            <Form method="POST" encType="multipart/form-data">
-              <BlockStack gap="400">
-                <textarea
-                  name="csvContent"
-                  rows={10}
-                  style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }}
-                  placeholder="Paste CSV content here or type..."
-                  value={csvText}
-                  onChange={(e) => {
-                    setCsvText(e.target.value);
-                    parsePreview(e.target.value);
+      <div className="b-stack b-stack-4">
+        {/* Upload card */}
+        <div className="b-card">
+          <div className="b-card-header">Upload CSV</div>
+          <div className="b-card-body">
+            <Form method="POST">
+              <div className="b-stack b-stack-4">
+                {/* Drop zone */}
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+                  onDragLeave={() => setIsDragOver(false)}
+                  onDrop={handleDrop}
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{
+                    border: `2px dashed ${isDragOver ? "var(--blue)" : "var(--border)"}`,
+                    borderRadius: "var(--r)",
+                    background: isDragOver ? "var(--blue-light)" : "var(--bg-hover)",
+                    padding: "36px 24px",
+                    textAlign: "center",
+                    cursor: "pointer",
+                    transition: "border-color 0.15s, background 0.15s",
                   }}
-                />
-
-                {previewRows.length > 0 && (
-                  <DataTable
-                    columnContentTypes={headers.map(() => "text" as const)}
-                    headings={headers}
-                    rows={previewRows.map((r) => r.map((v) => v || "—"))}
+                >
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>&#128196;</div>
+                  <p className="b-text-bold" style={{ margin: "0 0 4px" }}>
+                    Drop a CSV file here
+                  </p>
+                  <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
+                    or click to browse — .csv files only
+                  </p>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    style={{ display: "none" }}
+                    onChange={handleFileInput}
                   />
+                </div>
+
+                {/* Paste fallback */}
+                <div>
+                  <label className="b-label" htmlFor="csvContent">
+                    Or paste CSV content
+                  </label>
+                  <textarea
+                    id="csvContent"
+                    name="csvContent"
+                    rows={8}
+                    className="b-input"
+                    style={{ fontFamily: "monospace", fontSize: 12, resize: "vertical" }}
+                    placeholder="Paste CSV here..."
+                    value={csvText}
+                    onChange={(e) => {
+                      setCsvText(e.target.value);
+                      parsePreview(e.target.value);
+                    }}
+                  />
+                  <p className="b-help">All created offers start as drafts. You can activate them after reviewing.</p>
+                </div>
+
+                {/* Preview table */}
+                {previewRows.length > 0 && (
+                  <div>
+                    <p className="b-label" style={{ marginBottom: 8 }}>
+                      Preview — first {previewRows.length} data row{previewRows.length !== 1 ? "s" : ""}
+                    </p>
+                    <div className="b-table-wrap" style={{ overflowX: "auto" }}>
+                      <table className="b-table">
+                        <thead>
+                          <tr>
+                            {previewHeaders.map((h) => (
+                              <th key={h}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {previewRows.map((row, ri) => (
+                            <tr key={ri}>
+                              {row.map((cell, ci) => (
+                                <td key={ci} className="b-text-sm">
+                                  {cell || <span className="b-text-muted">—</span>}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 )}
 
-                <InlineStack gap="300">
-                  <Button variant="primary" submit disabled={!csvText.trim()}>
-                    Import {previewRows.length > 0 ? `(${previewRows.length} rows preview)` : ""}
-                  </Button>
-                  <Button onClick={() => navigate("/app/offers")}>Cancel</Button>
-                </InlineStack>
-              </BlockStack>
+                {/* Actions */}
+                <div className="b-row b-gap-3">
+                  <button
+                    type="submit"
+                    className="b-btn b-btn-primary"
+                    disabled={!csvText.trim()}
+                    style={!csvText.trim() ? { opacity: 0.5, cursor: "not-allowed" } : {}}
+                  >
+                    Import{previewRows.length > 0 ? ` (${previewRows.length} row${previewRows.length !== 1 ? "s" : ""})` : ""}
+                  </button>
+                  <button
+                    type="button"
+                    className="b-btn b-btn-secondary"
+                    onClick={() => navigate("/app/offers")}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
             </Form>
-          </LegacyCard>
-        </Layout.Section>
-      </Layout>
-    </Page>
+          </div>
+        </div>
+
+        {/* Format guide card */}
+        <div className="b-card">
+          <div className="b-card-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span>CSV Format Guide</span>
+            <button
+              type="button"
+              className="b-btn b-btn-secondary b-btn-sm"
+              onClick={downloadTemplate}
+            >
+              Download template
+            </button>
+          </div>
+          <div className="b-card-body" style={{ padding: 0 }}>
+            <table className="b-table">
+              <thead>
+                <tr>
+                  <th>Column</th>
+                  <th>Required</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {COLUMNS.map(({ col, req, note }) => (
+                  <tr key={col}>
+                    <td>
+                      <code style={{ fontFamily: "monospace", fontSize: 12, background: "var(--border-light)", padding: "2px 6px", borderRadius: 3 }}>
+                        {col}
+                      </code>
+                    </td>
+                    <td>
+                      {req
+                        ? <span className="b-badge b-badge-green">Required</span>
+                        : <span className="b-badge b-badge-gray">Optional</span>
+                      }
+                    </td>
+                    <td className="b-text-sm b-text-sub">{note}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Results table (only shown after a successful import with created IDs) */}
+        {hasResult && actionData.created.length > 0 && (
+          <div className="b-card">
+            <div className="b-card-header">Created Offer IDs</div>
+            <div className="b-card-body" style={{ padding: 0 }}>
+              <table className="b-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Offer ID</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {actionData.created.map((id, i) => (
+                    <tr key={id}>
+                      <td className="b-text-sm b-text-sub">{i + 1}</td>
+                      <td>
+                        <code style={{ fontFamily: "monospace", fontSize: 12 }}>{id}</code>
+                      </td>
+                      <td>
+                        <span className="b-badge b-badge-orange">Draft</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

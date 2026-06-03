@@ -4,11 +4,6 @@
  */
 
 import { Form, useNavigate } from "react-router";
-import {
-  Page, Layout, LegacyCard, FormLayout, TextField, Select,
-  RadioButton, Button, Text, BlockStack, InlineStack, Badge,
-  Banner, Checkbox, Divider,
-} from "@shopify/polaris";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
@@ -18,6 +13,7 @@ import {
 } from "@promo/db";
 import { eq } from "drizzle-orm";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -140,150 +136,357 @@ export default function NewBundleOfferPage() {
   const [discountType, setDiscountType] = useState("percentage");
   const [tiers, setTiers] = useState([{ qty: "3", label: "Buy 3+", value: "10" }]);
   const [useTiers, setUseTiers] = useState(false);
+  const [searchEnabled, setSearchEnabled] = useState(false);
 
   return (
-    <Page
-      title="New Bundle Offer"
-      backAction={{ content: "All Offers", url: "/app/offers" }}
-    >
-      <Layout>
-        <Layout.Section>
-          <Form method="POST">
-            <BlockStack gap="500">
-              <LegacyCard title="Bundle Type" sectioned>
-                <BlockStack gap="300">
-                  <RadioButton
-                    label="Classic Bundle — fixed set of products at a discount"
+    <div className="b-page">
+
+      {/* Page header */}
+      <div className="b-page-header">
+        <div className="b-page-title-row">
+          <button
+            type="button"
+            className="b-btn b-btn-secondary b-btn-sm"
+            onClick={() => navigate("/app/offers")}
+          >
+            ← All Offers
+          </button>
+          <h1 className="b-page-title">New Bundle Offer</h1>
+          <span className="b-badge b-badge-gray">draft</span>
+        </div>
+      </div>
+
+      <Form method="POST">
+        <div className="b-stack b-stack-4">
+
+          {/* Bundle Type */}
+          <div className="b-card">
+            <div className="b-card-header">Bundle Type</div>
+            <div className="b-card-body">
+              <div className="b-stack b-stack-3">
+
+                <label className="b-checkbox-row" style={{ cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="_bundleTypeRadio"
                     checked={bundleType === "classic"}
                     onChange={() => setBundleType("classic")}
-                    id="type-classic"
-                    helpText="E.g. 'Buy Product A + Product B for 20% off'"
+                    style={{ marginTop: 2, flexShrink: 0, accentColor: "var(--blue)", width: 16, height: 16, cursor: "pointer" }}
                   />
-                  <RadioButton
-                    label="Mix & Match — customer picks from a product list"
+                  <div>
+                    <div className="b-checkbox-label">Classic Bundle — fixed set of products at a discount</div>
+                    <div className="b-checkbox-help">E.g. "Buy Product A + Product B for 20% off"</div>
+                  </div>
+                </label>
+
+                <label className="b-checkbox-row" style={{ cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="_bundleTypeRadio"
                     checked={bundleType === "mix_match"}
                     onChange={() => setBundleType("mix_match")}
-                    id="type-mix"
-                    helpText="E.g. 'Pick any 3 products for 15% off'"
+                    style={{ marginTop: 2, flexShrink: 0, accentColor: "var(--blue)", width: 16, height: 16, cursor: "pointer" }}
                   />
-                  <RadioButton
-                    label="Bundle Page — multi-step build-a-box"
+                  <div>
+                    <div className="b-checkbox-label">Mix &amp; Match — customer picks from a product list</div>
+                    <div className="b-checkbox-help">E.g. "Pick any 3 products for 15% off"</div>
+                  </div>
+                </label>
+
+                <label className="b-checkbox-row" style={{ cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="_bundleTypeRadio"
                     checked={bundleType === "bundle_page"}
                     onChange={() => setBundleType("bundle_page")}
-                    id="type-page"
-                    helpText="Custom bundle builder page with steps"
+                    style={{ marginTop: 2, flexShrink: 0, accentColor: "var(--blue)", width: 16, height: 16, cursor: "pointer" }}
                   />
-                  <input type="hidden" name="bundleType" value={bundleType} />
-                </BlockStack>
-              </LegacyCard>
+                  <div>
+                    <div className="b-checkbox-label">Bundle Page — multi-step build-a-box</div>
+                    <div className="b-checkbox-help">Custom bundle builder page with steps</div>
+                  </div>
+                </label>
 
-              <LegacyCard title="Bundle Details" sectioned>
-                <FormLayout>
-                  <TextField label="Internal Name" name="internalName" autoComplete="off" />
-                  <TextField label="Customer-Facing Title" name="publicTitle" autoComplete="off" />
-                  <TextField label="Description (optional)" name="description" autoComplete="off" multiline={2} />
-                  <TextField label="Currency" name="currencyCode" defaultValue="USD" autoComplete="off" />
-                </FormLayout>
-              </LegacyCard>
+                <input type="hidden" name="bundleType" value={bundleType} />
+              </div>
+            </div>
+          </div>
 
-              <LegacyCard title="Step Configuration" sectioned>
-                <FormLayout>
-                  <TextField
-                    label="Min items per step"
-                    name="stepMinQty"
-                    type="number"
-                    defaultValue="1"
+          {/* Bundle Details */}
+          <div className="b-card">
+            <div className="b-card-header">Bundle Details</div>
+            <div className="b-card-body">
+              <div className="b-stack b-stack-3">
+
+                <div>
+                  <label className="b-label" htmlFor="internalName">Internal Name</label>
+                  <input
+                    id="internalName"
+                    className="b-input"
+                    type="text"
+                    name="internalName"
                     autoComplete="off"
                   />
-                  <TextField
-                    label="Max items per step (leave empty for unlimited)"
-                    name="stepMaxQty"
-                    type="number"
+                </div>
+
+                <div>
+                  <label className="b-label" htmlFor="publicTitle">Customer-Facing Title</label>
+                  <input
+                    id="publicTitle"
+                    className="b-input"
+                    type="text"
+                    name="publicTitle"
                     autoComplete="off"
                   />
-                  <Checkbox
-                    label="Enable product search in bundle step"
+                </div>
+
+                <div>
+                  <label className="b-label" htmlFor="description">Description (optional)</label>
+                  <textarea
+                    id="description"
+                    className="b-input"
+                    name="description"
+                    autoComplete="off"
+                    rows={2}
+                    style={{ resize: "vertical" }}
+                  />
+                </div>
+
+                <div>
+                  <label className="b-label" htmlFor="currencyCode">Currency</label>
+                  <input
+                    id="currencyCode"
+                    className="b-input"
+                    type="text"
+                    name="currencyCode"
+                    defaultValue="USD"
+                    autoComplete="off"
+                  />
+                </div>
+
+              </div>
+            </div>
+          </div>
+
+          {/* Step Configuration */}
+          <div className="b-card">
+            <div className="b-card-header">Step Configuration</div>
+            <div className="b-card-body">
+              <div className="b-stack b-stack-3">
+
+                <div className="b-grid-2">
+                  <div>
+                    <label className="b-label" htmlFor="stepMinQty">Min items per step</label>
+                    <input
+                      id="stepMinQty"
+                      className="b-input"
+                      type="number"
+                      name="stepMinQty"
+                      defaultValue="1"
+                      min="1"
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div>
+                    <label className="b-label" htmlFor="stepMaxQty">Max items per step</label>
+                    <input
+                      id="stepMaxQty"
+                      className="b-input"
+                      type="number"
+                      name="stepMaxQty"
+                      autoComplete="off"
+                    />
+                    <p className="b-help">Leave empty for unlimited</p>
+                  </div>
+                </div>
+
+                <label className="b-checkbox-row" style={{ cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
                     name="searchEnabled"
+                    checked={searchEnabled}
+                    onChange={(e) => setSearchEnabled(e.target.checked)}
                   />
-                </FormLayout>
-                <Text as="p" tone="subdued" variant="bodySm">
-                  Note: Product selection is configured on the offer detail page after creation.
-                </Text>
-              </LegacyCard>
+                  <span className="b-checkbox-label">Enable product search in bundle step</span>
+                </label>
 
-              <LegacyCard title="Discount" sectioned>
-                <FormLayout>
-                  <Checkbox
-                    label="Use quantity tiers (different discount at different quantities)"
+                <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
+                  Product selection is configured on the offer detail page after creation.
+                </p>
+
+              </div>
+            </div>
+          </div>
+
+          {/* Discount */}
+          <div className="b-card">
+            <div className="b-card-header">Discount</div>
+            <div className="b-card-body">
+              <div className="b-stack b-stack-3">
+
+                <label className="b-checkbox-row" style={{ cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
                     checked={useTiers}
-                    onChange={setUseTiers}
+                    onChange={(e) => setUseTiers(e.target.checked)}
                   />
+                  <span className="b-checkbox-label">Use quantity tiers (different discount at different quantities)</span>
+                </label>
 
-                  {!useTiers && (
-                    <>
-                      <Select
-                        label="Discount type"
+                {!useTiers && (
+                  <>
+                    <div>
+                      <label className="b-label" htmlFor="discountType">Discount type</label>
+                      <select
+                        id="discountType"
+                        className="b-select"
                         name="discountType"
-                        options={[
-                          { label: "Percentage off all bundle products", value: "percentage" },
-                          { label: "Fixed amount off bundle total", value: "fixed_amount" },
-                          { label: "Fixed price for bundle", value: "fixed_price" },
-                          { label: "Free gift included in bundle", value: "free" },
-                          { label: "Free shipping", value: "free_shipping" },
-                        ]}
                         value={discountType}
-                        onChange={setDiscountType}
-                      />
-                      <TextField
-                        label="Discount value"
-                        name="discountValue"
-                        type="number"
-                        autoComplete="off"
-                        prefix={discountType === "percentage" ? "%" : "$"}
-                      />
-                    </>
-                  )}
+                        onChange={(e) => setDiscountType(e.target.value)}
+                      >
+                        <option value="percentage">Percentage off all bundle products</option>
+                        <option value="fixed_amount">Fixed amount off bundle total</option>
+                        <option value="fixed_price">Fixed price for bundle</option>
+                        <option value="free">Free gift included in bundle</option>
+                        <option value="free_shipping">Free shipping</option>
+                      </select>
+                    </div>
 
-                  {useTiers && (
-                    <BlockStack gap="300">
-                      <input type="hidden" name="discountType" value="percentage" />
-                      <input type="hidden" name="discountValue" value="0" />
-                      {tiers.map((tier, i) => (
-                        <InlineStack key={i} gap="300">
-                          <TextField label="Min qty" name="tier_qty[]" value={tier.qty}
-                            onChange={(v) => { const t = [...tiers]; t[i] = { ...t[i]!, qty: v }; setTiers(t); }}
-                            type="number" autoComplete="off" />
-                          <TextField label="Label" name="tier_label[]" value={tier.label}
-                            onChange={(v) => { const t = [...tiers]; t[i] = { ...t[i]!, label: v }; setTiers(t); }}
-                            autoComplete="off" />
-                          <TextField label="% Discount" name="tier_value[]" value={tier.value}
-                            onChange={(v) => { const t = [...tiers]; t[i] = { ...t[i]!, value: v }; setTiers(t); }}
-                            type="number" autoComplete="off" />
-                        </InlineStack>
-                      ))}
-                      <Button onClick={() => setTiers([...tiers, { qty: "", label: "", value: "" }])}>
+                    <div>
+                      <label className="b-label" htmlFor="discountValue">Discount value</label>
+                      <div className="b-row" style={{ gap: 0 }}>
+                        <span style={{
+                          padding: "7px 10px",
+                          background: "var(--bg-hover)",
+                          border: "1px solid #babec3",
+                          borderRight: "none",
+                          borderRadius: "var(--r-sm) 0 0 var(--r-sm)",
+                          fontSize: 14,
+                          color: "var(--text-sub)",
+                          flexShrink: 0,
+                        }}>
+                          {discountType === "percentage" ? "%" : "$"}
+                        </span>
+                        <input
+                          id="discountValue"
+                          className="b-input"
+                          type="number"
+                          name="discountValue"
+                          autoComplete="off"
+                          style={{ borderRadius: "0 var(--r-sm) var(--r-sm) 0" }}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {useTiers && (
+                  <div className="b-stack b-stack-3">
+                    <input type="hidden" name="discountType" value="percentage" />
+                    <input type="hidden" name="discountValue" value="0" />
+
+                    {tiers.map((tier, i) => (
+                      <div key={i} className="b-grid-3" style={{ alignItems: "flex-end" }}>
+                        <div>
+                          <label className="b-label">Min qty</label>
+                          <input
+                            className="b-input"
+                            type="number"
+                            name="tier_qty[]"
+                            value={tier.qty}
+                            onChange={(e) => {
+                              const t = [...tiers];
+                              t[i] = { ...t[i]!, qty: e.target.value };
+                              setTiers(t);
+                            }}
+                            autoComplete="off"
+                          />
+                        </div>
+                        <div>
+                          <label className="b-label">Label</label>
+                          <input
+                            className="b-input"
+                            type="text"
+                            name="tier_label[]"
+                            value={tier.label}
+                            onChange={(e) => {
+                              const t = [...tiers];
+                              t[i] = { ...t[i]!, label: e.target.value };
+                              setTiers(t);
+                            }}
+                            autoComplete="off"
+                          />
+                        </div>
+                        <div>
+                          <label className="b-label">% Discount</label>
+                          <input
+                            className="b-input"
+                            type="number"
+                            name="tier_value[]"
+                            value={tier.value}
+                            onChange={(e) => {
+                              const t = [...tiers];
+                              t[i] = { ...t[i]!, value: e.target.value };
+                              setTiers(t);
+                            }}
+                            autoComplete="off"
+                          />
+                        </div>
+                      </div>
+                    ))}
+
+                    <div>
+                      <button
+                        type="button"
+                        className="b-btn b-btn-secondary b-btn-sm"
+                        onClick={() => setTiers([...tiers, { qty: "", label: "", value: "" }])}
+                      >
                         + Add Tier
-                      </Button>
-                    </BlockStack>
-                  )}
-                </FormLayout>
-              </LegacyCard>
+                      </button>
+                    </div>
+                  </div>
+                )}
 
-              <LegacyCard title="Combination Policy" sectioned>
-                <BlockStack gap="200">
-                  <Checkbox label="Combines with order discounts" name="combines_order" />
-                  <Checkbox label="Combines with shipping discounts" name="combines_shipping" />
-                </BlockStack>
-              </LegacyCard>
+              </div>
+            </div>
+          </div>
 
-              <InlineStack align="end" gap="300">
-                <Button onClick={() => navigate("/app/offers")}>Cancel</Button>
-                <Button variant="primary" submit>Create Bundle Offer</Button>
-              </InlineStack>
-            </BlockStack>
-          </Form>
-        </Layout.Section>
-      </Layout>
-    </Page>
+          {/* Combination Policy */}
+          <div className="b-card">
+            <div className="b-card-header">Combination Policy</div>
+            <div className="b-card-body">
+              <div className="b-stack b-stack-2">
+
+                <label className="b-checkbox-row" style={{ cursor: "pointer" }}>
+                  <input type="checkbox" name="combines_order" />
+                  <span className="b-checkbox-label">Combines with order discounts</span>
+                </label>
+
+                <label className="b-checkbox-row" style={{ cursor: "pointer" }}>
+                  <input type="checkbox" name="combines_shipping" />
+                  <span className="b-checkbox-label">Combines with shipping discounts</span>
+                </label>
+
+              </div>
+            </div>
+          </div>
+
+          {/* Form actions */}
+          <div className="b-row" style={{ justifyContent: "flex-end", gap: 8 }}>
+            <button
+              type="button"
+              className="b-btn b-btn-secondary"
+              onClick={() => navigate("/app/offers")}
+            >
+              Cancel
+            </button>
+            <button type="submit" className="b-btn b-btn-primary">
+              Create Bundle Offer
+            </button>
+          </div>
+
+        </div>
+      </Form>
+    </div>
   );
 }

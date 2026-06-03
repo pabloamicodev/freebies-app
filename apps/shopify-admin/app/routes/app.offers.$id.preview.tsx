@@ -5,12 +5,6 @@
  */
 
 import { useLoaderData, Form, useActionData } from "react-router";
-import {
-  Page, Layout, LegacyCard, FormLayout, TextField, Select, Button,
-  Banner, Badge, BlockStack, Text, Box, InlineStack, Divider,
-  Collapsible, Link,
-} from "@shopify/polaris";
-import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
@@ -41,7 +35,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (!offerId) throw new Response("Not found", { status: 404 });
 
   const formData = await request.formData();
-  const cartValueUsd = parseFloat(formData.get("cartValue") as string) || 0;
+  const cartValueUsd = parseFloat(formData.get("cartTotal") as string) || 0;
   const cartQty = parseInt(formData.get("cartQty") as string, 10) || 1;
   const customerTags = (formData.get("customerTags") as string).split(",").map((t) => t.trim()).filter(Boolean);
   const salesChannel = (formData.get("salesChannel") as string) || "online_store";
@@ -166,138 +160,311 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     now: new Date(),
   });
 
-  return { result, simulatedInput };
+  return { result, simulatedInput, conditionCount: conditionRows.length, rewardCount: rewardRows.length, offerStatus: offer.status };
 };
 
 export default function OfferPreviewPage() {
   const { offer } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
-  const [showRawInput, setShowRawInput] = useState(false);
 
   const result = actionData && "result" in actionData ? actionData.result : null;
   const qualified = result?.qualifiedOffers.find((o) => o.offerId === offer.id);
   const disqualified = result?.disqualifiedOffers.find((o) => o.offerId === offer.id);
+  const qualifies = !!qualified;
+
+  const conditionCount = actionData && "conditionCount" in actionData ? actionData.conditionCount : null;
+  const rewardCount = actionData && "rewardCount" in actionData ? actionData.rewardCount : null;
+  const offerStatus = actionData && "offerStatus" in actionData ? actionData.offerStatus : null;
 
   return (
-    <Page
-      title="Offer Preview & Debug"
-      subtitle={offer.internalName}
-      backAction={{ content: "Back to Offer", url: `/app/offers/${offer.id}` }}
-    >
-      <Layout>
-        <Layout.Section variant="oneHalf">
-          <LegacyCard title="Simulate Cart" sectioned>
-            <Form method="POST">
-              <FormLayout>
-                <TextField
-                  label="Cart subtotal (USD)"
-                  name="cartValue"
-                  type="number"
-                  defaultValue="50"
-                  autoComplete="off"
-                  helpText="Total value of non-gift lines in cart"
-                />
-                <TextField
-                  label="Cart item quantity"
-                  name="cartQty"
-                  type="number"
-                  defaultValue="1"
-                  autoComplete="off"
-                />
-                <TextField
-                  label="Customer tags"
-                  name="customerTags"
-                  defaultValue=""
-                  autoComplete="off"
-                  helpText="Comma-separated tags. Leave empty for guest."
-                  placeholder="vip, wholesale"
-                />
-                <Select
-                  label="Sales channel"
-                  name="salesChannel"
-                  options={[
-                    { label: "Online Store", value: "online_store" },
-                    { label: "POS", value: "pos" },
-                    { label: "Mobile App", value: "mobile_app" },
-                    { label: "Headless", value: "headless" },
-                  ]}
-                />
-                <TextField
-                  label="Currency code"
-                  name="currencyCode"
-                  defaultValue="USD"
-                  autoComplete="off"
-                />
-                <TextField
-                  label="Market ID (optional)"
-                  name="marketId"
-                  defaultValue=""
-                  autoComplete="off"
-                  placeholder="gid://shopify/Market/1"
-                />
-                <Button variant="primary" submit>
-                  Run Evaluation
-                </Button>
-              </FormLayout>
-            </Form>
-          </LegacyCard>
-        </Layout.Section>
+    <div className="b-page">
+      {/* Header */}
+      <div className="b-page-header">
+        <div>
+          <div className="b-page-title-row" style={{ marginBottom: 4 }}>
+            <a
+              href={`/app/offers/${offer.id}`}
+              className="b-btn b-btn-secondary b-btn-sm"
+              style={{ textDecoration: "none" }}
+            >
+              ← Back
+            </a>
+            <h1 className="b-page-title">Preview &amp; Debug</h1>
+          </div>
+          <p style={{ margin: 0, fontSize: 13, color: "var(--text-sub)" }}>{offer.internalName}</p>
+        </div>
+      </div>
 
-        <Layout.Section variant="oneHalf">
+      {/* Main layout */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16, alignItems: "start" }}>
+        {/* Left column */}
+        <div className="b-stack b-stack-4">
+          {/* Simulate Cart form card */}
+          <div className="b-card">
+            <div className="b-card-header">Simulate Cart</div>
+            <div className="b-card-body">
+              <Form method="POST">
+                <div className="b-stack b-stack-3">
+                  {/* Cart total */}
+                  <div>
+                    <label className="b-label" htmlFor="cartTotal">Cart total</label>
+                    <div className="b-relative b-row" style={{ gap: 0 }}>
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          padding: "7px 10px",
+                          background: "var(--bg-hover)",
+                          border: "1px solid #babec3",
+                          borderRight: "none",
+                          borderRadius: "var(--r-sm) 0 0 var(--r-sm)",
+                          fontSize: 14,
+                          color: "var(--text-sub)",
+                          lineHeight: 1.25,
+                        }}
+                      >
+                        $
+                      </span>
+                      <input
+                        id="cartTotal"
+                        className="b-input"
+                        name="cartTotal"
+                        type="number"
+                        defaultValue="50"
+                        min="0"
+                        step="0.01"
+                        style={{ borderRadius: "0 var(--r-sm) var(--r-sm) 0" }}
+                      />
+                    </div>
+                    <p className="b-help">Total value of non-gift lines in cart</p>
+                  </div>
+
+                  {/* Cart quantity */}
+                  <div>
+                    <label className="b-label" htmlFor="cartQty">Cart item quantity</label>
+                    <input
+                      id="cartQty"
+                      className="b-input"
+                      name="cartQty"
+                      type="number"
+                      defaultValue="1"
+                      min="1"
+                    />
+                  </div>
+
+                  {/* Customer tags */}
+                  <div>
+                    <label className="b-label" htmlFor="customerTags">Customer tags</label>
+                    <input
+                      id="customerTags"
+                      className="b-input"
+                      name="customerTags"
+                      type="text"
+                      placeholder="vip, wholesale"
+                      defaultValue=""
+                    />
+                    <p className="b-help">Comma-separated tags. Leave empty for guest.</p>
+                  </div>
+
+                  {/* Submit */}
+                  <div style={{ paddingTop: 4 }}>
+                    <button type="submit" className="b-btn b-btn-dark">
+                      Run Simulation
+                    </button>
+                  </div>
+                </div>
+              </Form>
+            </div>
+          </div>
+
+          {/* Results card */}
           {result && (
-            <BlockStack gap="400">
-              {/* Qualification result */}
-              <LegacyCard sectioned>
-                {qualified ? (
-                  <Banner tone="success" title="✅ Offer QUALIFIES">
-                    <p>All conditions passed. {qualified.cartActions.length} cart action(s) generated.</p>
-                  </Banner>
-                ) : (
-                  <Banner tone="critical" title="❌ Offer does NOT qualify">
-                    <p>One or more conditions failed. See reasons below.</p>
-                  </Banner>
-                )}
-              </LegacyCard>
+            <div className="b-card">
+              <div className="b-card-header">Simulation Results</div>
+              <div className="b-card-body">
+                <div className="b-stack b-stack-3">
+                  {/* Qualification banner */}
+                  {qualifies ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "12px 16px",
+                        borderRadius: "var(--r)",
+                        background: "var(--green-bg)",
+                        border: "1px solid #a7d9c8",
+                      }}
+                    >
+                      <span style={{ fontSize: 18 }}>✓</span>
+                      <span style={{ fontWeight: 600, color: "var(--green-txt)", fontSize: 14 }}>
+                        Offer QUALIFIES
+                      </span>
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "12px 16px",
+                        borderRadius: "var(--r)",
+                        background: "var(--orange-badge)",
+                        border: "1px solid #fcd34d",
+                      }}
+                    >
+                      <span style={{ fontSize: 18 }}>✗</span>
+                      <span style={{ fontWeight: 600, color: "var(--orange-txt)", fontSize: 14 }}>
+                        Offer does NOT qualify
+                      </span>
+                    </div>
+                  )}
 
-              {/* Condition reasons */}
-              <LegacyCard title="Condition Results" sectioned>
-                <BlockStack gap="300">
-                  {(qualified ?? disqualified)?.reasons.map((reason, i) => (
-                    <InlineStack key={i} gap="300" align="start">
-                      <Text as="span">{reason.passed ? "✅" : "❌"}</Text>
-                      <Box>
-                        <Text as="p" fontWeight="semibold">{reason.conditionType}</Text>
-                        <Text as="p" tone="subdued">{reason.message}</Text>
-                        {reason.actual !== undefined && (
-                          <Text as="p" variant="bodySm" tone="subdued">
-                            Actual: {JSON.stringify(reason.actual)} | Required: {JSON.stringify(reason.required)}
-                          </Text>
-                        )}
-                      </Box>
-                    </InlineStack>
-                  ))}
-                </BlockStack>
-              </LegacyCard>
+                  {/* Reasons list */}
+                  {(qualified ?? disqualified)?.reasons && (qualified ?? disqualified)!.reasons.length > 0 && (
+                    <div>
+                      <p className="b-label" style={{ marginBottom: 8 }}>Condition results</p>
+                      <div className="b-stack b-stack-2">
+                        {(qualified ?? disqualified)!.reasons.map((reason, i) => (
+                          <div
+                            key={i}
+                            className="b-row b-gap-3"
+                            style={{
+                              padding: "10px 14px",
+                              background: "var(--bg-hover)",
+                              borderRadius: "var(--r-sm)",
+                              border: "1px solid var(--border-light)",
+                              alignItems: "flex-start",
+                            }}
+                          >
+                            <span style={{ fontSize: 15, flexShrink: 0, marginTop: 1 }}>
+                              {reason.passed ? "✓" : "✗"}
+                            </span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <p
+                                style={{
+                                  margin: 0,
+                                  fontSize: 13,
+                                  fontWeight: 600,
+                                  color: reason.passed ? "var(--green-txt)" : "var(--orange-txt)",
+                                }}
+                              >
+                                {reason.conditionType}
+                              </p>
+                              <p className="b-text-xs b-text-sub" style={{ margin: "2px 0 0" }}>
+                                {reason.message}
+                              </p>
+                              {reason.actual !== undefined && (
+                                <p className="b-text-xs b-text-muted" style={{ margin: "2px 0 0" }}>
+                                  Actual: {JSON.stringify(reason.actual)} | Required: {JSON.stringify(reason.required)}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
-              {/* Cart actions */}
-              {qualified && qualified.cartActions.length > 0 && (
-                <LegacyCard title="Cart Actions Generated" sectioned>
-                  <BlockStack gap="200">
-                    {qualified.cartActions.map((action, i) => (
-                      <Box key={i} padding="300" borderWidth="025" borderColor="border" borderRadius="100">
-                        <Text as="p" fontWeight="semibold">{action.action}</Text>
-                        <Text as="p" variant="bodySm" tone="subdued">
-                          {JSON.stringify(action, null, 2)}
-                        </Text>
-                      </Box>
-                    ))}
-                  </BlockStack>
-                </LegacyCard>
-              )}
-            </BlockStack>
+                  {/* Applied gifts */}
+                  {qualified && qualified.cartActions.length > 0 && (
+                    <div>
+                      <p className="b-label" style={{ marginBottom: 8 }}>Applied gifts</p>
+                      <div className="b-stack b-stack-2">
+                        {qualified.cartActions.map((cartAction, i) => (
+                          <div
+                            key={i}
+                            style={{
+                              padding: "10px 14px",
+                              background: "var(--bg-hover)",
+                              borderRadius: "var(--r-sm)",
+                              border: "1px solid var(--border)",
+                            }}
+                          >
+                            <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "var(--text)" }}>
+                              {cartAction.action}
+                            </p>
+                            <pre
+                              style={{
+                                margin: "4px 0 0",
+                                fontSize: 11,
+                                color: "var(--text-muted)",
+                                whiteSpace: "pre-wrap",
+                                wordBreak: "break-all",
+                                fontFamily: "monospace",
+                              }}
+                            >
+                              {JSON.stringify(cartAction, null, 2)}
+                            </pre>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           )}
-        </Layout.Section>
-      </Layout>
-    </Page>
+        </div>
+
+        {/* Right sidebar */}
+        <div className="b-card">
+          <div className="b-card-header">Offer Summary</div>
+          <div className="b-card-body">
+            <div className="b-stack b-stack-3">
+              {/* Offer name */}
+              <div>
+                <p className="b-text-xs b-text-sub" style={{ margin: "0 0 2px" }}>Offer name</p>
+                <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "var(--text)" }}>
+                  {offer.internalName}
+                </p>
+              </div>
+
+              <hr className="b-divider" style={{ margin: "0" }} />
+
+              {/* Condition count */}
+              <div className="b-row-between">
+                <span className="b-text-sm b-text-sub">Conditions</span>
+                <span
+                  className="b-badge b-badge-blue"
+                  style={{ fontWeight: 600 }}
+                >
+                  {conditionCount ?? "—"}
+                </span>
+              </div>
+
+              {/* Reward count */}
+              <div className="b-row-between">
+                <span className="b-text-sm b-text-sub">Rewards</span>
+                <span
+                  className="b-badge b-badge-blue"
+                  style={{ fontWeight: 600 }}
+                >
+                  {rewardCount ?? "—"}
+                </span>
+              </div>
+
+              <hr className="b-divider" style={{ margin: "0" }} />
+
+              {/* Status badge */}
+              <div className="b-row-between">
+                <span className="b-text-sm b-text-sub">Status</span>
+                {offerStatus ? (
+                  offerStatus === "active" ? (
+                    <span className="b-badge b-badge-green">{offerStatus}</span>
+                  ) : offerStatus === "draft" ? (
+                    <span className="b-badge b-badge-gray">{offerStatus}</span>
+                  ) : (
+                    <span className="b-badge b-badge-orange">{offerStatus}</span>
+                  )
+                ) : (
+                  <span className="b-badge b-badge-gray">{offer.type}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

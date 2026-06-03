@@ -5,11 +5,7 @@
  * Accessible from the offer detail page → "Multi-Currency" tab.
  */
 
-import { useLoaderData, Form } from "react-router";
-import {
-  Page, Layout, LegacyCard, FormLayout, TextField, Button,
-  Text, BlockStack, InlineStack, Badge, Box, Banner, DataTable,
-} from "@shopify/polaris";
+import { useLoaderData, Form, Link } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, offerConditions, appSettings } from "@promo/db";
@@ -82,12 +78,23 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const overrides: Record<string, number> = {};
   const currencies = formData.getAll("currency[]") as string[];
   const thresholds = formData.getAll("threshold_cents[]") as string[];
+  const fixedAmounts = formData.getAll("fixed_amount[]") as string[];
 
   for (let i = 0; i < currencies.length; i++) {
     const currency = currencies[i]?.toUpperCase();
     const cents = Math.round(parseFloat(thresholds[i] ?? "0") * 100);
     if (currency && cents > 0) {
       overrides[currency] = cents;
+    }
+  }
+
+  // Build fixed amount overrides
+  const fixedOverrides: Record<string, number> = {};
+  for (let i = 0; i < currencies.length; i++) {
+    const currency = currencies[i]?.toUpperCase();
+    const fixed = Math.round(parseFloat(fixedAmounts[i] ?? "0") * 100);
+    if (currency && fixed > 0) {
+      fixedOverrides[currency] = fixed;
     }
   }
 
@@ -100,7 +107,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (existing[0]) {
     const currentValue = existing[0].value as Record<string, unknown>;
     await db.update(offerConditions)
-      .set({ value: { ...currentValue, currencyOverrides: overrides }, updatedAt: new Date() })
+      .set({ value: { ...currentValue, currencyOverrides: overrides, fixedAmountOverrides: fixedOverrides }, updatedAt: new Date() })
       .where(eq(offerConditions.id, existing[0].id));
   }
 
@@ -108,69 +115,202 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 };
 
 export default function MultiCurrencyPage() {
-  const { offer, markets, currencyOverrides, baseThresholdCents, baseCurrency } = useLoaderData<typeof loader>();
+  const { offer, offerId, markets, currencyOverrides, baseThresholdCents, baseCurrency } = useLoaderData<typeof loader>();
 
-  if (!offer) return <Page title="Not Found" />;
+  if (!offer) {
+    return (
+      <div className="b-page">
+        <p className="b-text-sub">Offer not found.</p>
+      </div>
+    );
+  }
 
   const baseThreshold = baseThresholdCents / 100;
 
   return (
-    <Page
-      title="Multi-Currency Thresholds"
-      subtitle={offer.internalName}
-      backAction={{ content: "Back to Offer", url: `/app/offers/${offer.id}` }}
-    >
-      <Layout>
-        <Layout.Section>
-          <Banner tone="info" title="Base threshold">
-            Store currency ({baseCurrency}): ${baseThreshold.toFixed(2)}. Buyers in markets with other currencies
-            will use the exchange rate automatically if no custom override is set.
-          </Banner>
-        </Layout.Section>
+    <div className="b-page">
+      {/* Header */}
+      <div className="b-page-header">
+        <div className="b-page-title-row">
+          <Link
+            to={`/app/offers/${offer.id}`}
+            className="b-btn b-btn-secondary b-btn-sm"
+            style={{ textDecoration: "none" }}
+          >
+            ← Back
+          </Link>
+          <h1 className="b-page-title">Multi-Currency</h1>
+          <span className="b-badge b-badge-gray">{offer.internalName}</span>
+        </div>
+      </div>
 
-        <Layout.Section>
-          <LegacyCard title="Per-Currency Thresholds" sectioned>
-            <Form method="POST">
-              <BlockStack gap="400">
-                <Text as="p" tone="subdued">
-                  Set custom thresholds for each market currency. Leave empty to use auto-converted base threshold.
-                </Text>
+      {/* Info Banner */}
+      <div className="b-banner">
+        <div className="b-banner-icon">
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <circle cx="10" cy="10" r="9" stroke="#2c6ecb" strokeWidth="1.5" />
+            <path d="M10 9v5" stroke="#2c6ecb" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="10" cy="6.5" r="0.75" fill="#2c6ecb" />
+          </svg>
+        </div>
+        <div className="b-banner-body">
+          <p className="b-banner-text">
+            Set per-currency thresholds to match local purchasing power. Leave a field empty to fall back to the auto-converted base threshold ({baseCurrency} {baseThreshold.toFixed(2)}).
+          </p>
+        </div>
+      </div>
 
-                {markets.map((market, i) => (
-                  <Box key={market.id} padding="300" borderWidth="025" borderColor="border" borderRadius="200">
-                    <InlineStack gap="400" align="center">
-                      <div style={{ minWidth: 120 }}>
-                        <Text as="p" fontWeight="semibold">{market.name}</Text>
-                        <Badge>{market.currencyCode}</Badge>
-                      </div>
-                      <input type="hidden" name="currency[]" value={market.currencyCode} />
-                      <TextField
-                        label={`Threshold (${market.currencyCode})`}
-                        name="threshold_cents[]"
-                        type="number"
-                        defaultValue={
-                          currencyOverrides[market.currencyCode]
+      {/* Two-column layout */}
+      <div className="b-editor-layout">
+        {/* Main — currency overrides form */}
+        <div className="b-editor-main">
+          <div className="b-editor-section">
+            <h2 className="b-editor-section-title">Currency Overrides</h2>
+            <div className="b-editor-section-body">
+              <Form method="POST">
+                <div className="b-table-wrap">
+                  <table className="b-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: "auto", paddingLeft: 16 }}>Currency</th>
+                        <th>Threshold Override</th>
+                        <th>Fixed Amount Override</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {markets.length === 0 ? (
+                        <tr>
+                          <td colSpan={3} style={{ textAlign: "center", padding: "24px 16px" }}>
+                            <span className="b-text-sub b-text-sm">
+                              No markets configured. Add Shopify Markets in your store settings.
+                            </span>
+                          </td>
+                        </tr>
+                      ) : (
+                        markets.map((market) => {
+                          const existingThreshold = currencyOverrides[market.currencyCode]
                             ? (currencyOverrides[market.currencyCode]! / 100).toFixed(2)
-                            : ""
-                        }
-                        autoComplete="off"
-                        prefix={market.currencyCode}
-                        placeholder={`Auto-convert from $${baseThreshold.toFixed(2)} ${baseCurrency}`}
-                      />
-                    </InlineStack>
-                  </Box>
-                ))}
+                            : "";
+                          return (
+                            <tr key={market.id}>
+                              <td style={{ paddingLeft: 16 }}>
+                                <input type="hidden" name="currency[]" value={market.currencyCode} />
+                                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                  <span className="b-text-bold">{market.name}</span>
+                                  <span className="b-badge b-badge-blue" style={{ alignSelf: "flex-start" }}>
+                                    {market.currencyCode}
+                                  </span>
+                                </div>
+                              </td>
+                              <td>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <label
+                                    className="b-label"
+                                    htmlFor={`threshold-${market.currencyCode}`}
+                                  >
+                                    {market.currencyCode} amount
+                                  </label>
+                                  <input
+                                    id={`threshold-${market.currencyCode}`}
+                                    className="b-input"
+                                    type="number"
+                                    name="threshold_cents[]"
+                                    defaultValue={existingThreshold}
+                                    placeholder={`Auto (${baseCurrency} ${baseThreshold.toFixed(2)})`}
+                                    min="0"
+                                    step="0.01"
+                                    autoComplete="off"
+                                    style={{ maxWidth: 200 }}
+                                  />
+                                </div>
+                              </td>
+                              <td>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <label
+                                    className="b-label"
+                                    htmlFor={`fixed-${market.currencyCode}`}
+                                  >
+                                    Fixed {market.currencyCode}
+                                  </label>
+                                  <input
+                                    id={`fixed-${market.currencyCode}`}
+                                    className="b-input"
+                                    type="number"
+                                    name="fixed_amount[]"
+                                    defaultValue=""
+                                    placeholder="Optional"
+                                    min="0"
+                                    step="0.01"
+                                    autoComplete="off"
+                                    style={{ maxWidth: 200 }}
+                                  />
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
 
-                {markets.length === 0 && (
-                  <Text as="p" tone="subdued">No markets configured. Add Shopify Markets in your store settings.</Text>
-                )}
+                <div className="b-editor-footer">
+                  <button type="submit" className="b-btn b-btn-primary">
+                    Save Overrides
+                  </button>
+                </div>
+              </Form>
+            </div>
+          </div>
+        </div>
 
-                <Button variant="primary" submit>Save Currency Thresholds</Button>
-              </BlockStack>
-            </Form>
-          </LegacyCard>
-        </Layout.Section>
-      </Layout>
-    </Page>
+        {/* Sidebar — info card */}
+        <div className="b-editor-sidebar">
+          <div className="b-editor-section">
+            <h2 className="b-editor-section-title">How it works</h2>
+            <div className="b-editor-section-body">
+              <div className="b-stack b-stack-3">
+                <div>
+                  <p className="b-label">Threshold override</p>
+                  <p className="b-text-sm b-text-sub">
+                    Replace the auto-converted cart value threshold for a specific currency. Useful when local purchasing power differs significantly from your base currency.
+                  </p>
+                </div>
+                <hr className="b-divider" style={{ margin: "4px 0" }} />
+                <div>
+                  <p className="b-label">Fixed amount override</p>
+                  <p className="b-text-sm b-text-sub">
+                    Override the discount amount (e.g. shipping discount or gift value) for buyers in this currency. Leave blank to use the base-currency amount converted at checkout.
+                  </p>
+                </div>
+                <hr className="b-divider" style={{ margin: "4px 0" }} />
+                <div>
+                  <p className="b-label">Fallback behaviour</p>
+                  <p className="b-text-sm b-text-sub">
+                    Any currency without an override inherits the base threshold of{" "}
+                    <strong>{baseCurrency} {baseThreshold.toFixed(2)}</strong>, converted by Shopify's exchange rate at the time of checkout.
+                  </p>
+                </div>
+                <hr className="b-divider" style={{ margin: "4px 0" }} />
+                <div className="b-banner" style={{ margin: 0 }}>
+                  <div className="b-banner-icon">
+                    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                      <circle cx="10" cy="10" r="9" stroke="#2c6ecb" strokeWidth="1.5" />
+                      <path d="M10 9v5" stroke="#2c6ecb" strokeWidth="1.5" strokeLinecap="round" />
+                      <circle cx="10" cy="6.5" r="0.75" fill="#2c6ecb" />
+                    </svg>
+                  </div>
+                  <div className="b-banner-body">
+                    <p className="b-banner-text">
+                      Markets are pulled live from your Shopify Markets configuration. Add or remove markets in your Shopify admin to update this list.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

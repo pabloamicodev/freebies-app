@@ -3,18 +3,17 @@
  * Controls how the promo engine behaves when gift products are out of stock.
  */
 
-import { useLoaderData, Form } from "react-router";
-import {
-  Page, Layout, LegacyCard, FormLayout, Select, Button,
-  Checkbox, Text, BlockStack, Banner, InlineStack,
-} from "@shopify/polaris";
+import { useLoaderData, Form, Link } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { shops, appSettings } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import bogosStyles from "../styles/bogos.css?url";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
+export const links = () => [{ rel: "stylesheet", href: bogosStyles }];
 
 const INVENTORY_SETTINGS = [
   "gift.oos_behavior",
@@ -81,69 +80,149 @@ export default function InventorySettingsPage() {
   const { oosBehavior, autoSwapEnabled, continueSelling, hideOosGifts } = useLoaderData<typeof loader>();
 
   return (
-    <Page title="Gift Inventory Policy" subtitle="Control behavior when gift products are out of stock">
-      <Layout>
-        <Layout.Section>
-          <Banner tone="info" title="Inventory limitation">
+    <div className="b-page">
+      {/* Header */}
+      <div className="b-page-header">
+        <div className="b-page-title-row">
+          <Link to="/app/settings" className="b-btn b-btn-secondary b-btn-sm">
+            &#8592; Back
+          </Link>
+          <h1 className="b-page-title">Inventory Settings</h1>
+        </div>
+      </div>
+
+      {/* Info banner */}
+      <div className="b-banner">
+        <span className="b-banner-icon">&#8505;&#65039;</span>
+        <div className="b-banner-body">
+          <p className="b-banner-title">Inventory limitation</p>
+          <p className="b-banner-text">
             Shopify does not natively reserve cart inventory. A gift shown as available may sell out
             between cart creation and checkout. These settings control the best-effort behavior.
-          </Banner>
-        </Layout.Section>
+          </p>
+        </div>
+      </div>
 
-        <Layout.Section>
-          <LegacyCard title="Out of Stock Behavior" sectioned>
-            <Form method="POST">
-              <BlockStack gap="400">
-                <Select
-                  label="When gift goes out of stock"
-                  name="oos_behavior"
-                  value={oosBehavior}
-                  onChange={() => {}}
-                  options={[
-                    { label: "Hide the gift (don't show as option)", value: "hide" },
-                    { label: "Show as disabled (greyed out, unselectable)", value: "show_disabled" },
-                    { label: "Show as available (use continue-selling policy)", value: "show_available" },
-                  ]}
-                  helpText="Controls what customers see when a gift product has 0 inventory."
-                />
+      {/* Settings card */}
+      <Form method="POST">
+        <div className="b-card">
 
-                <Checkbox
-                  label="Auto-swap to fallback gift"
-                  name="auto_swap"
-                  checked={autoSwapEnabled}
-                  onChange={() => {}}
-                  helpText="When the primary gift is OOS, automatically offer the next gift in the reward list by sort order."
-                />
+          {/* Section 1: Inventory method */}
+          <div className="b-settings-section">
+            <div className="b-settings-label-col">
+              <p className="b-settings-section-title">Out-of-Stock Behavior</p>
+              <p className="b-settings-section-desc">
+                Controls what customers see when a gift product has 0 inventory.
+              </p>
+            </div>
+            <div className="b-settings-control-col">
+              <label className="b-label" htmlFor="oos_behavior">
+                When gift goes out of stock
+              </label>
+              <select
+                id="oos_behavior"
+                name="oos_behavior"
+                defaultValue={oosBehavior}
+                className="b-select"
+              >
+                <option value="hide">Hide the gift (don&apos;t show as option)</option>
+                <option value="show_disabled">Show as disabled (greyed out, unselectable)</option>
+                <option value="show_available">Show as available (use continue-selling policy)</option>
+              </select>
+              <p className="b-help">Controls what customers see when a gift product has 0 inventory.</p>
+            </div>
+          </div>
 
-                <Checkbox
-                  label="Continue selling gifts when inventory_policy = CONTINUE"
-                  name="continue_selling"
-                  checked={continueSelling}
-                  onChange={() => {}}
-                  helpText="If the gift product has 'Continue selling when out of stock' enabled in Shopify, allow auto-add even when inventory_quantity is 0."
-                />
+          {/* Section 2: Sync options */}
+          <div className="b-settings-section">
+            <div className="b-settings-label-col">
+              <p className="b-settings-section-title">Sync Options</p>
+              <p className="b-settings-section-desc">
+                Configure how the promo engine syncs and falls back when gifts run out.
+              </p>
+            </div>
+            <div className="b-settings-control-col">
+              <div className="b-settings-row">
+                <label className="b-checkbox-row">
+                  <input
+                    type="checkbox"
+                    name="auto_swap"
+                    defaultChecked={autoSwapEnabled}
+                  />
+                  <div>
+                    <span className="b-checkbox-label">Auto-swap to fallback gift</span>
+                    <p className="b-checkbox-help">
+                      When the primary gift is OOS, automatically offer the next gift in the reward list by sort order.
+                    </p>
+                  </div>
+                </label>
+              </div>
 
-                <Checkbox
-                  label="Hide OOS gifts from slider"
-                  name="hide_oos"
-                  checked={hideOosGifts}
-                  onChange={() => {}}
-                  helpText="Remove out-of-stock gifts from the gift slider entirely (not shown as disabled)."
-                />
+              <div className="b-settings-row">
+                <label className="b-checkbox-row">
+                  <input
+                    type="checkbox"
+                    name="continue_selling"
+                    defaultChecked={continueSelling}
+                  />
+                  <div>
+                    <span className="b-checkbox-label">Continue selling gifts when inventory_policy = CONTINUE</span>
+                    <p className="b-checkbox-help">
+                      If the gift product has &apos;Continue selling when out of stock&apos; enabled in Shopify,
+                      allow auto-add even when inventory_quantity is 0.
+                    </p>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
 
-                <Text as="p" fontWeight="semibold">At checkout (always enforced):</Text>
-                <BlockStack gap="100">
-                  <Text as="p" variant="bodySm">✅ Gift is removed if OOS at checkout prepare</Text>
-                  <Text as="p" variant="bodySm">✅ Discount Function validates gift availability</Text>
-                  <Text as="p" variant="bodySm">✅ Validation Function blocks invalid gift quantity</Text>
-                </BlockStack>
+          {/* Section 3: Out-of-stock display */}
+          <div className="b-settings-section">
+            <div className="b-settings-label-col">
+              <p className="b-settings-section-title">Out-of-Stock Display</p>
+              <p className="b-settings-section-desc">
+                Control how OOS gifts appear in the gift slider shown to customers.
+              </p>
+            </div>
+            <div className="b-settings-control-col">
+              <div className="b-settings-row">
+                <label className="b-checkbox-row">
+                  <input
+                    type="checkbox"
+                    name="hide_oos"
+                    defaultChecked={hideOosGifts}
+                  />
+                  <div>
+                    <span className="b-checkbox-label">Hide OOS gifts from slider</span>
+                    <p className="b-checkbox-help">
+                      Remove out-of-stock gifts from the gift slider entirely (not shown as disabled).
+                    </p>
+                  </div>
+                </label>
+              </div>
 
-                <Button variant="primary" submit>Save Inventory Settings</Button>
-              </BlockStack>
-            </Form>
-          </LegacyCard>
-        </Layout.Section>
-      </Layout>
-    </Page>
+              <hr className="b-divider" />
+
+              <p className="b-text-sm b-text-bold">At checkout (always enforced):</p>
+              <div className="b-stack b-stack-2 b-mt-2">
+                <span className="b-text-sm b-text-sub">Gift is removed if OOS at checkout prepare</span>
+                <span className="b-text-sm b-text-sub">Discount Function validates gift availability</span>
+                <span className="b-text-sm b-text-sub">Validation Function blocks invalid gift quantity</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        {/* Save button */}
+        <div className="b-row b-justify-between b-mt-4">
+          <span />
+          <button type="submit" className="b-btn b-btn-primary">
+            Save Inventory Settings
+          </button>
+        </div>
+      </Form>
+    </div>
   );
 }

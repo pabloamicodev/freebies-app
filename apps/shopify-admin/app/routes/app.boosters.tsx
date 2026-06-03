@@ -5,10 +5,6 @@
  */
 
 import { useLoaderData, useNavigate, Form } from "react-router";
-import {
-  Page, Layout, LegacyCard, Text, BlockStack, InlineStack, Badge,
-  Button, EmptyState, IndexTable, useIndexResourceState, Banner,
-} from "@shopify/polaris";
 import { authenticate } from "../shopify.server.js";
 import { getDb, shops, offers, offerRewards, widgets } from "@promo/db";
 import { eq, and } from "drizzle-orm";
@@ -66,17 +62,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return null;
 };
 
-const STATUS_BADGE: Record<string, { tone: any; label: string }> = {
-  active: { tone: "success", label: "Active" },
-  draft: { tone: "info", label: "Draft" },
-  paused: { tone: "warning", label: "Paused" },
-  archived: { tone: "critical", label: "Archived" },
+const STATUS_BADGE: Record<string, { cls: string; label: string }> = {
+  active:   { cls: "b-badge b-badge-green",  label: "Active" },
+  draft:    { cls: "b-badge b-badge-blue",   label: "Draft" },
+  paused:   { cls: "b-badge b-badge-orange", label: "Paused" },
+  archived: { cls: "b-badge b-badge-gray",   label: "Archived" },
 };
 
 const WIDGET_TYPE_LABEL: Record<string, string> = {
   today_offer_widget: "🚀 Today Offer (Floating)",
-  today_offer_block: "📌 Today Offer (Inline Block)",
-  progress_bar: "📊 Progress Bar",
+  today_offer_block:  "📌 Today Offer (Inline Block)",
+  progress_bar:       "📊 Progress Bar",
 };
 
 export default function BoostersPage() {
@@ -84,127 +80,193 @@ export default function BoostersPage() {
   const navigate = useNavigate();
 
   return (
-    <Page
-      title="Boosters"
-      subtitle="Today Offer widgets and progress bars that promote active offers"
-      primaryAction={{ content: "Create Booster", url: "/app/offers/new?type=booster" }}
-    >
-      <Layout>
-        <Layout.Section>
-          <Banner tone="info" title="What are Boosters?">
+    <div className="b-page">
+      {/* ── Header ────────────────────────────────────────── */}
+      <div className="b-page-header">
+        <div className="b-page-title-row">
+          <h1 className="b-page-title">Boosters</h1>
+        </div>
+        <div className="b-page-actions">
+          <a
+            href="/app/offers/new?type=booster"
+            className="b-btn b-btn-primary"
+          >
+            + Create Booster
+          </a>
+        </div>
+      </div>
+
+      {/* ── Info banner ───────────────────────────────────── */}
+      <div className="b-banner">
+        <div className="b-banner-icon">
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="10" cy="10" r="9" stroke="#2c6ecb" strokeWidth="1.5" />
+            <path d="M10 9v5" stroke="#2c6ecb" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="10" cy="6.5" r="0.75" fill="#2c6ecb" />
+          </svg>
+        </div>
+        <div className="b-banner-body">
+          <div className="b-banner-title">What are Boosters?</div>
+          <p className="b-banner-text">
             Boosters are floating widgets and progress bars that increase visibility of your active
             gift, bundle, and discount offers. They do not create new promotions — they promote existing ones.
-          </Banner>
-        </Layout.Section>
+          </p>
+        </div>
+      </div>
 
-        {/* Active widgets */}
-        <Layout.Section>
-          <LegacyCard title="Configured Widgets" sectioned>
-            {boosterWidgets.length === 0 ? (
-              <Text as="p" tone="subdued">
-                No booster widgets configured. Create a booster offer and add a Today Offer or Progress Bar widget.
-              </Text>
-            ) : (
-              <BlockStack gap="300">
-                {boosterWidgets.map((w) => (
-                  <InlineStack key={w.id} gap="300" align="space-between">
-                    <InlineStack gap="200">
-                      <Text as="p" fontWeight="semibold">{WIDGET_TYPE_LABEL[w.type] ?? w.type}</Text>
-                      <Text as="p" tone="subdued">{w.internalName}</Text>
-                    </InlineStack>
-                    <InlineStack gap="200">
-                      <Badge tone={w.isEnabled ? "success" : "critical"}>
-                        {w.isEnabled ? "Enabled" : "Disabled"}
-                      </Badge>
-                      <Form method="POST">
-                        <input type="hidden" name="intent" value="toggle_widget" />
-                        <input type="hidden" name="widgetId" value={w.id} />
-                        <input type="hidden" name="enabled" value={String(!w.isEnabled)} />
-                        <Button size="slim" submit tone={w.isEnabled ? "critical" : "success"}>
-                          {w.isEnabled ? "Disable" : "Enable"}
-                        </Button>
-                      </Form>
-                    </InlineStack>
-                  </InlineStack>
-                ))}
-              </BlockStack>
-            )}
-          </LegacyCard>
-        </Layout.Section>
+      {/* ── Main + sidebar layout ─────────────────────────── */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: "16px", alignItems: "start" }}>
 
-        {/* Booster offers */}
-        <Layout.Section>
-          <LegacyCard title="Booster Offers">
+        {/* Left column */}
+        <div className="b-stack b-stack-4">
+
+          {/* Configured Widgets card */}
+          <div className="b-card">
+            <div className="b-card-header">Configured Widgets</div>
+            <div className="b-card-body">
+              {boosterWidgets.length === 0 ? (
+                <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
+                  No booster widgets configured. Create a booster offer and add a Today Offer or Progress Bar widget.
+                </p>
+              ) : (
+                <div className="b-stack b-stack-3">
+                  {boosterWidgets.map((w) => (
+                    <div key={w.id} className="b-row-between" style={{ padding: "10px 0", borderBottom: "1px solid var(--border-light)" }}>
+                      <div className="b-row b-gap-3">
+                        <span className="b-text-bold">{WIDGET_TYPE_LABEL[w.type] ?? w.type}</span>
+                        <span className="b-text-sm b-text-sub">{w.internalName}</span>
+                      </div>
+                      <div className="b-row b-gap-3">
+                        <span className={w.isEnabled ? "b-badge b-badge-green" : "b-badge b-badge-gray"}>
+                          {w.isEnabled ? "Enabled" : "Disabled"}
+                        </span>
+                        <Form method="POST">
+                          <input type="hidden" name="intent" value="toggle_widget" />
+                          <input type="hidden" name="widgetId" value={w.id} />
+                          <input type="hidden" name="enabled" value={String(!w.isEnabled)} />
+                          <button
+                            type="submit"
+                            className={`b-btn b-btn-sm ${w.isEnabled ? "b-btn-danger" : "b-btn-secondary"}`}
+                          >
+                            {w.isEnabled ? "Disable" : "Enable"}
+                          </button>
+                        </Form>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Booster Offers card */}
+          <div className="b-card">
+            <div className="b-card-header">Booster Offers</div>
+
             {boosters.length === 0 ? (
-              <LegacyCard.Section>
-                <EmptyState
-                  heading="No booster offers yet"
-                  action={{ content: "Create Booster", url: "/app/offers/new?type=booster" }}
-                  image=""
-                >
-                  <p>Create a booster to add Today Offer widgets and progress bars to your store.</p>
-                </EmptyState>
-              </LegacyCard.Section>
+              <div className="b-card-body" style={{ textAlign: "center", padding: "48px 24px" }}>
+                <div style={{ fontSize: "40px", marginBottom: "12px" }}>🚀</div>
+                <p className="b-text-bold" style={{ fontSize: "15px", margin: "0 0 6px" }}>No booster offers yet</p>
+                <p className="b-text-sm b-text-sub" style={{ margin: "0 0 20px" }}>
+                  Create a booster to add Today Offer widgets and progress bars to your store.
+                </p>
+                <a href="/app/offers/new?type=booster" className="b-btn b-btn-primary">
+                  + Create Booster
+                </a>
+              </div>
             ) : (
-              <IndexTable
-                resourceName={{ singular: "booster", plural: "boosters" }}
-                itemCount={boosters.length}
-                headings={[
-                  { title: "Name" },
-                  { title: "Status" },
-                  { title: "Priority" },
-                  { title: "Updated" },
-                ]}
-                selectable={false}
-              >
-                {boosters.map((booster, i) => {
-                  const badge = STATUS_BADGE[booster.status] ?? STATUS_BADGE.draft!;
-                  return (
-                    <IndexTable.Row
-                      id={booster.id}
-                      key={booster.id}
-                      position={i}
-                      onClick={() => navigate(`/app/offers/${booster.id}`)}
-                    >
-                      <IndexTable.Cell>
-                        <Text as="p" fontWeight="semibold">{booster.internalName}</Text>
-                        <Text as="p" tone="subdued" variant="bodySm">{booster.publicTitle}</Text>
-                      </IndexTable.Cell>
-                      <IndexTable.Cell>
-                        <Badge tone={badge.tone}>{badge.label}</Badge>
-                      </IndexTable.Cell>
-                      <IndexTable.Cell>{booster.priority}</IndexTable.Cell>
-                      <IndexTable.Cell>
-                        {new Date(booster.updatedAt).toLocaleDateString()}
-                      </IndexTable.Cell>
-                    </IndexTable.Row>
-                  );
-                })}
-              </IndexTable>
+              <div className="b-table-wrap" style={{ border: "none", boxShadow: "none", borderRadius: 0 }}>
+                <table className="b-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Status</th>
+                      <th>Priority</th>
+                      <th>Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {boosters.map((booster) => {
+                      const badge = STATUS_BADGE[booster.status] ?? STATUS_BADGE["draft"]!;
+                      return (
+                        <tr
+                          key={booster.id}
+                          onClick={() => navigate(`/app/offers/${booster.id}`)}
+                          style={{ cursor: "pointer" }}
+                        >
+                          <td>
+                            <div className="b-offer-name">{booster.internalName}</div>
+                            {booster.publicTitle && (
+                              <div className="b-offer-subtitle">{booster.publicTitle}</div>
+                            )}
+                          </td>
+                          <td>
+                            <span className={badge.cls}>{badge.label}</span>
+                          </td>
+                          <td className="b-text-sm b-text-sub">{booster.priority}</td>
+                          <td className="b-text-sm b-text-sub">
+                            {new Date(booster.updatedAt).toLocaleDateString()}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
-          </LegacyCard>
-        </Layout.Section>
+          </div>
+        </div>
 
-        {/* Quick setup guide */}
-        <Layout.Section variant="oneThird">
-          <LegacyCard title="How to set up a Booster" sectioned>
-            <BlockStack gap="200">
-              <Text as="p" variant="bodySm">
-                <strong>1.</strong> Create a Booster offer above.
-              </Text>
-              <Text as="p" variant="bodySm">
-                <strong>2.</strong> Add a "Today Offer" or "Progress Bar" widget in the offer settings.
-              </Text>
-              <Text as="p" variant="bodySm">
-                <strong>3.</strong> Link to existing gift/bundle/discount offers so the booster promotes them.
-              </Text>
-              <Text as="p" variant="bodySm">
-                <strong>4.</strong> Publish the booster — the widget will appear on your store automatically (if App Embed is enabled).
-              </Text>
-            </BlockStack>
-          </LegacyCard>
-        </Layout.Section>
-      </Layout>
-    </Page>
+        {/* Right sidebar */}
+        <div className="b-card">
+          <div className="b-card-header">How to set up a Booster</div>
+          <div className="b-card-body">
+            <div className="b-checklist">
+              <div className="b-check-item">
+                <div className="b-check-circle b-check-circle-todo">
+                  <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-sub)" }}>1</span>
+                </div>
+                <div>
+                  <p className="b-text-sm" style={{ margin: 0 }}>
+                    <strong>Create a Booster offer</strong> using the "Create Booster" button above.
+                  </p>
+                </div>
+              </div>
+              <div className="b-check-item">
+                <div className="b-check-circle b-check-circle-todo">
+                  <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-sub)" }}>2</span>
+                </div>
+                <div>
+                  <p className="b-text-sm" style={{ margin: 0 }}>
+                    <strong>Add a widget</strong> — choose "Today Offer" (floating) or "Progress Bar" in the offer settings.
+                  </p>
+                </div>
+              </div>
+              <div className="b-check-item">
+                <div className="b-check-circle b-check-circle-todo">
+                  <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-sub)" }}>3</span>
+                </div>
+                <div>
+                  <p className="b-text-sm" style={{ margin: 0 }}>
+                    <strong>Link existing offers</strong> — connect gift, bundle, or discount offers so the booster promotes them.
+                  </p>
+                </div>
+              </div>
+              <div className="b-check-item">
+                <div className="b-check-circle b-check-circle-todo">
+                  <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-sub)" }}>4</span>
+                </div>
+                <div>
+                  <p className="b-text-sm" style={{ margin: 0 }}>
+                    <strong>Publish the booster</strong> — the widget appears on your store automatically if App Embed is enabled.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
   );
 }

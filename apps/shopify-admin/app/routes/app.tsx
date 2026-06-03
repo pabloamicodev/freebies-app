@@ -5,9 +5,13 @@ import { NavMenu } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server.js";
 import type { LoaderFunctionArgs, HeadersFunction } from "react-router";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
+import bogosStyles from "../styles/bogos.css?url";
 import type { LinksFunction } from "react-router";
 
-export const links: LinksFunction = () => [{ rel: "stylesheet", href: polarisStyles }];
+export const links: LinksFunction = () => [
+  { rel: "stylesheet", href: polarisStyles },
+  { rel: "stylesheet", href: bogosStyles },
+];
 
 // Required for Shopify embedded app auth with React Router v7 single-fetch
 export const headers: HeadersFunction = (headersArgs) => {
@@ -33,8 +37,10 @@ export default function AppLayout() {
           <a href="/app/boosters">Boosters</a>
           <a href="/app/customize">Customize</a>
           <a href="/app/analytics">Analytics</a>
-          <a href="/app/translation">Translation</a>
           <a href="/app/settings">Settings</a>
+          <a href="/app/translation">Translation</a>
+          <a href="/app/pricing">Pricing</a>
+          <a href="/app/integrations">Integrations</a>
         </NavMenu>
         <Outlet />
       </PolarisAppProvider>
