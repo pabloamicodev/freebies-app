@@ -58,7 +58,7 @@ export function SubconditionCard({ def, onRemove, children }: SubconditionCardPr
         </div>
       </div>
 
-      {!collapsed && <div className="b-card-body">{children}</div>}
+      <div className="b-card-body" style={{ display: collapsed ? 'none' : 'block' }}>{children}</div>
     </div>
   );
 }

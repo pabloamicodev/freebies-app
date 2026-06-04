@@ -129,7 +129,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
   if (!newOffer) return { error: "Failed to create offer" };
 
+  // Main condition
   await db.insert(offerConditions).values({ shopId, offerId: newOffer.id, scope: "main", conditionType, operator: "gte", value: conditionValue, sortOrder: 0, isEnabled: true });
+
+  // Subconditions
+  const subconditionsJson = (formData.get("subconditions") as string) || "{}";
+  let subconditions: Record<string, Record<string, unknown>> = {};
+  try { subconditions = JSON.parse(subconditionsJson) as Record<string, Record<string, unknown>>; } catch {}
+  let subSortOrder = 1;
+  for (const [subId, subVal] of Object.entries(subconditions)) {
+    if (!subVal || Object.keys(subVal).length === 0) continue;
+    await db.insert(offerConditions).values({ shopId, offerId: newOffer.id, scope: "sub", conditionType: subId, operator: "eq", value: subVal as Record<string, unknown>, sortOrder: subSortOrder++, isEnabled: true });
+  }
+
   await db.insert(offerRewards).values({ shopId, offerId: newOffer.id, rewardType: "product_gift", discountType: discountType as "free" | "percentage" | "fixed_amount" | "fixed_price" | "cheapest_item_free" | "most_expensive_item_discount", value: { amount: rewardAmount, currencyCode: "USD" }, target: { scope: "cart", variantIds: rewardProducts }, quantity: giftCount, isAutoAdd, isCustomerSelectable: !isAutoAdd, trackMode: "product", sortOrder: 0 });
   await db.insert(offerCombinationPolicies).values({ shopId, offerId: newOffer.id, combinesWithOrderDiscounts: true, combinesWithProductDiscounts: true, combinesWithShippingDiscounts: true, combinesWithOtherAppOffers: true, stopLowerPriority: false, giftValueCountsForOtherOffers: false });
 
@@ -193,6 +205,7 @@ export default function NewGiftOfferPage() {
   // ── Block 3: Subconditions ──
   const [subModalOpen, setSubModalOpen]   = useState(false);
   const [activeSubs, setActiveSubs]       = useState<SubconditionId[]>([]);
+  const [subValues, setSubValues]         = useState<Record<string, unknown>>({});
 
   // ── Block 4: Gifts ──
   const [giftTab, setGiftTab]             = useState<"product" | "shipping">("product");
@@ -263,6 +276,7 @@ export default function NewGiftOfferPage() {
         <input type="hidden" name="maxAmount"          value={maxAmount} />
         <input type="hidden" name="appliesTo"          value={appliesTo} />
         <input type="hidden" name="priority"           value={priority} />
+        <input type="hidden" name="subconditions"      value={JSON.stringify(subValues)} />
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 20, alignItems: "start" }}>
 
@@ -352,7 +366,10 @@ export default function NewGiftOfferPage() {
                         <label className="b-label">La condición se aplicará a:</label>
                         <select className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
                           <option value="any_product">cualquier producto</option>
+                          <option value="exclude_variants_ids">todos excepto productos seleccionados</option>
+                          <option value="exclude_type_vendor_collection">todos excepto tipos/proveedores/colecciones seleccionados</option>
                           <option value="specific_products">productos seleccionados</option>
+                          <option value="type_vendor_collection">productos en tipos/proveedores/colecciones seleccionados</option>
                         </select>
                       </div>
                     </>
@@ -369,14 +386,17 @@ export default function NewGiftOfferPage() {
                         </div>
                         <div>
                           <label className="b-label">máx.</label>
-                          <input className="b-input" type="number" autoComplete="off" placeholder="0" />
+                          <input className="b-input" type="number" name="maxQty" autoComplete="off" placeholder="0" />
                         </div>
                       </div>
                       <div>
                         <label className="b-label">La condición se aplicará a:</label>
                         <select className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
                           <option value="any_product">cualquier producto</option>
+                          <option value="exclude_variants_ids">todos excepto productos seleccionados</option>
+                          <option value="exclude_type_vendor_collection">todos excepto tipos/proveedores/colecciones seleccionados</option>
                           <option value="specific_products">productos seleccionados</option>
+                          <option value="type_vendor_collection">productos en tipos/proveedores/colecciones seleccionados</option>
                         </select>
                       </div>
                     </>
@@ -449,8 +469,14 @@ export default function NewGiftOfferPage() {
                     const SubForm = SUB_FORMS[id];
                     const def = GIFT_SUBCONDITIONS.find((s) => s.id === id)!;
                     return (
-                      <SubconditionCard key={id} def={def} onRemove={() => setActiveSubs((prev) => prev.filter((x) => x !== id))}>
-                        <SubForm />
+                      <SubconditionCard key={id} def={def} onRemove={() => {
+                        setActiveSubs((prev) => prev.filter((x) => x !== id));
+                        setSubValues((prev) => { const n = { ...prev }; delete n[id]; return n; });
+                      }}>
+                        <SubForm
+                          value={subValues[id] as Record<string, unknown> | undefined}
+                          onChange={(v) => setSubValues((prev) => ({ ...prev, [id]: v }))}
+                        />
                       </SubconditionCard>
                     );
                   })}
@@ -715,7 +741,14 @@ export default function NewGiftOfferPage() {
         active={activeSubs}
         types={GIFT_SUBCONDITIONS}
         onClose={() => setSubModalOpen(false)}
-        onConfirm={(ids) => setActiveSubs(ids)}
+        onConfirm={(ids) => {
+          setActiveSubs(ids);
+          setSubValues((prev) => {
+            const next: Record<string, unknown> = {};
+            for (const id of ids) next[id] = prev[id] ?? {};
+            return next;
+          });
+        }}
       />
 
       <ProductPicker

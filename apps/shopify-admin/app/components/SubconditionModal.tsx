@@ -1,7 +1,7 @@
 // Generic subcondition picker modal.
 // Accepts any list of SubconditionDef so it works across gift / bundle / upsell / discount flows.
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { SubconditionDef, SubconditionId } from "./subconditions/types.js";
 import { SUB_ICONS, ICrown } from "./subconditions/icons.js";
 
@@ -19,8 +19,10 @@ interface SubconditionModalProps {
 export function SubconditionModal({ open, active, types, onClose, onConfirm }: SubconditionModalProps) {
   const [selected, setSelected] = useState<SubconditionId[]>([...active]);
 
-  // Re-sync when the modal is opened with a different active set.
-  // (useState initialiser only runs once, so we use a key on the parent instead — see usage note.)
+  // Re-sync when the modal opens with a different active set.
+  useEffect(() => {
+    if (open) setSelected([...active]);
+  }, [open, active]);
 
   if (!open) return null;
 

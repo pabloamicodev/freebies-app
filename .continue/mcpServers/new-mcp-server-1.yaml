@@ -1,0 +1,40 @@
+name: Shopify Promo Engine MCP Servers
+version: 0.0.1
+schema: v1
+
+mcpServers:
+  - name: shopify-dev-mcp
+    command: npx
+    args:
+      - -y
+      - "@shopify/dev-mcp@latest"
+    env:
+      LIQUID_VALIDATION_MODE: full
+
+  - name: context7
+    command: npx
+    args:
+      - -y
+      - "@upstash/context7-mcp@latest"
+    env: {}
+
+  - name: playwright-mcp
+    command: npx
+    args:
+      - -y
+      - "@playwright/mcp@latest"
+    env: {}
+
+  - name: chrome-devtools-mcp
+    command: npx
+    args:
+      - -y
+      - "chrome-devtools-mcp@0.23.0"
+    env: {}
+
+  - name: codegraph
+    command: codegraph
+    args:
+      - serve
+      - --mcp
+    env: {}
