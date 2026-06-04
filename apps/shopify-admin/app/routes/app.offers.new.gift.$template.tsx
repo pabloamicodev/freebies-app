@@ -13,6 +13,8 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { SubconditionModal } from "../components/SubconditionModal.js";
 import { SubconditionCard } from "../components/SubconditionCard.js";
+import type { MainConditionType } from "../components/MainConditionModal.js";
+import { MainConditionModal } from "../components/MainConditionModal.js";
 import { GIFT_SUBCONDITIONS, SUB_FORMS } from "../components/subconditions/index.js";
 import type { SubconditionId } from "../components/subconditions/index.js";
 import { OfferSummarySidebar } from "../components/OfferSummarySidebar.js";
@@ -156,7 +158,10 @@ export default function NewGiftOfferPage() {
   const { template: slug = "scratch" } = useParams<{ template: string }>();
   const templateId = SLUG_TO_TEMPLATE[slug] ?? "scratch";
   const preset = TEMPLATE_PRESETS[templateId];
-  const conditionType: ConditionType = preset?.conditionType ?? "cart_value";
+  const isScratch = templateId === "scratch";
+  // Scratch: sin condición predefinida ni preset
+  const effectivePreset = isScratch ? null : preset;
+  const conditionType: ConditionType = effectivePreset?.conditionType ?? "cart_value";
 
   // ── Block 1: Offer info ──
   const [internalName, setInternalName] = useState(preset?.internalName ?? "");
@@ -181,6 +186,10 @@ export default function NewGiftOfferPage() {
   const [subModalOpen, setSubModalOpen]   = useState(false);
   const [activeSubs, setActiveSubs]       = useState<SubconditionId[]>([]);
   const [subValues, setSubValues]         = useState<Record<string, unknown>>({});
+
+  // ── Main condition modal (scratch template) ──
+  const [mainCondModalOpen, setMainCondModalOpen] = useState(false);
+  const [selectedMainCond, setSelectedMainCond] = useState<MainConditionType>(conditionType);
 
   // ── Block 4: Gifts ──
   const [giftTab, setGiftTab]             = useState<"product" | "shipping">("product");
@@ -246,7 +255,7 @@ export default function NewGiftOfferPage() {
       </div>
 
       <Form method="POST">
-        <input type="hidden" name="conditionType"      value={conditionType} />
+        <input type="hidden" name="conditionType"      value={isScratch ? selectedMainCond : conditionType} />
         <input type="hidden" name="conditionProducts"  value={JSON.stringify(conditionProducts)} />
         <input type="hidden" name="rewardProducts"     value={JSON.stringify(rewardProducts)} />
         <input type="hidden" name="isAutoAdd"          value={String(isAutoAdd)} />
@@ -293,6 +302,7 @@ export default function NewGiftOfferPage() {
             </div>
 
             {/* ── Block 2: Oferta condición principal ── */}
+            {!isScratch && (
             <div>
               <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Oferta condición principal</div>
 
@@ -474,7 +484,7 @@ export default function NewGiftOfferPage() {
               </div>
 
               <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-                <button type="button" className="b-btn b-btn-primary b-btn-sm">
+                <button type="button" className="b-btn b-btn-primary b-btn-sm" disabled>
                   + Agregar condición principal
                 </button>
                 <div style={{ fontSize: 12, color: "var(--text-sub)" }}>
@@ -482,6 +492,25 @@ export default function NewGiftOfferPage() {
                 </div>
               </div>
             </div>
+            )}
+
+            {/* Scratch: botón para abrir el modal de condición principal */}
+            {isScratch && (
+              <div className="b-card">
+                <div className="b-card-header">Oferta condición principal</div>
+                <div className="b-card-body">
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <button type="button" className="b-btn b-btn-primary b-btn-sm"
+                      onClick={() => setMainCondModalOpen(true)}>
+                      + Agregar condición principal
+                    </button>
+                    <span style={{ fontSize: 12, color: "var(--text-sub)" }}>
+                      La cantidad del carrito y la condición del valor del carrito se pueden combinar
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* ── Block 3: Subconditions ── */}
             <div>
@@ -735,6 +764,13 @@ export default function NewGiftOfferPage() {
       </Form>
 
       {/* ── Modals ── */}
+      <MainConditionModal
+        open={mainCondModalOpen}
+        initialSelected={selectedMainCond}
+        onClose={() => setMainCondModalOpen(false)}
+        onConfirm={(type) => setSelectedMainCond(type)}
+      />
+
       <SubconditionModal
         open={subModalOpen}
         active={activeSubs}
