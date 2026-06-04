@@ -221,12 +221,15 @@ export default function NewGiftOfferPage() {
     if (conditionType === "cart_quantity") {
       return `Comprar ${minQty} artículo(s) para obtener ${giftCount} regalo(s)`;
     }
-    return `${conditionProducts.length} producto(s) seleccionados`;
+    return `Compre ${minQty} artículo(s) de productos para obtener ${giftCount} regalo(s)`;
   }
 
   function appliesToLabel() {
     if (appliesTo === "any_product") return "Aplica para cualquier producto";
-    if (appliesTo === "specific_products") return `${conditionProducts.length} producto(s) seleccionados`;
+    if (appliesTo === "exclude_variants_ids") return "Excepto productos seleccionados";
+    if (appliesTo === "exclude_type_vendor_collection") return "Excepto tipos/proveedores/colecciones";
+    if (appliesTo === "variants_ids" || appliesTo === "specific_products") return `Se aplica a ${conditionProducts.length} productos seleccionados`;
+    if (appliesTo === "type_vendor_collection") return "Se aplica a tipos/proveedores/colecciones seleccionados";
     return appliesTo;
   }
 
@@ -300,8 +303,8 @@ export default function NewGiftOfferPage() {
                 </div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
-                  {/* cart_value / cart_value_multiplier */}
-                  {(conditionType === "cart_value" || conditionType === "cart_value_multiplier") && (
+                  {/* cart_value */}
+                  {conditionType === "cart_value" && (
                     <>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                         <div>
@@ -323,6 +326,53 @@ export default function NewGiftOfferPage() {
                             <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: "var(--text-sub)" }}>%</span>
                           </div>
                         </div>
+                      </div>
+
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Agregar moneda</div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {CURRENCIES.map((c) => (
+                            <button key={c} type="button" onClick={() => toggleCurrency(c)} style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1.5px solid ${selectedCurrencies.includes(c) ? "var(--blue)" : "var(--border)"}`, background: selectedCurrencies.includes(c) ? "var(--blue-light)" : "var(--bg)", color: selectedCurrencies.includes(c) ? "var(--blue)" : "var(--text-sub)", transition: "all 0.12s" }}>
+                              {c}
+                            </button>
+                          ))}
+                          <button type="button" style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "1.5px solid var(--border)", background: "var(--bg)", color: "var(--text-sub)" }}>···</button>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="b-label">La condición se aplicará a:</label>
+                        <select className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
+                          <option value="any_product">cualquier producto</option>
+                          <option value="exclude_variants_ids">todos excepto productos seleccionados</option>
+                          <option value="exclude_type_vendor_collection">todos excepto tipos/proveedores/colecciones seleccionados</option>
+                          <option value="specific_products">productos seleccionados</option>
+                          <option value="type_vendor_collection">productos en tipos/proveedores/colecciones seleccionados</option>
+                        </select>
+                      </div>
+                    </>
+                  )}
+
+                  {/* cart_value_multiplier */}
+                  {conditionType === "cart_value_multiplier" && (
+                    <>
+                      <div>
+                        <label className="b-label">Multiplicar el valor base</label>
+                        <div style={{ position: "relative", maxWidth: 280 }}>
+                          <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--text-sub)" }}>$</span>
+                          <input className="b-input" type="number" name="minAmount" value={minAmount}
+                            onChange={(e) => setMinAmount(e.target.value)}
+                            min="0" step="0.01" style={{ paddingLeft: 22 }} autoComplete="off" placeholder="0.00" />
+                        </div>
+                        <div className="b-help">
+                          Por ejemplo: cuando el valor base se establece en $100, el cliente recibirá 1 regalo cuando el valor del carrito sea superior a $100, 2 obsequios cuando sea superior a $200.
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                        <span style={{ color: "var(--text-sub)", display: "flex" }}>
+                          <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M6.5 5.275v-1.025c0-.69.56-1.25 1.25-1.25h4.5c.69 0 1.25.56 1.25 1.25v1.025c0 .448-.24.862-.63 1.085l-.43.246.866 3.894h.694c.69 0 1.25.56 1.25 1.25v1c0 .69-.56 1.25-1.25 1.25h-2.781l-.48 2.873a.75.75 0 0 1-1.479 0l-.479-2.873h-2.781c-.69 0-1.25-.56-1.25-1.25v-1c0-.69.56-1.25 1.25-1.25h.694l.866-3.894-.43-.246a1.25 1.25 0 0 1-.63-1.085Z"/></svg>
+                        </span>
                       </div>
 
                       <div>
@@ -397,16 +447,15 @@ export default function NewGiftOfferPage() {
                         <input type="checkbox" name="giftsMatchProducts" checked={giftsMatchProducts} onChange={(e) => setGiftsMatchProducts(e.target.checked)} />
                         <div className="b-checkbox-label">Los regalos serán los mismos que los productos seleccionados.</div>
                       </label>
-                      {giftsMatchProducts && (
-                        <div style={{ marginLeft: 26, display: "flex", flexDirection: "column", gap: 6 }}>
-                          {[{ v: "variant", l: "Seguimiento por variante" }, { v: "product", l: "Seguimiento por producto" }].map((opt) => (
-                            <label key={opt.v} className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                              <input type="radio" name="trackMode" value={opt.v} checked={trackMode === opt.v} onChange={() => setTrackMode(opt.v)} style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
-                              <span style={{ fontSize: 13 }}>{opt.l}</span>
-                            </label>
-                          ))}
-                        </div>
-                      )}
+                      <div style={{ marginLeft: 26, display: "flex", flexDirection: "column", gap: 6 }}>
+                        {[{ v: "variant", l: "Seguimiento por variante" }, { v: "product", l: "Seguimiento por producto" }].map((opt) => (
+                          <label key={opt.v} className="b-checkbox-row" style={{ cursor: giftsMatchProducts ? "pointer" : "not-allowed", gap: 8, opacity: giftsMatchProducts ? 1 : 0.5 }}>
+                            <input type="radio" name="trackMode" value={opt.v} checked={trackMode === opt.v} disabled={!giftsMatchProducts}
+                              onChange={() => setTrackMode(opt.v)} style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
+                            <span style={{ fontSize: 13, color: giftsMatchProducts ? "var(--text)" : "var(--text-sub)" }}>{opt.l}</span>
+                          </label>
+                        ))}
+                      </div>
                       <div>
                         <label className="b-label">La condición se aplicará a:</label>
                         <select className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>

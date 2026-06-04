@@ -7,7 +7,7 @@
 
 import { IconLink, IconClock, IconCondition,  IconCheck } from "./Icons.js";
 
-// ─── ──────────────────────────────────────────────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface SummaryStepItem {
   /** Icon component (12px muted) rendered before the text. Defaults to IconCondition. */
@@ -138,6 +138,7 @@ export function OfferSummarySidebar({
   });
 
   return (
+
     <div style={{ position: "sticky", top: 16, display: "flex", flexDirection: "column", gap: 14 }}>
       {/* Help card */}
       {helpCard !== null && (helpCard ?? <DefaultHelpCard />)}
