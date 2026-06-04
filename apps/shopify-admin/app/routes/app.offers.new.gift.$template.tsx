@@ -15,6 +15,8 @@ import { SubconditionModal } from "../components/SubconditionModal.js";
 import { SubconditionCard } from "../components/SubconditionCard.js";
 import { GIFT_SUBCONDITIONS, SUB_FORMS } from "../components/subconditions/index.js";
 import type { SubconditionId } from "../components/subconditions/index.js";
+import { OfferSummarySidebar } from "../components/OfferSummarySidebar.js";
+import { IconCondition, IconSettings } from "../components/Icons.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -49,7 +51,6 @@ const CONDITION_TYPE_LABEL: Record<ConditionType, string> = {
 const CURRENCIES = ["AFN","AUD","AWG","BBD","BZD","CAD","CNY","DJF","EUR","FKP","GBP","HKD","JPY","MXN","USD"];
 
 // ─── Local icons (only used within this file) ─────────────────────────────────
-function ICheck()    { return <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>; }
 function IChevDown() { return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>; }
 function IChevUp()   { return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>; }
 function IInfo()     { return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>; }
@@ -148,33 +149,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return redirect(`/app/offers/${newOffer.id}`);
 };
 
-// ─── Summary sidebar ──────────────────────────────────────────────────────────
-function SummaryDot({ checked }: { checked: boolean }) {
-  return (
-    <div style={{ width: 20, height: 20, borderRadius: "50%", flexShrink: 0, marginTop: 1, background: checked ? "#008060" : "transparent", border: `2px solid ${checked ? "#008060" : "var(--border)"}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      {checked && <ICheck />}
-    </div>
-  );
-}
-
-function SummaryRow({ checked, label, lines = [], optional = false }: { checked: boolean; label: string; lines?: string[]; optional?: boolean }) {
-  return (
-    <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-      <SummaryDot checked={checked} />
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: optional && !checked ? "var(--text-sub)" : "var(--text)" }}>
-          {label}{optional && !checked && <span style={{ fontWeight: 400 }}> (opcional)</span>}
-        </div>
-        {lines.map((l, i) => (
-          <div key={i} style={{ fontSize: 12, color: "var(--text-sub)", marginTop: 1 }}>{l}</div>
-        ))}
-        {!checked && lines.length === 0 && (
-          <div style={{ fontSize: 12, color: "var(--blue)", marginTop: 1 }}>+ Haga clic para agregar</div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function NewGiftOfferPage() {
@@ -198,6 +172,7 @@ export default function NewGiftOfferPage() {
   const [minQty, setMinQty]                 = useState(1);
   const [multiplyGifts, setMultiplyGifts]   = useState(false);
   const [giftsMatchProducts, setGiftsMatchProducts] = useState(preset?.giftsMatchProducts ?? false);
+  const isBogo = templateId === "bogo"; // BOGO: auto-add disabled, gifts match by default
   const [trackMode, setTrackMode]           = useState("product");
   const [conditionProducts, setConditionProducts] = useState<string[]>([]);
   const [condPickerOpen, setCondPickerOpen] = useState(false);
@@ -434,10 +409,9 @@ export default function NewGiftOfferPage() {
                       )}
                       <div>
                         <label className="b-label">La condición se aplicará a:</label>
-                        <select className="b-select" value={trackMode} onChange={(e) => setTrackMode(e.target.value)}>
-                          <option value="product">productos seleccionados</option>
-                          <option value="variant">variantes seleccionadas</option>
-                          <option value="any">cualquier producto</option>
+                        <select className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
+                          <option value="variants_ids">productos seleccionados</option>
+                          <option value="type_vendor_collection">productos en tipos/proveedores/colecciones seleccionados</option>
                         </select>
                       </div>
                       <div>
@@ -524,9 +498,9 @@ export default function NewGiftOfferPage() {
                           <div>
                             <label className="b-label">Tipo:</label>
                             <select className="b-select" name="discountType" value={discountType} onChange={(e) => setDiscountType(e.target.value)}>
-                              <option value="free">Gratis (100%)</option>
                               <option value="percentage">Porcentaje</option>
-                              <option value="fixed_amount">Monto fijo</option>
+                              <option value="fixed_amount">Cantidad</option>
+                              <option value="fixed_price">Precio fijo</option>
                             </select>
                           </div>
                           <div>
@@ -545,10 +519,11 @@ export default function NewGiftOfferPage() {
 
                       <div>
                         <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>El cliente recibirá:</div>
-                        <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, marginBottom: 6 }}>
-                          <input type="radio" name="_autoAddRadio" checked={isAutoAdd} onChange={() => setIsAutoAdd(true)}
+                        <label className="b-checkbox-row" style={{ cursor: isBogo ? "not-allowed" : "pointer", gap: 10, marginBottom: 6, opacity: isBogo ? 0.5 : 1 }}>
+                          <input type="radio" name="_autoAddRadio" checked={isAutoAdd} disabled={isBogo}
+                            onChange={() => setIsAutoAdd(true)}
                             style={{ accentColor: "var(--blue)", width: 15, height: 15 }} />
-                          <span style={{ fontSize: 13, color: "var(--text)" }}>Automáticamente todos los regalos</span>
+                          <span style={{ fontSize: 13, color: isBogo ? "var(--text-sub)" : "var(--text)" }}>Automáticamente todos los regalos</span>
                         </label>
                         <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                           <input type="radio" name="_autoAddRadio" checked={!isAutoAdd} onChange={() => setIsAutoAdd(false)}
@@ -595,7 +570,10 @@ export default function NewGiftOfferPage() {
               {advancedOpen && (
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
                   {/* Funciona con otras ofertas */}
-                  <div>
+                  <div style={{ position: "relative" }}>
+                    <div style={{ position: "absolute", top: 0, right: 0, zIndex: 1 }}>
+                      <img src="data:image/svg+xml,%3csvg%20width='36'%20height='36'%20viewBox='0%200%2036%2036'%20fill='none'%20xmlns='http://www.w3.org/2000/svg'%3e%3cpath%20d='M0%200H36V36L0%200Z'%20fill='%23FFAA00'/%3e%3cpath%20d='M0%200H36V36L0%200Z'%20fill='url(%23paint0_linear_30409_40096)'%20fill-opacity='0.5'/%3e%3cpath%20d='M28.8775%2014.8774C28.8593%2013.9095%2028.481%2012.947%2027.7424%2012.2085L27.3396%2011.8057L25.8059%2013.3395L26.2087%2013.7422C26.8763%2014.4099%2026.8763%2015.492%2026.2088%2016.1596C25.5412%2016.8271%2024.459%2016.8272%2023.7913%2016.1596C23.1237%2015.4919%2023.1238%2014.4099%2023.7914%2013.7422L27.7425%209.79118C28.41%209.12371%2029.4922%209.12366%2030.1597%209.79118C30.8272%2010.4587%2030.8273%2011.541%2030.1598%2012.2085L31.6936%2013.7422C33.2082%2012.2277%2033.2081%209.77202%2031.6935%208.25743C31.2597%207.82368%2030.7489%207.51414%2030.2049%207.32882C29.7756%207.18258%2029.3261%207.11358%2028.8777%207.12222C28.8861%206.67385%2028.8172%206.22419%2028.6711%205.79503C28.4858%205.25118%2028.1762%204.74017%2027.7424%204.30632C26.2278%202.79173%2023.7722%202.79173%2022.2576%204.30632C21.8238%204.74017%2021.5143%205.25123%2021.3289%205.79502C21.1827%206.22428%2021.1138%206.67389%2021.1224%207.12232C20.674%207.11367%2020.2244%207.18258%2019.7951%207.32882C19.2513%207.51409%2018.7403%207.82362%2018.3065%208.25743C16.792%209.77201%2016.7919%2012.2277%2018.3064%2013.7422C18.7403%2014.1761%2019.2513%2014.4856%2019.7951%2014.6709C20.2243%2014.817%2020.6739%2014.8859%2021.1224%2014.8775C21.1138%2015.3259%2021.1827%2015.7755%2021.3289%2016.2047C21.5142%2016.7488%2021.8238%2017.2596%2022.2575%2017.6933C23.7721%2019.2079%2026.2279%2019.2079%2027.7425%2017.6934C28.1762%2017.2596%2028.4857%2016.7485%2028.6711%2016.2047C28.8173%2015.7755%2028.8861%2015.3257%2028.8775%2014.8774ZM22.2577%2012.2085C21.5901%2012.8761%2020.5079%2012.8761%2019.8403%2012.2085C19.1727%2011.5409%2019.1728%2010.4588%2019.8404%209.79118C20.508%209.12356%2021.5901%209.12365%2022.2576%209.79118L23.4663%2010.9999L22.2577%2012.2085ZM25.0001%209.46614L23.7913%208.25743C23.1239%207.58996%2023.1238%206.50774%2023.7914%205.84012C24.4591%205.1725%2025.5411%205.1726%2026.2087%205.84012C26.8762%206.50764%2026.8763%207.58991%2026.2088%208.25743L25.0001%209.46614Z'%20fill='white'/%3e%3cpath%20d='M21.1225%207.12289C21.1407%208.09071%2021.519%209.0532%2022.2576%209.79175L22.6604%2010.1945L24.1941%208.66079L23.7913%208.258C23.1237%207.59038%2023.1237%206.50822%2023.7912%205.84069C24.4588%205.17317%2025.541%205.17307%2026.2087%205.84069C26.8763%206.50832%2026.8762%207.59038%2026.2086%208.258L22.2575%2012.2091C21.59%2012.8765%2020.5078%2012.8766%2019.8403%2012.2091C19.1728%2011.5415%2019.1727%2010.4593%2019.8402%209.79175L18.3064%208.258C16.7918%209.77259%2016.7919%2012.2282%2018.3065%2013.7428C18.7403%2014.1766%2019.2511%2014.4861%2019.7951%2014.6714C20.2244%2014.8177%2020.6739%2014.8867%2021.1223%2014.878C21.1139%2015.3264%2021.1828%2015.7761%2021.3289%2016.2052C21.5142%2016.7491%2021.8238%2017.2601%2022.2576%2017.6939C23.7722%2019.2085%2026.2278%2019.2085%2027.7424%2017.6939C28.1762%2017.2601%2028.4857%2016.749%2028.6711%2016.2052C28.8173%2015.776%2028.8862%2015.3264%2028.8776%2014.8779C29.326%2014.8866%2029.7756%2014.8177%2030.2049%2014.6714C30.7487%2014.4862%2031.2597%2014.1766%2031.6935%2013.7428C33.208%2012.2282%2033.2081%209.77259%2031.6936%208.25801C31.2597%207.82415%2030.7487%207.51462%2030.2049%207.3293C29.7757%207.1832%2029.3261%207.1143%2028.8776%207.12279C28.8862%206.67437%2028.8173%206.22476%2028.6711%205.7955C28.4858%205.25145%2028.1762%204.74065%2027.7424%204.30689C26.2279%202.79231%2023.7721%202.79231%2022.2575%204.30689C21.8238%204.74065%2021.5143%205.2517%2021.3289%205.7955C21.1827%206.22476%2021.1139%206.67452%2021.1225%207.12289ZM27.7423%209.79175C28.4099%209.12413%2029.4921%209.12413%2030.1597%209.79175C30.8273%2010.4594%2030.8272%2011.5414%2030.1596%2012.2091C29.492%2012.8767%2028.4099%2012.8766%2027.7424%2012.2091L26.5337%2011.0004L27.7423%209.79175ZM24.9999%2012.5341L26.2087%2013.7428C26.8761%2014.4103%2026.8762%2015.4925%2026.2086%2016.1601C25.5409%2016.8277%2024.4589%2016.8276%2023.7913%2016.1601C23.1238%2015.4926%2023.1237%2014.4103%2023.7912%2013.7428L24.9999%2012.5341Z'%20fill='white'/%3e%3cdefs%3e%3clinearGradient%20id='paint0_linear_30409_40096'%20x1='18'%20y1='0'%20x2='18'%20y2='36'%20gradientUnits='userSpaceOnUse'%3e%3cstop%20stop-color='white'%20stop-opacity='0'/%3e%3cstop%20offset='1'%20stop-color='white'/%3e%3c/linearGradient%3e%3c/defs%3e%3c/svg%3e" width="36" height="36" alt="feature-plan" />
+                    </div>
                     <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Funciona con otras ofertas</div>
                     <div>
                       <label className="b-label" htmlFor="priority">Prioridad</label>
@@ -659,67 +637,39 @@ export default function NewGiftOfferPage() {
           </div>
 
           {/* ── Right sidebar (sticky) ── */}
-          <div style={{ position: "sticky", top: 16, display: "flex", flexDirection: "column", gap: 14 }}>
-
-            {/* Help card */}
-            <div className="b-card">
-              <div className="b-card-body" style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-                <div style={{ width: 36, height: 36, borderRadius: 8, background: "#e8f4fd", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2c6ecb" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-                  </svg>
-                </div>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>¿Necesitas ayuda para crear ofertas?</div>
-                  <div style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 10 }}>Chatea con nosotros para obtener ayuda</div>
-                  <button type="button" className="b-btn b-btn-secondary b-btn-sm">Chatea con nosotros</button>
-                </div>
-              </div>
-            </div>
-
-            {/* Summary card */}
-            <div className="b-card">
-              <div className="b-card-header">Resumen</div>
-              <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-
-                <SummaryRow
-                  checked={hasName}
-                  label="Información básica"
-                  lines={hasName ? [
-                    publicTitle || internalName,
-                    `Empieza en ${formatDate(startsAt)}`,
-                  ] : []}
-                />
-
-                <div style={{ width: 1, height: 1, borderLeft: "1.5px dashed var(--border)", marginLeft: 9 }} />
-
-                <SummaryRow
-                  checked={true}
-                  label="Condición principal"
-                  lines={[conditionSummaryLine(), appliesToLabel()]}
-                />
-
-                <div style={{ width: 1, height: 1, borderLeft: "1.5px dashed var(--border)", marginLeft: 9 }} />
-
-                <SummaryRow
-                  checked={activeSubs.length > 0}
-                  label="Subcondición"
-                  optional
-                  lines={subSummaryLines}
-                />
-
-                <div style={{ width: 1, height: 1, borderLeft: "1.5px dashed var(--border)", marginLeft: 9 }} />
-
-                <SummaryRow
-                  checked={hasRewardProducts}
-                  label="Regalo"
-                  optional
-                  lines={hasRewardProducts ? [`${rewardProducts.length} producto(s) seleccionados`] : []}
-                />
-
-              </div>
-            </div>
-          </div>
+          <OfferSummarySidebar
+            title={hasName ? (publicTitle || internalName) : undefined}
+            startDate={hasName ? formatDate(startsAt) : undefined}
+            steps={[
+              {
+                label: "Información básica",
+                checked: hasName,
+              },
+              {
+                label: "Condición principal",
+                checked: true,
+                items: [
+                  { icon: IconCondition, text: conditionSummaryLine() },
+                  { icon: IconSettings, text: appliesToLabel() },
+                ],
+              },
+              {
+                label: "Subcondición",
+                checked: activeSubs.length > 0,
+                optional: true,
+                items: activeSubs.length > 0
+                  ? subSummaryLines.map((l) => ({ text: l }))
+                  : undefined,
+              },
+              {
+                label: "Regalo",
+                checked: hasRewardProducts,
+                items: hasRewardProducts
+                  ? [{ text: `${rewardProducts.length} producto(s) seleccionados` }]
+                  : undefined,
+              },
+            ]}
+          />
 
         </div>
 

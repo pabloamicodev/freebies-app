@@ -13,6 +13,7 @@ import { offers, offerConditions, offerRewards, offerCombinationPolicies, shops 
 import { eq } from "drizzle-orm";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
+import { OfferSummarySidebar } from "../components/OfferSummarySidebar.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -808,9 +809,9 @@ export default function NewUpsellOfferPage() {
           </div>
 
           {/* ── Right column ── */}
-          <div style={{ position: "sticky", top: 16 }}>
-            {isFbt ? (
-              // FBT: Live preview panel
+          <OfferSummarySidebar
+            helpCard={null}
+            aboveSummary={isFbt ? (
               <div className="b-card">
                 <div className="b-card-header">Avance</div>
                 <div className="b-card-body">
@@ -850,31 +851,28 @@ export default function NewUpsellOfferPage() {
                   </div>
                 </div>
               </div>
-            ) : (
-              // Checkout / Thank-you: Summary panel
-              <div className="b-card">
-                <div className="b-card-header">Resumen</div>
-                <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <SummaryRow
-                    checked={hasName}
-                    label="Información básica"
-                    detail={hasName ? internalName : undefined}
-                    sub={hasName ? `Empieza ${new Date(startsAt).toLocaleDateString("es-ES", { month: "short", day: "numeric", year: "numeric" })}` : undefined}
-                  />
-                  <SummaryRow
-                    checked={true}
-                    label="Activador de venta adicional"
-                    detail={triggerType === "always" ? "Sin disparador / Mostrar siempre" : triggerType}
-                  />
-                  <SummaryRow
-                    checked={hasProducts}
-                    label="Método de venta adicional"
-                    detail={hasProducts ? `${upsellProducts.length} producto(s) seleccionados` : undefined}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
+            ) : undefined}
+            steps={[
+              {
+                label: "Información básica",
+                checked: hasName,
+                items: hasName ? [
+                  { text: internalName },
+                  { text: `Empieza ${new Date(startsAt).toLocaleDateString("es-ES", { month: "short", day: "numeric", year: "numeric" })}` },
+                ] : undefined,
+              },
+              {
+                label: "Activador de venta adicional",
+                checked: true,
+                items: [{ text: triggerType === "always" ? "Sin disparador / Mostrar siempre" : triggerType }],
+              },
+              {
+                label: "Método de venta adicional",
+                checked: hasProducts,
+                items: hasProducts ? [{ text: `${upsellProducts.length} producto(s) seleccionados` }] : undefined,
+              },
+            ]}
+          />
 
         </div>
 
@@ -912,37 +910,3 @@ export default function NewUpsellOfferPage() {
   );
 }
 
-// ─── Summary row helper ───────────────────────────────────────────────────────
-
-function SummaryRow({
-  checked, label, detail, sub, optional = false,
-}: {
-  checked: boolean; label: string; detail?: string; sub?: string; optional?: boolean;
-}) {
-  return (
-    <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-      <div style={{
-        width: 18, height: 18, borderRadius: "50%", flexShrink: 0, marginTop: 1,
-        background: checked ? "#008060" : "transparent",
-        border: `2px solid ${checked ? "#008060" : "var(--border)"}`,
-        display: "flex", alignItems: "center", justifyContent: "center",
-      }}>
-        {checked && (
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="20 6 9 17 4 12"/>
-          </svg>
-        )}
-      </div>
-      <div>
-        <div style={{ fontSize: 13, fontWeight: 600, color: optional && !checked ? "var(--text-sub)" : "var(--text)" }}>
-          {label}{optional && !checked && <span style={{ fontWeight: 400 }}> (opcional)</span>}
-        </div>
-        {detail && <div style={{ fontSize: 12, color: "var(--text-sub)", marginTop: 1 }}>{detail}</div>}
-        {sub && <div style={{ fontSize: 12, color: "var(--text-sub)" }}>{sub}</div>}
-        {!checked && !detail && (
-          <div style={{ fontSize: 12, color: "var(--blue)", marginTop: 1 }}>+ Haga clic para agregar</div>
-        )}
-      </div>
-    </div>
-  );
-}
