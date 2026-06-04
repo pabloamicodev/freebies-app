@@ -1,0 +1,64 @@
+// Generic collapsible card wrapper for an active subcondition.
+// Used by every offer-type creation/edit page.
+
+import { useState } from "react";
+import type { SubconditionDef } from "./subconditions/types.js";
+
+function IChevUp() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="18 15 12 9 6 15"/>
+    </svg>
+  );
+}
+function IChevDown() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="6 9 12 15 18 9"/>
+    </svg>
+  );
+}
+
+interface SubconditionCardProps {
+  def: SubconditionDef;
+  onRemove: () => void;
+  children: React.ReactNode;
+}
+
+export function SubconditionCard({ def, onRemove, children }: SubconditionCardProps) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  return (
+    <div className="b-card" style={{ marginBottom: 12 }}>
+      <div
+        className="b-card-header"
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+      >
+        <span style={{ fontSize: 14, fontWeight: 600 }}>{def.name}</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button
+            type="button"
+            onClick={() => setCollapsed((v) => !v)}
+            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-sub)", display: "flex" }}
+          >
+            {collapsed ? <IChevDown /> : <IChevUp />}
+          </button>
+          <button
+            type="button"
+            onClick={onRemove}
+            style={{
+              background: "#ff4d4d", border: "none", borderRadius: "50%",
+              width: 20, height: 20, cursor: "pointer", color: "white",
+              fontWeight: 700, fontSize: 14, display: "flex",
+              alignItems: "center", justifyContent: "center", lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </div>
+      </div>
+
+      {!collapsed && <div className="b-card-body">{children}</div>}
+    </div>
+  );
+}
