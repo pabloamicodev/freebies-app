@@ -1,5 +1,6 @@
 import { useLoaderData, useNavigate, useFetcher, useActionData, redirect } from "react-router";
 import { useState } from "react";
+import { SUPPORTED_CURRENCIES } from "@promo/shared-types";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies, shops, offerVersions } from "@promo/db";
@@ -207,7 +208,7 @@ const CONDITION_TYPE_NAMES: Record<string, string> = {
 };
 
 /* ── Currency chips shown on monetary conditions ────────── */
-const CURRENCIES = ["AFN","AUD","AWG","BBD","BZD","CAD","CNY","DJF","EUR","FKP","GBP","HKD","JPY","MXN","USD"];
+const CURRENCIES = SUPPORTED_CURRENCIES;
 
 function CurrencyChips({ selected, onSelect }: { selected: string; onSelect: (c: string) => void }) {
   const [showAll, setShowAll] = useState(false);

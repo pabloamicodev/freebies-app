@@ -4,7 +4,7 @@
  * validated form for each condition type.
  */
 
-import { useLoaderData, Form, Link, useActionData } from "react-router";
+import { useLoaderData, Form, Link, useActionData, useNavigation } from "react-router";
 import { useState } from "react";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { authenticate } from "../shopify.server.js";
@@ -171,6 +171,8 @@ const SUB_CONDITION_TYPES = [
 export default function OfferConditionsPage() {
   const { offer, conditions } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
+  const navigation = useNavigation();
+  const isSubmitting = navigation.state !== "idle";
   const [addingScope, setAddingScope] = useState<"main" | "sub" | null>(null);
   const [selectedType, setSelectedType] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -286,8 +288,12 @@ export default function OfferConditionsPage() {
                   <Form method="POST">
                     <input type="hidden" name="intent" value="delete_condition" />
                     <input type="hidden" name="conditionId" value={c.id} />
-                    <button type="submit" className="b-btn b-btn-danger b-btn-sm">
-                      Remove
+                    <button
+                      type="submit"
+                      className="b-btn b-btn-danger b-btn-sm"
+                      disabled={isSubmitting}
+                    >
+                      {isSubmitting ? "…" : "Remove"}
                     </button>
                   </Form>
                 </div>
@@ -616,13 +622,18 @@ export default function OfferConditionsPage() {
                   {/* Add / Cancel buttons — only shown once a type is selected */}
                   {selectedType && (
                     <div className="b-row b-gap-3" style={{ marginTop: 4 }}>
-                      <button type="submit" className="b-btn b-btn-primary">
-                        Add Condition
+                      <button
+                        type="submit"
+                        className="b-btn b-btn-primary"
+                        disabled={isSubmitting}
+                      >
+                        {isSubmitting ? "Adding…" : "Add Condition"}
                       </button>
                       <button
                         type="button"
                         className="b-btn b-btn-secondary"
                         onClick={() => setAddingScope(null)}
+                        disabled={isSubmitting}
                       >
                         Cancel
                       </button>

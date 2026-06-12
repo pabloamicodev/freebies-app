@@ -3,7 +3,7 @@
  * Configure what the customer receives: gift products, discounts, shipping.
  */
 
-import { useLoaderData, useNavigate, Form } from "react-router";
+import { useLoaderData, useNavigate, useNavigation, useActionData, Form } from "react-router";
 import { useState } from "react";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { authenticate } from "../shopify.server.js";
@@ -55,6 +55,16 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const label = (formData.get("label") as string) || null;
     const currencyCode = (formData.get("currencyCode") as string) || "USD";
 
+    if (!rewardType) return { error: "Reward type is required." };
+
+    const needsValue = discountType !== "free" && discountType !== "cheapest_item_free" && discountType !== "most_expensive_item_discount";
+    if (needsValue && discountValue <= 0) {
+      return { error: "Discount value must be greater than 0." };
+    }
+    if (discountType === "percentage" && discountValue > 100) {
+      return { error: "Percentage discount cannot exceed 100%." };
+    }
+
     // Build target from variant GIDs input
     const variantGids = (formData.get("variantGids") as string)
       .split("\n")
@@ -88,10 +98,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (intent === "delete_reward") {
     const rewardId = formData.get("rewardId") as string;
+    if (!rewardId) return { error: "Reward ID missing." };
     await db.delete(offerRewards).where(eq(offerRewards.id, rewardId));
   }
 
-  return null;
+  return { success: true };
 };
 
 const REWARD_TYPES = [
@@ -120,6 +131,9 @@ const REWARD_TYPE_LABELS: Record<string, string> = {
 export default function OfferRewardsPage() {
   const { offer, rewards } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
+  const navigation = useNavigation();
+  const actionData = useActionData<typeof action>();
+  const isSubmitting = navigation.state !== "idle";
   const [adding, setAdding] = useState(false);
   const [rewardType, setRewardType] = useState("product_gift");
   const [discountType, setDiscountType] = useState("free");
@@ -181,6 +195,18 @@ export default function OfferRewardsPage() {
             </button>
           </div>
         </div>
+
+        {/* ── Action error banner ─────────────────────────── */}
+        {"error" in (actionData ?? {}) && (actionData as { error: string }).error && (
+          <div className="b-banner b-banner-red b-mb-4">
+            <span className="b-banner-icon">✕</span>
+            <div className="b-banner-body">
+              <p className="b-banner-text" style={{ margin: 0 }}>
+                {(actionData as { error: string }).error}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* ── No rewards warning ───────────────────────────── */}
         {rewards.length === 0 && !adding && (
@@ -527,13 +553,18 @@ export default function OfferRewardsPage() {
 
                   {/* Form actions */}
                   <div className="b-row b-gap-3 b-mt-2">
-                    <button type="submit" className="b-btn b-btn-primary">
-                      Add Reward
+                    <button
+                      type="submit"
+                      className="b-btn b-btn-primary"
+                      disabled={isSubmitting}
+                    >
+                      {isSubmitting ? "Adding…" : "Add Reward"}
                     </button>
                     <button
                       type="button"
                       className="b-btn b-btn-secondary"
                       onClick={() => setAdding(false)}
+                      disabled={isSubmitting}
                     >
                       Cancel
                     </button>

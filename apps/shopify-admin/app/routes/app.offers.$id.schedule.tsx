@@ -2,7 +2,7 @@
  * Offer Schedule editor — configure start/end dates and timezone.
  */
 
-import { useLoaderData, Form, Link } from "react-router";
+import { useLoaderData, Form, Link, useActionData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers } from "@promo/db";
@@ -45,6 +45,18 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const endsAtStr = formData.get("ends_at") as string;
   const timezone = (formData.get("timezone") as string) || "UTC";
 
+  if (startsAtStr && endsAtStr) {
+    const start = new Date(startsAtStr);
+    const end = new Date(endsAtStr);
+    if (end <= start) {
+      return { error: "End time must be after start time." };
+    }
+  }
+
+  if (endsAtStr && !startsAtStr) {
+    return { error: "Set a start time before setting an end time." };
+  }
+
   await db.update(offers).set({
     startsAt: startsAtStr ? new Date(startsAtStr) : null,
     endsAt: endsAtStr ? new Date(endsAtStr) : null,
@@ -52,7 +64,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     updatedAt: new Date(),
   }).where(eq(offers.id, offerId));
 
-  return null;
+  return { success: true };
 };
 
 function statusBadgeClass(status: string) {
@@ -67,6 +79,9 @@ function statusBadgeClass(status: string) {
 
 export default function OfferSchedulePage() {
   const { offer } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
+  const navigation = useNavigation();
+  const isSubmitting = navigation.state !== "idle";
 
   return (
     <div className="b-page">
@@ -89,6 +104,24 @@ export default function OfferSchedulePage() {
           {offer.internalName}
         </span>
       </div>
+
+      {/* Action feedback */}
+      {actionData && "error" in actionData && actionData.error && (
+        <div className="b-banner b-banner-red b-mb-4">
+          <span className="b-banner-icon">✕</span>
+          <div className="b-banner-body">
+            <p className="b-banner-text" style={{ margin: 0 }}>{actionData.error}</p>
+          </div>
+        </div>
+      )}
+      {actionData && "success" in actionData && actionData.success && (
+        <div className="b-banner b-banner-green b-mb-4">
+          <span className="b-banner-icon">✓</span>
+          <div className="b-banner-body">
+            <p className="b-banner-text" style={{ margin: 0 }}>Schedule saved.</p>
+          </div>
+        </div>
+      )}
 
       {/* Body: main + sidebar */}
       <div className="b-editor-layout">
@@ -143,8 +176,12 @@ export default function OfferSchedulePage() {
 
                   {/* Save */}
                   <div>
-                    <button type="submit" className="b-btn b-btn-primary">
-                      Save
+                    <button
+                      type="submit"
+                      className="b-btn b-btn-primary"
+                      disabled={isSubmitting}
+                    >
+                      {isSubmitting ? "Saving…" : "Save"}
                     </button>
                   </div>
 

@@ -4,6 +4,7 @@
  */
 
 import { Form, useNavigate, redirect, useParams } from "react-router";
+import { SUPPORTED_CURRENCIES } from "@promo/shared-types";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
@@ -50,7 +51,7 @@ const CONDITION_TYPE_LABEL: Record<ConditionType, string> = {
   cart_value_multiplier:  "Condición del valor escalonado",
 };
 
-const CURRENCIES = ["AFN","AUD","AWG","BBD","BZD","CAD","CNY","DJF","EUR","FKP","GBP","HKD","JPY","MXN","USD"];
+const CURRENCIES = SUPPORTED_CURRENCIES;
 
 // ─── Local icons (only used within this file) ─────────────────────────────────
 function IChevDown() { return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>; }

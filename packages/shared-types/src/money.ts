@@ -39,3 +39,13 @@ export const ZERO_DECIMAL_CURRENCIES = new Set([
 export function getCurrencyDecimals(currencyCode: string): number {
   return ZERO_DECIMAL_CURRENCIES.has(currencyCode.toUpperCase()) ? 0 : 2;
 }
+
+/**
+ * Currency codes supported in the promo engine UI for per-currency threshold overrides.
+ * Single source of truth — import from @promo/shared-types instead of duplicating.
+ */
+export const SUPPORTED_CURRENCIES = [
+  "AFN","AUD","AWG","BBD","BZD","CAD","CNY","DJF","EUR","FKP",
+  "GBP","HKD","JPY","MXN","USD",
+] as const;
+export type SupportedCurrency = typeof SUPPORTED_CURRENCIES[number];

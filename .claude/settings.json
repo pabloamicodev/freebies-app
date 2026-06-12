@@ -1,7 +1,22 @@
 {
   "permissions": {
     "allow": [
-      "mcp__codegraph__codegraph_explore"
+      "mcp__codegraph__codegraph_explore",
+      "Bash(cd \"c:\\\\Users\\\\pol\\\\Desktop\\\\freebies-app\" && ls -la \"apps/shopify-admin/app/routes/app.offers.\\\\$id.rewards.tsx\" 2>&1 || find \"apps/shopify-admin/app/routes/\" -name \"*rewards*\")",
+      "Read(//c/Users/pol/Desktop/freebies-app/apps/shopify-admin/app/routes/**)",
+      "Bash(*)",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "MultiEdit(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "LS(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "TodoWrite(*)",
+      "mcp__*",
+      "PowerShell(*)"
     ]
   }
 }

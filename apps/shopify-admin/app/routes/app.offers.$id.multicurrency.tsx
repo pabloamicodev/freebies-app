@@ -5,7 +5,7 @@
  * Accessible from the offer detail page → "Multi-Currency" tab.
  */
 
-import { useLoaderData, Form, Link } from "react-router";
+import { useLoaderData, Form, Link, useActionData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, offerConditions } from "@promo/db";
@@ -98,18 +98,23 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     .where(and(eq(offerConditions.offerId, offerId), eq(offerConditions.conditionType, "cart_value")))
     .limit(1);
 
-  if (existing[0]) {
-    const currentValue = existing[0].value as Record<string, unknown>;
-    await db.update(offerConditions)
-      .set({ value: { ...currentValue, currencyOverrides: overrides, fixedAmountOverrides: fixedOverrides }, updatedAt: new Date() })
-      .where(eq(offerConditions.id, existing[0].id));
+  if (!existing[0]) {
+    return { error: "No cart value condition found. Add a Cart Value condition on the Conditions page first." };
   }
+
+  const currentValue = existing[0].value as Record<string, unknown>;
+  await db.update(offerConditions)
+    .set({ value: { ...currentValue, currencyOverrides: overrides, fixedAmountOverrides: fixedOverrides }, updatedAt: new Date() })
+    .where(eq(offerConditions.id, existing[0].id));
 
   return { success: true };
 };
 
 export default function MultiCurrencyPage() {
   const { offer, markets, currencyOverrides, baseThresholdCents, baseCurrency } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
+  const navigation = useNavigation();
+  const isSubmitting = navigation.state !== "idle";
 
   if (!offer) {
     return (
@@ -137,6 +142,24 @@ export default function MultiCurrencyPage() {
           <span className="b-badge b-badge-gray">{offer.internalName}</span>
         </div>
       </div>
+
+      {/* Action feedback */}
+      {actionData && "error" in actionData && actionData.error && (
+        <div className="b-banner b-banner-red b-mb-4">
+          <span className="b-banner-icon">✕</span>
+          <div className="b-banner-body">
+            <p className="b-banner-text" style={{ margin: 0 }}>{actionData.error}</p>
+          </div>
+        </div>
+      )}
+      {actionData && "success" in actionData && actionData.success && (
+        <div className="b-banner b-banner-green b-mb-4">
+          <span className="b-banner-icon">✓</span>
+          <div className="b-banner-body">
+            <p className="b-banner-text" style={{ margin: 0 }}>Currency overrides saved.</p>
+          </div>
+        </div>
+      )}
 
       {/* Info Banner */}
       <div className="b-banner">
@@ -249,8 +272,12 @@ export default function MultiCurrencyPage() {
                 </div>
 
                 <div className="b-editor-footer">
-                  <button type="submit" className="b-btn b-btn-primary">
-                    Save Overrides
+                  <button
+                    type="submit"
+                    className="b-btn b-btn-primary"
+                    disabled={isSubmitting}
+                  >
+                    {isSubmitting ? "Saving…" : "Save Overrides"}
                   </button>
                 </div>
               </Form>

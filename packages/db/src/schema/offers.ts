@@ -1,6 +1,6 @@
 import {
   pgTable, pgEnum, uuid, text, integer, boolean,
-  timestamp, jsonb, unique,
+  timestamp, jsonb, unique, index,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { shops } from "./shops";
@@ -60,7 +60,13 @@ export const offers = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [unique("offers_shop_internal_name").on(t.shopId, t.internalName)],
+  (t) => [
+    unique("offers_shop_internal_name").on(t.shopId, t.internalName),
+    // Hot path: evaluator and admin list both filter by shopId+status
+    index("offers_shop_status_idx").on(t.shopId, t.status),
+    // Hot path: evaluator sorts by priority to pick winning offer
+    index("offers_shop_priority_idx").on(t.shopId, t.priority),
+  ],
 );
 
 export type Offer = typeof offers.$inferSelect;
@@ -81,57 +87,76 @@ export const offerVersions = pgTable(
     createdBy: text("created_by"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [unique("offer_versions_offer_version").on(t.offerId, t.versionNumber)],
+  (t) => [
+    unique("offer_versions_offer_version").on(t.offerId, t.versionNumber),
+    index("offer_versions_offer_id_idx").on(t.offerId),
+  ],
 );
 
 export type OfferVersion = typeof offerVersions.$inferSelect;
 
-export const offerConditions = pgTable("offer_conditions", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  shopId: uuid("shop_id")
-    .notNull()
-    .references(() => shops.id, { onDelete: "cascade" }),
-  offerId: uuid("offer_id")
-    .notNull()
-    .references(() => offers.id, { onDelete: "cascade" }),
-  scope: conditionScopeEnum("scope").notNull(),
-  conditionType: text("condition_type").notNull(),
-  operator: conditionOperatorEnum("operator").notNull(),
-  /** Condition threshold / target — JSONB for flexibility. */
-  value: jsonb("value").notNull(),
-  sortOrder: integer("sort_order").notNull().default(0),
-  isEnabled: boolean("is_enabled").notNull().default(true),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const offerConditions = pgTable(
+  "offer_conditions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    shopId: uuid("shop_id")
+      .notNull()
+      .references(() => shops.id, { onDelete: "cascade" }),
+    offerId: uuid("offer_id")
+      .notNull()
+      .references(() => offers.id, { onDelete: "cascade" }),
+    scope: conditionScopeEnum("scope").notNull(),
+    conditionType: text("condition_type").notNull(),
+    operator: conditionOperatorEnum("operator").notNull(),
+    /** Condition threshold / target — JSONB for flexibility. */
+    value: jsonb("value").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    isEnabled: boolean("is_enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Every condition lookup is by offerId — critical for evaluator hot path
+    index("offer_conditions_offer_id_idx").on(t.offerId),
+    index("offer_conditions_shop_id_idx").on(t.shopId),
+  ],
+);
 
 export type OfferCondition = typeof offerConditions.$inferSelect;
 export type NewOfferCondition = typeof offerConditions.$inferInsert;
 
-export const offerRewards = pgTable("offer_rewards", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  shopId: uuid("shop_id")
-    .notNull()
-    .references(() => shops.id, { onDelete: "cascade" }),
-  offerId: uuid("offer_id")
-    .notNull()
-    .references(() => offers.id, { onDelete: "cascade" }),
-  rewardType: rewardTypeEnum("reward_type").notNull(),
-  discountType: discountTypeEnum("discount_type").notNull(),
-  /** Discount value — JSONB to support per-currency fixed amounts. */
-  value: jsonb("value").notNull(),
-  /** Target — variant IDs, product IDs, collection IDs. */
-  target: jsonb("target").notNull(),
-  quantity: integer("quantity"),
-  isAutoAdd: boolean("is_auto_add").notNull().default(false),
-  isCustomerSelectable: boolean("is_customer_selectable").notNull().default(false),
-  /** "track_product" | "track_variant" */
-  trackMode: text("track_mode").notNull().default("product"),
-  sortOrder: integer("sort_order").notNull().default(0),
-  label: text("label"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const offerRewards = pgTable(
+  "offer_rewards",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    shopId: uuid("shop_id")
+      .notNull()
+      .references(() => shops.id, { onDelete: "cascade" }),
+    offerId: uuid("offer_id")
+      .notNull()
+      .references(() => offers.id, { onDelete: "cascade" }),
+    rewardType: rewardTypeEnum("reward_type").notNull(),
+    discountType: discountTypeEnum("discount_type").notNull(),
+    /** Discount value — JSONB to support per-currency fixed amounts. */
+    value: jsonb("value").notNull(),
+    /** Target — variant IDs, product IDs, collection IDs. */
+    target: jsonb("target").notNull(),
+    quantity: integer("quantity"),
+    isAutoAdd: boolean("is_auto_add").notNull().default(false),
+    isCustomerSelectable: boolean("is_customer_selectable").notNull().default(false),
+    /** "track_product" | "track_variant" */
+    trackMode: text("track_mode").notNull().default("product"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    label: text("label"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Every reward lookup is by offerId — needed for publish guard + evaluator
+    index("offer_rewards_offer_id_idx").on(t.offerId),
+    index("offer_rewards_shop_id_idx").on(t.shopId),
+  ],
+);
 
 export type OfferReward = typeof offerRewards.$inferSelect;
 export type NewOfferReward = typeof offerRewards.$inferInsert;

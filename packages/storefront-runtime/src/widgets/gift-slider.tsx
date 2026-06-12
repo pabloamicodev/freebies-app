@@ -1,5 +1,7 @@
+// NOTE: This file uses Preact JSX (class= not className=, style strings not objects).
+// @jsxImportSource preact is required — do not replace with React imports.
 /** @jsxImportSource preact */
-import { useState, useEffect, useCallback } from "preact/hooks";
+import { useState, useEffect } from "preact/hooks";
 import { h, Fragment } from "preact";
 import { render } from "preact";
 import { on, emit, PromoEvents, publishAnalytics } from "../event-bus.js";
