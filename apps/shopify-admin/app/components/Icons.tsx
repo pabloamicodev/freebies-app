@@ -80,6 +80,15 @@ export function IconTrash() {
   );
 }
 
+export function IconArchive() {
+  return (
+    <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor" focusable="false" aria-hidden="true">
+      <path d="M2.5 3A1.5 1.5 0 0 0 1 4.5v1A1.5 1.5 0 0 0 2.5 7h15A1.5 1.5 0 0 0 19 5.5v-1A1.5 1.5 0 0 0 17.5 3h-15Z"/>
+      <path fillRule="evenodd" d="M3 8.5h14v5.75A2.75 2.75 0 0 1 14.25 17h-8.5A2.75 2.75 0 0 1 3 14.25V8.5Zm4.25 2a.75.75 0 0 0 0 1.5h5.5a.75.75 0 0 0 0-1.5h-5.5Z" clipRule="evenodd"/>
+    </svg>
+  );
+}
+
 /* ── Status / Feedback ──────────────────────────────────── */
 
 export function IconCheck() {

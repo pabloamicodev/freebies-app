@@ -273,11 +273,11 @@ export default function NewBundleOfferPage() {
     <div className="b-page">
 
       {/* ── Header ── */}
-      <div style={{ marginBottom: 20 }}>
+      <div style={{ marginBottom: 28 }}>
         <button
           type="button"
           className="b-btn-plain b-text-sm"
-          style={{ display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 12 }}
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 14 }}
           onClick={() => void navigate("/app/offers")}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -285,7 +285,16 @@ export default function NewBundleOfferPage() {
           </svg>
           All Offers
         </button>
-        <h1 className="b-page-title">{pageTitle}</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 14, background: "var(--bundle-grad)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 4px 14px rgba(13,148,136,0.28)" }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="17"/><line x1="9.5" y1="14.5" x2="14.5" y2="14.5"/></svg>
+          </div>
+          <div>
+            <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, color: "var(--text)", lineHeight: 1.2 }}>{pageTitle}</h1>
+            <div style={{ fontSize: 12, color: "var(--text-sub)", marginTop: 2 }}>Configure your bundle offer</div>
+          </div>
+          <span style={{ marginLeft: "auto", background: "rgba(13,148,136,0.1)", color: "var(--bundle-color)", border: "1.5px solid rgba(13,148,136,0.2)", borderRadius: 20, fontSize: 11, fontWeight: 700, padding: "4px 12px", letterSpacing: "0.2px" }}>Bundle</span>
+        </div>
       </div>
 
       <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
@@ -312,8 +321,12 @@ export default function NewBundleOfferPage() {
             {bundleTypeFromSlug === "classic" && (
               <>
                 {/* Bundle information */}
-                <div className="b-card">
-                  <div className="b-card-header">Bundle information</div>
+                <div className="b-card" style={{ borderTop: "3px solid var(--bundle-color)" }}>
+                  <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
+                    <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--bundle-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>1</div>
+                    <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Bundle information</span>
+                    <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(13,148,136,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>1</span>
+                  </div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div>
                       <label className="b-label" htmlFor="internalName">Bundle name</label>
@@ -358,8 +371,12 @@ export default function NewBundleOfferPage() {
                 </div>
 
                 {/* Seleccionar paquete */}
-                <div className="b-card">
-                  <div className="b-card-header">Bundle products</div>
+                <div className="b-card" style={{ borderTop: "3px solid var(--bundle-color)" }}>
+                  <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
+                    <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--bundle-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>2</div>
+                    <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Bundle products</span>
+                    <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(13,148,136,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>2</span>
+                  </div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div>
                       <label className="b-label">Bundle item level</label>
@@ -368,7 +385,7 @@ export default function NewBundleOfferPage() {
                           <input type="radio" name="productLevel" value="product"
                             checked={productLevel === "product"}
                             onChange={() => setProductLevel("product")}
-                            style={{ accentColor: "var(--blue)", width: 15, height: 15 }} />
+                            style={{ accentColor: "var(--bundle-color)", width: 15, height: 15 }} />
                           <div>
                             <div className="b-checkbox-label">Product level</div>
                             <div className="b-checkbox-help">Each product counts as a bundle item</div>
@@ -378,7 +395,7 @@ export default function NewBundleOfferPage() {
                           <input type="radio" name="productLevel" value="variant"
                             checked={productLevel === "variant"}
                             onChange={() => setProductLevel("variant")}
-                            style={{ accentColor: "var(--blue)", width: 15, height: 15 }} />
+                            style={{ accentColor: "var(--bundle-color)", width: 15, height: 15 }} />
                           <div>
                             <div className="b-checkbox-label">Variant level</div>
                             <div className="b-checkbox-help">Each variant counts as a bundle item</div>
@@ -400,8 +417,12 @@ export default function NewBundleOfferPage() {
                 </div>
 
                 {/* Bundle discount */}
-                <div className="b-card">
-                  <div className="b-card-header">Bundle discount</div>
+                <div className="b-card" style={{ borderTop: "3px solid var(--bundle-color)" }}>
+                  <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
+                    <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--bundle-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>3</div>
+                    <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Bundle discount</span>
+                    <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(13,148,136,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>3</span>
+                  </div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <div>
@@ -426,7 +447,7 @@ export default function NewBundleOfferPage() {
                       </div>
                     </div>
                     <div>
-                      <span className="b-help" style={{ color: "var(--blue)", cursor: "pointer" }}>
+                      <span className="b-help" style={{ color: "var(--bundle-color)", cursor: "pointer" }}>
                         Add: Shipping discount
                       </span>
                     </div>
@@ -535,12 +556,12 @@ export default function NewBundleOfferPage() {
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input type="radio" name="mixMode" value="one_list"
-                          style={{ accentColor: "var(--blue)", width: 15, height: 15 }} />
+                          style={{ accentColor: "var(--bundle-color)", width: 15, height: 15 }} />
                         <span className="b-checkbox-label">Mix items from a product list</span>
                       </label>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input type="radio" name="mixMode" value="per_item" defaultChecked
-                          style={{ accentColor: "var(--blue)", width: 15, height: 15 }} />
+                          style={{ accentColor: "var(--bundle-color)", width: 15, height: 15 }} />
                         <span className="b-checkbox-label">Each Mix item contains a different product list.</span>
                       </label>
                     </div>
@@ -551,9 +572,9 @@ export default function NewBundleOfferPage() {
                           <span>Mix item {i + 1}</span>
                           {mixItems.length > 1 && (
                             <button type="button"
-                              style={{ background: "none", border: "none", cursor: "pointer", color: "#ff4d4d", fontSize: 16, lineHeight: 1 }}
+                              className="b-modal-close" style={{ width: 22, height: 22 }}
                               onClick={() => setMixItems(mixItems.filter((_, idx) => idx !== i))}>
-                              ×
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                             </button>
                           )}
                         </div>
@@ -626,9 +647,9 @@ export default function NewBundleOfferPage() {
                         <div className="b-card-header" style={{ fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                           <span>Tier {i + 1}</span>
                           <button type="button"
-                            style={{ background: "none", border: "none", cursor: "pointer", color: "#ff4d4d", fontSize: 16, lineHeight: 1 }}
+                            className="b-modal-close" style={{ width: 22, height: 22 }}
                             onClick={() => setTiers(tiers.filter((_, idx) => idx !== i))}>
-                            ×
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                           </button>
                         </div>
                         <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -689,7 +710,7 @@ export default function NewBundleOfferPage() {
                             </div>
                           </div>
                           <div>
-                            <span className="b-help" style={{ color: "var(--blue)", cursor: "pointer" }}>
+                            <span className="b-help" style={{ color: "var(--bundle-color)", cursor: "pointer" }}>
                               Add: Shipping discount
                             </span>
                           </div>
@@ -794,11 +815,11 @@ export default function NewBundleOfferPage() {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <label
                     style={{
-                      border: `2px solid ${layoutMode === "one_step_per_page" ? "var(--blue)" : "var(--border)"}`,
+                      border: `2px solid ${layoutMode === "one_step_per_page" ? "var(--bundle-color)" : "var(--border)"}`,
                       borderRadius: "var(--r)",
                       padding: 16,
                       cursor: "pointer",
-                      background: layoutMode === "one_step_per_page" ? "var(--blue-light, #eef2ff)" : "var(--bg-card)",
+                      background: layoutMode === "one_step_per_page" ? "rgba(13,148,136,0.06)" : "var(--bg-card)",
                       display: "flex",
                       flexDirection: "column",
                       gap: 10,
@@ -820,11 +841,11 @@ export default function NewBundleOfferPage() {
 
                   <label
                     style={{
-                      border: `2px solid ${layoutMode === "all_steps_one_page" ? "var(--blue)" : "var(--border)"}`,
+                      border: `2px solid ${layoutMode === "all_steps_one_page" ? "var(--bundle-color)" : "var(--border)"}`,
                       borderRadius: "var(--r)",
                       padding: 16,
                       cursor: "pointer",
-                      background: layoutMode === "all_steps_one_page" ? "var(--blue-light, #eef2ff)" : "var(--bg-card)",
+                      background: layoutMode === "all_steps_one_page" ? "rgba(13,148,136,0.06)" : "var(--bg-card)",
                       display: "flex",
                       flexDirection: "column",
                       gap: 10,
@@ -861,7 +882,7 @@ export default function NewBundleOfferPage() {
                       Recommended image specs: 1200x240px, under 1 MB, supported formats: gif, jpg, png.
                     </div>
                     <div>
-                      <span style={{ fontSize: 13, color: "var(--blue)", cursor: "pointer" }}>Transparent banner</span>
+                      <span style={{ fontSize: 13, color: "var(--bundle-color)", cursor: "pointer" }}>Transparent banner</span>
                     </div>
                   </div>
                 </div>
@@ -990,17 +1011,16 @@ export default function NewBundleOfferPage() {
         </div>
 
         {/* ── Footer ── */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, paddingBottom: 32 }}>
+        <div style={{ position: "sticky", bottom: 0, zIndex: 10, display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, padding: "14px 0", background: "rgba(250,249,247,0.9)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", borderTop: "1px solid var(--border)" }}>
           <button type="button" className="b-btn b-btn-secondary"
             onClick={() => void navigate("/app/offers")}>
             Cancel
           </button>
-          <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary"
-            style={{ background: "var(--bg-hover)", border: "1px solid var(--border)" }}>
+          <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary">
             Save draft
           </button>
-          <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary">
-            Publish
+          <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary" style={{ background: "var(--bundle-grad)", boxShadow: "0 4px 12px rgba(13,148,136,0.3)" }}>
+            Publish offer
           </button>
         </div>
 

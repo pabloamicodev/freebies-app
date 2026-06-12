@@ -230,11 +230,11 @@ export default function NewUpsellOfferPage() {
     <div className="b-page">
 
       {/* ── Header ── */}
-      <div style={{ marginBottom: 20 }}>
+      <div style={{ marginBottom: 28 }}>
         <button
           type="button"
           className="b-btn-plain b-text-sm"
-          style={{ display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 12 }}
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 14 }}
           onClick={() => void navigate("/app/offers")}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -242,7 +242,16 @@ export default function NewUpsellOfferPage() {
           </svg>
           All Offers
         </button>
-        <h1 className="b-page-title">{pageTitle}</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 14, background: "var(--upsell-grad)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 4px 14px rgba(124,58,237,0.28)" }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+          </div>
+          <div>
+            <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, color: "var(--text)", lineHeight: 1.2 }}>{pageTitle}</h1>
+            <div style={{ fontSize: 12, color: "var(--text-sub)", marginTop: 2 }}>Configure your upsell offer</div>
+          </div>
+          <span style={{ marginLeft: "auto", background: "rgba(124,58,237,0.1)", color: "var(--upsell-color)", border: "1.5px solid rgba(124,58,237,0.2)", borderRadius: 20, fontSize: 11, fontWeight: 700, padding: "4px 12px", letterSpacing: "0.2px" }}>Upsell</span>
+        </div>
       </div>
 
       {/* ── Info banner ── */}
@@ -257,7 +266,7 @@ export default function NewUpsellOfferPage() {
               Quick tour: How to create an upsell
             </div>
             <div style={{ fontSize: 13, color: "var(--text-sub)" }}>
-              <a href="#" style={{ color: "var(--blue)", textDecoration: "underline" }}>
+              <a href="#" style={{ color: "var(--upsell-color)", textDecoration: "underline" }}>
                 Get familiar with our tour or learn more in our onboarding guide.
               </a>
             </div>
@@ -289,8 +298,12 @@ export default function NewUpsellOfferPage() {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
             {/* ── Card: Información de venta adicional ── */}
-            <div className="b-card">
-              <div className="b-card-header">Upsell information</div>
+            <div className="b-card" style={{ borderTop: "3px solid var(--upsell-color)" }}>
+              <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
+                <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--upsell-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>1</div>
+                <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Upsell information</span>
+                <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(124,58,237,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>1</span>
+              </div>
               <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <div>
                   <label className="b-label" htmlFor="internalName">Upsell name</label>
@@ -347,8 +360,12 @@ export default function NewUpsellOfferPage() {
             </div>
 
             {/* ── Card: Upsell trigger ── */}
-            <div className="b-card">
-              <div className="b-card-header">Upsell trigger</div>
+            <div className="b-card" style={{ borderTop: "3px solid var(--upsell-color)" }}>
+              <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
+                <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--upsell-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>2</div>
+                <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Upsell trigger</span>
+                <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(124,58,237,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>2</span>
+              </div>
               <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {isFbt ? (
                   <>
@@ -364,7 +381,7 @@ export default function NewUpsellOfferPage() {
                           type="radio" name="_triggerTypeRadio" value={value}
                           checked={triggerType === value}
                           onChange={() => setTriggerType(value)}
-                          style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
+                          style={{ accentColor: "var(--upsell-color)", width: 15, height: 15 }}
                         />
                         <span style={{ fontSize: 13, color: "var(--text)" }}>{label}</span>
                       </label>
@@ -386,7 +403,7 @@ export default function NewUpsellOfferPage() {
                           type="radio" name="_triggerTypeRadio" value={value}
                           checked={triggerType === value}
                           onChange={() => setTriggerType(value)}
-                          style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
+                          style={{ accentColor: "var(--upsell-color)", width: 15, height: 15 }}
                         />
                         <span style={{ fontSize: 13, color: "var(--text)" }}>{label}</span>
                       </label>
@@ -401,7 +418,7 @@ export default function NewUpsellOfferPage() {
 
             {/* ── Agregar subcondición (dashed) ── */}
             <div className="b-card" style={{ background: "var(--bg)", border: "1.5px dashed var(--border)" }}>
-              <div className="b-card-body" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px 16px", color: "var(--blue)", cursor: "pointer", fontWeight: 500, fontSize: 14 }}>
+              <div className="b-card-body" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px 16px", color: "var(--upsell-color)", cursor: "pointer", fontWeight: 500, fontSize: 14 }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
                 </svg>
@@ -410,8 +427,12 @@ export default function NewUpsellOfferPage() {
             </div>
 
             {/* ── Card: Upsell method ── */}
-            <div className="b-card">
-              <div className="b-card-header">Upsell method</div>
+            <div className="b-card" style={{ borderTop: "3px solid var(--upsell-color)" }}>
+              <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
+                <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--upsell-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>3</div>
+                <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Upsell method</span>
+                <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(124,58,237,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>3</span>
+              </div>
               <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
                 {/* FBT: Widget type selector */}
@@ -428,11 +449,11 @@ export default function NewUpsellOfferPage() {
                           type="button"
                           onClick={() => setWidgetType(value)}
                           style={{
-                            border: `2px solid ${widgetType === value ? "var(--blue)" : "var(--border)"}`,
-                            borderRadius: 8, padding: "14px 12px", background: widgetType === value ? "var(--blue-bg, #e8f0fe)" : "var(--bg)",
+                            border: `2px solid ${widgetType === value ? "var(--upsell-color)" : "var(--border)"}`,
+                            borderRadius: 8, padding: "14px 12px", background: widgetType === value ? "rgba(124,58,237,0.06)" : "var(--bg)",
                             cursor: "pointer", textAlign: "center", fontSize: 13,
                             fontWeight: widgetType === value ? 600 : 400,
-                            color: widgetType === value ? "var(--blue)" : "var(--text)",
+                            color: widgetType === value ? "var(--upsell-color)" : "var(--text)",
                           }}
                         >
                           {label}
@@ -456,11 +477,11 @@ export default function NewUpsellOfferPage() {
                           style={{
                             padding: "8px 16px", fontSize: 13,
                             fontWeight: upsellMethod === m ? 600 : 400,
-                            color: upsellMethod === m ? "var(--blue)" : "var(--text-sub)",
-                            borderBottom: upsellMethod === m ? "2px solid var(--blue)" : "2px solid transparent",
+                            color: upsellMethod === m ? "var(--upsell-color)" : "var(--text-sub)",
+                            borderBottom: upsellMethod === m ? "2px solid var(--upsell-color)" : "2px solid transparent",
                             background: "none", border: "none",
                             borderBottomWidth: 2, borderBottomStyle: "solid",
-                            borderBottomColor: upsellMethod === m ? "var(--blue)" : "transparent",
+                            borderBottomColor: upsellMethod === m ? "var(--upsell-color)" : "transparent",
                             cursor: "pointer",
                           }}
                         >
@@ -514,7 +535,7 @@ export default function NewUpsellOfferPage() {
                             type="radio" name="_allowCustomerQtyRadio"
                             checked={allowCustomerQty}
                             onChange={() => setAllowCustomerQty(true)}
-                            style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
+                            style={{ accentColor: "var(--upsell-color)", width: 15, height: 15 }}
                           />
                           <div>
                             <div className="b-checkbox-label">Allow customers to change quantity</div>
@@ -526,7 +547,7 @@ export default function NewUpsellOfferPage() {
                             type="radio" name="_allowCustomerQtyRadio"
                             checked={!allowCustomerQty}
                             onChange={() => setAllowCustomerQty(false)}
-                            style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
+                            style={{ accentColor: "var(--upsell-color)", width: 15, height: 15 }}
                           />
                           <div>
                             <div className="b-checkbox-label">Fixed quantity</div>
@@ -569,7 +590,7 @@ export default function NewUpsellOfferPage() {
                         </div>
                       </div>
                       <div>
-                        <a href="#" style={{ fontSize: 13, color: "var(--blue)", textDecoration: "none" }}>
+                        <a href="#" style={{ fontSize: 13, color: "var(--upsell-color)", textDecoration: "none" }}>
                           + Add: Shipping discount
                         </a>
                       </div>
@@ -645,7 +666,7 @@ export default function NewUpsellOfferPage() {
                         </div>
                       </div>
                       <div>
-                        <a href="#" style={{ fontSize: 13, color: "var(--blue)", textDecoration: "none" }}>
+                        <a href="#" style={{ fontSize: 13, color: "var(--upsell-color)", textDecoration: "none" }}>
                           + Add: Shipping discount
                         </a>
                       </div>
@@ -686,7 +707,7 @@ export default function NewUpsellOfferPage() {
                     </div>
                   </div>
                   <div>
-                    <a href="#" style={{ fontSize: 13, color: "var(--blue)", textDecoration: "none" }}>
+                    <a href="#" style={{ fontSize: 13, color: "var(--upsell-color)", textDecoration: "none" }}>
                       + Add: Shipping discount
                     </a>
                   </div>
@@ -819,6 +840,7 @@ export default function NewUpsellOfferPage() {
 
           {/* ── Right column ── */}
           <OfferSummarySidebar
+            accentColor="var(--upsell-color)"
             helpCard={null}
             aboveSummary={isFbt ? (
               <div className="b-card">
@@ -853,7 +875,7 @@ export default function NewUpsellOfferPage() {
                       )}
                     </div>
                     {discountEnabled && (
-                      <div style={{ fontSize: 12, color: "var(--blue)", fontWeight: 500 }}>
+                      <div style={{ fontSize: 12, color: "var(--upsell-color)", fontWeight: 500 }}>
                         {discountType === "percentage" ? `${discountValue}% OFF` : `$${discountValue} OFF`}
                       </div>
                     )}
@@ -886,7 +908,7 @@ export default function NewUpsellOfferPage() {
         </div>
 
         {/* ── Footer ── */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, paddingBottom: 32 }}>
+        <div style={{ position: "sticky", bottom: 0, zIndex: 10, display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, padding: "14px 0", background: "rgba(250,249,247,0.9)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", borderTop: "1px solid var(--border)" }}>
           <button
             type="button" className="b-btn b-btn-secondary"
             onClick={() => void navigate("/app/offers")}
@@ -895,12 +917,11 @@ export default function NewUpsellOfferPage() {
           </button>
           <button
             type="submit" name="intent" value="draft" className="b-btn b-btn-secondary"
-            style={{ background: "var(--bg-hover)", border: "1px solid var(--border)" }}
           >
             Save draft
           </button>
-          <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary">
-            Publish
+          <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary" style={{ background: "var(--upsell-grad)", boxShadow: "0 4px 12px rgba(124,58,237,0.3)" }}>
+            Publish offer
           </button>
         </div>
 

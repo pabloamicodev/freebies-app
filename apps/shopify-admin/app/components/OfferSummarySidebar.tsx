@@ -28,21 +28,20 @@ export interface OfferSummarySidebarProps {
   aboveSummary?: React.ReactNode;
   belowSummary?: React.ReactNode;
   helpCard?: React.ReactNode | null;
+  accentColor?: string;
 }
 
 // ─── Step dot ────────────────────────────────────────────────────────────────
 
-function StepDot({ checked, index }: { checked: boolean; index: number }) {
+function StepDot({ checked, index, accentColor }: { checked: boolean; index: number; accentColor: string }) {
   return (
     <div style={{
       width: 26, height: 26, borderRadius: "50%", flexShrink: 0, zIndex: 1,
-      background: checked
-        ? "linear-gradient(145deg, #059669, #047857)"
-        : "var(--bg-card, #fff)",
+      background: checked ? accentColor : "var(--bg-card, #fff)",
       border: `2px solid ${checked ? "transparent" : "var(--border, #e1e3e5)"}`,
       display: "flex", alignItems: "center", justifyContent: "center",
-      transition: "all 0.2s ease",
-      boxShadow: checked ? "0 2px 6px rgba(5,150,105,0.35)" : "0 1px 2px rgba(0,0,0,0.06)",
+      transition: "all 0.24s ease",
+      boxShadow: checked ? `0 2px 6px ${accentColor}55` : "0 1px 2px rgba(0,0,0,0.06)",
     }}>
       {checked
         ? <IconCheck />
@@ -120,6 +119,7 @@ export function OfferSummarySidebar({
   aboveSummary,
   belowSummary,
   helpCard,
+  accentColor = "#059669",
 }: OfferSummarySidebarProps) {
   const enrichedSteps = steps.map((step, i) => {
     if (i === 0 && (title || startDate)) {
@@ -174,9 +174,7 @@ export function OfferSummarySidebar({
         <div style={{ height: 3, background: "var(--border-light)" }}>
           <div style={{
             height: "100%", width: `${progress}%`,
-            background: isComplete
-              ? "linear-gradient(90deg, #059669, #34d399)"
-              : "linear-gradient(90deg, #2563eb, #60a5fa)",
+            background: accentColor,
             transition: "width 0.4s ease",
             borderRadius: "0 2px 2px 0",
           }} />
@@ -202,7 +200,7 @@ export function OfferSummarySidebar({
                 marginBottom: i < enrichedSteps.length - 1 ? 20 : 0,
               }}
             >
-              <StepDot checked={step.checked} index={i} />
+              <StepDot checked={step.checked} index={i} accentColor={accentColor} />
               <div style={{ flex: 1, paddingTop: 3, minWidth: 0 }}>
                 <div style={{
                   fontSize: 13, fontWeight: step.checked ? 600 : 500,

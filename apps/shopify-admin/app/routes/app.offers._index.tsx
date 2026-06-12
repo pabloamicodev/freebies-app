@@ -1,29 +1,37 @@
 import { useLoaderData, useNavigate, useSearchParams, useFetcher } from "react-router";
 import { useState } from "react";
-import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
-import { offers } from "@promo/db";
+import {
+  analyticsEvents,
+  appSettings,
+  bundleDefinitions,
+  cartMutationLogs,
+  giftCloneProducts,
+  offers,
+  widgets,
+} from "@promo/db";
 import { eq, and, like, desc } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
-  GiftIcon, IconCopy, IconTrash, IconEye, IconSearch, IconFilter,
+  IconCopy, IconTrash, IconArchive, IconEye, IconSearch, IconFilter,
   IconChevronDown, SortIcon,
 } from "../components/Icons.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { OfferToggle } from "../components/BogosSwitch.js";
+import { getShopContext } from "../lib/shop-context.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 type OfferStatus = "draft" | "active" | "paused" | "scheduled" | "expired" | "archived";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
+  if (!shopId) return { offers: [] };
+
   const url = new URL(request.url);
   const statusFilter = url.searchParams.get("status") as OfferStatus | "all" | null;
   const search = url.searchParams.get("q") ?? "";
 
-  const conditions = [];
+  const conditions = [eq(offers.shopId, shopId)];
   if (statusFilter && statusFilter !== "all") conditions.push(eq(offers.status, statusFilter));
   if (search) conditions.push(like(offers.internalName, `%${search}%`));
 
@@ -53,33 +61,51 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
+  if (!shopId) throw new Response("Shop not found", { status: 404 });
+
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
   const offerIds = formData.getAll("offerIds[]") as string[];
 
+  if (request.method.toUpperCase() === "DELETE" || intent === "delete") {
+    const offerId = formData.get("offerId") as string | null;
+    if (!offerId) throw new Response("Missing offerId", { status: 400 });
+
+    await db.transaction(async (tx) => {
+      await tx.delete(analyticsEvents).where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.offerId, offerId)));
+      await tx.delete(cartMutationLogs).where(and(eq(cartMutationLogs.shopId, shopId), eq(cartMutationLogs.offerId, offerId)));
+      await tx.delete(giftCloneProducts).where(and(eq(giftCloneProducts.shopId, shopId), eq(giftCloneProducts.offerId, offerId)));
+      await tx.delete(appSettings).where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, `widget.market_overrides.${offerId}`)));
+      await tx.delete(widgets).where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId)));
+      await tx.delete(bundleDefinitions).where(and(eq(bundleDefinitions.shopId, shopId), eq(bundleDefinitions.offerId, offerId)));
+      await tx.delete(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+    });
+
+    return null;
+  }
+
   switch (intent) {
     case "bulk_pause":
       for (const id of offerIds) {
-        await db.update(offers).set({ status: "paused", updatedAt: new Date() }).where(eq(offers.id, id));
+        await db.update(offers).set({ status: "paused", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, id)));
       }
       break;
     case "bulk_activate":
       for (const id of offerIds) {
-        await db.update(offers).set({ status: "active", updatedAt: new Date() }).where(eq(offers.id, id));
+        await db.update(offers).set({ status: "active", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, id)));
       }
       break;
     case "toggle_status": {
       const offerId = formData.get("offerId") as string;
       const currentStatus = formData.get("currentStatus") as string;
       const newStatus = currentStatus === "active" ? "paused" : "active";
-      await db.update(offers).set({ status: newStatus, updatedAt: new Date() }).where(eq(offers.id, offerId));
+      await db.update(offers).set({ status: newStatus, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
       break;
     }
-    case "delete": {
+    case "archive": {
       const offerId = formData.get("offerId") as string;
-      await db.update(offers).set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() }).where(eq(offers.id, offerId));
+      await db.update(offers).set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
       break;
     }
   }
@@ -159,6 +185,40 @@ function DiscountSvg() {
       <line x1="7" y1="7" x2="7.01" y2="7"/>
       <line x1="9" y1="14" x2="15" y2="8"/>
     </svg>
+  );
+}
+
+function TypeIcon({ type }: { type: string }) {
+  return (
+    <div className={`b-offer-icon b-offer-icon-${type}`}>
+      {type === "gift" && (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/>
+          <line x1="12" y1="22" x2="12" y2="7"/>
+          <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
+          <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
+        </svg>
+      )}
+      {type === "bundle" && (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="14" width="20" height="8" rx="2"/>
+          <rect x="4" y="9" width="16" height="6" rx="2"/>
+          <rect x="6" y="4" width="12" height="6" rx="2"/>
+        </svg>
+      )}
+      {type === "upsell" && (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 12h14"/><path d="M12 5l7 7-7 7"/>
+        </svg>
+      )}
+      {(type !== "gift" && type !== "bundle" && type !== "upsell") && (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+          <line x1="7" y1="7" x2="7.01" y2="7"/>
+          <line x1="9" y1="14" x2="15" y2="8"/>
+        </svg>
+      )}
+    </div>
   );
 }
 
@@ -308,8 +368,56 @@ const GIFT_TEMPLATES = [
 ];
 
 /* ══════════════════════════════════════════════════════════
-   MODAL 1 — Choose offer type
+   MODAL 1 — Choose offer type (premium dark catalog)
    ══════════════════════════════════════════════════════════ */
+
+const OFFER_CATALOG = [
+  {
+    value: "gift",
+    name: "Gift offer",
+    tagline: "Reward customers with free products",
+    examples: ["Spend $400 → receive a gift", "Buy 3 products → get 1 free"],
+    accent: "#f59e0b",
+    glow: "rgba(245,158,11,0.18)",
+    iconBg: "rgba(245,158,11,0.12)",
+    iconBorder: "rgba(245,158,11,0.25)",
+    Icon: GiftSvg,
+  },
+  {
+    value: "bundle",
+    name: "Bundle offer",
+    tagline: "Group products into curated sets",
+    examples: ["Buy A + B together with discount", "Classic, Mix & Match, Bundle Page"],
+    accent: "#10b981",
+    glow: "rgba(16,185,129,0.18)",
+    iconBg: "rgba(16,185,129,0.10)",
+    iconBorder: "rgba(16,185,129,0.22)",
+    Icon: BundleSvg,
+  },
+  {
+    value: "upsell",
+    name: "Upsell offer",
+    tagline: "Suggest higher-value alternatives",
+    examples: ["Checkout upsell widget", "Frequently bought together"],
+    accent: "#a78bfa",
+    glow: "rgba(167,139,250,0.18)",
+    iconBg: "rgba(167,139,250,0.10)",
+    iconBorder: "rgba(167,139,250,0.22)",
+    Icon: UpsellSvg,
+  },
+  {
+    value: "discount",
+    name: "Discount offer",
+    tagline: "Volume pricing and cart incentives",
+    examples: ["Buy 2 → 10% off, buy 3 → 30% off", "Cart value discount tiers"],
+    accent: "#f472b6",
+    glow: "rgba(244,114,182,0.18)",
+    iconBg: "rgba(244,114,182,0.10)",
+    iconBorder: "rgba(244,114,182,0.22)",
+    Icon: DiscountSvg,
+  },
+];
+
 function Modal1TypeSelector({
   onClose,
   onSelect,
@@ -317,40 +425,95 @@ function Modal1TypeSelector({
   onClose: () => void;
   onSelect: (type: string) => void;
 }) {
+  const [hoveredType, setHoveredType] = useState<string | null>(null);
+
   return (
     <div className="b-modal-overlay" onClick={onClose}>
-      <div className="b-modal b-modal-sm" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="b-modal"
+        style={{ maxWidth: 580 }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="b-modal-header">
-          <h2 className="b-modal-title">Choose the type of offer</h2>
-          <button className="b-modal-close" onClick={onClose}>×</button>
+          <div>
+            <h2 className="b-modal-title">Create a new offer</h2>
+            <p className="b-modal-subtitle">Choose the promotion type that fits your strategy</p>
+          </div>
+          <button className="b-modal-close" onClick={onClose} aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
         </div>
-        <div className="b-modal-body">
-          <p style={{ textAlign: "center", fontSize: 14, fontWeight: 500, color: "var(--text)", margin: "0 0 16px" }}>
-            Choose a type of offer to start
-          </p>
-          <div className="b-offer-type-list">
-            {OFFER_TYPES_MODAL.map((t) => (
-              <div key={t.value} className="b-offer-type-card">
-                <div className="b-type-icon-wrap">
-                  <t.Icon />
-                </div>
-                <div className="b-offer-type-body">
-                  <p className="b-offer-type-name">{t.name}</p>
-                  <p className="b-offer-type-tag">{t.tag}</p>
-                  <ul className="b-offer-type-bullets">
-                    {t.bullets.map((b) => <li key={b}>{b}</li>)}
-                  </ul>
-                </div>
-                <div className="b-offer-type-action">
-                  <button
-                    className="b-btn b-btn-secondary b-btn-sm"
-                    onClick={() => onSelect(t.value)}
-                  >
-                    Start &gt;
-                  </button>
-                </div>
-              </div>
-            ))}
+
+        <div className="b-modal-body" style={{ padding: "20px 24px 24px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {OFFER_CATALOG.map((type) => {
+              const isHovered = hoveredType === type.value;
+              return (
+                <button
+                  key={type.value}
+                  type="button"
+                  onClick={() => onSelect(type.value)}
+                  onMouseEnter={() => setHoveredType(type.value)}
+                  onMouseLeave={() => setHoveredType(null)}
+                  style={{
+                    background: "var(--bg-card)",
+                    border: `2px solid ${isHovered ? `var(--${type.value}-color)` : "var(--border)"}`,
+                    borderRadius: 14, padding: 0, cursor: "pointer", textAlign: "left",
+                    overflow: "hidden", fontFamily: "inherit",
+                    display: "flex", flexDirection: "column",
+                    transition: "border-color 0.18s, box-shadow 0.22s cubic-bezier(0.34,1.56,0.64,1), transform 0.22s cubic-bezier(0.34,1.56,0.64,1)",
+                    transform: isHovered ? "translateY(-3px)" : "translateY(0)",
+                    boxShadow: isHovered ? "0 8px 24px rgba(28,25,23,0.14), 0 2px 6px rgba(28,25,23,0.08)" : "0 1px 3px rgba(28,25,23,0.06)",
+                  }}
+                >
+                  {/* Gradient illustration band */}
+                  <div style={{
+                    background: `var(--${type.value}-grad)`,
+                    height: 92,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    position: "relative", overflow: "hidden",
+                  }}>
+                    <div style={{ position: "absolute", right: -16, bottom: -16, width: 72, height: 72, borderRadius: "50%", background: "rgba(255,255,255,0.10)", pointerEvents: "none" }} />
+                    <div style={{ position: "absolute", right: 16, top: 10, width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.07)", pointerEvents: "none" }} />
+                    <div style={{
+                      width: 50, height: 50, borderRadius: 13, position: "relative", zIndex: 1,
+                      background: "rgba(255,255,255,0.22)", border: "1.5px solid rgba(255,255,255,0.35)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      boxShadow: "0 4px 12px rgba(0,0,0,0.12)",
+                    }}>
+                      <type.Icon />
+                    </div>
+                  </div>
+
+                  {/* Content */}
+                  <div style={{ padding: "14px 16px 16px", flex: 1, display: "flex", flexDirection: "column" }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)", marginBottom: 3, fontFamily: "var(--font-display)", letterSpacing: "-0.2px" }}>
+                      {type.name}
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5, marginBottom: 10 }}>
+                      {type.tagline}
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
+                      {type.examples.map((ex) => (
+                        <div key={ex} style={{ display: "flex", alignItems: "flex-start", gap: 5 }}>
+                          <div style={{ width: 4, height: 4, borderRadius: "50%", flexShrink: 0, background: `var(--${type.value}-color)`, marginTop: 6 }} />
+                          <span style={{ fontSize: 11.5, color: "var(--text-muted)", lineHeight: 1.5 }}>{ex}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--border-light)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: `var(--${type.value}-color)` }}>Get started</span>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
+                        style={{ color: `var(--${type.value}-color)`, transition: "transform 0.18s", transform: isHovered ? "translateX(2px)" : "translateX(0)" }}>
+                        <path d="M5 12h14"/><path d="M12 5l7 7-7 7"/>
+                      </svg>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -376,7 +539,7 @@ function Modal2GiftWizard({
       <div className="b-modal" onClick={(e) => e.stopPropagation()}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Create gift offer</h2>
-          <button className="b-modal-close" onClick={onClose}>×</button>
+          <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div className="b-modal-body">
           {/* Scratch option */}
@@ -542,7 +705,7 @@ function Modal2BundleWizard({ onClose, onBack }: { onClose: () => void; onBack: 
       <div className="b-modal" onClick={(e) => e.stopPropagation()}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Choose the type of bundle</h2>
-          <button className="b-modal-close" onClick={onClose}>×</button>
+          <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div className="b-modal-body">
           <div className="b-template-grid">
@@ -672,7 +835,7 @@ function Modal2UpsellWizard({ onClose, onBack }: { onClose: () => void; onBack: 
       <div className="b-modal" onClick={(e) => e.stopPropagation()}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Choose the type of offer</h2>
-          <button className="b-modal-close" onClick={onClose}>×</button>
+          <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div className="b-modal-body">
           <div className="b-template-grid">
@@ -810,7 +973,7 @@ function Modal2DiscountWizard({ onClose, onBack }: { onClose: () => void; onBack
       <div className="b-modal" onClick={(e) => e.stopPropagation()}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Create discount offer</h2>
-          <button className="b-modal-close" onClick={onClose}>×</button>
+          <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div className="b-modal-body">
           <div className="b-template-grid">
@@ -848,7 +1011,9 @@ export default function OffersPage() {
   const [bannerVisible, setBannerVisible] = useState(true);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
   const deleteFetcher = useFetcher();
+  const archiveFetcher = useFetcher();
   const bulkFetcher = useFetcher();
 
   // Modal state
@@ -881,6 +1046,25 @@ export default function OffersPage() {
     }
   }
 
+  // Optimistic — IDs currently in-flight
+  const deletingId = deleteFetcher.state !== "idle"
+    ? (deleteFetcher.formData?.get("offerId") as string | null)
+    : null;
+  const archivingId = archiveFetcher.state !== "idle"
+    ? (archiveFetcher.formData?.get("offerId") as string | null)
+    : null;
+
+  // Filter out rows that are being deleted / archived from the visible list
+  const visibleOffers = offerRows.filter((o) => {
+    if (deletingId && o.id === deletingId) return false;
+    if (archivingId && o.id === archivingId && activeTab !== "archived") return false;
+    return true;
+  });
+
+  // Derive names for modal copy
+  const deletingOffer = confirmDeleteId ? offerRows.find((o) => o.id === confirmDeleteId) : null;
+  const archivingOffer = confirmArchiveId ? offerRows.find((o) => o.id === confirmArchiveId) : null;
+
   function confirmDelete(id: string) {
     setConfirmDeleteId(id);
   }
@@ -890,8 +1074,21 @@ export default function OffersPage() {
     const fd = new FormData();
     fd.append("intent", "delete");
     fd.append("offerId", confirmDeleteId);
-    void deleteFetcher.submit(fd, { method: "POST" });
+    void deleteFetcher.submit(fd, { method: "DELETE" });
     setConfirmDeleteId(null);
+  }
+
+  function confirmArchive(id: string) {
+    setConfirmArchiveId(id);
+  }
+
+  function executeArchive() {
+    if (!confirmArchiveId) return;
+    const fd = new FormData();
+    fd.append("intent", "archive");
+    fd.append("offerId", confirmArchiveId);
+    void archiveFetcher.submit(fd, { method: "POST" });
+    setConfirmArchiveId(null);
   }
 
   function bulkAction(intent: "bulk_pause" | "bulk_activate") {
@@ -967,22 +1164,45 @@ export default function OffersPage() {
         </div>
       )}
 
+      {/* ── Archive confirmation dialog ──────────────────────── */}
+      {confirmArchiveId && (
+        <div className="b-modal-overlay" onClick={() => setConfirmArchiveId(null)}>
+          <div className="b-modal b-modal-sm" onClick={(e) => e.stopPropagation()}>
+            <div className="b-modal-header">
+              <h2 className="b-modal-title">Archive offer?</h2>
+              <button className="b-modal-close" onClick={() => setConfirmArchiveId(null)} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+            <div className="b-modal-body">
+              <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0, lineHeight: 1.6 }}>
+                The offer will be archived and hidden from customers. You can restore it later from the archived view.
+                {archivingOffer ? ` Offer: ${archivingOffer.internalName}.` : ""}
+              </p>
+            </div>
+            <div className="b-modal-footer">
+              <button className="b-btn b-btn-secondary" onClick={() => setConfirmArchiveId(null)}>Cancel</button>
+              <button className="b-btn b-btn-secondary" onClick={executeArchive} style={{ borderColor: "#9ca3af" }}>Archive offer</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Delete confirmation dialog ───────────────────────── */}
       {confirmDeleteId && (
         <div className="b-modal-overlay" onClick={() => setConfirmDeleteId(null)}>
-          <div className="b-modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+          <div className="b-modal b-modal-sm" onClick={(e) => e.stopPropagation()}>
             <div className="b-modal-header">
-              <h2 className="b-modal-title">Archive offer?</h2>
-              <button className="b-modal-close" onClick={() => setConfirmDeleteId(null)}>×</button>
+              <h2 className="b-modal-title">Delete offer permanently?</h2>
+              <button className="b-modal-close" onClick={() => setConfirmDeleteId(null)} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </div>
             <div className="b-modal-body">
-              <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0 }}>
-                The offer will be archived and no longer visible to customers. You can restore it later.
+              <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0, lineHeight: 1.6 }}>
+                This will <strong style={{ color: "var(--text)" }}>permanently delete</strong> the offer and all its data. This action cannot be undone.
+                {deletingOffer ? ` Offer: ${deletingOffer.internalName}.` : ""}
               </p>
             </div>
             <div className="b-modal-footer">
               <button className="b-btn b-btn-secondary" onClick={() => setConfirmDeleteId(null)}>Cancel</button>
-              <button className="b-btn b-btn-danger" onClick={executeDelete}>Archive offer</button>
+              <button className="b-btn b-btn-danger" onClick={executeDelete}>Delete permanently</button>
             </div>
           </div>
         </div>
@@ -1086,7 +1306,7 @@ export default function OffersPage() {
             </tr>
           </thead>
           <tbody>
-            {offerRows.length === 0 ? (
+            {visibleOffers.length === 0 ? (
               <tr>
                 <td colSpan={7} style={{ textAlign: "center", padding: "48px 24px" }}>
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
@@ -1100,7 +1320,7 @@ export default function OffersPage() {
                 </td>
               </tr>
             ) : (
-              offerRows.map((offer: OfferRow) => (
+              visibleOffers.map((offer: OfferRow) => (
                 <tr key={offer.id}>
                   <td>
                     <input
@@ -1110,37 +1330,34 @@ export default function OffersPage() {
                       onChange={() => toggleCheck(offer.id)}
                     />
                   </td>
-                  {/* Título — title button + invisible eye on hover */}
+                  {/* Offer name with colored type icon */}
                   <td onClick={() => navigate(`/app/offers/${offer.id}`)}>
-                    <div className="bogos-offer-title-cell">
-                      <button
-                        type="button"
-                        className="bogos-offer-title-text"
-                        data-primary-link="true"
-                      >
-                        {offer.internalName}
-                      </button>
+                    <div className="b-table-offer-cell">
+                      <TypeIcon type={offer.type} />
+                      <div style={{ minWidth: 0 }}>
+                        <button type="button" className="bogos-offer-title-text" data-primary-link="true">
+                          {offer.internalName}
+                        </button>
+                        {offer.publicTitle && (
+                          <div className="b-offer-subtitle">{offer.publicTitle}</div>
+                        )}
+                      </div>
                       <div className="bogos-row-reveal" title="Preview">
-                        <span style={{ color: "var(--text-muted)", display: "flex" }}>
-                          <IconEye />
-                        </span>
+                        <span style={{ color: "var(--text-muted)", display: "flex" }}><IconEye /></span>
                       </div>
                     </div>
                   </td>
 
-                  {/* Tipo de oferta — gift SVG icon + label */}
+                  {/* Offer type chip — colored by type */}
                   <td>
-                    <div className="bogos-type-cell">
-                      <GiftIcon />
-                      <span>{TYPE_LABEL[offer.type] ?? offer.type}</span>
-                    </div>
+                    <span className={`b-type-chip b-type-chip-${offer.type}`}>
+                      {TYPE_LABEL[offer.type] ?? offer.type}
+                    </span>
                   </td>
 
-                  {/* Fecha de inicio */}
+                  {/* Start date in mono */}
                   <td>
-                    <span style={{ fontSize: 14, color: "var(--text)" }}>
-                      {formatDate(offer.startsAt ?? offer.updatedAt)}
-                    </span>
+                    <span className="b-mono">{formatDate(offer.startsAt ?? offer.updatedAt)}</span>
                   </td>
 
                   {/* Estado badge */}
@@ -1155,33 +1372,37 @@ export default function OffersPage() {
                     </div>
                   </td>
 
-                  {/* Comportamiento — duplicate + delete */}
+                  {/* Actions — duplicate + archive + delete */}
                   <td>
-                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                      <span title="Duplicate offer" tabIndex={0}>
-                        <div className="cursor-pointer">
-                          <button
-                            type="button"
-                            className="bogos-action-btn"
-                            onClick={(e) => { e.stopPropagation(); void navigate(`/app/offers/${offer.id}`); }}
-                            aria-label="Duplicate"
-                          >
-                            <IconCopy />
-                          </button>
-                        </div>
-                      </span>
-                      <span title="Delete offer" tabIndex={0}>
-                        <div className="cursor-pointer">
-                          <button
-                            type="button"
-                            className="bogos-action-btn red"
-                            onClick={(e) => { e.stopPropagation(); confirmDelete(offer.id); }}
-                            aria-label="Delete"
-                          >
-                            <IconTrash />
-                          </button>
-                        </div>
-                      </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                      <button
+                        type="button"
+                        className="bogos-action-btn"
+                        onClick={(e) => { e.stopPropagation(); void navigate(`/app/offers/${offer.id}`); }}
+                        aria-label="Duplicate offer"
+                        title="Duplicate"
+                      >
+                        <IconCopy />
+                      </button>
+                      <button
+                        type="button"
+                        className="bogos-action-btn"
+                        onClick={(e) => { e.stopPropagation(); confirmArchive(offer.id); }}
+                        aria-label="Archive offer"
+                        title="Archive"
+                        style={{ color: "var(--text-sub)" }}
+                      >
+                        <IconArchive />
+                      </button>
+                      <button
+                        type="button"
+                        className="bogos-action-btn red"
+                        onClick={(e) => { e.stopPropagation(); confirmDelete(offer.id); }}
+                        aria-label="Delete offer permanently"
+                        title="Delete permanently"
+                      >
+                        <IconTrash />
+                      </button>
                     </div>
                   </td>
                 </tr>

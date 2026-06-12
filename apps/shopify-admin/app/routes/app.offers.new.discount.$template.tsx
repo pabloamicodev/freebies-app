@@ -383,11 +383,11 @@ export default function NewDiscountOfferPage() {
     <div className="b-page">
 
       {/* ── Header ── */}
-      <div style={{ marginBottom: 20 }}>
+      <div style={{ marginBottom: 28 }}>
         <button
           type="button"
           className="b-btn-plain b-text-sm"
-          style={{ display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 12 }}
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 14 }}
           onClick={() => void navigate("/app/offers")}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -395,7 +395,16 @@ export default function NewDiscountOfferPage() {
           </svg>
           All Offers
         </button>
-        <h1 className="b-page-title">{pageTitle}</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 14, background: "var(--discount-grad)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 4px 14px rgba(225,29,72,0.28)" }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </div>
+          <div>
+            <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, color: "var(--text)", lineHeight: 1.2 }}>{pageTitle}</h1>
+            <div style={{ fontSize: 12, color: "var(--text-sub)", marginTop: 2 }}>Configure your discount offer</div>
+          </div>
+          <span style={{ marginLeft: "auto", background: "rgba(225,29,72,0.1)", color: "var(--discount-color)", border: "1.5px solid rgba(225,29,72,0.2)", borderRadius: 20, fontSize: 11, fontWeight: 700, padding: "4px 12px", letterSpacing: "0.2px" }}>Discount</span>
+        </div>
       </div>
 
       <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
@@ -446,8 +455,12 @@ export default function NewDiscountOfferPage() {
                 VOLUME — Basic information
             ──────────────────────────────────────────────── */}
             {templateId === "volume" && (
-              <div className="b-card">
-                <div className="b-card-header">Basic information</div>
+              <div className="b-card" style={{ borderTop: "3px solid var(--discount-color)" }}>
+                <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
+                  <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--discount-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>1</div>
+                  <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Basic information</span>
+                  <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(225,29,72,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>1</span>
+                </div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
                     <label className="b-label" htmlFor="internalName">Discount name</label>
@@ -611,14 +624,14 @@ export default function NewDiscountOfferPage() {
                         <input type="radio" name="displayType" value="quantity_options"
                           checked={displayType === "quantity_options"}
                           onChange={() => setDisplayType("quantity_options")}
-                          style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
+                          style={{ accentColor: "var(--discount-color)", width: 14, height: 14 }} />
                         <span style={{ fontSize: 13, color: "var(--text)" }}>Quantity options</span>
                       </label>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                         <input type="radio" name="displayType" value="discount_table"
                           checked={displayType === "discount_table"}
                           onChange={() => setDisplayType("discount_table")}
-                          style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
+                          style={{ accentColor: "var(--discount-color)", width: 14, height: 14 }} />
                         <span style={{ fontSize: 13, color: "var(--text)" }}>Quantity discount table</span>
                       </label>
                     </div>
@@ -743,7 +756,7 @@ export default function NewDiscountOfferPage() {
 
             {/* ── Agregar subcondición (all templates) ── */}
             <div className="b-card" style={{ background: "var(--bg)", border: "1.5px dashed var(--border)" }}>
-              <div className="b-card-body" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px 16px", color: "var(--blue)", cursor: "pointer", fontWeight: 500, fontSize: 14 }}>
+              <div className="b-card-body" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px 16px", color: "var(--discount-color)", cursor: "pointer", fontWeight: 500, fontSize: 14 }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
                 </svg>
@@ -763,8 +776,8 @@ export default function NewDiscountOfferPage() {
                       <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ fontSize: 13, fontWeight: 600 }}>Tier {i + 1}</span>
                         <button type="button" onClick={() => removeVolumeTier(i)}
-                          style={{ width: 20, height: 20, borderRadius: "50%", background: "#ff4d4d", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 700, fontSize: 14, padding: 0 }}>
-                          ×
+                          className="b-modal-close" style={{ width: 22, height: 22 }}>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                         </button>
                       </div>
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -799,18 +812,18 @@ export default function NewDiscountOfferPage() {
                               autoComplete="off" />
                           </div>
                         </div>
-                        <div style={{ fontSize: 12, color: "var(--blue)", cursor: "pointer" }}>
+                        <div style={{ fontSize: 12, color: "var(--discount-color)", cursor: "pointer" }}>
                           Add: Shipping discount
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                           <label className="b-checkbox-row" style={{ gap: 8, alignItems: "center", cursor: "pointer" }}>
-                            <input type="checkbox" defaultChecked style={{ accentColor: "var(--blue)" }} />
+                            <input type="checkbox" defaultChecked style={{ accentColor: "var(--discount-color)" }} />
                             <input className="b-input" style={{ flex: 1 }}
                               value={tier.tag1} onChange={(e) => updateVolumeTier(i, "tag1", e.target.value)}
                               placeholder="Label 1" autoComplete="off" />
                           </label>
                           <label className="b-checkbox-row" style={{ gap: 8, alignItems: "center", cursor: "pointer" }}>
-                            <input type="checkbox" defaultChecked style={{ accentColor: "var(--blue)" }} />
+                            <input type="checkbox" defaultChecked style={{ accentColor: "var(--discount-color)" }} />
                             <input className="b-input" style={{ flex: 1 }}
                               value={tier.tag2} onChange={(e) => updateVolumeTier(i, "tag2", e.target.value)}
                               placeholder="Label 2" autoComplete="off" />
@@ -819,7 +832,7 @@ export default function NewDiscountOfferPage() {
                             <input type="checkbox"
                               checked={tier.preselected}
                               onChange={(e) => updateVolumeTier(i, "preselected", e.target.checked)}
-                              style={{ accentColor: "var(--blue)" }} />
+                              style={{ accentColor: "var(--discount-color)" }} />
                             <span style={{ fontSize: 13, color: "var(--text)" }}>Preselected</span>
                           </label>
                         </div>
@@ -854,14 +867,14 @@ export default function NewDiscountOfferPage() {
                         <input type="radio" name="discountOnItem" value="cheapest"
                           checked={discountOnItem === "cheapest"}
                           onChange={() => setDiscountOnItem("cheapest")}
-                          style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
+                          style={{ accentColor: "var(--discount-color)", width: 14, height: 14 }} />
                         <span style={{ fontSize: 13, color: "var(--text)" }}>Cheapest item</span>
                       </label>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                         <input type="radio" name="discountOnItem" value="most_expensive"
                           checked={discountOnItem === "most_expensive"}
                           onChange={() => setDiscountOnItem("most_expensive")}
-                          style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
+                          style={{ accentColor: "var(--discount-color)", width: 14, height: 14 }} />
                         <span style={{ fontSize: 13, color: "var(--text)" }}>Most expensive item</span>
                       </label>
                     </div>
@@ -872,8 +885,8 @@ export default function NewDiscountOfferPage() {
                       <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ fontSize: 13, fontWeight: 600 }}>Tier {i + 1}</span>
                         <button type="button" onClick={() => removeCheapestTier(i)}
-                          style={{ width: 20, height: 20, borderRadius: "50%", background: "#ff4d4d", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 700, fontSize: 14, padding: 0 }}>
-                          ×
+                          className="b-modal-close" style={{ width: 22, height: 22 }}>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                         </button>
                       </div>
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -923,7 +936,7 @@ export default function NewDiscountOfferPage() {
                       + Add tier
                     </button>
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                      <input type="checkbox" style={{ accentColor: "var(--blue)" }} />
+                      <input type="checkbox" style={{ accentColor: "var(--discount-color)" }} />
                       <span style={{ fontSize: 13, color: "var(--text)" }}>Multiply the last tier</span>
                     </label>
                   </div>
@@ -964,8 +977,8 @@ export default function NewDiscountOfferPage() {
                       <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ fontSize: 13, fontWeight: 600 }}>Tier {i + 1}</span>
                         <button type="button" onClick={() => removeCartTier(i)}
-                          style={{ width: 20, height: 20, borderRadius: "50%", background: "#ff4d4d", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 700, fontSize: 14, padding: 0 }}>
-                          ×
+                          className="b-modal-close" style={{ width: 22, height: 22 }}>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                         </button>
                       </div>
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -1007,7 +1020,7 @@ export default function NewDiscountOfferPage() {
                         </div>
 
                         <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                          <input type="checkbox" style={{ accentColor: "var(--blue)" }} />
+                          <input type="checkbox" style={{ accentColor: "var(--discount-color)" }} />
                           <span style={{ fontSize: 13, color: "var(--text)" }}>Maximum discount value</span>
                         </label>
 
@@ -1037,12 +1050,12 @@ export default function NewDiscountOfferPage() {
                 <div className="b-card-header">Subscription</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                    <input type="checkbox" style={{ accentColor: "var(--blue)" }} />
+                    <input type="checkbox" style={{ accentColor: "var(--discount-color)" }} />
                     <span style={{ fontSize: 13, color: "var(--text)" }}>
                       Show subscription options in widget
                     </span>
                   </label>
-                  <div style={{ fontSize: 12, color: "var(--blue)", background: "var(--bg-hover)", borderRadius: 6, padding: "8px 12px", border: "1px solid var(--border)" }}>
+                  <div style={{ fontSize: 12, color: "var(--discount-color)", background: "var(--bg-hover)", borderRadius: 6, padding: "8px 12px", border: "1px solid var(--border)" }}>
                     Tip: Integrate with Appstle to show subscription options alongside the volume discount.
                   </div>
                 </div>
@@ -1054,7 +1067,7 @@ export default function NewDiscountOfferPage() {
               <div className="b-card-header">Discount code</div>
               <div className="b-card-body">
                 <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                  <input type="checkbox" style={{ accentColor: "var(--blue)" }} />
+                  <input type="checkbox" style={{ accentColor: "var(--discount-color)" }} />
                   <span style={{ fontSize: 13, color: "var(--text)" }}>
                     Add a custom discount code
                   </span>
@@ -1071,7 +1084,7 @@ export default function NewDiscountOfferPage() {
                     <input type="checkbox" name="combinesProductDiscounts"
                       checked={combinesProductDiscounts}
                       onChange={(e) => setCombinesProductDiscounts(e.target.checked)}
-                      style={{ accentColor: "var(--blue)" }} />
+                      style={{ accentColor: "var(--discount-color)" }} />
                     <span style={{ fontSize: 13, color: "var(--text)" }}>Product discounts</span>
                   </label>
                 )}
@@ -1079,14 +1092,14 @@ export default function NewDiscountOfferPage() {
                   <input type="checkbox" name="combinesOrderDiscounts"
                     checked={combinesOrderDiscounts}
                     onChange={(e) => setCombinesOrderDiscounts(e.target.checked)}
-                    style={{ accentColor: "var(--blue)" }} />
+                    style={{ accentColor: "var(--discount-color)" }} />
                   <span style={{ fontSize: 13, color: "var(--text)" }}>Order discounts</span>
                 </label>
                 <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                   <input type="checkbox" name="combinesShippingDiscounts"
                     checked={combinesShippingDiscounts}
                     onChange={(e) => setCombinesShippingDiscounts(e.target.checked)}
-                    style={{ accentColor: "var(--blue)" }} />
+                    style={{ accentColor: "var(--discount-color)" }} />
                   <span style={{ fontSize: 13, color: "var(--text)" }}>Shipping discounts</span>
                 </label>
               </div>
@@ -1131,17 +1144,16 @@ export default function NewDiscountOfferPage() {
         </div>
 
         {/* ── Footer ── */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, paddingBottom: 32 }}>
+        <div style={{ position: "sticky", bottom: 0, zIndex: 10, display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, padding: "14px 0", background: "rgba(250,249,247,0.9)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", borderTop: "1px solid var(--border)" }}>
           <button type="button" className="b-btn b-btn-secondary"
             onClick={() => void navigate("/app/offers")}>
             Cancel
           </button>
-          <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary"
-            style={{ background: "var(--bg-hover)", border: "1px solid var(--border)" }}>
+          <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary">
             Save draft
           </button>
-          <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary">
-            Publish
+          <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary" style={{ background: "var(--discount-grad)", boxShadow: "0 4px 12px rgba(225,29,72,0.3)" }}>
+            Publish offer
           </button>
         </div>
 
@@ -1183,8 +1195,8 @@ function VolumePreview({
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {tiers.map((tier, i) => (
             <div key={i} style={{
-              border: tier.preselected ? "2px solid var(--blue)" : "1px solid var(--border)",
-              borderRadius: 6, padding: "8px 10px", background: tier.preselected ? "rgba(0,119,255,0.04)" : "var(--bg)",
+              border: tier.preselected ? "2px solid var(--discount-color)" : "1px solid var(--border)",
+              borderRadius: 6, padding: "8px 10px", background: tier.preselected ? "rgba(225,29,72,0.04)" : "var(--bg)",
               display: "flex", justifyContent: "space-between", alignItems: "center",
             }}>
               <div>
