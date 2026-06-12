@@ -135,7 +135,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         await db.insert(bundleSteps).values({
           shopId, bundleId: bundleDef.id,
-          title: `Artículo mixto ${i + 1}`,
+          title: `Mix item ${i + 1}`,
           sourceType: "products",
           sourceConfig: { productGids },
           minQuantity: minQty,
@@ -151,7 +151,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (mixItemCount === 0) {
         await db.insert(bundleSteps).values({
           shopId, bundleId: bundleDef.id,
-          title: "Artículo mixto 1",
+          title: "Mix item 1",
           sourceType: "products",
           sourceConfig: { productGids: [] },
           minQuantity: 1,
@@ -217,8 +217,8 @@ export default function NewBundleOfferPage() {
 
   function validate() {
     const errs: { internalName?: string; publicTitle?: string } = {};
-    if (!internalName.trim()) errs.internalName = "Nombre del paquete es requerido";
-    if (!publicTitle.trim()) errs.publicTitle = "Título del paquete es requerido";
+    if (!internalName.trim()) errs.internalName = "Bundle name is required";
+    if (!publicTitle.trim()) errs.publicTitle = "Bundle title is required";
     setFieldErrors(errs);
     if (Object.keys(errs).length > 0) {
       setToastMsg(Object.values(errs)[0]!);
@@ -263,11 +263,11 @@ export default function NewBundleOfferPage() {
 
   // Page title per bundle type
   const pageTitles: Record<string, string> = {
-    classic: "Crear paquete clásico",
-    mix_match: "Crear Mix & Match",
-    bundle_page: "Crear página de paquete",
+    classic: "Create classic bundle",
+    mix_match: "Create Mix & Match",
+    bundle_page: "Create bundle page",
   };
-  const pageTitle = pageTitles[bundleTypeFromSlug] ?? "Crear paquete";
+  const pageTitle = pageTitles[bundleTypeFromSlug] ?? "Create bundle";
 
   return (
     <div className="b-page">
@@ -311,30 +311,30 @@ export default function NewBundleOfferPage() {
             {/* ══ CLASSIC BUNDLE ═══════════════════════════════════════════════ */}
             {bundleTypeFromSlug === "classic" && (
               <>
-                {/* Información del paquete */}
+                {/* Bundle information */}
                 <div className="b-card">
-                  <div className="b-card-header">Información del paquete</div>
+                  <div className="b-card-header">Bundle information</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div>
-                      <label className="b-label" htmlFor="internalName">Nombre del paquete</label>
+                      <label className="b-label" htmlFor="internalName">Bundle name</label>
                       <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                         value={internalName} onChange={(e) => setInternalName(e.target.value)}
-                        autoComplete="off" placeholder="Solo para uso interno" />
-                      <div className="b-help">Sólo para uso interno</div>
+                        autoComplete="off" placeholder="Internal use only" />
+                      <div className="b-help">Internal use only</div>
                     </div>
 
-                    {/* Visualización en widget */}
+                    {/* Widget display */}
                     <div className="b-card" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-                      <div className="b-card-header" style={{ fontSize: 13 }}>Visualización en widget</div>
+                      <div className="b-card-header" style={{ fontSize: 13 }}>Widget display</div>
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         <div>
-                          <label className="b-label" htmlFor="publicTitle">Título del paquete</label>
+                          <label className="b-label" htmlFor="publicTitle">Bundle title</label>
                           <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle"
                             value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
-                            autoComplete="off" placeholder="e.g. Paquete ahorro" />
+                            autoComplete="off" placeholder="e.g. Savings bundle" />
                         </div>
                         <div>
-                          <label className="b-label" htmlFor="description">Descripción del paquete <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(opcional)</span></label>
+                          <label className="b-label" htmlFor="description">Bundle description <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(optional)</span></label>
                           <textarea id="description" className="b-input" name="description"
                             value={description} onChange={(e) => setDescription(e.target.value)}
                             autoComplete="off" rows={2} style={{ resize: "vertical" }} />
@@ -344,12 +344,12 @@ export default function NewBundleOfferPage() {
 
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <div>
-                        <label className="b-label" htmlFor="startsAt">Hora de inicio</label>
+                        <label className="b-label" htmlFor="startsAt">Start time</label>
                         <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                           value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                       </div>
                       <div>
-                        <label className="b-label" htmlFor="endsAt">Hora de finalización</label>
+                        <label className="b-label" htmlFor="endsAt">End time</label>
                         <input id="endsAt" className="b-input" type="datetime-local" name="endsAt"
                           value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
                       </div>
@@ -359,10 +359,10 @@ export default function NewBundleOfferPage() {
 
                 {/* Seleccionar paquete */}
                 <div className="b-card">
-                  <div className="b-card-header">Seleccionar paquete</div>
+                  <div className="b-card-header">Bundle products</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div>
-                      <label className="b-label">Nivel de artículo del paquete</label>
+                      <label className="b-label">Bundle item level</label>
                       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>
                         <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                           <input type="radio" name="productLevel" value="product"
@@ -370,8 +370,8 @@ export default function NewBundleOfferPage() {
                             onChange={() => setProductLevel("product")}
                             style={{ accentColor: "var(--blue)", width: 15, height: 15 }} />
                           <div>
-                            <div className="b-checkbox-label">Nivel de producto</div>
-                            <div className="b-checkbox-help">Cada producto cuenta como un artículo del paquete</div>
+                            <div className="b-checkbox-label">Product level</div>
+                            <div className="b-checkbox-help">Each product counts as a bundle item</div>
                           </div>
                         </label>
                         <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
@@ -380,8 +380,8 @@ export default function NewBundleOfferPage() {
                             onChange={() => setProductLevel("variant")}
                             style={{ accentColor: "var(--blue)", width: 15, height: 15 }} />
                           <div>
-                            <div className="b-checkbox-label">Nivel de variante</div>
-                            <div className="b-checkbox-help">Cada variante cuenta como un artículo de paquete</div>
+                            <div className="b-checkbox-label">Variant level</div>
+                            <div className="b-checkbox-help">Each variant counts as a bundle item</div>
                           </div>
                         </label>
                       </div>
@@ -390,31 +390,31 @@ export default function NewBundleOfferPage() {
                     <div>
                       <button type="button" className="b-btn b-btn-secondary"
                         onClick={() => setClassicPickerOpen(true)}>
-                        Seleccionar productos
+                        Select products
                       </button>
                       <span style={{ marginLeft: 10, fontSize: 13, color: "var(--text-sub)" }}>
-                        {conditionProductsForClassic.length} productos seleccionados
+                        {conditionProductsForClassic.length} products selected
                       </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Descuento por paquete */}
+                {/* Bundle discount */}
                 <div className="b-card">
-                  <div className="b-card-header">Descuento por paquete</div>
+                  <div className="b-card-header">Bundle discount</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <div>
-                        <label className="b-label">Tipo</label>
+                        <label className="b-label">Type</label>
                         <select className="b-select" name="discountType" value={discountType}
                           onChange={(e) => setDiscountType(e.target.value)}>
-                          <option value="percentage">Porcentaje</option>
-                          <option value="fixed_amount">Monto fijo</option>
-                          <option value="fixed_price">Precio fijo</option>
+                          <option value="percentage">Percentage</option>
+                          <option value="fixed_amount">Fixed amount</option>
+                          <option value="fixed_price">Fixed price</option>
                         </select>
                       </div>
                       <div>
-                        <label className="b-label">Cantidad</label>
+                        <label className="b-label">Amount</label>
                         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                           <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
                             {discountType === "percentage" ? "%" : "$"}
@@ -427,7 +427,7 @@ export default function NewBundleOfferPage() {
                     </div>
                     <div>
                       <span className="b-help" style={{ color: "var(--blue)", cursor: "pointer" }}>
-                        Agregar: Descuento de envío
+                        Add: Shipping discount
                       </span>
                     </div>
                   </div>
@@ -435,27 +435,27 @@ export default function NewBundleOfferPage() {
 
                 {/* Producto para el paquete */}
                 <div className="b-card">
-                  <div className="b-card-header">Producto para el paquete</div>
+                  <div className="b-card-header">Bundle product</div>
                   <div className="b-card-body">
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                       <input type="checkbox" name="createBundleProduct" />
                       <div>
-                        <div className="b-checkbox-label">Crear un producto para este paquete</div>
-                        <div className="b-checkbox-help">Esta característica creará un producto con su propia página de productos.</div>
+                        <div className="b-checkbox-label">Create a product for this bundle</div>
+                        <div className="b-checkbox-help">This feature will create a product with its own product page.</div>
                       </div>
                     </label>
                   </div>
                 </div>
 
-                {/* Código de descuento */}
+                {/* Discount code */}
                 <div className="b-card">
-                  <div className="b-card-header">Código de descuento</div>
+                  <div className="b-card-header">Discount code</div>
                   <div className="b-card-body">
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                       <input type="checkbox" name="customDiscountCode" />
                       <div>
-                        <div className="b-checkbox-label">Agregue un código de descuento personalizado</div>
-                        <div className="b-checkbox-help">Si no se controla, Bogos aplicará su código de descuento predeterminado automáticamente.</div>
+                        <div className="b-checkbox-label">Add a custom discount code</div>
+                        <div className="b-checkbox-help">If unchecked, Bogos will apply its default discount code automatically.</div>
                       </div>
                     </label>
                   </div>
@@ -463,19 +463,19 @@ export default function NewBundleOfferPage() {
 
                 {/* Combinaciones */}
                 <div className="b-card">
-                  <div className="b-card-header">Esta oferta se puede combinar con</div>
+                  <div className="b-card-header">This offer can be combined with</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                       <input type="checkbox" name="combinesOrderDiscounts"
                         checked={combinesOrderDiscounts}
                         onChange={(e) => setCombinesOrderDiscounts(e.target.checked)} />
-                      <span className="b-checkbox-label">Descuentos de pedido</span>
+                      <span className="b-checkbox-label">Order discounts</span>
                     </label>
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                       <input type="checkbox" name="combinesShippingDiscounts"
                         checked={combinesShippingDiscounts}
                         onChange={(e) => setCombinesShippingDiscounts(e.target.checked)} />
-                      <span className="b-checkbox-label">Descuentos de envío</span>
+                      <span className="b-checkbox-label">Shipping discounts</span>
                     </label>
                   </div>
                 </div>
@@ -485,28 +485,28 @@ export default function NewBundleOfferPage() {
             {/* ══ MIX & MATCH ══════════════════════════════════════════════════ */}
             {bundleTypeFromSlug === "mix_match" && (
               <>
-                {/* Información del paquete */}
+                {/* Bundle information */}
                 <div className="b-card">
-                  <div className="b-card-header">Información del paquete</div>
+                  <div className="b-card-header">Bundle information</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div>
-                      <label className="b-label" htmlFor="internalName">Nombre del paquete</label>
+                      <label className="b-label" htmlFor="internalName">Bundle name</label>
                       <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                         value={internalName} onChange={(e) => setInternalName(e.target.value)}
-                        autoComplete="off" placeholder="Solo para uso interno" />
-                      <div className="b-help">Sólo para uso interno</div>
+                        autoComplete="off" placeholder="Internal use only" />
+                      <div className="b-help">Internal use only</div>
                     </div>
                     <div className="b-card" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-                      <div className="b-card-header" style={{ fontSize: 13 }}>Visualización en widget</div>
+                      <div className="b-card-header" style={{ fontSize: 13 }}>Widget display</div>
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         <div>
-                          <label className="b-label" htmlFor="publicTitle">Título del paquete</label>
+                          <label className="b-label" htmlFor="publicTitle">Bundle title</label>
                           <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle"
                             value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
                             autoComplete="off" />
                         </div>
                         <div>
-                          <label className="b-label" htmlFor="description">Descripción del paquete <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(opcional)</span></label>
+                          <label className="b-label" htmlFor="description">Bundle description <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(optional)</span></label>
                           <textarea id="description" className="b-input" name="description"
                             value={description} onChange={(e) => setDescription(e.target.value)}
                             autoComplete="off" rows={2} style={{ resize: "vertical" }} />
@@ -515,12 +515,12 @@ export default function NewBundleOfferPage() {
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <div>
-                        <label className="b-label" htmlFor="startsAt">Hora de inicio</label>
+                        <label className="b-label" htmlFor="startsAt">Start time</label>
                         <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                           value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                       </div>
                       <div>
-                        <label className="b-label" htmlFor="endsAt">Hora de finalización</label>
+                        <label className="b-label" htmlFor="endsAt">End time</label>
                         <input id="endsAt" className="b-input" type="datetime-local" name="endsAt"
                           value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
                       </div>
@@ -530,25 +530,25 @@ export default function NewBundleOfferPage() {
 
                 {/* Seleccionar elementos mixtos */}
                 <div className="b-card">
-                  <div className="b-card-header">Seleccionar elementos mixtos</div>
+                  <div className="b-card-header">Mix items</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input type="radio" name="mixMode" value="one_list"
                           style={{ accentColor: "var(--blue)", width: 15, height: 15 }} />
-                        <span className="b-checkbox-label">Mezclar artículos de una lista de productos</span>
+                        <span className="b-checkbox-label">Mix items from a product list</span>
                       </label>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input type="radio" name="mixMode" value="per_item" defaultChecked
                           style={{ accentColor: "var(--blue)", width: 15, height: 15 }} />
-                        <span className="b-checkbox-label">Cada artículo Mix contiene una lista diferente de productos.</span>
+                        <span className="b-checkbox-label">Each Mix item contains a different product list.</span>
                       </label>
                     </div>
 
                     {mixItems.map((item, i) => (
                       <div key={i} className="b-card" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
                         <div className="b-card-header" style={{ fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                          <span>Artículo mixto {i + 1}</span>
+                          <span>Mix item {i + 1}</span>
                           {mixItems.length > 1 && (
                             <button type="button"
                               style={{ background: "none", border: "none", cursor: "pointer", color: "#ff4d4d", fontSize: 16, lineHeight: 1 }}
@@ -559,22 +559,22 @@ export default function NewBundleOfferPage() {
                         </div>
                         <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                           <div>
-                            <label className="b-label">Seleccione una lista de productos:</label>
+                            <label className="b-label">Select a product list:</label>
                             <select className="b-select" defaultValue="">
-                              <option value="">productos seleccionados</option>
+                              <option value="">selected products</option>
                             </select>
                           </div>
                           <div>
-                            <div className="b-label" style={{ marginBottom: 6 }}>Productos:</div>
+                            <div className="b-label" style={{ marginBottom: 6 }}>Products:</div>
                             <button type="button" className="b-btn b-btn-secondary"
                               onClick={() => {
                                 setProductPickerForItem(i);
                                 setProductPickerOpen(true);
                               }}>
-                              Seleccionar productos
+                              Select products
                             </button>
                             <span style={{ marginLeft: 10, fontSize: 13, color: "var(--text-sub)" }}>
-                              {item.products.length} productos seleccionados
+                              {item.products.length} products selected
                             </span>
                           </div>
                           <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
@@ -585,11 +585,11 @@ export default function NewBundleOfferPage() {
                                 next[i] = { ...next[i]!, useMinQty: e.target.checked };
                                 setMixItems(next);
                               }} />
-                            <span className="b-checkbox-label">Establecer la cantidad mínima</span>
+                            <span className="b-checkbox-label">Set minimum quantity</span>
                           </label>
                           {item.useMinQty && (
                             <div>
-                              <label className="b-label">Cantidad mínima</label>
+                              <label className="b-label">Minimum quantity</label>
                               <input className="b-input" type="number" min="1"
                                 value={item.minQty}
                                 onChange={(e) => {
@@ -607,7 +607,7 @@ export default function NewBundleOfferPage() {
                     <div>
                       <button type="button" className="b-btn b-btn-secondary"
                         onClick={() => setMixItems([...mixItems, { products: [], minQty: "1", useMinQty: false }])}>
-                        + Añadir elemento Mix
+                        + Add Mix item
                       </button>
                     </div>
                   </div>
@@ -615,7 +615,7 @@ export default function NewBundleOfferPage() {
 
                 {/* Descuento (tiers) */}
                 <div className="b-card">
-                  <div className="b-card-header">Descuento</div>
+                  <div className="b-card-header">Discount</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     {/* Hidden fallback discount fields */}
                     <input type="hidden" name="discountType" value={discountType} />
@@ -624,7 +624,7 @@ export default function NewBundleOfferPage() {
                     {tiers.map((tier, i) => (
                       <div key={i} className="b-card" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
                         <div className="b-card-header" style={{ fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                          <span>Nivel {i + 1}</span>
+                          <span>Tier {i + 1}</span>
                           <button type="button"
                             style={{ background: "none", border: "none", cursor: "pointer", color: "#ff4d4d", fontSize: 16, lineHeight: 1 }}
                             onClick={() => setTiers(tiers.filter((_, idx) => idx !== i))}>
@@ -634,7 +634,7 @@ export default function NewBundleOfferPage() {
                         <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                             <div>
-                              <label className="b-label">Cantidad</label>
+                              <label className="b-label">Quantity</label>
                               <input className="b-input" type="number" name="tier_qty[]"
                                 value={tier.qty}
                                 onChange={(e) => {
@@ -645,7 +645,7 @@ export default function NewBundleOfferPage() {
                                 min="1" autoComplete="off" />
                             </div>
                             <div>
-                              <label className="b-label">Texto de la etiqueta</label>
+                              <label className="b-label">Label text</label>
                               <input className="b-input" type="text" name="tier_label[]"
                                 value={tier.label}
                                 onChange={(e) => {
@@ -658,7 +658,7 @@ export default function NewBundleOfferPage() {
                           </div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                             <div>
-                              <label className="b-label">Tipo</label>
+                              <label className="b-label">Type</label>
                               <select className="b-select" name="tier_discount_type[]"
                                 value={tier.discountType}
                                 onChange={(e) => {
@@ -666,13 +666,13 @@ export default function NewBundleOfferPage() {
                                   t[i] = { ...t[i]!, discountType: e.target.value };
                                   setTiers(t);
                                 }}>
-                                <option value="percentage">Porcentaje</option>
-                                <option value="fixed_amount">Monto fijo</option>
-                                <option value="fixed_price">Precio fijo</option>
+                                <option value="percentage">Percentage</option>
+                                <option value="fixed_amount">Fixed amount</option>
+                                <option value="fixed_price">Fixed price</option>
                               </select>
                             </div>
                             <div>
-                              <label className="b-label">Valor</label>
+                              <label className="b-label">Value</label>
                               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                                 <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
                                   {tier.discountType === "percentage" ? "%" : "$"}
@@ -690,7 +690,7 @@ export default function NewBundleOfferPage() {
                           </div>
                           <div>
                             <span className="b-help" style={{ color: "var(--blue)", cursor: "pointer" }}>
-                              Agregar: Descuento de envío
+                              Add: Shipping discount
                             </span>
                           </div>
                         </div>
@@ -700,21 +700,21 @@ export default function NewBundleOfferPage() {
                     <div>
                       <button type="button" className="b-btn b-btn-secondary"
                         onClick={() => setTiers([...tiers, { qty: "", label: "", discountType: "percentage", value: "" }])}>
-                        + Agregar nivel
+                        + Add tier
                       </button>
                     </div>
                   </div>
                 </div>
 
-                {/* Código de descuento */}
+                {/* Discount code */}
                 <div className="b-card">
-                  <div className="b-card-header">Código de descuento</div>
+                  <div className="b-card-header">Discount code</div>
                   <div className="b-card-body">
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                       <input type="checkbox" name="customDiscountCode" />
                       <div>
-                        <div className="b-checkbox-label">Agregue un código de descuento personalizado</div>
-                        <div className="b-checkbox-help">Si no se controla, Bogos aplicará su código de descuento predeterminado automáticamente.</div>
+                        <div className="b-checkbox-label">Add a custom discount code</div>
+                        <div className="b-checkbox-help">If unchecked, Bogos will apply its default discount code automatically.</div>
                       </div>
                     </label>
                   </div>
@@ -722,19 +722,19 @@ export default function NewBundleOfferPage() {
 
                 {/* Combinaciones */}
                 <div className="b-card">
-                  <div className="b-card-header">Esta oferta se puede combinar con</div>
+                  <div className="b-card-header">This offer can be combined with</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                       <input type="checkbox" name="combinesOrderDiscounts"
                         checked={combinesOrderDiscounts}
                         onChange={(e) => setCombinesOrderDiscounts(e.target.checked)} />
-                      <span className="b-checkbox-label">Descuentos de pedido</span>
+                      <span className="b-checkbox-label">Order discounts</span>
                     </label>
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                       <input type="checkbox" name="combinesShippingDiscounts"
                         checked={combinesShippingDiscounts}
                         onChange={(e) => setCombinesShippingDiscounts(e.target.checked)} />
-                      <span className="b-checkbox-label">Descuentos de envío</span>
+                      <span className="b-checkbox-label">Shipping discounts</span>
                     </label>
                   </div>
                 </div>
@@ -748,27 +748,27 @@ export default function NewBundleOfferPage() {
                 <input type="hidden" name="discountType" value="percentage" />
                 <input type="hidden" name="discountValue" value="0" />
 
-                {/* Información del paquete */}
+                {/* Bundle information */}
                 <div className="b-card">
-                  <div className="b-card-header">Información del paquete</div>
+                  <div className="b-card-header">Bundle information</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div>
-                      <label className="b-label" htmlFor="internalName">Nombre del paquete</label>
+                      <label className="b-label" htmlFor="internalName">Bundle name</label>
                       <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                         value={internalName} onChange={(e) => setInternalName(e.target.value)}
-                        autoComplete="off" placeholder="Solo para uso interno" />
+                        autoComplete="off" placeholder="Internal use only" />
                     </div>
                     <div className="b-card" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-                      <div className="b-card-header" style={{ fontSize: 13 }}>Visualización en widget</div>
+                      <div className="b-card-header" style={{ fontSize: 13 }}>Widget display</div>
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         <div>
-                          <label className="b-label" htmlFor="publicTitle">Encabezado de página</label>
+                          <label className="b-label" htmlFor="publicTitle">Page header</label>
                           <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle"
                             value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
                             autoComplete="off" />
                         </div>
                         <div>
-                          <label className="b-label" htmlFor="description">Subtítulo de página <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(opcional)</span></label>
+                          <label className="b-label" htmlFor="description">Page subtitle <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(optional)</span></label>
                           <textarea id="description" className="b-input" name="description"
                             value={description} onChange={(e) => setDescription(e.target.value)}
                             autoComplete="off" rows={2} style={{ resize: "vertical" }} />
@@ -777,12 +777,12 @@ export default function NewBundleOfferPage() {
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <div>
-                        <label className="b-label" htmlFor="startsAt">Hora de inicio</label>
+                        <label className="b-label" htmlFor="startsAt">Start time</label>
                         <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                           value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                       </div>
                       <div>
-                        <label className="b-label" htmlFor="endsAt">Hora de finalización</label>
+                        <label className="b-label" htmlFor="endsAt">End time</label>
                         <input id="endsAt" className="b-input" type="datetime-local" name="endsAt"
                           value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
                       </div>
@@ -815,7 +815,7 @@ export default function NewBundleOfferPage() {
                       <div style={{ height: 8, background: "var(--border)", borderRadius: 3 }} />
                       <div style={{ height: 8, background: "var(--border)", borderRadius: 3 }} />
                     </div>
-                    <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>Un paso por página</span>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>One step per page</span>
                   </label>
 
                   <label
@@ -842,51 +842,51 @@ export default function NewBundleOfferPage() {
                       <div style={{ height: 8, background: "var(--border)", borderRadius: 3 }} />
                       <div style={{ height: 8, background: "var(--border)", borderRadius: 3 }} />
                     </div>
-                    <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>Múltiples pasos en una página</span>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>Multiple steps on one page</span>
                   </label>
                 </div>
 
                 {/* Imagen del banner */}
                 <div className="b-card">
-                  <div className="b-card-header">Imagen del banner</div>
+                  <div className="b-card-header">Banner image</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                     <div style={{
                       border: "2px dashed var(--border)", borderRadius: "var(--r)",
                       padding: "32px 16px", textAlign: "center",
                       display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
                     }}>
-                      <button type="button" className="b-btn b-btn-secondary">Agregar archivo</button>
+                      <button type="button" className="b-btn b-btn-secondary">Add file</button>
                     </div>
                     <div className="b-help">
-                      Especificaciones de imagen recomendadas: Dimensiones 1200x240 píxeles, menos de 1 MB y los formatos admitidos son gif, jpg y png.
+                      Recommended image specs: 1200x240px, under 1 MB, supported formats: gif, jpg, png.
                     </div>
                     <div>
-                      <span style={{ fontSize: 13, color: "var(--blue)", cursor: "pointer" }}>Banner transparente</span>
+                      <span style={{ fontSize: 13, color: "var(--blue)", cursor: "pointer" }}>Transparent banner</span>
                     </div>
                   </div>
                 </div>
 
                 {/* Estructura del paquete */}
                 <div className="b-card">
-                  <div className="b-card-header">Estructura del paquete</div>
+                  <div className="b-card-header">Bundle structure</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                     <div className="b-help">
-                      Cada paso contiene un conjunto diferente de productos. Los clientes seleccionarán productos de cada paso para completar el paquete.
+                      Each step contains a different set of products. Customers select from each step to complete the bundle.
                     </div>
                     <div>
                       <button type="button" className="b-btn b-btn-secondary">
-                        + Añadir paso
+                        + Add step
                       </button>
                     </div>
                   </div>
                 </div>
 
-                {/* Descuento por paquete */}
+                {/* Bundle discount */}
                 <div className="b-card">
-                  <div className="b-card-header">Descuento por paquete</div>
+                  <div className="b-card-header">Bundle discount</div>
                   <div className="b-card-body">
                     <button type="button" className="b-btn b-btn-secondary">
-                      + Añadir descuento
+                      + Add discount
                     </button>
                   </div>
                 </div>
@@ -894,7 +894,7 @@ export default function NewBundleOfferPage() {
                 {/* Configuración avanzada */}
                 <details className="b-card">
                   <summary className="b-card-header" style={{ cursor: "pointer", listStyle: "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span>Configuración avanzada (opcional)</span>
+                    <span>Advanced settings (optional)</span>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="6 9 12 15 18 9"/>
                     </svg>
@@ -903,23 +903,23 @@ export default function NewBundleOfferPage() {
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                       <input type="checkbox" name="customDiscountCode" />
                       <div>
-                        <div className="b-checkbox-label">Agregue un código de descuento personalizado</div>
-                        <div className="b-checkbox-help">Si no se controla, Bogos aplicará su código de descuento predeterminado automáticamente.</div>
+                        <div className="b-checkbox-label">Add a custom discount code</div>
+                        <div className="b-checkbox-help">If unchecked, Bogos will apply its default discount code automatically.</div>
                       </div>
                     </label>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
-                      <div className="b-label" style={{ marginBottom: 4 }}>Esta oferta se puede combinar con</div>
+                      <div className="b-label" style={{ marginBottom: 4 }}>This offer can be combined with</div>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input type="checkbox" name="combinesOrderDiscounts"
                           checked={combinesOrderDiscounts}
                           onChange={(e) => setCombinesOrderDiscounts(e.target.checked)} />
-                        <span className="b-checkbox-label">Descuentos de pedido</span>
+                        <span className="b-checkbox-label">Order discounts</span>
                       </label>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input type="checkbox" name="combinesShippingDiscounts"
                           checked={combinesShippingDiscounts}
                           onChange={(e) => setCombinesShippingDiscounts(e.target.checked)} />
-                        <span className="b-checkbox-label">Descuentos de envío</span>
+                        <span className="b-checkbox-label">Shipping discounts</span>
                       </label>
                     </div>
                   </div>
@@ -933,7 +933,7 @@ export default function NewBundleOfferPage() {
           <div style={{ position: "sticky", top: 16 }}>
             {bundleTypeFromSlug === "classic" && (
               <div className="b-card">
-                <div className="b-card-header">Avance</div>
+                <div className="b-card-header">Preview</div>
                 <div className="b-card-body">
                   <div style={{ fontSize: 13, color: "var(--text-sub)", textAlign: "center", padding: "20px 0" }}>
                     There are no product selected. Select at least 2 bundle items to preview this widget.
@@ -944,10 +944,10 @@ export default function NewBundleOfferPage() {
 
             {bundleTypeFromSlug === "mix_match" && (
               <div className="b-card">
-                <div className="b-card-header">Avance</div>
+                <div className="b-card-header">Preview</div>
                 <div className="b-card-body">
                   <div style={{ fontSize: 13, color: "var(--text-sub)", textAlign: "center", padding: "20px 0" }}>
-                    Configure los artículos mix y el descuento para ver el avance del widget.
+                    Configure mix items and discount to preview the widget.
                   </div>
                 </div>
               </div>
@@ -955,32 +955,32 @@ export default function NewBundleOfferPage() {
 
             {bundleTypeFromSlug === "bundle_page" && (
               <div className="b-card">
-                <div className="b-card-header">Resumen de la página del paquete</div>
+                <div className="b-card-header">Bundle page summary</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div style={{ fontSize: 13, color: "var(--text-sub)" }}>
-                    <strong style={{ color: "var(--text)" }}>0 pasos</strong> configurados
+                    <strong style={{ color: "var(--text)" }}>0 steps</strong> configured
                   </div>
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>Discount(s)</div>
-                    <div style={{ fontSize: 12, color: "var(--text-sub)" }}>Sin descuentos añadidos</div>
+                    <div style={{ fontSize: 12, color: "var(--text-sub)" }}>No discounts added</div>
                   </div>
                   <div className="b-card" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
                     <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>Cómo mostrar el paquete</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>How the bundle displays</div>
                       <div style={{ fontSize: 12, color: "var(--text-sub)", display: "flex", gap: 6 }}>
-                        <span>•</span><span>Los clientes seleccionan productos de cada paso</span>
+                        <span>•</span><span>Customers select products from each step</span>
                       </div>
                       <div style={{ fontSize: 12, color: "var(--text-sub)", display: "flex", gap: 6 }}>
-                        <span>•</span><span>El descuento se aplica al completar el paquete</span>
+                        <span>•</span><span>Discount applies on bundle completion</span>
                       </div>
                       <div style={{ fontSize: 12, color: "var(--text-sub)", display: "flex", gap: 6 }}>
-                        <span>•</span><span>Configurable por pasos y cantidades</span>
+                        <span>•</span><span>Configurable by steps and quantities</span>
                       </div>
                     </div>
                   </div>
                   <button type="button" className="b-btn b-btn-secondary"
                     disabled style={{ opacity: 0.5, cursor: "not-allowed" }}>
-                    Vista previa del paquete
+                    Bundle preview
                   </button>
                 </div>
               </div>
@@ -993,14 +993,14 @@ export default function NewBundleOfferPage() {
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, paddingBottom: 32 }}>
           <button type="button" className="b-btn b-btn-secondary"
             onClick={() => void navigate("/app/offers")}>
-            Cancelar
+            Cancel
           </button>
           <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary"
             style={{ background: "var(--bg-hover)", border: "1px solid var(--border)" }}>
-            Guardar borrador
+            Save draft
           </button>
           <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary">
-            Publicar
+            Publish
           </button>
         </div>
 
@@ -1010,7 +1010,7 @@ export default function NewBundleOfferPage() {
       <ProductPicker
         open={classicPickerOpen}
         onClose={() => setClassicPickerOpen(false)}
-        title="Seleccionar productos para el paquete"
+        title="Select bundle products"
         mode="products"
         allowMultiple
         selectedIds={conditionProductsForClassic}
@@ -1023,7 +1023,7 @@ export default function NewBundleOfferPage() {
           setProductPickerOpen(false);
           setProductPickerForItem(null);
         }}
-        title={`Seleccionar productos — Artículo mixto ${productPickerForItem !== null ? productPickerForItem + 1 : ""}`}
+        title={`Select products — Mix item ${productPickerForItem !== null ? productPickerForItem + 1 : ""}`}
         mode="products"
         allowMultiple
         selectedIds={productPickerForItem !== null ? (mixItems[productPickerForItem]?.products ?? []) : []}

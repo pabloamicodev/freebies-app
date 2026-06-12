@@ -215,11 +215,11 @@ export default function NewUpsellOfferPage() {
 
   // ── Page title ───────────────────────────────────────────────────────────
   const PAGE_TITLE: Record<string, string> = {
-    "checkout": "Crear venta adicional en Checkout",
-    "fbt": "Crear venta adicional",
-    "thank-you": "Crear una página de agradecimiento para aumentar las ventas",
+    "checkout": "Create Checkout upsell",
+    "fbt": "Create upsell",
+    "thank-you": "Create a thank-you page to boost sales",
   };
-  const pageTitle = PAGE_TITLE[templateSlug] ?? "Crear venta adicional";
+  const pageTitle = PAGE_TITLE[templateSlug] ?? "Create upsell";
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   const isCheckout = templateSlug === "checkout";
@@ -254,11 +254,11 @@ export default function NewUpsellOfferPage() {
         }}>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>
-              Recorrido rápido: Cómo crear una venta adicional
+              Quick tour: How to create an upsell
             </div>
             <div style={{ fontSize: 13, color: "var(--text-sub)" }}>
               <a href="#" style={{ color: "var(--blue)", textDecoration: "underline" }}>
-                Familiarícese con nuestro recorrido o aprenda más en nuestro documento de orientación.
+                Get familiar with our tour or learn more in our onboarding guide.
               </a>
             </div>
           </div>
@@ -266,7 +266,7 @@ export default function NewUpsellOfferPage() {
             type="button"
             onClick={() => setInfoBannerDismissed(true)}
             style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, lineHeight: 1, color: "var(--text-sub)", padding: 0, flexShrink: 0 }}
-            aria-label="Cerrar"
+            aria-label="Close"
           >
             ×
           </button>
@@ -290,25 +290,25 @@ export default function NewUpsellOfferPage() {
 
             {/* ── Card: Información de venta adicional ── */}
             <div className="b-card">
-              <div className="b-card-header">Información de venta adicional</div>
+              <div className="b-card-header">Upsell information</div>
               <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <div>
-                  <label className="b-label" htmlFor="internalName">Nombre de venta adicional</label>
+                  <label className="b-label" htmlFor="internalName">Upsell name</label>
                   <input
                     id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                     value={internalName} onChange={(e) => setInternalName(e.target.value)}
                     autoComplete="off" placeholder="e.g., Checkout Upsell #1"
                   />
-                  <div className="b-help">Sólo para uso interno, no para mostrar a los clientes.</div>
+                  <div className="b-help">Internal use only, not shown to customers.</div>
                 </div>
 
                 {/* FBT-only: widget display fields */}
                 {isFbt && (
                   <div className="b-card" style={{ background: "var(--bg-hover, #f9f9f9)" }}>
-                    <div className="b-card-header" style={{ fontSize: 13 }}>Visualización en widget</div>
+                    <div className="b-card-header" style={{ fontSize: 13 }}>Widget display</div>
                     <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                       <div>
-                        <label className="b-label" htmlFor="publicTitle">Título de venta adicional</label>
+                        <label className="b-label" htmlFor="publicTitle">Upsell title</label>
                         <input
                           id="publicTitle" className="b-input" name="publicTitle"
                           value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
@@ -316,7 +316,7 @@ export default function NewUpsellOfferPage() {
                         />
                       </div>
                       <div>
-                        <label className="b-label" htmlFor="description">Descripción de venta adicional <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(opcional)</span></label>
+                        <label className="b-label" htmlFor="description">Upsell description <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(optional)</span></label>
                         <input
                           id="description" className="b-input" name="description"
                           value={description} onChange={(e) => setDescription(e.target.value)}
@@ -329,14 +329,14 @@ export default function NewUpsellOfferPage() {
 
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <div>
-                    <label className="b-label" htmlFor="startsAt">Hora de inicio</label>
+                    <label className="b-label" htmlFor="startsAt">Start time</label>
                     <input
                       id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                       value={startsAt} onChange={(e) => setStartsAt(e.target.value)}
                     />
                   </div>
                   <div>
-                    <label className="b-label" htmlFor="endsAt">Hora de finalización</label>
+                    <label className="b-label" htmlFor="endsAt">End time</label>
                     <input
                       id="endsAt" className="b-input" type="datetime-local" name="endsAt"
                       value={endsAt} onChange={(e) => setEndsAt(e.target.value)}
@@ -346,18 +346,18 @@ export default function NewUpsellOfferPage() {
               </div>
             </div>
 
-            {/* ── Card: Activador de venta adicional ── */}
+            {/* ── Card: Upsell trigger ── */}
             <div className="b-card">
-              <div className="b-card-header">Activador de venta adicional</div>
+              <div className="b-card-header">Upsell trigger</div>
               <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {isFbt ? (
                   <>
                     {[
-                      { value: "always", label: "Mostrar siempre las ventas adicionales" },
-                      { value: "product_selected", label: "Productos seleccionados" },
-                      { value: "product_except", label: "Todos excepto productos seleccionados" },
-                      { value: "collection_selected", label: "Colecciones/tipos/proveedores seleccionados" },
-                      { value: "collection_except", label: "Todos excepto colecciones/tipos/proveedores seleccionados" },
+                      { value: "always", label: "Always show upsells" },
+                      { value: "product_selected", label: "Selected products" },
+                      { value: "product_except", label: "All except selected products" },
+                      { value: "collection_selected", label: "Selected collections/types/vendors" },
+                      { value: "collection_except", label: "All except selected collections/types/vendors" },
                     ].map(({ value, label }) => (
                       <label key={value} className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input
@@ -370,16 +370,16 @@ export default function NewUpsellOfferPage() {
                       </label>
                     ))}
                     <div className="b-help" style={{ marginTop: 4 }}>
-                      La venta adicional siempre se muestra sin ningún disparador.
+                      The upsell always shows without any trigger.
                     </div>
                   </>
                 ) : (
                   <>
                     {[
-                      { value: "always", label: "Mostrar siempre las ventas adicionales" },
-                      { value: "cart", label: "Activador de carrito" },
-                      { value: "product", label: "Activador de producto específico" },
-                      { value: "customer", label: "Activador del cliente" },
+                      { value: "always", label: "Always show upsells" },
+                      { value: "cart", label: "Cart trigger" },
+                      { value: "product", label: "Specific product trigger" },
+                      { value: "customer", label: "Customer trigger" },
                     ].map(({ value, label }) => (
                       <label key={value} className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input
@@ -392,7 +392,7 @@ export default function NewUpsellOfferPage() {
                       </label>
                     ))}
                     <div className="b-help" style={{ marginTop: 4 }}>
-                      La venta adicional siempre se muestra sin ningún disparador.
+                      The upsell always shows without any trigger.
                     </div>
                   </>
                 )}
@@ -405,23 +405,23 @@ export default function NewUpsellOfferPage() {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
                 </svg>
-                Agregar subcondición
+                Add sub-condition
               </div>
             </div>
 
-            {/* ── Card: Método de venta adicional ── */}
+            {/* ── Card: Upsell method ── */}
             <div className="b-card">
-              <div className="b-card-header">Método de venta adicional</div>
+              <div className="b-card-header">Upsell method</div>
               <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
                 {/* FBT: Widget type selector */}
                 {isFbt && (
                   <div>
-                    <div className="b-label" style={{ marginBottom: 8 }}>Tipo de widget de venta adicional</div>
+                    <div className="b-label" style={{ marginBottom: 8 }}>Upsell widget type</div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                       {[
-                        { value: "fbt", label: "Comprados juntos con frecuencia" },
-                        { value: "product_add_on", label: "Complemento de producto" },
+                        { value: "fbt", label: "Frequently bought together" },
+                        { value: "product_add_on", label: "Product add-on" },
                       ].map(({ value, label }) => (
                         <button
                           key={value}
@@ -444,10 +444,10 @@ export default function NewUpsellOfferPage() {
 
                 {/* Method tabs: Manual | Auto | (Aleatorio for fbt/thank-you) */}
                 <div>
-                  <div className="b-label" style={{ marginBottom: 8 }}>Seleccionar método</div>
+                  <div className="b-label" style={{ marginBottom: 8 }}>Select method</div>
                   <div style={{ display: "flex", borderBottom: "1px solid var(--border)" }}>
                     {["manual", "auto", ...(isCheckout ? [] : ["random"])].map((m) => {
-                      const labels: Record<string, string> = { manual: "Manual", auto: "Auto", random: "Aleatorio" };
+                      const labels: Record<string, string> = { manual: "Manual", auto: "Auto", random: "Random" };
                       return (
                         <button
                           key={m}
@@ -474,17 +474,17 @@ export default function NewUpsellOfferPage() {
                 {/* Product selection */}
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>
-                    Seleccionar producto de venta adicional
+                    Select upsell product
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <button
                       type="button" className="b-btn b-btn-secondary"
                       onClick={() => setProductPickerOpen(true)}
                     >
-                      Seleccionar productos
+                      Select products
                     </button>
                     <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
-                      {upsellProducts.length} productos seleccionados
+                      {upsellProducts.length} products selected
                     </span>
                   </div>
 
@@ -493,7 +493,7 @@ export default function NewUpsellOfferPage() {
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, marginTop: 10 }}>
                       <input type="checkbox" />
                       <div>
-                        <div className="b-checkbox-label">Se puede añadir un número limitado de productos de venta adicional.</div>
+                        <div className="b-checkbox-label">A limited number of upsell products can be added.</div>
                       </div>
                     </label>
                   )}
@@ -503,11 +503,11 @@ export default function NewUpsellOfferPage() {
                     <>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, marginTop: 10 }}>
                         <input type="checkbox" />
-                        <div className="b-checkbox-label">Establecer cantidad para el artículo actual</div>
+                        <div className="b-checkbox-label">Set quantity for current item</div>
                       </label>
                       <div style={{ marginTop: 10 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>
-                          Cantidad de producto de venta adicional:
+                          Upsell product quantity:
                         </div>
                         <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, marginBottom: 6 }}>
                           <input
@@ -517,8 +517,8 @@ export default function NewUpsellOfferPage() {
                             style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
                           />
                           <div>
-                            <div className="b-checkbox-label">Permitir a los clientes cambiar la cantidad</div>
-                            <div className="b-checkbox-help">Los clientes pueden ajustar la cantidad antes de agregar al carrito.</div>
+                            <div className="b-checkbox-label">Allow customers to change quantity</div>
+                            <div className="b-checkbox-help">Customers can adjust the quantity before adding to cart.</div>
                           </div>
                         </label>
                         <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
@@ -529,8 +529,8 @@ export default function NewUpsellOfferPage() {
                             style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
                           />
                           <div>
-                            <div className="b-checkbox-label">Cantidad fija</div>
-                            <div className="b-checkbox-help">La cantidad está fija y no puede ser cambiada por el cliente.</div>
+                            <div className="b-checkbox-label">Fixed quantity</div>
+                            <div className="b-checkbox-help">The quantity is fixed and cannot be changed by the customer.</div>
                           </div>
                         </label>
                       </div>
@@ -541,21 +541,21 @@ export default function NewUpsellOfferPage() {
                 {/* Checkout: Discount section (inside method card) */}
                 {isCheckout && (
                   <div className="b-card" style={{ background: "var(--bg-hover, #f9f9f9)" }}>
-                    <div className="b-card-header" style={{ fontSize: 13 }}>Descuento</div>
+                    <div className="b-card-header" style={{ fontSize: 13 }}>Discount</div>
                     <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                         <div>
-                          <label className="b-label">Tipo:</label>
+                          <label className="b-label">Type:</label>
                           <select
                             className="b-select" name="discountType" value={discountType}
                             onChange={(e) => setDiscountType(e.target.value)}
                           >
-                            <option value="percentage">Porcentaje</option>
-                            <option value="fixed_amount">Monto fijo</option>
+                            <option value="percentage">Percentage</option>
+                            <option value="fixed_amount">Fixed amount</option>
                           </select>
                         </div>
                         <div>
-                          <label className="b-label">Valor:</label>
+                          <label className="b-label">Value:</label>
                           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                             <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
                               {discountType === "percentage" ? "%" : "$"}
@@ -570,7 +570,7 @@ export default function NewUpsellOfferPage() {
                       </div>
                       <div>
                         <a href="#" style={{ fontSize: 13, color: "var(--blue)", textDecoration: "none" }}>
-                          + Agregar: Descuento de envío
+                          + Add: Shipping discount
                         </a>
                       </div>
                     </div>
@@ -582,7 +582,7 @@ export default function NewUpsellOfferPage() {
             {/* ── FBT: Discount card (standalone) ── */}
             {isFbt && (
               <div className="b-card">
-                <div className="b-card-header">Descuento</div>
+                <div className="b-card-header">Discount</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                     <input
@@ -590,14 +590,14 @@ export default function NewUpsellOfferPage() {
                       checked={discountEnabled}
                       onChange={(e) => setDiscountEnabled(e.target.checked)}
                     />
-                    <div className="b-checkbox-label">Habilitar descuento</div>
+                    <div className="b-checkbox-label">Enable discount</div>
                   </label>
 
                   {discountEnabled && (
                     <>
                       <div>
                         <label className="b-label" htmlFor="discountMinProducts">
-                          Número de productos únicos necesarios para el descuento
+                          Number of unique products required for discount
                         </label>
                         <input
                           id="discountMinProducts" className="b-input" type="number"
@@ -608,30 +608,30 @@ export default function NewUpsellOfferPage() {
                         />
                       </div>
                       <div>
-                        <label className="b-label" htmlFor="discountApplyTo">Aplicar descuento a:</label>
+                        <label className="b-label" htmlFor="discountApplyTo">Apply discount to:</label>
                         <select
                           id="discountApplyTo" className="b-select" name="discountApplyTo"
                           value={discountApplyTo}
                           onChange={(e) => setDiscountApplyTo(e.target.value)}
                         >
-                          <option value="any">Cualquier artículo</option>
-                          <option value="cheapest">Artículo más barato</option>
-                          <option value="most_expensive">Artículo más caro</option>
+                          <option value="any">Any item</option>
+                          <option value="cheapest">Cheapest item</option>
+                          <option value="most_expensive">Most expensive item</option>
                         </select>
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                         <div>
-                          <label className="b-label">Tipo:</label>
+                          <label className="b-label">Type:</label>
                           <select
                             className="b-select" name="discountType" value={discountType}
                             onChange={(e) => setDiscountType(e.target.value)}
                           >
-                            <option value="percentage">Porcentaje</option>
-                            <option value="fixed_amount">Monto fijo</option>
+                            <option value="percentage">Percentage</option>
+                            <option value="fixed_amount">Fixed amount</option>
                           </select>
                         </div>
                         <div>
-                          <label className="b-label">Valor:</label>
+                          <label className="b-label">Value:</label>
                           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                             <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
                               {discountType === "percentage" ? "%" : "$"}
@@ -646,7 +646,7 @@ export default function NewUpsellOfferPage() {
                       </div>
                       <div>
                         <a href="#" style={{ fontSize: 13, color: "var(--blue)", textDecoration: "none" }}>
-                          + Agregar: Descuento de envío
+                          + Add: Shipping discount
                         </a>
                       </div>
                     </>
@@ -658,7 +658,7 @@ export default function NewUpsellOfferPage() {
             {/* ── Thank You: Discount card ── */}
             {isThankYou && (
               <div className="b-card">
-                <div className="b-card-header">Descuento</div>
+                <div className="b-card-header">Discount</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div>
@@ -687,7 +687,7 @@ export default function NewUpsellOfferPage() {
                   </div>
                   <div>
                     <a href="#" style={{ fontSize: 13, color: "var(--blue)", textDecoration: "none" }}>
-                      + Agregar: Descuento de envío
+                      + Add: Shipping discount
                     </a>
                   </div>
                 </div>
@@ -703,7 +703,7 @@ export default function NewUpsellOfferPage() {
                   style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", background: "none", border: "none", cursor: "pointer", padding: "12px 16px", textAlign: "left" }}
                   onClick={() => setAdvancedOpen(!advancedOpen)}
                 >
-                  <span>Configuración avanzada (opcional)</span>
+                  <span>Advanced settings (optional)</span>
                   <svg
                     width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                     strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
@@ -716,13 +716,13 @@ export default function NewUpsellOfferPage() {
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                     {/* Discount code */}
                     <div className="b-card" style={{ background: "var(--bg-hover, #f9f9f9)" }}>
-                      <div className="b-card-header" style={{ fontSize: 13 }}>Código de descuento</div>
+                      <div className="b-card-header" style={{ fontSize: 13 }}>Discount code</div>
                       <div className="b-card-body">
                         <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                           <input type="checkbox" />
                           <div>
-                            <div className="b-checkbox-label">Agregue un código de descuento personalizado</div>
-                            <div className="b-checkbox-help">Los clientes pueden ingresar un código de descuento al momento del pago.</div>
+                            <div className="b-checkbox-label">Add a custom discount code</div>
+                            <div className="b-checkbox-help">Customers can enter a discount code at checkout.</div>
                           </div>
                         </label>
                       </div>
@@ -731,7 +731,7 @@ export default function NewUpsellOfferPage() {
                     {/* Combinations */}
                     <div>
                       <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>
-                        Este descuento de venta adicional se puede combinar con
+                        This upsell discount can be combined with
                       </div>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, marginBottom: 8 }}>
                         <input
@@ -739,7 +739,7 @@ export default function NewUpsellOfferPage() {
                           checked={combinesOrderDiscounts}
                           onChange={(e) => setCombinesOrderDiscounts(e.target.checked)}
                         />
-                        <div className="b-checkbox-label">Descuentos de pedido</div>
+                        <div className="b-checkbox-label">Order discounts</div>
                       </label>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input
@@ -747,7 +747,7 @@ export default function NewUpsellOfferPage() {
                           checked={combinesShippingDiscounts}
                           onChange={(e) => setCombinesShippingDiscounts(e.target.checked)}
                         />
-                        <div className="b-checkbox-label">Descuentos de envío</div>
+                        <div className="b-checkbox-label">Shipping discounts</div>
                       </label>
                     </div>
                   </div>
@@ -759,20 +759,20 @@ export default function NewUpsellOfferPage() {
             {isFbt && (
               <>
                 <div className="b-card">
-                  <div className="b-card-header">Código de descuento</div>
+                  <div className="b-card-header">Discount code</div>
                   <div className="b-card-body">
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                       <input type="checkbox" />
                       <div>
-                        <div className="b-checkbox-label">Agregue un código de descuento personalizado</div>
-                        <div className="b-checkbox-help">Los clientes pueden ingresar un código de descuento al momento del pago.</div>
+                        <div className="b-checkbox-label">Add a custom discount code</div>
+                        <div className="b-checkbox-help">Customers can enter a discount code at checkout.</div>
                       </div>
                     </label>
                   </div>
                 </div>
 
                 <div className="b-card">
-                  <div className="b-card-header">Este descuento de venta adicional se puede combinar con</div>
+                  <div className="b-card-header">This upsell discount can be combined with</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                       <input
@@ -780,7 +780,7 @@ export default function NewUpsellOfferPage() {
                         checked={combinesOrderDiscounts}
                         onChange={(e) => setCombinesOrderDiscounts(e.target.checked)}
                       />
-                      <div className="b-checkbox-label">Descuentos de pedido</div>
+                      <div className="b-checkbox-label">Order discounts</div>
                     </label>
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                       <input
@@ -788,7 +788,7 @@ export default function NewUpsellOfferPage() {
                         checked={combinesShippingDiscounts}
                         onChange={(e) => setCombinesShippingDiscounts(e.target.checked)}
                       />
-                      <div className="b-checkbox-label">Descuentos de envío</div>
+                      <div className="b-checkbox-label">Shipping discounts</div>
                     </label>
                   </div>
                 </div>
@@ -798,18 +798,18 @@ export default function NewUpsellOfferPage() {
             {/* Checkout target (hidden field, shown as select for checkout) */}
             {isCheckout && (
               <div className="b-card">
-                <div className="b-card-header">Superficie de checkout</div>
+                <div className="b-card-header">Checkout surface</div>
                 <div className="b-card-body">
-                  <label className="b-label" htmlFor="checkoutTarget">Objetivo de checkout</label>
+                  <label className="b-label" htmlFor="checkoutTarget">Checkout target</label>
                   <select
                     id="checkoutTarget" className="b-select" name="checkoutTarget"
                     value={checkoutTarget}
                     onChange={(e) => setCheckoutTarget(e.target.value)}
                   >
-                    <option value="">Seleccionar superficie</option>
+                    <option value="">Select surface</option>
                     <option value="checkout">Checkout</option>
-                    <option value="post_purchase">Post-compra</option>
-                    <option value="cart">Carrito</option>
+                    <option value="post_purchase">Post-purchase</option>
+                    <option value="cart">Cart</option>
                   </select>
                 </div>
               </div>
@@ -822,7 +822,7 @@ export default function NewUpsellOfferPage() {
             helpCard={null}
             aboveSummary={isFbt ? (
               <div className="b-card">
-                <div className="b-card-header">Avance</div>
+                <div className="b-card-header">Preview</div>
                 <div className="b-card-body">
                   <div style={{
                     border: "1px solid var(--border)", borderRadius: 8, padding: 16,
@@ -838,7 +838,7 @@ export default function NewUpsellOfferPage() {
                     <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                       {upsellProducts.length === 0 ? (
                         <div style={{ fontSize: 12, color: "var(--text-sub)", fontStyle: "italic" }}>
-                          Seleccione productos para ver una vista previa
+                          Select products to see a preview
                         </div>
                       ) : (
                         upsellProducts.slice(0, 3).map((id) => (
@@ -863,22 +863,22 @@ export default function NewUpsellOfferPage() {
             ) : undefined}
             steps={[
               {
-                label: "Información básica",
+                label: "Basic information",
                 checked: hasName,
                 items: hasName ? [
                   { text: internalName },
-                  { text: `Empieza ${new Date(startsAt).toLocaleDateString("es-ES", { month: "short", day: "numeric", year: "numeric" })}` },
+                  { text: `Starts ${new Date(startsAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}` },
                 ] : undefined,
               },
               {
-                label: "Activador de venta adicional",
+                label: "Upsell trigger",
                 checked: true,
-                items: [{ text: triggerType === "always" ? "Sin disparador / Mostrar siempre" : triggerType }],
+                items: [{ text: triggerType === "always" ? "No trigger / Always show" : triggerType }],
               },
               {
-                label: "Método de venta adicional",
+                label: "Upsell method",
                 checked: hasProducts,
-                items: hasProducts ? [{ text: `${upsellProducts.length} producto(s) seleccionados` }] : undefined,
+                items: hasProducts ? [{ text: `${upsellProducts.length} product(s) selected` }] : undefined,
               },
             ]}
           />
@@ -891,16 +891,16 @@ export default function NewUpsellOfferPage() {
             type="button" className="b-btn b-btn-secondary"
             onClick={() => void navigate("/app/offers")}
           >
-            Cancelar
+            Cancel
           </button>
           <button
             type="submit" name="intent" value="draft" className="b-btn b-btn-secondary"
             style={{ background: "var(--bg-hover)", border: "1px solid var(--border)" }}
           >
-            Guardar borrador
+            Save draft
           </button>
           <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary">
-            Publicar
+            Publish
           </button>
         </div>
 
@@ -909,7 +909,7 @@ export default function NewUpsellOfferPage() {
       <ProductPicker
         open={productPickerOpen}
         onClose={() => setProductPickerOpen(false)}
-        title="Seleccionar productos de venta adicional"
+        title="Select upsell products"
         allowMultiple
         selectedIds={upsellProducts}
         onSelect={(gids) => setUpsellProducts(gids)}

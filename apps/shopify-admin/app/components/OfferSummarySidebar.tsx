@@ -1,114 +1,117 @@
 /**
- * Shared sidebar component for all offer creation templates.
- * Renders a help card + summary timeline matching BOGOS.io design.
- *
- * Each template customises the steps array and optionally the right-column content.
+ * Shared sticky sidebar for all offer creation wizards.
+ * Shows a live summary checklist and a help card.
  */
 
-import { IconLink, IconClock, IconCondition,  IconCheck } from "./Icons.js";
+import { IconLink, IconClock, IconCondition, IconCheck } from "./Icons.js";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface SummaryStepItem {
-  /** Icon component (12px muted) rendered before the text. Defaults to IconCondition. */
   icon?: () => JSX.Element;
-  /** Single-line text. Use this OR lines (not both). */
   text?: string;
-  /** Multi-line text array. Use this OR text (not both). */
   lines?: string[];
 }
 
 export interface SummaryStep {
-  /** Step title shown next to the bullet. */
   label: string;
-  /** Whether the step is completed (green check) or empty (gray circle). */
   checked: boolean;
-  /** Shows "(opcional)" after the label when incomplete. */
   optional?: boolean;
-  /** Items shown indented below the label. Each renders with its own mini icon. */
   items?: SummaryStepItem[];
-  /** Text shown dimmed when the step is empty/incomplete. */
   emptyText?: string;
 }
 
 export interface OfferSummarySidebarProps {
-  /** Title shown in the summary header line (e.g. the offer's public title). */
   title?: string;
-  /** Formatted start date string. */
   startDate?: string;
-  /** Steps to render in the timeline. */
   steps: SummaryStep[];
-  /** Optional extra content above the summary card (e.g. FBT preview panel). */
   aboveSummary?: React.ReactNode;
-  /** Optional content below the summary card. */
   belowSummary?: React.ReactNode;
-  /** Override the help card entirely (pass null to hide, or a custom element). */
   helpCard?: React.ReactNode | null;
 }
 
-// ─── Internal helpers ───────────────────────────────────────────────────────
+// ─── Step dot ────────────────────────────────────────────────────────────────
 
-function Dot({ checked }: { checked: boolean }) {
+function StepDot({ checked, index }: { checked: boolean; index: number }) {
   return (
-    <div
-      style={{
-        width: 21,
-        height: 21,
-        borderRadius: "50%",
-        flexShrink: 0,
-        zIndex: 1,
-        background: checked ? "var(--green-badge, #d1fae5)" : "var(--bg-card, #fff)",
-        border: `2px solid ${checked ? "var(--green, #008060)" : "var(--border, #e5e7eb)"}`,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
-      {checked && <IconCheck />}
+    <div style={{
+      width: 26, height: 26, borderRadius: "50%", flexShrink: 0, zIndex: 1,
+      background: checked
+        ? "linear-gradient(145deg, #059669, #047857)"
+        : "var(--bg-card, #fff)",
+      border: `2px solid ${checked ? "transparent" : "var(--border, #e1e3e5)"}`,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      transition: "all 0.2s ease",
+      boxShadow: checked ? "0 2px 6px rgba(5,150,105,0.35)" : "0 1px 2px rgba(0,0,0,0.06)",
+    }}>
+      {checked
+        ? <IconCheck />
+        : <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted, #9ca3af)", lineHeight: 1 }}>{index + 1}</span>
+      }
     </div>
   );
 }
 
-function StepIcon({ icon }: { icon?: () => JSX.Element }) {
+function ItemIcon({ icon }: { icon?: () => JSX.Element }) {
   const Icon = icon ?? IconCondition;
-  return (
-    <span style={{ color: "var(--text-sub, #6d7175)", flexShrink: 0, marginTop: 1 }}>
-      <Icon />
-    </span>
-  );
+  return <span style={{ color: "var(--text-muted)", flexShrink: 0, marginTop: 1, opacity: 0.7 }}><Icon /></span>;
 }
 
-// ─── Default help card ──────────────────────────────────────────────────────
+// ─── Help card ───────────────────────────────────────────────────────────────
 
 function DefaultHelpCard() {
   return (
-    <div className="b-card">
-      <div className="b-card-body" style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-        <div style={{ width: 60, height: 60, borderRadius: 8, overflow: "hidden", flexShrink: 0 }}>
-          <img
-            loading="lazy"
-            src="data:image/webp;base64,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"
-            alt="help"
-            style={{ width: 60, height: 60, objectFit: "cover" }}
-          />
-        </div>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>
-            ¿Necesitas ayuda para crear ofertas?
+    <div style={{
+      background: "linear-gradient(145deg, #1e1b4b 0%, #312e81 50%, #3730a3 100%)",
+      border: "none", borderRadius: 12, overflow: "hidden",
+      boxShadow: "0 4px 16px rgba(49,46,129,0.3), 0 1px 4px rgba(0,0,0,0.1)",
+    }}>
+      <div style={{ padding: "16px 18px" }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
+          <div style={{
+            width: 38, height: 38, borderRadius: 10, flexShrink: 0,
+            background: "rgba(255,255,255,0.15)",
+            border: "1px solid rgba(255,255,255,0.2)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="white">
+              <path fillRule="evenodd" d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0ZM8.94 6.94a.75.75 0 1 1-1.061-1.061 3 3 0 1 1 2.871 5.026v.345a.75.75 0 0 1-1.5 0v-.5c0-.72.57-1.172 1.081-1.287A1.5 1.5 0 1 0 8.94 6.94ZM10 15a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd"/>
+            </svg>
           </div>
-          <div style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 10 }}>
-            Chatea con nosotros para obtener ayuda
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", marginBottom: 2, letterSpacing: "-0.1px" }}>
+              Need help?
+            </div>
+            <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)" }}>
+              Our team is ready to assist
+            </div>
           </div>
-          <button type="button" className="b-btn b-btn-secondary b-btn-sm">
-            Chatea con nosotros
-          </button>
         </div>
+        <button
+          type="button"
+          style={{
+            width: "100%", padding: "7px 12px",
+            background: "rgba(255,255,255,0.12)",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: 6, fontSize: 13, fontWeight: 600,
+            color: "rgba(255,255,255,0.9)", cursor: "pointer",
+            fontFamily: "inherit", transition: "background 0.15s",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.2)")}
+          onMouseLeave={e => (e.currentTarget.style.background = "rgba(255,255,255,0.12)")}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          Chat with us
+        </button>
       </div>
     </div>
   );
 }
 
-// ─── Component ──────────────────────────────────────────────────────────────
+// ─── Component ───────────────────────────────────────────────────────────────
 
 export function OfferSummarySidebar({
   title,
@@ -118,109 +121,137 @@ export function OfferSummarySidebar({
   belowSummary,
   helpCard,
 }: OfferSummarySidebarProps) {
-  // Inject title/startDate into the first "Información básica" step if not already there
   const enrichedSteps = steps.map((step, i) => {
     if (i === 0 && (title || startDate)) {
+      if (step.items && step.items.length > 0) return step;
       const extraItems: SummaryStepItem[] = [];
-      if (title) {
-        extraItems.push({ icon: IconLink, text: title });
-      }
-      if (startDate) {
-        extraItems.push({ icon: IconClock, text: `Empieza en ${startDate}` });
-      }
-      // Only add if step doesn't already have its own items
-      if (step.items && step.items.length > 0) {
-        return step; // already has items, don't override
-      }
+      if (title) extraItems.push({ icon: IconLink, text: title });
+      if (startDate) extraItems.push({ icon: IconClock, text: `Starts ${startDate}` });
       return { ...step, items: extraItems.length > 0 ? extraItems : step.items };
     }
     return step;
   });
 
-  return (
+  const completedCount = enrichedSteps.filter((s) => s.checked).length;
+  const totalRequired = enrichedSteps.filter((s) => !s.optional).length;
+  const isComplete = completedCount >= totalRequired;
+  const progress = totalRequired > 0 ? Math.round((completedCount / totalRequired) * 100) : 0;
 
-    <div style={{ position: "sticky", top: 16, display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* Help card */}
+  return (
+    <div style={{ position: "sticky", top: 20, display: "flex", flexDirection: "column", gap: 14 }}>
       {helpCard !== null && (helpCard ?? <DefaultHelpCard />)}
 
-      {/* Above summary slot (e.g. FBT preview) */}
       {aboveSummary}
 
       {/* Summary card */}
-      <div className="b-card">
-        <div className="b-card-header">Resumen</div>
-        <div className="b-card-body" style={{ padding: 0 }}>
-          <div style={{ position: "relative", padding: "16px 20px" }}>
-            {/* Vertical timeline line */}
+      <div style={{
+        background: "var(--bg-card)", border: "1px solid var(--border)",
+        borderRadius: 12, overflow: "hidden",
+        boxShadow: "0 2px 4px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)",
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: "13px 18px 12px",
+          borderBottom: "1px solid var(--border-light)",
+          background: "var(--bg-hover)",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+        }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", letterSpacing: "0.4px", textTransform: "uppercase" }}>
+            Setup checklist
+          </span>
+          <span style={{
+            fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 100,
+            letterSpacing: "0.2px",
+            background: isComplete ? "var(--green-badge)" : "var(--border-light)",
+            color: isComplete ? "var(--green-txt)" : "var(--text-sub)",
+            border: isComplete ? "1px solid #a7f3d0" : "1px solid var(--border)",
+          }}>
+            {completedCount}/{totalRequired}
+          </span>
+        </div>
+
+        {/* Progress bar */}
+        <div style={{ height: 3, background: "var(--border-light)" }}>
+          <div style={{
+            height: "100%", width: `${progress}%`,
+            background: isComplete
+              ? "linear-gradient(90deg, #059669, #34d399)"
+              : "linear-gradient(90deg, #2563eb, #60a5fa)",
+            transition: "width 0.4s ease",
+            borderRadius: "0 2px 2px 0",
+          }} />
+        </div>
+
+        {/* Steps */}
+        <div style={{ position: "relative", padding: "18px 18px 20px" }}>
+          {/* Timeline connector */}
+          <div style={{
+            position: "absolute",
+            left: 30,
+            top: 30,
+            bottom: 20,
+            width: 1,
+            background: "linear-gradient(to bottom, var(--border) 60%, transparent 100%)",
+          }} />
+
+          {enrichedSteps.map((step, i) => (
             <div
+              key={i}
               style={{
-                position: "absolute",
-                left: 30,
-                top: 30,
-                bottom: 16,
-                width: 1,
-                borderLeft: "1px solid #ebebeb",
+                display: "flex", gap: 12, alignItems: "flex-start",
+                marginBottom: i < enrichedSteps.length - 1 ? 20 : 0,
               }}
-            />
-
-            {enrichedSteps.map((step, i) => (
-              <div
-                key={i}
-                style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: i < enrichedSteps.length - 1 ? 16 : 0 }}
-              >
-                <Dot checked={step.checked} />
-                <div style={{ flex: 1 }}>
-                  <div
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: step.checked ? "var(--text)" : "var(--text-sub)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {step.label}
-                    {step.optional && !step.checked && (
-                      <span style={{ fontWeight: 400 }}> (opcional)</span>
-                    )}
-                  </div>
-
-                  {step.checked && step.items && step.items.length > 0 ? (
-                    <div style={{ paddingLeft: 0, marginTop: 4 }}>
-                      {step.items.map((item, j) => (
-                        <div key={j} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-                          <StepIcon icon={item.icon} />
-                          {item.text ? (
-                            <span style={{ fontSize: 12, color: "var(--text-sub)" }}>{item.text}</span>
-                          ) : item.lines ? (
-                            <div style={{ display: "flex", flexDirection: "column" }}>
-                              {item.lines.map((l, k) => (
-                                <span key={k} style={{ fontSize: 12, color: "var(--text-sub)" }}>{l}</span>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  ) : !step.checked ? (
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color: step.emptyText ? "var(--text-muted)" : "var(--text-muted)",
-                        marginTop: 2,
-                        cursor: "pointer",
-                      }}
-                    >
-                      {step.emptyText ?? "+ Haga clic para agregar"}
-                    </div>
-                  ) : null}
+            >
+              <StepDot checked={step.checked} index={i} />
+              <div style={{ flex: 1, paddingTop: 3, minWidth: 0 }}>
+                <div style={{
+                  fontSize: 13, fontWeight: step.checked ? 600 : 500,
+                  color: step.checked ? "var(--text)" : "var(--text-sub)",
+                  display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap",
+                }}>
+                  {step.label}
+                  {step.optional && !step.checked && (
+                    <span style={{
+                      fontSize: 10, fontWeight: 500, color: "var(--text-muted)",
+                      background: "var(--border-light)", padding: "1px 6px",
+                      borderRadius: 100, border: "1px solid var(--border)",
+                    }}>
+                      optional
+                    </span>
+                  )}
                 </div>
+
+                {step.checked && step.items && step.items.length > 0 ? (
+                  <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                    {step.items.map((item, j) => (
+                      <div key={j} style={{ display: "flex", gap: 5, alignItems: "flex-start" }}>
+                        <ItemIcon icon={item.icon} />
+                        {item.text ? (
+                          <span style={{
+                            fontSize: 12, color: "var(--text-sub)", lineHeight: 1.5,
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          }}>{item.text}</span>
+                        ) : item.lines ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                            {item.lines.map((l, k) => (
+                              <span key={k} style={{ fontSize: 12, color: "var(--text-sub)", lineHeight: 1.5 }}>{l}</span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : !step.checked ? (
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3, fontStyle: "italic" }}>
+                    {step.emptyText ?? "Not configured yet"}
+                  </div>
+                ) : null}
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Below summary slot */}
       {belowSummary}
     </div>
   );

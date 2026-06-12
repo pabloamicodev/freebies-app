@@ -166,48 +166,60 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 const OFFER_TYPES = [
   {
     value: "gift",
-    emoji: "🎁",
     label: "Gift Offer",
-    desc: "Auto-add or let customer select a free product when cart meets a threshold.",
-    color: "#ff6b35",
+    desc: "Auto-add or let customers select a free product when the cart hits a threshold.",
+    color: "#f97316",
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+        <path d="M10.75 4.5a.75.75 0 0 0-1.5 0v.75h-1.5A2.25 2.25 0 0 0 5.5 7.5v.75H3.75A.75.75 0 0 0 3 9v7.25A1.75 1.75 0 0 0 4.75 18h10.5A1.75 1.75 0 0 0 17 16.25V9a.75.75 0 0 0-.75-.75H14.5V7.5a2.25 2.25 0 0 0-2.25-2.25h-1.5V4.5ZM9.25 7.5h-1.5a.75.75 0 0 0 0 1.5H9.25v3.5H4.5V9.75h1.25V8.25H4.5V7.5a.75.75 0 0 1 .75-.75h4V7.5Zm1.5 0v-.75h1.5a.75.75 0 0 1 .75.75v.75h-1.25v1.5H14V9.75h-3.25V9h1.25V8.25H10.75V7.5Zm-1.5 5V9.75h1.5V12.5h-1.5Zm-4.75 0H9.25v4H4.75a.25.25 0 0 1-.25-.25V12.5Zm5.75 4V12.5h4.75v3.75a.25.25 0 0 1-.25.25H10.75Z"/>
+      </svg>
+    ),
   },
   {
     value: "bundle",
-    emoji: "📦",
     label: "Bundle Offer",
-    desc: "Group products together with a discount — classic bundle, mix & match, or build-a-box.",
+    desc: "Group products with a discount — classic bundles, mix & match, or build-your-own.",
     color: "#3b82f6",
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M2 3.75A.75.75 0 0 1 2.75 3h14.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 3.75ZM2 7.5a.75.75 0 0 1 .75-.75h14.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 7.5ZM2.75 10.75a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5h-7.5ZM14.25 9.5a.75.75 0 0 1 .75.75v4.69l1.72-1.72a.75.75 0 1 1 1.06 1.06l-3 3a.75.75 0 0 1-1.06 0l-3-3a.75.75 0 1 1 1.06-1.06l1.72 1.72V10.25a.75.75 0 0 1 .75-.75Z" clipRule="evenodd"/>
+      </svg>
+    ),
   },
   {
     value: "upsell",
-    emoji: "⬆️",
     label: "Upsell Offer",
-    desc: "Show a recommended product at checkout or on the product page (FBT).",
+    desc: "Recommend products at checkout or on the product page (Frequently Bought Together).",
     color: "#8b5cf6",
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M10 17a.75.75 0 0 1-.75-.75V5.612L5.29 9.77a.75.75 0 0 1-1.08-1.04l5.25-5.5a.75.75 0 0 1 1.08 0l5.25 5.5a.75.75 0 1 1-1.08 1.04l-3.96-4.158V16.25A.75.75 0 0 1 10 17Z" clipRule="evenodd"/>
+      </svg>
+    ),
   },
   {
     value: "discount",
-    emoji: "💰",
     label: "Discount Offer",
-    desc: "Volume tiers, cart-level discount, or cheapest / most expensive item free.",
+    desc: "Volume tiers, cart discounts, or cheapest/most expensive item promotions.",
     color: "#10b981",
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM6.75 9.25a.75.75 0 0 0 0 1.5h6.5a.75.75 0 0 0 0-1.5h-6.5Z" clipRule="evenodd"/>
+      </svg>
+    ),
   },
   {
     value: "booster",
-    emoji: "🚀",
     label: "Booster",
-    desc: "Today Offer widget or progress bar — shows active offers site-wide.",
+    desc: "Today Offer widget or progress bar — surfaces active offers across the entire storefront.",
     color: "#f59e0b",
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M10.38 1.103a.75.75 0 0 0-1.042.155L5.45 6.38H2.75a.75.75 0 0 0-.75.75v5.74a.75.75 0 0 0 .75.75H5.45l3.888 5.122a.75.75 0 0 0 1.31-.407l.001-.01.004-.04.012-.119a31.516 31.516 0 0 0 .115-2.047c.035-1.354.026-3.34-.395-5.293.421-1.952.43-3.94.395-5.293a31.55 31.55 0 0 0-.115-2.047l-.012-.119-.004-.04-.001-.01a.75.75 0 0 0-.268-.414Z" clipRule="evenodd"/>
+      </svg>
+    ),
   },
 ];
-
-function IconChevronLeft() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M15 18l-6-6 6-6"/>
-    </svg>
-  );
-}
 
 export default function NewOfferPage() {
   const navigate = useNavigate();
@@ -235,78 +247,93 @@ export default function NewOfferPage() {
   }
 
   return (
-    <div className="b-page">
-      {/* Back + Header */}
-      <div style={{ marginBottom: 16 }}>
+    <div className="b-page" style={{ maxWidth: 680, margin: "0 auto" }}>
+      {/* Header */}
+      <div style={{ marginBottom: 28 }}>
         <button
           type="button"
-          className="b-btn-plain b-text-sm"
-          style={{ display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 12 }}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 16, background: "none", border: "none", cursor: "pointer", color: "var(--text-sub)", fontSize: 13, padding: 0 }}
           onClick={() => navigate("/app/offers")}
         >
-          <IconChevronLeft /> All Offers
+          <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M17 10a.75.75 0 0 1-.75.75H5.612l4.158 3.96a.75.75 0 1 1-1.04 1.08l-5.5-5.25a.75.75 0 0 1 0-1.08l5.5-5.25a.75.75 0 1 1 1.04 1.08L5.612 9.25H16.25A.75.75 0 0 1 17 10Z" clipRule="evenodd"/></svg>
+          All Offers
         </button>
-        <h1 className="b-page-title">Create new offer</h1>
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: "var(--text)", margin: "0 0 6px" }}>Create new offer</h1>
+        <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0 }}>
+          Choose a type to get started. You can always change settings later.
+        </p>
       </div>
 
       <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
         <input type="hidden" name="offerType" value={offerType} />
 
-        {/* Offer type selector */}
-        <div className="b-card b-mb-4">
-          <div className="b-card-header">Offer type</div>
-          <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {OFFER_TYPES.map((type) => (
-              <label
-                key={type.value}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 14,
-                  padding: "12px 16px",
-                  borderRadius: 8,
-                  border: `2px solid ${offerType === type.value ? "var(--blue)" : "var(--border)"}`,
-                  cursor: "pointer",
-                  background: offerType === type.value ? "var(--blue-light)" : "transparent",
-                  transition: "border-color 0.15s, background 0.15s",
-                }}
-                onClick={() => setOfferType(type.value)}
-              >
-                <input
-                  type="radio"
-                  name="offerTypeRadio"
-                  value={type.value}
-                  checked={offerType === type.value}
-                  onChange={() => setOfferType(type.value)}
-                  style={{ accentColor: "var(--blue)", width: 16, height: 16 }}
-                />
-                <div
+        {/* ── Offer type selector ── */}
+        <div className="b-card" style={{ marginBottom: 16 }}>
+          <div className="b-card-header">
+            <span>Offer type</span>
+            <span style={{ fontSize: 12, fontWeight: 400, color: "var(--text-sub)" }}>Select one</span>
+          </div>
+          <div className="b-card-body" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, padding: 16 }}>
+            {OFFER_TYPES.map((type) => {
+              const active = offerType === type.value;
+              return (
+                <button
+                  key={type.value}
+                  type="button"
+                  onClick={() => setOfferType(type.value)}
                   style={{
-                    width: 36, height: 36,
-                    borderRadius: 8,
-                    background: type.color,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 18,
-                    flexShrink: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-start",
+                    gap: 10,
+                    padding: "14px 16px",
+                    borderRadius: 10,
+                    border: `2px solid ${active ? "var(--blue)" : "var(--border)"}`,
+                    background: active ? "var(--blue-light, #f0f4ff)" : "var(--bg-card)",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    transition: "border-color 0.12s, background 0.12s, box-shadow 0.12s",
+                    boxShadow: active ? "0 0 0 3px rgba(44,110,203,0.12)" : "none",
+                    position: "relative",
                   }}
                 >
-                  {type.emoji}
-                </div>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{type.label}</div>
-                  <div style={{ fontSize: 12, color: "var(--text-sub)", marginTop: 2 }}>{type.desc}</div>
-                </div>
-              </label>
-            ))}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+                    <div style={{
+                      width: 36, height: 36, borderRadius: 9, flexShrink: 0,
+                      background: active ? type.color : `${type.color}1a`,
+                      color: active ? "#fff" : type.color,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      transition: "background 0.12s, color 0.12s",
+                    }}>
+                      {type.icon}
+                    </div>
+                    {active && (
+                      <div style={{ width: 18, height: 18, borderRadius: "50%", background: "var(--blue)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <svg width="10" height="10" viewBox="0 0 20 20" fill="white"><path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clipRule="evenodd"/></svg>
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 3 }}>{type.label}</div>
+                    <div style={{ fontSize: 12, color: "var(--text-sub)", lineHeight: 1.4 }}>{type.desc}</div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {/* Offer details */}
-        <div className="b-card b-mb-4">
-          <div className="b-card-header">Offer details</div>
-          <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {/* ── Offer details ── */}
+        <div className="b-card" style={{ marginBottom: 20 }}>
+          <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="var(--text-sub)"><path fillRule="evenodd" d="M4.5 2A1.5 1.5 0 0 0 3 3.5v13A1.5 1.5 0 0 0 4.5 18h11a1.5 1.5 0 0 0 1.5-1.5V7.621a1.5 1.5 0 0 0-.44-1.06l-4.12-4.122A1.5 1.5 0 0 0 11.378 2H4.5Zm2.25 8.5a.75.75 0 0 0 0 1.5h6.5a.75.75 0 0 0 0-1.5h-6.5Zm0 3a.75.75 0 0 0 0 1.5h6.5a.75.75 0 0 0 0-1.5h-6.5Zm0-6a.75.75 0 0 0 0 1.5h3a.75.75 0 0 0 0-1.5h-3Z" clipRule="evenodd"/></svg>
+            <span>Offer details</span>
+          </div>
+          <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
             <div>
-              <label className="b-label" htmlFor="internalName">Internal name</label>
+              <label className="b-label" htmlFor="internalName">
+                Internal name <span style={{ color: "var(--red, #e53e3e)" }}>*</span>
+              </label>
               <input
                 id="internalName"
                 className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`}
@@ -318,11 +345,13 @@ export default function NewOfferPage() {
               />
               {fieldErrors.internalName
                 ? <div className="b-help-error">{fieldErrors.internalName}</div>
-                : <div className="b-help">Used internally to identify this offer. Must be unique.</div>
+                : <div className="b-help">Only visible to your team. Used to identify this offer.</div>
               }
             </div>
             <div>
-              <label className="b-label" htmlFor="publicTitle">Public title</label>
+              <label className="b-label" htmlFor="publicTitle">
+                Public title <span style={{ color: "var(--red, #e53e3e)" }}>*</span>
+              </label>
               <input
                 id="publicTitle"
                 className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`}
@@ -334,36 +363,37 @@ export default function NewOfferPage() {
               />
               {fieldErrors.publicTitle
                 ? <div className="b-help-error">{fieldErrors.publicTitle}</div>
-                : <div className="b-help">Shown to customers in widgets and cart messages.</div>
+                : <div className="b-help">Displayed to customers in widgets and cart messages.</div>
               }
             </div>
-            <div>
+            <div style={{ maxWidth: 140 }}>
               <label className="b-label" htmlFor="priority">Priority</label>
               <input
                 id="priority"
                 className={`b-input${fieldErrors.priority ? " b-input-error" : ""}`}
                 name="priority"
                 type="number"
+                min="1"
                 value={priority}
                 onChange={(e) => { setPriority(e.target.value); setFieldErrors((p) => ({ ...p, priority: undefined })); }}
                 autoComplete="off"
-                style={{ maxWidth: 120 }}
               />
               {fieldErrors.priority
                 ? <div className="b-help-error">{fieldErrors.priority}</div>
-                : <div className="b-help">Lower number = higher priority. Evaluated first when multiple offers are active.</div>
+                : <div className="b-help">Lower = evaluated first.</div>
               }
             </div>
           </div>
         </div>
 
-        {/* Footer actions */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <button type="button" className="b-btn b-btn-secondary" onClick={() => navigate("/app/offers")}>
+        {/* ── Footer ── */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <button type="button" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-sub)", fontSize: 13, padding: 0 }} onClick={() => navigate("/app/offers")}>
             Cancel
           </button>
-          <button type="submit" className="b-btn b-btn-primary">
-            Create & continue to conditions →
+          <button type="submit" className="b-btn b-btn-primary" style={{ padding: "10px 22px", fontSize: 14 }}>
+            Create offer and continue
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M3 10a.75.75 0 0 1 .75-.75h10.638L10.23 5.29a.75.75 0 1 1 1.04-1.08l5.5 5.25a.75.75 0 0 1 0 1.08l-5.5 5.25a.75.75 0 1 1-1.04-1.08l4.158-3.96H3.75A.75.75 0 0 1 3 10Z" clipRule="evenodd"/></svg>
           </button>
         </div>
       </Form>

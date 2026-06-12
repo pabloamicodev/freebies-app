@@ -240,20 +240,20 @@ export default function NewGiftOfferPage() {
 
   function conditionSummaryLine() {
     if (conditionType === "cart_value" || conditionType === "cart_value_multiplier") {
-      return `Gaste desde $${parseFloat(minAmount || "0").toFixed(2)} para obtener ${giftCount} regalo(s)`;
+      return `Spend from $${parseFloat(minAmount || "0").toFixed(2)} to get ${giftCount} gift(s)`;
     }
     if (conditionType === "cart_quantity") {
-      return `Comprar ${minQty} artículo(s) para obtener ${giftCount} regalo(s)`;
+      return `Buy ${minQty} item(s) to get ${giftCount} gift(s)`;
     }
-    return `Compre ${minQty} artículo(s) de productos para obtener ${giftCount} regalo(s)`;
+    return `Buy ${minQty} item(s) from selected products to get ${giftCount} gift(s)`;
   }
 
   function appliesToLabel() {
-    if (appliesTo === "any_product") return "Aplica para cualquier producto";
-    if (appliesTo === "exclude_variants_ids") return "Excepto productos seleccionados";
-    if (appliesTo === "exclude_type_vendor_collection") return "Excepto tipos/proveedores/colecciones";
-    if (appliesTo === "variants_ids" || appliesTo === "specific_products") return `Se aplica a ${conditionProducts.length} productos seleccionados`;
-    if (appliesTo === "type_vendor_collection") return "Se aplica a tipos/proveedores/colecciones seleccionados";
+    if (appliesTo === "any_product") return "Applies to any product";
+    if (appliesTo === "exclude_variants_ids") return "All except selected products";
+    if (appliesTo === "exclude_type_vendor_collection") return "All except selected types/vendors/collections";
+    if (appliesTo === "variants_ids" || appliesTo === "specific_products") return `Applies to ${conditionProducts.length} selected product(s)`;
+    if (appliesTo === "type_vendor_collection") return "Applies to selected types/vendors/collections";
     return appliesTo;
   }
 
@@ -265,7 +265,7 @@ export default function NewGiftOfferPage() {
       <div style={{ marginBottom: 24 }}>
         <button type="button" className="b-btn-plain b-text-sm" style={{ display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 8 }} onClick={() => void navigate("/app/offers")}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
-          Crear oferta de regalo
+          All Offers
         </button>
       </div>
 
@@ -285,47 +285,47 @@ export default function NewGiftOfferPage() {
           {/* ── Left column ── */}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
-            {/* ── Block 1: Información de la oferta ── */}
+            {/* ── Block 1: Offer information ── */}
             <div className="b-card">
-              <div className="b-card-header">Información de la oferta</div>
+              <div className="b-card-header">Offer information</div>
               <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <div>
-                  <label className="b-label" htmlFor="internalName">Nombre de la oferta</label>
+                  <label className="b-label" htmlFor="internalName">Offer name <span style={{ color: "var(--red, #e53e3e)" }}>*</span></label>
                   <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName" value={internalName}
                     onChange={(e) => { setInternalName(e.target.value); setFieldErrors((p) => ({ ...p, internalName: undefined })); }} autoComplete="off" />
                   {fieldErrors.internalName
                     ? <div className="b-help-error">{fieldErrors.internalName}</div>
-                    : <div className="b-help">Solo para uso interno, no se muestra a los clientes..</div>
+                    : <div className="b-help">Internal only — not shown to customers.</div>
                   }
                 </div>
                 <div>
-                  <label className="b-label" htmlFor="publicTitle">Título de la oferta</label>
+                  <label className="b-label" htmlFor="publicTitle">Public title <span style={{ color: "var(--red, #e53e3e)" }}>*</span></label>
                   <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle" value={publicTitle}
                     onChange={(e) => { setPublicTitle(e.target.value); setFieldErrors((p) => ({ ...p, publicTitle: undefined })); }} autoComplete="off" />
                   {fieldErrors.publicTitle
                     ? <div className="b-help-error">{fieldErrors.publicTitle}</div>
-                    : <div className="b-help">Mostrado a los clientes en la tienda online.</div>
+                    : <div className="b-help">Shown to customers in your online store.</div>
                   }
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <div>
-                    <label className="b-label" htmlFor="startsAt">Hora de inicio</label>
+                    <label className="b-label" htmlFor="startsAt">Start time</label>
                     <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                       value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                   </div>
                   <div>
-                    <label className="b-label" htmlFor="endsAt">Hora de finalización</label>
+                    <label className="b-label" htmlFor="endsAt">End time <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(optional)</span></label>
                     <input id="endsAt" className="b-input" type="datetime-local" name="endsAt"
-                      value={endsAt} onChange={(e) => setEndsAt(e.target.value)} placeholder="Hora de finalización" />
+                      value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* ── Block 2: Oferta condición principal ── */}
+            {/* ── Block 2: Main condition ── */}
             {!isScratch && (
             <div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Oferta condición principal</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Main condition</div>
 
               <div className="b-card">
                 <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -360,7 +360,7 @@ export default function NewGiftOfferPage() {
                       </div>
 
                       <div>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Agregar moneda</div>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Currency filter</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                           {CURRENCIES.map((c) => (
                             <button key={c} type="button" onClick={() => toggleCurrency(c)} style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1.5px solid ${selectedCurrencies.includes(c) ? "var(--blue)" : "var(--border)"}`, background: selectedCurrencies.includes(c) ? "var(--blue-light)" : "var(--bg)", color: selectedCurrencies.includes(c) ? "var(--blue)" : "var(--text-sub)", transition: "all 0.12s" }}>
@@ -372,13 +372,13 @@ export default function NewGiftOfferPage() {
                       </div>
 
                       <div>
-                        <label className="b-label">La condición se aplicará a:</label>
+                        <label className="b-label">Condition applies to:</label>
                         <select className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
-                          <option value="any_product">cualquier producto</option>
-                          <option value="exclude_variants_ids">todos excepto productos seleccionados</option>
-                          <option value="exclude_type_vendor_collection">todos excepto tipos/proveedores/colecciones seleccionados</option>
-                          <option value="specific_products">productos seleccionados</option>
-                          <option value="type_vendor_collection">productos en tipos/proveedores/colecciones seleccionados</option>
+                          <option value="any_product">any product</option>
+                          <option value="exclude_variants_ids">all except selected products</option>
+                          <option value="exclude_type_vendor_collection">all except selected types/vendors/collections</option>
+                          <option value="specific_products">selected products</option>
+                          <option value="type_vendor_collection">products in selected types/vendors/collections</option>
                         </select>
                       </div>
                     </>
@@ -388,7 +388,7 @@ export default function NewGiftOfferPage() {
                   {conditionType === "cart_value_multiplier" && (
                     <>
                       <div>
-                        <label className="b-label">Multiplicar el valor base</label>
+                        <label className="b-label">Base multiplier value</label>
                         <div style={{ position: "relative", maxWidth: 280 }}>
                           <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--text-sub)" }}>$</span>
                           <input className="b-input" type="number" name="minAmount" value={minAmount}
@@ -396,7 +396,7 @@ export default function NewGiftOfferPage() {
                             min="0" step="0.01" style={{ paddingLeft: 22 }} autoComplete="off" placeholder="0.00" />
                         </div>
                         <div className="b-help">
-                          Por ejemplo: cuando el valor base se establece en $100, el cliente recibirá 1 regalo cuando el valor del carrito sea superior a $100, 2 obsequios cuando sea superior a $200.
+                          Example: with base value $100, customers get 1 gift when cart exceeds $100, 2 gifts over $200, and so on.
                         </div>
                       </div>
 
@@ -407,7 +407,7 @@ export default function NewGiftOfferPage() {
                       </div>
 
                       <div>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Agregar moneda</div>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Currency filter</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                           {CURRENCIES.map((c) => (
                             <button key={c} type="button" onClick={() => toggleCurrency(c)} style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1.5px solid ${selectedCurrencies.includes(c) ? "var(--blue)" : "var(--border)"}`, background: selectedCurrencies.includes(c) ? "var(--blue-light)" : "var(--bg)", color: selectedCurrencies.includes(c) ? "var(--blue)" : "var(--text-sub)", transition: "all 0.12s" }}>
@@ -419,13 +419,13 @@ export default function NewGiftOfferPage() {
                       </div>
 
                       <div>
-                        <label className="b-label">La condición se aplicará a:</label>
+                        <label className="b-label">Condition applies to:</label>
                         <select className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
-                          <option value="any_product">cualquier producto</option>
-                          <option value="exclude_variants_ids">todos excepto productos seleccionados</option>
-                          <option value="exclude_type_vendor_collection">todos excepto tipos/proveedores/colecciones seleccionados</option>
-                          <option value="specific_products">productos seleccionados</option>
-                          <option value="type_vendor_collection">productos en tipos/proveedores/colecciones seleccionados</option>
+                          <option value="any_product">any product</option>
+                          <option value="exclude_variants_ids">all except selected products</option>
+                          <option value="exclude_type_vendor_collection">all except selected types/vendors/collections</option>
+                          <option value="specific_products">selected products</option>
+                          <option value="type_vendor_collection">products in selected types/vendors/collections</option>
                         </select>
                       </div>
                     </>
@@ -446,13 +446,13 @@ export default function NewGiftOfferPage() {
                         </div>
                       </div>
                       <div>
-                        <label className="b-label">La condición se aplicará a:</label>
+                        <label className="b-label">Condition applies to:</label>
                         <select className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
-                          <option value="any_product">cualquier producto</option>
-                          <option value="exclude_variants_ids">todos excepto productos seleccionados</option>
-                          <option value="exclude_type_vendor_collection">todos excepto tipos/proveedores/colecciones seleccionados</option>
-                          <option value="specific_products">productos seleccionados</option>
-                          <option value="type_vendor_collection">productos en tipos/proveedores/colecciones seleccionados</option>
+                          <option value="any_product">any product</option>
+                          <option value="exclude_variants_ids">all except selected products</option>
+                          <option value="exclude_type_vendor_collection">all except selected types/vendors/collections</option>
+                          <option value="specific_products">selected products</option>
+                          <option value="type_vendor_collection">products in selected types/vendors/collections</option>
                         </select>
                       </div>
                     </>
@@ -462,7 +462,7 @@ export default function NewGiftOfferPage() {
                   {conditionType === "specific_product" && (
                     <>
                       <div>
-                        <label className="b-label">Número de productos requeridos</label>
+                        <label className="b-label">Required product quantity</label>
                         <input className="b-input" type="number" name="minQty" value={minQty}
                           onChange={(e) => setMinQty(parseInt(e.target.value) || 1)}
                           min="1" style={{ maxWidth: 120 }} autoComplete="off" />
@@ -470,16 +470,16 @@ export default function NewGiftOfferPage() {
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input type="checkbox" name="multiplyGifts" checked={multiplyGifts} onChange={(e) => setMultiplyGifts(e.target.checked)} />
                         <div>
-                          <div className="b-checkbox-label">Multiplica regalos con número de productos</div>
-                          <div className="b-checkbox-help">Esta función permite a los clientes obtener más obsequios comprando más productos.</div>
+                          <div className="b-checkbox-label">Multiply gifts by product quantity</div>
+                          <div className="b-checkbox-help">Customers get more gifts the more qualifying products they buy.</div>
                         </div>
                       </label>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input type="checkbox" name="giftsMatchProducts" checked={giftsMatchProducts} onChange={(e) => setGiftsMatchProducts(e.target.checked)} />
-                        <div className="b-checkbox-label">Los regalos serán los mismos que los productos seleccionados.</div>
+                        <div className="b-checkbox-label">Gifts match the selected products (BOGO).</div>
                       </label>
                       <div style={{ marginLeft: 26, display: "flex", flexDirection: "column", gap: 6 }}>
-                        {[{ v: "variant", l: "Seguimiento por variante" }, { v: "product", l: "Seguimiento por producto" }].map((opt) => (
+                        {[{ v: "variant", l: "Track by variant" }, { v: "product", l: "Track by product" }].map((opt) => (
                           <label key={opt.v} className="b-checkbox-row" style={{ cursor: giftsMatchProducts ? "pointer" : "not-allowed", gap: 8, opacity: giftsMatchProducts ? 1 : 0.5 }}>
                             <input type="radio" name="trackMode" value={opt.v} checked={trackMode === opt.v} disabled={!giftsMatchProducts}
                               onChange={() => setTrackMode(opt.v)} style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
@@ -488,15 +488,15 @@ export default function NewGiftOfferPage() {
                         ))}
                       </div>
                       <div>
-                        <label className="b-label">La condición se aplicará a:</label>
+                        <label className="b-label">Condition applies to:</label>
                         <select className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
-                          <option value="variants_ids">productos seleccionados</option>
-                          <option value="type_vendor_collection">productos en tipos/proveedores/colecciones seleccionados</option>
+                          <option value="variants_ids">selected products</option>
+                          <option value="type_vendor_collection">products in selected types/vendors/collections</option>
                         </select>
                       </div>
                       <div>
-                        <button type="button" className="b-btn b-btn-secondary" onClick={() => setCondPickerOpen(true)}>Seleccionar productos</button>
-                        <span style={{ marginLeft: 10, fontSize: 13, color: "var(--text-sub)" }}>{conditionProducts.length} productos seleccionados</span>
+                        <button type="button" className="b-btn b-btn-secondary" onClick={() => setCondPickerOpen(true)}>Select products</button>
+                        <span style={{ marginLeft: 10, fontSize: 13, color: "var(--text-sub)" }}>{conditionProducts.length} selected products</span>
                       </div>
                     </>
                   )}
@@ -506,10 +506,10 @@ export default function NewGiftOfferPage() {
 
               <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
                 <button type="button" className="b-btn b-btn-primary b-btn-sm" disabled>
-                  + Agregar condición principal
+                  + Add main condition
                 </button>
                 <div style={{ fontSize: 12, color: "var(--text-sub)" }}>
-                  La cantidad del carrito y la condición del valor del carrito se pueden combinar
+                  Cart quantity and cart value conditions can be combined
                 </div>
               </div>
             </div>
@@ -518,15 +518,15 @@ export default function NewGiftOfferPage() {
             {/* Scratch: botón para abrir el modal de condición principal */}
             {isScratch && (
               <div className="b-card">
-                <div className="b-card-header">Oferta condición principal</div>
+                <div className="b-card-header">Main condition</div>
                 <div className="b-card-body">
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <button type="button" className="b-btn b-btn-primary b-btn-sm"
                       onClick={() => setMainCondModalOpen(true)}>
-                      + Agregar condición principal
+                      + Add main condition
                     </button>
                     <span style={{ fontSize: 12, color: "var(--text-sub)" }}>
-                      La cantidad del carrito y la condición del valor del carrito se pueden combinar
+                      Cart quantity and cart value conditions can be combined
                     </span>
                   </div>
                 </div>
@@ -537,7 +537,7 @@ export default function NewGiftOfferPage() {
             <div>
               {activeSubs.length > 0 && (
                 <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Subcondición de oferta</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Sub-conditions</div>
                   {activeSubs.map((id) => {
                     const SubForm = SUB_FORMS[id];
                     const def = GIFT_SUBCONDITIONS.find((s) => s.id === id)!;
@@ -560,29 +560,29 @@ export default function NewGiftOfferPage() {
                 <div className="b-card-body" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px 16px", color: "var(--blue)", cursor: "pointer", fontWeight: 500, fontSize: 14 }}
                   onClick={() => setSubModalOpen(true)}>
                   <div style={{ width: 22, height: 22, borderRadius: "50%", border: "1.5px solid var(--blue)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, lineHeight: 1, flexShrink: 0 }}>+</div>
-                  Agregar subcondición
+                  Add sub-condition
                 </div>
               </div>
 
               {activeSubs.length > 0 && (
                 <div style={{ marginTop: 6, fontSize: 13, color: "var(--text-sub)" }}>
-                  La subcondición combina más condiciones para ofertas como enlaces específicos, mercados, ubicación del cliente, etc. No se requieren subcondiciones.
+                  Sub-conditions combine additional filters like specific links, markets, customer location, etc. Sub-conditions are optional.
                 </div>
               )}
             </div>
 
             {/* ── Block 4: Seleccionar regalos ── */}
             <div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Seleccionar regalos</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Gift reward</div>
               <div className="b-card">
                 {/* Tabs */}
                 <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 16px" }}>
                   {[
-                    { key: "product",  label: "Regalo de productos" },
-                    { key: "shipping", label: "Descuento de envío como regalo" },
+                    { key: "product",  label: "Product Gift" },
+                    { key: "shipping", label: "Free Shipping" },
                   ].map((tab) => (
                     <button key={tab.key} type="button" onClick={() => setGiftTab(tab.key as "product" | "shipping")}
-                      style={{ padding: "10px 16px 10px", fontSize: 13, fontWeight: giftTab === tab.key ? 600 : 400, color: giftTab === tab.key ? "var(--blue)" : "var(--text-sub)", borderBottom: giftTab === tab.key ? "2px solid var(--blue)" : "2px solid transparent", background: "none", border: "none", borderBottomStyle: "solid", cursor: "pointer" }}>
+                      style={{ padding: "10px 16px", fontSize: 13, fontWeight: giftTab === tab.key ? 600 : 400, color: giftTab === tab.key ? "var(--blue)" : "var(--text-sub)", borderTop: "none", borderLeft: "none", borderRight: "none", borderBottom: giftTab === tab.key ? "2px solid var(--blue)" : "2px solid transparent", background: "none", cursor: "pointer" }}>
                       {tab.label}
                     </button>
                   ))}
@@ -592,14 +592,14 @@ export default function NewGiftOfferPage() {
                   {giftTab === "product" && (
                     <>
                       <div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Tipo de descuento de regalo</div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Gift discount type</div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                           <div>
                             <label className="b-label">Tipo:</label>
                             <select className="b-select" name="discountType" value={discountType} onChange={(e) => setDiscountType(e.target.value)}>
-                              <option value="percentage">Porcentaje</option>
-                              <option value="fixed_amount">Cantidad</option>
-                              <option value="fixed_price">Precio fijo</option>
+                              <option value="percentage">Percentage</option>
+                              <option value="fixed_amount">Amount</option>
+                              <option value="fixed_price">Fixed price</option>
                             </select>
                           </div>
                           <div>
@@ -617,17 +617,17 @@ export default function NewGiftOfferPage() {
                       </div>
 
                       <div>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>El cliente recibirá:</div>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Customer will receive:</div>
                         <label className="b-checkbox-row" style={{ cursor: isBogo ? "not-allowed" : "pointer", gap: 10, marginBottom: 6, opacity: isBogo ? 0.5 : 1 }}>
                           <input type="radio" name="_autoAddRadio" checked={isAutoAdd} disabled={isBogo}
                             onChange={() => setIsAutoAdd(true)}
                             style={{ accentColor: "var(--blue)", width: 15, height: 15 }} />
-                          <span style={{ fontSize: 13, color: isBogo ? "var(--text-sub)" : "var(--text)" }}>Automáticamente todos los regalos</span>
+                          <span style={{ fontSize: 13, color: isBogo ? "var(--text-sub)" : "var(--text)" }}>Automatically add all gifts</span>
                         </label>
                         <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                           <input type="radio" name="_autoAddRadio" checked={!isAutoAdd} onChange={() => setIsAutoAdd(false)}
                             style={{ accentColor: "var(--blue)", width: 15, height: 15 }} />
-                          <span style={{ fontSize: 13, color: "var(--text)" }}>Número de regalos que recibirá el cliente</span>
+                          <span style={{ fontSize: 13, color: "var(--text)" }}>Customer selects number of gifts</span>
                         </label>
                         {!isAutoAdd && (
                           <input className="b-input" type="number" name="giftCount" value={giftCount}
@@ -639,16 +639,16 @@ export default function NewGiftOfferPage() {
 
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <button type="button" className="b-btn b-btn-secondary" onClick={() => setRewardPickerOpen(true)}>
-                          Seleccionar regalos
+                          Select gifts
                         </button>
-                        <span style={{ fontSize: 13, color: "var(--text-sub)" }}>{rewardProducts.length} productos seleccionados</span>
+                        <span style={{ fontSize: 13, color: "var(--text-sub)" }}>{rewardProducts.length} selected products</span>
                       </div>
                     </>
                   )}
 
                   {giftTab === "shipping" && (
                     <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-sub)", fontSize: 13 }}>
-                      Descuento de envío como regalo — próximamente
+                      Free shipping as gift — coming soon
                     </div>
                   )}
                 </div>
@@ -660,7 +660,7 @@ export default function NewGiftOfferPage() {
               <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
                 onClick={() => setAdvancedOpen((v) => !v)}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span>Configuración avanzada (opcional)</span>
+                  <span>Advanced settings (optional)</span>
                   <span style={{ color: "var(--text-sub)", display: "flex" }}><IInfo /></span>
                 </div>
                 <span style={{ color: "var(--text-sub)", display: "flex" }}>{advancedOpen ? <IChevUp /> : <IChevDown />}</span>
@@ -673,9 +673,9 @@ export default function NewGiftOfferPage() {
                     <div style={{ position: "absolute", top: 0, right: 0, zIndex: 1 }}>
                       <img src="data:image/svg+xml,%3csvg%20width='36'%20height='36'%20viewBox='0%200%2036%2036'%20fill='none'%20xmlns='http://www.w3.org/2000/svg'%3e%3cpath%20d='M0%200H36V36L0%200Z'%20fill='%23FFAA00'/%3e%3cpath%20d='M0%200H36V36L0%200Z'%20fill='url(%23paint0_linear_30409_40096)'%20fill-opacity='0.5'/%3e%3cpath%20d='M28.8775%2014.8774C28.8593%2013.9095%2028.481%2012.947%2027.7424%2012.2085L27.3396%2011.8057L25.8059%2013.3395L26.2087%2013.7422C26.8763%2014.4099%2026.8763%2015.492%2026.2088%2016.1596C25.5412%2016.8271%2024.459%2016.8272%2023.7913%2016.1596C23.1237%2015.4919%2023.1238%2014.4099%2023.7914%2013.7422L27.7425%209.79118C28.41%209.12371%2029.4922%209.12366%2030.1597%209.79118C30.8272%2010.4587%2030.8273%2011.541%2030.1598%2012.2085L31.6936%2013.7422C33.2082%2012.2277%2033.2081%209.77202%2031.6935%208.25743C31.2597%207.82368%2030.7489%207.51414%2030.2049%207.32882C29.7756%207.18258%2029.3261%207.11358%2028.8777%207.12222C28.8861%206.67385%2028.8172%206.22419%2028.6711%205.79503C28.4858%205.25118%2028.1762%204.74017%2027.7424%204.30632C26.2278%202.79173%2023.7722%202.79173%2022.2576%204.30632C21.8238%204.74017%2021.5143%205.25123%2021.3289%205.79502C21.1827%206.22428%2021.1138%206.67389%2021.1224%207.12232C20.674%207.11367%2020.2244%207.18258%2019.7951%207.32882C19.2513%207.51409%2018.7403%207.82362%2018.3065%208.25743C16.792%209.77201%2016.7919%2012.2277%2018.3064%2013.7422C18.7403%2014.1761%2019.2513%2014.4856%2019.7951%2014.6709C20.2243%2014.817%2020.6739%2014.8859%2021.1224%2014.8775C21.1138%2015.3259%2021.1827%2015.7755%2021.3289%2016.2047C21.5142%2016.7488%2021.8238%2017.2596%2022.2575%2017.6933C23.7721%2019.2079%2026.2279%2019.2079%2027.7425%2017.6934C28.1762%2017.2596%2028.4857%2016.7485%2028.6711%2016.2047C28.8173%2015.7755%2028.8861%2015.3257%2028.8775%2014.8774ZM22.2577%2012.2085C21.5901%2012.8761%2020.5079%2012.8761%2019.8403%2012.2085C19.1727%2011.5409%2019.1728%2010.4588%2019.8404%209.79118C20.508%209.12356%2021.5901%209.12365%2022.2576%209.79118L23.4663%2010.9999L22.2577%2012.2085ZM25.0001%209.46614L23.7913%208.25743C23.1239%207.58996%2023.1238%206.50774%2023.7914%205.84012C24.4591%205.1725%2025.5411%205.1726%2026.2087%205.84012C26.8762%206.50764%2026.8763%207.58991%2026.2088%208.25743L25.0001%209.46614Z'%20fill='white'/%3e%3cpath%20d='M21.1225%207.12289C21.1407%208.09071%2021.519%209.0532%2022.2576%209.79175L22.6604%2010.1945L24.1941%208.66079L23.7913%208.258C23.1237%207.59038%2023.1237%206.50822%2023.7912%205.84069C24.4588%205.17317%2025.541%205.17307%2026.2087%205.84069C26.8763%206.50832%2026.8762%207.59038%2026.2086%208.258L22.2575%2012.2091C21.59%2012.8765%2020.5078%2012.8766%2019.8403%2012.2091C19.1728%2011.5415%2019.1727%2010.4593%2019.8402%209.79175L18.3064%208.258C16.7918%209.77259%2016.7919%2012.2282%2018.3065%2013.7428C18.7403%2014.1766%2019.2511%2014.4861%2019.7951%2014.6714C20.2244%2014.8177%2020.6739%2014.8867%2021.1223%2014.878C21.1139%2015.3264%2021.1828%2015.7761%2021.3289%2016.2052C21.5142%2016.7491%2021.8238%2017.2601%2022.2576%2017.6939C23.7722%2019.2085%2026.2278%2019.2085%2027.7424%2017.6939C28.1762%2017.2601%2028.4857%2016.749%2028.6711%2016.2052C28.8173%2015.776%2028.8862%2015.3264%2028.8776%2014.8779C29.326%2014.8866%2029.7756%2014.8177%2030.2049%2014.6714C30.7487%2014.4862%2031.2597%2014.1766%2031.6935%2013.7428C33.208%2012.2282%2033.2081%209.77259%2031.6936%208.25801C31.2597%207.82415%2030.7487%207.51462%2030.2049%207.3293C29.7757%207.1832%2029.3261%207.1143%2028.8776%207.12279C28.8862%206.67437%2028.8173%206.22476%2028.6711%205.7955C28.4858%205.25145%2028.1762%204.74065%2027.7424%204.30689C26.2279%202.79231%2023.7721%202.79231%2022.2575%204.30689C21.8238%204.74065%2021.5143%205.2517%2021.3289%205.7955C21.1827%206.22476%2021.1139%206.67452%2021.1225%207.12289ZM27.7423%209.79175C28.4099%209.12413%2029.4921%209.12413%2030.1597%209.79175C30.8273%2010.4594%2030.8272%2011.5414%2030.1596%2012.2091C29.492%2012.8767%2028.4099%2012.8766%2027.7424%2012.2091L26.5337%2011.0004L27.7423%209.79175ZM24.9999%2012.5341L26.2087%2013.7428C26.8761%2014.4103%2026.8762%2015.4925%2026.2086%2016.1601C25.5409%2016.8277%2024.4589%2016.8276%2023.7913%2016.1601C23.1238%2015.4926%2023.1237%2014.4103%2023.7912%2013.7428L24.9999%2012.5341Z'%20fill='white'/%3e%3cdefs%3e%3clinearGradient%20id='paint0_linear_30409_40096'%20x1='18'%20y1='0'%20x2='18'%20y2='36'%20gradientUnits='userSpaceOnUse'%3e%3cstop%20stop-color='white'%20stop-opacity='0'/%3e%3cstop%20offset='1'%20stop-color='white'/%3e%3c/linearGradient%3e%3c/defs%3e%3c/svg%3e" width="36" height="36" alt="feature-plan" />
                     </div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Funciona con otras ofertas</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Works with other offers</div>
                     <div>
-                      <label className="b-label" htmlFor="priority">Prioridad</label>
+                      <label className="b-label" htmlFor="priority">Priority</label>
                       <input id="priority" className="b-input" type="number" value={priority}
                         onChange={(e) => setPriority(e.target.value)} style={{ maxWidth: 120 }} autoComplete="off" />
                     </div>
@@ -683,15 +683,15 @@ export default function NewGiftOfferPage() {
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, alignItems: "flex-start" }}>
                         <input type="checkbox" checked={stopLower} onChange={(e) => setStopLower(e.target.checked)} style={{ marginTop: 2 }} />
                         <div>
-                          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>Detener prioridad más baja</div>
-                          <div style={{ fontSize: 12, color: "var(--text-sub)" }}>Ofertas con prioridad 2, 3,... se detendrá si los clientes cumplen las condiciones de esta oferta</div>
+                          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>Stop lower priority</div>
+                          <div style={{ fontSize: 12, color: "var(--text-sub)" }}>Offers with priority 2, 3,... will stop if customers meet this offer's conditions</div>
                         </div>
                       </label>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, alignItems: "flex-start" }}>
                         <input type="checkbox" checked={giftAppliesOther} onChange={(e) => setGiftAppliesOther(e.target.checked)} style={{ marginTop: 2 }} />
                         <div>
-                          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>El regalo se aplicará a otras reglas.</div>
-                          <div style={{ fontSize: 12, color: "var(--text-sub)" }}>El valor del regalo se aplicará a otras reglas cuando el precio del regalo sea superior a 0.</div>
+                          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>Gift applies to other rules.</div>
+                          <div style={{ fontSize: 12, color: "var(--text-sub)" }}>The gift value will apply to other rules when the gift price is greater than 0.</div>
                         </div>
                       </label>
                     </div>
@@ -699,33 +699,33 @@ export default function NewGiftOfferPage() {
 
                   {/* Mensaje del carrito */}
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Mensaje del carrito</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Cart message</div>
                     <div style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 8 }}>This is applied when offer is displayed on Cart page on your Online Store.</div>
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                       <input type="checkbox" checked={addCartMessage} onChange={(e) => setAddCartMessage(e.target.checked)} />
-                      <span style={{ fontSize: 13, color: "var(--text)" }}>Agregar un mensaje de carrito</span>
+                      <span style={{ fontSize: 13, color: "var(--text)" }}>Add a cart message</span>
                     </label>
                   </div>
 
                   {/* Oferta de hoy */}
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>oferta de hoy</span>
-                      <span style={{ background: "#fef3c7", color: "#92400e", fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 10, border: "1px solid #fbbf24" }}>versión antigua</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>Today's offer</span>
+                      <span style={{ background: "#fef3c7", color: "#92400e", fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 10, border: "1px solid #fbbf24" }}>legacy</span>
                     </div>
                     <div style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 10 }}>
-                      La última versión de la oferta Hoy ya está disponible en Boosters. Si todavía está usando esta versión, puede configurar el texto que se muestra y el enlace de redireccionamiento aquí.
+                      The latest version of the Today offer is now available in Boosters. If you&apos;re still using this version, you can configure the display text and redirect link here.
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                       <div>
-                        <label className="b-label">Título de la oferta</label>
+                        <label className="b-label">Offer title</label>
                         <input className="b-input" value={offerTodayTitle} onChange={(e) => setOfferTodayTitle(e.target.value)}
-                          placeholder="Ingresar título de la oferta" autoComplete="off" />
+                          placeholder="Enter offer title" autoComplete="off" />
                         <div className="b-help">If blank, the original title will be used. Changing this won&apos;t affect the original offer title.</div>
                       </div>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input type="checkbox" checked={addRedirectBtn} onChange={(e) => setAddRedirectBtn(e.target.checked)} />
-                        <span style={{ fontSize: 13, color: "var(--text)" }}>Agregar un botón de redireccionamiento</span>
+                        <span style={{ fontSize: 13, color: "var(--text)" }}>Add a redirect button</span>
                       </label>
                     </div>
                   </div>
@@ -741,11 +741,11 @@ export default function NewGiftOfferPage() {
             startDate={hasName ? formatDate(startsAt) : undefined}
             steps={[
               {
-                label: "Información básica",
+                label: "Basic information",
                 checked: hasName,
               },
               {
-                label: "Condición principal",
+                label: "Main condition",
                 checked: true,
                 items: [
                   { icon: IconCondition, text: conditionSummaryLine() },
@@ -753,7 +753,7 @@ export default function NewGiftOfferPage() {
                 ],
               },
               {
-                label: "Subcondición",
+                label: "Sub-conditions",
                 checked: activeSubs.length > 0,
                 optional: true,
                 items: activeSubs.length > 0
@@ -761,10 +761,10 @@ export default function NewGiftOfferPage() {
                   : undefined,
               },
               {
-                label: "Regalo",
+                label: "Gift reward",
                 checked: hasRewardProducts,
                 items: hasRewardProducts
-                  ? [{ text: `${rewardProducts.length} producto(s) seleccionados` }]
+                  ? [{ text: `${rewardProducts.length} product(s) selected` }]
                   : undefined,
               },
             ]}
@@ -775,10 +775,10 @@ export default function NewGiftOfferPage() {
         {/* ── Footer ── */}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, paddingBottom: 32 }}>
           <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary">
-            Guardar borrador
+            Save draft
           </button>
           <button type="submit" name="intent" value="publish" className="b-btn b-btn-dark">
-            Publicar
+            Publish
           </button>
         </div>
 
@@ -814,7 +814,7 @@ export default function NewGiftOfferPage() {
       <ProductPicker
         open={condPickerOpen}
         onClose={() => setCondPickerOpen(false)}
-        title="Seleccionar productos para la condición"
+        title="Select condition products"
         allowMultiple
         selectedIds={conditionProducts}
         onSelect={(gids) => setConditionProducts(gids)}
@@ -823,7 +823,7 @@ export default function NewGiftOfferPage() {
       <ProductPicker
         open={rewardPickerOpen}
         onClose={() => setRewardPickerOpen(false)}
-        title="Seleccionar regalos"
+        title="Select gifts"
         allowMultiple
         selectedIds={rewardProducts}
         onSelect={(gids) => setRewardProducts(gids)}

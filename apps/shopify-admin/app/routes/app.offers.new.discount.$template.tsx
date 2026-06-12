@@ -277,8 +277,8 @@ export default function NewDiscountOfferPage() {
 
   function validate() {
     const errs: { internalName?: string; publicTitle?: string } = {};
-    if (!internalName.trim()) errs.internalName = "Nombre de la oferta es requerido";
-    if (!publicTitle.trim()) errs.publicTitle = "Título de la oferta es requerido";
+    if (!internalName.trim()) errs.internalName = "Offer name is required";
+    if (!publicTitle.trim()) errs.publicTitle = "Offer title is required";
     setFieldErrors(errs);
     if (Object.keys(errs).length > 0) {
       setToastMsg(Object.values(errs)[0]!);
@@ -374,10 +374,10 @@ export default function NewDiscountOfferPage() {
   // ── Page title ──
   const pageTitle =
     templateId === "volume"
-      ? "Crear descuento por volumen"
+      ? "Create volume discount"
       : templateId === "cheapest_item"
-      ? "Crear descuento en el artículo más barato/más caro"
-      : "Crear descuento en el carrito";
+      ? "Create cheapest/most expensive item discount"
+      : "Create cart discount";
 
   return (
     <div className="b-page">
@@ -443,44 +443,44 @@ export default function NewDiscountOfferPage() {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
             {/* ────────────────────────────────────────────────
-                VOLUME — Información básica
+                VOLUME — Basic information
             ──────────────────────────────────────────────── */}
             {templateId === "volume" && (
               <div className="b-card">
-                <div className="b-card-header">Información básica</div>
+                <div className="b-card-header">Basic information</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
-                    <label className="b-label" htmlFor="internalName">Nombre del descuento</label>
+                    <label className="b-label" htmlFor="internalName">Discount name</label>
                     <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                       value={internalName} onChange={(e) => setInternalName(e.target.value)}
                       autoComplete="off" />
-                    <div className="b-help">Sólo para uso interno, no para mostrar a los clientes.</div>
+                    <div className="b-help">Internal use only, not shown to customers.</div>
                   </div>
                   <div className="b-card" style={{ background: "var(--bg-hover)" }}>
-                    <div className="b-card-header" style={{ fontSize: 13 }}>Visualización en widget</div>
+                    <div className="b-card-header" style={{ fontSize: 13 }}>Widget display</div>
                     <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                       <div>
-                        <label className="b-label" htmlFor="publicTitle">Título de descuento</label>
+                        <label className="b-label" htmlFor="publicTitle">Discount title</label>
                         <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle"
                           value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
                           autoComplete="off" />
                       </div>
                       <div>
-                        <label className="b-label" htmlFor="description">Descripción del descuento</label>
+                        <label className="b-label" htmlFor="description">Discount description</label>
                         <input id="description" className="b-input" name="description"
                           value={description} onChange={(e) => setDescription(e.target.value)}
-                          autoComplete="off" placeholder="(opcional)" />
+                          autoComplete="off" placeholder="(optional)" />
                       </div>
                     </div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div>
-                      <label className="b-label" htmlFor="startsAt">Hora de inicio</label>
+                      <label className="b-label" htmlFor="startsAt">Start time</label>
                       <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                         value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                     </div>
                     <div>
-                      <label className="b-label" htmlFor="endsAt">Hora de fin</label>
+                      <label className="b-label" htmlFor="endsAt">End time</label>
                       <input id="endsAt" className="b-input" type="datetime-local" name="endsAt"
                         value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
                     </div>
@@ -490,43 +490,43 @@ export default function NewDiscountOfferPage() {
             )}
 
             {/* ────────────────────────────────────────────────
-                CHEAPEST — Ofrecer información
+                CHEAPEST — Offer information
             ──────────────────────────────────────────────── */}
             {templateId === "cheapest_item" && (
               <div className="b-card">
-                <div className="b-card-header">Ofrecer información</div>
+                <div className="b-card-header">Offer information</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
-                    <label className="b-label" htmlFor="internalName">Nombre de la oferta</label>
+                    <label className="b-label" htmlFor="internalName">Offer name</label>
                     <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                       value={internalName} onChange={(e) => setInternalName(e.target.value)}
                       autoComplete="off" />
                   </div>
                   <div className="b-card" style={{ background: "var(--bg-hover)" }}>
-                    <div className="b-card-header" style={{ fontSize: 13 }}>Visualización en widget</div>
+                    <div className="b-card-header" style={{ fontSize: 13 }}>Widget display</div>
                     <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                       <div>
-                        <label className="b-label" htmlFor="publicTitle">Título de descuento</label>
+                        <label className="b-label" htmlFor="publicTitle">Discount title</label>
                         <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle"
                           value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
                           autoComplete="off" />
                       </div>
                       <div>
-                        <label className="b-label" htmlFor="description">Descripción del bloque</label>
+                        <label className="b-label" htmlFor="description">Block description</label>
                         <input id="description" className="b-input" name="description"
                           value={description} onChange={(e) => setDescription(e.target.value)}
-                          autoComplete="off" placeholder="(opcional)" />
+                          autoComplete="off" placeholder="(optional)" />
                       </div>
                     </div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div>
-                      <label className="b-label" htmlFor="startsAt">Hora de inicio</label>
+                      <label className="b-label" htmlFor="startsAt">Start time</label>
                       <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                         value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                     </div>
                     <div>
-                      <label className="b-label" htmlFor="endsAt">Hora de fin</label>
+                      <label className="b-label" htmlFor="endsAt">End time</label>
                       <input id="endsAt" className="b-input" type="datetime-local" name="endsAt"
                         value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
                     </div>
@@ -536,43 +536,43 @@ export default function NewDiscountOfferPage() {
             )}
 
             {/* ────────────────────────────────────────────────
-                CART — Información de la oferta
+                CART — Offer information
             ──────────────────────────────────────────────── */}
             {templateId === "cart" && (
               <div className="b-card">
-                <div className="b-card-header">Información de la oferta</div>
+                <div className="b-card-header">Offer information</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
-                    <label className="b-label" htmlFor="internalName">Nombre de la oferta</label>
+                    <label className="b-label" htmlFor="internalName">Offer name</label>
                     <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                       value={internalName} onChange={(e) => setInternalName(e.target.value)}
                       autoComplete="off" />
                   </div>
                   <div className="b-card" style={{ background: "var(--bg-hover)" }}>
-                    <div className="b-card-header" style={{ fontSize: 13 }}>Visualización en widget</div>
+                    <div className="b-card-header" style={{ fontSize: 13 }}>Widget display</div>
                     <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                       <div>
-                        <label className="b-label" htmlFor="publicTitle">Título de la oferta</label>
+                        <label className="b-label" htmlFor="publicTitle">Offer title</label>
                         <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle"
                           value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
                           autoComplete="off" />
                       </div>
                       <div>
-                        <label className="b-label" htmlFor="description">Descripción del bloque</label>
+                        <label className="b-label" htmlFor="description">Block description</label>
                         <input id="description" className="b-input" name="description"
                           value={description} onChange={(e) => setDescription(e.target.value)}
-                          autoComplete="off" placeholder="(opcional)" />
+                          autoComplete="off" placeholder="(optional)" />
                       </div>
                     </div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div>
-                      <label className="b-label" htmlFor="startsAt">Hora de inicio</label>
+                      <label className="b-label" htmlFor="startsAt">Start time</label>
                       <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                         value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                     </div>
                     <div>
-                      <label className="b-label" htmlFor="endsAt">Hora de fin</label>
+                      <label className="b-label" htmlFor="endsAt">End time</label>
                       <input id="endsAt" className="b-input" type="datetime-local" name="endsAt"
                         value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
                     </div>
@@ -582,68 +582,68 @@ export default function NewDiscountOfferPage() {
             )}
 
             {/* ────────────────────────────────────────────────
-                VOLUME — Card "Ofertas"
+                VOLUME — Card "Offers"
             ──────────────────────────────────────────────── */}
             {templateId === "volume" && (
               <div className="b-card">
-                <div className="b-card-header">Ofertas</div>
+                <div className="b-card-header">Offers</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   {/* Regla de cantidad */}
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                     <div style={{ flex: 1 }}>
-                      <label className="b-label">Regla de cantidad</label>
+                      <label className="b-label">Count rule</label>
                       <select className="b-select" name="countRule"
                         value={countRule} onChange={(e) => setCountRule(e.target.value)}>
-                        <option value="all">Contar todos los productos</option>
-                        <option value="unique">Sólo contar productos iguales</option>
+                        <option value="all">Count all products</option>
+                        <option value="unique">Count identical products only</option>
                       </select>
                     </div>
                     <button type="button" className="b-btn b-btn-secondary" style={{ marginTop: 20, whiteSpace: "nowrap" }}>
-                      Lógica de selección
+                      Selection logic
                     </button>
                   </div>
 
                   {/* Display type */}
                   <div>
-                    <label className="b-label">Elija el tipo de visualización:</label>
+                    <label className="b-label">Choose display type:</label>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                         <input type="radio" name="displayType" value="quantity_options"
                           checked={displayType === "quantity_options"}
                           onChange={() => setDisplayType("quantity_options")}
                           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
-                        <span style={{ fontSize: 13, color: "var(--text)" }}>Opciones de cantidad</span>
+                        <span style={{ fontSize: 13, color: "var(--text)" }}>Quantity options</span>
                       </label>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                         <input type="radio" name="displayType" value="discount_table"
                           checked={displayType === "discount_table"}
                           onChange={() => setDisplayType("discount_table")}
                           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
-                        <span style={{ fontSize: 13, color: "var(--text)" }}>Tabla de descuentos por cantidad</span>
+                        <span style={{ fontSize: 13, color: "var(--text)" }}>Quantity discount table</span>
                       </label>
                     </div>
                   </div>
 
                   {/* Referirse a */}
                   <div>
-                    <label className="b-label">Referirse a:</label>
+                    <label className="b-label">Apply to:</label>
                     <select className="b-select" name="applyTo"
                       value={applyTo} onChange={(e) => setApplyTo(e.target.value)}>
-                      <option value="selected_products">productos seleccionados</option>
-                      <option value="any_product">cualquier producto</option>
+                      <option value="selected_products">selected products</option>
+                      <option value="any_product">any product</option>
                     </select>
                   </div>
 
                   {applyTo === "selected_products" && (
                     <div>
-                      <div className="b-label">Productos:</div>
+                      <div className="b-label">Products:</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <button type="button" className="b-btn b-btn-secondary"
                           onClick={() => setProductPickerOpen(true)}>
-                          Seleccionar productos
+                          Select products
                         </button>
                         <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
-                          {selectedProducts.length} productos seleccionados
+                          {selectedProducts.length} products selected
                         </span>
                       </div>
                     </div>
@@ -653,18 +653,18 @@ export default function NewDiscountOfferPage() {
             )}
 
             {/* ────────────────────────────────────────────────
-                CHEAPEST — Card "Ofertas"
+                CHEAPEST — Card "Offers"
             ──────────────────────────────────────────────── */}
             {templateId === "cheapest_item" && (
               <div className="b-card">
-                <div className="b-card-header">Ofertas</div>
+                <div className="b-card-header">Offers</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
-                    <label className="b-label">Referirse a:</label>
+                    <label className="b-label">Apply to:</label>
                     <select className="b-select" name="applyTo"
                       value={applyTo} onChange={(e) => setApplyTo(e.target.value)}>
-                      <option value="any_product">cualquier producto</option>
-                      <option value="selected_products">productos seleccionados</option>
+                      <option value="any_product">any product</option>
+                      <option value="selected_products">selected products</option>
                     </select>
                   </div>
                   {applyTo === "selected_products" && (
@@ -672,10 +672,10 @@ export default function NewDiscountOfferPage() {
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <button type="button" className="b-btn b-btn-secondary"
                           onClick={() => setProductPickerOpen(true)}>
-                          Seleccionar productos
+                          Select products
                         </button>
                         <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
-                          {selectedProducts.length} productos seleccionados
+                          {selectedProducts.length} products selected
                         </span>
                       </div>
                     </div>
@@ -684,25 +684,25 @@ export default function NewDiscountOfferPage() {
                     <input type="checkbox" name="countRule" value="unique"
                       checked={countRule === "unique"}
                       onChange={(e) => setCountRule(e.target.checked ? "unique" : "all")} />
-                    <span style={{ fontSize: 13, color: "var(--text)" }}>Cuente solo productos únicos</span>
+                    <span style={{ fontSize: 13, color: "var(--text)" }}>Count unique products only</span>
                   </label>
                 </div>
               </div>
             )}
 
             {/* ────────────────────────────────────────────────
-                CART — Card "Ofertas"
+                CART — Card "Offers"
             ──────────────────────────────────────────────── */}
             {templateId === "cart" && (
               <div className="b-card">
-                <div className="b-card-header">Ofertas</div>
+                <div className="b-card-header">Offers</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
-                    <label className="b-label">Aplicar al carrito con:</label>
+                    <label className="b-label">Apply to cart with:</label>
                     <select className="b-select" name="applyTo"
                       value={applyTo} onChange={(e) => setApplyTo(e.target.value)}>
-                      <option value="any_product">cualquier producto</option>
-                      <option value="selected_products">productos seleccionados</option>
+                      <option value="any_product">any product</option>
+                      <option value="selected_products">selected products</option>
                     </select>
                   </div>
                   {applyTo === "selected_products" && (
@@ -712,19 +712,19 @@ export default function NewDiscountOfferPage() {
                         Seleccionar productos
                       </button>
                       <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
-                        {selectedProducts.length} productos seleccionados
+                        {selectedProducts.length} products selected
                       </span>
                     </div>
                   )}
                   <div>
-                    <div className="b-label" style={{ marginBottom: 8 }}>Usos de descuento máximo</div>
+                    <div className="b-label" style={{ marginBottom: 8 }}>Maximum discount usage</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                         <input type="checkbox" name="maxUsesEnabled"
                           checked={maxUsesEnabled}
                           onChange={(e) => setMaxUsesEnabled(e.target.checked)} />
                         <span style={{ fontSize: 13, color: "var(--text)" }}>
-                          Límite el número de veces que se puede utilizar este descuento en total
+                          Limit the number of times this discount can be used in total
                         </span>
                       </label>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
@@ -732,7 +732,7 @@ export default function NewDiscountOfferPage() {
                           checked={maxUsePerCustomerEnabled}
                           onChange={(e) => setMaxUsePerCustomerEnabled(e.target.checked)} />
                         <span style={{ fontSize: 13, color: "var(--text)" }}>
-                          Límite de un uso por cliente
+                          Limit to one use per customer
                         </span>
                       </label>
                     </div>
@@ -747,7 +747,7 @@ export default function NewDiscountOfferPage() {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
                 </svg>
-                Agregar subcondición
+                Add sub-condition
               </div>
             </div>
 
@@ -756,12 +756,12 @@ export default function NewDiscountOfferPage() {
             ──────────────────────────────────────────────── */}
             {templateId === "volume" && (
               <div className="b-card">
-                <div className="b-card-header">Niveles</div>
+                <div className="b-card-header">Tiers</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   {tiers.map((tier, i) => (
                     <div key={i} className="b-card" style={{ background: "var(--bg-hover)" }}>
                       <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontSize: 13, fontWeight: 600 }}>Nivel {i + 1}</span>
+                        <span style={{ fontSize: 13, fontWeight: 600 }}>Tier {i + 1}</span>
                         <button type="button" onClick={() => removeVolumeTier(i)}
                           style={{ width: 20, height: 20, borderRadius: "50%", background: "#ff4d4d", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 700, fontSize: 14, padding: 0 }}>
                           ×
@@ -770,13 +770,13 @@ export default function NewDiscountOfferPage() {
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
-                            <label className="b-label">Cantidad</label>
+                            <label className="b-label">Quantity</label>
                             <input className="b-input" type="number" min="1"
                               value={tier.qty} onChange={(e) => updateVolumeTier(i, "qty", e.target.value)}
                               autoComplete="off" />
                           </div>
                           <div>
-                            <label className="b-label">Título</label>
+                            <label className="b-label">Title</label>
                             <input className="b-input"
                               value={tier.label} onChange={(e) => updateVolumeTier(i, "label", e.target.value)}
                               autoComplete="off" />
@@ -784,43 +784,43 @@ export default function NewDiscountOfferPage() {
                         </div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
-                            <label className="b-label">Tipo de descuento</label>
+                            <label className="b-label">Discount type</label>
                             <select className="b-select"
                               value={tier.discountType} onChange={(e) => updateVolumeTier(i, "discountType", e.target.value)}>
-                              <option value="percentage">Porcentaje</option>
-                              <option value="fixed_amount">Monto fijo</option>
-                              <option value="fixed_price">Precio fijo</option>
+                              <option value="percentage">Percentage</option>
+                              <option value="fixed_amount">Fixed amount</option>
+                              <option value="fixed_price">Fixed price</option>
                             </select>
                           </div>
                           <div>
-                            <label className="b-label">Valor</label>
+                            <label className="b-label">Value</label>
                             <input className="b-input" type="number" min="0"
                               value={tier.value} onChange={(e) => updateVolumeTier(i, "value", e.target.value)}
                               autoComplete="off" />
                           </div>
                         </div>
                         <div style={{ fontSize: 12, color: "var(--blue)", cursor: "pointer" }}>
-                          Agregar: Descuento de envío
+                          Add: Shipping discount
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                           <label className="b-checkbox-row" style={{ gap: 8, alignItems: "center", cursor: "pointer" }}>
                             <input type="checkbox" defaultChecked style={{ accentColor: "var(--blue)" }} />
                             <input className="b-input" style={{ flex: 1 }}
                               value={tier.tag1} onChange={(e) => updateVolumeTier(i, "tag1", e.target.value)}
-                              placeholder="Etiqueta 1" autoComplete="off" />
+                              placeholder="Label 1" autoComplete="off" />
                           </label>
                           <label className="b-checkbox-row" style={{ gap: 8, alignItems: "center", cursor: "pointer" }}>
                             <input type="checkbox" defaultChecked style={{ accentColor: "var(--blue)" }} />
                             <input className="b-input" style={{ flex: 1 }}
                               value={tier.tag2} onChange={(e) => updateVolumeTier(i, "tag2", e.target.value)}
-                              placeholder="Etiqueta 2" autoComplete="off" />
+                              placeholder="Label 2" autoComplete="off" />
                           </label>
                           <label className="b-checkbox-row" style={{ gap: 8, cursor: "pointer" }}>
                             <input type="checkbox"
                               checked={tier.preselected}
                               onChange={(e) => updateVolumeTier(i, "preselected", e.target.checked)}
                               style={{ accentColor: "var(--blue)" }} />
-                            <span style={{ fontSize: 13, color: "var(--text)" }}>Preseleccionado</span>
+                            <span style={{ fontSize: 13, color: "var(--text)" }}>Preselected</span>
                           </label>
                         </div>
                       </div>
@@ -828,12 +828,12 @@ export default function NewDiscountOfferPage() {
                   ))}
 
                   <div style={{ fontSize: 12, color: "var(--text-sub)", background: "var(--bg-hover)", borderRadius: 6, padding: "8px 12px", border: "1px solid var(--border)" }}>
-                    Los artículos que superan la cantidad del nivel anterior no tendrán descuento.
+                    Items exceeding the previous tier quantity will not receive a discount.
                   </div>
 
                   <button type="button" className="b-btn b-btn-secondary"
                     onClick={addVolumeTier} style={{ alignSelf: "flex-start" }}>
-                    + Agregar nivel
+                    + Add tier
                   </button>
                 </div>
               </div>
@@ -844,25 +844,25 @@ export default function NewDiscountOfferPage() {
             ──────────────────────────────────────────────── */}
             {templateId === "cheapest_item" && (
               <div className="b-card">
-                <div className="b-card-header">Niveles</div>
+                <div className="b-card-header">Tiers</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   {/* Descuento sobre */}
                   <div>
-                    <label className="b-label">Descuento sobre:</label>
+                    <label className="b-label">Discount on:</label>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                         <input type="radio" name="discountOnItem" value="cheapest"
                           checked={discountOnItem === "cheapest"}
                           onChange={() => setDiscountOnItem("cheapest")}
                           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
-                        <span style={{ fontSize: 13, color: "var(--text)" }}>Artículo más barato</span>
+                        <span style={{ fontSize: 13, color: "var(--text)" }}>Cheapest item</span>
                       </label>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                         <input type="radio" name="discountOnItem" value="most_expensive"
                           checked={discountOnItem === "most_expensive"}
                           onChange={() => setDiscountOnItem("most_expensive")}
                           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
-                        <span style={{ fontSize: 13, color: "var(--text)" }}>Artículo más caro</span>
+                        <span style={{ fontSize: 13, color: "var(--text)" }}>Most expensive item</span>
                       </label>
                     </div>
                   </div>
@@ -870,7 +870,7 @@ export default function NewDiscountOfferPage() {
                   {cheapestTiers.map((tier, i) => (
                     <div key={i} className="b-card" style={{ background: "var(--bg-hover)" }}>
                       <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontSize: 13, fontWeight: 600 }}>Nivel {i + 1}</span>
+                        <span style={{ fontSize: 13, fontWeight: 600 }}>Tier {i + 1}</span>
                         <button type="button" onClick={() => removeCheapestTier(i)}
                           style={{ width: 20, height: 20, borderRadius: "50%", background: "#ff4d4d", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 700, fontSize: 14, padding: 0 }}>
                           ×
@@ -879,13 +879,13 @@ export default function NewDiscountOfferPage() {
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
-                            <label className="b-label">Número de artículos requeridos</label>
+                            <label className="b-label">Required items count</label>
                             <input className="b-input" type="number" min="1"
                               value={tier.requiredQty} onChange={(e) => updateCheapestTier(i, "requiredQty", e.target.value)}
                               autoComplete="off" />
                           </div>
                           <div>
-                            <label className="b-label">Número de artículos con descuento</label>
+                            <label className="b-label">Discounted items count</label>
                             <input className="b-input" type="number" min="1"
                               value={tier.discountedQty} onChange={(e) => updateCheapestTier(i, "discountedQty", e.target.value)}
                               autoComplete="off" />
@@ -893,22 +893,22 @@ export default function NewDiscountOfferPage() {
                         </div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
-                            <label className="b-label">Tipo</label>
+                            <label className="b-label">Type</label>
                             <select className="b-select"
                               value={tier.discountType} onChange={(e) => updateCheapestTier(i, "discountType", e.target.value)}>
-                              <option value="percentage">Porcentaje</option>
-                              <option value="fixed_amount">Monto fijo</option>
+                              <option value="percentage">Percentage</option>
+                              <option value="fixed_amount">Fixed amount</option>
                             </select>
                           </div>
                           <div>
-                            <label className="b-label">Valor</label>
+                            <label className="b-label">Value</label>
                             <input className="b-input" type="number" min="0"
                               value={tier.discountValue} onChange={(e) => updateCheapestTier(i, "discountValue", e.target.value)}
                               autoComplete="off" />
                           </div>
                         </div>
                         <div>
-                          <label className="b-label">Texto de la etiqueta</label>
+                          <label className="b-label">Label text</label>
                           <input className="b-input"
                             value={tier.label} onChange={(e) => updateCheapestTier(i, "label", e.target.value)}
                             autoComplete="off" />
@@ -920,11 +920,11 @@ export default function NewDiscountOfferPage() {
                   <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
                     <button type="button" className="b-btn b-btn-secondary"
                       onClick={addCheapestTier}>
-                      + Agregar nivel
+                      + Add tier
                     </button>
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                       <input type="checkbox" style={{ accentColor: "var(--blue)" }} />
-                      <span style={{ fontSize: 13, color: "var(--text)" }}>Multiplicar el último nivel</span>
+                      <span style={{ fontSize: 13, color: "var(--text)" }}>Multiply the last tier</span>
                     </label>
                   </div>
                 </div>
@@ -940,29 +940,29 @@ export default function NewDiscountOfferPage() {
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div>
-                      <label className="b-label">Descuento por:</label>
+                      <label className="b-label">Discount by:</label>
                       <select className="b-select" name="cartDiscountBy"
                         value={cartDiscountBy} onChange={(e) => setCartDiscountBy(e.target.value)}>
-                        <option value="cart_value">Valor del carrito</option>
-                        <option value="quantity">Cantidad</option>
+                        <option value="cart_value">Cart value</option>
+                        <option value="quantity">Quantity</option>
                       </select>
                     </div>
                     <div>
-                      <label className="b-label">Tipo de descuento:</label>
+                      <label className="b-label">Discount type:</label>
                       <select className="b-select" name="cartDiscountType"
                         value={cartDiscountType} onChange={(e) => setCartDiscountType(e.target.value)}>
-                        <option value="percentage">Porcentaje</option>
-                        <option value="fixed_amount">Monto fijo</option>
+                        <option value="percentage">Percentage</option>
+                        <option value="fixed_amount">Fixed amount</option>
                       </select>
                     </div>
                   </div>
 
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginTop: 4 }}>Niveles</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginTop: 4 }}>Tiers</div>
 
                   {cartTiers.map((tier, i) => (
                     <div key={i} className="b-card" style={{ background: "var(--bg-hover)" }}>
                       <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontSize: 13, fontWeight: 600 }}>Nivel {i + 1}</span>
+                        <span style={{ fontSize: 13, fontWeight: 600 }}>Tier {i + 1}</span>
                         <button type="button" onClick={() => removeCartTier(i)}
                           style={{ width: 20, height: 20, borderRadius: "50%", background: "#ff4d4d", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 700, fontSize: 14, padding: 0 }}>
                           ×
@@ -971,7 +971,7 @@ export default function NewDiscountOfferPage() {
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
-                            <label className="b-label">Valor del carrito requerido</label>
+                            <label className="b-label">Required cart value</label>
                             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                               <span style={{ fontSize: 13, color: "var(--text-sub)", fontWeight: 500 }}>$</span>
                               <input className="b-input" type="number" min="0" step="0.01"
@@ -980,7 +980,7 @@ export default function NewDiscountOfferPage() {
                             </div>
                           </div>
                           <div>
-                            <label className="b-label">Valor de descuento</label>
+                            <label className="b-label">Discount value</label>
                             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                               <span style={{ fontSize: 13, color: "var(--text-sub)", fontWeight: 500 }}>%</span>
                               <input className="b-input" type="number" min="0"
@@ -992,7 +992,7 @@ export default function NewDiscountOfferPage() {
 
                         {/* Currency chips (visual only) */}
                         <div>
-                          <div style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 6 }}>Agregar moneda</div>
+                          <div style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 6 }}>Add currency</div>
                           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                             {CURRENCY_CHIPS.map((code) => (
                               <span key={code} style={{
@@ -1008,11 +1008,11 @@ export default function NewDiscountOfferPage() {
 
                         <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                           <input type="checkbox" style={{ accentColor: "var(--blue)" }} />
-                          <span style={{ fontSize: 13, color: "var(--text)" }}>Valor máximo de descuento</span>
+                          <span style={{ fontSize: 13, color: "var(--text)" }}>Maximum discount value</span>
                         </label>
 
                         <div>
-                          <label className="b-label">Texto de la etiqueta de nivel</label>
+                          <label className="b-label">Tier label text</label>
                           <input className="b-input"
                             value={tier.label} onChange={(e) => updateCartTier(i, "label", e.target.value)}
                             autoComplete="off" />
@@ -1023,7 +1023,7 @@ export default function NewDiscountOfferPage() {
 
                   <button type="button" className="b-btn b-btn-secondary"
                     onClick={addCartTier} style={{ alignSelf: "flex-start" }}>
-                    + Agregar nivel
+                    + Add tier
                   </button>
                 </div>
               </div>
@@ -1034,16 +1034,16 @@ export default function NewDiscountOfferPage() {
             ──────────────────────────────────────────────── */}
             {templateId === "volume" && (
               <div className="b-card">
-                <div className="b-card-header">Suscripción</div>
+                <div className="b-card-header">Subscription</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                     <input type="checkbox" style={{ accentColor: "var(--blue)" }} />
                     <span style={{ fontSize: 13, color: "var(--text)" }}>
-                      Mostrar opciones de suscripción en el widget
+                      Show subscription options in widget
                     </span>
                   </label>
                   <div style={{ fontSize: 12, color: "var(--blue)", background: "var(--bg-hover)", borderRadius: 6, padding: "8px 12px", border: "1px solid var(--border)" }}>
-                    Sugerencia: Integra con Appstle para mostrar opciones de suscripción junto con el descuento por volumen.
+                    Tip: Integrate with Appstle to show subscription options alongside the volume discount.
                   </div>
                 </div>
               </div>
@@ -1051,12 +1051,12 @@ export default function NewDiscountOfferPage() {
 
             {/* ── Código de descuento (all templates) ── */}
             <div className="b-card">
-              <div className="b-card-header">Código de descuento</div>
+              <div className="b-card-header">Discount code</div>
               <div className="b-card-body">
                 <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                   <input type="checkbox" style={{ accentColor: "var(--blue)" }} />
                   <span style={{ fontSize: 13, color: "var(--text)" }}>
-                    Agregue un código de descuento personalizado
+                    Add a custom discount code
                   </span>
                 </label>
               </div>
@@ -1064,7 +1064,7 @@ export default function NewDiscountOfferPage() {
 
             {/* ── Este descuento se puede combinar con ── */}
             <div className="b-card">
-              <div className="b-card-header">Este descuento se puede combinar con</div>
+              <div className="b-card-header">This discount can be combined with</div>
               <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {templateId === "cart" && (
                   <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
@@ -1072,7 +1072,7 @@ export default function NewDiscountOfferPage() {
                       checked={combinesProductDiscounts}
                       onChange={(e) => setCombinesProductDiscounts(e.target.checked)}
                       style={{ accentColor: "var(--blue)" }} />
-                    <span style={{ fontSize: 13, color: "var(--text)" }}>Descuentos de productos</span>
+                    <span style={{ fontSize: 13, color: "var(--text)" }}>Product discounts</span>
                   </label>
                 )}
                 <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
@@ -1080,14 +1080,14 @@ export default function NewDiscountOfferPage() {
                     checked={combinesOrderDiscounts}
                     onChange={(e) => setCombinesOrderDiscounts(e.target.checked)}
                     style={{ accentColor: "var(--blue)" }} />
-                  <span style={{ fontSize: 13, color: "var(--text)" }}>Descuentos de pedido</span>
+                  <span style={{ fontSize: 13, color: "var(--text)" }}>Order discounts</span>
                 </label>
                 <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                   <input type="checkbox" name="combinesShippingDiscounts"
                     checked={combinesShippingDiscounts}
                     onChange={(e) => setCombinesShippingDiscounts(e.target.checked)}
                     style={{ accentColor: "var(--blue)" }} />
-                  <span style={{ fontSize: 13, color: "var(--text)" }}>Descuentos de envío</span>
+                  <span style={{ fontSize: 13, color: "var(--text)" }}>Shipping discounts</span>
                 </label>
               </div>
             </div>
@@ -1098,7 +1098,7 @@ export default function NewDiscountOfferPage() {
           <div style={{ position: "sticky", top: 16 }}>
             {(templateId === "volume" || templateId === "cheapest_item") && (
               <div className="b-card">
-                <div className="b-card-header">Avance</div>
+                <div className="b-card-header">Preview</div>
                 <div className="b-card-body">
                   {templateId === "volume" && (
                     <VolumePreview
@@ -1118,11 +1118,11 @@ export default function NewDiscountOfferPage() {
             )}
             {templateId === "cart" && (
               <div className="b-card">
-                <div className="b-card-header">Mostrar descuento en el carrito</div>
+                <div className="b-card-header">Show discount in cart</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-                  <CartPreviewSection title="Personalizar el widget de banner" />
-                  <CartPreviewSection title="Añadir mensaje de felicitación" />
-                  <CartPreviewSection title="Agregar una barra de progreso en el cajón del carrito" />
+                  <CartPreviewSection title="Customize banner widget" />
+                  <CartPreviewSection title="Add a greeting message" />
+                  <CartPreviewSection title="Add a progress bar in the cart drawer" />
                 </div>
               </div>
             )}
@@ -1134,14 +1134,14 @@ export default function NewDiscountOfferPage() {
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, paddingBottom: 32 }}>
           <button type="button" className="b-btn b-btn-secondary"
             onClick={() => void navigate("/app/offers")}>
-            Cancelar
+            Cancel
           </button>
           <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary"
             style={{ background: "var(--bg-hover)", border: "1px solid var(--border)" }}>
-            Guardar borrador
+            Save draft
           </button>
           <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary">
-            Publicar
+            Publish
           </button>
         </div>
 
@@ -1150,7 +1150,7 @@ export default function NewDiscountOfferPage() {
       <ProductPicker
         open={productPickerOpen}
         onClose={() => setProductPickerOpen(false)}
-        title="Seleccionar productos"
+        title="Select products"
         allowMultiple
         selectedIds={selectedProducts}
         onSelect={(gids) => setSelectedProducts(gids)}
@@ -1189,7 +1189,7 @@ function VolumePreview({
             }}>
               <div>
                 <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>
-                  {tier.qty ? `${tier.qty}x` : `—`} {tier.label || `Nivel ${i + 1}`}
+                  {tier.qty ? `${tier.qty}x` : `—`} {tier.label || `Tier ${i + 1}`}
                 </div>
                 {tier.tag2 && <div style={{ fontSize: 11, color: "var(--text-sub)" }}>{tier.tag2}</div>}
               </div>
@@ -1206,7 +1206,7 @@ function VolumePreview({
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
               <th style={{ textAlign: "left", padding: "4px 6px", color: "var(--text-sub)" }}>Qty</th>
-              <th style={{ textAlign: "left", padding: "4px 6px", color: "var(--text-sub)" }}>Descuento</th>
+              <th style={{ textAlign: "left", padding: "4px 6px", color: "var(--text-sub)" }}>Discount</th>
             </tr>
           </thead>
           <tbody>
@@ -1245,7 +1245,7 @@ function CheapestPreview({
             border: "1px solid var(--border)", borderRadius: 6, padding: "8px 10px",
             background: "var(--bg)", fontSize: 12, color: "var(--text)",
           }}>
-            {tier.label || `Compra ${tier.requiredQty}, obtén ${tier.discountedQty} con descuento`}
+            {tier.label || `Buy ${tier.requiredQty}, get ${tier.discountedQty} discounted`}
           </div>
         ))}
       </div>
@@ -1277,7 +1277,7 @@ function CartPreviewSection({ title }: { title: string }) {
       </button>
       {open && (
         <div style={{ padding: "0 0 12px", fontSize: 12, color: "var(--text-sub)" }}>
-          Configura esta sección para personalizar la apariencia en el carrito.
+          Configure this section to customize the cart appearance.
         </div>
       )}
     </div>
