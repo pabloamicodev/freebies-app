@@ -42,7 +42,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const db = getDb();
 
   const shopRows = await db
-    .select({ id: shops.id, shopDomain: shops.shopDomain, planName: shops.planName })
+    .select({ id: shops.id })
     .from(shops)
     .where(eq(shops.myshopifyDomain, session.shop))
     .limit(1);

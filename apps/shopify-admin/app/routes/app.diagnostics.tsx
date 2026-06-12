@@ -61,7 +61,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       domain: shop.shopDomain,
       isActive: shop.isActive,
       installedAt: shop.installedAt.toISOString(),
-      plan: shop.planName,
     },
     diagnostics: {
       activeOffers: activeOfferCount[0]?.count ?? 0,
@@ -315,12 +314,11 @@ export default function DiagnosticsPage() {
     {
       id: "shopify",
       label: "Shopify Connection",
-      description: `Shop ${shop.domain} — plan ${shop.plan ?? "unknown"}`,
+      description: `Shop ${shop.domain}`,
       status: shop.isActive ? "ok" : "warn",
       value: shop.isActive ? "Connected" : "Inactive",
       detail: [
         `Domain: ${shop.domain}`,
-        `Plan: ${shop.plan ?? "unknown"}`,
         `Active: ${shop.isActive}`,
         `Installed: ${new Date(shop.installedAt).toLocaleString()}`,
       ].join("\n"),
@@ -378,12 +376,6 @@ export default function DiagnosticsPage() {
             <span className="b-text-sub b-text-sm">
               Installed {new Date(shop.installedAt).toLocaleDateString()}
             </span>
-            {shop.plan && (
-              <>
-                <span className="b-text-muted b-text-sm">·</span>
-                <span className="b-text-sm">{shop.plan}</span>
-              </>
-            )}
           </div>
         </div>
       </div>

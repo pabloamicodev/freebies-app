@@ -39,7 +39,6 @@ export default function AppLayout() {
           <a href="/app/analytics">Analytics</a>
           <a href="/app/settings">Settings</a>
           <a href="/app/translation">Translation</a>
-          <a href="/app/pricing">Pricing</a>
           <a href="/app/integrations">Integrations</a>
         </NavMenu>
         <Outlet />
