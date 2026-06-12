@@ -1,8 +1,8 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { productCache, variantCache, shops } from "@promo/db";
-import { eq } from "drizzle-orm";
+import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs } from "@promo/db";
+import { eq, and } from "drizzle-orm";
 
 /**
  * Central webhook handler for all Shopify webhooks.
@@ -34,18 +34,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       break;
 
     case "CUSTOMERS_UPDATE":
-      // Invalidate customer segment cache via Redis (handled by worker)
+      await handleCustomersUpdate(shop, payload as CustomerGdprPayload);
       break;
 
     case "APP_UNINSTALLED":
       await handleAppUninstalled(shop);
       break;
 
-    case "SHOP_REDACT":
-    case "CUSTOMERS_REDACT":
     case "CUSTOMERS_DATA_REQUEST":
-      // GDPR mandatory — log and confirm
-      console.info(`GDPR webhook received: ${topic} for ${shop}`);
+      await handleCustomersDataRequest(shop, payload as CustomerGdprPayload);
+      break;
+
+    case "CUSTOMERS_REDACT":
+      await handleCustomersRedact(shop, payload as CustomerGdprPayload);
+      break;
+
+    case "SHOP_REDACT":
+      await handleShopRedact(shop);
       break;
 
     default:
@@ -98,6 +103,15 @@ interface OrderWebhookPayload {
     properties: Array<{ name: string; value: string }>;
   }>;
   note_attributes: Array<{ name: string; value: string }>;
+}
+
+interface CustomerGdprPayload {
+  customer?: {
+    id?: number | string;
+    email?: string;
+    phone?: string;
+  };
+  orders_requested?: Array<{ id: number; name: string }>;
 }
 
 async function getShopId(shopDomain: string): Promise<string | null> {
@@ -224,4 +238,84 @@ async function handleAppUninstalled(shop: string) {
     .set({ isActive: false, uninstalledAt: new Date() })
     .where(eq(shops.myshopifyDomain, shop));
   // Enqueue cleanup job: archive clone products, remove Function configs
+}
+
+async function handleCustomersUpdate(shop: string, payload: CustomerGdprPayload) {
+  const customerId = String(payload.customer?.id ?? "");
+  if (!customerId) return;
+  try {
+    const { redis } = await import("../lib/queues.server.js") as { redis?: { del: (...keys: string[]) => Promise<number> } };
+    if (redis) {
+      await redis.del(
+        `customer:${shop}:${customerId}:tags`,
+        `customer:${shop}:${customerId}:segments`,
+        `customer:${shop}:${customerId}:orders`,
+      );
+    }
+  } catch {
+    // Redis unavailable — cache will expire naturally
+  }
+}
+
+async function handleCustomersDataRequest(shop: string, payload: CustomerGdprPayload) {
+  const customerId = String(payload.customer?.id ?? "");
+  const customerEmail = payload.customer?.email ?? "";
+  const shopId = await getShopId(shop);
+
+  console.info(`GDPR CUSTOMERS_DATA_REQUEST: shop=${shop} customerId=${customerId} email=${customerEmail}`);
+
+  if (!shopId || !customerId) return;
+
+  const db = getDb();
+  const events = await db
+    .select()
+    .from(analyticsEvents)
+    .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.customerId, customerId)));
+
+  // In production: email export to customer or submit via Shopify data request API.
+  // For now we log the count so there's a verifiable audit trail.
+  console.info(`GDPR CUSTOMERS_DATA_REQUEST: found ${events.length} analytics events for customer ${customerId}`);
+}
+
+async function handleCustomersRedact(shop: string, payload: CustomerGdprPayload) {
+  const customerId = String(payload.customer?.id ?? "");
+  const shopId = await getShopId(shop);
+
+  if (!shopId || !customerId) {
+    console.warn(`GDPR CUSTOMERS_REDACT: missing shopId or customerId — shop=${shop}`);
+    return;
+  }
+
+  const db = getDb();
+  const deleted = await db
+    .delete(analyticsEvents)
+    .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.customerId, customerId)))
+    .returning({ id: analyticsEvents.id });
+
+  console.info(`GDPR CUSTOMERS_REDACT: deleted ${deleted.length} events for customer ${customerId} shop=${shop}`);
+}
+
+async function handleShopRedact(shop: string) {
+  const shopId = await getShopId(shop);
+
+  if (!shopId) {
+    console.warn(`GDPR SHOP_REDACT: shop not found — ${shop}`);
+    return;
+  }
+
+  const db = getDb();
+
+  // Delete PII-containing analytics data before marking the shop inactive.
+  // Offer/conditions/rewards cascade via FK ON DELETE CASCADE when shop is deleted.
+  await Promise.all([
+    db.delete(analyticsEvents).where(eq(analyticsEvents.shopId, shopId)),
+    db.delete(cartMutationLogs).where(eq(cartMutationLogs.shopId, shopId)),
+  ]);
+
+  await db
+    .update(shops)
+    .set({ isActive: false, uninstalledAt: new Date() })
+    .where(eq(shops.id, shopId));
+
+  console.info(`GDPR SHOP_REDACT: completed for shop=${shop} shopId=${shopId}`);
 }

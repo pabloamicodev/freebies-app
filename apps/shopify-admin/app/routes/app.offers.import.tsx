@@ -18,6 +18,69 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {};
 };
 
+/**
+ * RFC 4180-compliant CSV parser.
+ * Handles quoted fields with embedded commas, double-quote escapes, and CRLF/LF line endings.
+ */
+function parseCSV(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  let i = 0;
+
+  // Normalize line endings
+  const src = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  while (i < src.length) {
+    const ch = src[i]!;
+
+    if (inQuotes) {
+      if (ch === '"') {
+        // Peek next char
+        if (src[i + 1] === '"') {
+          // Escaped quote
+          field += '"';
+          i += 2;
+        } else {
+          // End of quoted field
+          inQuotes = false;
+          i++;
+        }
+      } else {
+        field += ch;
+        i++;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+        i++;
+      } else if (ch === ",") {
+        row.push(field);
+        field = "";
+        i++;
+      } else if (ch === "\n") {
+        row.push(field);
+        field = "";
+        if (row.some((f) => f.trim())) rows.push(row);
+        row = [];
+        i++;
+      } else {
+        field += ch;
+        i++;
+      }
+    }
+  }
+
+  // Flush last field/row
+  if (field || row.length > 0) {
+    row.push(field);
+    if (row.some((f) => f.trim())) rows.push(row);
+  }
+
+  return rows;
+}
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const db = getDb();
@@ -34,24 +97,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const shopId = shopRows[0]?.id;
   if (!shopId) return { error: "Shop not found", created: [], errors: [] };
 
-  const lines = csvContent.split("\n").filter((l) => l.trim());
-  if (lines.length < 2) return { error: "CSV must have header and at least one row", created: [], errors: [] };
+  const parsedRows = parseCSV(csvContent);
+  if (parsedRows.length < 2) return { error: "CSV must have a header row and at least one data row", created: [], errors: [] };
 
-  const headers = lines[0]!.split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
+  const headerRow = parsedRows[0]!.map((h) => h.trim());
+  const dataRows = parsedRows.slice(1);
   const created: string[] = [];
   const errors: Array<{ row: number; message: string }> = [];
 
-  for (let i = 1; i < lines.length; i++) {
-    const values = lines[i]!.split(",").map((v) => v.trim().replace(/^"|"$/g, ""));
+  for (let i = 0; i < dataRows.length; i++) {
+    const values = dataRows[i]!;
     const row: Record<string, string> = {};
-    headers.forEach((h, idx) => { row[h] = values[idx] ?? ""; });
+    headerRow.forEach((h, idx) => { row[h] = (values[idx] ?? "").trim(); });
 
     const internalName = row["internal_name"];
     const publicTitle = row["public_title"];
     const offerType = row["type"] as "gift" | "bundle" | "upsell" | "discount" | "booster";
 
+    const rowNumber = i + 2; // +1 for header, +1 for 1-based indexing
+
     if (!internalName || !publicTitle || !offerType) {
-      errors.push({ row: i + 1, message: "Missing required fields: internal_name, public_title, type" });
+      errors.push({ row: rowNumber, message: "Missing required fields: internal_name, public_title, type" });
+      continue;
+    }
+
+    const validTypes = ["gift", "bundle", "upsell", "discount", "booster"];
+    if (!validTypes.includes(offerType)) {
+      errors.push({ row: rowNumber, message: `Invalid type "${offerType}". Must be one of: ${validTypes.join(", ")}` });
       continue;
     }
 
@@ -66,7 +138,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         discountTags: row["discount_tags"] ? row["discount_tags"].split("|") : [],
       }).returning({ id: offers.id });
 
-      if (!newOffer) { errors.push({ row: i + 1, message: "Failed to create offer" }); continue; }
+      if (!newOffer) { errors.push({ row: rowNumber, message: "Failed to create offer" }); continue; }
 
       // Create condition if provided
       if (row["condition_type"] && row["condition_value_threshold_cents"]) {
@@ -110,7 +182,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       created.push(newOffer.id);
     } catch (e) {
-      errors.push({ row: i + 1, message: (e as Error).message });
+      errors.push({ row: rowNumber, message: (e as Error).message });
     }
   }
 
@@ -148,12 +220,44 @@ export default function OffersImportPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function parsePreview(text: string) {
-    const lines = text.split("\n").filter((l) => l.trim()).slice(0, 6);
-    if (lines.length < 1) return;
-    const hdrs = lines[0]!.split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
-    const rows = lines.slice(1).map((l) => l.split(",").map((v) => v.trim().replace(/^"|"$/g, "")));
+    // Use the same RFC 4180 parser — extract first 6 rows for preview
+    const allRows = parseCSVClient(text);
+    if (allRows.length < 1) return;
+    const hdrs = allRows[0]!.map((h) => h.trim());
+    const rows = allRows.slice(1, 6).map((r) => r.map((v) => v.trim()));
     setPreviewHeaders(hdrs);
     setPreviewRows(rows);
+  }
+
+  /**
+   * Client-side mirror of the server parseCSV — same logic, exported inline for the preview.
+   */
+  function parseCSVClient(text: string): string[][] {
+    const rows: string[][] = [];
+    let row: string[] = [];
+    let field = "";
+    let inQuotes = false;
+    let i = 0;
+    const src = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    while (i < src.length) {
+      const ch = src[i]!;
+      if (inQuotes) {
+        if (ch === '"') {
+          if (src[i + 1] === '"') { field += '"'; i += 2; }
+          else { inQuotes = false; i++; }
+        } else { field += ch; i++; }
+      } else {
+        if (ch === '"') { inQuotes = true; i++; }
+        else if (ch === ",") { row.push(field); field = ""; i++; }
+        else if (ch === "\n") {
+          row.push(field); field = "";
+          if (row.some((f) => f.trim())) rows.push(row);
+          row = []; i++;
+        } else { field += ch; i++; }
+      }
+    }
+    if (field || row.length > 0) { row.push(field); if (row.some((f) => f.trim())) rows.push(row); }
+    return rows;
   }
 
   function handleFile(file: File) {
@@ -223,7 +327,7 @@ export default function OffersImportPage() {
 
       {/* Result banner */}
       {hasResult && (
-        <div className={`b-banner ${allOk ? "" : "b-banner-orange"} b-mb-4`}>
+        <div className={`b-banner ${allOk ? "b-banner-green" : "b-banner-orange"} b-mb-4`}>
           <span className="b-banner-icon">{allOk ? "✓" : "⚠"}</span>
           <div className="b-banner-body">
             <p className="b-banner-title">

@@ -10,7 +10,7 @@
 import { Worker, type Job } from "bullmq";
 import pino from "pino";
 import { getDb, productCache } from "@promo/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import type Redis from "ioredis";
 
 const log = pino({ name: "collection-sync-worker" });
@@ -129,25 +129,29 @@ async function syncCollectionProducts(
     const collection = data.data.collection;
     if (!collection) break;
 
-    for (const product of collection.products.nodes) {
-      // Append collectionGid to the product's collections array if not already present
-      const rows = await db
-        .select({ collections: productCache.collections })
-        .from(productCache)
-        .where(and(eq(productCache.shopId, shopId), eq(productCache.productGid, product.id)))
-        .limit(1);
-
-      const existing = rows[0];
-      if (!existing) continue;
-
-      const collections = existing.collections ?? [];
-      if (!collections.includes(collectionGid)) {
-        await db
-          .update(productCache)
-          .set({ collections: [...collections, collectionGid], syncedAt: new Date() })
-          .where(and(eq(productCache.shopId, shopId), eq(productCache.productGid, product.id)));
-      }
+    const productGids = collection.products.nodes.map((p) => p.id);
+    if (productGids.length === 0) {
+      cursor = collection.products.pageInfo.hasNextPage
+        ? collection.products.pageInfo.endCursor
+        : null;
+      continue;
     }
+
+    // Single UPDATE: append collectionGid to all products in this page that don't have it yet.
+    // Replaces the previous per-row SELECT + UPDATE loop (N+1 → 1 query).
+    await db
+      .update(productCache)
+      .set({
+        collections: sql`array_append(${productCache.collections}, ${collectionGid}::text)`,
+        syncedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(productCache.shopId, shopId),
+          inArray(productCache.productGid, productGids),
+          sql`NOT (${collectionGid}::text = ANY(${productCache.collections}))`,
+        ),
+      );
 
     cursor = collection.products.pageInfo.hasNextPage
       ? collection.products.pageInfo.endCursor

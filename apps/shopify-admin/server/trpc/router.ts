@@ -1,6 +1,14 @@
 /**
  * tRPC router — type-safe RPC between admin React UI and React Router backend.
  * All procedures require an authenticated Shopify session.
+ *
+ * Integration boundary:
+ * - Server side: this router is intended to be mounted at /trpc via a Hono or
+ *   React Router resource route (not yet wired — see server/trpc/handler.ts when ready).
+ * - Client side: import AppRouter as the type arg for createTRPCReact() in the
+ *   frontend; do NOT import runtime values from this file into client bundles.
+ * - Export only appRouter (handler) and AppRouter (type) from this file. All
+ *   internal sub-routers stay unexported.
  */
 
 import { initTRPC, TRPCError } from "@trpc/server";
@@ -18,7 +26,6 @@ export interface TRPCContext {
 const t = initTRPC.context<TRPCContext>().create();
 
 const router = t.router;
-const publicProcedure = t.procedure;
 const shopProcedure = t.procedure.use(async ({ ctx, next }) => {
   if (!ctx.shopId) throw new TRPCError({ code: "UNAUTHORIZED" });
   return next({ ctx });
@@ -311,10 +318,11 @@ const syncRouter = router({
       .from(shops).where(eq(shops.id, ctx.shopId)).limit(1);
     if (!shop) throw new TRPCError({ code: "NOT_FOUND" });
 
+    const { decryptToken } = await import("../../app/lib/token-crypto.server.js");
     await productSyncQueue.add("manual-full-sync", {
       shopId: ctx.shopId,
       shopDomain: shop.myshopifyDomain,
-      accessToken: shop.accessTokenEncrypted,
+      accessToken: await decryptToken(shop.accessTokenEncrypted),
       mode: "full",
     });
     return { queued: true };

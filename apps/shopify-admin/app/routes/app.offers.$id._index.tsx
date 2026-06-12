@@ -1,8 +1,8 @@
-import { useLoaderData, useNavigate, useFetcher, redirect } from "react-router";
+import { useLoaderData, useNavigate, useFetcher, useActionData, redirect } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { offers, offerConditions, offerRewards, offerCombinationPolicies, shops } from "@promo/db";
+import { offers, offerConditions, offerRewards, offerCombinationPolicies, shops, offerVersions } from "@promo/db";
 import { eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
@@ -13,7 +13,7 @@ import {
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const db = getDb();
   const offerId = params["id"];
   if (!offerId) throw new Response("Not found", { status: 404 });
@@ -21,6 +21,13 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const offerRows = await db.select().from(offers).where(eq(offers.id, offerId)).limit(1);
   const offer = offerRows[0];
   if (!offer) throw new Response("Not found", { status: 404 });
+
+  const shopRows = await db
+    .select({ currencyCode: shops.currencyCode })
+    .from(shops)
+    .where(eq(shops.myshopifyDomain, session.shop))
+    .limit(1);
+  const shopCurrencyCode = shopRows[0]?.currencyCode ?? "USD";
 
   const [conditions, rewards, policy] = await Promise.all([
     db.select().from(offerConditions).where(eq(offerConditions.offerId, offerId)),
@@ -42,6 +49,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     })),
     rewards,
     policy: policy[0] ?? null,
+    shopCurrencyCode,
   };
 };
 
@@ -55,11 +63,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const intent = formData.get("intent") as string;
 
   const shopRows = await db
-    .select({ id: shops.id })
+    .select({ id: shops.id, currencyCode: shops.currencyCode })
     .from(shops)
     .where(eq(shops.myshopifyDomain, session.shop))
     .limit(1);
   const shopId = shopRows[0]?.id ?? "";
+  const shopCurrencyCode = shopRows[0]?.currencyCode ?? "USD";
 
   switch (intent) {
     case "update": {
@@ -116,7 +125,39 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       break;
     }
     case "publish": {
-      await db.update(offers).set({ status: "active", updatedAt: new Date() }).where(eq(offers.id, offerId));
+      // Guard: must have at least one main condition and one reward
+      const [existingConditions, existingRewards] = await Promise.all([
+        db.select({ id: offerConditions.id }).from(offerConditions)
+          .where(eq(offerConditions.offerId, offerId)),
+        db.select({ id: offerRewards.id }).from(offerRewards)
+          .where(eq(offerRewards.offerId, offerId)),
+      ]);
+      if (existingConditions.length === 0) {
+        return { error: "Cannot publish: add at least one main condition before publishing." };
+      }
+      if (existingRewards.length === 0) {
+        return { error: "Cannot publish: add at least one reward (gift) before publishing." };
+      }
+
+      const now = new Date();
+      await db.update(offers).set({ status: "active", updatedAt: now }).where(eq(offers.id, offerId));
+
+      // Write version snapshot
+      const offerSnapshot = await db.select().from(offers).where(eq(offers.id, offerId)).limit(1);
+      const condSnapshot = await db.select().from(offerConditions).where(eq(offerConditions.offerId, offerId));
+      const rewSnapshot = await db.select().from(offerRewards).where(eq(offerRewards.offerId, offerId));
+      const existingVersions = await db.select({ versionNumber: offerVersions.versionNumber })
+        .from(offerVersions).where(eq(offerVersions.offerId, offerId))
+        .orderBy(offerVersions.versionNumber);
+      const nextVersion = (existingVersions[existingVersions.length - 1]?.versionNumber ?? 0) + 1;
+      await db.insert(offerVersions).values({
+        shopId,
+        offerId,
+        versionNumber: nextVersion,
+        snapshot: { offer: offerSnapshot[0], conditions: condSnapshot, rewards: rewSnapshot },
+        createdBy: session.shop,
+      }).onConflictDoNothing();
+
       try {
         const { offerPublishQueue } = await import("../lib/queues.server.js") as { offerPublishQueue?: { add: (name: string, data: unknown, opts?: unknown) => Promise<unknown> } };
         if (offerPublishQueue) {
@@ -152,17 +193,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
 /* ── Condition type display names ───────────────────────── */
 const CONDITION_TYPE_NAMES: Record<string, string> = {
-  cart_value:            "Condición del valor del carrito",
-  cart_quantity:         "Condición de cantidad del carrito",
-  cart_value_multiplier: "Condición del multiplicador del valor del carrito",
-  specific_product:      "Condición específica del producto",
-  pack_of_products:      "Condición de paquete de productos",
-  customer_tags:         "Etiquetas de cliente",
-  order_history_total_spent: "Historial de pedidos — total gastado",
-  one_use_per_customer:  "Un uso por cliente",
+  cart_value:            "Cart Value",
+  cart_quantity:         "Cart Quantity",
+  cart_value_multiplier: "Cart Value Multiplier",
+  specific_product:      "Specific Product",
+  pack_of_products:      "Pack of Products",
+  customer_tags:         "Customer Tags",
+  order_history_total_spent: "Order History — Total Spent",
+  one_use_per_customer:  "One Use Per Customer",
   markets:               "Shopify Markets",
-  customer_location:     "Ubicación del cliente",
-  sales_channels:        "Canales de venta",
+  customer_location:     "Customer Location",
+  sales_channels:        "Sales Channels",
 };
 
 /* ── Currency chips shown on monetary conditions ────────── */
@@ -213,16 +254,16 @@ function AppliesToSelect({ value, onChange }: { value: string; onChange: (v: str
   return (
     <div style={{ marginTop: 14 }}>
       <label style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
-        La condición se aplicará a:
+        Condition applies to:
       </label>
       <select
         className="b-select"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
-        <option value="any_product">cualquier producto</option>
-        <option value="specific_products">productos seleccionados</option>
-        <option value="specific_collection">colección específica</option>
+        <option value="any_product">Any product</option>
+        <option value="specific_products">Specific products</option>
+        <option value="specific_collection">Specific collection</option>
       </select>
     </div>
   );
@@ -243,6 +284,7 @@ function ConditionCard({
   onDelete: () => void;
 }) {
   const fetcher = useFetcher();
+  const isSaving = fetcher.state !== "idle";
   const [val, setVal] = useState<ConditionValue>({ ...initialValue });
 
   function update(patch: Partial<ConditionValue>) {
@@ -276,7 +318,12 @@ function ConditionCard({
         background: "var(--bg-hover)",
         borderBottom: "1px solid var(--border-light)",
       }}>
-        <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{title}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{title}</span>
+          {isSaving && (
+            <span style={{ fontSize: 11, color: "var(--text-muted)", fontStyle: "italic" }}>Saving…</span>
+          )}
+        </div>
         <button
           type="button"
           onClick={onDelete}
@@ -296,7 +343,7 @@ function ConditionCard({
           <>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end" }}>
               <div>
-                <label style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>min.</label>
+                <label style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Min.</label>
                 <div style={{ position: "relative" }}>
                   <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-sub)", fontSize: 13 }}>$</span>
                   <input
@@ -311,7 +358,7 @@ function ConditionCard({
                 </div>
               </div>
               <div>
-                <label style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>máx.</label>
+                <label style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Max.</label>
                 <div style={{ position: "relative" }}>
                   <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-sub)", fontSize: 13 }}>$</span>
                   <input
@@ -549,18 +596,26 @@ function SummaryItem({
 }
 
 /* ── Condition summary text from DB value ────────────────── */
-function conditionSummary(conditionType: string, value: ConditionValue): string[] {
+function conditionSummary(conditionType: string, value: ConditionValue, currencyCode = "USD"): string[] {
   const v = value;
+  const conditionCurrency = (v.currencyCode as string | undefined) ?? currencyCode;
+  const fmt = (cents: number) => {
+    try {
+      return new Intl.NumberFormat("en-US", { style: "currency", currency: conditionCurrency, maximumFractionDigits: 2 }).format(cents / 100);
+    } catch {
+      return `${conditionCurrency} ${(cents / 100).toFixed(2)}`;
+    }
+  };
   switch (conditionType) {
     case "cart_value": {
       const cents = v.thresholdCents as number ?? 50000;
       const applies = v.appliesTo === "specific_products" ? "specific products" : "any product";
-      return [`Spend from $${(cents / 100).toFixed(2)} to get 1 gift(s)`, `Applies to ${applies}`];
+      return [`Spend from ${fmt(cents)} to get 1 gift(s)`, `Applies to ${applies}`];
     }
     case "cart_value_multiplier": {
       const cents = v.thresholdCents as number ?? 50000;
       const applies = v.appliesTo === "specific_products" ? "specific products" : "any product";
-      return [`Spend $${(cents / 100).toFixed(2)} to get 1 gift(s)`, `Applies to ${applies}`];
+      return [`Spend ${fmt(cents)} to get 1 gift(s)`, `Applies to ${applies}`];
     }
     case "cart_quantity": {
       const min = v.minQuantity as number ?? 1;
@@ -587,7 +642,8 @@ function formatStartDate(iso: string | null): string {
    PAGE COMPONENT
    ═══════════════════════════════════════════════════════════ */
 export default function OfferDetailPage() {
-  const { offer, conditions, rewards, policy } = useLoaderData<typeof loader>();
+  const { offer, conditions, rewards, policy, shopCurrencyCode } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const fetcher = useFetcher();
 
@@ -945,14 +1001,29 @@ export default function OfferDetailPage() {
             )}
           </div>
 
+          {/* Publish error banner */}
+          {actionData && "error" in actionData && actionData.error && (
+            <div className="b-banner b-banner-red" style={{ marginBottom: 12 }}>
+              <span className="b-banner-icon">⚠</span>
+              <div className="b-banner-body">
+                <p className="b-banner-text" style={{ margin: 0 }}>{actionData.error}</p>
+              </div>
+            </div>
+          )}
+
           {/* Footer ──────────────────────────────────────── */}
           <div className="b-editor-footer">
             <button type="button" className="b-btn b-btn-secondary" onClick={saveInfo}>
               Save draft
             </button>
             {canPublish ? (
-              <button type="button" className="b-btn b-btn-dark" onClick={() => submitAction("publish")}>
-                Publish
+              <button
+                type="button"
+                className="b-btn b-btn-dark"
+                onClick={() => submitAction("publish")}
+                disabled={fetcher.state !== "idle"}
+              >
+                {fetcher.state !== "idle" ? "Publishing…" : "Publish"}
               </button>
             ) : (
               <button type="button" className="b-btn b-btn-danger" onClick={() => submitAction("pause")}>
@@ -988,7 +1059,7 @@ export default function OfferDetailPage() {
               label="Main condition"
               done={hasConditions}
               details={hasConditions
-                ? mainConditions.flatMap((c) => conditionSummary(c.conditionType, c.value as ConditionValue))
+                ? mainConditions.flatMap((c) => conditionSummary(c.conditionType, c.value as ConditionValue, shopCurrencyCode))
                 : undefined}
             />
             <SummaryItem

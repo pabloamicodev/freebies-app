@@ -1,9 +1,9 @@
-import { useLoaderData } from "react-router";
+import { useLoaderData, Link } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { offers, shops } from "@promo/db";
-import { eq, and, count } from "drizzle-orm";
+import { offers, shops, analyticsEvents } from "@promo/db";
+import { eq, and, count, gte, desc } from "drizzle-orm";
 import { getDashboardWarnings } from "../lib/dashboard-warnings.server.js";
 import type { LoaderFunctionArgs } from "react-router";
 
@@ -15,20 +15,71 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   try {
     const db = getDb();
-    const shopRows = await db.select({ id: shops.id }).from(shops)
-      .where(eq(shops.myshopifyDomain, shopDomain)).limit(1);
-    const shopId = shopRows[0]?.id ?? "";
+    const shopRows = await db
+      .select({ id: shops.id, shopDomain: shops.shopDomain, currencyCode: shops.currencyCode })
+      .from(shops)
+      .where(eq(shops.myshopifyDomain, shopDomain))
+      .limit(1);
+    const shopRow = shopRows[0];
+    const shopId = shopRow?.id ?? "";
+    const shopDisplayName = shopRow?.shopDomain
+      ? shopRow.shopDomain.replace(/\.myshopify\.com$/, "").replace(/-/g, " ")
+      : shopDomain.replace(/\.myshopify\.com$/, "");
+    const currencyCode = shopRow?.currencyCode ?? "USD";
 
-    const [activeOffersResult] = await Promise.all([
+    const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const [activeOffersResult, orderEventRows] = await Promise.all([
       db.select({ count: count() }).from(offers)
-        .where(and(eq(offers.shopId, shopId), eq(offers.status, "active"))).catch(() => [{ count: 0 }]),
+        .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")))
+        .catch(() => [{ count: 0 }]),
+      db.select({ properties: analyticsEvents.properties })
+        .from(analyticsEvents)
+        .where(and(
+          eq(analyticsEvents.shopId, shopId),
+          eq(analyticsEvents.eventName, "promo_engine:order_paid"),
+          gte(analyticsEvents.occurredAt, since30d),
+        ))
+        .orderBy(desc(analyticsEvents.occurredAt))
+        .limit(500)
+        .catch(() => []),
     ]);
 
     const warnings = await getDashboardWarnings(shopId, shopDomain).catch(() => []);
 
-    return { shopDomain, shopId, activeOffers: activeOffersResult[0]?.count ?? 0, warnings };
+    // Aggregate real order stats from events
+    let totalSalesCents = 0;
+    for (const row of orderEventRows) {
+      const props = row.properties as Record<string, unknown> | null;
+      const subtotal = typeof props?.subtotalCents === "number" ? props.subtotalCents : 0;
+      totalSalesCents += subtotal;
+    }
+    const orderCount = orderEventRows.length;
+    const avgOrderCents = orderCount > 0 ? Math.round(totalSalesCents / orderCount) : 0;
+
+    return {
+      shopDomain,
+      shopDisplayName,
+      currencyCode,
+      shopId,
+      activeOffers: activeOffersResult[0]?.count ?? 0,
+      totalSalesCents,
+      orderCount,
+      avgOrderCents,
+      warnings,
+    };
   } catch {
-    return { shopDomain, shopId: "", activeOffers: 0, warnings: [] };
+    return {
+      shopDomain,
+      shopDisplayName: shopDomain.replace(/\.myshopify\.com$/, ""),
+      currencyCode: "USD",
+      shopId: "",
+      activeOffers: 0,
+      totalSalesCents: 0,
+      orderCount: 0,
+      avgOrderCents: 0,
+      warnings: [],
+    };
   }
 };
 
@@ -48,9 +99,13 @@ function IconChevron() {
 }
 
 export default function Dashboard() {
-  const { activeOffers } = useLoaderData<typeof loader>();
+  const { activeOffers, shopDisplayName, currencyCode, totalSalesCents, orderCount, avgOrderCents } = useLoaderData<typeof loader>();
   const [showOnboarding, setShowOnboarding] = useState(true);
   const [showRecommended, setShowRecommended] = useState(true);
+
+  const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: currencyCode, maximumFractionDigits: 0 });
+  const totalSalesFmt = fmt.format(totalSalesCents / 100);
+  const avgOrderFmt = fmt.format(avgOrderCents / 100);
 
   const onboardingSteps = [
     { label: "Enable BOGOS in themes", done: true },
@@ -62,10 +117,10 @@ export default function Dashboard() {
   const progressPct = Math.round((completedSteps / onboardingSteps.length) * 100);
 
   const supportLinks = [
-    { icon: "💬", title: "Live chat support", desc: "Get help from our highly trained support team", href: "#" },
-    { icon: "❓", title: "View frequently asked questions", desc: "See FAQs and learn about BOGOS functionality", href: "#" },
-    { icon: "▶️", title: "Watch our YouTube series", desc: "See all guides step by step on our YouTube series", href: "#" },
-    { icon: "✉️", title: "Contact via email", desc: "Send us an email at support@secomapp.com for help", href: "#" },
+    { icon: "💬", title: "Live chat support", desc: "Get help from our highly trained support team", href: "https://secomapp.com/contact" },
+    { icon: "❓", title: "View frequently asked questions", desc: "See FAQs and learn about BOGOS functionality", href: "https://help.secomapp.com" },
+    { icon: "▶️", title: "Watch our YouTube series", desc: "See all guides step by step on our YouTube series", href: "https://www.youtube.com/@secomapp" },
+    { icon: "✉️", title: "Contact via email", desc: "Send us an email at support@secomapp.com for help", href: "mailto:support@secomapp.com" },
   ];
 
   const recApps = [
@@ -82,7 +137,7 @@ export default function Dashboard() {
           <h1 className="b-page-title">Panel</h1>
           <span className="b-status-pill b-status-pill-green">
             <span className="b-status-dot" />
-            0 app blocks active
+            {activeOffers} active offer{activeOffers !== 1 ? "s" : ""}
           </span>
         </div>
       </div>
@@ -128,12 +183,12 @@ export default function Dashboard() {
         <div className="b-card b-card-body" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div>
             <h2 style={{ fontSize: 18, fontWeight: 700, margin: "0 0 6px", color: "var(--text)" }}>
-              Welcome to BOGOS, Sean
+              Welcome to BOGOS, {shopDisplayName}
             </h2>
             <p style={{ fontSize: 14, color: "var(--text-sub)", margin: "0 0 16px" }}>
               Create an offer and increase your AOV now
             </p>
-            <a href="/app/offers/new" className="b-btn b-btn-primary">Create offer</a>
+            <Link to="/app/offers/new" className="b-btn b-btn-primary">Create offer</Link>
           </div>
           {/* Person + boxes illustration */}
           <div style={{ position: "relative", width: 120, height: 140, flexShrink: 0 }}>
@@ -158,9 +213,9 @@ export default function Dashboard() {
           <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 16px", color: "var(--text)" }}>Overview</p>
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
             {[
-              { label: "Total sales", value: "$0" },
-              { label: "Average order value", value: "$0" },
-              { label: "Orders", value: "0" },
+              { label: "Total sales (30d)", value: totalSalesFmt },
+              { label: "Average order value (30d)", value: avgOrderFmt },
+              { label: "Orders with gifts (30d)", value: String(orderCount) },
             ].map((row, i) => (
               <div
                 key={row.label}

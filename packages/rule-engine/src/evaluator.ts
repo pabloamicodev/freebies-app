@@ -85,6 +85,8 @@ export interface EvaluatorContext {
   offers: OfferDefinition[];
   oneUseStates: OneUseState[];
   now: Date;
+  /** Shop's base currency code — used to determine if a currency conversion is needed. */
+  shopCurrencyCode?: string;
 }
 
 /**
@@ -143,9 +145,9 @@ export async function evaluate(
       .sort((a, b) => a.sortOrder - b.sortOrder);
 
     const currency = {
-      activeCurrencyCode: input.cart.currencyCode,
-      shopCurrencyCode: input.cart.currencyCode,
-      exchangeRate: input.market ? undefined : undefined,
+      activeCurrencyCode: input.market?.currencyCode ?? input.cart.currencyCode,
+      shopCurrencyCode: ctx.shopCurrencyCode ?? input.cart.currencyCode,
+      exchangeRate: input.market?.exchangeRate ?? undefined,
     };
 
     // Evaluate main conditions

@@ -120,9 +120,10 @@ export async function getMarketsForShop(shopId: string): Promise<ShopifyMarket[]
 
   if (!shop) return [];
 
+  const { decryptToken } = await import("./token-crypto.server.js");
   const markets = await fetchMarketsFromShopify(
     shop.myshopifyDomain,
-    shop.accessTokenEncrypted,
+    await decryptToken(shop.accessTokenEncrypted),
   );
 
   // Cache in Redis

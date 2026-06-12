@@ -29,8 +29,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopId = shopRows[0]?.id;
   if (!shopId) return { orders: [], totalSales: 0, avgOrder: 0, orderCount: 0, chartData: [], days };
 
-  // Recent orders with gift events
-  const recentGiftEvents = await db
+  // Recent orders that had gifts added
+  const recentOrderEvents = await db
     .select({
       id: analyticsEvents.id,
       offerId: analyticsEvents.offerId,
@@ -42,7 +42,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     .where(
       and(
         eq(analyticsEvents.shopId, shopId),
-        eq(analyticsEvents.eventName, "promo_engine:gift_auto_added"),
+        eq(analyticsEvents.eventName, "promo_engine:order_paid"),
         gte(analyticsEvents.occurredAt, since),
       ),
     )
@@ -57,15 +57,54 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const offerNames: Record<string, string> = {};
   offerRows.forEach((o) => { offerNames[o.id] = o.internalName; });
 
-  const orders = recentGiftEvents.map((ev) => ({
-    id: ev.id,
-    orderId: ev.orderId ?? `#${Math.floor(70000 + Math.random() * 10000)}`,
-    date: ev.occurredAt.toISOString(),
-    giftName: ev.offerId ? (offerNames[ev.offerId] ?? "Gift Offer") : "Gift Offer",
-    total: 0,
-  }));
+  // Build per-day chart data
+  const dayBuckets: Record<string, { sales: number; orders: number }> = {};
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 86400000);
+    const key = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    dayBuckets[key] = { sales: 0, orders: 0 };
+  }
 
-  return { orders, totalSales: 0, avgOrder: 0, orderCount: orders.length, chartData: [], days };
+  let totalSalesCents = 0;
+  const orders = recentOrderEvents
+    .filter((ev) => Boolean(ev.orderId))
+    .map((ev) => {
+      const props = ev.properties as Record<string, unknown> | null;
+      const subtotalCents = typeof props?.subtotalCents === "number" ? props.subtotalCents : 0;
+      const giftName = ev.offerId ? (offerNames[ev.offerId] ?? "Gift Offer") : "Gift Offer";
+
+      totalSalesCents += subtotalCents;
+
+      const dayKey = new Date(ev.occurredAt).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      if (dayBuckets[dayKey]) {
+        dayBuckets[dayKey]!.sales += subtotalCents;
+        dayBuckets[dayKey]!.orders += 1;
+      }
+
+      return {
+        id: ev.id,
+        orderId: ev.orderId!,
+        date: ev.occurredAt.toISOString(),
+        giftName,
+        totalCents: subtotalCents,
+      };
+    });
+
+  const orderCount = orders.length;
+  const avgOrderCents = orderCount > 0 ? Math.round(totalSalesCents / orderCount) : 0;
+
+  const salesChartData = Object.entries(dayBuckets).map(([x, v]) => ({ x, y: v.sales / 100 }));
+  const ordersChartData = Object.entries(dayBuckets).map(([x, v]) => ({ x, y: v.orders }));
+
+  return {
+    orders,
+    totalSalesCents,
+    avgOrderCents,
+    orderCount,
+    salesChartData,
+    ordersChartData,
+    days,
+  };
 };
 
 /** Simple SVG line chart — renders a smooth line with area fill */
@@ -141,24 +180,11 @@ function formatDate(iso: string) {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-// Generate placeholder chart data for the last N days
-function makePlaceholderData(days: number, seed: number) {
-  const labels = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(Date.now() - i * 86400000);
-    labels.push({ x: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }), y: Math.sin((i + seed) * 0.7) * 100 + 150 });
-  }
-  return labels;
-}
-
 export default function AnalyticsPage() {
-  const { orders, totalSales, avgOrder, orderCount, days } = useLoaderData<typeof loader>();
+  const { orders, totalSalesCents, avgOrderCents, orderCount, salesChartData, ordersChartData, days } = useLoaderData<typeof loader>();
   const [, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-
-  const salesData = makePlaceholderData(days, 1).map((d, i) => ({ x: d.x, y: i % 3 === 0 ? d.y * 1.5 : d.y }));
-  const ordersData = makePlaceholderData(days, 3).map((d, _i) => ({ x: d.x, y: Math.round(d.y / 40) + 1 }));
 
   const filteredOrders = orders.filter((o) =>
     !search || o.orderId.toLowerCase().includes(search.toLowerCase()) || o.giftName.toLowerCase().includes(search.toLowerCase()),
@@ -194,7 +220,7 @@ export default function AnalyticsPage() {
         <div className="b-card b-card-body" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
             <div style={{ fontSize: 26, fontWeight: 700, color: "var(--text)", marginBottom: 4 }}>
-              ${totalSales > 0 ? (totalSales / 1000).toFixed(1) + "K" : "0"}
+              ${totalSalesCents > 0 ? (totalSalesCents / 100).toFixed(2) : "0.00"}
             </div>
             <div className="b-text-sm b-text-sub">Total sales</div>
           </div>
@@ -203,7 +229,7 @@ export default function AnalyticsPage() {
         <div className="b-card b-card-body" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
             <div style={{ fontSize: 26, fontWeight: 700, color: "var(--text)", marginBottom: 4 }}>
-              ${avgOrder > 0 ? avgOrder : "0"}
+              ${avgOrderCents > 0 ? (avgOrderCents / 100).toFixed(2) : "0.00"}
             </div>
             <div className="b-text-sm b-text-sub">Average order value</div>
           </div>
@@ -226,7 +252,7 @@ export default function AnalyticsPage() {
         <div className="b-grid-2 b-mb-4">
           <div className="b-card b-card-body">
             <p style={{ fontSize: 13, fontWeight: 600, margin: "0 0 12px", color: "var(--text)" }}>Total sales</p>
-            <LineChart data={salesData} yLabel="$" />
+            <LineChart data={salesChartData} yLabel="$" />
             <div className="b-chart-legend">
               <div className="b-chart-legend-line" />
               <span>Total sales</span>
@@ -234,7 +260,7 @@ export default function AnalyticsPage() {
           </div>
           <div className="b-card b-card-body">
             <p style={{ fontSize: 13, fontWeight: 600, margin: "0 0 12px", color: "var(--text)" }}>Total orders</p>
-            <LineChart data={ordersData} yLabel="#" />
+            <LineChart data={ordersChartData} yLabel="#" />
             <div className="b-chart-legend">
               <div className="b-chart-legend-line" />
               <span>Total orders</span>
@@ -289,7 +315,7 @@ export default function AnalyticsPage() {
                       <span>{order.giftName} <span style={{ color: "var(--text-sub)" }}>(100% off) x1</span></span>
                     </div>
                   </td>
-                  <td><span className="b-text-sm">${order.total.toFixed(2)}</span></td>
+                  <td><span className="b-text-sm">${(order.totalCents / 100).toFixed(2)}</span></td>
                   <td>
                     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                       <button className="b-btn-icon" aria-label="View"><IconEye /></button>

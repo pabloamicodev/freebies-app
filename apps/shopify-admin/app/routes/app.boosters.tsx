@@ -4,7 +4,7 @@
  * via floating widgets, progress bars, and cart messages.
  */
 
-import { useLoaderData, useNavigate, Form } from "react-router";
+import { useLoaderData, useNavigate, Link, Form } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb, shops, offers, widgets } from "@promo/db";
 import { eq, and } from "drizzle-orm";
@@ -87,12 +87,12 @@ export default function BoostersPage() {
           <h1 className="b-page-title">Boosters</h1>
         </div>
         <div className="b-page-actions">
-          <a
-            href="/app/offers/new?type=booster"
+          <Link
+            to="/app/offers/new?type=booster"
             className="b-btn b-btn-primary"
           >
             + Create Booster
-          </a>
+          </Link>
         </div>
       </div>
 
@@ -170,9 +170,9 @@ export default function BoostersPage() {
                 <p className="b-text-sm b-text-sub" style={{ margin: "0 0 20px" }}>
                   Create a booster to add Today Offer widgets and progress bars to your store.
                 </p>
-                <a href="/app/offers/new?type=booster" className="b-btn b-btn-primary">
+                <Link to="/app/offers/new?type=booster" className="b-btn b-btn-primary">
                   + Create Booster
-                </a>
+                </Link>
               </div>
             ) : (
               <div className="b-table-wrap" style={{ border: "none", boxShadow: "none", borderRadius: 0 }}>

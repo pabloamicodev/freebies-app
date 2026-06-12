@@ -13,6 +13,29 @@ import { Worker, type Job } from "bullmq";
 import { redis } from "../../product-sync/src/queues.js";
 import { getDb, shops, offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import { eq, and } from "drizzle-orm";
+
+/**
+ * AES-256-GCM token decryption — mirrors token-crypto.server.ts.
+ * Falls back to plaintext for legacy tokens (no ":" separator).
+ */
+async function decryptAccessToken(stored: string): Promise<string> {
+  const separatorIndex = stored.indexOf(":");
+  if (separatorIndex === -1) return stored; // Legacy plaintext
+
+  const keyHex = process.env["TOKEN_ENCRYPTION_KEY"];
+  if (!keyHex) return stored; // No key configured
+
+  try {
+    const keyBytes = Buffer.from(keyHex, "hex");
+    const key = await crypto.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["decrypt"]);
+    const iv = Buffer.from(stored.slice(0, separatorIndex), "hex");
+    const ciphertext = Buffer.from(stored.slice(separatorIndex + 1), "hex");
+    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+    return new TextDecoder().decode(plaintext);
+  } catch {
+    return stored;
+  }
+}
 import pino from "pino";
 import { compileOfferConfig, estimateConfigSize, type CompiledFunctionConfig } from "./compile-config.js";
 
@@ -24,9 +47,8 @@ const METAFIELD_KEY = "function_config";
 const MAX_METAFIELD_BYTES = 9500; // Leave headroom under 10KB limit
 
 export interface OfferPublishJobData {
-  shopId: string;
+  shopId?: string;
   shopDomain: string;
-  accessToken: string;
   /** Specific offer ID that changed, or null for full rebuild. */
   offerId?: string;
 }
@@ -35,10 +57,26 @@ export function startOfferPublisherWorker() {
   return new Worker<OfferPublishJobData>(
     "offer-publish",
     async (job: Job<OfferPublishJobData>) => {
-      const { shopId, shopDomain, accessToken } = job.data;
+      const { shopDomain } = job.data;
       log.info({ shopDomain, offerId: job.data.offerId }, "Starting offer config publish");
 
       const db = getDb();
+
+      // Look up shop from DB to get decrypted access token — never passed plaintext through Redis
+      const shopRows = await db
+        .select({ id: shops.id, accessTokenEncrypted: shops.accessTokenEncrypted })
+        .from(shops)
+        .where(and(eq(shops.myshopifyDomain, shopDomain), eq(shops.isActive, true)))
+        .limit(1);
+
+      if (shopRows.length === 0) {
+        log.warn({ shopDomain }, "Shop not found or inactive — skipping publish");
+        return;
+      }
+
+      const shopRow = shopRows[0];
+      const shopId = job.data.shopId ?? shopRow.id;
+      const accessToken = await decryptAccessToken(shopRow.accessTokenEncrypted);
 
       // Load all active offers for this shop
       const activeOffers = await db

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, Form, redirect } from "react-router";
+import { useNavigate, useLoaderData, Form, redirect } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, offerCombinationPolicies, offerConditions, offerRewards, shops } from "@promo/db";
@@ -72,9 +72,14 @@ const TEMPLATE_PRESETS: Record<string, {
   },
 };
 
+const VALID_TYPES = ["gift", "bundle", "upsell", "discount", "booster"] as const;
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  return { shopDomain: session.shop };
+  const url = new URL(request.url);
+  const typeParam = url.searchParams.get("type") ?? "gift";
+  const initialType = (VALID_TYPES as readonly string[]).includes(typeParam) ? typeParam : "gift";
+  return { shopDomain: session.shop, initialType };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -214,7 +219,8 @@ function IconChevronLeft() {
 
 export default function NewOfferPage() {
   const navigate = useNavigate();
-  const [offerType, setOfferType] = useState("gift");
+  const { initialType } = useLoaderData<typeof loader>();
+  const [offerType, setOfferType] = useState(initialType ?? "gift");
   const [internalName, setInternalName] = useState("");
   const [publicTitle, setPublicTitle] = useState("");
   const [priority, setPriority] = useState("100");

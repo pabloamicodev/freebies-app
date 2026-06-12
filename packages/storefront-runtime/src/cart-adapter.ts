@@ -148,6 +148,7 @@ declare global {
       locale?: string;
       currency?: { active: string; rate: string };
       shop?: string;
+      country?: string;
     };
   }
 }

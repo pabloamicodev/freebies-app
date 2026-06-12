@@ -8,7 +8,7 @@
 
 import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
-
+import { decryptToken } from "./token-crypto.server.js";
 
 export type ReplayTopic =
   | "products/update"
@@ -41,7 +41,7 @@ export async function replayWebhookTopic(
       await productSyncQueue.add("replay-products", {
         shopId,
         shopDomain: shop.myshopifyDomain,
-        accessToken: shop.accessTokenEncrypted,
+        accessToken: await decryptToken(shop.accessTokenEncrypted),
         mode: "full",
       }, { priority: 10 });
       return { queued: 1 };
@@ -50,7 +50,7 @@ export async function replayWebhookTopic(
       await inventorySyncQueue.add("replay-inventory", {
         shopId,
         shopDomain: shop.myshopifyDomain,
-        accessToken: shop.accessTokenEncrypted,
+        accessToken: await decryptToken(shop.accessTokenEncrypted),
       }, { priority: 10 });
       return { queued: 1 };
 
@@ -75,7 +75,7 @@ export async function replayProductSync(shopId: string, productGid: string): Pro
   await productSyncQueue.add("replay-single-product", {
     shopId,
     shopDomain: shop.myshopifyDomain,
-    accessToken: shop.accessTokenEncrypted,
+    accessToken: await decryptToken(shop.accessTokenEncrypted),
     mode: "partial",
     productGid,
   }, { priority: 5 });

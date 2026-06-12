@@ -1,4 +1,4 @@
-import { useLoaderData, useNavigate, useSearchParams } from "react-router";
+import { useLoaderData, useNavigate, useSearchParams, useFetcher } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
@@ -98,7 +98,7 @@ type OfferRow = {
   type: string;
   status: string;
   internalName: string;
-  publicTitle: string | null;
+  publicTitle: string;
   priority: number;
   startsAt: string | null;
   updatedAt: string;
@@ -388,7 +388,7 @@ function Modal2GiftWizard({
             <div className="b-template-scratch-desc">Create offers manually, from conditions to gifts.</div>
           </div>
 
-          <div className="b-template-divider">O</div>
+          <div className="b-template-divider">or</div>
 
           <p className="b-template-section-label">Choose a template:</p>
 
@@ -847,6 +847,9 @@ export default function OffersPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [bannerVisible, setBannerVisible] = useState(true);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const deleteFetcher = useFetcher();
+  const bulkFetcher = useFetcher();
 
   // Modal state
   const [modal, setModal] = useState<null | "type" | "gift" | "bundle" | "upsell" | "discount">(null);
@@ -878,13 +881,27 @@ export default function OffersPage() {
     }
   }
 
-  async function deleteOffer(id: string) {
-    if (!confirm("Archive this offer?")) return;
+  function confirmDelete(id: string) {
+    setConfirmDeleteId(id);
+  }
+
+  function executeDelete() {
+    if (!confirmDeleteId) return;
     const fd = new FormData();
     fd.append("intent", "delete");
-    fd.append("offerId", id);
-    await fetch(window.location.pathname, { method: "POST", body: fd });
-    window.location.reload();
+    fd.append("offerId", confirmDeleteId);
+    void deleteFetcher.submit(fd, { method: "POST" });
+    setConfirmDeleteId(null);
+  }
+
+  function bulkAction(intent: "bulk_pause" | "bulk_activate") {
+    const fd = new FormData();
+    fd.append("intent", intent);
+    for (const id of checkedIds) {
+      fd.append("offerIds[]", id);
+    }
+    void bulkFetcher.submit(fd, { method: "POST" });
+    setCheckedIds(new Set());
   }
 
   return (
@@ -950,6 +967,61 @@ export default function OffersPage() {
         </div>
       )}
 
+      {/* ── Delete confirmation dialog ───────────────────────── */}
+      {confirmDeleteId && (
+        <div className="b-modal-overlay" onClick={() => setConfirmDeleteId(null)}>
+          <div className="b-modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <div className="b-modal-header">
+              <h2 className="b-modal-title">Archive offer?</h2>
+              <button className="b-modal-close" onClick={() => setConfirmDeleteId(null)}>×</button>
+            </div>
+            <div className="b-modal-body">
+              <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0 }}>
+                The offer will be archived and no longer visible to customers. You can restore it later.
+              </p>
+            </div>
+            <div className="b-modal-footer">
+              <button className="b-btn b-btn-secondary" onClick={() => setConfirmDeleteId(null)}>Cancel</button>
+              <button className="b-btn b-btn-danger" onClick={executeDelete}>Archive offer</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk actions toolbar ─────────────────────────────── */}
+      {checkedIds.size > 0 && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, padding: "10px 16px",
+          background: "var(--bg-hover)", border: "1px solid var(--border)",
+          borderRadius: "var(--r)", marginBottom: 12,
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginRight: 4 }}>
+            {checkedIds.size} selected
+          </span>
+          <button
+            className="b-btn b-btn-secondary b-btn-sm"
+            onClick={() => bulkAction("bulk_activate")}
+            disabled={bulkFetcher.state !== "idle"}
+          >
+            Activate
+          </button>
+          <button
+            className="b-btn b-btn-secondary b-btn-sm"
+            onClick={() => bulkAction("bulk_pause")}
+            disabled={bulkFetcher.state !== "idle"}
+          >
+            Pause
+          </button>
+          <button
+            className="b-btn b-btn-plain b-btn-sm"
+            style={{ marginLeft: "auto", color: "var(--text-sub)", fontSize: 13 }}
+            onClick={() => setCheckedIds(new Set())}
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       {/* ── Table card ──────────────────────────────────────── */}
       <div className="b-table-wrap">
         {/* Filter Tabs */}
@@ -988,29 +1060,29 @@ export default function OffersPage() {
               <th>
                 <button className="bogos-sort-btn" type="button">
                   <SortIcon active="asc" />
-                  <span>Título</span>
+                  <span>Title</span>
                 </button>
               </th>
               <th>
                 <button className="bogos-sort-btn" type="button">
                   <SortIcon />
-                  <span>Tipo de oferta</span>
+                  <span>Offer type</span>
                 </button>
               </th>
               <th>
                 <button className="bogos-sort-btn" type="button">
                   <SortIcon />
-                  <span>Fecha de inicio</span>
+                  <span>Start date</span>
                 </button>
               </th>
-              <th><span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-sub)" }}>Estado</span></th>
+              <th><span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-sub)" }}>Status</span></th>
               <th>
                 <button className="bogos-sort-btn" type="button">
                   <SortIcon />
-                  <span>Encendido apagado</span>
+                  <span>On / Off</span>
                 </button>
               </th>
-              <th><span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-sub)" }}>Comportamiento</span></th>
+              <th><span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-sub)" }}>Actions</span></th>
             </tr>
           </thead>
           <tbody>
@@ -1103,7 +1175,7 @@ export default function OffersPage() {
                           <button
                             type="button"
                             className="bogos-action-btn red"
-                            onClick={(e) => { e.stopPropagation(); void deleteOffer(offer.id); }}
+                            onClick={(e) => { e.stopPropagation(); confirmDelete(offer.id); }}
                             aria-label="Delete"
                           >
                             <IconTrash />

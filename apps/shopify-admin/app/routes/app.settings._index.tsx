@@ -102,6 +102,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const boolField = (name: string) => formData.get(name) === "on" || formData.get(name) === "true";
   const strField = (name: string) => (formData.get(name) as string | null) ?? "";
 
+  // Validate: email is required when fraud notifications are enabled
+  const fraudNotifyEnabled = boolField("fraud_notify_email");
+  const fraudEmailValue = strField("fraud_email_address").trim();
+  if (fraudNotifyEnabled) {
+    if (!fraudEmailValue) {
+      return { error: "Email address is required when fraud notifications are enabled." };
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(fraudEmailValue)) {
+      return { error: "Please enter a valid email address for fraud notifications." };
+    }
+  }
+
   const updates: Record<string, unknown> = {
     "app.enabled": boolField("app_enabled"),
     "gift.logic_mode": strField("gift_logic_mode"),
@@ -270,9 +283,19 @@ export default function SettingsPage() {
       </div>
 
       {actionData && "success" in actionData && (
-        <div className="b-banner" style={{ marginBottom: 16 }}>
+        <div className="b-banner b-banner-green" style={{ marginBottom: 16 }}>
+          <span className="b-banner-icon">✓</span>
           <div className="b-banner-body">
-            <div className="b-banner-title" style={{ color: "var(--green)" }}>✓ Settings saved successfully</div>
+            <div className="b-banner-title">Settings saved successfully</div>
+          </div>
+        </div>
+      )}
+
+      {actionData && "error" in actionData && actionData.error && (
+        <div className="b-banner b-banner-red" style={{ marginBottom: 16 }}>
+          <span className="b-banner-icon">⚠</span>
+          <div className="b-banner-body">
+            <div className="b-banner-title" style={{ color: "var(--red)" }}>{actionData.error}</div>
           </div>
         </div>
       )}
@@ -508,7 +531,9 @@ export default function SettingsPage() {
               />
               {fraudNotify && (
                 <div style={{ paddingLeft: 26 }}>
-                  <label className="b-label">Email address</label>
+                  <label className="b-label">
+                    Email address <span style={{ color: "var(--red)" }}>*</span>
+                  </label>
                   <input
                     className="b-input"
                     type="email"
@@ -516,7 +541,14 @@ export default function SettingsPage() {
                     value={fraudEmail}
                     onChange={(e) => setFraudEmail(e.target.value)}
                     placeholder="you@example.com"
+                    required
+                    style={fraudNotify && !fraudEmail ? { borderColor: "var(--red)" } : undefined}
                   />
+                  {fraudNotify && !fraudEmail && (
+                    <div className="b-help" style={{ color: "var(--red)" }}>
+                      Required when fraud notifications are enabled.
+                    </div>
+                  )}
                 </div>
               )}
 

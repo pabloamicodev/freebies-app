@@ -70,13 +70,23 @@ class PromoEngineRuntime {
     // Our own events
     on(PromoEvents.CartChanged, () => this.debouncedEvaluate.call());
 
-    // Mutation observer for cart quantity inputs (some themes)
+    // Mutation observer for cart quantity changes in themes that don't fire cart events.
+    // Scoped narrowly to avoid triggering on unrelated DOM mutations (spinners, lazy images, etc.).
     const cartObserver = new MutationObserver(() => {
       this.debouncedEvaluate.call();
     });
 
-    const cartForms = document.querySelectorAll('[action*="/cart"]');
-    cartForms.forEach((form) => cartObserver.observe(form, { childList: true, subtree: true }));
+    // Observe direct children of cart forms only (line-item add/remove)
+    document.querySelectorAll('[action*="/cart"]').forEach((form) => {
+      cartObserver.observe(form, { childList: true, subtree: false });
+    });
+
+    // Observe quantity inputs for value attribute changes (themes that mutate value directly)
+    document.querySelectorAll<HTMLInputElement>(
+      'input[name="quantity"], input[name*="qty"], input[type="number"][data-quantity-input]',
+    ).forEach((input) => {
+      cartObserver.observe(input, { attributes: true, attributeFilter: ["value"] });
+    });
   }
 
   private async triggerEvaluation(): Promise<void> {
@@ -98,6 +108,23 @@ class PromoEngineRuntime {
 
     const signal = this.evaluationAbort.start();
 
+    // Build market context from Shopify global if a non-base currency is active
+    const shopifyGlobal = window.Shopify;
+    const activeCurrency = shopifyGlobal?.currency?.active ?? this.config.currency;
+    const exchangeRateRaw = shopifyGlobal?.currency?.rate;
+    const exchangeRate = exchangeRateRaw ? parseFloat(exchangeRateRaw) : null;
+    const market =
+      activeCurrency && activeCurrency !== this.config.currency
+        ? {
+            id: activeCurrency,
+            handle: activeCurrency.toLowerCase(),
+            currencyCode: activeCurrency,
+            countryCode: shopifyGlobal?.country ?? null,
+            primaryLocale: shopifyGlobal?.locale ?? this.config.locale,
+            exchangeRate: exchangeRate && !isNaN(exchangeRate) ? exchangeRate : null,
+          }
+        : null;
+
     try {
       const response = await fetch(EVAL_ENDPOINT, {
         method: "POST",
@@ -109,7 +136,11 @@ class PromoEngineRuntime {
         },
         body: JSON.stringify({
           cart: this.normalizeCart(cart),
+          customer: null,
+          market,
           locale: this.config.locale,
+          salesChannel: "online_store",
+          requestedUrl: window.location.href,
           sessionId: this.sessionId,
         }),
         signal,

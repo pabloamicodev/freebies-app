@@ -4,7 +4,7 @@
  * and see exactly why an offer qualifies or doesn't.
  */
 
-import { useLoaderData, Form, useActionData } from "react-router";
+import { useLoaderData, Form, useActionData, Link } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
@@ -182,13 +182,13 @@ export default function OfferPreviewPage() {
       <div className="b-page-header">
         <div>
           <div className="b-page-title-row" style={{ marginBottom: 4 }}>
-            <a
-              href={`/app/offers/${offer.id}`}
+            <Link
+              to={`/app/offers/${offer.id}`}
               className="b-btn b-btn-secondary b-btn-sm"
               style={{ textDecoration: "none" }}
             >
               ← Back
-            </a>
+            </Link>
             <h1 className="b-page-title">Preview &amp; Debug</h1>
           </div>
           <p style={{ margin: 0, fontSize: 13, color: "var(--text-sub)" }}>{offer.internalName}</p>

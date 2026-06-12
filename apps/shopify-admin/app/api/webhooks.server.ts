@@ -7,6 +7,7 @@
 
 import { Hono } from "hono";
 import { createWebhookHmacMiddleware } from "../lib/hmac.server.js";
+import { decryptToken } from "../lib/token-crypto.server.js";
 import { getDb, shops, productCache, analyticsEvents } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 
@@ -45,7 +46,7 @@ webhookApp.post("/products/update", async (c) => {
     await productSyncQueue.add(`product-update-${product.id}`, {
       shopId,
       shopDomain: shop.myshopifyDomain,
-      accessToken: shop.accessTokenEncrypted,
+      accessToken: await decryptToken(shop.accessTokenEncrypted),
       mode: "partial" as const,
       productGid: product.admin_graphql_api_id,
     }, { priority: 5 });
@@ -87,7 +88,7 @@ webhookApp.post("/inventory", async (c) => {
     await inventorySyncQueue.add(`inv-update-${payload.inventory_item_id}`, {
       shopId,
       shopDomain: shop.myshopifyDomain,
-      accessToken: shop.accessTokenEncrypted,
+      accessToken: await decryptToken(shop.accessTokenEncrypted),
       inventoryItemId: payload.inventory_item_id,
       locationId: payload.location_id,
       availableQuantity: payload.available,
@@ -196,7 +197,7 @@ webhookApp.post("/markets", async (c) => {
     await redis.publish(`market-sync:${shopId}`, JSON.stringify({
       shopId,
       shopDomain: shop.myshopifyDomain,
-      accessToken: shop.accessTokenEncrypted,
+      accessToken: await decryptToken(shop.accessTokenEncrypted),
     }));
   }
 

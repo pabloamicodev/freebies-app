@@ -4,7 +4,7 @@
  * POST /app/offers/:id/widget/market  → save market overrides
  */
 
-import { useLoaderData, useActionData, Form } from "react-router";
+import { useLoaderData, useActionData, Link, Form } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb, shops, widgets, appSettings } from "@promo/db";
 import { eq, and } from "drizzle-orm";
@@ -91,9 +91,9 @@ export default function WidgetMarketPage() {
       {/* Header */}
       <div className="b-page-header">
         <div className="b-page-title-row">
-          <a href={`/app/offers/${offerId}/widget`} className="b-btn b-btn-secondary b-btn-sm">
+          <Link to={`/app/offers/${offerId}/widget`} className="b-btn b-btn-secondary b-btn-sm">
             ← Back
-          </a>
+          </Link>
           <h1 className="b-page-title">Market Widget Overrides</h1>
         </div>
       </div>

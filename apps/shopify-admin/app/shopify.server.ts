@@ -38,7 +38,9 @@ export const shopify = shopifyApp({
         const { eq } = await import("drizzle-orm");
         const db = getDb();
         const shopDomain = session.shop;
-        const accessToken = session.accessToken ?? "";
+        const rawToken = session.accessToken ?? "";
+        const { encryptToken } = await import("./lib/token-crypto.server.js");
+        const accessTokenEncrypted = await encryptToken(rawToken);
 
         const existing = await db
           .select({ id: shops.id })
@@ -50,14 +52,14 @@ export const shopify = shopifyApp({
           await db.insert(shops).values({
             shopDomain,
             myshopifyDomain: shopDomain,
-            accessTokenEncrypted: accessToken,
+            accessTokenEncrypted,
             currencyCode: "USD",
             timezone: "UTC",
           });
         } else {
           await db
             .update(shops)
-            .set({ accessTokenEncrypted: accessToken, isActive: true, updatedAt: new Date() })
+            .set({ accessTokenEncrypted, isActive: true, updatedAt: new Date() })
             .where(eq(shops.myshopifyDomain, shopDomain));
         }
       } catch (dbError) {

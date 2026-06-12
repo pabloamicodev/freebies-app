@@ -4,7 +4,7 @@
  * validated form for each condition type.
  */
 
-import { useLoaderData, Form, Link } from "react-router";
+import { useLoaderData, Form, Link, useActionData } from "react-router";
 import { useState } from "react";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { authenticate } from "../shopify.server.js";
@@ -106,6 +106,24 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       case "sales_channels":
         value = { channels: formData.getAll("channels[]") as string[] };
         break;
+      case "specific_product":
+      case "pack_of_products": {
+        const gidsRaw = (formData.get("requiredVariantGids") as string | null) ?? "";
+        const variantIds = gidsRaw.split(",").map((g) => g.trim()).filter(Boolean);
+        if (variantIds.length === 0) {
+          // Return early with validation error rather than inserting an empty condition
+          return { error: "Select at least one product before adding this condition." };
+        }
+        value = {
+          variantIds,
+          minQtyPerProduct: parseInt((formData.get("minQtyPerProduct") as string | null) ?? "1", 10) || 1,
+          multiplyGifts: false,
+          giftsMatchProducts: false,
+          trackMode: "product",
+          appliesTo: "specific_products",
+        };
+        break;
+      }
     }
 
     const existingCount = await db.select({ id: offerConditions.id })
@@ -152,6 +170,7 @@ const SUB_CONDITION_TYPES = [
 
 export default function OfferConditionsPage() {
   const { offer, conditions } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
   const [addingScope, setAddingScope] = useState<"main" | "sub" | null>(null);
   const [selectedType, setSelectedType] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -185,6 +204,16 @@ export default function OfferConditionsPage() {
       />
 
       <div className="b-page">
+        {/* Action error banner */}
+        {actionData && "error" in actionData && actionData.error && (
+          <div className="b-banner b-banner-red b-mb-4">
+            <span className="b-banner-icon">⚠</span>
+            <div className="b-banner-body">
+              <p className="b-banner-text" style={{ margin: 0 }}>{actionData.error}</p>
+            </div>
+          </div>
+        )}
+
         {/* Page Header */}
         <div className="b-page-header">
           <div className="b-page-title-row">

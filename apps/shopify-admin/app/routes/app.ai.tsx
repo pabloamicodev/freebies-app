@@ -7,7 +7,7 @@
  * This is a DRAFT implementation to satisfy the spec requirement.
  */
 
-import { Form, useActionData } from "react-router";
+import { Form, Link, useActionData } from "react-router";
 import { useState, useRef, useEffect } from "react";
 import { authenticate } from "../shopify.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -22,35 +22,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   await authenticate.admin(request);
-  const formData = await request.formData();
-  const prompt = formData.get("prompt") as string;
-  const intent = formData.get("intent") as string;
-
-  if (intent === "generate_offer") {
-    // Placeholder: In production, call Claude API to generate offer config
-    // from the natural language prompt.
-    // NEVER auto-publish — always return as draft for merchant review.
-    return {
-      suggestion: {
-        type: "gift",
-        internalName: "ai-generated-offer",
-        publicTitle: "AI Suggested: Free Gift with Purchase",
-        priority: 100,
-        conditions: [{ type: "cart_value", threshold: 50, currency: "USD" }],
-        rewards: [{ type: "product_gift", discountType: "free", isAutoAdd: true }],
-        reasoning: `Based on your prompt: "${prompt}", I suggest a free gift offer that triggers when cart value reaches $50.`,
-        isDraft: true,
-      },
-    };
-  }
-
-  if (intent === "explain_offer") {
-    return {
-      explanation: "This offer qualifies when the cart subtotal exceeds $50 (excluding gift lines). The Discount Function validates eligibility at checkout.",
-    };
-  }
-
-  return { error: "Unknown intent" };
+  // AI integration not yet available — guard all intents
+  return { error: "AI assistant is not yet available. This feature is coming soon." };
 };
 
 type Message =
@@ -80,26 +53,10 @@ export default function AiAssistantPage() {
     if (!actionData || actionData === prevActionData.current) return;
     prevActionData.current = actionData;
 
-    if ("suggestion" in actionData && actionData.suggestion) {
-      const s = actionData.suggestion;
+    if ("error" in actionData && actionData.error) {
       setMessages((prev) => [
         ...prev,
-        {
-          role: "assistant",
-          text: s.reasoning,
-          isDraft: true,
-          title: s.publicTitle,
-        },
-      ]);
-    } else if ("explanation" in actionData && actionData.explanation) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", text: actionData.explanation as string },
-      ]);
-    } else if ("error" in actionData && actionData.error) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", text: `Error: ${actionData.error}` },
+        { role: "assistant", text: actionData.error as string },
       ]);
     }
   }, [actionData]);
@@ -126,24 +83,20 @@ export default function AiAssistantPage() {
       <div className="b-page-header" style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", background: "var(--bg-card)", marginBottom: 0, flexShrink: 0 }}>
         <div className="b-page-title-row">
           <h1 className="b-page-title">AI Assistant</h1>
-          <span className="b-badge b-badge-blue">Beta</span>
+          <span className="b-badge b-badge-orange">Coming Soon</span>
         </div>
         <div className="b-page-actions">
-          <span className="b-text-sm b-text-sub">Draft-only — no auto-publish</span>
+          <span className="b-text-sm b-text-sub">Natural language offer creation</span>
         </div>
       </div>
 
-      {/* Info banner */}
+      {/* Coming soon banner */}
       <div style={{ padding: "12px 20px 0", flexShrink: 0 }}>
-        <div className="b-banner">
-          <span className="b-banner-icon">
-            <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" style={{ color: "var(--blue)" }}>
-              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-            </svg>
-          </span>
+        <div className="b-banner b-banner-orange">
+          <span className="b-banner-icon">🚧</span>
           <div className="b-banner-body">
-            <p className="b-banner-text">
-              The AI assistant creates <strong>draft offers only</strong>. Always review and publish manually. No offer is auto-published without your approval.
+            <p className="b-banner-text" style={{ margin: 0 }}>
+              <strong>AI assistant is not yet available.</strong> The Claude API integration is in development. This feature will let you generate offer configs from natural language prompts.
             </p>
           </div>
         </div>
@@ -200,9 +153,9 @@ export default function AiAssistantPage() {
                   </div>
                   <div className="b-card-body" style={{ paddingTop: 12, paddingBottom: 12 }}>
                     <p className="b-text-sm b-text-sub" style={{ margin: "0 0 10px" }}>{msg.text}</p>
-                    <a href="/app/offers/new" className="b-btn b-btn-secondary b-btn-sm">
+                    <Link to="/app/offers/new" className="b-btn b-btn-secondary b-btn-sm">
                       Create This Offer Manually →
-                    </a>
+                    </Link>
                   </div>
                 </div>
               )}
@@ -257,19 +210,21 @@ export default function AiAssistantPage() {
             paddingBottom: 9,
             lineHeight: 1.4,
             overflow: "auto",
+            opacity: 0.5,
           }}
-          placeholder="e.g. Give customers a free sample when they spend over $75, but only for first-time buyers with the VIP tag"
+          placeholder="AI assistant coming soon…"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           rows={1}
+          disabled
         />
         <button
           type="button"
           className="b-btn b-btn-primary"
           style={{ flexShrink: 0, alignSelf: "flex-end" }}
           onClick={handleSend}
-          disabled={!input.trim()}
+          disabled
         >
           Send
         </button>

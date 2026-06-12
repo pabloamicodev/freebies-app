@@ -67,8 +67,9 @@ export async function checkRateLimit(
       remaining,
       resetIn,
     };
-  } catch {
-    // Redis unavailable — fail open (allow request)
+  } catch (err) {
+    // Redis unavailable — fail open but log so on-call can detect the outage
+    console.warn(`[rate-limit] Redis unavailable for limit="${limitName}" identifier="${identifier}" — failing open. Error: ${(err as Error).message}`);
     return { allowed: true, remaining: config.max, resetIn: config.windowSecs };
   }
 }

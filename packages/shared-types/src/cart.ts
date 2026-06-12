@@ -70,6 +70,8 @@ export const MarketContextSchema = z.object({
   currencyCode: z.string().length(3),
   countryCode: z.string().length(2).nullable(),
   primaryLocale: z.string(),
+  /** Exchange rate from shop base currency to this market's currency. Populated by storefront from window.Shopify.currency.rate. */
+  exchangeRate: z.number().positive().nullable().optional(),
 });
 export type MarketContext = z.infer<typeof MarketContextSchema>;
 

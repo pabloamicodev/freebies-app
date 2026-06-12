@@ -95,7 +95,7 @@ app.post("/evaluate", async (c) => {
 
   const db = getDb();
   const shopRows = await db
-    .select({ id: shops.id })
+    .select({ id: shops.id, currencyCode: shops.currencyCode })
     .from(shops)
     .where(and(eq(shops.myshopifyDomain, shopDomain), eq(shops.isActive, true)))
     .limit(1);
@@ -137,8 +137,18 @@ app.post("/evaluate", async (c) => {
     return c.json({ error: "Invalid JSON" }, 400);
   }
 
+  // Merge server-authoritative fields so storefront doesn't need to send them
+  const enrichedBody = {
+    shopDomain,
+    salesChannel: "online_store",
+    customer: null,
+    market: null,
+    requestedUrl: null,
+    ...(body as object),
+  };
+
   // Validate input
-  const parseResult = EvaluationInputSchema.safeParse(body);
+  const parseResult = EvaluationInputSchema.safeParse(enrichedBody);
   if (!parseResult.success) {
     return c.json({ error: "Invalid evaluation input", details: parseResult.error.issues }, 400);
   }
@@ -216,6 +226,7 @@ app.post("/evaluate", async (c) => {
     offers: offerDefinitions,
     oneUseStates: [],
     now: new Date(),
+    shopCurrencyCode: shop.currencyCode ?? undefined,
   });
 
   // ── Shadow mode: evaluate but strip cart mutations ────────────────────────

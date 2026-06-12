@@ -32,15 +32,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const productSyncQueue = new Queue("product-sync", { connection: redis });
 
   switch (syncType) {
-    case "products":
+    case "products": {
+      const { decryptToken } = await import("../lib/token-crypto.server.js");
       await productSyncQueue.add("manual-product-sync", {
         shopId: shop.id,
         shopDomain: shop.myshopifyDomain,
-        accessToken: shop.accessTokenEncrypted,
+        accessToken: await decryptToken(shop.accessTokenEncrypted),
         mode: "full" as const,
       }, { priority: 2 });
       await redis.quit();
       return Response.json({ queued: true, type: "products" });
+    }
 
     case "markets":
       await redis.quit();
