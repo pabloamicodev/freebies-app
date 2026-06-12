@@ -69,12 +69,13 @@ export function startOfferPublisherWorker() {
         .where(and(eq(shops.myshopifyDomain, shopDomain), eq(shops.isActive, true)))
         .limit(1);
 
-      if (shopRows.length === 0) {
+      const [shopRow] = shopRows;
+
+      if (!shopRow) {
         log.warn({ shopDomain }, "Shop not found or inactive — skipping publish");
         return;
       }
 
-      const shopRow = shopRows[0];
       const shopId = job.data.shopId ?? shopRow.id;
       const accessToken = await decryptAccessToken(shopRow.accessTokenEncrypted);
 
