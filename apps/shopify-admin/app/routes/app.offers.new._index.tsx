@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useNavigate, useLoaderData, Form, redirect } from "react-router";
 import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
-import { offers, offerCombinationPolicies, offerConditions, offerRewards, shops } from "@promo/db";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { offers, offerCombinationPolicies, offerConditions, offerRewards } from "@promo/db";
 import { eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
@@ -83,17 +83,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const formData = await request.formData();
-
-  const shopRows = await db
-    .select({ id: shops.id })
-    .from(shops)
-    .where(eq(shops.myshopifyDomain, session.shop))
-    .limit(1);
-
-  const shopId = shopRows[0]?.id;
   if (!shopId) return { error: "Shop not found" };
 
   const offerType = formData.get("offerType") as string;

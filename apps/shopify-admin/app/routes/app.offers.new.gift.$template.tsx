@@ -7,9 +7,8 @@ import { Form, useNavigate, redirect, useParams } from "react-router";
 import { SUPPORTED_CURRENCIES } from "@promo/shared-types";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
-import { offers, offerConditions, offerRewards, offerCombinationPolicies, shops } from "@promo/db";
-import { eq } from "drizzle-orm";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { SubconditionModal } from "../components/SubconditionModal.js";
@@ -66,12 +65,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 // ─── Action ──────────────────────────────────────────────────────────────────
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const formData = await request.formData();
-
-  const shopRows = await db.select({ id: shops.id }).from(shops).where(eq(shops.myshopifyDomain, session.shop)).limit(1);
-  const shopId = shopRows[0]?.id;
   if (!shopId) return { error: "Shop not found" };
 
   const intent      = formData.get("intent") as string;

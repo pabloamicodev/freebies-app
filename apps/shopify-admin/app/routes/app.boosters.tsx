@@ -5,20 +5,16 @@
  */
 
 import { useLoaderData, useNavigate, Link, Form } from "react-router";
-import { authenticate } from "../shopify.server.js";
-import { getDb, shops, offers, widgets } from "@promo/db";
-import { eq, and } from "drizzle-orm";
+import { PageHeader } from "../components/PageHeader.js";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { offers, widgets } from "@promo/db";
+import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
-
-  const [shopRow] = await db.select({ id: shops.id }).from(shops)
-    .where(eq(shops.myshopifyDomain, session.shop)).limit(1);
-  const shopId = shopRow?.id ?? "";
+  const { shopId, db } = await getShopContext(request);
 
   const boosterOffers = await db.select().from(offers)
     .where(and(eq(offers.shopId, shopId), eq(offers.type, "booster")))
@@ -82,19 +78,10 @@ export default function BoostersPage() {
   return (
     <div className="b-page">
       {/* ── Header ────────────────────────────────────────── */}
-      <div className="b-page-header">
-        <div className="b-page-title-row">
-          <h1 className="b-page-title">Boosters</h1>
-        </div>
-        <div className="b-page-actions">
-          <Link
-            to="/app/offers/new?type=booster"
-            className="b-btn b-btn-primary"
-          >
-            + Create Booster
-          </Link>
-        </div>
-      </div>
+      <PageHeader
+        title="Boosters"
+        actions={<Link to="/app/offers/new?type=booster" className="b-btn b-btn-primary">+ Create Booster</Link>}
+      />
 
       {/* ── Info banner ───────────────────────────────────── */}
       <div className="b-banner">

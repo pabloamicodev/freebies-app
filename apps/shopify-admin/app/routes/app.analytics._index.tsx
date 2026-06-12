@@ -1,9 +1,8 @@
 import { useLoaderData, useSearchParams } from "react-router";
 import { useState } from "react";
-import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
-import { analyticsEvents, offers, shops } from "@promo/db";
-import { eq, and, gte, desc } from "drizzle-orm";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { analyticsEvents, offers } from "@promo/db";
+import { and, desc, eq, gte } from "drizzle-orm";
 import type { LoaderFunctionArgs } from "react-router";
 import {
   IconChevronDown, IconChevronLeft, IconChevronRight,
@@ -13,20 +12,12 @@ import {
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
 
   const url = new URL(request.url);
   const days = parseInt(url.searchParams.get("days") ?? "7", 10);
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-  const shopRows = await db
-    .select({ id: shops.id })
-    .from(shops)
-    .where(eq(shops.myshopifyDomain, session.shop))
-    .limit(1);
-
-  const shopId = shopRows[0]?.id;
   if (!shopId) return { orders: [], totalSales: 0, avgOrder: 0, orderCount: 0, chartData: [], days };
 
   // Recent orders that had gifts added

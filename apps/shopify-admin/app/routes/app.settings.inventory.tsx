@@ -3,11 +3,11 @@
  * Controls how the promo engine behaves when gift products are out of stock.
  */
 
-import { useLoaderData, Form, Link } from "react-router";
-import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
-import { shops, appSettings } from "@promo/db";
-import { eq, and } from "drizzle-orm";
+import { useLoaderData, Form } from "react-router";
+import { PageHeader } from "../components/PageHeader.js";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { appSettings } from "@promo/db";
+import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import bogosStyles from "../styles/bogos.css?url";
 
@@ -16,12 +16,7 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export const links = () => [{ rel: "stylesheet", href: bogosStyles }];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
-
-  const shopRows = await db.select({ id: shops.id }).from(shops)
-    .where(eq(shops.myshopifyDomain, session.shop)).limit(1);
-  const shopId = shopRows[0]?.id ?? "";
+  const { shopId, db } = await getShopContext(request);
 
   const settingRows = await db.select()
     .from(appSettings)
@@ -42,12 +37,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
-
-  const shopRows = await db.select({ id: shops.id }).from(shops)
-    .where(eq(shops.myshopifyDomain, session.shop)).limit(1);
-  const shopId = shopRows[0]?.id ?? "";
+  const { shopId, db } = await getShopContext(request);
   const formData = await request.formData();
 
   const updates = {
@@ -75,14 +65,7 @@ export default function InventorySettingsPage() {
   return (
     <div className="b-page">
       {/* Header */}
-      <div className="b-page-header">
-        <div className="b-page-title-row">
-          <Link to="/app/settings" className="b-btn b-btn-secondary b-btn-sm">
-            &#8592; Back
-          </Link>
-          <h1 className="b-page-title">Inventory Settings</h1>
-        </div>
-      </div>
+      <PageHeader title="Inventory Settings" backTo="/app/settings" />
 
       {/* Info banner */}
       <div className="b-banner">

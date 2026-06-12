@@ -5,25 +5,17 @@
  */
 
 import type { LoaderFunctionArgs } from "react-router";
-import { authenticate } from "../shopify.server.js";
-import { getDb, shops } from "@promo/db";
-import { eq } from "drizzle-orm";
+import { getShopContext } from "../lib/shop-context.server.js";
 import { getMarketsForShop } from "../lib/markets.server.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { shopId } = await getShopContext(request);
 
-  const db = getDb();
-  const [shop] = await db.select({ id: shops.id })
-    .from(shops)
-    .where(eq(shops.myshopifyDomain, session.shop))
-    .limit(1);
-
-  if (!shop) {
+  if (!shopId) {
     return Response.json({ markets: [] }, { status: 200 });
   }
 
-  const markets = await getMarketsForShop(shop.id);
+  const markets = await getMarketsForShop(shopId);
 
   return Response.json({ markets }, {
     status: 200,

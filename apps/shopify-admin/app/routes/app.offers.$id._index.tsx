@@ -1,9 +1,8 @@
 import { useLoaderData, useNavigate, useFetcher, useActionData, redirect } from "react-router";
 import { useState } from "react";
 import { SUPPORTED_CURRENCIES } from "@promo/shared-types";
-import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
-import { offers, offerConditions, offerRewards, offerCombinationPolicies, shops, offerVersions } from "@promo/db";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { offers, offerConditions, offerRewards, offerCombinationPolicies, offerVersions } from "@promo/db";
 import { eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
@@ -14,21 +13,13 @@ import {
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
+  const { currencyCode: shopCurrencyCode, db } = await getShopContext(request);
   const offerId = params["id"];
   if (!offerId) throw new Response("Not found", { status: 404 });
 
   const offerRows = await db.select().from(offers).where(eq(offers.id, offerId)).limit(1);
   const offer = offerRows[0];
   if (!offer) throw new Response("Not found", { status: 404 });
-
-  const shopRows = await db
-    .select({ currencyCode: shops.currencyCode })
-    .from(shops)
-    .where(eq(shops.myshopifyDomain, session.shop))
-    .limit(1);
-  const shopCurrencyCode = shopRows[0]?.currencyCode ?? "USD";
 
   const [conditions, rewards, policy] = await Promise.all([
     db.select().from(offerConditions).where(eq(offerConditions.offerId, offerId)),
@@ -55,21 +46,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, currencyCode: shopCurrencyCode, db } = await getShopContext(request);
   const offerId = params["id"];
   if (!offerId) throw new Response("Not found", { status: 404 });
 
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
-
-  const shopRows = await db
-    .select({ id: shops.id, currencyCode: shops.currencyCode })
-    .from(shops)
-    .where(eq(shops.myshopifyDomain, session.shop))
-    .limit(1);
-  const shopId = shopRows[0]?.id ?? "";
-  const shopCurrencyCode = shopRows[0]?.currencyCode ?? "USD";
 
   switch (intent) {
     case "update": {

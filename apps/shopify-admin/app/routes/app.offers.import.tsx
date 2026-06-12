@@ -4,6 +4,7 @@
  */
 
 import { Form, useActionData, useNavigate } from "react-router";
+import { BackButton } from "../components/BackButton.js";
 import { useState, useRef } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
@@ -300,13 +301,7 @@ export default function OffersImportPage() {
       {/* Header */}
       <div className="b-page-header">
         <div className="b-page-title-row">
-          <button
-            className="b-btn b-btn-secondary b-btn-sm"
-            onClick={() => navigate("/app/offers")}
-            type="button"
-          >
-            ← All Offers
-          </button>
+          <BackButton to="/app/offers" label="← All Offers" />
           <h1 className="b-page-title">Import Offers</h1>
         </div>
         <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>

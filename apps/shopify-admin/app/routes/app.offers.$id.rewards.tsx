@@ -5,9 +5,11 @@
 
 import { useLoaderData, useNavigate, useNavigation, useActionData, Form } from "react-router";
 import { useState } from "react";
+import { NotFound } from "../components/NotFound.js";
+import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
+import { getShopContext } from "../lib/shop-context.server.js";
 import { offers, offerRewards } from "@promo/db";
 import { eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -31,18 +33,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
-
-  const shopRows = await db
-    .select({ id: (await import("@promo/db")).shops.id })
-    .from((await import("@promo/db")).shops)
-    .where(eq((await import("@promo/db")).shops.myshopifyDomain, session.shop))
-    .limit(1);
-  const shopId = shopRows[0]?.id!;
 
   if (intent === "add_reward") {
     const rewardType = formData.get("rewardType") as string;
@@ -142,13 +136,7 @@ export default function OfferRewardsPage() {
   const [currencyCode, setCurrencyCode] = useState("USD");
   const [giftQuantity, setGiftQuantity] = useState("1");
 
-  if (!offer) {
-    return (
-      <div className="b-page">
-        <p className="b-text-sub">Offer not found.</p>
-      </div>
-    );
-  }
+  if (!offer) return <NotFound message="Offer not found." />;
 
   const needsValue =
     discountType !== "free" &&
@@ -169,32 +157,12 @@ export default function OfferRewardsPage() {
 
       <div className="b-page">
         {/* ── Page header ─────────────────────────────────── */}
-        <div className="b-page-header">
-          <div className="b-page-title-row">
-            <button
-              type="button"
-              className="b-btn b-btn-secondary b-btn-sm"
-              onClick={() => navigate(`/app/offers/${offer.id}/conditions`)}
-            >
-              ← Back
-            </button>
-            <div>
-              <h1 className="b-page-title">Rewards / Gifts</h1>
-              <p className="b-text-sm b-text-sub" style={{ margin: "2px 0 0" }}>
-                {offer.internalName}
-              </p>
-            </div>
-          </div>
-          <div className="b-page-actions">
-            <button
-              type="button"
-              className="b-btn b-btn-primary"
-              onClick={() => navigate(`/app/offers/${offer.id}`)}
-            >
-              Widget →
-            </button>
-          </div>
-        </div>
+        <PageHeader
+          title="Rewards / Gifts"
+          subtitle={offer.internalName}
+          backTo={`/app/offers/${offer.id}/conditions`}
+          actions={<button type="button" className="b-btn b-btn-primary" onClick={() => navigate(`/app/offers/${offer.id}`)}>Widget →</button>}
+        />
 
         {/* ── Action error banner ─────────────────────────── */}
         {"error" in (actionData ?? {}) && (actionData as { error: string }).error && (

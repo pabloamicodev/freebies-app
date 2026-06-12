@@ -1,6 +1,7 @@
 import { useLoaderData, Form, useActionData } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
+import { getShopContext } from "../lib/shop-context.server.js";
 import { getDb } from "@promo/db";
 import { shops, appSettings } from "@promo/db";
 import { eq } from "drizzle-orm";
@@ -90,11 +91,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
-  const shopRows = await db.select({ id: shops.id }).from(shops)
-    .where(eq(shops.myshopifyDomain, session.shop)).limit(1);
-  const shopId = shopRows[0]?.id;
+  const { shopId, db } = await getShopContext(request);
   if (!shopId) return { error: "Shop not found" };
 
   const formData = await request.formData();

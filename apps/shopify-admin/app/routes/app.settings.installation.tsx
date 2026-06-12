@@ -5,7 +5,7 @@
  */
 
 import { useLoaderData } from "react-router";
-import { Link } from "react-router";
+import { PageHeader } from "../components/PageHeader.js";
 import { authenticate } from "../shopify.server.js";
 import type { LoaderFunctionArgs } from "react-router";
 import "../styles/bogos.css";
@@ -70,14 +70,7 @@ export default function InstallationPage() {
   return (
     <div className="b-page">
       {/* Page header */}
-      <div className="b-page-header">
-        <div className="b-page-title-row">
-          <Link to="/app/settings" className="b-btn b-btn-secondary b-btn-sm">
-            ← Back
-          </Link>
-          <h1 className="b-page-title">Theme Installation</h1>
-        </div>
-      </div>
+      <PageHeader title="Theme Installation" backTo="/app/settings" />
 
       {/* Warning banner when embed status is unknown / disabled */}
       {!appEmbedEnabled && (

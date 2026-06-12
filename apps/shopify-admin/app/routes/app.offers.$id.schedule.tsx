@@ -2,7 +2,8 @@
  * Offer Schedule editor — configure start/end dates and timezone.
  */
 
-import { useLoaderData, Form, Link, useActionData, useNavigation } from "react-router";
+import { useLoaderData, Form, useActionData, useNavigation } from "react-router";
+import { BackButton } from "../components/BackButton.js";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers } from "@promo/db";
@@ -88,13 +89,7 @@ export default function OfferSchedulePage() {
       {/* Header */}
       <div className="b-page-header">
         <div className="b-page-title-row">
-          <Link
-            to={`/app/offers/${offer.id}`}
-            className="b-btn b-btn-secondary b-btn-sm"
-            style={{ textDecoration: "none" }}
-          >
-            ← Back
-          </Link>
+          <BackButton to={`/app/offers/${offer.id}`} />
           <h1 className="b-page-title">Schedule</h1>
           <span className={statusBadgeClass(offer.status ?? "draft")}>
             {offer.status ?? "draft"}

@@ -5,10 +5,11 @@
  */
 
 import { useLoaderData, Form } from "react-router";
+import { PageHeader } from "../components/PageHeader.js";
 import { useState } from "react";
-import { authenticate } from "../shopify.server.js";
-import { getDb, shops, appSettings } from "@promo/db";
-import { eq, and } from "drizzle-orm";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { appSettings } from "@promo/db";
+import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import "../styles/bogos.css";
 
@@ -35,11 +36,7 @@ const DEFAULTS = {
 };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
-  const [shopRow] = await db.select({ id: shops.id }).from(shops)
-    .where(eq(shops.myshopifyDomain, session.shop)).limit(1);
-  const shopId = shopRow?.id ?? "";
+  const { shopId, db } = await getShopContext(request);
 
   const [settingRow] = await db.select({ value: appSettings.value })
     .from(appSettings)
@@ -55,11 +52,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
-  const [shopRow] = await db.select({ id: shops.id }).from(shops)
-    .where(eq(shops.myshopifyDomain, session.shop)).limit(1);
-  const shopId = shopRow?.id ?? "";
+  const { shopId, db } = await getShopContext(request);
   const formData = await request.formData();
 
   const theme: Record<string, string> = {};
@@ -148,14 +141,7 @@ export default function CustomizePage() {
   return (
     <div className="b-page">
       {/* ── Page header ───────────────────────────────────────── */}
-      <div className="b-page-header">
-        <div>
-          <h1 className="b-page-title">Customize</h1>
-          <p className="b-text-sm b-text-sub" style={{ margin: "2px 0 0" }}>
-            Global widget appearance and default copy
-          </p>
-        </div>
-      </div>
+      <PageHeader title="Customize" subtitle="Global widget appearance and default copy" />
 
       {/* ── Info banner ───────────────────────────────────────── */}
       <div className="b-banner">

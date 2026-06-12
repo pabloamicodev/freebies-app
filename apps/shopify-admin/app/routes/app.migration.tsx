@@ -10,21 +10,16 @@
 
 import { useLoaderData, Form } from "react-router";
 import { useState } from "react";
-import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
-import { shops, offers } from "@promo/db";
-import { eq, and, count } from "drizzle-orm";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { offers } from "@promo/db";
+import { and, count, eq } from "drizzle-orm";
 import { isShadowModeEnabled, setShadowMode } from "../lib/shadow-mode.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
-
-  const shopRows = await db.select({ id: shops.id }).from(shops).where(eq(shops.myshopifyDomain, session.shop)).limit(1);
-  const shopId = shopRows[0]?.id ?? "";
+  const { shopId, db } = await getShopContext(request);
 
   const [shadowMode, activeOffers, draftOffers] = await Promise.all([
     isShadowModeEnabled(shopId),
@@ -41,11 +36,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
-
-  const shopRows = await db.select({ id: shops.id }).from(shops).where(eq(shops.myshopifyDomain, session.shop)).limit(1);
-  const shopId = shopRows[0]?.id ?? "";
+  const { shopId } = await getShopContext(request);
 
   const formData = await request.formData();
   const intent = formData.get("intent") as string;

@@ -1,31 +1,18 @@
 import { useLoaderData, Link } from "react-router";
 import { useState } from "react";
-import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
-import { offers, shops, analyticsEvents } from "@promo/db";
-import { eq, and, count, gte, desc } from "drizzle-orm";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { offers, analyticsEvents } from "@promo/db";
+import { and, count, desc, eq, gte } from "drizzle-orm";
 import { getDashboardWarnings } from "../lib/dashboard-warnings.server.js";
 import type { LoaderFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopDomain = session.shop;
+  const { shopId, shopDomain, currencyCode, db } = await getShopContext(request);
 
   try {
-    const db = getDb();
-    const shopRows = await db
-      .select({ id: shops.id, shopDomain: shops.shopDomain, currencyCode: shops.currencyCode })
-      .from(shops)
-      .where(eq(shops.myshopifyDomain, shopDomain))
-      .limit(1);
-    const shopRow = shopRows[0];
-    const shopId = shopRow?.id ?? "";
-    const shopDisplayName = shopRow?.shopDomain
-      ? shopRow.shopDomain.replace(/\.myshopify\.com$/, "").replace(/-/g, " ")
-      : shopDomain.replace(/\.myshopify\.com$/, "");
-    const currencyCode = shopRow?.currencyCode ?? "USD";
+    const shopDisplayName = shopDomain.replace(/\.myshopify\.com$/, "").replace(/-/g, " ");
 
     const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 

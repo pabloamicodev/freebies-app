@@ -4,26 +4,17 @@
  */
 
 import { useLoaderData } from "react-router";
-import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
+import { getShopContext } from "../lib/shop-context.server.js";
 import { analyticsEvents, offers } from "@promo/db";
-import { eq, and, gte, count, sql } from "drizzle-orm";
+import { and, count, eq, gte, sql } from "drizzle-orm";
 import type { LoaderFunctionArgs } from "react-router";
 import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
-
-  const shopRows = await db
-    .select({ id: (await import("@promo/db")).shops.id })
-    .from((await import("@promo/db")).shops)
-    .where(eq((await import("@promo/db")).shops.myshopifyDomain, session.shop))
-    .limit(1);
-  const shopId = shopRows[0]?.id ?? "";
 
   const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 

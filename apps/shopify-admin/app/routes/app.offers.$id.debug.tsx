@@ -3,9 +3,9 @@
  * Shows: compiled function config, metafield status, recent evaluation errors.
  */
 
-import { useLoaderData, Form, Link } from "react-router";
-import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
+import { useLoaderData, Form } from "react-router";
+import { PageHeader } from "../components/PageHeader.js";
+import { getShopContext } from "../lib/shop-context.server.js";
 import { offers, cartMutationLogs, analyticsEvents } from "@promo/db";
 import { eq, and, desc, count, gte } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -14,16 +14,8 @@ import "../styles/bogos.css";
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
-
-  const shopRows = await db
-    .select({ id: (await import("@promo/db")).shops.id })
-    .from((await import("@promo/db")).shops)
-    .where(eq((await import("@promo/db")).shops.myshopifyDomain, session.shop))
-    .limit(1);
-  const shopId = shopRows[0]?.id ?? "";
 
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
@@ -154,23 +146,7 @@ export default function OfferDebugPage() {
   return (
     <div className="b-page">
       {/* Header */}
-      <div className="b-page-header">
-        <div className="b-page-title-row">
-          <Link
-            to={`/app/offers/${offer.id}`}
-            className="b-btn b-btn-secondary b-btn-sm"
-            style={{ textDecoration: "none" }}
-          >
-            &#8592; Back
-          </Link>
-          <div>
-            <h1 className="b-page-title">Debug &amp; Diagnostics</h1>
-            <p className="b-text-sm b-text-sub" style={{ margin: "2px 0 0" }}>
-              {offer.internalName}
-            </p>
-          </div>
-        </div>
-      </div>
+      <PageHeader title="Debug & Diagnostics" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
 
       {/* Main + sidebar layout */}
       <div className="b-editor-layout">

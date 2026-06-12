@@ -5,7 +5,9 @@
  * Accessible from the offer detail page → "Multi-Currency" tab.
  */
 
-import { useLoaderData, Form, Link, useActionData, useNavigation } from "react-router";
+import { useLoaderData, Form, useActionData, useNavigation } from "react-router";
+import { NotFound } from "../components/NotFound.js";
+import { PageHeader } from "../components/PageHeader.js";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, offerConditions } from "@promo/db";
@@ -116,32 +118,14 @@ export default function MultiCurrencyPage() {
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
 
-  if (!offer) {
-    return (
-      <div className="b-page">
-        <p className="b-text-sub">Offer not found.</p>
-      </div>
-    );
-  }
+  if (!offer) return <NotFound message="Offer not found." />;
 
   const baseThreshold = baseThresholdCents / 100;
 
   return (
     <div className="b-page">
       {/* Header */}
-      <div className="b-page-header">
-        <div className="b-page-title-row">
-          <Link
-            to={`/app/offers/${offer.id}`}
-            className="b-btn b-btn-secondary b-btn-sm"
-            style={{ textDecoration: "none" }}
-          >
-            ← Back
-          </Link>
-          <h1 className="b-page-title">Multi-Currency</h1>
-          <span className="b-badge b-badge-gray">{offer.internalName}</span>
-        </div>
-      </div>
+      <PageHeader title="Multi-Currency" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
 
       {/* Action feedback */}
       {actionData && "error" in actionData && actionData.error && (

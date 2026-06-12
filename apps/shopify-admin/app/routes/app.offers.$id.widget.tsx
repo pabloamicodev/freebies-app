@@ -3,9 +3,12 @@
  * Configure widget type, placement, theme, and copy for each offer.
  */
 
-import { useLoaderData, Form, Link } from "react-router";
+import { useLoaderData, Form } from "react-router";
+import { NotFound } from "../components/NotFound.js";
+import { PageHeader } from "../components/PageHeader.js";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
+import { getShopContext } from "../lib/shop-context.server.js";
 import { getDb } from "@promo/db";
 import { offers, widgets, widgetPlacements } from "@promo/db";
 import { eq } from "drizzle-orm";
@@ -30,18 +33,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
-
-  const shopRows = await db
-    .select({ id: (await import("@promo/db")).shops.id })
-    .from((await import("@promo/db")).shops)
-    .where(eq((await import("@promo/db")).shops.myshopifyDomain, session.shop))
-    .limit(1);
-  const shopId = shopRows[0]?.id!;
 
   if (intent === "add_widget") {
     const widgetType = formData.get("widgetType") as string;
@@ -136,34 +131,12 @@ export default function OfferWidgetPage() {
   const [placementType, setPlacementType] = useState("cart_drawer");
   const [primaryColor, setPrimaryColor] = useState("#111111");
 
-  if (!offer) {
-    return (
-      <div className="b-page">
-        <p className="b-text-sub">Offer not found.</p>
-      </div>
-    );
-  }
+  if (!offer) return <NotFound message="Offer not found." />;
 
   return (
     <div className="b-page">
       {/* ── Header ── */}
-      <div className="b-page-header">
-        <div className="b-page-title-row">
-          <Link
-            to={`/app/offers/${offer.id}`}
-            className="b-btn b-btn-secondary b-btn-sm"
-            style={{ textDecoration: "none" }}
-          >
-            ← Back
-          </Link>
-          <div>
-            <h1 className="b-page-title">Widget Settings</h1>
-            <p className="b-text-sm b-text-sub" style={{ margin: "2px 0 0" }}>
-              {offer.internalName}
-            </p>
-          </div>
-        </div>
-      </div>
+      <PageHeader title="Widget Settings" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
 
       {/* ── Body layout ── */}
       <div className="b-editor-layout">

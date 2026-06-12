@@ -3,9 +3,9 @@
  * Shows which other active offers would conflict or be blocked.
  */
 
-import { useLoaderData, Form, Link } from "react-router";
-import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
+import { useLoaderData, Form } from "react-router";
+import { PageHeader } from "../components/PageHeader.js";
+import { getShopContext } from "../lib/shop-context.server.js";
 import { offers, offerCombinationPolicies } from "@promo/db";
 import { eq, and, ne } from "drizzle-orm";
 import { detectConflicts } from "../lib/conflict-detection.server.js";
@@ -14,16 +14,8 @@ import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
-
-  const shopRows = await db
-    .select({ id: (await import("@promo/db")).shops.id })
-    .from((await import("@promo/db")).shops)
-    .where(eq((await import("@promo/db")).shops.myshopifyDomain, session.shop))
-    .limit(1);
-  const shopId = shopRows[0]?.id ?? "";
 
   const [offerRows, policyRows, otherActiveOffers] = await Promise.all([
     db.select().from(offers).where(eq(offers.id, offerId)).limit(1),
@@ -77,19 +69,7 @@ export default function OfferPriorityPage() {
   return (
     <div className="b-page">
       {/* Header */}
-      <div className="b-page-header">
-        <div className="b-page-title-row">
-          <Link
-            to={`/app/offers/${offer.id}`}
-            className="b-btn b-btn-secondary b-btn-sm"
-            style={{ textDecoration: "none" }}
-          >
-            &#8592;
-          </Link>
-          <h1 className="b-page-title">Priority &amp; Stacking</h1>
-          <span className="b-text-sub b-text-sm">{offer.internalName}</span>
-        </div>
-      </div>
+      <PageHeader title="Priority & Stacking" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
 
       <div className="b-editor-layout">
         {/* Main column */}

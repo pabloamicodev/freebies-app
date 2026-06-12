@@ -5,10 +5,9 @@
 
 import { useLoaderData, Form } from "react-router";
 import { useState } from "react";
-import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
-import { shops, appSettings } from "@promo/db";
-import { eq, and } from "drizzle-orm";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { appSettings } from "@promo/db";
+import { and, eq } from "drizzle-orm";
 import { SUPPORTED_LOCALES, type WidgetTranslations } from "@promo/shared-types";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import "../styles/bogos.css";
@@ -31,11 +30,7 @@ const TRANSLATION_KEYS: Array<{ key: keyof WidgetTranslations; label: string; hi
 ];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
-
-  const shopRows = await db.select({ id: shops.id }).from(shops).where(eq(shops.myshopifyDomain, session.shop)).limit(1);
-  const shopId = shopRows[0]?.id;
+  const { shopId, db } = await getShopContext(request);
   if (!shopId) return { translations: {} as Record<string, Partial<WidgetTranslations>>, shopId: "" };
 
   const settingRows = await db.select({ value: appSettings.value })
@@ -52,10 +47,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
-  const shopRows = await db.select({ id: shops.id }).from(shops).where(eq(shops.myshopifyDomain, session.shop)).limit(1);
-  const shopId = shopRows[0]?.id;
+  const { shopId, db } = await getShopContext(request);
   if (!shopId) return { error: "Shop not found" };
 
   const formData = await request.formData();

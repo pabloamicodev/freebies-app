@@ -4,9 +4,10 @@
  * POST /app/offers/:id/widget/market  → save market overrides
  */
 
-import { useLoaderData, useActionData, Link, Form } from "react-router";
-import { authenticate } from "../shopify.server.js";
-import { getDb, shops, widgets, appSettings } from "@promo/db";
+import { useLoaderData, useActionData, Form } from "react-router";
+import { PageHeader } from "../components/PageHeader.js";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { widgets, appSettings } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import { getMarketsForShop } from "../lib/markets.server.js";
 import { MarketWidgetConfig } from "../components/MarketWidgetConfig.js";
@@ -16,13 +17,8 @@ import "../styles/bogos.css";
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
-
-  const [shopRow] = await db.select({ id: shops.id })
-    .from(shops).where(eq(shops.myshopifyDomain, session.shop)).limit(1);
-  const shopId = shopRow?.id ?? "";
 
   const [offerWidgets, markets, marketOverrideRow] = await Promise.all([
     db.select().from(widgets).where(and(eq(widgets.offerId, offerId), eq(widgets.shopId, shopId))).limit(1),
@@ -53,14 +49,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
-
-  const [shopRow] = await db.select({ id: shops.id })
-    .from(shops).where(eq(shops.myshopifyDomain, session.shop)).limit(1);
-  const shopId = shopRow?.id ?? "";
 
   const overridesJson = formData.get("overrides") as string;
   let overrides = [];
@@ -89,14 +80,7 @@ export default function WidgetMarketPage() {
   return (
     <div className="b-page">
       {/* Header */}
-      <div className="b-page-header">
-        <div className="b-page-title-row">
-          <Link to={`/app/offers/${offerId}/widget`} className="b-btn b-btn-secondary b-btn-sm">
-            ← Back
-          </Link>
-          <h1 className="b-page-title">Market Widget Overrides</h1>
-        </div>
-      </div>
+      <PageHeader title="Market Widget Overrides" backTo={`/app/offers/${offerId}/widget`} />
 
       {/* Info banner */}
       <div className="b-banner">
