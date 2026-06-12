@@ -7,6 +7,7 @@
 import { useLoaderData, useNavigate, Link, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { createRouteTimer } from "../lib/route-timing.server.js";
 import { offers, widgets } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -14,15 +15,23 @@ import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const timer = createRouteTimer("app.boosters");
+  const { shopId, db } = await timer.time("shop_context", () => getShopContext(request));
 
-  const [boosterOffers, boosterWidgets] = await Promise.all([
-    db.select().from(offers)
-      .where(and(eq(offers.shopId, shopId), eq(offers.type, "booster")))
-      .orderBy(offers.priority),
-    db.select().from(widgets)
-      .where(eq(widgets.shopId, shopId)),
-  ]);
+  const [boosterOffers, boosterWidgets] = await timer.time("boosters.parallel_queries", () =>
+    Promise.all([
+      db.select().from(offers)
+        .where(and(eq(offers.shopId, shopId), eq(offers.type, "booster")))
+        .orderBy(offers.priority),
+      db.select().from(widgets)
+        .where(eq(widgets.shopId, shopId)),
+    ]),
+  );
+
+  timer.done({
+    boosterCount: boosterOffers.length,
+    widgetCount: boosterWidgets.length,
+  });
 
   return {
     boosters: boosterOffers.map((o) => ({

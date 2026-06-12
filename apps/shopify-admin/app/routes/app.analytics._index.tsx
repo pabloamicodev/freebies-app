@@ -1,6 +1,7 @@
 import { useLoaderData, useSearchParams } from "react-router";
 import { useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { createRouteTimer } from "../lib/route-timing.server.js";
 import { analyticsEvents, offers } from "@promo/db";
 import { and, desc, eq, gte } from "drizzle-orm";
 import type { LoaderFunctionArgs } from "react-router";
@@ -12,13 +13,15 @@ import {
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const timer = createRouteTimer("app.analytics._index");
+  const { shopId, db } = await timer.time("shop_context", () => getShopContext(request));
 
   const url = new URL(request.url);
   const days = parseInt(url.searchParams.get("days") ?? "7", 10);
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
   if (!shopId) {
+    timer.done({ shopFound: false, days });
     return {
       orders: [],
       totalSalesCents: 0,
@@ -30,30 +33,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
   }
 
-  const [recentOrderEvents, offerRows] = await Promise.all([
-    db
-      .select({
-        id: analyticsEvents.id,
-        offerId: analyticsEvents.offerId,
-        orderId: analyticsEvents.orderId,
-        properties: analyticsEvents.properties,
-        occurredAt: analyticsEvents.occurredAt,
-      })
-      .from(analyticsEvents)
-      .where(
-        and(
-          eq(analyticsEvents.shopId, shopId),
-          eq(analyticsEvents.eventName, "promo_engine:order_paid"),
-          gte(analyticsEvents.occurredAt, since),
-        ),
-      )
-      .orderBy(desc(analyticsEvents.occurredAt))
-      .limit(50),
-    db
-      .select({ id: offers.id, internalName: offers.internalName })
-      .from(offers)
-      .where(eq(offers.shopId, shopId)),
-  ]);
+  const [recentOrderEvents, offerRows] = await timer.time("analytics.parallel_queries", () =>
+    Promise.all([
+      db
+        .select({
+          id: analyticsEvents.id,
+          offerId: analyticsEvents.offerId,
+          orderId: analyticsEvents.orderId,
+          properties: analyticsEvents.properties,
+          occurredAt: analyticsEvents.occurredAt,
+        })
+        .from(analyticsEvents)
+        .where(
+          and(
+            eq(analyticsEvents.shopId, shopId),
+            eq(analyticsEvents.eventName, "promo_engine:order_paid"),
+            gte(analyticsEvents.occurredAt, since),
+          ),
+        )
+        .orderBy(desc(analyticsEvents.occurredAt))
+        .limit(50),
+      db
+        .select({ id: offers.id, internalName: offers.internalName })
+        .from(offers)
+        .where(eq(offers.shopId, shopId)),
+    ]),
+  );
   const offerNames: Record<string, string> = {};
   offerRows.forEach((o) => { offerNames[o.id] = o.internalName; });
 
@@ -95,6 +100,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const salesChartData = Object.entries(dayBuckets).map(([x, v]) => ({ x, y: v.sales / 100 }));
   const ordersChartData = Object.entries(dayBuckets).map(([x, v]) => ({ x, y: v.orders }));
+
+  timer.done({
+    shopFound: true,
+    days,
+    orderEventCount: recentOrderEvents.length,
+    offerCount: offerRows.length,
+  });
 
   return {
     orders,
