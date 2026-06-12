@@ -16,12 +16,13 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
 
-  const boosterOffers = await db.select().from(offers)
-    .where(and(eq(offers.shopId, shopId), eq(offers.type, "booster")))
-    .orderBy(offers.priority);
-
-  const boosterWidgets = await db.select().from(widgets)
-    .where(eq(widgets.shopId, shopId));
+  const [boosterOffers, boosterWidgets] = await Promise.all([
+    db.select().from(offers)
+      .where(and(eq(offers.shopId, shopId), eq(offers.type, "booster")))
+      .orderBy(offers.priority),
+    db.select().from(widgets)
+      .where(eq(widgets.shopId, shopId)),
+  ]);
 
   return {
     boosters: boosterOffers.map((o) => ({

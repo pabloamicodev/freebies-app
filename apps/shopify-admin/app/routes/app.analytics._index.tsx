@@ -30,31 +30,30 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
   }
 
-  // Recent orders that had gifts added
-  const recentOrderEvents = await db
-    .select({
-      id: analyticsEvents.id,
-      offerId: analyticsEvents.offerId,
-      orderId: analyticsEvents.orderId,
-      properties: analyticsEvents.properties,
-      occurredAt: analyticsEvents.occurredAt,
-    })
-    .from(analyticsEvents)
-    .where(
-      and(
-        eq(analyticsEvents.shopId, shopId),
-        eq(analyticsEvents.eventName, "promo_engine:order_paid"),
-        gte(analyticsEvents.occurredAt, since),
-      ),
-    )
-    .orderBy(desc(analyticsEvents.occurredAt))
-    .limit(50);
-
-  // Offer names
-  const offerRows = await db
-    .select({ id: offers.id, internalName: offers.internalName })
-    .from(offers)
-    .where(eq(offers.shopId, shopId));
+  const [recentOrderEvents, offerRows] = await Promise.all([
+    db
+      .select({
+        id: analyticsEvents.id,
+        offerId: analyticsEvents.offerId,
+        orderId: analyticsEvents.orderId,
+        properties: analyticsEvents.properties,
+        occurredAt: analyticsEvents.occurredAt,
+      })
+      .from(analyticsEvents)
+      .where(
+        and(
+          eq(analyticsEvents.shopId, shopId),
+          eq(analyticsEvents.eventName, "promo_engine:order_paid"),
+          gte(analyticsEvents.occurredAt, since),
+        ),
+      )
+      .orderBy(desc(analyticsEvents.occurredAt))
+      .limit(50),
+    db
+      .select({ id: offers.id, internalName: offers.internalName })
+      .from(offers)
+      .where(eq(offers.shopId, shopId)),
+  ]);
   const offerNames: Record<string, string> = {};
   offerRows.forEach((o) => { offerNames[o.id] = o.internalName; });
 

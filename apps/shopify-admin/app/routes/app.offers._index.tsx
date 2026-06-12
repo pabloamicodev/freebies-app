@@ -1,5 +1,5 @@
 import { useLoaderData, useNavigate, useSearchParams, useFetcher } from "react-router";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   analyticsEvents,
   appSettings,
@@ -130,6 +130,11 @@ type OfferRow = {
   updatedAt: string;
 };
 
+type ConfirmActionState = {
+  type: "archive" | "delete";
+  offer: Pick<OfferRow, "id" | "internalName">;
+};
+
 
 const TABS = [
   { label: "All", value: "all" },
@@ -222,40 +227,6 @@ function TypeIcon({ type }: { type: string }) {
     </div>
   );
 }
-
-const OFFER_TYPES_MODAL = [
-  {
-    value: "gift",
-    Icon: GiftSvg,
-    name: "Gift offer",
-    tag: "Example",
-    bullets: ["Spend $400 to receive a gift", "Buy 3 products to receive a gift"],
-  },
-  {
-    value: "bundle",
-    Icon: BundleSvg,
-    name: "Bundle offer",
-    tag: "Example",
-    bullets: ["Buy a bundle of A and B with discount"],
-  },
-  {
-    value: "upsell",
-    Icon: UpsellSvg,
-    name: "Upsell offer",
-    tag: "Example",
-    bullets: [
-      "Buy an item from a collection at half the deactivation price",
-      "Buy the second item at half price",
-    ],
-  },
-  {
-    value: "discount",
-    Icon: DiscountSvg,
-    name: "Discount offer",
-    tag: "Example",
-    bullets: ["Buy 2 with 10% off, buy 3 with 30% off"],
-  },
-];
 
 /* Gift offer templates */
 const GIFT_TEMPLATES = [
@@ -1011,8 +982,7 @@ export default function OffersPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [bannerVisible, setBannerVisible] = useState(true);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<ConfirmActionState | null>(null);
   const deleteFetcher = useFetcher();
   const archiveFetcher = useFetcher();
   const bulkFetcher = useFetcher();
@@ -1022,32 +992,8 @@ export default function OffersPage() {
 
   const activeTab = searchParams.get("status") ?? "all";
 
-  function setTab(val: string) {
-    if (val === "all") {
-      setSearchParams({});
-    } else {
-      setSearchParams({ status: val });
-    }
-  }
+  const allOfferIds = useMemo(() => offerRows.map((offer) => offer.id), [offerRows]);
 
-  function toggleCheck(id: string) {
-    setCheckedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleAll() {
-    if (checkedIds.size === offerRows.length) {
-      setCheckedIds(new Set());
-    } else {
-      setCheckedIds(new Set(offerRows.map((o) => o.id)));
-    }
-  }
-
-  // Optimistic — IDs currently in-flight
   const deletingId = deleteFetcher.state !== "idle"
     ? (deleteFetcher.formData?.get("offerId") as string | null)
     : null;
@@ -1055,44 +1001,69 @@ export default function OffersPage() {
     ? (archiveFetcher.formData?.get("offerId") as string | null)
     : null;
 
-  // Filter out rows that are being deleted / archived from the visible list
-  const visibleOffers = offerRows.filter((o) => {
-    if (deletingId && o.id === deletingId) return false;
-    if (archivingId && o.id === archivingId && activeTab !== "archived") return false;
-    return true;
-  });
+  const visibleOffers = useMemo(
+    () => offerRows.filter((offer) => {
+      if (deletingId && offer.id === deletingId) return false;
+      if (archivingId && offer.id === archivingId && activeTab !== "archived") return false;
+      return true;
+    }),
+    [activeTab, archivingId, deletingId, offerRows],
+  );
 
-  // Derive names for modal copy
-  const deletingOffer = confirmDeleteId ? offerRows.find((o) => o.id === confirmDeleteId) : null;
-  const archivingOffer = confirmArchiveId ? offerRows.find((o) => o.id === confirmArchiveId) : null;
+  const setTab = useCallback((val: string) => {
+    if (val === "all") {
+      setSearchParams({});
+    } else {
+      setSearchParams({ status: val });
+    }
+  }, [setSearchParams]);
 
-  function confirmDelete(id: string) {
-    setConfirmDeleteId(id);
-  }
+  const toggleCheck = useCallback((id: string) => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
-  function executeDelete() {
-    if (!confirmDeleteId) return;
+  const toggleAll = useCallback(() => {
+    if (checkedIds.size === offerRows.length) {
+      setCheckedIds(new Set());
+    } else {
+      setCheckedIds(new Set(allOfferIds));
+    }
+  }, [allOfferIds, checkedIds.size, offerRows.length]);
+
+  const closeConfirmAction = useCallback(() => {
+    setConfirmAction(null);
+  }, []);
+
+  const confirmDelete = useCallback((offer: OfferRow) => {
+    setConfirmAction({ type: "delete", offer: { id: offer.id, internalName: offer.internalName } });
+  }, []);
+
+  const executeDelete = useCallback((offerId: string) => {
     const fd = new FormData();
     fd.append("intent", "delete");
-    fd.append("offerId", confirmDeleteId);
+    fd.append("offerId", offerId);
     void deleteFetcher.submit(fd, { method: "DELETE" });
-    setConfirmDeleteId(null);
-  }
+    closeConfirmAction();
+  }, [closeConfirmAction, deleteFetcher]);
 
-  function confirmArchive(id: string) {
-    setConfirmArchiveId(id);
-  }
+  const confirmArchive = useCallback((offer: OfferRow) => {
+    setConfirmAction({ type: "archive", offer: { id: offer.id, internalName: offer.internalName } });
+  }, []);
 
-  function executeArchive() {
-    if (!confirmArchiveId) return;
+  const executeArchive = useCallback((offerId: string) => {
     const fd = new FormData();
     fd.append("intent", "archive");
-    fd.append("offerId", confirmArchiveId);
+    fd.append("offerId", offerId);
     void archiveFetcher.submit(fd, { method: "POST" });
-    setConfirmArchiveId(null);
-  }
+    closeConfirmAction();
+  }, [archiveFetcher, closeConfirmAction]);
 
-  function bulkAction(intent: "bulk_pause" | "bulk_activate") {
+  const bulkAction = useCallback((intent: "bulk_pause" | "bulk_activate") => {
     const fd = new FormData();
     fd.append("intent", intent);
     for (const id of checkedIds) {
@@ -1100,7 +1071,7 @@ export default function OffersPage() {
     }
     void bulkFetcher.submit(fd, { method: "POST" });
     setCheckedIds(new Set());
-  }
+  }, [bulkFetcher, checkedIds]);
 
   return (
     <div className="b-page">
@@ -1165,45 +1136,39 @@ export default function OffersPage() {
         </div>
       )}
 
-      {/* ── Archive confirmation dialog ──────────────────────── */}
-      {confirmArchiveId && (
-        <div className="b-modal-overlay" onClick={() => setConfirmArchiveId(null)}>
+      {/* ── Action confirmation dialog ──────────────────────── */}
+      {confirmAction && (
+        <div className="b-modal-overlay">
           <div className="b-modal b-modal-sm" onClick={(e) => e.stopPropagation()}>
             <div className="b-modal-header">
-              <h2 className="b-modal-title">Archive offer?</h2>
-              <button className="b-modal-close" onClick={() => setConfirmArchiveId(null)} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+              <h2 className="b-modal-title">
+                {confirmAction.type === "delete" ? "Delete offer permanently?" : "Archive offer?"}
+              </h2>
+              <button className="b-modal-close" onClick={closeConfirmAction} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </div>
             <div className="b-modal-body">
               <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0, lineHeight: 1.6 }}>
-                The offer will be archived and hidden from customers. You can restore it later from the archived view.
-                {archivingOffer ? ` Offer: ${archivingOffer.internalName}.` : ""}
+                {confirmAction.type === "delete" ? (
+                  <>
+                    This will <strong style={{ color: "var(--text)" }}>permanently delete</strong> the offer and all its data. This action cannot be undone.
+                  </>
+                ) : (
+                  "The offer will be archived and hidden from customers. You can restore it later from the archived view."
+                )}
+                {" "}Offer: {confirmAction.offer.internalName}.
               </p>
             </div>
             <div className="b-modal-footer">
-              <button className="b-btn b-btn-secondary" onClick={() => setConfirmArchiveId(null)}>Cancel</button>
-              <button className="b-btn b-btn-secondary" onClick={executeArchive} style={{ borderColor: "#9ca3af" }}>Archive offer</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Delete confirmation dialog ───────────────────────── */}
-      {confirmDeleteId && (
-        <div className="b-modal-overlay" onClick={() => setConfirmDeleteId(null)}>
-          <div className="b-modal b-modal-sm" onClick={(e) => e.stopPropagation()}>
-            <div className="b-modal-header">
-              <h2 className="b-modal-title">Delete offer permanently?</h2>
-              <button className="b-modal-close" onClick={() => setConfirmDeleteId(null)} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-            </div>
-            <div className="b-modal-body">
-              <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0, lineHeight: 1.6 }}>
-                This will <strong style={{ color: "var(--text)" }}>permanently delete</strong> the offer and all its data. This action cannot be undone.
-                {deletingOffer ? ` Offer: ${deletingOffer.internalName}.` : ""}
-              </p>
-            </div>
-            <div className="b-modal-footer">
-              <button className="b-btn b-btn-secondary" onClick={() => setConfirmDeleteId(null)}>Cancel</button>
-              <button className="b-btn b-btn-danger" onClick={executeDelete}>Delete permanently</button>
+              <button className="b-btn b-btn-secondary" onClick={closeConfirmAction}>Cancel</button>
+              {confirmAction.type === "delete" ? (
+                <button className="b-btn b-btn-danger" onClick={() => executeDelete(confirmAction.offer.id)}>
+                  Delete permanently
+                </button>
+              ) : (
+                <button className="b-btn b-btn-secondary" onClick={() => executeArchive(confirmAction.offer.id)} style={{ borderColor: "#9ca3af" }}>
+                  Archive offer
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1388,7 +1353,7 @@ export default function OffersPage() {
                       <button
                         type="button"
                         className="bogos-action-btn"
-                        onClick={(e) => { e.stopPropagation(); confirmArchive(offer.id); }}
+                        onClick={(e) => { e.stopPropagation(); confirmArchive(offer); }}
                         aria-label="Archive offer"
                         title="Archive"
                         style={{ color: "var(--text-sub)" }}
@@ -1398,7 +1363,7 @@ export default function OffersPage() {
                       <button
                         type="button"
                         className="bogos-action-btn red"
-                        onClick={(e) => { e.stopPropagation(); confirmDelete(offer.id); }}
+                        onClick={(e) => { e.stopPropagation(); confirmDelete(offer); }}
                         aria-label="Delete offer permanently"
                         title="Delete permanently"
                       >
