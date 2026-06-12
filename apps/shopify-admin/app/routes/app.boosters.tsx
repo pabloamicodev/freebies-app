@@ -44,8 +44,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
   const widgetId = formData.get("widgetId") as string;
@@ -53,7 +52,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "toggle_widget") {
     const enabled = formData.get("enabled") === "true";
     await db.update(widgets).set({ isEnabled: enabled, updatedAt: new Date() })
-      .where(eq(widgets.id, widgetId));
+      .where(and(eq(widgets.shopId, shopId), eq(widgets.id, widgetId)));
   }
   return null;
 };

@@ -18,7 +18,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const days = parseInt(url.searchParams.get("days") ?? "7", 10);
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-  if (!shopId) return { orders: [], totalSales: 0, avgOrder: 0, orderCount: 0, chartData: [], days };
+  if (!shopId) {
+    return {
+      orders: [],
+      totalSalesCents: 0,
+      avgOrderCents: 0,
+      orderCount: 0,
+      salesChartData: [],
+      ordersChartData: [],
+      days,
+    };
+  }
 
   // Recent orders that had gifts added
   const recentOrderEvents = await db

@@ -104,7 +104,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params: _params }: ActionFunctionArgs) => {
-  await authenticate.admin(request);
+  await getShopContext(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
 

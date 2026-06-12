@@ -46,7 +46,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { shopId, currencyCode: shopCurrencyCode, db } = await getShopContext(request);
+  const { session, shopId, currencyCode: shopCurrencyCode, db } = await getShopContext(request);
   const offerId = params["id"];
   if (!offerId) throw new Response("Not found", { status: 404 });
 

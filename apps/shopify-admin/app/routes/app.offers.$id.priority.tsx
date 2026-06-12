@@ -47,18 +47,17 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
 
   const newPriority = parseInt(formData.get("priority") as string, 10);
   const stopLowerPriority = formData.get("stop_lower_priority") === "on";
 
-  await db.update(offers).set({ priority: newPriority, updatedAt: new Date() }).where(eq(offers.id, offerId));
+  await db.update(offers).set({ priority: newPriority, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
   await db.update(offerCombinationPolicies)
     .set({ stopLowerPriority, updatedAt: new Date() })
-    .where(eq(offerCombinationPolicies.offerId, offerId));
+    .where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId)));
 
   return null;
 };

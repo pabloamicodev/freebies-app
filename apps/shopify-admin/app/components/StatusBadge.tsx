@@ -8,7 +8,7 @@ const STATUS_MAP: Record<string, { cls: string; label: string }> = {
 };
 
 export function getStatusBadgeClass(status: string): string {
-  return (STATUS_MAP[status] ?? STATUS_MAP["draft"]).cls;
+  return (STATUS_MAP[status] ?? STATUS_MAP.draft ?? { cls: "b-badge b-badge-gray" }).cls;
 }
 
 /** Offer status badge — shared across All Offers, Boosters, Analytics, etc. */
