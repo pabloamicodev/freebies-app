@@ -6,6 +6,7 @@
 import { Form, useNavigate, redirect, useParams } from "react-router";
 import { SUPPORTED_CURRENCIES } from "@promo/shared-types";
 import { useState } from "react";
+import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
@@ -159,6 +160,24 @@ export default function NewGiftOfferPage() {
   const effectivePreset = isScratch ? null : preset;
   const conditionType: ConditionType = effectivePreset?.conditionType ?? "cart_value";
 
+  // ── Validation ──
+  const [fieldErrors, setFieldErrors] = useState<{ internalName?: string; publicTitle?: string }>({});
+  const [showToast, setShowToast] = useState(false);
+  const [toastMsg, setToastMsg] = useState("");
+
+  function validate() {
+    const errs: { internalName?: string; publicTitle?: string } = {};
+    if (!internalName.trim()) errs.internalName = "Nombre de la oferta es requerido";
+    if (!publicTitle.trim()) errs.publicTitle = "Título de la oferta es requerido";
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      setToastMsg(Object.values(errs)[0]!);
+      setShowToast(true);
+      return false;
+    }
+    return true;
+  }
+
   // ── Block 1: Offer info ──
   const [internalName, setInternalName] = useState(preset?.internalName ?? "");
   const [publicTitle, setPublicTitle]   = useState(preset?.publicTitle ?? "");
@@ -250,7 +269,7 @@ export default function NewGiftOfferPage() {
         </button>
       </div>
 
-      <Form method="POST">
+      <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
         <input type="hidden" name="conditionType"      value={isScratch ? selectedMainCond : conditionType} />
         <input type="hidden" name="conditionProducts"  value={JSON.stringify(conditionProducts)} />
         <input type="hidden" name="rewardProducts"     value={JSON.stringify(rewardProducts)} />
@@ -272,15 +291,21 @@ export default function NewGiftOfferPage() {
               <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <div>
                   <label className="b-label" htmlFor="internalName">Nombre de la oferta</label>
-                  <input id="internalName" className="b-input" name="internalName" value={internalName}
-                    onChange={(e) => setInternalName(e.target.value)} autoComplete="off" />
-                  <div className="b-help">Solo para uso interno, no se muestra a los clientes..</div>
+                  <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName" value={internalName}
+                    onChange={(e) => { setInternalName(e.target.value); setFieldErrors((p) => ({ ...p, internalName: undefined })); }} autoComplete="off" />
+                  {fieldErrors.internalName
+                    ? <div className="b-help-error">{fieldErrors.internalName}</div>
+                    : <div className="b-help">Solo para uso interno, no se muestra a los clientes..</div>
+                  }
                 </div>
                 <div>
                   <label className="b-label" htmlFor="publicTitle">Título de la oferta</label>
-                  <input id="publicTitle" className="b-input" name="publicTitle" value={publicTitle}
-                    onChange={(e) => setPublicTitle(e.target.value)} autoComplete="off" />
-                  <div className="b-help">Mostrado a los clientes en la tienda online.</div>
+                  <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle" value={publicTitle}
+                    onChange={(e) => { setPublicTitle(e.target.value); setFieldErrors((p) => ({ ...p, publicTitle: undefined })); }} autoComplete="off" />
+                  {fieldErrors.publicTitle
+                    ? <div className="b-help-error">{fieldErrors.publicTitle}</div>
+                    : <div className="b-help">Mostrado a los clientes en la tienda online.</div>
+                  }
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <div>
@@ -758,6 +783,10 @@ export default function NewGiftOfferPage() {
         </div>
 
       </Form>
+
+      {showToast && (
+        <Toast message={toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+      )}
 
       {/* ── Modals ── */}
       <MainConditionModal

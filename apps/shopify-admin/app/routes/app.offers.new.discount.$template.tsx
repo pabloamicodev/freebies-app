@@ -7,6 +7,7 @@
 
 import { Form, useNavigate, redirect, useParams } from "react-router";
 import { useState } from "react";
+import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
@@ -269,6 +270,24 @@ export default function NewDiscountOfferPage() {
   const templateId = SLUG_TO_TEMPLATE[templateSlug] ?? "volume";
   const defaults = TEMPLATE_DEFAULTS[templateId] ?? { internalName: "Volume discount 1", publicTitle: "Volume discount save" };
 
+  // Validation
+  const [fieldErrors, setFieldErrors] = useState<{ internalName?: string; publicTitle?: string }>({});
+  const [showToast, setShowToast] = useState(false);
+  const [toastMsg, setToastMsg] = useState("");
+
+  function validate() {
+    const errs: { internalName?: string; publicTitle?: string } = {};
+    if (!internalName.trim()) errs.internalName = "Nombre de la oferta es requerido";
+    if (!publicTitle.trim()) errs.publicTitle = "Título de la oferta es requerido";
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      setToastMsg(Object.values(errs)[0]!);
+      setShowToast(true);
+      return false;
+    }
+    return true;
+  }
+
   // Basic info
   const [internalName, setInternalName] = useState(defaults.internalName);
   const [publicTitle, setPublicTitle] = useState(defaults.publicTitle);
@@ -379,7 +398,7 @@ export default function NewDiscountOfferPage() {
         <h1 className="b-page-title">{pageTitle}</h1>
       </div>
 
-      <Form method="POST">
+      <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
         {/* Hidden fields */}
         <input type="hidden" name="discountTemplate" value={templateId} />
         <input type="hidden" name="upsellProducts" value={JSON.stringify(selectedProducts)} />
@@ -432,7 +451,7 @@ export default function NewDiscountOfferPage() {
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
                     <label className="b-label" htmlFor="internalName">Nombre del descuento</label>
-                    <input id="internalName" className="b-input" name="internalName"
+                    <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                       value={internalName} onChange={(e) => setInternalName(e.target.value)}
                       autoComplete="off" />
                     <div className="b-help">Sólo para uso interno, no para mostrar a los clientes.</div>
@@ -442,7 +461,7 @@ export default function NewDiscountOfferPage() {
                     <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                       <div>
                         <label className="b-label" htmlFor="publicTitle">Título de descuento</label>
-                        <input id="publicTitle" className="b-input" name="publicTitle"
+                        <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle"
                           value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
                           autoComplete="off" />
                       </div>
@@ -479,7 +498,7 @@ export default function NewDiscountOfferPage() {
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
                     <label className="b-label" htmlFor="internalName">Nombre de la oferta</label>
-                    <input id="internalName" className="b-input" name="internalName"
+                    <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                       value={internalName} onChange={(e) => setInternalName(e.target.value)}
                       autoComplete="off" />
                   </div>
@@ -488,7 +507,7 @@ export default function NewDiscountOfferPage() {
                     <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                       <div>
                         <label className="b-label" htmlFor="publicTitle">Título de descuento</label>
-                        <input id="publicTitle" className="b-input" name="publicTitle"
+                        <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle"
                           value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
                           autoComplete="off" />
                       </div>
@@ -525,7 +544,7 @@ export default function NewDiscountOfferPage() {
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
                     <label className="b-label" htmlFor="internalName">Nombre de la oferta</label>
-                    <input id="internalName" className="b-input" name="internalName"
+                    <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                       value={internalName} onChange={(e) => setInternalName(e.target.value)}
                       autoComplete="off" />
                   </div>
@@ -534,7 +553,7 @@ export default function NewDiscountOfferPage() {
                     <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                       <div>
                         <label className="b-label" htmlFor="publicTitle">Título de la oferta</label>
-                        <input id="publicTitle" className="b-input" name="publicTitle"
+                        <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle"
                           value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
                           autoComplete="off" />
                       </div>
@@ -1137,6 +1156,9 @@ export default function NewDiscountOfferPage() {
         onSelect={(gids) => setSelectedProducts(gids)}
       />
 
+      {showToast && (
+        <Toast message={toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+      )}
     </div>
   );
 }

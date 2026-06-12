@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate, useLoaderData, Form, redirect } from "react-router";
+import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { offers, offerCombinationPolicies, offerConditions, offerRewards } from "@promo/db";
@@ -215,13 +216,21 @@ export default function NewOfferPage() {
   const [internalName, setInternalName] = useState("");
   const [publicTitle, setPublicTitle] = useState("");
   const [priority, setPriority] = useState("100");
-  const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<{ internalName?: string; publicTitle?: string; priority?: string }>({});
+  const [showToast, setShowToast] = useState(false);
+  const [toastMsg, setToastMsg] = useState("");
 
   function validate() {
-    if (!internalName.trim()) { setError("Internal name is required"); return false; }
-    if (!publicTitle.trim()) { setError("Public title is required"); return false; }
-    if (isNaN(parseInt(priority, 10))) { setError("Priority must be a number"); return false; }
-    setError("");
+    const errs: { internalName?: string; publicTitle?: string; priority?: string } = {};
+    if (!internalName.trim()) errs.internalName = "Internal name is required";
+    if (!publicTitle.trim()) errs.publicTitle = "Public title is required";
+    if (isNaN(parseInt(priority, 10))) errs.priority = "Priority must be a number";
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      setToastMsg(Object.values(errs)[0]!);
+      setShowToast(true);
+      return false;
+    }
     return true;
   }
 
@@ -239,15 +248,6 @@ export default function NewOfferPage() {
         </button>
         <h1 className="b-page-title">Create new offer</h1>
       </div>
-
-      {error && (
-        <div className="b-banner b-banner-orange" style={{ marginBottom: 16 }}>
-          <div className="b-banner-body">
-            <div className="b-banner-title">Validation error</div>
-            <p className="b-banner-text">{error}</p>
-          </div>
-        </div>
-      )}
 
       <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
         <input type="hidden" name="offerType" value={offerType} />
@@ -309,41 +309,50 @@ export default function NewOfferPage() {
               <label className="b-label" htmlFor="internalName">Internal name</label>
               <input
                 id="internalName"
-                className="b-input"
+                className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`}
                 name="internalName"
                 value={internalName}
-                onChange={(e) => setInternalName(e.target.value)}
+                onChange={(e) => { setInternalName(e.target.value); setFieldErrors((p) => ({ ...p, internalName: undefined })); }}
                 placeholder="e.g., free-gift-50-usd-cart"
                 autoComplete="off"
               />
-              <div className="b-help">Used internally to identify this offer. Must be unique.</div>
+              {fieldErrors.internalName
+                ? <div className="b-help-error">{fieldErrors.internalName}</div>
+                : <div className="b-help">Used internally to identify this offer. Must be unique.</div>
+              }
             </div>
             <div>
               <label className="b-label" htmlFor="publicTitle">Public title</label>
               <input
                 id="publicTitle"
-                className="b-input"
+                className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`}
                 name="publicTitle"
                 value={publicTitle}
-                onChange={(e) => setPublicTitle(e.target.value)}
+                onChange={(e) => { setPublicTitle(e.target.value); setFieldErrors((p) => ({ ...p, publicTitle: undefined })); }}
                 placeholder="e.g., Free Gift with $50 Purchase"
                 autoComplete="off"
               />
-              <div className="b-help">Shown to customers in widgets and cart messages.</div>
+              {fieldErrors.publicTitle
+                ? <div className="b-help-error">{fieldErrors.publicTitle}</div>
+                : <div className="b-help">Shown to customers in widgets and cart messages.</div>
+              }
             </div>
             <div>
               <label className="b-label" htmlFor="priority">Priority</label>
               <input
                 id="priority"
-                className="b-input"
+                className={`b-input${fieldErrors.priority ? " b-input-error" : ""}`}
                 name="priority"
                 type="number"
                 value={priority}
-                onChange={(e) => setPriority(e.target.value)}
+                onChange={(e) => { setPriority(e.target.value); setFieldErrors((p) => ({ ...p, priority: undefined })); }}
                 autoComplete="off"
                 style={{ maxWidth: 120 }}
               />
-              <div className="b-help">Lower number = higher priority. Evaluated first when multiple offers are active.</div>
+              {fieldErrors.priority
+                ? <div className="b-help-error">{fieldErrors.priority}</div>
+                : <div className="b-help">Lower number = higher priority. Evaluated first when multiple offers are active.</div>
+              }
             </div>
           </div>
         </div>
@@ -358,6 +367,10 @@ export default function NewOfferPage() {
           </button>
         </div>
       </Form>
+
+      {showToast && (
+        <Toast message={toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+      )}
     </div>
   );
 }

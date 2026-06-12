@@ -7,6 +7,7 @@
 
 import { Form, useNavigate, redirect, useParams } from "react-router";
 import { useState } from "react";
+import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import {
@@ -209,6 +210,24 @@ export default function NewBundleOfferPage() {
 
   const bundleTypeFromSlug = (SLUG_TO_TEMPLATE[templateSlug] ?? "classic") as "classic" | "mix_match" | "bundle_page";
 
+  // Validation
+  const [fieldErrors, setFieldErrors] = useState<{ internalName?: string; publicTitle?: string }>({});
+  const [showToast, setShowToast] = useState(false);
+  const [toastMsg, setToastMsg] = useState("");
+
+  function validate() {
+    const errs: { internalName?: string; publicTitle?: string } = {};
+    if (!internalName.trim()) errs.internalName = "Nombre del paquete es requerido";
+    if (!publicTitle.trim()) errs.publicTitle = "Título del paquete es requerido";
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      setToastMsg(Object.values(errs)[0]!);
+      setShowToast(true);
+      return false;
+    }
+    return true;
+  }
+
   // Offer info
   const [internalName, setInternalName] = useState("");
   const [publicTitle, setPublicTitle] = useState("");
@@ -269,7 +288,7 @@ export default function NewBundleOfferPage() {
         <h1 className="b-page-title">{pageTitle}</h1>
       </div>
 
-      <Form method="POST">
+      <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
         {/* Hidden fields */}
         <input type="hidden" name="bundleType" value={bundleTypeFromSlug} />
         {bundleTypeFromSlug === "mix_match" && (
@@ -298,7 +317,7 @@ export default function NewBundleOfferPage() {
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div>
                       <label className="b-label" htmlFor="internalName">Nombre del paquete</label>
-                      <input id="internalName" className="b-input" name="internalName"
+                      <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                         value={internalName} onChange={(e) => setInternalName(e.target.value)}
                         autoComplete="off" placeholder="Solo para uso interno" />
                       <div className="b-help">Sólo para uso interno</div>
@@ -310,7 +329,7 @@ export default function NewBundleOfferPage() {
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         <div>
                           <label className="b-label" htmlFor="publicTitle">Título del paquete</label>
-                          <input id="publicTitle" className="b-input" name="publicTitle"
+                          <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle"
                             value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
                             autoComplete="off" placeholder="e.g. Paquete ahorro" />
                         </div>
@@ -472,7 +491,7 @@ export default function NewBundleOfferPage() {
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div>
                       <label className="b-label" htmlFor="internalName">Nombre del paquete</label>
-                      <input id="internalName" className="b-input" name="internalName"
+                      <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                         value={internalName} onChange={(e) => setInternalName(e.target.value)}
                         autoComplete="off" placeholder="Solo para uso interno" />
                       <div className="b-help">Sólo para uso interno</div>
@@ -482,7 +501,7 @@ export default function NewBundleOfferPage() {
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         <div>
                           <label className="b-label" htmlFor="publicTitle">Título del paquete</label>
-                          <input id="publicTitle" className="b-input" name="publicTitle"
+                          <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle"
                             value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
                             autoComplete="off" />
                         </div>
@@ -735,7 +754,7 @@ export default function NewBundleOfferPage() {
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div>
                       <label className="b-label" htmlFor="internalName">Nombre del paquete</label>
-                      <input id="internalName" className="b-input" name="internalName"
+                      <input id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                         value={internalName} onChange={(e) => setInternalName(e.target.value)}
                         autoComplete="off" placeholder="Solo para uso interno" />
                     </div>
@@ -744,7 +763,7 @@ export default function NewBundleOfferPage() {
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         <div>
                           <label className="b-label" htmlFor="publicTitle">Encabezado de página</label>
-                          <input id="publicTitle" className="b-input" name="publicTitle"
+                          <input id="publicTitle" className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`} name="publicTitle"
                             value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
                             autoComplete="off" />
                         </div>
@@ -1017,6 +1036,9 @@ export default function NewBundleOfferPage() {
         }}
       />
 
+      {showToast && (
+        <Toast message={toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+      )}
     </div>
   );
 }

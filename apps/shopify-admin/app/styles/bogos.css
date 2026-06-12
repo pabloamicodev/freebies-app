@@ -1721,3 +1721,53 @@ tr:hover .bogos-row-reveal { visibility: visible; }
 .b-w-full { width: 100%; }
 .b-relative { position: relative; }
 .b-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Toast notifications ─────────────────────────────────────────────── */
+@keyframes b-toast-in {
+  from { transform: translateY(16px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+.b-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  min-width: 280px;
+  max-width: 420px;
+  padding: 13px 16px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  animation: b-toast-in 0.2s ease;
+  line-height: 1.4;
+}
+.b-toast-error   { background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; }
+.b-toast-success { background: #f0fdf4; border: 1px solid #86efac; color: #15803d; }
+.b-toast-warning { background: #fffbeb; border: 1px solid #fcd34d; color: #b45309; }
+.b-toast-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.6;
+  padding: 0;
+  flex-shrink: 0;
+}
+.b-toast-close:hover { opacity: 1; }
+
+/* ── Inline field validation ─────────────────────────────────────────── */
+input.b-input-error, textarea.b-input-error {
+  border-color: #e53e3e !important;
+  box-shadow: 0 0 0 1px #e53e3e;
+}
+.b-help-error {
+  font-size: 12px;
+  color: #e53e3e;
+  margin-top: 4px;
+}

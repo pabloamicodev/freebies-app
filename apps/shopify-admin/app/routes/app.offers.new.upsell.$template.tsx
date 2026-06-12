@@ -7,6 +7,7 @@
 
 import { Form, useNavigate, redirect, useParams } from "react-router";
 import { useState } from "react";
+import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
@@ -192,6 +193,23 @@ export default function NewUpsellOfferPage() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [infoBannerDismissed, setInfoBannerDismissed] = useState(false);
 
+  // Validation
+  const [fieldErrors, setFieldErrors] = useState<{ internalName?: string }>({});
+  const [showToast, setShowToast] = useState(false);
+  const [toastMsg, setToastMsg] = useState("");
+
+  function validate() {
+    const errs: { internalName?: string } = {};
+    if (!internalName.trim()) errs.internalName = "Nombre de venta adicional es requerido";
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      setToastMsg(Object.values(errs)[0]!);
+      setShowToast(true);
+      return false;
+    }
+    return true;
+  }
+
   const hasName = Boolean(internalName.trim());
   const hasProducts = upsellProducts.length > 0;
 
@@ -255,7 +273,7 @@ export default function NewUpsellOfferPage() {
         </div>
       )}
 
-      <Form method="POST">
+      <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
         <input type="hidden" name="template" value={templateId} />
         <input type="hidden" name="triggerType" value={triggerType} />
         <input type="hidden" name="upsellMethod" value={upsellMethod} />
@@ -277,7 +295,7 @@ export default function NewUpsellOfferPage() {
                 <div>
                   <label className="b-label" htmlFor="internalName">Nombre de venta adicional</label>
                   <input
-                    id="internalName" className="b-input" name="internalName"
+                    id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
                     value={internalName} onChange={(e) => setInternalName(e.target.value)}
                     autoComplete="off" placeholder="e.g., Checkout Upsell #1"
                   />
@@ -897,6 +915,9 @@ export default function NewUpsellOfferPage() {
         onSelect={(gids) => setUpsellProducts(gids)}
       />
 
+      {showToast && (
+        <Toast message={toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+      )}
     </div>
   );
 }
