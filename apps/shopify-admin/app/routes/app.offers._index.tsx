@@ -137,6 +137,7 @@ const TABS = [
   { label: "Disabled", value: "paused" },
   { label: "Scheduled", value: "scheduled" },
   { label: "Expired", value: "expired" },
+  { label: "Archived", value: "archived" },
 ];
 
 const TYPE_LABEL: Record<string, string> = {
