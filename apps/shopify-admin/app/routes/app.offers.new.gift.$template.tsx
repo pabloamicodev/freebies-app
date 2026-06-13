@@ -20,8 +20,6 @@ import { MainConditionModal } from "../components/MainConditionModal.js";
 import { SUB_FORMS } from "../components/subconditions/registry.js";
 import { GIFT_SUBCONDITIONS } from "../components/subconditions/types.js";
 import type { SubconditionId } from "../components/subconditions/types.js";
-import { OfferSummarySidebar } from "../components/OfferSummarySidebar.js";
-import { IconCondition, IconSettings } from "../components/Icons.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -54,14 +52,6 @@ const CONDITION_TYPE_LABEL: Record<ConditionType, string> = {
 };
 
 const CURRENCIES = SUPPORTED_CURRENCIES;
-
-function formatOfferStartDate(iso: string) {
-  try {
-    return new Date(iso).toLocaleDateString("es-ES", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return iso;
-  }
-}
 
 // ─── Local icons (only used within this file) ─────────────────────────────────
 function IChevDown() { return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>; }
@@ -300,34 +290,9 @@ export default function NewGiftOfferPage() {
 
   const isBogo = templateId === "bogo"; // BOGO: auto-add disabled, gifts match by default
 
-  // ── Derived ──
-  const hasName = Boolean(internalName.trim());
-  const hasRewardProducts = rewardProducts.length > 0;
-
   function toggleCurrency(c: string) {
     setSelectedCurrencies((prev) => prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]);
   }
-
-  function conditionSummaryLine() {
-    if (conditionType === "cart_value" || conditionType === "cart_value_multiplier") {
-      return `Spend from $${parseFloat(minAmount || "0").toFixed(2)} to get ${giftCount} gift(s)`;
-    }
-    if (conditionType === "cart_quantity") {
-      return `Buy ${minQty} item(s) to get ${giftCount} gift(s)`;
-    }
-    return `Buy ${minQty} item(s) from selected products to get ${giftCount} gift(s)`;
-  }
-
-  function appliesToLabel() {
-    if (appliesTo === "any_product") return "Applies to any product";
-    if (appliesTo === "exclude_variants_ids") return "All except selected products";
-    if (appliesTo === "exclude_type_vendor_collection") return "All except selected types/vendors/collections";
-    if (appliesTo === "variants_ids" || appliesTo === "specific_products") return `Applies to ${conditionProducts.length} selected product(s)`;
-    if (appliesTo === "type_vendor_collection") return "Applies to selected types/vendors/collections";
-    return appliesTo;
-  }
-
-  const subSummaryLines = activeSubs.map((id) => GIFT_SUBCONDITIONS.find((s) => s.id === id)?.name ?? id);
 
   return (
     <div className="b-page">
@@ -836,41 +801,6 @@ export default function NewGiftOfferPage() {
 
           </div>
 
-          {/* ── Right sidebar (sticky) ── */}
-          <OfferSummarySidebar
-            accentColor="var(--gift-color)"
-            title={hasName ? (publicTitle || internalName) : undefined}
-            startDate={hasName ? formatOfferStartDate(startsAt) : undefined}
-            steps={[
-              {
-                label: "Basic information",
-                checked: hasName,
-              },
-              {
-                label: "Main condition",
-                checked: true,
-                items: [
-                  { icon: IconCondition, text: conditionSummaryLine() },
-                  { icon: IconSettings, text: appliesToLabel() },
-                ],
-              },
-              {
-                label: "Sub-conditions",
-                checked: activeSubs.length > 0,
-                optional: true,
-                items: activeSubs.length > 0
-                  ? subSummaryLines.map((l) => ({ text: l }))
-                  : undefined,
-              },
-              {
-                label: "Gift reward",
-                checked: hasRewardProducts,
-                items: hasRewardProducts
-                  ? [{ text: `${rewardProducts.length} product(s) selected` }]
-                  : undefined,
-              },
-            ]}
-          />
 
         </div>
 

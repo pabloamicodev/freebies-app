@@ -6,7 +6,6 @@
  */
 
 import { Form, useNavigate, redirect, useParams } from "react-router";
-import { useMemo } from "react";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -15,7 +14,6 @@ import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
-import { OfferSummarySidebar } from "../components/OfferSummarySidebar.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -169,55 +167,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-function FbtPreviewCard({
-  publicTitle,
-  description,
-  upsellProducts,
-  discountEnabled,
-  discountType,
-  discountValue,
-}: {
-  publicTitle: string;
-  description: string;
-  upsellProducts: string[];
-  discountEnabled: boolean;
-  discountType: string;
-  discountValue: string;
-}) {
-  return (
-    <div className="b-card">
-      <div className="b-card-header">Preview</div>
-      <div className="b-card-body">
-        <div className="rd-style-064">
-          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)" }}>
-            {publicTitle || "Frequently bought together"}
-          </div>
-          {description && (
-            <div style={{ fontSize: 12, color: "var(--text-sub)" }}>{description}</div>
-          )}
-          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-            {upsellProducts.length === 0 ? (
-              <div style={{ fontSize: 12, color: "var(--text-sub)", fontStyle: "italic" }}>
-                Select products to see a preview
-              </div>
-            ) : (
-              upsellProducts.slice(0, 3).map((id) => (
-                <div key={id} className="rd-style-065">
-                  img
-                </div>
-              ))
-            )}
-          </div>
-          {discountEnabled && (
-            <div style={{ fontSize: 12, color: "var(--upsell-color)", fontWeight: 500 }}>
-              {discountType === "percentage" ? `${discountValue}% OFF` : `$${discountValue} OFF`}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export default function NewUpsellOfferPage() {
   const navigate = useNavigate();
@@ -315,8 +264,6 @@ export default function NewUpsellOfferPage() {
     return true;
   }
 
-  const hasName = Boolean(internalName.trim());
-  const hasProducts = upsellProducts.length > 0;
 
   // ── Page title ───────────────────────────────────────────────────────────
   const pageTitle = UPSELL_PAGE_TITLES[templateSlug] ?? "Create upsell";
@@ -325,20 +272,6 @@ export default function NewUpsellOfferPage() {
   const isCheckout = templateSlug === "checkout";
   const isFbt = templateSlug === "fbt";
   const isThankYou = templateSlug === "thank-you";
-  const aboveSummary = useMemo(
-    () => isFbt ? (
-      <FbtPreviewCard
-        publicTitle={publicTitle}
-        description={description}
-        upsellProducts={upsellProducts}
-        discountEnabled={discountEnabled}
-        discountType={discountType}
-        discountValue={discountValue}
-      />
-    ) : undefined,
-    [description, discountEnabled, discountType, discountValue, isFbt, publicTitle, upsellProducts],
-  );
-
   return (
     <div className="b-page">
 
@@ -945,32 +878,6 @@ export default function NewUpsellOfferPage() {
 
           </div>
 
-          {/* ── Right column ── */}
-          <OfferSummarySidebar
-            accentColor="var(--upsell-color)"
-            helpCard={null}
-            aboveSummary={aboveSummary}
-            steps={[
-              {
-                label: "Basic information",
-                checked: hasName,
-                items: hasName ? [
-                  { text: internalName },
-                  { text: `Starts ${new Date(startsAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}` },
-                ] : undefined,
-              },
-              {
-                label: "Upsell trigger",
-                checked: true,
-                items: [{ text: triggerType === "always" ? "No trigger / Always show" : triggerType }],
-              },
-              {
-                label: "Upsell method",
-                checked: hasProducts,
-                items: hasProducts ? [{ text: `${upsellProducts.length} product(s) selected` }] : undefined,
-              },
-            ]}
-          />
 
         </div>
 
