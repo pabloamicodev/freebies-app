@@ -1,5 +1,6 @@
-import { Outlet, useFetchers, useLoaderData, useNavigation, useRouteError } from "react-router";
+import { Outlet, useFetchers, useLoaderData, useLocation, useNavigation, useRouteError } from "react-router";
 import { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { NavMenu } from "@shopify/app-bridge-react";
@@ -34,14 +35,53 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export default function AppLayout() {
   const { apiKey } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
+  const location = useLocation();
   const fetchers = useFetchers();
   const [showNavigationIndicator, setShowNavigationIndicator] = useState(false);
+  const [documentNavigationPending, setDocumentNavigationPending] = useState(false);
   const isNavigating = navigation.state !== "idle";
   const activeFetcherCount = fetchers.reduce((count, fetcher) => count + (fetcher.state !== "idle" ? 1 : 0), 0);
-  const isBusy = isNavigating || activeFetcherCount > 0;
+  const isBusy = isNavigating || activeFetcherCount > 0 || documentNavigationPending;
   const loadingLabel = navigation.state === "submitting" || activeFetcherCount > 0
     ? "Saving changes"
     : "Loading page";
+
+  useEffect(() => {
+    setDocumentNavigationPending(false);
+  }, [location.key]);
+
+  useEffect(() => {
+    const handleClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const target = event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (!(target instanceof HTMLAnchorElement)) return;
+      if (target.target && target.target !== "_self") return;
+      if (target.hasAttribute("download")) return;
+      const nextUrl = new URL(target.href, window.location.href);
+      if (nextUrl.origin !== window.location.origin) return;
+      if (!nextUrl.pathname.startsWith("/app")) return;
+      const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const next = `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`;
+      if (next !== current) flushSync(() => setDocumentNavigationPending(true));
+    };
+
+    const handleSubmit = (event: SubmitEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target;
+      if (!(target instanceof HTMLFormElement)) return;
+      const action = new URL(target.action || window.location.href, window.location.href);
+      if (action.origin === window.location.origin && action.pathname.startsWith("/app")) {
+        flushSync(() => setDocumentNavigationPending(true));
+      }
+    };
+
+    document.addEventListener("click", handleClick, true);
+    document.addEventListener("submit", handleSubmit, true);
+    return () => {
+      document.removeEventListener("click", handleClick, true);
+      document.removeEventListener("submit", handleSubmit, true);
+    };
+  }, []);
 
   useEffect(() => {
     if (!isBusy) {
