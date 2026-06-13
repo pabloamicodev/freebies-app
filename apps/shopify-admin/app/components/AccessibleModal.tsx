@@ -20,6 +20,8 @@ const FOCUSABLE_SELECTOR = [
 export function AccessibleModal({ ariaLabel, children, className = "", onClose, style }: AccessibleModalProps) {
   const modalRef = useRef<HTMLDialogElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -30,7 +32,7 @@ export function AccessibleModal({ ariaLabel, children, className = "", onClose, 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
 
@@ -63,7 +65,7 @@ export function AccessibleModal({ ariaLabel, children, className = "", onClose, 
       document.removeEventListener("keydown", handleKeyDown);
       previousFocusRef.current?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div className="b-modal-overlay">
