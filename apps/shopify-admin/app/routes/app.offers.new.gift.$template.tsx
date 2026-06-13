@@ -4,6 +4,7 @@
  */
 
 import { Form, useNavigate, redirect, useParams } from "react-router";
+import { useCallback } from "react";
 import { SUPPORTED_CURRENCIES } from "@promo/shared-types";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
@@ -275,7 +276,7 @@ export default function NewGiftOfferPage() {
   const setOfferTodayTitle = createFieldSetter(setFormField, "offerTodayTitle");
   const setAddRedirectBtn = createFieldSetter(setFormField, "addRedirectBtn");
 
-  function validate() {
+  const validate = useCallback(() => {
     const errs: { internalName?: string; publicTitle?: string } = {};
     if (!internalName.trim()) errs.internalName = "Offer name is required";
     if (!publicTitle.trim()) errs.publicTitle = "Public title is required";
@@ -286,13 +287,13 @@ export default function NewGiftOfferPage() {
       return false;
     }
     return true;
-  }
+  }, [internalName, publicTitle, setFieldErrors, setToastMsg, setShowToast]);
 
   const isBogo = templateId === "bogo"; // BOGO: auto-add disabled, gifts match by default
 
-  function toggleCurrency(c: string) {
+  const toggleCurrency = useCallback((c: string) => {
     setSelectedCurrencies((prev) => prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]);
-  }
+  }, [setSelectedCurrencies]);
 
   return (
     <div className="b-page">

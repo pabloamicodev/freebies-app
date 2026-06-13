@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { AccessibleModal } from "./AccessibleModal.js";
 import type { SubconditionDef, SubconditionId } from "./subconditions/types.js";
 import { SUB_ICONS, ICrown } from "./subconditions/icons.js";
@@ -41,16 +41,16 @@ function SubconditionModalContent({
 }: Omit<SubconditionModalProps, "open">) {
   const [selected, setSelected] = useState<SubconditionId[]>(() => [...active]);
 
-  function toggle(id: SubconditionId) {
+  const toggle = useCallback((id: SubconditionId) => {
     setSelected((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
-  }
+  }, []);
 
-  function handleConfirm() {
+  const handleConfirm = useCallback(() => {
     onConfirm(selected);
     onClose();
-  }
+  }, [onConfirm, onClose, selected]);
 
   return (
     <AccessibleModal ariaLabel="Add sub-conditions" onClose={onClose} style={{ maxWidth: 660, width: "92%" }}>

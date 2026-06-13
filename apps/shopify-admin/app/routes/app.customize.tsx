@@ -6,7 +6,7 @@
 
 import { useLoaderData, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { appSettings } from "@promo/db";
 import { and, eq } from "drizzle-orm";
@@ -103,6 +103,9 @@ function ColorInputRow({
   helpText?: string;
 }) {
   const controlled = value !== undefined && onChange !== undefined;
+  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    onChange!(e.target.value);
+  }, [onChange]);
   return (
     <div>
       <label className="b-label" htmlFor={name}>{label}</label>
@@ -114,7 +117,7 @@ function ColorInputRow({
             className="b-input"
             name={name}
             value={value}
-            onChange={(e) => onChange!(e.target.value)}
+            onChange={handleChange}
             autoComplete="off"
           />
         ) : (

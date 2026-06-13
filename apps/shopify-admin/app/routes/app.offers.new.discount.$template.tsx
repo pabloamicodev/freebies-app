@@ -6,6 +6,7 @@
  */
 
 import { Form, useNavigate, redirect, useParams } from "react-router";
+import { useCallback } from "react";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -372,7 +373,7 @@ export default function NewDiscountOfferPage() {
   const setCombinesShippingDiscounts = createFieldSetter(setFormField, "combinesShippingDiscounts");
   const setCombinesProductDiscounts = createFieldSetter(setFormField, "combinesProductDiscounts");
 
-  function validate() {
+  const validate = useCallback(() => {
     const errs: { internalName?: string; publicTitle?: string } = {};
     if (!internalName.trim()) errs.internalName = "Offer name is required";
     if (!publicTitle.trim()) errs.publicTitle = "Offer title is required";
@@ -383,48 +384,45 @@ export default function NewDiscountOfferPage() {
       return false;
     }
     return true;
-  }
+  }, [internalName, publicTitle, setFieldErrors, setToastMsg, setShowToast]);
 
   // ── Tier helpers ──
 
-  function addVolumeTier() {
-    setTiers((prev) => [
-      ...prev,
-      createVolumeTier({ qty: "", label: "", discountType: "percentage", value: "", tag1: "", tag2: "", preselected: false }),
-    ]);
-  }
-  function removeVolumeTier(i: number) {
+  const addVolumeTier = useCallback(() => {
+    setTiers((prev) => [...prev, createVolumeTier({ qty: "", label: "", discountType: "percentage", value: "", tag1: "", tag2: "", preselected: false })]);
+  }, [setTiers]);
+
+  const removeVolumeTier = useCallback((i: number) => {
     setTiers((prev) => prev.filter((_, idx) => idx !== i));
-  }
-  function updateVolumeTier(i: number, field: keyof VolumeTier, val: string | boolean) {
+  }, [setTiers]);
+
+  const updateVolumeTier = useCallback((i: number, field: keyof VolumeTier, val: string | boolean) => {
     setTiers((prev) => prev.map((t, idx) => idx === i ? ({ ...t, [field]: val } as VolumeTier) : t));
-  }
+  }, [setTiers]);
 
-  function addCheapestTier() {
-    setCheapestTiers((prev) => [
-      ...prev,
-      createCheapestTier({ requiredQty: "", discountedQty: "1", discountType: "percentage", discountValue: "100", label: "" }),
-    ]);
-  }
-  function removeCheapestTier(i: number) {
+  const addCheapestTier = useCallback(() => {
+    setCheapestTiers((prev) => [...prev, createCheapestTier({ requiredQty: "", discountedQty: "1", discountType: "percentage", discountValue: "100", label: "" })]);
+  }, [setCheapestTiers]);
+
+  const removeCheapestTier = useCallback((i: number) => {
     setCheapestTiers((prev) => prev.filter((_, idx) => idx !== i));
-  }
-  function updateCheapestTier(i: number, field: keyof CheapestTier, val: string) {
-    setCheapestTiers((prev) => prev.map((t, idx) => idx === i ? ({ ...t, [field]: val } as CheapestTier) : t));
-  }
+  }, [setCheapestTiers]);
 
-  function addCartTier() {
-    setCartTiers((prev) => [
-      ...prev,
-      createCartTier({ threshold: "", discountType: "percentage", discountValue: "", label: "" }),
-    ]);
-  }
-  function removeCartTier(i: number) {
+  const updateCheapestTier = useCallback((i: number, field: keyof CheapestTier, val: string) => {
+    setCheapestTiers((prev) => prev.map((t, idx) => idx === i ? ({ ...t, [field]: val } as CheapestTier) : t));
+  }, [setCheapestTiers]);
+
+  const addCartTier = useCallback(() => {
+    setCartTiers((prev) => [...prev, createCartTier({ threshold: "", discountType: "percentage", discountValue: "", label: "" })]);
+  }, [setCartTiers]);
+
+  const removeCartTier = useCallback((i: number) => {
     setCartTiers((prev) => prev.filter((_, idx) => idx !== i));
-  }
-  function updateCartTier(i: number, field: keyof CartTier, val: string) {
+  }, [setCartTiers]);
+
+  const updateCartTier = useCallback((i: number, field: keyof CartTier, val: string) => {
     setCartTiers((prev) => prev.map((t, idx) => idx === i ? ({ ...t, [field]: val } as CartTier) : t));
-  }
+  }, [setCartTiers]);
 
   // ── Page title ──
   const pageTitle =

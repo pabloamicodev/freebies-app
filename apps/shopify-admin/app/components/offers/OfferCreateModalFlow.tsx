@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useNavigate } from "react-router";
 import { AccessibleModal } from "../AccessibleModal.js";
 
@@ -239,6 +239,9 @@ function Modal1TypeSelector({
   onSelect: (type: string) => void;
 }) {
   const [hoveredType, setHoveredType] = useState<string | null>(null);
+  const handleMouseEnter = useCallback((type: string) => setHoveredType(type), []);
+  const handleMouseLeave = useCallback(() => setHoveredType(null), []);
+  const handleSelect = useCallback((type: string) => onSelect(type), [onSelect]);
 
   return (
     <AccessibleModal ariaLabel="Create a new offer" onClose={onClose} style={{ maxWidth: 580 }}>
@@ -262,9 +265,9 @@ function Modal1TypeSelector({
                 <button
                   key={type.value}
                   type="button"
-                  onClick={() => onSelect(type.value)}
-                  onMouseEnter={() => setHoveredType(type.value)}
-                  onMouseLeave={() => setHoveredType(null)}
+                  onClick={() => handleSelect(type.value)}
+                  onMouseEnter={() => handleMouseEnter(type.value)}
+                  onMouseLeave={handleMouseLeave}
                   className="rd-style-042" style={{ border: `2px solid ${isHovered ? `var(--${type.value}-color)` : "var(--border)"}`, transform: isHovered ? "translateY(-3px)" : "translateY(0)", boxShadow: isHovered ? "0 8px 24px rgba(28,25,23,0.14), 0 2px 6px rgba(28,25,23,0.08)" : "0 1px 3px rgba(28,25,23,0.06)" }}
                 >
                   {/* Gradient illustration band */}

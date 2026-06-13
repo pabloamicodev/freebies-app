@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { AccessibleModal } from "./AccessibleModal.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -168,7 +168,7 @@ export function MainConditionModal({ open, initialSelected, onClose, onConfirm }
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               {COMBINABLE_OPTIONS.map((opt) => (
-                <ConditionCard key={opt.id} opt={opt} selected={selected === opt.id} onSelect={() => setSelected(opt.id)} />
+                <ConditionCard key={opt.id} opt={opt} selected={selected === opt.id} onSelect={setSelected} />
               ))}
             </div>
           </div>
@@ -182,7 +182,7 @@ export function MainConditionModal({ open, initialSelected, onClose, onConfirm }
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               {INDEPENDENT_OPTIONS.map((opt) => (
-                <ConditionCard key={opt.id} opt={opt} selected={selected === opt.id} onSelect={() => setSelected(opt.id)} />
+                <ConditionCard key={opt.id} opt={opt} selected={selected === opt.id} onSelect={setSelected} />
               ))}
             </div>
           </div>
@@ -201,11 +201,12 @@ export function MainConditionModal({ open, initialSelected, onClose, onConfirm }
 
 // ─── Condition card ──────────────────────────────────────────────────────────
 
-function ConditionCard({ opt, selected, onSelect }: { opt: MainConditionOption; selected: boolean; onSelect: () => void }) {
+function ConditionCard({ opt, selected, onSelect }: { opt: MainConditionOption; selected: boolean; onSelect: (id: MainConditionType) => void }) {
+  const handleClick = useCallback(() => onSelect(opt.id), [onSelect, opt.id]);
   return (
     <button
       type="button"
-      onClick={onSelect}
+      onClick={handleClick}
       aria-pressed={selected}
       className="rd-style-097" style={{ border: `1.5px solid ${selected ? "var(--blue)" : "var(--border)"}`, background: selected ? "var(--blue-light, #f0f4ff)" : "var(--bg-card)", boxShadow: selected ? "0 0 0 3px rgba(44,110,203,0.12)" : "none" }}
     >

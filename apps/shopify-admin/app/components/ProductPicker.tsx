@@ -117,44 +117,38 @@ function ProductPickerContent({
     void debouncedFetch(query);
   }, [debouncedFetch, query]);
 
-  function toggleVariant(variantGid: string) {
-    const next = new Set(selected);
-    if (next.has(variantGid)) {
-      next.delete(variantGid);
-    } else {
-      if (!allowMultiple) next.clear();
-      next.add(variantGid);
-    }
-    setSelected(next);
-  }
-
-  function toggleProduct(productGid: string, allVariantGids: string[]) {
-    if (mode === "products") {
-      const next = new Set(selected);
-      if (next.has(productGid)) {
-        next.delete(productGid);
+  const toggleVariant = useCallback((variantGid: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(variantGid)) {
+        next.delete(variantGid);
       } else {
         if (!allowMultiple) next.clear();
-        next.add(productGid);
+        next.add(variantGid);
       }
-      setSelected(next);
-    } else {
-      // Select all variants of this product
-      const next = new Set(selected);
-      const allSelected = allVariantGids.every((v) => next.has(v));
-      if (allSelected) {
-        allVariantGids.forEach((v) => next.delete(v));
-      } else {
-        allVariantGids.forEach((v) => next.add(v));
-      }
-      setSelected(next);
-    }
-  }
+      return next;
+    });
+  }, [allowMultiple, setSelected]);
 
-  function handleConfirm() {
+  const toggleProduct = useCallback((productGid: string, allVariantGids: string[]) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (mode === "products") {
+        if (next.has(productGid)) next.delete(productGid);
+        else { if (!allowMultiple) next.clear(); next.add(productGid); }
+      } else {
+        const allSelected = allVariantGids.every((v) => next.has(v));
+        if (allSelected) allVariantGids.forEach((v) => next.delete(v));
+        else allVariantGids.forEach((v) => next.add(v));
+      }
+      return next;
+    });
+  }, [mode, allowMultiple, setSelected]);
+
+  const handleConfirm = useCallback(() => {
     onSelect([...selected]);
     onClose();
-  }
+  }, [selected, onSelect, onClose]);
 
   return (
     <Modal

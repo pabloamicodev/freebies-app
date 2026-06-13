@@ -1,5 +1,5 @@
 import { useLoaderData, Link } from "react-router";
-import { useState } from "react";
+import { useMemo, useCallback, useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { offers, analyticsEvents } from "@promo/db";
 import { and, count, desc, eq, gte } from "drizzle-orm";
@@ -123,14 +123,21 @@ export default function Dashboard() {
   const totalSalesFmt = fmt.format(totalSalesCents / 100);
   const avgOrderFmt = fmt.format(avgOrderCents / 100);
 
-  const onboardingSteps = [
+  const onboardingSteps = useMemo(() => [
     { label: "Enable BOGOS in themes", done: true },
     { label: "Create your first offer", done: activeOffers > 0 },
     { label: "Check the offer in your Online Store", done: false },
     { label: "Customize the appearance", done: false },
-  ];
+  ], [activeOffers]);
   const completedSteps = onboardingSteps.filter((s) => s.done).length;
   const progressPct = Math.round((completedSteps / onboardingSteps.length) * 100);
+  const statsRows = useMemo(() => [
+    { label: "Total sales (30d)", value: totalSalesFmt },
+    { label: "Average order value (30d)", value: avgOrderFmt },
+    { label: "Orders with gifts (30d)", value: String(orderCount) },
+  ], [totalSalesFmt, avgOrderFmt, orderCount]);
+  const dismissOnboarding = useCallback(() => setShowOnboarding(false), []);
+  const dismissRecommended = useCallback(() => setShowRecommended(false), []);
 
   return (
     <div className="b-page">
@@ -215,11 +222,7 @@ export default function Dashboard() {
         <div className="b-card b-card-body">
           <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 16px", color: "var(--text)" }}>Overview</p>
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-            {[
-              { label: "Total sales (30d)", value: totalSalesFmt },
-              { label: "Average order value (30d)", value: avgOrderFmt },
-              { label: "Orders with gifts (30d)", value: String(orderCount) },
-            ].map((row, i) => (
+            {statsRows.map((row, i) => (
               <div
                 key={row.label}
                 style={{
@@ -245,7 +248,7 @@ export default function Dashboard() {
             <div className="b-row-between" style={{ marginBottom: 4 }}>
               <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>BOGOS Getting Started Guide</h3>
               <button type="button"
-                onClick={() => setShowOnboarding(false)}
+                onClick={dismissOnboarding}
                 style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-sub)", fontSize: 18, lineHeight: 1, padding: "2px 4px" }}
                 aria-label="Dismiss"
               >
@@ -279,7 +282,7 @@ export default function Dashboard() {
             <div className="b-row-between" style={{ marginBottom: 14 }}>
               <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Recommended apps for you</h3>
               <button type="button"
-                onClick={() => setShowRecommended(false)}
+                onClick={dismissRecommended}
                 style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-sub)", fontSize: 18, lineHeight: 1, padding: "2px 4px" }}
                 aria-label="Dismiss"
               >

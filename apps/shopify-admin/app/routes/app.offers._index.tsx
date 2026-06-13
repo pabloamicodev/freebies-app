@@ -243,6 +243,10 @@ export default function OffersPage() {
 
   // Modal state
   const [modal, setModal] = useState<OfferCreateModalType | null>(null);
+  const closeModal = useCallback(() => setModal(null), []);
+  const openModal = useCallback(() => setModal("type"), []);
+  const dismissBanner = useCallback(() => setBannerVisible(false), []);
+  const clearChecked = useCallback(() => setCheckedIds(new Set()), []);
 
   const activeTab = searchParams.get("status") ?? "all";
 
@@ -331,8 +335,8 @@ export default function OffersPage() {
     <div className="b-page">
       {/* ── Modals ──────────────────────────────────────────── */}
       {modal && (
-        <Suspense fallback={<OfferCreateModalFallback onClose={() => setModal(null)} />}>
-          <OfferCreateModalFlow modal={modal} onClose={() => setModal(null)} onChange={setModal} />
+        <Suspense fallback={<OfferCreateModalFallback onClose={closeModal} />}>
+          <OfferCreateModalFlow modal={modal} onClose={closeModal} onChange={setModal} />
         </Suspense>
       )}
       {/* ── Header ──────────────────────────────────────────── */}
@@ -342,7 +346,7 @@ export default function OffersPage() {
           <button type="button" className="b-btn b-btn-secondary">
             More actions <IconChevronDown />
           </button>
-          <button type="button" className="b-btn b-btn-primary" onClick={() => setModal("type")}>
+          <button type="button" className="b-btn b-btn-primary" onClick={openModal}>
             Create offer
           </button>
         </div>
@@ -365,7 +369,7 @@ export default function OffersPage() {
               <button type="button" className="b-btn b-btn-plain" style={{ color: "var(--blue)", textDecoration: "underline" }}>Send us a message</button> for support.
             </p>
           </div>
-          <button type="button" className="b-banner-close" onClick={() => setBannerVisible(false)} aria-label="Dismiss">×</button>
+          <button type="button" className="b-banner-close" onClick={dismissBanner} aria-label="Dismiss">×</button>
         </div>
       )}
 
@@ -428,7 +432,7 @@ export default function OffersPage() {
           <button type="button"
             className="b-btn b-btn-plain b-btn-sm"
             style={{ marginLeft: "auto", color: "var(--text-sub)", fontSize: 13 }}
-            onClick={() => setCheckedIds(new Set())}
+            onClick={clearChecked}
           >
             Clear
           </button>
@@ -509,7 +513,7 @@ export default function OffersPage() {
                     <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0 }}>
                       Add free gifts, bundles, upsells and discounts to your store.
                     </p>
-                    <button type="button" className="b-btn b-btn-primary" onClick={() => setModal("type")}>Create offer</button>
+                    <button type="button" className="b-btn b-btn-primary" onClick={openModal}>Create offer</button>
                   </div>
                 </td>
               </tr>
