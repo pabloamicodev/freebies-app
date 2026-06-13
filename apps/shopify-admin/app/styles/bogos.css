@@ -5,6 +5,18 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+.visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important;
+  clip-path: inset(50%) !important;
+  overflow: hidden !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  white-space: nowrap !important;
+}
+
 /* ── Design Tokens ──────────────────────────────────────── */
 :root {
   --font-display: 'Bricolage Grotesque', 'Georgia', serif;
@@ -213,6 +225,16 @@
   transition: background var(--t-fast), color var(--t-fast), transform var(--t-spring);
 }
 .b-btn-icon:hover { background: var(--bg-active); color: var(--text); }
+.b-btn-icon:focus-visible,
+.bogos-action-btn:focus-visible,
+.bogos-sort-btn:focus-visible,
+.b-modal-close:focus-visible,
+.b-tab:focus-visible,
+.b-banner-close:focus-visible,
+.b-toast-close:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
 .b-btn-icon:active { transform: scale(0.88); }
 .b-btn-icon.b-btn-icon-red { color: #dc2626; }
 .b-btn-icon.b-btn-icon-red:hover { background: var(--red-bg); color: #b91c1c; }
@@ -425,6 +447,10 @@ tr:hover .bogos-row-reveal { visibility: visible; }
   border-color: var(--border-focus);
   box-shadow: 0 0 0 3px rgba(4,120,87,0.12);
   background: #fffffe;
+}
+.b-input:focus-visible, .b-select:focus-visible, .b-textarea:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
 }
 .b-select {
   appearance: none;
@@ -744,6 +770,7 @@ tr:hover .bogos-row-reveal { visibility: visible; }
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
   z-index: 1000; display: flex; align-items: center; justify-content: center;
   padding: 20px; animation: b-overlay-in 160ms ease;
+  overscroll-behavior: contain;
 }
 .b-modal {
   background: var(--bg-card); border-radius: var(--r-xl);
@@ -819,11 +846,15 @@ tr:hover .bogos-row-reveal { visibility: visible; }
 
 /* ── Modal 2: Template grid ─────────────────────────────── */
 .b-template-scratch {
+  display: block;
+  width: 100%;
   border: 2px dashed var(--border); border-radius: var(--r-md); padding: 18px 24px;
   text-align: center; cursor: pointer; margin-bottom: 16px; background: var(--bg-hover);
+  font-family: var(--font-body);
   transition: border-color var(--t-base), background var(--t-fast);
 }
 .b-template-scratch:hover, .b-template-scratch.selected { border-color: var(--green); background: var(--green-light); }
+.b-template-scratch:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 .b-template-scratch-title { font-size: 14px; font-weight: 700; color: var(--text); margin: 0 0 4px; font-family: var(--font-display); }
 .b-template-scratch-desc  { font-size: 13px; color: var(--text-muted); margin: 0; }
 
@@ -836,12 +867,16 @@ tr:hover .bogos-row-reveal { visibility: visible; }
 .b-template-section-label { font-size: 13px; font-weight: 700; color: var(--text); margin: 0 0 12px; font-family: var(--font-display); }
 .b-template-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .b-template-card {
+  display: block;
+  width: 100%;
+  padding: 0;
   border: 2px solid var(--border); border-radius: var(--r-md); overflow: hidden;
-  cursor: pointer; background: var(--bg-card);
+  cursor: pointer; background: var(--bg-card); text-align: left; font-family: var(--font-body);
   transition: border-color var(--t-base), box-shadow var(--t-base), transform var(--t-spring);
 }
 .b-template-card:hover  { border-color: var(--border-strong); box-shadow: var(--shadow-md); transform: translateY(-2px); }
 .b-template-card.selected { border-color: var(--green); box-shadow: 0 0 0 3px rgba(4,120,87,0.12); }
+.b-template-card:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 3px; }
 .b-template-illus {
   background: linear-gradient(160deg, var(--bg-page) 0%, var(--border-light) 100%);
   height: 116px; display: flex; align-items: center; justify-content: center;
@@ -849,6 +884,19 @@ tr:hover .bogos-row-reveal { visibility: visible; }
 }
 .b-template-info       { padding: 12px; }
 .b-template-radio-row  { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.b-template-radio {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-card);
+  box-shadow: inset 0 0 0 3px var(--bg-card);
+  flex-shrink: 0;
+}
+.b-template-radio.selected {
+  border-color: var(--blue);
+  background: var(--blue);
+}
 .b-template-name       { font-size: 13px; font-weight: 700; color: var(--text); margin: 0; font-family: var(--font-display); }
 .b-template-desc       { font-size: 12px; color: var(--text-muted); margin: 0; line-height: 1.5; }
 

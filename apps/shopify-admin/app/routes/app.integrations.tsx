@@ -345,7 +345,6 @@ export default function IntegrationsPage() {
                 padding: "8px 12px",
                 fontSize: "13px",
                 color: "#1a1a1a",
-                outline: "none",
                 backgroundColor: "#fafafa",
               }}
             />

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
+import { AccessibleModal } from "../AccessibleModal.js";
 
 export type OfferCreateModalType = "type" | "gift" | "bundle" | "upsell" | "discount";
 
@@ -213,12 +214,7 @@ function Modal1TypeSelector({
   const [hoveredType, setHoveredType] = useState<string | null>(null);
 
   return (
-    <div className="b-modal-overlay" onClick={onClose}>
-      <div
-        className="b-modal"
-        style={{ maxWidth: 580 }}
-        onClick={(e) => e.stopPropagation()}
-      >
+    <AccessibleModal ariaLabel="Create a new offer" onClose={onClose} style={{ maxWidth: 580 }}>
         <div className="b-modal-header">
           <div>
             <h2 className="b-modal-title">Create a new offer</h2>
@@ -301,8 +297,7 @@ function Modal1TypeSelector({
             })}
           </div>
         </div>
-      </div>
-    </div>
+    </AccessibleModal>
   );
 }
 
@@ -320,21 +315,21 @@ function Modal2GiftWizard({
   const navigate = useNavigate();
 
   return (
-    <div className="b-modal-overlay" onClick={onClose}>
-      <div className="b-modal" onClick={(e) => e.stopPropagation()}>
+    <AccessibleModal ariaLabel="Create gift offer" onClose={onClose}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Create gift offer</h2>
           <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div className="b-modal-body">
           {/* Scratch option */}
-          <div
+          <button
+            type="button"
             className={`b-template-scratch${selected === "scratch" ? " selected" : ""}`}
             onClick={() => setSelected("scratch")}
           >
             <div className="b-template-scratch-title">Start from scratch</div>
             <div className="b-template-scratch-desc">Create offers manually, from conditions to gifts.</div>
-          </div>
+          </button>
 
           <div className="b-template-divider">or</div>
 
@@ -343,29 +338,24 @@ function Modal2GiftWizard({
           {/* Template grid */}
           <div className="b-template-grid">
             {GIFT_TEMPLATES.map((tmpl) => (
-              <div
+              <button
+                type="button"
                 key={tmpl.id}
                 className={`b-template-card${selected === tmpl.id ? " selected" : ""}`}
                 onClick={() => setSelected(tmpl.id)}
+                aria-pressed={selected === tmpl.id}
               >
                 <div className="b-template-illus">
                   <tmpl.IllusComponent />
                 </div>
                 <div className="b-template-info">
-                  <div className="b-template-radio-row">
-                    <input
-                      type="radio"
-                      name="template"
-                      value={tmpl.id}
-                      checked={selected === tmpl.id}
-                      onChange={() => setSelected(tmpl.id)}
-                      style={{ accentColor: "var(--blue)", width: 14, height: 14 }}
-                    />
+                  <div className="b-template-radio-row" aria-hidden="true">
+                    <span className={`b-template-radio${selected === tmpl.id ? " selected" : ""}`} />
                   </div>
                   <p className="b-template-name">{tmpl.name}</p>
                   <p className="b-template-desc">{tmpl.desc}</p>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
 
@@ -383,8 +373,7 @@ function Modal2GiftWizard({
             Create offer
           </button>
         </div>
-      </div>
-    </div>
+    </AccessibleModal>
   );
 }
 
@@ -486,8 +475,7 @@ function Modal2BundleWizard({ onClose, onBack }: { onClose: () => void; onBack: 
   const navigate = useNavigate();
   const BUNDLE_SLUG_MAP: Record<string, string> = { classic: "classic-bundle", mix: "mix-match", build_a_box: "bundle-page" };
   return (
-    <div className="b-modal-overlay" onClick={onClose}>
-      <div className="b-modal" onClick={(e) => e.stopPropagation()}>
+    <AccessibleModal ariaLabel="Choose the type of bundle" onClose={onClose}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Choose the type of bundle</h2>
           <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
@@ -495,15 +483,17 @@ function Modal2BundleWizard({ onClose, onBack }: { onClose: () => void; onBack: 
         <div className="b-modal-body">
           <div className="b-template-grid">
             {BUNDLE_TEMPLATES.map((tmpl) => (
-              <div
+              <button
+                type="button"
                 key={tmpl.id}
                 className={`b-template-card${selected === tmpl.id ? " selected" : ""}`}
                 onClick={() => setSelected(tmpl.id)}
+                aria-pressed={selected === tmpl.id}
               >
                 <div className="b-template-illus"><tmpl.IllusComponent /></div>
                 <div className="b-template-info">
-                  <div className="b-template-radio-row">
-                    <input type="radio" name="bundle_template" value={tmpl.id} checked={selected === tmpl.id} onChange={() => setSelected(tmpl.id)} style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
+                  <div className="b-template-radio-row" aria-hidden="true">
+                    <span className={`b-template-radio${selected === tmpl.id ? " selected" : ""}`} />
                     <p className="b-template-name">
                       {tmpl.name}
                       {tmpl.shopifyPlus && <span className="b-shopify-plus-badge">Shopify Plus only</span>}
@@ -511,7 +501,7 @@ function Modal2BundleWizard({ onClose, onBack }: { onClose: () => void; onBack: 
                   </div>
                   <p className="b-template-desc">{tmpl.desc}</p>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -519,8 +509,7 @@ function Modal2BundleWizard({ onClose, onBack }: { onClose: () => void; onBack: 
           <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
           <button className="b-btn b-btn-dark" onClick={() => { void navigate(`/app/offers/new/bundle/${BUNDLE_SLUG_MAP[selected] ?? selected}`); onClose(); }}>Create bundle</button>
         </div>
-      </div>
-    </div>
+    </AccessibleModal>
   );
 }
 
@@ -616,8 +605,7 @@ function Modal2UpsellWizard({ onClose, onBack }: { onClose: () => void; onBack: 
   const navigate = useNavigate();
   const UPSELL_SLUG_MAP: Record<string, string> = { fbt: "fbt", checkout: "checkout", thank_you: "thank-you" };
   return (
-    <div className="b-modal-overlay" onClick={onClose}>
-      <div className="b-modal" onClick={(e) => e.stopPropagation()}>
+    <AccessibleModal ariaLabel="Choose the type of offer" onClose={onClose}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Choose the type of offer</h2>
           <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
@@ -625,15 +613,17 @@ function Modal2UpsellWizard({ onClose, onBack }: { onClose: () => void; onBack: 
         <div className="b-modal-body">
           <div className="b-template-grid">
             {UPSELL_TEMPLATES.map((tmpl) => (
-              <div
+              <button
+                type="button"
                 key={tmpl.id}
                 className={`b-template-card${selected === tmpl.id ? " selected" : ""}`}
                 onClick={() => setSelected(tmpl.id)}
+                aria-pressed={selected === tmpl.id}
               >
                 <div className="b-template-illus"><tmpl.IllusComponent /></div>
                 <div className="b-template-info">
-                  <div className="b-template-radio-row">
-                    <input type="radio" name="upsell_template" value={tmpl.id} checked={selected === tmpl.id} onChange={() => setSelected(tmpl.id)} style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
+                  <div className="b-template-radio-row" aria-hidden="true">
+                    <span className={`b-template-radio${selected === tmpl.id ? " selected" : ""}`} />
                     <p className="b-template-name">
                       {tmpl.name}
                       {tmpl.shopifyPlus && <span className="b-shopify-plus-badge">Shopify Plus only</span>}
@@ -641,7 +631,7 @@ function Modal2UpsellWizard({ onClose, onBack }: { onClose: () => void; onBack: 
                   </div>
                   <p className="b-template-desc">{tmpl.desc}</p>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -649,8 +639,7 @@ function Modal2UpsellWizard({ onClose, onBack }: { onClose: () => void; onBack: 
           <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
           <button className="b-btn b-btn-dark" onClick={() => { void navigate(`/app/offers/new/upsell/${UPSELL_SLUG_MAP[selected] ?? selected}`); onClose(); }}>Create upsell</button>
         </div>
-      </div>
-    </div>
+    </AccessibleModal>
   );
 }
 
@@ -754,8 +743,7 @@ function Modal2DiscountWizard({ onClose, onBack }: { onClose: () => void; onBack
   const navigate = useNavigate();
   const DISCOUNT_SLUG_MAP: Record<string, string> = { volume: "volume", cheapest: "cheapest", cart: "cart" };
   return (
-    <div className="b-modal-overlay" onClick={onClose}>
-      <div className="b-modal" onClick={(e) => e.stopPropagation()}>
+    <AccessibleModal ariaLabel="Create discount offer" onClose={onClose}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Create discount offer</h2>
           <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
@@ -763,20 +751,22 @@ function Modal2DiscountWizard({ onClose, onBack }: { onClose: () => void; onBack
         <div className="b-modal-body">
           <div className="b-template-grid">
             {DISCOUNT_TEMPLATES.map((tmpl) => (
-              <div
+              <button
+                type="button"
                 key={tmpl.id}
                 className={`b-template-card${selected === tmpl.id ? " selected" : ""}`}
                 onClick={() => setSelected(tmpl.id)}
+                aria-pressed={selected === tmpl.id}
               >
                 <div className="b-template-illus"><tmpl.IllusComponent /></div>
                 <div className="b-template-info">
-                  <div className="b-template-radio-row">
-                    <input type="radio" name="discount_template" value={tmpl.id} checked={selected === tmpl.id} onChange={() => setSelected(tmpl.id)} style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
+                  <div className="b-template-radio-row" aria-hidden="true">
+                    <span className={`b-template-radio${selected === tmpl.id ? " selected" : ""}`} />
                     <p className="b-template-name">{tmpl.name}</p>
                   </div>
                   <p className="b-template-desc">{tmpl.desc}</p>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -784,8 +774,7 @@ function Modal2DiscountWizard({ onClose, onBack }: { onClose: () => void; onBack
           <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
           <button className="b-btn b-btn-dark" onClick={() => { void navigate(`/app/offers/new/discount/${DISCOUNT_SLUG_MAP[selected] ?? selected}`); onClose(); }}>Create discount</button>
         </div>
-      </div>
-    </div>
+    </AccessibleModal>
   );
 }
 

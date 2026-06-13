@@ -15,6 +15,7 @@ import {
   IconCopy, IconTrash, IconArchive, IconEye, IconSearch, IconFilter,
   IconChevronDown, SortIcon,
 } from "../components/Icons.js";
+import { AccessibleModal } from "../components/AccessibleModal.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { OfferToggle } from "../components/BogosSwitch.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -211,8 +212,7 @@ function TypeIcon({ type }: { type: string }) {
 }
 function OfferCreateModalFallback({ onClose }: { onClose: () => void }) {
   return (
-    <div className="b-modal-overlay">
-      <div className="b-modal b-modal-sm" onClick={(e) => e.stopPropagation()}>
+    <AccessibleModal ariaLabel="Create offer" className="b-modal-sm" onClose={onClose}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Create offer</h2>
           <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
@@ -224,8 +224,7 @@ function OfferCreateModalFallback({ onClose }: { onClose: () => void }) {
             <span />
           </div>
         </div>
-      </div>
-    </div>
+    </AccessibleModal>
   );
 }
 
@@ -361,7 +360,7 @@ export default function OffersPage() {
             <div className="b-banner-title">Cart integration</div>
             <p className="b-banner-text">
               If you&apos;re using a custom cart drawer/XHR, BOGOS may need a larger integration.{" "}
-              <a href="#" style={{ color: "var(--blue)", textDecoration: "underline" }}>Send us a message</a> for support.
+              <button type="button" className="b-btn b-btn-plain" style={{ color: "var(--blue)", textDecoration: "underline" }}>Send us a message</button> for support.
             </p>
           </div>
           <button className="b-banner-close" onClick={() => setBannerVisible(false)} aria-label="Dismiss">×</button>
@@ -370,8 +369,7 @@ export default function OffersPage() {
 
       {/* ── Action confirmation dialog ──────────────────────── */}
       {confirmAction && (
-        <div className="b-modal-overlay">
-          <div className="b-modal b-modal-sm" onClick={(e) => e.stopPropagation()}>
+        <AccessibleModal ariaLabel={confirmAction.type === "delete" ? "Delete offer permanently" : "Archive offer"} className="b-modal-sm" onClose={closeConfirmAction}>
             <div className="b-modal-header">
               <h2 className="b-modal-title">
                 {confirmAction.type === "delete" ? "Delete offer permanently?" : "Archive offer?"}
@@ -402,8 +400,7 @@ export default function OffersPage() {
                 </button>
               )}
             </div>
-          </div>
-        </div>
+        </AccessibleModal>
       )}
 
       {/* ── Bulk actions toolbar ─────────────────────────────── */}
@@ -529,11 +526,16 @@ export default function OffersPage() {
                     />
                   </td>
                   {/* Offer name with colored type icon */}
-                  <td onClick={() => navigate(`/app/offers/${offer.id}`)}>
+                  <td>
                     <div className="b-table-offer-cell">
                       <TypeIcon type={offer.type} />
                       <div style={{ minWidth: 0 }}>
-                        <button type="button" className="bogos-offer-title-text" data-primary-link="true">
+                        <button
+                          type="button"
+                          className="bogos-offer-title-text"
+                          data-primary-link="true"
+                          onClick={() => navigate(`/app/offers/${offer.id}`)}
+                        >
                           {offer.internalName}
                         </button>
                         {offer.publicTitle && (

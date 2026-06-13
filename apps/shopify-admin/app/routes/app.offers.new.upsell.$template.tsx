@@ -266,9 +266,9 @@ export default function NewUpsellOfferPage() {
               Quick tour: How to create an upsell
             </div>
             <div style={{ fontSize: 13, color: "var(--text-sub)" }}>
-              <a href="#" style={{ color: "var(--upsell-color)", textDecoration: "underline" }}>
+              <button type="button" className="b-btn b-btn-plain" style={{ color: "var(--upsell-color)", textDecoration: "underline" }}>
                 Get familiar with our tour or learn more in our onboarding guide.
-              </a>
+              </button>
             </div>
           </div>
           <button
@@ -590,9 +590,9 @@ export default function NewUpsellOfferPage() {
                         </div>
                       </div>
                       <div>
-                        <a href="#" style={{ fontSize: 13, color: "var(--upsell-color)", textDecoration: "none" }}>
+                        <button type="button" className="b-btn b-btn-plain" style={{ fontSize: 13, color: "var(--upsell-color)", textDecoration: "none" }}>
                           + Add: Shipping discount
-                        </a>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -666,9 +666,9 @@ export default function NewUpsellOfferPage() {
                         </div>
                       </div>
                       <div>
-                        <a href="#" style={{ fontSize: 13, color: "var(--upsell-color)", textDecoration: "none" }}>
+                        <button type="button" className="b-btn b-btn-plain" style={{ fontSize: 13, color: "var(--upsell-color)", textDecoration: "none" }}>
                           + Add: Shipping discount
-                        </a>
+                        </button>
                       </div>
                     </>
                   )}
@@ -707,9 +707,9 @@ export default function NewUpsellOfferPage() {
                     </div>
                   </div>
                   <div>
-                    <a href="#" style={{ fontSize: 13, color: "var(--upsell-color)", textDecoration: "none" }}>
+                    <button type="button" className="b-btn b-btn-plain" style={{ fontSize: 13, color: "var(--upsell-color)", textDecoration: "none" }}>
                       + Add: Shipping discount
-                    </a>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -942,4 +942,3 @@ export default function NewUpsellOfferPage() {
     </div>
   );
 }
-

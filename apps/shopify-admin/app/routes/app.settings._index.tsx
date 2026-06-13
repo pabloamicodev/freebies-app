@@ -645,9 +645,9 @@ export default function SettingsPage() {
 
       {/* Terms */}
       <div style={{ marginTop: 16, textAlign: "center" }}>
-        <a href="#" className="b-text-sm b-text-sub" style={{ textDecoration: "underline" }}>
+        <button type="button" className="b-btn b-btn-plain b-text-sm b-text-sub" style={{ textDecoration: "underline" }}>
           BOGOS Terms and Conditions ↗
-        </a>
+        </button>
       </div>
     </div>
   );

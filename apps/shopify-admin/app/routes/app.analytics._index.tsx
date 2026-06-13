@@ -316,9 +316,9 @@ export default function AnalyticsPage() {
               filteredOrders.map((order) => (
                 <tr key={order.id}>
                   <td>
-                    <a href="#" style={{ color: "var(--blue)", textDecoration: "none", fontSize: 13, fontWeight: 500 }}>
+                    <button type="button" className="b-btn b-btn-plain" style={{ color: "var(--blue)", textDecoration: "none", fontSize: 13, fontWeight: 500 }}>
                       {order.orderId}
-                    </a>
+                    </button>
                   </td>
                   <td><span className="b-text-sm b-text-sub">{formatDate(order.date)}</span></td>
                   <td>

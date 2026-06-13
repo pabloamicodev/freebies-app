@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AccessibleModal } from "./AccessibleModal.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -142,8 +143,7 @@ export function MainConditionModal({ open, initialSelected, onClose, onConfirm }
   }
 
   return (
-    <div className="b-modal-overlay" onClick={onClose}>
-      <div className="b-modal" style={{ maxWidth: 660, width: "92%" }} onClick={(e) => e.stopPropagation()}>
+    <AccessibleModal ariaLabel="Choose a condition type" onClose={onClose} style={{ maxWidth: 660, width: "92%" }}>
         {/* Header */}
         <div className="b-modal-header">
           <div>
@@ -195,8 +195,7 @@ export function MainConditionModal({ open, initialSelected, onClose, onConfirm }
             Use this condition
           </button>
         </div>
-      </div>
-    </div>
+    </AccessibleModal>
   );
 }
 
@@ -204,11 +203,10 @@ export function MainConditionModal({ open, initialSelected, onClose, onConfirm }
 
 function ConditionCard({ opt, selected, onSelect }: { opt: MainConditionOption; selected: boolean; onSelect: () => void }) {
   return (
-    <div
-      role="button"
-      tabIndex={0}
+    <button
+      type="button"
       onClick={onSelect}
-      onKeyDown={(e) => e.key === "Enter" && onSelect()}
+      aria-pressed={selected}
       style={{
         border: `1.5px solid ${selected ? "var(--blue)" : "var(--border)"}`,
         borderRadius: 10,
@@ -221,7 +219,8 @@ function ConditionCard({ opt, selected, onSelect }: { opt: MainConditionOption; 
         position: "relative",
         transition: "border-color 0.12s, background 0.12s, box-shadow 0.12s",
         boxShadow: selected ? "0 0 0 3px rgba(44,110,203,0.12)" : "none",
-        outline: "none",
+        textAlign: "left",
+        fontFamily: "inherit",
       }}
     >
       {/* Icon pill */}
@@ -252,6 +251,6 @@ function ConditionCard({ opt, selected, onSelect }: { opt: MainConditionOption; 
           <ICheck />
         </div>
       )}
-    </div>
+    </button>
   );
 }

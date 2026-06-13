@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { AccessibleModal } from "./AccessibleModal.js";
 import type { SubconditionDef, SubconditionId } from "./subconditions/types.js";
 import { SUB_ICONS, ICrown } from "./subconditions/icons.js";
 
@@ -39,8 +40,7 @@ export function SubconditionModal({ open, active, types, onClose, onConfirm }: S
   }
 
   return (
-    <div className="b-modal-overlay" onClick={onClose}>
-      <div className="b-modal" style={{ maxWidth: 660, width: "92%" }} onClick={(e) => e.stopPropagation()}>
+    <AccessibleModal ariaLabel="Add sub-conditions" onClose={onClose} style={{ maxWidth: 660, width: "92%" }}>
         <div className="b-modal-header">
           <div>
             <h2 className="b-modal-title">Add sub-conditions</h2>
@@ -64,12 +64,11 @@ export function SubconditionModal({ open, active, types, onClose, onConfirm }: S
               const Icon = SUB_ICONS[sub.id];
               const isSelected = selected.includes(sub.id);
               return (
-                <div
+                <button
                   key={sub.id}
-                  role="button"
-                  tabIndex={0}
+                  type="button"
                   onClick={() => toggle(sub.id)}
-                  onKeyDown={(e) => e.key === "Enter" && toggle(sub.id)}
+                  aria-pressed={isSelected}
                   style={{
                     border: `1.5px solid ${isSelected ? "var(--blue)" : "var(--border)"}`,
                     borderRadius: 10,
@@ -82,7 +81,8 @@ export function SubconditionModal({ open, active, types, onClose, onConfirm }: S
                     gap: 14,
                     transition: "border-color 0.12s, background 0.12s, box-shadow 0.12s",
                     boxShadow: isSelected ? "0 0 0 3px rgba(44,110,203,0.12)" : "none",
-                    outline: "none",
+                    textAlign: "left",
+                    fontFamily: "inherit",
                   }}
                 >
                   {/* Plus badge */}
@@ -130,7 +130,7 @@ export function SubconditionModal({ open, active, types, onClose, onConfirm }: S
                       <ICheck />
                     </div>
                   )}
-                </div>
+                </button>
               );
             })}
           </div>
@@ -142,7 +142,6 @@ export function SubconditionModal({ open, active, types, onClose, onConfirm }: S
             {selected.length > 0 ? `Apply ${selected.length} sub-condition${selected.length !== 1 ? "s" : ""}` : "Apply"}
           </button>
         </div>
-      </div>
-    </div>
+    </AccessibleModal>
   );
 }

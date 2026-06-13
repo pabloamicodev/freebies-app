@@ -144,7 +144,8 @@ export function ProductPicker({
     >
       <Modal.Section>
         <TextField
-          label=""
+          label="Search products"
+          labelHidden
           placeholder="Search by title, handle, or vendor…"
           value={query}
           onChange={setQuery}
@@ -204,7 +205,8 @@ export function ProductPicker({
                     <InlineStack gap="300" align="space-between">
                       <InlineStack gap="200">
                         <Checkbox
-                          label=""
+                          label={`Select ${product.title}`}
+                          labelHidden
                           checked={productSelected}
                           onChange={() => {
                             if (product.variants?.length === 1 && mode === "variants") {
@@ -228,7 +230,8 @@ export function ProductPicker({
                         {product.variants.map((variant) => (
                           <InlineStack key={variant.id} gap="200" align="start">
                             <Checkbox
-                              label=""
+                              label={`Select ${product.title} - ${variant.title}`}
+                              labelHidden
                               checked={selected.has(variant.id)}
                               onChange={() => toggleVariant(variant.id)}
                             />

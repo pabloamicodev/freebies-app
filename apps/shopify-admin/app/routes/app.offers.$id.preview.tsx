@@ -176,6 +176,11 @@ export default function OfferPreviewPage() {
   const conditionCount = actionData && "conditionCount" in actionData ? actionData.conditionCount : null;
   const rewardCount = actionData && "rewardCount" in actionData ? actionData.rewardCount : null;
   const offerStatus = actionData && "offerStatus" in actionData ? actionData.offerStatus : null;
+  const previewStatusText = result
+    ? qualifies
+      ? "Customer sees this offer"
+      : "Offer hidden for this cart"
+    : "Run a simulation to preview eligibility";
 
   return (
     <div className="b-page">
@@ -194,6 +199,78 @@ export default function OfferPreviewPage() {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16, alignItems: "start" }}>
         {/* Left column */}
         <div className="b-stack b-stack-4">
+          {/* Merchant-facing storefront preview */}
+          <div className="b-card">
+            <div className="b-card-header">Storefront Preview</div>
+            <div className="b-card-body">
+              <div
+                style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--r-lg)",
+                  background: "linear-gradient(180deg, #ffffff 0%, var(--bg-subtle) 100%)",
+                  padding: 18,
+                  boxShadow: "var(--shadow-xs)",
+                }}
+              >
+                <div className="b-row-between" style={{ marginBottom: 12 }}>
+                  <div>
+                    <p className="b-text-xs b-text-sub" style={{ margin: 0 }}>Cart drawer widget</p>
+                    <p style={{ margin: "2px 0 0", fontSize: 15, fontWeight: 700, color: "var(--text)" }}>
+                      {offer.internalName}
+                    </p>
+                  </div>
+                  <span className={`b-badge ${qualifies ? "b-badge-green" : result ? "b-badge-orange" : "b-badge-gray"}`}>
+                    {previewStatusText}
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    padding: "13px 14px",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--r)",
+                    background: qualifies ? "var(--green-bg)" : "var(--bg-card)",
+                  }}
+                >
+                  <div
+                    aria-hidden="true"
+                    style={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: "var(--r-sm)",
+                      background: qualifies ? "var(--green)" : "var(--bg-hover)",
+                      color: qualifies ? "#fff" : "var(--text-muted)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 20,
+                    }}
+                  >
+                    {qualifies ? "✓" : "•"}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "var(--text)" }}>
+                      {qualifies ? "Free gift unlocked" : "Free gift locked"}
+                    </p>
+                    <p className="b-text-xs b-text-sub" style={{ margin: "2px 0 0" }}>
+                      {qualifies
+                        ? "The offer qualifies for the simulated cart and can be shown to the customer."
+                        : result
+                          ? "The simulated cart does not match the current offer conditions."
+                          : "Enter cart values below to see how the offer behaves."}
+                    </p>
+                  </div>
+                  <button type="button" className="b-btn b-btn-primary b-btn-sm" disabled={!qualifies}>
+                    Add Gift
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Simulate Cart form card */}
           <div className="b-card">
             <div className="b-card-header">Simulate Cart</div>
@@ -225,6 +302,7 @@ export default function OfferPreviewPage() {
                         className="b-input"
                         name="cartTotal"
                         type="number"
+                        inputMode="decimal"
                         defaultValue="50"
                         min="0"
                         step="0.01"
@@ -242,6 +320,7 @@ export default function OfferPreviewPage() {
                       className="b-input"
                       name="cartQty"
                       type="number"
+                      inputMode="numeric"
                       defaultValue="1"
                       min="1"
                     />
@@ -255,8 +334,9 @@ export default function OfferPreviewPage() {
                       className="b-input"
                       name="customerTags"
                       type="text"
-                      placeholder="vip, wholesale"
+                      placeholder="vip, wholesale…"
                       defaultValue=""
+                      autoComplete="off"
                     />
                     <p className="b-help">Comma-separated tags. Leave empty for guest.</p>
                   </div>
@@ -351,7 +431,7 @@ export default function OfferPreviewPage() {
                               </p>
                               {reason.actual !== undefined && (
                                 <p className="b-text-xs b-text-muted" style={{ margin: "2px 0 0" }}>
-                                  Actual: {JSON.stringify(reason.actual)} | Required: {JSON.stringify(reason.required)}
+                                  Actual: {JSON.stringify(reason.actual)} · Required: {JSON.stringify(reason.required)}
                                 </p>
                               )}
                             </div>
