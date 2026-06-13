@@ -2,6 +2,7 @@ import { useLoaderData, useNavigate, useFetcher, useActionData, redirect } from 
 import { useState } from "react";
 import { SUPPORTED_CURRENCIES } from "@promo/shared-types";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies, offerVersions } from "@promo/db";
 import { eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -46,11 +47,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session, shopId, currencyCode: shopCurrencyCode, db } = await getShopContext(request);
+  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
+  const { session, shopId, currencyCode: shopCurrencyCode, db } = context;
   const offerId = params["id"];
   if (!offerId) throw new Response("Not found", { status: 404 });
-
-  const formData = await request.formData();
   const intent = formData.get("intent") as string;
 
   switch (intent) {
@@ -126,12 +126,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       await db.update(offers).set({ status: "active", updatedAt: now }).where(eq(offers.id, offerId));
 
       // Write version snapshot
-      const offerSnapshot = await db.select().from(offers).where(eq(offers.id, offerId)).limit(1);
-      const condSnapshot = await db.select().from(offerConditions).where(eq(offerConditions.offerId, offerId));
-      const rewSnapshot = await db.select().from(offerRewards).where(eq(offerRewards.offerId, offerId));
-      const existingVersions = await db.select({ versionNumber: offerVersions.versionNumber })
-        .from(offerVersions).where(eq(offerVersions.offerId, offerId))
-        .orderBy(offerVersions.versionNumber);
+      const [offerSnapshot, condSnapshot, rewSnapshot, existingVersions] = await Promise.all([
+        db.select().from(offers).where(eq(offers.id, offerId)).limit(1),
+        db.select().from(offerConditions).where(eq(offerConditions.offerId, offerId)),
+        db.select().from(offerRewards).where(eq(offerRewards.offerId, offerId)),
+        db.select({ versionNumber: offerVersions.versionNumber })
+          .from(offerVersions).where(eq(offerVersions.offerId, offerId))
+          .orderBy(offerVersions.versionNumber),
+      ]);
       const nextVersion = (existingVersions[existingVersions.length - 1]?.versionNumber ?? 0) + 1;
       await db.insert(offerVersions).values({
         shopId,
@@ -191,6 +193,21 @@ const CONDITION_TYPE_NAMES: Record<string, string> = {
 
 /* ── Currency chips shown on monetary conditions ────────── */
 const CURRENCIES = SUPPORTED_CURRENCIES;
+const conditionCurrencyFormatters = new Map<string, Intl.NumberFormat>();
+
+function getConditionCurrencyFormatter(currencyCode: string): Intl.NumberFormat {
+  const key = currencyCode.toUpperCase();
+  const cached = conditionCurrencyFormatters.get(key);
+  if (cached) return cached;
+
+  const formatter = Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: key,
+    maximumFractionDigits: 2,
+  });
+  conditionCurrencyFormatters.set(key, formatter);
+  return formatter;
+}
 
 function CurrencyChips({ selected, onSelect }: { selected: string; onSelect: (c: string) => void }) {
   const [showAll, setShowAll] = useState(false);
@@ -204,16 +221,7 @@ function CurrencyChips({ selected, onSelect }: { selected: string; onSelect: (c:
             key={c}
             type="button"
             onClick={() => onSelect(c)}
-            style={{
-              padding: "3px 8px",
-              fontSize: 11,
-              border: `1px solid ${selected === c ? "var(--blue)" : "var(--border)"}`,
-              borderRadius: 4,
-              background: selected === c ? "var(--blue-light)" : "transparent",
-              color: selected === c ? "var(--blue)" : "var(--text-sub)",
-              cursor: "pointer",
-              fontWeight: selected === c ? 600 : 400,
-            }}
+            className="rd-style-068" style={{ border: `1px solid ${selected === c ? "var(--blue)" : "var(--border)"}`, background: selected === c ? "var(--blue-light)" : "transparent", color: selected === c ? "var(--blue)" : "var(--text-sub)", fontWeight: selected === c ? 600 : 400 }}
           >
             {c}
           </button>
@@ -222,7 +230,7 @@ function CurrencyChips({ selected, onSelect }: { selected: string; onSelect: (c:
           <button
             type="button"
             onClick={() => setShowAll(true)}
-            style={{ padding: "3px 8px", fontSize: 11, border: "1px solid var(--border)", borderRadius: 4, background: "transparent", color: "var(--text-sub)", cursor: "pointer" }}
+            style={{ padding: "3px 8px", fontSize: 12, border: "1px solid var(--border)", borderRadius: 4, background: "transparent", color: "var(--text-sub)", cursor: "pointer" }}
           >
             …
           </button>
@@ -236,10 +244,11 @@ function CurrencyChips({ selected, onSelect }: { selected: string; onSelect: (c:
 function AppliesToSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <div style={{ marginTop: 14 }}>
-      <label style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
+      <div style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
         Condition applies to:
-      </label>
+      </div>
       <select
+        aria-label="Condition applies to"
         className="b-select"
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -304,7 +313,7 @@ function ConditionCard({
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{title}</span>
           {isSaving && (
-            <span style={{ fontSize: 11, color: "var(--text-muted)", fontStyle: "italic" }}>Saving…</span>
+            <span style={{ fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>Saving…</span>
           )}
         </div>
         <button
@@ -326,10 +335,12 @@ function ConditionCard({
           <>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end" }}>
               <div>
-                <label style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Min.</label>
+                <label htmlFor={`condition-${conditionId}-min`} style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Min.</label>
                 <div style={{ position: "relative" }}>
                   <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-sub)", fontSize: 13 }}>$</span>
                   <input
+                    id={`condition-${conditionId}-min`}
+                    aria-label="Minimum cart value"
                     className="b-input"
                     type="number"
                     style={{ paddingLeft: 22 }}
@@ -341,10 +352,12 @@ function ConditionCard({
                 </div>
               </div>
               <div>
-                <label style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Max.</label>
+                <label htmlFor={`condition-${conditionId}-max`} style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Max.</label>
                 <div style={{ position: "relative" }}>
                   <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-sub)", fontSize: 13 }}>$</span>
                   <input
+                    id={`condition-${conditionId}-max`}
+                    aria-label="Maximum cart value"
                     className="b-input"
                     type="number"
                     style={{ paddingLeft: 22 }}
@@ -371,12 +384,14 @@ function ConditionCard({
         {/* ── Cart value multiplier ──────────────────────────── */}
         {conditionType === "cart_value_multiplier" && (
           <>
-            <label style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
+            <label htmlFor={`condition-${conditionId}-multiplier`} style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
               Multiply base value
             </label>
             <div style={{ position: "relative", maxWidth: 200 }}>
               <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-sub)", fontSize: 13 }}>$</span>
               <input
+                id={`condition-${conditionId}-multiplier`}
+                aria-label="Multiply base value"
                 className="b-input"
                 type="number"
                 style={{ paddingLeft: 22 }}
@@ -404,8 +419,10 @@ function ConditionCard({
           <>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <div>
-                <label style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Min. quantity</label>
+                <label htmlFor={`condition-${conditionId}-min-quantity`} style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Min. quantity</label>
                 <input
+                  id={`condition-${conditionId}-min-quantity`}
+                  aria-label="Minimum quantity"
                   className="b-input"
                   type="number"
                   min="1"
@@ -415,8 +432,10 @@ function ConditionCard({
                 />
               </div>
               <div>
-                <label style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Max. quantity (optional)</label>
+                <label htmlFor={`condition-${conditionId}-max-quantity`} style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Max. quantity (optional)</label>
                 <input
+                  id={`condition-${conditionId}-max-quantity`}
+                  aria-label="Maximum quantity"
                   className="b-input"
                   type="number"
                   min="0"
@@ -437,10 +456,12 @@ function ConditionCard({
         {(conditionType === "specific_product" || conditionType === "pack_of_products") && (
           <>
             <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
+              <label htmlFor={`condition-${conditionId}-required-products`} style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
                 Required number of products
               </label>
               <input
+                id={`condition-${conditionId}-required-products`}
+                aria-label="Required number of products"
                 className="b-input"
                 type="number"
                 min="1"
@@ -455,6 +476,7 @@ function ConditionCard({
               <input
                 type="checkbox"
                 id={`multiplyGifts-${conditionId}`}
+                aria-label="Multiply gifts with number of products"
                 checked={Boolean(val.multiplyGifts)}
                 onChange={(e) => { const next = { ...val, multiplyGifts: e.target.checked }; setVal(next); save(next); }}
                 style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
@@ -473,6 +495,7 @@ function ConditionCard({
               <input
                 type="checkbox"
                 id={`giftsMatch-${conditionId}`}
+                aria-label="Gifts will be the same as selected products"
                 checked={Boolean(val.giftsMatchProducts)}
                 onChange={(e) => { const next = { ...val, giftsMatchProducts: e.target.checked }; setVal(next); save(next); }}
                 style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
@@ -489,6 +512,7 @@ function ConditionCard({
                     <input
                       type="radio"
                       id={`trackMode-${mode}-${conditionId}`}
+                      aria-label={mode === "variant" ? "Track by variant" : "Track by product"}
                       name={`trackMode-${conditionId}`}
                       checked={val.trackMode === mode}
                       onChange={() => { const next = { ...val, trackMode: mode }; setVal(next); save(next); }}
@@ -503,10 +527,12 @@ function ConditionCard({
             )}
 
             <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
+              <label htmlFor={`condition-${conditionId}-specific-applies-to`} style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
                 The condition applies to:
               </label>
               <select
+                id={`condition-${conditionId}-specific-applies-to`}
+                aria-label="The condition applies to"
                 className="b-select"
                 value="specific_products"
                 onChange={() => {}}
@@ -560,7 +586,7 @@ function SummaryItem({
         {done && details && details.length > 0 ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 4 }}>
             {details.map((d, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <div key={d} style={{ display: "flex", alignItems: "center", gap: 5 }}>
                 <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>
                   {i === 0 ? <IconLink /> : <IconCondition />}
                 </span>
@@ -584,7 +610,7 @@ function conditionSummary(conditionType: string, value: ConditionValue, currency
   const conditionCurrency = (v.currencyCode as string | undefined) ?? currencyCode;
   const fmt = (cents: number) => {
     try {
-      return new Intl.NumberFormat("en-US", { style: "currency", currency: conditionCurrency, maximumFractionDigits: 2 }).format(cents / 100);
+      return getConditionCurrencyFormatter(conditionCurrency).format(cents / 100);
     } catch {
       return `${conditionCurrency} ${(cents / 100).toFixed(2)}`;
     }
@@ -630,23 +656,47 @@ export default function OfferDetailPage() {
   const navigate = useNavigate();
   const fetcher = useFetcher();
 
-  const [internalName, setInternalName] = useState(offer.internalName);
-  const [publicTitle, setPublicTitle] = useState(offer.publicTitle ?? "");
-  const [startsAt, setStartsAt] = useState(offer.startsAt ? new Date(offer.startsAt).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16));
-  const [endsAt, setEndsAt] = useState(offer.endsAt ? new Date(offer.endsAt).toISOString().slice(0, 16) : "");
-
-  const [giftTab, setGiftTab] = useState<"product" | "shipping">("product");
   const firstReward = rewards[0] as typeof rewards[0] | undefined;
-  const [discountType, setDiscountType] = useState(firstReward?.discountType ?? "free");
-  const [discountValue, setDiscountValue] = useState(
-    String((firstReward?.value as { amount?: number } | null)?.amount ?? 100)
-  );
-  const [receivesAll, setReceivesAll] = useState(firstReward?.isAutoAdd !== false);
-  const [giftCount, setGiftCount] = useState(String(firstReward?.quantity ?? 1));
-
-  const [addingCondition, setAddingCondition] = useState(false);
-  const [newCondType, setNewCondType] = useState("");
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [detailState, setDetailField] = useObjectState(() => ({
+    internalName: offer.internalName,
+    publicTitle: offer.publicTitle ?? "",
+    startsAt: offer.startsAt ? new Date(offer.startsAt).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16),
+    endsAt: offer.endsAt ? new Date(offer.endsAt).toISOString().slice(0, 16) : "",
+    giftTab: "product" as "product" | "shipping",
+    discountType: firstReward?.discountType ?? "free",
+    discountValue: String((firstReward?.value as { amount?: number } | null)?.amount ?? 100),
+    receivesAll: firstReward?.isAutoAdd !== false,
+    giftCount: String(firstReward?.quantity ?? 1),
+    addingCondition: false,
+    newCondType: "",
+    advancedOpen: false,
+  }));
+  const {
+    internalName,
+    publicTitle,
+    startsAt,
+    endsAt,
+    giftTab,
+    discountType,
+    discountValue,
+    receivesAll,
+    giftCount,
+    addingCondition,
+    newCondType,
+    advancedOpen,
+  } = detailState;
+  const setInternalName = createFieldSetter(setDetailField, "internalName");
+  const setPublicTitle = createFieldSetter(setDetailField, "publicTitle");
+  const setStartsAt = createFieldSetter(setDetailField, "startsAt");
+  const setEndsAt = createFieldSetter(setDetailField, "endsAt");
+  const setGiftTab = createFieldSetter(setDetailField, "giftTab");
+  const setDiscountType = createFieldSetter(setDetailField, "discountType");
+  const setDiscountValue = createFieldSetter(setDetailField, "discountValue");
+  const setReceivesAll = createFieldSetter(setDetailField, "receivesAll");
+  const setGiftCount = createFieldSetter(setDetailField, "giftCount");
+  const setAddingCondition = createFieldSetter(setDetailField, "addingCondition");
+  const setNewCondType = createFieldSetter(setDetailField, "newCondType");
+  const setAdvancedOpen = createFieldSetter(setDetailField, "advancedOpen");
 
   const canPublish = offer.status === "draft" || offer.status === "paused";
   const hasName = Boolean(internalName.trim());
@@ -748,8 +798,10 @@ export default function OfferDetailPage() {
               </div>
               <div className="b-datetime-row">
                 <div>
-                  <label className="b-label">Start time</label>
+                  <label className="b-label" htmlFor="offer-start-time">Start time</label>
                   <input
+                    id="offer-start-time"
+                    aria-label="Start time"
                     className="b-input"
                     type="datetime-local"
                     value={startsAt}
@@ -758,8 +810,10 @@ export default function OfferDetailPage() {
                   />
                 </div>
                 <div>
-                  <label className="b-label">End time</label>
+                  <label className="b-label" htmlFor="offer-end-time">End time</label>
                   <input
+                    id="offer-end-time"
+                    aria-label="End time"
                     className="b-input"
                     type="datetime-local"
                     value={endsAt}
@@ -789,8 +843,10 @@ export default function OfferDetailPage() {
               {/* Add new condition form */}
               {addingCondition ? (
                 <div style={{ marginBottom: 12 }}>
-                  <label className="b-label">Condition type</label>
+                  <label className="b-label" htmlFor="new-condition-type">Condition type</label>
                   <select
+                    id="new-condition-type"
+                    aria-label="Condition type"
                     className="b-select"
                     value={newCondType}
                     onChange={(e) => setNewCondType(e.target.value)}
@@ -823,15 +879,7 @@ export default function OfferDetailPage() {
               ) : (
                 <button
                   type="button"
-                  className="b-btn-dark"
-                  style={{
-                    marginBottom: 10,
-                    opacity: mainConditions.length >= 2 ? 0.5 : 1,
-                    cursor: mainConditions.length >= 2 ? "not-allowed" : "pointer",
-                    display: "inline-flex", alignItems: "center", gap: 6,
-                    background: "#111827", color: "white", border: "none",
-                    padding: "8px 14px", borderRadius: "var(--r-sm)", fontSize: 14, fontWeight: 500,
-                  }}
+                  className="b-btn-dark rd-style-069" style={{ opacity: mainConditions.length >= 2 ? 0.5 : 1, cursor: mainConditions.length >= 2 ? "not-allowed" : "pointer" }}
                   onClick={() => mainConditions.length < 2 && setAddingCondition(true)}
                 >
                   <IconPlus /> Add main condition
@@ -876,7 +924,7 @@ export default function OfferDetailPage() {
                   <div className="b-discount-type-row">
                     <div>
                       <div className="b-discount-type-label">Type:</div>
-                      <select className="b-select" value={discountType} onChange={(e) => setDiscountType(e.target.value as typeof discountType)}>
+                      <select aria-label="Gift discount type" className="b-select" value={discountType} onChange={(e) => setDiscountType(e.target.value as typeof discountType)}>
                         <option value="free">Percentage</option>
                         <option value="percentage">Fixed amount</option>
                       </select>
@@ -886,6 +934,7 @@ export default function OfferDetailPage() {
                       <div style={{ position: "relative" }}>
                         <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-sub)", fontSize: 13, pointerEvents: "none" }}>%</span>
                         <input
+                          aria-label="Gift discount value"
                           className="b-input"
                           type="number"
                           value={discountValue}
@@ -903,6 +952,7 @@ export default function OfferDetailPage() {
                       <input
                         type="radio"
                         id="all-gifts"
+                        aria-label="Automatically all gifts"
                         name="receives"
                         checked={receivesAll}
                         onChange={() => setReceivesAll(true)}
@@ -916,6 +966,7 @@ export default function OfferDetailPage() {
                       <input
                         type="radio"
                         id="num-gifts"
+                        aria-label="Number of gifts the customer will receive"
                         name="receives"
                         checked={!receivesAll}
                         onChange={() => setReceivesAll(false)}
@@ -927,6 +978,7 @@ export default function OfferDetailPage() {
                         </label>
                         {!receivesAll && (
                           <input
+                            aria-label="Gift count"
                             className="b-input b-mt-2"
                             type="number"
                             value={giftCount}
@@ -955,7 +1007,7 @@ export default function OfferDetailPage() {
 
           {/* Advanced accordion ──────────────────────────── */}
           <div className="b-accordion">
-            <div className="b-accordion-header" onClick={() => setAdvancedOpen(!advancedOpen)}>
+            <button type="button" className="b-accordion-header" onClick={() => setAdvancedOpen(!advancedOpen)}>
               <span className="b-accordion-title">
                 <IconInfo />
                 Advanced settings (optional)
@@ -963,7 +1015,7 @@ export default function OfferDetailPage() {
               <span style={{ transform: advancedOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s", color: "var(--text-sub)", display: "flex" }}>
                 <IconChevronDown />
               </span>
-            </div>
+            </button>
             {advancedOpen && (
               <div className="b-accordion-body">
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1024,7 +1076,7 @@ export default function OfferDetailPage() {
             <div className="b-support-bot-icon" style={{ margin: "0 auto 10px" }}><IconBot /></div>
             <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 6px" }}>Need help creating offers?</p>
             <p style={{ fontSize: 13, color: "var(--text-sub)", margin: "0 0 14px" }}>Chat with us to get help</p>
-            <button className="b-btn b-btn-secondary b-w-full">Chat with us</button>
+            <button type="button" className="b-btn b-btn-secondary b-w-full">Chat with us</button>
           </div>
 
           {/* Summary card */}
@@ -1058,7 +1110,7 @@ export default function OfferDetailPage() {
 
           {/* Offer metadata */}
           <div className="b-card b-card-body">
-            <p style={{ fontSize: 11, fontWeight: 600, color: "var(--text-sub)", margin: "0 0 12px", textTransform: "uppercase", letterSpacing: "0.5px" }}>Offer info</p>
+            <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-sub)", margin: "0 0 12px", textTransform: "uppercase", letterSpacing: "0.5px" }}>Offer info</p>
             {[
               { label: "Status", value: <span className={`b-badge ${offer.status === "active" ? "b-badge-green" : "b-badge-gray"}`}>{offer.status}</span> },
               { label: "Type", value: offer.type },

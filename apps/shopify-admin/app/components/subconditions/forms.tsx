@@ -2,7 +2,7 @@
 // Each form receives `value` (external state) and `onChange` (persist callback).
 // The parent serializes their values via hidden inputs on form submit.
 
-import { useState, useEffect } from "react";
+import { useState, useId } from "react";
 import { ProductPicker } from "../ProductPicker.js";
 import type { SubconditionId } from "./types.js";
 
@@ -19,20 +19,57 @@ function getv(v: Record<string, unknown> | undefined, key: string, fallback: unk
   return v && key in v ? v[key] : fallback;
 }
 
+interface QuantityRule {
+  id: string;
+  qty: number;
+  scope: string;
+  operator: string;
+  productIds: string[];
+}
+
+function createQuantityRule(overrides: Partial<Omit<QuantityRule, "id">> = {}): QuantityRule {
+  return {
+    id: globalThis.crypto?.randomUUID?.() ?? `qty-rule-${Date.now()}-${Math.random()}`,
+    qty: 1,
+    scope: "specific_products",
+    operator: "at_least",
+    productIds: [],
+    ...overrides,
+  };
+}
+
+function normalizeQuantityRules(rawRules: unknown): QuantityRule[] {
+  if (!Array.isArray(rawRules) || rawRules.length === 0) return [createQuantityRule()];
+
+  return rawRules.map((rule) => {
+    const value = rule as Partial<QuantityRule>;
+    return createQuantityRule({
+      qty: typeof value.qty === "number" ? value.qty : 1,
+      scope: typeof value.scope === "string" ? value.scope : "specific_products",
+      operator: typeof value.operator === "string" ? value.operator : "at_least",
+      productIds: Array.isArray(value.productIds) ? value.productIds.filter((id): id is string => typeof id === "string") : [],
+    });
+  });
+}
+
+function serializeQuantityRules(rules: QuantityRule[]): Array<Omit<QuantityRule, "id">> {
+  return rules.map(({ id: _id, ...rule }) => rule);
+}
+
+const ORDER_HISTORY_LABELS = [
+  "Total gastado en el historial de pedidos",
+  "Total gastado en el último pedido",
+  "Número total de pedidos realizados",
+  "Limitar un número de usos por cliente",
+];
+
 // ─── Link ─────────────────────────────────────────────────────────────────────
 export function LinkForm({ value, onChange }: SubFormProps) {
-  const [dest, setDest] = useState(getv(value, "dest", "home") as string);
-  const [word, setWord] = useState(getv(value, "word", "") as string);
-
-  useEffect(() => {
-    if (value) {
-      setDest(getv(value, "dest", "home") as string);
-      setWord(getv(value, "word", "") as string);
-    }
-  }, [value]);
+  const idPrefix = useId();
+  const dest = getv(value, "dest", "home") as string;
+  const word = getv(value, "word", "") as string;
 
   function emit(d: string, w: string) {
-    setDest(d); setWord(w);
     onChange?.({ dest: d, word: w });
   }
 
@@ -42,8 +79,8 @@ export function LinkForm({ value, onChange }: SubFormProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <label className="b-label">Destino del enlace</label>
-        <select className="b-select" value={dest} onChange={(e) => emit(e.target.value, word)}>
+        <label className="b-label" htmlFor={`${idPrefix}-dest`}>Destino del enlace</label>
+        <select id={`${idPrefix}-dest`} aria-label="Destino del enlace" className="b-select" value={dest} onChange={(e) => emit(e.target.value, word)}>
           <option value="home">Home page</option>
           <option value="product">Product page</option>
           <option value="collection">Collection page</option>
@@ -52,32 +89,32 @@ export function LinkForm({ value, onChange }: SubFormProps) {
       </div>
 
       <div>
-        <label className="b-label">Entrar a palabras para personalizar</label>
-        <input className="b-input" value={word} onChange={(e) => emit(dest, e.target.value)}
+        <label className="b-label" htmlFor={`${idPrefix}-word`}>Entrar a palabras para personalizar</label>
+        <input id={`${idPrefix}-word`} aria-label="Entrar a palabras para personalizar" className="b-input" value={word} onChange={(e) => emit(dest, e.target.value)}
           placeholder="E.g. summers2024" autoComplete="off" />
       </div>
 
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-          <label className="b-label" style={{ margin: 0 }}>Enlace generado</label>
+          <label className="b-label" htmlFor={`${idPrefix}-generated`} style={{ margin: 0 }}>Enlace generado</label>
           <button type="button" onClick={() => void navigator.clipboard.writeText(generated)}
-            style={{ fontSize: 11, color: "var(--blue)", background: "none", border: "none", cursor: "pointer" }}>
+            style={{ fontSize: 12, color: "var(--blue)", background: "none", border: "none", cursor: "pointer" }}>
             Copiar link
           </button>
         </div>
-        <input className="b-input" readOnly value={generated}
+        <input id={`${idPrefix}-generated`} aria-label="Enlace generado" className="b-input" readOnly value={generated}
           style={{ background: "var(--bg)", color: "var(--text-sub)" }} />
       </div>
 
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-          <label className="b-label" style={{ margin: 0 }}>Parámetro</label>
+          <label className="b-label" htmlFor={`${idPrefix}-param`} style={{ margin: 0 }}>Parámetro</label>
           <button type="button" onClick={() => void navigator.clipboard.writeText(param)}
-            style={{ fontSize: 11, color: "var(--blue)", background: "none", border: "none", cursor: "pointer" }}>
+            style={{ fontSize: 12, color: "var(--blue)", background: "none", border: "none", cursor: "pointer" }}>
             Copiar parámetro
           </button>
         </div>
-        <input className="b-input" readOnly value={param}
+        <input id={`${idPrefix}-param`} aria-label="Parámetro" className="b-input" readOnly value={param}
           style={{ background: "var(--bg)", color: "var(--text-sub)" }} />
       </div>
     </div>
@@ -86,39 +123,25 @@ export function LinkForm({ value, onChange }: SubFormProps) {
 
 // ─── Order history ────────────────────────────────────────────────────────────
 export function OrderHistoryForm({ value, onChange }: SubFormProps) {
-  const [dateFrom, setDateFrom] = useState(getv(value, "dateFrom", "") as string);
-  const [checkboxes, setCheckboxes] = useState(getv(value, "checkboxes", []) as number[]);
-
-  useEffect(() => {
-    if (value) {
-      setDateFrom(getv(value, "dateFrom", "") as string);
-      setCheckboxes(getv(value, "checkboxes", []) as number[]);
-    }
-  }, [value]);
+  const idPrefix = useId();
+  const dateFrom = getv(value, "dateFrom", "") as string;
+  const checkboxes = getv(value, "checkboxes", []) as number[];
 
   function toggle(idx: number) {
     const next = checkboxes.includes(idx) ? checkboxes.filter((x) => x !== idx) : [...checkboxes, idx];
-    setCheckboxes(next);
     onChange?.({ dateFrom, checkboxes: next });
   }
-
-  const labels = [
-    "Total gastado en el historial de pedidos",
-    "Total gastado en el último pedido",
-    "Número total de pedidos realizados",
-    "Limitar un número de usos por cliente",
-  ];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <label className="b-label">Orden creada a partir de</label>
-        <input className="b-input" type="date" style={{ maxWidth: 200 }} value={dateFrom}
-          onChange={(e) => { setDateFrom(e.target.value); onChange?.({ dateFrom: e.target.value, checkboxes }); }} />
+        <label className="b-label" htmlFor={`${idPrefix}-date-from`}>Orden creada a partir de</label>
+        <input id={`${idPrefix}-date-from`} aria-label="Orden creada a partir de" className="b-input" type="date" style={{ maxWidth: 200 }} value={dateFrom}
+          onChange={(e) => onChange?.({ dateFrom: e.target.value, checkboxes })} />
       </div>
-      {labels.map((label, i) => (
-        <label key={i} className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-          <input type="checkbox" checked={checkboxes.includes(i)} onChange={() => toggle(i)}
+      {ORDER_HISTORY_LABELS.map((label, i) => (
+        <label key={label} className="b-checkbox-row" htmlFor={`${idPrefix}-history-${i}`} style={{ cursor: "pointer", gap: 10 }}>
+          <input id={`${idPrefix}-history-${i}`} aria-label={label} type="checkbox" checked={checkboxes.includes(i)} onChange={() => toggle(i)}
             style={{ accentColor: "var(--blue)", width: 14, height: 14, flexShrink: 0 }} />
           <span style={{ fontSize: 13, color: "var(--text)" }}>{label}</span>
         </label>
@@ -129,38 +152,30 @@ export function OrderHistoryForm({ value, onChange }: SubFormProps) {
 
 // ─── Customer tags ────────────────────────────────────────────────────────────
 export function CustomerTagsForm({ value, onChange }: SubFormProps) {
-  const [tags, setTags] = useState(getv(value, "tags", "") as string);
-  const [exclude, setExclude] = useState(getv(value, "exclude", false) as boolean);
-  const [guest, setGuest] = useState(getv(value, "guest", false) as boolean);
-
-  useEffect(() => {
-    if (value) {
-      setTags(getv(value, "tags", "") as string);
-      setExclude(getv(value, "exclude", false) as boolean);
-      setGuest(getv(value, "guest", false) as boolean);
-    }
-  }, [value]);
+  const idPrefix = useId();
+  const tags = getv(value, "tags", "") as string;
+  const exclude = getv(value, "exclude", false) as boolean;
+  const guest = getv(value, "guest", false) as boolean;
 
   function emit(patch: Partial<Record<string, unknown>>) {
     const next = { tags, exclude, guest, ...patch };
-    setTags(next.tags as string); setExclude(next.exclude as boolean); setGuest(next.guest as boolean);
     onChange?.(next);
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <label className="b-label">Seleccionar etiquetas</label>
-        <input className="b-input" placeholder="Seleccionar..." autoComplete="off" value={tags}
+        <label className="b-label" htmlFor={`${idPrefix}-tags`}>Seleccionar etiquetas</label>
+        <input id={`${idPrefix}-tags`} aria-label="Seleccionar etiquetas" className="b-input" placeholder="Seleccionar..." autoComplete="off" value={tags}
           onChange={(e) => emit({ tags: e.target.value })} />
       </div>
-      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-        <input type="checkbox" checked={exclude} onChange={(e) => emit({ exclude: e.target.checked })}
+      <label className="b-checkbox-row" htmlFor={`${idPrefix}-exclude`} style={{ cursor: "pointer", gap: 10 }}>
+        <input id={`${idPrefix}-exclude`} aria-label="Excluir clientes con estas etiquetas" type="checkbox" checked={exclude} onChange={(e) => emit({ exclude: e.target.checked })}
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
         <span style={{ fontSize: 13, color: "var(--text)" }}>Excluir clientes con estas etiquetas</span>
       </label>
-      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-        <input type="checkbox" checked={guest} onChange={(e) => emit({ guest: e.target.checked })}
+      <label className="b-checkbox-row" htmlFor={`${idPrefix}-guest`} style={{ cursor: "pointer", gap: 10 }}>
+        <input id={`${idPrefix}-guest`} aria-label="Considere no iniciar sesión como cliente sin etiquetas" type="checkbox" checked={guest} onChange={(e) => emit({ guest: e.target.checked })}
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
         <span style={{ fontSize: 13, color: "var(--text)" }}>Considere no iniciar sesión como cliente sin etiquetas</span>
       </label>
@@ -170,28 +185,22 @@ export function CustomerTagsForm({ value, onChange }: SubFormProps) {
 
 // ─── Location ─────────────────────────────────────────────────────────────────
 export function LocationForm({ value, onChange }: SubFormProps) {
-  const [countries, setCountries] = useState(getv(value, "countries", "") as string);
-
-  useEffect(() => {
-    if (value) setCountries(getv(value, "countries", "") as string);
-  }, [value]);
+  const idPrefix = useId();
+  const countries = getv(value, "countries", "") as string;
 
   return (
     <div>
-      <label className="b-label">Seleccionar países</label>
-      <input className="b-input" placeholder="Seleccionar países..." autoComplete="off" value={countries}
-        onChange={(e) => { setCountries(e.target.value); onChange?.({ countries: e.target.value }); }} />
+      <label className="b-label" htmlFor={`${idPrefix}-countries`}>Seleccionar países</label>
+      <input id={`${idPrefix}-countries`} aria-label="Seleccionar países" className="b-input" placeholder="Seleccionar países..." autoComplete="off" value={countries}
+        onChange={(e) => onChange?.({ countries: e.target.value })} />
     </div>
   );
 }
 
 // ─── Subscription ─────────────────────────────────────────────────────────────
 export function SubscriptionForm({ value, onChange }: SubFormProps) {
-  const [mode, setMode] = useState(getv(value, "mode", "subscription") as string);
-
-  useEffect(() => {
-    if (value) setMode(getv(value, "mode", "subscription") as string);
-  }, [value]);
+  const idPrefix = useId();
+  const mode = getv(value, "mode", "subscription") as string;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -200,10 +209,10 @@ export function SubscriptionForm({ value, onChange }: SubFormProps) {
         { value: "subscription", label: "Solo productos de suscripción" },
         { value: "one_time",     label: "Productos de compra única" },
       ].map((opt) => (
-        <label key={opt.value} className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-          <input type="radio" name="sub_subscription_mode" value={opt.value}
+        <label key={opt.value} className="b-checkbox-row" htmlFor={`${idPrefix}-${opt.value}`} style={{ cursor: "pointer", gap: 10 }}>
+          <input id={`${idPrefix}-${opt.value}`} aria-label={opt.label} type="radio" name="sub_subscription_mode" value={opt.value}
             checked={mode === opt.value}
-            onChange={() => { setMode(opt.value); onChange?.({ mode: opt.value }); }}
+            onChange={() => onChange?.({ mode: opt.value })}
             style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
           <span style={{ fontSize: 13, color: "var(--text)" }}>{opt.label}</span>
         </label>
@@ -214,38 +223,30 @@ export function SubscriptionForm({ value, onChange }: SubFormProps) {
 
 // ─── Sales channel ────────────────────────────────────────────────────────────
 export function SalesChannelForm({ value, onChange }: SubFormProps) {
-  const [online, setOnline] = useState(getv(value, "online", true) as boolean);
-  const [mobile, setMobile] = useState(getv(value, "mobile", false) as boolean);
-  const [pos, setPos]       = useState(getv(value, "pos", false) as boolean);
-
-  useEffect(() => {
-    if (value) {
-      setOnline(getv(value, "online", true) as boolean);
-      setMobile(getv(value, "mobile", false) as boolean);
-      setPos(getv(value, "pos", false) as boolean);
-    }
-  }, [value]);
+  const idPrefix = useId();
+  const online = getv(value, "online", true) as boolean;
+  const mobile = getv(value, "mobile", false) as boolean;
+  const pos = getv(value, "pos", false) as boolean;
 
   function emit(patch: Partial<Record<string, unknown>>) {
     const next = { online, mobile, pos, ...patch };
-    setOnline(next.online as boolean); setMobile(next.mobile as boolean); setPos(next.pos as boolean);
     onChange?.(next);
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-        <input type="checkbox" checked={online} onChange={(e) => emit({ online: e.target.checked })}
+      <label className="b-checkbox-row" htmlFor={`${idPrefix}-online`} style={{ cursor: "pointer", gap: 10 }}>
+        <input id={`${idPrefix}-online`} aria-label="Tienda en línea" type="checkbox" checked={online} onChange={(e) => emit({ online: e.target.checked })}
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
         <span style={{ fontSize: 13, color: "var(--text)" }}>Tienda en línea</span>
       </label>
-      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-        <input type="checkbox" checked={mobile} onChange={(e) => emit({ mobile: e.target.checked })}
+      <label className="b-checkbox-row" htmlFor={`${idPrefix}-mobile`} style={{ cursor: "pointer", gap: 10 }}>
+        <input id={`${idPrefix}-mobile`} aria-label="Canal de aplicaciones móvil" type="checkbox" checked={mobile} onChange={(e) => emit({ mobile: e.target.checked })}
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
         <span style={{ fontSize: 13, color: "var(--text)" }}>Canal de aplicaciones móvil</span>
       </label>
-      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-        <input type="checkbox" checked={pos} onChange={(e) => emit({ pos: e.target.checked })}
+      <label className="b-checkbox-row" htmlFor={`${idPrefix}-pos`} style={{ cursor: "pointer", gap: 10 }}>
+        <input id={`${idPrefix}-pos`} aria-label="Canal de punto de venta" type="checkbox" checked={pos} onChange={(e) => emit({ pos: e.target.checked })}
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
         <span style={{ fontSize: 13, color: "var(--text)" }}>Canal de punto de venta</span>
       </label>
@@ -260,15 +261,9 @@ export function SalesChannelForm({ value, onChange }: SubFormProps) {
 
 // ─── Markets ──────────────────────────────────────────────────────────────────
 export function MarketsForm({ value, onChange }: SubFormProps) {
-  const [marketIds, setMarketIds] = useState(getv(value, "marketIds", "") as string);
-  const [exclude, setExclude] = useState(getv(value, "exclude", false) as boolean);
-
-  useEffect(() => {
-    if (value) {
-      setMarketIds(getv(value, "marketIds", "") as string);
-      setExclude(getv(value, "exclude", false) as boolean);
-    }
-  }, [value]);
+  const idPrefix = useId();
+  const marketIds = getv(value, "marketIds", "") as string;
+  const exclude = getv(value, "exclude", false) as boolean;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -282,13 +277,13 @@ export function MarketsForm({ value, onChange }: SubFormProps) {
         </div>
       </div>
       <div>
-        <label className="b-label">Seleccionar mercados</label>
-        <input className="b-input" placeholder="Seleccionar..." autoComplete="off" value={marketIds}
-          onChange={(e) => { setMarketIds(e.target.value); onChange?.({ marketIds: e.target.value, exclude }); }} />
+        <label className="b-label" htmlFor={`${idPrefix}-markets`}>Seleccionar mercados</label>
+        <input id={`${idPrefix}-markets`} aria-label="Seleccionar mercados" className="b-input" placeholder="Seleccionar..." autoComplete="off" value={marketIds}
+          onChange={(e) => onChange?.({ marketIds: e.target.value, exclude })} />
       </div>
-      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-        <input type="checkbox" checked={exclude}
-          onChange={(e) => { setExclude(e.target.checked); onChange?.({ marketIds, exclude: e.target.checked }); }}
+      <label className="b-checkbox-row" htmlFor={`${idPrefix}-exclude-markets`} style={{ cursor: "pointer", gap: 10 }}>
+        <input id={`${idPrefix}-exclude-markets`} aria-label="Excluir clientes de mercados seleccionados" type="checkbox" checked={exclude}
+          onChange={(e) => onChange?.({ marketIds, exclude: e.target.checked })}
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
         <span style={{ fontSize: 13, color: "var(--text)" }}>Excluir clientes de mercados seleccionados</span>
       </label>
@@ -298,31 +293,25 @@ export function MarketsForm({ value, onChange }: SubFormProps) {
 
 // ─── Quantity limit ───────────────────────────────────────────────────────────
 export function QuantityLimitForm({ value, onChange }: SubFormProps) {
+  const idPrefix = useId();
   const [matchMode, setMatchMode] = useState<"all" | "any">(getv(value, "matchMode", "all") as "all" | "any");
-  const [rules, setRules] = useState<Array<{ qty: number; scope: string; operator: string; productIds: string[] }>>(
-    getv(value, "rules", [{ qty: 1, scope: "specific_products", operator: "at_least", productIds: [] }]) as Array<{ qty: number; scope: string; operator: string; productIds: string[] }>
+  const [rules, setRules] = useState<QuantityRule[]>(
+    () => normalizeQuantityRules(getv(value, "rules", undefined))
   );
   const [pickerIdx, setPickerIdx] = useState<number | null>(null);
 
-  useEffect(() => {
-    if (value) {
-      setMatchMode(getv(value, "matchMode", "all") as "all" | "any");
-      setRules(getv(value, "rules", [{ qty: 1, scope: "specific_products", operator: "at_least", productIds: [] }]) as Array<{ qty: number; scope: string; operator: string; productIds: string[] }>);
-    }
-  }, [value]);
-
   function emit(mm: "all" | "any", r: typeof rules) {
     setMatchMode(mm); setRules(r);
-    onChange?.({ matchMode: mm, rules: r });
+    onChange?.({ matchMode: mm, rules: serializeQuantityRules(r) });
   }
 
   function addRule() {
-    const next = [...rules, { qty: 1, scope: "specific_products", operator: "at_least", productIds: [] as string[] }];
+    const next = [...rules, createQuantityRule()];
     emit(matchMode, next);
   }
   function removeRule(i: number) {
     const next = rules.filter((_, idx) => idx !== i);
-    emit(matchMode, next.length > 0 ? next : [{ qty: 1, scope: "specific_products", operator: "at_least", productIds: [] }]);
+    emit(matchMode, next.length > 0 ? next : [createQuantityRule()]);
   }
 
   return (
@@ -331,8 +320,8 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
         <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Los clientes deben tener:</div>
         <div style={{ display: "flex", gap: 16 }}>
           {[{ v: "all", l: "Todas las reglas" }, { v: "any", l: "Cualquier regla" }].map((opt) => (
-            <label key={opt.v} className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-              <input type="radio" name="qty_match_mode" value={opt.v}
+            <label key={opt.v} className="b-checkbox-row" htmlFor={`${idPrefix}-match-${opt.v}`} style={{ cursor: "pointer", gap: 8 }}>
+              <input id={`${idPrefix}-match-${opt.v}`} aria-label={opt.l} type="radio" name="qty_match_mode" value={opt.v}
                 checked={matchMode === opt.v}
                 onChange={() => emit(opt.v as "all" | "any", rules)}
                 style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
@@ -343,10 +332,10 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
       </div>
 
       {rules.map((rule, i) => (
-        <div key={i} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div key={rule.id} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 13, color: "var(--text-sub)" }}>Comprar</span>
-            <select className="b-select" style={{ width: 120 }} value={rule.operator}
+            <select aria-label={`Operador de cantidad para regla ${i + 1}`} className="b-select" style={{ width: 120 }} value={rule.operator}
               onChange={(e) => {
                 const next = rules.map((x, idx) => idx === i ? { ...x, operator: e.target.value } : x);
                 emit(matchMode, next);
@@ -354,7 +343,7 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
               <option value="at_least">Al menos</option>
               <option value="exactly">Exactamente</option>
             </select>
-            <input className="b-input" type="number" min="1" value={rule.qty}
+            <input aria-label={`Cantidad para regla ${i + 1}`} className="b-input" type="number" min="1" value={rule.qty}
               onChange={(e) => {
                 const next = rules.map((x, idx) => idx === i ? { ...x, qty: parseInt(e.target.value) || 1 } : x);
                 emit(matchMode, next);
@@ -368,7 +357,7 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 13, color: "var(--text-sub)" }}>de</span>
-            <select className="b-select" value={rule.scope}
+            <select aria-label={`Alcance de producto para regla ${i + 1}`} className="b-select" value={rule.scope}
               onChange={(e) => {
                 const next = rules.map((x, idx) => idx === i ? { ...x, scope: e.target.value } : x);
                 emit(matchMode, next);
@@ -393,7 +382,7 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
       ))}
 
       <button type="button" onClick={addRule}
-        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--blue)", fontSize: 13, fontWeight: 500, textAlign: "left", padding: 0 }}>
+        className="rd-style-083">
         + Agregar regla
       </button>
 
@@ -414,17 +403,3 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
     </div>
   );
 }
-
-// ─── Registry: id → form component ───────────────────────────────────────────
-import type { ComponentType } from "react";
-
-export const SUB_FORMS: Record<SubconditionId, ComponentType<SubFormProps>> = {
-  link:           LinkForm,
-  order_history:  OrderHistoryForm,
-  customer_tags:  CustomerTagsForm,
-  location:       LocationForm,
-  subscription:   SubscriptionForm,
-  sales_channel:  SalesChannelForm,
-  markets:        MarketsForm,
-  quantity_limit: QuantityLimitForm,
-};

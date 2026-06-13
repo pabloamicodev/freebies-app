@@ -4,6 +4,33 @@ import { AccessibleModal } from "../AccessibleModal.js";
 
 export type OfferCreateModalType = "type" | "gift" | "bundle" | "upsell" | "discount";
 
+const GIFT_SLUG_MAP: Record<string, string> = {
+  buy_x_get_y: "bxgy",
+  bogo: "bogo",
+  buy_x_gift: "free-sample",
+  cart_value: "cart-value",
+  tiered: "tiered",
+  custom: "scratch",
+};
+
+const BUNDLE_SLUG_MAP: Record<string, string> = {
+  classic: "classic-bundle",
+  mix: "mix-match",
+  build_a_box: "bundle-page",
+};
+
+const UPSELL_SLUG_MAP: Record<string, string> = {
+  fbt: "fbt",
+  checkout: "checkout",
+  thank_you: "thank-you",
+};
+
+const DISCOUNT_SLUG_MAP: Record<string, string> = {
+  volume: "volume",
+  cheapest: "cheapest",
+  cart: "cart",
+};
+
 function GiftSvg() {
   return (
     <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -66,10 +93,10 @@ const GIFT_TEMPLATES = [
     desc: "e.g. Reward customers with a sample once they buy at least 1 product.",
     IllusComponent: () => (
       <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
-        <div style={{ background: "#3b82f6", color: "white", fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 10, position: "absolute", top: 8, right: 8 }}>1 item Added!</div>
-        <div style={{ width: 52, height: 52, borderRadius: "50%", background: "white", border: "1.5px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>🛒</div>
+        <div className="rd-style-035">1 item Added!</div>
+        <div className="rd-style-036">🛒</div>
         <span style={{ color: "#6d7175", fontSize: 18 }}>→</span>
-        <div style={{ width: 52, height: 52, borderRadius: "50%", background: "white", border: "1.5px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>🧴</div>
+        <div className="rd-style-036">🧴</div>
       </div>
     ),
   },
@@ -80,15 +107,15 @@ const GIFT_TEMPLATES = [
     IllusComponent: () => (
       <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
         <div style={{ display: "flex", justifyContent: "space-around", width: "100%", position: "absolute", top: 10 }}>
-          <span style={{ fontSize: 10, fontWeight: 700, color: "#6d7175" }}>Buy One</span>
-          <span style={{ fontSize: 10, fontWeight: 700, color: "#6d7175" }}>Get One</span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: "#6d7175" }}>Buy One</span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: "#6d7175" }}>Get One</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
-          <div style={{ width: 48, height: 48, borderRadius: "50%", background: "#f3f4f6", border: "1.5px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>👕</div>
+          <div className="rd-style-037">👕</div>
           <div style={{ width: 8, height: 1, background: "#e5e7eb" }} />
-          <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: 12, fontWeight: 700 }}>+</div>
+          <div className="rd-style-038">+</div>
           <div style={{ width: 8, height: 1, background: "#e5e7eb" }} />
-          <div style={{ width: 48, height: 48, borderRadius: "50%", background: "#fff3e0", border: "1.5px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>👕</div>
+          <div className="rd-style-039">👕</div>
         </div>
       </div>
     ),
@@ -100,16 +127,16 @@ const GIFT_TEMPLATES = [
     IllusComponent: () => (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, width: "100%", height: "100%" }}>
         <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 9, fontWeight: 700, color: "#6d7175", marginBottom: 4 }}>Buy X</div>
-          <div style={{ width: 48, height: 48, borderRadius: "50%", background: "#f3f4f6", border: "1.5px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>👕</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#6d7175", marginBottom: 4 }}>Buy X</div>
+          <div className="rd-style-037">👕</div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-          <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: 12, fontWeight: 700 }}>+</div>
+          <div className="rd-style-038">+</div>
           <div style={{ width: 20, height: 1, background: "#e5e7eb" }} />
         </div>
         <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 9, fontWeight: 700, color: "#6d7175", marginBottom: 4 }}>Get Y</div>
-          <div style={{ width: 48, height: 48, borderRadius: "50%", background: "#fff3e0", border: "1.5px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🧢</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#6d7175", marginBottom: 4 }}>Get Y</div>
+          <div className="rd-style-039">🧢</div>
         </div>
       </div>
     ),
@@ -122,7 +149,7 @@ const GIFT_TEMPLATES = [
       <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "0 8px", width: "100%" }}>
         {[{ amt: "$500", done: true }, { amt: "$1000", done: true }, { amt: "$1500", done: false }].map((tier) => (
           <div key={tier.amt} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 10px", background: "white", borderRadius: 6, border: "1px solid #e5e7eb" }}>
-            <div style={{ width: 14, height: 14, borderRadius: "50%", background: tier.done ? "#008060" : "#e5e7eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, color: "white", fontWeight: 700, flexShrink: 0 }}>
+            <div className="rd-style-040" style={{ background: tier.done ? "#008060" : "#e5e7eb" }}>
               {tier.done ? "✓" : ""}
             </div>
             <span style={{ fontSize: 12, fontWeight: 600, color: tier.done ? "#202223" : "#babec3", flex: 1 }}>SPEND {tier.amt}</span>
@@ -143,7 +170,7 @@ const GIFT_TEMPLATES = [
           { label: "Discount type", value: "Percent  Amount" },
           { label: "Amount", value: "% 30" },
         ].map((row) => (
-          <div key={row.label} style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 10px", fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div key={row.label} className="rd-style-041">
             <span style={{ color: "#6d7175" }}>{row.label}</span>
             <span style={{ color: "#202223", fontWeight: 500 }}>{row.icons ?? row.value}</span>
           </div>
@@ -220,7 +247,7 @@ function Modal1TypeSelector({
             <h2 className="b-modal-title">Create a new offer</h2>
             <p className="b-modal-subtitle">Choose the promotion type that fits your strategy</p>
           </div>
-          <button className="b-modal-close" onClick={onClose} aria-label="Close">
+          <button type="button" className="b-modal-close" onClick={onClose} aria-label="Close">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
             </svg>
@@ -238,16 +265,7 @@ function Modal1TypeSelector({
                   onClick={() => onSelect(type.value)}
                   onMouseEnter={() => setHoveredType(type.value)}
                   onMouseLeave={() => setHoveredType(null)}
-                  style={{
-                    background: "var(--bg-card)",
-                    border: `2px solid ${isHovered ? `var(--${type.value}-color)` : "var(--border)"}`,
-                    borderRadius: 14, padding: 0, cursor: "pointer", textAlign: "left",
-                    overflow: "hidden", fontFamily: "inherit",
-                    display: "flex", flexDirection: "column",
-                    transition: "border-color 0.18s, box-shadow 0.22s cubic-bezier(0.34,1.56,0.64,1), transform 0.22s cubic-bezier(0.34,1.56,0.64,1)",
-                    transform: isHovered ? "translateY(-3px)" : "translateY(0)",
-                    boxShadow: isHovered ? "0 8px 24px rgba(28,25,23,0.14), 0 2px 6px rgba(28,25,23,0.08)" : "0 1px 3px rgba(28,25,23,0.06)",
-                  }}
+                  className="rd-style-042" style={{ border: `2px solid ${isHovered ? `var(--${type.value}-color)` : "var(--border)"}`, transform: isHovered ? "translateY(-3px)" : "translateY(0)", boxShadow: isHovered ? "0 8px 24px rgba(28,25,23,0.14), 0 2px 6px rgba(28,25,23,0.08)" : "0 1px 3px rgba(28,25,23,0.06)" }}
                 >
                   {/* Gradient illustration band */}
                   <div style={{
@@ -256,14 +274,9 @@ function Modal1TypeSelector({
                     display: "flex", alignItems: "center", justifyContent: "center",
                     position: "relative", overflow: "hidden",
                   }}>
-                    <div style={{ position: "absolute", right: -16, bottom: -16, width: 72, height: 72, borderRadius: "50%", background: "rgba(255,255,255,0.10)", pointerEvents: "none" }} />
-                    <div style={{ position: "absolute", right: 16, top: 10, width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.07)", pointerEvents: "none" }} />
-                    <div style={{
-                      width: 50, height: 50, borderRadius: 13, position: "relative", zIndex: 1,
-                      background: "rgba(255,255,255,0.22)", border: "1.5px solid rgba(255,255,255,0.35)",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      boxShadow: "0 4px 12px rgba(0,0,0,0.12)",
-                    }}>
+                    <div className="rd-style-043" />
+                    <div className="rd-style-044" />
+                    <div className="rd-style-045">
                       <type.Icon />
                     </div>
                   </div>
@@ -280,7 +293,7 @@ function Modal1TypeSelector({
                       {type.examples.map((ex) => (
                         <div key={ex} style={{ display: "flex", alignItems: "flex-start", gap: 5 }}>
                           <div style={{ width: 4, height: 4, borderRadius: "50%", flexShrink: 0, background: `var(--${type.value}-color)`, marginTop: 6 }} />
-                          <span style={{ fontSize: 11.5, color: "var(--text-muted)", lineHeight: 1.5 }}>{ex}</span>
+                          <span style={{ fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.5 }}>{ex}</span>
                         </div>
                       ))}
                     </div>
@@ -318,7 +331,7 @@ function Modal2GiftWizard({
     <AccessibleModal ariaLabel="Create gift offer" onClose={onClose}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Create gift offer</h2>
-          <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+          <button type="button" className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div className="b-modal-body">
           {/* Scratch option */}
@@ -361,12 +374,11 @@ function Modal2GiftWizard({
 
         </div>
         <div className="b-modal-footer">
-          <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
-          <button
+          <button type="button" className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
+          <button type="button"
             className="b-btn b-btn-dark"
             onClick={() => {
-              const SLUG: Record<string, string> = { buy_x_get_y: "bxgy", bogo: "bogo", buy_x_gift: "free-sample", cart_value: "cart-value", tiered: "tiered", custom: "scratch" };
-              void navigate(`/app/offers/new/gift/${SLUG[selected ?? "scratch"] ?? selected ?? "scratch"}`);
+              void navigate(`/app/offers/new/gift/${GIFT_SLUG_MAP[selected ?? "scratch"] ?? selected ?? "scratch"}`);
               onClose();
             }}
           >
@@ -386,7 +398,7 @@ const BUNDLE_TEMPLATES = [
     name: "Classic bundle",
     desc: "e.g. Buy a bundle of A and B with discount.",
     IllusComponent: () => (
-      <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", width: "90%", fontSize: 11 }}>
+      <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", width: "90%", fontSize: 12 }}>
         <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8, color: "#202223" }}>Save more with this bundle</div>
         {[
           { name: "Radiant Glow Serum", qty: "x2", price: "$105.00", orig: "$150.00" },
@@ -394,23 +406,23 @@ const BUNDLE_TEMPLATES = [
         ].map((item) => (
           <div key={item.name} style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
             <div>
-              <div style={{ fontSize: 11, color: "#202223" }}>{item.name}</div>
-              <div style={{ fontSize: 10, color: "#6d7175" }}>{item.qty}</div>
+              <div style={{ fontSize: 12, color: "#202223" }}>{item.name}</div>
+              <div style={{ fontSize: 12, color: "#6d7175" }}>{item.qty}</div>
             </div>
             <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#2c6ecb" }}>{item.price}</div>
-              <div style={{ fontSize: 10, color: "#babec3", textDecoration: "line-through" }}>{item.orig}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#2c6ecb" }}>{item.price}</div>
+              <div style={{ fontSize: 12, color: "#babec3", textDecoration: "line-through" }}>{item.orig}</div>
             </div>
           </div>
         ))}
         <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid #f3f4f6", paddingTop: 6, marginBottom: 8 }}>
-          <span style={{ fontSize: 10, color: "#6d7175" }}>Total bundle price</span>
+          <span style={{ fontSize: 12, color: "#6d7175" }}>Total bundle price</span>
           <div>
-            <span style={{ fontSize: 11, fontWeight: 600, color: "#202223" }}>$120.00 </span>
-            <span style={{ fontSize: 10, color: "#babec3", textDecoration: "line-through" }}>$170.00</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#202223" }}>$120.00 </span>
+            <span style={{ fontSize: 12, color: "#babec3", textDecoration: "line-through" }}>$170.00</span>
           </div>
         </div>
-        <div style={{ background: "#2c6ecb", color: "white", textAlign: "center", padding: "5px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>ADD BUNDLE TO CART</div>
+        <div style={{ background: "#2c6ecb", color: "white", textAlign: "center", padding: "5px", borderRadius: 4, fontSize: 12, fontWeight: 700 }}>ADD BUNDLE TO CART</div>
       </div>
     ),
   },
@@ -419,7 +431,7 @@ const BUNDLE_TEMPLATES = [
     name: "Mix and match",
     desc: "Mix your favorite items from a list to create a perfect combination",
     IllusComponent: () => (
-      <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", width: "90%", fontSize: 11 }}>
+      <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", width: "90%", fontSize: 12 }}>
         <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8, color: "#202223" }}>Mix your own bundle</div>
         {[
           { name: "Radiant Glow Serum", price: "$105.00", checked: false },
@@ -433,11 +445,11 @@ const BUNDLE_TEMPLATES = [
                 width: 14, height: 14, borderRadius: 2, border: "1.5px solid #e5e7eb", flexShrink: 0,
                 background: item.checked ? "#2c6ecb" : "white",
               }} />
-              <span style={{ fontSize: 10, color: "#202223" }}>{item.name}</span>
+              <span style={{ fontSize: 12, color: "#202223" }}>{item.name}</span>
             </div>
             {item.change
-              ? <span style={{ fontSize: 9, color: "#2c6ecb", border: "1px solid #2c6ecb", padding: "1px 4px", borderRadius: 3 }}>CHANGE</span>
-              : <span style={{ fontSize: 10, fontWeight: 600, color: "#202223" }}>{item.price}</span>}
+              ? <span style={{ fontSize: 12, color: "#2c6ecb", border: "1px solid #2c6ecb", padding: "1px 4px", borderRadius: 3 }}>CHANGE</span>
+              : <span style={{ fontSize: 12, fontWeight: 600, color: "#202223" }}>{item.price}</span>}
           </div>
         ))}
       </div>
@@ -451,9 +463,9 @@ const BUNDLE_TEMPLATES = [
     IllusComponent: () => (
       <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", width: "90%", position: "relative" }}>
         <div style={{ position: "absolute", top: -8, right: 8 }}>
-          <span style={{ background: "#fbbf24", color: "#78350f", fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 10 }}>+ Shopify Plus only</span>
+          <span style={{ background: "#fbbf24", color: "#78350f", fontSize: 12, fontWeight: 700, padding: "2px 6px", borderRadius: 10 }}>+ Shopify Plus only</span>
         </div>
-        <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 8, color: "#202223" }}>Select items for your own bundle</div>
+        <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 8, color: "#202223" }}>Select items for your own bundle</div>
         <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
           {["#2c6ecb", "#e5e7eb", "#e5e7eb"].map((c, i) => (
             <div key={i} style={{ flex: 1, height: 4, background: c, borderRadius: 2 }} />
@@ -473,12 +485,11 @@ const BUNDLE_TEMPLATES = [
 function Modal2BundleWizard({ onClose, onBack }: { onClose: () => void; onBack: () => void }) {
   const [selected, setSelected] = useState<string>("classic");
   const navigate = useNavigate();
-  const BUNDLE_SLUG_MAP: Record<string, string> = { classic: "classic-bundle", mix: "mix-match", build_a_box: "bundle-page" };
   return (
     <AccessibleModal ariaLabel="Choose the type of bundle" onClose={onClose}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Choose the type of bundle</h2>
-          <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+          <button type="button" className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div className="b-modal-body">
           <div className="b-template-grid">
@@ -506,8 +517,8 @@ function Modal2BundleWizard({ onClose, onBack }: { onClose: () => void; onBack: 
           </div>
         </div>
         <div className="b-modal-footer">
-          <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
-          <button className="b-btn b-btn-dark" onClick={() => { void navigate(`/app/offers/new/bundle/${BUNDLE_SLUG_MAP[selected] ?? selected}`); onClose(); }}>Create bundle</button>
+          <button type="button" className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
+          <button type="button" className="b-btn b-btn-dark" onClick={() => { void navigate(`/app/offers/new/bundle/${BUNDLE_SLUG_MAP[selected] ?? selected}`); onClose(); }}>Create bundle</button>
         </div>
     </AccessibleModal>
   );
@@ -524,7 +535,7 @@ const UPSELL_TEMPLATES = [
     shopifyPlus: true,
     IllusComponent: () => (
       <div style={{ width: "90%", background: "white", border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden", position: "relative" }}>
-        <div style={{ position: "absolute", top: 0, right: 0, background: "#fbbf24", fontSize: 8, fontWeight: 700, padding: "2px 6px", color: "#78350f" }}>+ Shopify Plus</div>
+        <div className="rd-style-046">+ Shopify Plus</div>
         <div style={{ background: "#f3f4f6", padding: "8px 10px" }}>
           <div style={{ height: 6, background: "#e5e7eb", borderRadius: 3, marginBottom: 4, width: "60%" }} />
           <div style={{ height: 4, background: "#e5e7eb", borderRadius: 2, width: "40%" }} />
@@ -532,13 +543,13 @@ const UPSELL_TEMPLATES = [
         <div style={{ padding: "8px 10px", display: "flex", gap: 8, alignItems: "center" }}>
           <div style={{ width: 32, height: 32, background: "#f3f4f6", borderRadius: 4, flexShrink: 0 }} />
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 10, fontWeight: 600, color: "#202223", marginBottom: 2 }}>Radiant Glow Serum</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#202223", marginBottom: 2 }}>Radiant Glow Serum</div>
             <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-              <span style={{ fontSize: 10, color: "#2c6ecb", fontWeight: 700 }}>$5.99</span>
-              <span style={{ fontSize: 9, textDecoration: "line-through", color: "#babec3" }}>$9.99</span>
+              <span style={{ fontSize: 12, color: "#2c6ecb", fontWeight: 700 }}>$5.99</span>
+              <span style={{ fontSize: 12, textDecoration: "line-through", color: "#babec3" }}>$9.99</span>
             </div>
           </div>
-          <div style={{ background: "#2c6ecb", color: "white", fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4 }}>ADD</div>
+          <div style={{ background: "#2c6ecb", color: "white", fontSize: 12, fontWeight: 700, padding: "3px 8px", borderRadius: 4 }}>ADD</div>
         </div>
         <div style={{ padding: "4px 10px 8px" }}>
           {[1, 2, 3].map((i) => <div key={i} style={{ height: 4, background: "#f3f4f6", borderRadius: 2, marginBottom: 4 }} />)}
@@ -552,15 +563,15 @@ const UPSELL_TEMPLATES = [
     desc: "Sell more to your customers with complementary or related products",
     IllusComponent: () => (
       <div style={{ width: "90%", background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: "#202223", marginBottom: 8 }}>Frequently bought together</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#202223", marginBottom: 8 }}>Frequently bought together</div>
         <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
           {["🧴", "💄", "🧴"].map((emoji, i) => (
             <span key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <div style={{ width: 28, height: 28, background: "#f3f4f6", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>{emoji}</div>
+              <div className="rd-style-047">{emoji}</div>
               {i < 2 && <span style={{ color: "#6d7175", fontSize: 12 }}>+</span>}
             </span>
           ))}
-          <div style={{ background: "#2c6ecb", color: "white", fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, marginLeft: 4 }}>ADD</div>
+          <div style={{ background: "#2c6ecb", color: "white", fontSize: 12, fontWeight: 700, padding: "3px 8px", borderRadius: 4, marginLeft: 4 }}>ADD</div>
         </div>
         {[1, 2, 3].map((i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
@@ -578,21 +589,21 @@ const UPSELL_TEMPLATES = [
     IllusComponent: () => (
       <div style={{ width: "90%", background: "white", border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden" }}>
         <div style={{ background: "#f3f4f6", padding: "6px 10px", display: "flex", alignItems: "center", gap: 6 }}>
-          <div style={{ width: 14, height: 14, borderRadius: "50%", border: "1.5px solid #008060", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, color: "#008060" }}>✓</div>
-          <span style={{ fontSize: 10, fontWeight: 600, color: "#202223" }}>Thank you</span>
+          <div className="rd-style-048">✓</div>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#202223" }}>Thank you</span>
         </div>
         <div style={{ padding: "8px 10px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <div>
             {[1, 2, 3].map((i) => <div key={i} style={{ height: 4, background: "#f3f4f6", borderRadius: 2, marginBottom: 4 }} />)}
             <div style={{ height: 20, background: "#f3f4f6", borderRadius: 4, marginTop: 4, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <span style={{ fontSize: 8, color: "#6d7175" }}>📍</span>
+              <span style={{ fontSize: 12, color: "#6d7175" }}>📍</span>
             </div>
           </div>
           <div>
-            <div style={{ width: "100%", height: 40, background: "#f3f4f6", borderRadius: 4, marginBottom: 4, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12 }}>🧴</div>
-            <div style={{ fontSize: 9, fontWeight: 600, color: "#202223", marginBottom: 2 }}>Radiant Glow Serum</div>
-            <div style={{ fontSize: 9, color: "#2c6ecb", fontWeight: 600, marginBottom: 4 }}>$5.99 <span style={{ color: "#babec3", textDecoration: "line-through" }}>$9.99</span></div>
-            <div style={{ background: "#2c6ecb", color: "white", fontSize: 8, textAlign: "center", padding: "2px", borderRadius: 3 }}>ADD</div>
+            <div className="rd-style-049">🧴</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#202223", marginBottom: 2 }}>Radiant Glow Serum</div>
+            <div style={{ fontSize: 12, color: "#2c6ecb", fontWeight: 600, marginBottom: 4 }}>$5.99 <span style={{ color: "#babec3", textDecoration: "line-through" }}>$9.99</span></div>
+            <div style={{ background: "#2c6ecb", color: "white", fontSize: 12, textAlign: "center", padding: "2px", borderRadius: 3 }}>ADD</div>
           </div>
         </div>
       </div>
@@ -603,12 +614,11 @@ const UPSELL_TEMPLATES = [
 function Modal2UpsellWizard({ onClose, onBack }: { onClose: () => void; onBack: () => void }) {
   const [selected, setSelected] = useState<string>("fbt");
   const navigate = useNavigate();
-  const UPSELL_SLUG_MAP: Record<string, string> = { fbt: "fbt", checkout: "checkout", thank_you: "thank-you" };
   return (
     <AccessibleModal ariaLabel="Choose the type of offer" onClose={onClose}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Choose the type of offer</h2>
-          <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+          <button type="button" className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div className="b-modal-body">
           <div className="b-template-grid">
@@ -636,8 +646,8 @@ function Modal2UpsellWizard({ onClose, onBack }: { onClose: () => void; onBack: 
           </div>
         </div>
         <div className="b-modal-footer">
-          <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
-          <button className="b-btn b-btn-dark" onClick={() => { void navigate(`/app/offers/new/upsell/${UPSELL_SLUG_MAP[selected] ?? selected}`); onClose(); }}>Create upsell</button>
+          <button type="button" className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
+          <button type="button" className="b-btn b-btn-dark" onClick={() => { void navigate(`/app/offers/new/upsell/${UPSELL_SLUG_MAP[selected] ?? selected}`); onClose(); }}>Create upsell</button>
         </div>
     </AccessibleModal>
   );
@@ -652,7 +662,7 @@ const DISCOUNT_TEMPLATES = [
     name: "Volume discount",
     desc: "e.g. Buy 2 with 10% off, buy 3 with 30% off.",
     IllusComponent: () => (
-      <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", width: "90%", fontSize: 11 }}>
+      <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", width: "90%", fontSize: 12 }}>
         <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8, color: "#202223" }}>Buy more get more</div>
         {[
           { qty: "1 Item", price: "$20.00", badge: null, selected: false },
@@ -661,11 +671,11 @@ const DISCOUNT_TEMPLATES = [
         ].map((row) => (
           <div key={row.qty} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: "1px solid #f3f4f6" }}>
             <div style={{ width: 10, height: 10, borderRadius: "50%", border: "1.5px solid #babec3", background: row.selected ? "#2c6ecb" : "white", flexShrink: 0 }} />
-            <span style={{ flex: 1, fontSize: 11, color: "#202223" }}>{row.qty}</span>
-            {row.badge && <span style={{ background: "#fbbf24", color: "#78350f", fontSize: 8, fontWeight: 700, padding: "1px 4px", borderRadius: 3 }}>{row.badge}</span>}
+            <span style={{ flex: 1, fontSize: 12, color: "#202223" }}>{row.qty}</span>
+            {row.badge && <span style={{ background: "#fbbf24", color: "#78350f", fontSize: 12, fontWeight: 700, padding: "1px 4px", borderRadius: 3 }}>{row.badge}</span>}
             <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: row.selected ? "#2c6ecb" : "#202223" }}>{row.price}</div>
-              {row.orig && <div style={{ fontSize: 9, textDecoration: "line-through", color: "#babec3" }}>{row.orig}</div>}
+              <div style={{ fontSize: 12, fontWeight: 600, color: row.selected ? "#2c6ecb" : "#202223" }}>{row.price}</div>
+              {row.orig && <div style={{ fontSize: 12, textDecoration: "line-through", color: "#babec3" }}>{row.orig}</div>}
             </div>
           </div>
         ))}
@@ -677,7 +687,7 @@ const DISCOUNT_TEMPLATES = [
     name: "Cheapest/most expensive item discount",
     desc: "e.g. Buy 3 get 1 cheapest item free",
     IllusComponent: () => (
-      <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", width: "90%", fontSize: 11 }}>
+      <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", width: "90%", fontSize: 12 }}>
         <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8, color: "#202223" }}>Buy 3 get cheapest free</div>
         {[true, false, false].map((checked, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
@@ -687,7 +697,7 @@ const DISCOUNT_TEMPLATES = [
         ))}
         <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
           {["🧴", "💄", "🧴"].map((emoji, i) => (
-            <div key={i} style={{ flex: 1, background: "#f3f4f6", borderRadius: 4, padding: "4px", display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+            <div key={i} className="rd-style-050">
               <span style={{ fontSize: 14 }}>{emoji}</span>
               <div style={{ width: "100%", height: 12, background: "#2c6ecb", borderRadius: 2 }} />
             </div>
@@ -714,22 +724,16 @@ const DISCOUNT_TEMPLATES = [
             border: `1.5px solid ${tier.active ? "#2c6ecb" : "#e5e7eb"}`,
             borderRadius: 6,
           }}>
-            <div style={{
-              width: 14, height: 14, borderRadius: "50%",
-              border: "1.5px solid #babec3",
-              background: tier.loading ? "transparent" : tier.active ? "#2c6ecb" : "white",
-              flexShrink: 0,
-              display: "flex", alignItems: "center", justifyContent: "center",
-            }}>
+            <div className="rd-style-051" style={{ background: tier.loading ? "transparent" : tier.active ? "#2c6ecb" : "white" }}>
               {tier.loading && <div style={{ width: 10, height: 10, borderRadius: "50%", border: "2px solid #babec3", borderTopColor: "#2c6ecb" }} />}
             </div>
-            <span style={{ fontSize: 10, fontWeight: tier.active ? 700 : 400, color: tier.active ? "#2c6ecb" : tier.loading ? "#babec3" : "#6d7175" }}>{tier.label}</span>
+            <span style={{ fontSize: 12, fontWeight: tier.active ? 700 : 400, color: tier.active ? "#2c6ecb" : tier.loading ? "#babec3" : "#6d7175" }}>{tier.label}</span>
           </div>
         ))}
         <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 6, padding: "6px 10px", display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 24, height: 24, background: "#f3f4f6", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12 }}>🛒</div>
+          <div className="rd-style-052">🛒</div>
           <div>
-            <div style={{ fontSize: 9, fontWeight: 600, color: "#6d7175", letterSpacing: "0.5px" }}>CART VALUE</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#6d7175", letterSpacing: "0.5px" }}>CART VALUE</div>
             <div style={{ fontSize: 12, fontWeight: 700, color: "#202223" }}>$ 514.99</div>
           </div>
         </div>
@@ -741,12 +745,11 @@ const DISCOUNT_TEMPLATES = [
 function Modal2DiscountWizard({ onClose, onBack }: { onClose: () => void; onBack: () => void }) {
   const [selected, setSelected] = useState<string>("volume");
   const navigate = useNavigate();
-  const DISCOUNT_SLUG_MAP: Record<string, string> = { volume: "volume", cheapest: "cheapest", cart: "cart" };
   return (
     <AccessibleModal ariaLabel="Create discount offer" onClose={onClose}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Create discount offer</h2>
-          <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+          <button type="button" className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div className="b-modal-body">
           <div className="b-template-grid">
@@ -771,8 +774,8 @@ function Modal2DiscountWizard({ onClose, onBack }: { onClose: () => void; onBack
           </div>
         </div>
         <div className="b-modal-footer">
-          <button className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
-          <button className="b-btn b-btn-dark" onClick={() => { void navigate(`/app/offers/new/discount/${DISCOUNT_SLUG_MAP[selected] ?? selected}`); onClose(); }}>Create discount</button>
+          <button type="button" className="b-btn b-btn-secondary" onClick={onBack}>Back</button>
+          <button type="button" className="b-btn b-btn-dark" onClick={() => { void navigate(`/app/offers/new/discount/${DISCOUNT_SLUG_MAP[selected] ?? selected}`); onClose(); }}>Create discount</button>
         </div>
     </AccessibleModal>
   );

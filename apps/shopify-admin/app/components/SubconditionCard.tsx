@@ -46,12 +46,7 @@ export function SubconditionCard({ def, onRemove, children }: SubconditionCardPr
           <button
             type="button"
             onClick={onRemove}
-            style={{
-              background: "#ff4d4d", border: "none", borderRadius: "50%",
-              width: 20, height: 20, cursor: "pointer", color: "white",
-              fontWeight: 700, fontSize: 14, display: "flex",
-              alignItems: "center", justifyContent: "center", lineHeight: 1,
-            }}
+            className="rd-style-009"
           >
             ×
           </button>

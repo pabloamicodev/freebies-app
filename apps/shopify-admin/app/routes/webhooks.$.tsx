@@ -165,8 +165,8 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
 
   // Sync variants
   if (product.variants) {
-    for (const variant of product.variants) {
-      await db
+    await Promise.all(product.variants.map((variant) =>
+      db
         .insert(variantCache)
         .values({
           shopId,
@@ -198,8 +198,8 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
             raw: variant as unknown,
             syncedAt: new Date(),
           },
-        });
-    }
+        })
+    ));
   }
 }
 

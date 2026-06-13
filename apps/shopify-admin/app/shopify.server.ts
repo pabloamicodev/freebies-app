@@ -3,6 +3,9 @@ import "@shopify/shopify-app-react-router/adapters/node";
 import { shopifyApp } from "@shopify/shopify-app-react-router/server";
 import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";
 import { ApiVersion } from "@shopify/shopify-api";
+import { getDb, shops } from "@promo/db";
+import { eq } from "drizzle-orm";
+import { encryptToken } from "./lib/token-crypto.server.js";
 
 // Strip channel_binding param — Node.js pg library doesn't support it
 const rawDbUrl = new URL(
@@ -12,7 +15,7 @@ rawDbUrl.searchParams.delete("channel_binding");
 
 const sessionStorage = new PostgreSQLSessionStorage(rawDbUrl);
 
-export const shopify = shopifyApp({
+const shopify = shopifyApp({
   apiKey: process.env["SHOPIFY_API_KEY"] ?? "",
   apiSecretKey: process.env["SHOPIFY_API_SECRET"] ?? "",
   apiVersion: ApiVersion.October25,
@@ -33,13 +36,9 @@ export const shopify = shopifyApp({
 
       // Mirror shop record to PostgreSQL for offer management
       try {
-        const { getDb } = await import("@promo/db");
-        const { shops } = await import("@promo/db");
-        const { eq } = await import("drizzle-orm");
         const db = getDb();
         const shopDomain = session.shop;
         const rawToken = session.accessToken ?? "";
-        const { encryptToken } = await import("./lib/token-crypto.server.js");
         const accessTokenEncrypted = await encryptToken(rawToken);
 
         const existing = await db
@@ -71,6 +70,4 @@ export const shopify = shopifyApp({
 });
 
 export const authenticate = shopify.authenticate;
-export const unauthenticated = shopify.unauthenticated;
 export const login = shopify.login;
-export const registerWebhooks = shopify.registerWebhooks;

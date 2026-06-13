@@ -1,8 +1,9 @@
-import { useState } from "react";
 import { useNavigate, useLoaderData, Form, redirect } from "react-router";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
+import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerCombinationPolicies, offerConditions, offerRewards } from "@promo/db";
 import { eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -84,8 +85,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
-  const formData = await request.formData();
+  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
+  const { shopId, db } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const offerType = formData.get("offerType") as string;
@@ -103,62 +104,66 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { error: "Internal name, public title, and type are required" };
   }
 
-  // Insert with automatic dedup: if (shopId, internalName) already exists, append " (2)", " (3)", etc.
+  async function createOffer(candidateName: string) {
+    const [offer] = await db
+      .insert(offers)
+      .values({ shopId, type: offerType as "gift" | "bundle" | "upsell" | "discount" | "booster", status: "draft", internalName: candidateName, publicTitle, priority })
+      .returning({ id: offers.id });
+    return offer;
+  }
+
   let newOffer: { id: string } | undefined;
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const candidateName = attempt === 0 ? internalName : `${internalName} (${attempt + 1})`;
-    try {
-      [newOffer] = await db
-        .insert(offers)
-        .values({ shopId, type: offerType as "gift" | "bundle" | "upsell" | "discount" | "booster", status: "draft", internalName: candidateName, publicTitle, priority })
-        .returning({ id: offers.id });
-      break;
-    } catch (err) {
-      if ((err as { code?: string }).code === "23505") continue;
-      throw err;
-    }
+  try {
+    newOffer = await createOffer(internalName);
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    newOffer = await createOffer(withUniqueOfferSuffix(internalName));
   }
 
   if (!newOffer) return { error: "Failed to create offer" };
 
-  await db.insert(offerCombinationPolicies).values({
-    shopId,
-    offerId: newOffer.id,
-    combinesWithOrderDiscounts: true,
-    combinesWithProductDiscounts: true,
-    combinesWithShippingDiscounts: true,
-    combinesWithOtherAppOffers: true,
-    stopLowerPriority: false,
-    giftValueCountsForOtherOffers: false,
-  });
+  const setupTasks: Array<PromiseLike<unknown>> = [
+    db.insert(offerCombinationPolicies).values({
+      shopId,
+      offerId: newOffer.id,
+      combinesWithOrderDiscounts: true,
+      combinesWithProductDiscounts: true,
+      combinesWithShippingDiscounts: true,
+      combinesWithOtherAppOffers: true,
+      stopLowerPriority: false,
+      giftValueCountsForOtherOffers: false,
+    }),
+  ];
 
   // Pre-create condition + reward from template preset
   if (preset) {
-    await db.insert(offerConditions).values({
-      shopId,
-      offerId: newOffer.id,
-      scope: preset.condition.scope,
-      conditionType: preset.condition.conditionType,
-      operator: preset.condition.operator as "gte" | "lte" | "eq" | "in",
-      value: preset.condition.value,
-      sortOrder: 0,
-      isEnabled: true,
-    });
-
-    await db.insert(offerRewards).values({
-      shopId,
-      offerId: newOffer.id,
-      rewardType: preset.reward.rewardType as "product_gift" | "order_discount" | "bundle_discount" | "upsell_discount",
-      discountType: preset.reward.discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
-      value: { amount: 100, currencyCode: "USD" },
-      target: { scope: "cart" },
-      quantity: preset.reward.quantity,
-      isAutoAdd: preset.reward.isAutoAdd,
-      isCustomerSelectable: true,
-      trackMode: "product",
-      sortOrder: 0,
-    });
+    setupTasks.push(
+      db.insert(offerConditions).values({
+        shopId,
+        offerId: newOffer.id,
+        scope: preset.condition.scope,
+        conditionType: preset.condition.conditionType,
+        operator: preset.condition.operator as "gte" | "lte" | "eq" | "in",
+        value: preset.condition.value,
+        sortOrder: 0,
+        isEnabled: true,
+      }),
+      db.insert(offerRewards).values({
+        shopId,
+        offerId: newOffer.id,
+        rewardType: preset.reward.rewardType as "product_gift" | "order_discount" | "bundle_discount" | "upsell_discount",
+        discountType: preset.reward.discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
+        value: { amount: 100, currencyCode: "USD" },
+        target: { scope: "cart" },
+        quantity: preset.reward.quantity,
+        isAutoAdd: preset.reward.isAutoAdd,
+        isCustomerSelectable: true,
+        trackMode: "product",
+        sortOrder: 0,
+      }),
+    );
   }
+  await Promise.all(setupTasks);
 
   return redirect(`/app/offers/${newOffer.id}`);
 };
@@ -224,13 +229,23 @@ const OFFER_TYPES = [
 export default function NewOfferPage() {
   const navigate = useNavigate();
   const { initialType } = useLoaderData<typeof loader>();
-  const [offerType, setOfferType] = useState(initialType ?? "gift");
-  const [internalName, setInternalName] = useState("");
-  const [publicTitle, setPublicTitle] = useState("");
-  const [priority, setPriority] = useState("100");
-  const [fieldErrors, setFieldErrors] = useState<{ internalName?: string; publicTitle?: string; priority?: string }>({});
-  const [showToast, setShowToast] = useState(false);
-  const [toastMsg, setToastMsg] = useState("");
+  const [formState, setFormField] = useObjectState(() => ({
+    offerType: initialType ?? "gift",
+    internalName: "",
+    publicTitle: "",
+    priority: "100",
+    fieldErrors: {} as { internalName?: string; publicTitle?: string; priority?: string },
+    showToast: false,
+    toastMsg: "",
+  }));
+  const { offerType, internalName, publicTitle, priority, fieldErrors, showToast, toastMsg } = formState;
+  const setOfferType = createFieldSetter(setFormField, "offerType");
+  const setInternalName = createFieldSetter(setFormField, "internalName");
+  const setPublicTitle = createFieldSetter(setFormField, "publicTitle");
+  const setPriority = createFieldSetter(setFormField, "priority");
+  const setFieldErrors = createFieldSetter(setFormField, "fieldErrors");
+  const setShowToast = createFieldSetter(setFormField, "showToast");
+  const setToastMsg = createFieldSetter(setFormField, "toastMsg");
 
   function validate() {
     const errs: { internalName?: string; publicTitle?: string; priority?: string } = {};
@@ -252,7 +267,7 @@ export default function NewOfferPage() {
       <div style={{ marginBottom: 28 }}>
         <button
           type="button"
-          style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 16, background: "none", border: "none", cursor: "pointer", color: "var(--text-sub)", fontSize: 13, padding: 0 }}
+          className="rd-style-011"
           onClick={() => navigate("/app/offers")}
         >
           <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M17 10a.75.75 0 0 1-.75.75H5.612l4.158 3.96a.75.75 0 1 1-1.04 1.08l-5.5-5.25a.75.75 0 0 1 0-1.08l5.5-5.25a.75.75 0 1 1 1.04 1.08L5.612 9.25H16.25A.75.75 0 0 1 17 10Z" clipRule="evenodd"/></svg>
@@ -281,30 +296,10 @@ export default function NewOfferPage() {
                   key={type.value}
                   type="button"
                   onClick={() => setOfferType(type.value)}
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "flex-start",
-                    gap: 10,
-                    padding: "14px 16px",
-                    borderRadius: 10,
-                    border: `2px solid ${active ? "var(--blue)" : "var(--border)"}`,
-                    background: active ? "var(--blue-light, #f0f4ff)" : "var(--bg-card)",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    transition: "border-color 0.12s, background 0.12s, box-shadow 0.12s",
-                    boxShadow: active ? "0 0 0 3px rgba(44,110,203,0.12)" : "none",
-                    position: "relative",
-                  }}
+                  className="rd-style-012" style={{ border: `2px solid ${active ? "var(--blue)" : "var(--border)"}`, background: active ? "var(--blue-light, #f0f4ff)" : "var(--bg-card)", boxShadow: active ? "0 0 0 3px rgba(44,110,203,0.12)" : "none" }}
                 >
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
-                    <div style={{
-                      width: 36, height: 36, borderRadius: 9, flexShrink: 0,
-                      background: active ? type.color : `${type.color}1a`,
-                      color: active ? "#fff" : type.color,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      transition: "background 0.12s, color 0.12s",
-                    }}>
+                    <div className="rd-style-013" style={{ background: active ? type.color : `${type.color}1a`, color: active ? "#fff" : type.color }}>
                       {type.icon}
                     </div>
                     {active && (

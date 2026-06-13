@@ -1,6 +1,6 @@
 import type { SubconditionId } from "./types.js";
 
-export function ILink() {
+function ILink() {
   return (
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#5c6ac4" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
@@ -9,7 +9,7 @@ export function ILink() {
   );
 }
 
-export function IHistory() {
+function IHistory() {
   return (
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#5c6ac4" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="1 4 1 10 7 10"/>
@@ -18,7 +18,7 @@ export function IHistory() {
   );
 }
 
-export function IPerson() {
+function IPerson() {
   return (
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#5c6ac4" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
@@ -27,7 +27,7 @@ export function IPerson() {
   );
 }
 
-export function ILocation() {
+function ILocation() {
   return (
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#5c6ac4" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
@@ -36,7 +36,7 @@ export function ILocation() {
   );
 }
 
-export function ISub() {
+function ISub() {
   return (
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#5c6ac4" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
@@ -44,7 +44,7 @@ export function ISub() {
   );
 }
 
-export function IChannel() {
+function IChannel() {
   return (
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#5c6ac4" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <rect x="2" y="3" width="20" height="14" rx="2"/>
@@ -53,7 +53,7 @@ export function IChannel() {
   );
 }
 
-export function IGlobe() {
+function IGlobe() {
   return (
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#5c6ac4" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="10"/>
@@ -63,7 +63,7 @@ export function IGlobe() {
   );
 }
 
-export function IQty() {
+function IQty() {
   return (
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#5c6ac4" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M20 7H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/>

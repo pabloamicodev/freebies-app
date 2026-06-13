@@ -134,19 +134,7 @@ export default function InstallationPage() {
         <div className="b-card">
           <div className="b-card-header b-row b-gap-3">
             <span
-              style={{
-                width: 24,
-                height: 24,
-                borderRadius: "50%",
-                background: "var(--blue)",
-                color: "#fff",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 12,
-                fontWeight: 700,
-                flexShrink: 0,
-              }}
+              className="rd-style-032"
             >
               1
             </span>
@@ -195,24 +183,12 @@ export default function InstallationPage() {
         <div className="b-card">
           <div className="b-card-header b-row b-gap-3">
             <span
-              style={{
-                width: 24,
-                height: 24,
-                borderRadius: "50%",
-                background: "var(--blue)",
-                color: "#fff",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 12,
-                fontWeight: 700,
-                flexShrink: 0,
-              }}
+              className="rd-style-032"
             >
               2
             </span>
             Add App Blocks{" "}
-            <span className="b-badge b-badge-gray" style={{ marginLeft: 4, fontSize: 11 }}>
+            <span className="b-badge b-badge-gray" style={{ marginLeft: 4, fontSize: 12 }}>
               Optional
             </span>
           </div>
@@ -239,7 +215,7 @@ export default function InstallationPage() {
                       — {block.desc}
                     </span>
                   </div>
-                  <span className="b-badge b-badge-gray" style={{ fontSize: 11 }}>Block</span>
+                  <span className="b-badge b-badge-gray" style={{ fontSize: 12 }}>Block</span>
                 </div>
               ))}
             </div>
@@ -250,19 +226,7 @@ export default function InstallationPage() {
         <div className="b-card">
           <div className="b-card-header b-row b-gap-3">
             <span
-              style={{
-                width: 24,
-                height: 24,
-                borderRadius: "50%",
-                background: "var(--green)",
-                color: "#fff",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 12,
-                fontWeight: 700,
-                flexShrink: 0,
-              }}
+              className="rd-style-033"
             >
               3
             </span>
@@ -316,16 +280,7 @@ export default function InstallationPage() {
               function with your store domain and public key.
             </p>
             <pre
-              style={{
-                background: "#f3f4f6",
-                padding: "12px 16px",
-                borderRadius: "var(--r)",
-                fontSize: 12,
-                overflow: "auto",
-                margin: 0,
-                lineHeight: 1.6,
-                border: "1px solid var(--border)",
-              }}
+              className="rd-style-034"
             >
 {`import { createPromoClient } from '@promo/headless-sdk';
 import { usePromoOffers } from '@promo/headless-sdk/react';

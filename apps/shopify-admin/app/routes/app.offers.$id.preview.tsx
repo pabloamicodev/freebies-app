@@ -16,6 +16,13 @@ import type { EvaluationInput } from "@promo/shared-types";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
+function splitCsvList(value: string | null): string[] {
+  return (value ?? "").split(",").flatMap((item) => {
+    const trimmed = item.trim();
+    return trimmed ? [trimmed] : [];
+  });
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
   const db = getDb();
@@ -30,27 +37,30 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const [admin, formData] = await Promise.all([
+    authenticate.admin(request),
+    request.formData(),
+  ]);
+  const { session } = admin;
   const db = getDb();
   const offerId = params["id"];
   if (!offerId) throw new Response("Not found", { status: 404 });
 
-  const formData = await request.formData();
   const cartValueUsd = parseFloat(formData.get("cartTotal") as string) || 0;
   const cartQty = parseInt(formData.get("cartQty") as string, 10) || 1;
-  const customerTags = (formData.get("customerTags") as string).split(",").map((t) => t.trim()).filter(Boolean);
+  const customerTags = splitCsvList(formData.get("customerTags") as string | null);
   const salesChannel = (formData.get("salesChannel") as string) || "online_store";
   const marketId = (formData.get("marketId") as string) || null;
   const currencyCode = (formData.get("currencyCode") as string) || "USD";
 
   // Load offer definitions
-  const [conditionRows, rewardRows, policyRows] = await Promise.all([
+  const [conditionRows, rewardRows, policyRows, offerRows] = await Promise.all([
     db.select().from(offerConditions).where(eq(offerConditions.offerId, offerId)),
     db.select().from(offerRewards).where(eq(offerRewards.offerId, offerId)),
     db.select().from(offerCombinationPolicies).where(eq(offerCombinationPolicies.offerId, offerId)).limit(1),
+    db.select().from(offers).where(eq(offers.id, offerId)).limit(1),
   ]);
 
-  const offerRows = await db.select().from(offers).where(eq(offers.id, offerId)).limit(1);
   const offer = offerRows[0];
   if (!offer) return { error: "Offer not found" };
 
@@ -237,17 +247,7 @@ export default function OfferPreviewPage() {
                 >
                   <div
                     aria-hidden="true"
-                    style={{
-                      width: 42,
-                      height: 42,
-                      borderRadius: "var(--r-sm)",
-                      background: qualifies ? "var(--green)" : "var(--bg-hover)",
-                      color: qualifies ? "#fff" : "var(--text-muted)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 20,
-                    }}
+                    className="rd-style-084" style={{ background: qualifies ? "var(--green)" : "var(--bg-hover)", color: qualifies ? "#fff" : "var(--text-muted)" }}
                   >
                     {qualifies ? "✓" : "•"}
                   </div>
@@ -282,18 +282,7 @@ export default function OfferPreviewPage() {
                     <label className="b-label" htmlFor="cartTotal">Cart total</label>
                     <div className="b-relative b-row" style={{ gap: 0 }}>
                       <span
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          padding: "7px 10px",
-                          background: "var(--bg-hover)",
-                          border: "1px solid #babec3",
-                          borderRight: "none",
-                          borderRadius: "var(--r-sm) 0 0 var(--r-sm)",
-                          fontSize: 14,
-                          color: "var(--text-sub)",
-                          lineHeight: 1.25,
-                        }}
+                        className="rd-style-085"
                       >
                         $
                       </span>
@@ -400,9 +389,9 @@ export default function OfferPreviewPage() {
                     <div>
                       <p className="b-label" style={{ marginBottom: 8 }}>Condition results</p>
                       <div className="b-stack b-stack-2">
-                        {(qualified ?? disqualified)!.reasons.map((reason, i) => (
+                        {(qualified ?? disqualified)!.reasons.map((reason) => (
                           <div
-                            key={i}
+                            key={`${reason.conditionType}:${reason.message}:${String(reason.actual)}:${String(reason.required)}`}
                             className="b-row b-gap-3"
                             style={{
                               padding: "10px 14px",
@@ -446,9 +435,9 @@ export default function OfferPreviewPage() {
                     <div>
                       <p className="b-label" style={{ marginBottom: 8 }}>Applied gifts</p>
                       <div className="b-stack b-stack-2">
-                        {qualified.cartActions.map((cartAction, i) => (
+                        {qualified.cartActions.map((cartAction) => (
                           <div
-                            key={i}
+                            key={`${cartAction.action}:${JSON.stringify(cartAction)}`}
                             style={{
                               padding: "10px 14px",
                               background: "var(--bg-hover)",
@@ -462,7 +451,7 @@ export default function OfferPreviewPage() {
                             <pre
                               style={{
                                 margin: "4px 0 0",
-                                fontSize: 11,
+                                fontSize: 12,
                                 color: "var(--text-muted)",
                                 whiteSpace: "pre-wrap",
                                 wordBreak: "break-all",

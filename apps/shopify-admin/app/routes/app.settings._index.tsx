@@ -1,7 +1,7 @@
 import { useLoaderData, Form, useActionData } from "react-router";
-import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { getDb } from "@promo/db";
 import { shops, appSettings } from "@promo/db";
 import { eq } from "drizzle-orm";
@@ -141,14 +141,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     "advanced.draft_order_api": boolField("advanced_draft_order_api"),
   };
 
-  for (const [key, value] of Object.entries(updates)) {
-    await db.insert(appSettings)
+  await Promise.all(Object.entries(updates).map(([key, value]) =>
+    db.insert(appSettings)
       .values({ shopId, key, value: JSON.stringify(value) })
       .onConflictDoUpdate({
         target: [appSettings.shopId, appSettings.key],
         set: { value: JSON.stringify(value), updatedAt: new Date() },
-      });
-  }
+      }),
+  ));
 
   return { success: true };
 };
@@ -177,6 +177,7 @@ function CheckRow({
   return (
     <div className="b-checkbox-row">
       <input
+        aria-label={label}
         type="checkbox"
         id={name}
         name={name}
@@ -200,6 +201,7 @@ function RadioRow({
   return (
     <div className="b-checkbox-row">
       <input
+        aria-label={label}
         type="radio"
         id={`${name}-${value}`}
         name={name}
@@ -217,12 +219,12 @@ function CloneIllustration() {
   return (
     <div style={{ position: "relative", width: 64, height: 56, margin: "0 auto 12px" }}>
       {/* Bag 1 */}
-      <div style={{ position: "absolute", left: 0, bottom: 0, width: 36, height: 32, background: "#e5e7eb", border: "2px solid #9ca3af", borderRadius: 4 }}>
-        <div style={{ position: "absolute", top: -10, left: 8, width: 18, height: 12, border: "2px solid #9ca3af", borderBottom: "none", borderRadius: "8px 8px 0 0" }} />
+      <div className="rd-style-070">
+        <div className="rd-style-071" />
         <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🛍️</span>
       </div>
       {/* Arrow badge */}
-      <div style={{ position: "absolute", right: 0, top: 0, width: 22, height: 22, background: "#3b82f6", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 700, fontSize: 13 }}>
+      <div className="rd-style-072">
         ↗
       </div>
     </div>
@@ -233,10 +235,10 @@ function CloneIllustration() {
 function FunctionIllustration() {
   return (
     <div style={{ position: "relative", width: 64, height: 56, margin: "0 auto 12px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ width: 48, height: 40, background: "#fef9c3", border: "2px solid #ca8a04", borderRadius: "4px 4px 4px 0", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div className="rd-style-073">
         <span style={{ fontSize: 20, fontWeight: 800, color: "#ca8a04" }}>%</span>
       </div>
-      <div style={{ position: "absolute", top: 4, right: 8, width: 8, height: 8, background: "white", borderRadius: "50%", border: "2px solid #ca8a04" }} />
+      <div className="rd-style-074" />
     </div>
   );
 }
@@ -245,33 +247,88 @@ export default function SettingsPage() {
   const { settings: s } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
 
-  // Local state mirrors
-  const [appEnabled, setAppEnabled] = useState(Boolean(s["app.enabled"]));
-  const [logicMode, setLogicMode] = useState(String(s["gift.logic_mode"] ?? "clone_product"));
-  const [autoAdd, setAutoAdd] = useState(Boolean(s["gift.auto_add"]));
-  const [discountBy, setDiscountBy] = useState(String(s["gift.discount_by"] ?? "current_price"));
-  const [priceConstraint, setPriceConstraint] = useState(Boolean(s["gift.price_constraint"]));
-  const [selectionLimit, setSelectionLimit] = useState(Boolean(s["gift.selection_limit"]));
-  const [excludeCart, setExcludeCart] = useState(Boolean(s["gift.exclude_cart"]));
-  const [removeOnDeactivate, setRemoveOnDeactivate] = useState(Boolean(s["gift.remove_on_deactivate"]));
-  const [includeComparePrice, setIncludeComparePrice] = useState(Boolean(s["gift.include_compare_price"]));
-  const [skuFormat, setSkuFormat] = useState(String(s["gift.sku_format"] ?? "same_as_original"));
-  const [barcodeFormat, setBarcodeFormat] = useState(String(s["gift.barcode_format"] ?? "blank"));
-  const [titleFormat, setTitleFormat] = useState(String(s["gift.title_format"] ?? "emoji_name_pct"));
-  const [includeProductType, setIncludeProductType] = useState(Boolean(s["gift.include_product_type"]));
-  const [includeTags, setIncludeTags] = useState(Boolean(s["gift.include_tags"]));
-  const [invMethod, setInvMethod] = useState(String(s["inventory.method"] ?? "sync_auto"));
-  const [whenOut, setWhenOut] = useState(String(s["inventory.when_out"] ?? "stop"));
-  const [fraudNotify, setFraudNotify] = useState(Boolean(s["fraud.notify_email"]));
-  const [fraudEmail, setFraudEmail] = useState(String(s["fraud.email_address"] ?? ""));
-  const [cartPayRule, setCartPayRule] = useState(Boolean(s["fraud.cart_payment_rule"]));
-  const [condType, setCondType] = useState(String(s["fraud.condition_type"] ?? "all"));
-  const [minCartVal, setMinCartVal] = useState(Boolean(s["fraud.min_cart_value"]));
-  const [minCartQty, setMinCartQty] = useState(Boolean(s["fraud.min_cart_qty"]));
-  const [maxGifts, setMaxGifts] = useState(Boolean(s["fraud.max_gifts"]));
-  const [perOfferConfig, setPerOfferConfig] = useState(Boolean(s["fraud.per_offer_config"]));
-  const [orderProtection, setOrderProtection] = useState(Boolean(s["fraud.order_protection"]));
-  const [draftOrderApi, setDraftOrderApi] = useState(Boolean(s["advanced.draft_order_api"]));
+  const [settingsState, setSettingsField] = useObjectState(() => ({
+    appEnabled: Boolean(s["app.enabled"]),
+    logicMode: String(s["gift.logic_mode"] ?? "clone_product"),
+    autoAdd: Boolean(s["gift.auto_add"]),
+    discountBy: String(s["gift.discount_by"] ?? "current_price"),
+    priceConstraint: Boolean(s["gift.price_constraint"]),
+    selectionLimit: Boolean(s["gift.selection_limit"]),
+    excludeCart: Boolean(s["gift.exclude_cart"]),
+    removeOnDeactivate: Boolean(s["gift.remove_on_deactivate"]),
+    includeComparePrice: Boolean(s["gift.include_compare_price"]),
+    skuFormat: String(s["gift.sku_format"] ?? "same_as_original"),
+    barcodeFormat: String(s["gift.barcode_format"] ?? "blank"),
+    titleFormat: String(s["gift.title_format"] ?? "emoji_name_pct"),
+    includeProductType: Boolean(s["gift.include_product_type"]),
+    includeTags: Boolean(s["gift.include_tags"]),
+    invMethod: String(s["inventory.method"] ?? "sync_auto"),
+    whenOut: String(s["inventory.when_out"] ?? "stop"),
+    fraudNotify: Boolean(s["fraud.notify_email"]),
+    fraudEmail: String(s["fraud.email_address"] ?? ""),
+    cartPayRule: Boolean(s["fraud.cart_payment_rule"]),
+    condType: String(s["fraud.condition_type"] ?? "all"),
+    minCartVal: Boolean(s["fraud.min_cart_value"]),
+    minCartQty: Boolean(s["fraud.min_cart_qty"]),
+    maxGifts: Boolean(s["fraud.max_gifts"]),
+    perOfferConfig: Boolean(s["fraud.per_offer_config"]),
+    orderProtection: Boolean(s["fraud.order_protection"]),
+    draftOrderApi: Boolean(s["advanced.draft_order_api"]),
+  }));
+  const {
+    appEnabled,
+    logicMode,
+    autoAdd,
+    discountBy,
+    priceConstraint,
+    selectionLimit,
+    excludeCart,
+    removeOnDeactivate,
+    includeComparePrice,
+    skuFormat,
+    barcodeFormat,
+    titleFormat,
+    includeProductType,
+    includeTags,
+    invMethod,
+    whenOut,
+    fraudNotify,
+    fraudEmail,
+    cartPayRule,
+    condType,
+    minCartVal,
+    minCartQty,
+    maxGifts,
+    perOfferConfig,
+    orderProtection,
+    draftOrderApi,
+  } = settingsState;
+  const setAppEnabled = createFieldSetter(setSettingsField, "appEnabled");
+  const setLogicMode = createFieldSetter(setSettingsField, "logicMode");
+  const setAutoAdd = createFieldSetter(setSettingsField, "autoAdd");
+  const setDiscountBy = createFieldSetter(setSettingsField, "discountBy");
+  const setPriceConstraint = createFieldSetter(setSettingsField, "priceConstraint");
+  const setSelectionLimit = createFieldSetter(setSettingsField, "selectionLimit");
+  const setExcludeCart = createFieldSetter(setSettingsField, "excludeCart");
+  const setRemoveOnDeactivate = createFieldSetter(setSettingsField, "removeOnDeactivate");
+  const setIncludeComparePrice = createFieldSetter(setSettingsField, "includeComparePrice");
+  const setSkuFormat = createFieldSetter(setSettingsField, "skuFormat");
+  const setBarcodeFormat = createFieldSetter(setSettingsField, "barcodeFormat");
+  const setTitleFormat = createFieldSetter(setSettingsField, "titleFormat");
+  const setIncludeProductType = createFieldSetter(setSettingsField, "includeProductType");
+  const setIncludeTags = createFieldSetter(setSettingsField, "includeTags");
+  const setInvMethod = createFieldSetter(setSettingsField, "invMethod");
+  const setWhenOut = createFieldSetter(setSettingsField, "whenOut");
+  const setFraudNotify = createFieldSetter(setSettingsField, "fraudNotify");
+  const setFraudEmail = createFieldSetter(setSettingsField, "fraudEmail");
+  const setCartPayRule = createFieldSetter(setSettingsField, "cartPayRule");
+  const setCondType = createFieldSetter(setSettingsField, "condType");
+  const setMinCartVal = createFieldSetter(setSettingsField, "minCartVal");
+  const setMinCartQty = createFieldSetter(setSettingsField, "minCartQty");
+  const setMaxGifts = createFieldSetter(setSettingsField, "maxGifts");
+  const setPerOfferConfig = createFieldSetter(setSettingsField, "perOfferConfig");
+  const setOrderProtection = createFieldSetter(setSettingsField, "orderProtection");
+  const setDraftOrderApi = createFieldSetter(setSettingsField, "draftOrderApi");
 
   return (
     <div className="b-page">
@@ -322,8 +379,8 @@ export default function SettingsPage() {
             </p>
 
             <div style={{ marginBottom: 12 }}>
-              <label className="b-label">Timezone</label>
-              <select className="b-select" name="timezone" defaultValue="(GMT-03:00) America/Buenos_Aires">
+              <label className="b-label" htmlFor="settings-timezone">Timezone</label>
+              <select id="settings-timezone" aria-label="Timezone" className="b-select" name="timezone" defaultValue="(GMT-03:00) America/Buenos_Aires">
                 <option>(GMT-03:00) America/Buenos_Aires</option>
                 <option>(GMT-05:00) America/New_York</option>
                 <option>(GMT+00:00) UTC</option>
@@ -331,8 +388,8 @@ export default function SettingsPage() {
               </select>
             </div>
             <div>
-              <label className="b-label">App language</label>
-              <select className="b-select" name="language" defaultValue="en">
+              <label className="b-label" htmlFor="settings-language">App language</label>
+              <select id="settings-language" aria-label="App language" className="b-select" name="language" defaultValue="en">
                 <option value="en">English</option>
                 <option value="es">Spanish</option>
                 <option value="fr">French</option>
@@ -345,7 +402,8 @@ export default function SettingsPage() {
             <p className="b-text-sm b-text-sub" style={{ margin: "0 0 14px" }}>Choose between these logics:</p>
             <div className="b-logic-cards">
               {/* Clone product card */}
-              <div
+              <button
+                type="button"
                 className={`b-logic-card${logicMode === "clone_product" ? " active" : ""}`}
                 onClick={() => setLogicMode("clone_product")}
               >
@@ -358,11 +416,12 @@ export default function SettingsPage() {
                   Gift products are added indirectly via their duplicates and discounted using the BOGOS function.
                 </div>
                 <div style={{ textAlign: "center" }}>
-                  <button type="button" className="b-btn b-btn-secondary b-btn-sm">Change logic</button>
+                  <span className="b-btn b-btn-secondary b-btn-sm">Change logic</span>
                 </div>
-              </div>
+              </button>
               {/* Gift function card */}
-              <div
+              <button
+                type="button"
                 className={`b-logic-card${logicMode === "function" ? " active" : ""}`}
                 onClick={() => setLogicMode("function")}
               >
@@ -375,9 +434,9 @@ export default function SettingsPage() {
                   Gift products are added directly and discounted using Shopify&apos;s discount function.
                 </div>
                 <div style={{ textAlign: "center" }}>
-                  <button type="button" className="b-btn b-btn-secondary b-btn-sm">Change logic</button>
+                  <span className="b-btn b-btn-secondary b-btn-sm">Change logic</span>
                 </div>
-              </div>
+              </button>
             </div>
             <input type="hidden" name="gift_logic_mode" value={logicMode} />
 
@@ -452,23 +511,23 @@ export default function SettingsPage() {
               />
 
               <div>
-                <label className="b-label">Clone SKU format of product</label>
-                <select className="b-select" name="gift_sku_format" value={skuFormat} onChange={(e) => setSkuFormat(e.target.value)}>
+                  <label className="b-label" htmlFor="settings-gift-sku-format">Clone SKU format of product</label>
+                  <select id="settings-gift-sku-format" aria-label="Clone SKU format of product" className="b-select" name="gift_sku_format" value={skuFormat} onChange={(e) => setSkuFormat(e.target.value)}>
                   <option value="same_as_original">Same as original product</option>
                   <option value="suffix_gift">Original SKU + _GIFT</option>
                   <option value="blank">Blank</option>
                 </select>
               </div>
               <div>
-                <label className="b-label">Clone barcode format of product</label>
-                <select className="b-select" name="gift_barcode_format" value={barcodeFormat} onChange={(e) => setBarcodeFormat(e.target.value)}>
+                  <label className="b-label" htmlFor="settings-gift-barcode-format">Clone barcode format of product</label>
+                  <select id="settings-gift-barcode-format" aria-label="Clone barcode format of product" className="b-select" name="gift_barcode_format" value={barcodeFormat} onChange={(e) => setBarcodeFormat(e.target.value)}>
                   <option value="blank">Blank</option>
                   <option value="same_as_original">Same as original product</option>
                 </select>
               </div>
               <div>
-                <label className="b-label">Clone title format of product</label>
-                <select className="b-select" name="gift_title_format" value={titleFormat} onChange={(e) => setTitleFormat(e.target.value)}>
+                  <label className="b-label" htmlFor="settings-gift-title-format">Clone title format of product</label>
+                  <select id="settings-gift-title-format" aria-label="Clone title format of product" className="b-select" name="gift_title_format" value={titleFormat} onChange={(e) => setTitleFormat(e.target.value)}>
                   <option value="emoji_name_pct">🎁 Product name (100% off)</option>
                   <option value="name_pct">Product name (100% off)</option>
                   <option value="same_as_original">Same as original</option>
@@ -477,7 +536,7 @@ export default function SettingsPage() {
 
               <div>
                 <div className="b-row-between" style={{ marginBottom: 6 }}>
-                  <label className="b-label" style={{ margin: 0 }}>Sales channels</label>
+                  <div className="b-label" style={{ margin: 0 }}>Sales channels</div>
                   <button type="button" className="b-btn-plain b-text-sm">Edit</button>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text)" }}>
@@ -500,8 +559,8 @@ export default function SettingsPage() {
           <Section title="Gift inventory management" desc="Manage how gift inventory is adjusted.">
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <div>
-                <label className="b-label">Select inventory method</label>
-                <select className="b-select" name="inventory_method" value={invMethod} onChange={(e) => setInvMethod(e.target.value)}>
+                <label className="b-label" htmlFor="settings-inventory-method">Select inventory method</label>
+                <select id="settings-inventory-method" aria-label="Select inventory method" className="b-select" name="inventory_method" value={invMethod} onChange={(e) => setInvMethod(e.target.value)}>
                   <option value="sync_auto">Sync cloned product quantity with originals automatically</option>
                   <option value="manual">Manual inventory management</option>
                   <option value="unlimited">Unlimited (no tracking)</option>
@@ -528,10 +587,12 @@ export default function SettingsPage() {
               />
               {fraudNotify && (
                 <div style={{ paddingLeft: 26 }}>
-                  <label className="b-label">
+                  <label className="b-label" htmlFor="settings-fraud-email">
                     Email address <span style={{ color: "var(--red)" }}>*</span>
                   </label>
                   <input
+                    id="settings-fraud-email"
+                    aria-label="Email address"
                     className="b-input"
                     type="email"
                     name="fraud_email_address"
@@ -560,7 +621,7 @@ export default function SettingsPage() {
                 <div>
                   <label htmlFor="fraud_cart_payment_rule" className="b-checkbox-label">
                     Cart and payment protection rule{" "}
-                    <span className="b-badge b-badge-blue" style={{ verticalAlign: "middle", fontSize: 10 }}>Recommended</span>
+                    <span className="b-badge b-badge-blue" style={{ verticalAlign: "middle", fontSize: 12 }}>Recommended</span>
                   </label>
                   <div className="b-checkbox-help">
                     Once you activate the cart and payment protection rule, BOGOS will add a custom checkout validation rule to Configuration &gt; Payment &gt; Checkout rules. This rule will prevent customers from paying only with gifts.

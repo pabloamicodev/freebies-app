@@ -52,8 +52,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
-  const formData = await request.formData();
+  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
+  const { shopId, db } = context;
 
   const theme: Record<string, string> = {};
   for (const [key, value] of formData.entries()) {
@@ -402,23 +402,12 @@ export default function CustomizePage() {
                 <div style={{ width: 40, height: 40, background: "#f3f4f6", borderRadius: 4, flexShrink: 0 }} />
                 <div>
                   <p style={{ fontSize: 12, fontWeight: 600, margin: 0, color: theme.textColor }}>Sample Gift</p>
-                  <p style={{ fontSize: 11, color: accentColor, margin: 0, fontWeight: 700 }}>Free</p>
+                  <p style={{ fontSize: 12, color: accentColor, margin: 0, fontWeight: 700 }}>Free</p>
                 </div>
               </div>
               <button
                 type="button"
-                style={{
-                  marginTop: 10,
-                  width: "100%",
-                  padding: "8px 16px",
-                  background: buttonColor,
-                  color: theme.buttonTextColor,
-                  border: "none",
-                  borderRadius: `${theme.borderRadius}px`,
-                  fontSize: 13,
-                  fontWeight: 700,
-                  cursor: "pointer",
-                }}
+                className="rd-style-075" style={{ background: buttonColor, color: theme.buttonTextColor, borderRadius: `${theme.borderRadius}px` }}
               >
                 {theme.addToCartText}
               </button>

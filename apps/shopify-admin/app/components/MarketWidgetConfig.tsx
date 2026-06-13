@@ -3,13 +3,13 @@
  * Shown in the widget settings page to let merchants customize widget copy
  * and thresholds per Shopify Market.
  *
- * Uses the /api/markets endpoint to fetch available markets.
+ * Receives markets from the route loader to avoid client-side data races.
  */
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   LegacyCard, BlockStack, InlineStack, Text, Badge, TextField,
-  Spinner, Banner, Collapsible, Button, Box, Divider,
+  Banner, Collapsible, Button, Box, Divider,
 } from "@shopify/polaris";
 import type { ShopifyMarket } from "../lib/markets.server.js";
 
@@ -27,52 +27,38 @@ interface MarketWidgetConfigProps {
   widgetId: string;
   baseThresholdCents?: number;
   baseCurrencyCode?: string;
+  markets: ShopifyMarket[];
   /** Current overrides (loaded from DB). */
   defaultOverrides?: MarketOverride[];
   onSave: (overrides: MarketOverride[]) => Promise<void>;
 }
 
+const EMPTY_MARKET_OVERRIDES: MarketOverride[] = [];
+
 export function MarketWidgetConfig({
   widgetId: _widgetId,
   baseThresholdCents,
   baseCurrencyCode = "USD",
-  defaultOverrides = [],
+  markets,
+  defaultOverrides = EMPTY_MARKET_OVERRIDES,
   onSave,
 }: MarketWidgetConfigProps) {
-  const [markets, setMarkets] = useState<ShopifyMarket[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Record<string, MarketOverride>>(
-    Object.fromEntries(defaultOverrides.map((o) => [o.marketId, o])),
+    () => {
+      const initial = Object.fromEntries(defaultOverrides.map((o) => [o.marketId, o]));
+      for (const market of markets) {
+        initial[market.id] ??= {
+          marketId: market.id,
+          thresholdCents: null,
+          widgetTitle: null,
+          enabled: true,
+        };
+      }
+      return initial;
+    },
   );
   const [saving, setSaving] = useState(false);
   const [expandedMarket, setExpandedMarket] = useState<string | null>(null);
-
-  // Fetch markets from API
-  useEffect(() => {
-    fetch("/api/markets")
-      .then((r) => r.json() as Promise<{ markets: ShopifyMarket[] }>)
-      .then(({ markets }) => {
-        setMarkets(markets);
-        // Initialize overrides for markets that don't have one yet
-        setOverrides((prev) => {
-          const next = { ...prev };
-          for (const market of markets) {
-            if (!next[market.id]) {
-              next[market.id] = {
-                marketId: market.id,
-                thresholdCents: null,
-                widgetTitle: null,
-                enabled: true,
-              };
-            }
-          }
-          return next;
-        });
-      })
-      .catch(() => setError("Could not load markets. Check Shopify Markets are configured."))
-      .finally(() => setLoading(false));
-  }, []);
 
   function updateOverride(marketId: string, patch: Partial<MarketOverride>) {
     setOverrides((prev) => ({
@@ -91,25 +77,6 @@ export function MarketWidgetConfig({
     } finally {
       setSaving(false);
     }
-  }
-
-  if (loading) {
-    return (
-      <LegacyCard sectioned>
-        <InlineStack gap="300" align="center">
-          <Spinner size="small" />
-          <Text as="p">Loading markets…</Text>
-        </InlineStack>
-      </LegacyCard>
-    );
-  }
-
-  if (error) {
-    return (
-      <Banner tone="warning" title="Markets unavailable">
-        <p>{error}</p>
-      </Banner>
-    );
   }
 
   if (markets.length === 0) {
@@ -164,6 +131,7 @@ export function MarketWidgetConfig({
                   <BlockStack gap="300">
                     <InlineStack gap="300" blockAlign="center">
                       <input
+                        aria-label={`Enable market override for ${market.name}`}
                         type="checkbox"
                         checked={override.enabled}
                         onChange={(e) => updateOverride(market.id, { enabled: e.target.checked })}

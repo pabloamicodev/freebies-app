@@ -7,10 +7,6 @@ const STATUS_MAP: Record<string, { cls: string; label: string }> = {
   archived:  { cls: "b-badge b-badge-gray",   label: "Archived" },
 };
 
-export function getStatusBadgeClass(status: string): string {
-  return (STATUS_MAP[status] ?? STATUS_MAP.draft ?? { cls: "b-badge b-badge-gray" }).cls;
-}
-
 /** Offer status badge — shared across All Offers, Boosters, Analytics, etc. */
 export function StatusBadge({ status }: { status: string }) {
   const v = STATUS_MAP[status] ?? { cls: "b-badge b-badge-gray", label: status };

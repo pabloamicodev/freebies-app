@@ -5,14 +5,17 @@
 
 import { Form, useActionData, useNavigate } from "react-router";
 import { BackButton } from "../components/BackButton.js";
-import { useState, useRef } from "react";
+import { useState, useRef, useId } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
+import { offers, offerConditions, offerRewards, offerCombinationPolicies, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
+const VALID_OFFER_TYPES = new Set(["gift", "bundle", "upsell", "discount", "booster"]);
+const VALID_OFFER_TYPE_LABELS = Array.from(VALID_OFFER_TYPES).join(", ");
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
@@ -91,9 +94,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (!csvContent) return { error: "No CSV content provided", created: [], errors: [] };
 
   const shopRows = await db
-    .select({ id: (await import("@promo/db")).shops.id })
-    .from((await import("@promo/db")).shops)
-    .where(eq((await import("@promo/db")).shops.myshopifyDomain, session.shop))
+    .select({ id: shops.id })
+    .from(shops)
+    .where(eq(shops.myshopifyDomain, session.shop))
     .limit(1);
   const shopId = shopRows[0]?.id;
   if (!shopId) return { error: "Shop not found", created: [], errors: [] };
@@ -103,11 +106,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const headerRow = parsedRows[0]!.map((h) => h.trim());
   const dataRows = parsedRows.slice(1);
-  const created: string[] = [];
-  const errors: Array<{ row: number; message: string }> = [];
-
-  for (let i = 0; i < dataRows.length; i++) {
-    const values = dataRows[i]!;
+  const rowResults = await Promise.all(dataRows.map(async (values, i) => {
     const row: Record<string, string> = {};
     headerRow.forEach((h, idx) => { row[h] = (values[idx] ?? "").trim(); });
 
@@ -118,14 +117,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const rowNumber = i + 2; // +1 for header, +1 for 1-based indexing
 
     if (!internalName || !publicTitle || !offerType) {
-      errors.push({ row: rowNumber, message: "Missing required fields: internal_name, public_title, type" });
-      continue;
+      return { error: { row: rowNumber, message: "Missing required fields: internal_name, public_title, type" } };
     }
 
-    const validTypes = ["gift", "bundle", "upsell", "discount", "booster"];
-    if (!validTypes.includes(offerType)) {
-      errors.push({ row: rowNumber, message: `Invalid type "${offerType}". Must be one of: ${validTypes.join(", ")}` });
-      continue;
+    if (!VALID_OFFER_TYPES.has(offerType)) {
+      return { error: { row: rowNumber, message: `Invalid type "${offerType}". Must be one of: ${VALID_OFFER_TYPE_LABELS}` } };
     }
 
     try {
@@ -139,11 +135,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         discountTags: row["discount_tags"] ? row["discount_tags"].split("|") : [],
       }).returning({ id: offers.id });
 
-      if (!newOffer) { errors.push({ row: rowNumber, message: "Failed to create offer" }); continue; }
+      if (!newOffer) return { error: { row: rowNumber, message: "Failed to create offer" } };
 
-      // Create condition if provided
+      const setupTasks: Array<PromiseLike<unknown>> = [
+        db.insert(offerCombinationPolicies).values({
+          shopId, offerId: newOffer.id,
+          combinesWithOrderDiscounts: true, combinesWithProductDiscounts: true,
+          combinesWithShippingDiscounts: true, combinesWithOtherAppOffers: true,
+          stopLowerPriority: false, giftValueCountsForOtherOffers: false,
+        }),
+      ];
+
       if (row["condition_type"] && row["condition_value_threshold_cents"]) {
-        await db.insert(offerConditions).values({
+        setupTasks.push(db.insert(offerConditions).values({
           shopId,
           offerId: newOffer.id,
           scope: "main",
@@ -152,13 +156,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           value: { thresholdCents: parseInt(row["condition_value_threshold_cents"], 10), currencyCode: "USD", includeGiftValues: false },
           sortOrder: 0,
           isEnabled: true,
-        });
+        }));
       }
 
-      // Create reward if provided
       if (row["reward_type"] && row["discount_type"]) {
         const variantIds = row["gift_variant_gids"] ? row["gift_variant_gids"].split("|").filter(Boolean) : [];
-        await db.insert(offerRewards).values({
+        setupTasks.push(db.insert(offerRewards).values({
           shopId,
           offerId: newOffer.id,
           rewardType: row["reward_type"] as "product_gift" | "order_discount" | "bundle_discount" | "upsell_discount",
@@ -171,21 +174,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           trackMode: (row["track_mode"] as "product" | "variant") ?? "product",
           sortOrder: 0,
           label: null,
-        });
+        }));
       }
 
-      await db.insert(offerCombinationPolicies).values({
-        shopId, offerId: newOffer.id,
-        combinesWithOrderDiscounts: true, combinesWithProductDiscounts: true,
-        combinesWithShippingDiscounts: true, combinesWithOtherAppOffers: true,
-        stopLowerPriority: false, giftValueCountsForOtherOffers: false,
-      });
-
-      created.push(newOffer.id);
+      await Promise.all(setupTasks);
+      return { created: newOffer.id };
     } catch (e) {
-      errors.push({ row: rowNumber, message: (e as Error).message });
+      return { error: { row: rowNumber, message: (e as Error).message } };
     }
-  }
+  }));
+
+  const created = rowResults.flatMap((result) => result.created ? [result.created] : []);
+  const errors = rowResults.flatMap((result) => result.error ? [result.error] : []);
 
   return { created, errors, error: null };
 };
@@ -211,9 +211,20 @@ const TEMPLATE_CSV = `internal_name,public_title,type,priority,condition_type,co
 free-gift-50-usd,Free Gift with $50 Purchase,gift,100,cart_value,5000,product_gift,free,100,gid://shopify/ProductVariant/12345,1,true,product,summer-promo
 volume-discount-3plus,Volume Discount Buy 3+,discount,200,cart_quantity,3,order_discount,percentage,10,,,,, `;
 
+function downloadTemplate() {
+  const blob = new Blob([TEMPLATE_CSV], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "offer-import-template.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function OffersImportPage() {
   const navigate = useNavigate();
   const actionData = useActionData<typeof action>();
+  const fileInputId = useId();
   const [csvText, setCsvText] = useState("");
   const [previewRows, setPreviewRows] = useState<string[][]>([]);
   const [previewHeaders, setPreviewHeaders] = useState<string[]>([]);
@@ -222,43 +233,12 @@ export default function OffersImportPage() {
 
   function parsePreview(text: string) {
     // Use the same RFC 4180 parser — extract first 6 rows for preview
-    const allRows = parseCSVClient(text);
+    const allRows = parseCSV(text);
     if (allRows.length < 1) return;
     const hdrs = allRows[0]!.map((h) => h.trim());
     const rows = allRows.slice(1, 6).map((r) => r.map((v) => v.trim()));
     setPreviewHeaders(hdrs);
     setPreviewRows(rows);
-  }
-
-  /**
-   * Client-side mirror of the server parseCSV — same logic, exported inline for the preview.
-   */
-  function parseCSVClient(text: string): string[][] {
-    const rows: string[][] = [];
-    let row: string[] = [];
-    let field = "";
-    let inQuotes = false;
-    let i = 0;
-    const src = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    while (i < src.length) {
-      const ch = src[i]!;
-      if (inQuotes) {
-        if (ch === '"') {
-          if (src[i + 1] === '"') { field += '"'; i += 2; }
-          else { inQuotes = false; i++; }
-        } else { field += ch; i++; }
-      } else {
-        if (ch === '"') { inQuotes = true; i++; }
-        else if (ch === ",") { row.push(field); field = ""; i++; }
-        else if (ch === "\n") {
-          row.push(field); field = "";
-          if (row.some((f) => f.trim())) rows.push(row);
-          row = []; i++;
-        } else { field += ch; i++; }
-      }
-    }
-    if (field || row.length > 0) { row.push(field); if (row.some((f) => f.trim())) rows.push(row); }
-    return rows;
   }
 
   function handleFile(file: File) {
@@ -281,16 +261,6 @@ export default function OffersImportPage() {
   function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (file) handleFile(file);
-  }
-
-  function downloadTemplate() {
-    const blob = new Blob([TEMPLATE_CSV], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "offer-import-template.csv";
-    a.click();
-    URL.revokeObjectURL(url);
   }
 
   const hasResult = actionData && !actionData.error;
@@ -350,11 +320,11 @@ export default function OffersImportPage() {
             <Form method="POST">
               <div className="b-stack b-stack-4">
                 {/* Drop zone */}
-                <div
+                <label
+                  htmlFor={fileInputId}
                   onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
                   onDragLeave={() => setIsDragOver(false)}
                   onDrop={handleDrop}
-                  onClick={() => fileInputRef.current?.click()}
                   style={{
                     border: `2px dashed ${isDragOver ? "var(--blue)" : "var(--border)"}`,
                     borderRadius: "var(--r)",
@@ -373,13 +343,14 @@ export default function OffersImportPage() {
                     or click to browse — .csv files only
                   </p>
                   <input
+                    id={fileInputId}
                     ref={fileInputRef}
                     type="file"
                     accept=".csv,text/csv"
                     style={{ display: "none" }}
                     onChange={handleFileInput}
                   />
-                </div>
+                </label>
 
                 {/* Paste fallback */}
                 <div>

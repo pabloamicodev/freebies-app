@@ -8,6 +8,22 @@ import type { LoaderFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
+const dashboardCurrencyFormatters = new Map<string, Intl.NumberFormat>();
+
+function getDashboardCurrencyFormatter(currencyCode: string): Intl.NumberFormat {
+  const key = currencyCode.toUpperCase();
+  const cached = dashboardCurrencyFormatters.get(key);
+  if (cached) return cached;
+
+  const formatter = Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: key,
+    maximumFractionDigits: 0,
+  });
+  dashboardCurrencyFormatters.set(key, formatter);
+  return formatter;
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId, shopDomain, currencyCode, db } = await getShopContext(request);
 
@@ -85,12 +101,25 @@ function IconChevron() {
   );
 }
 
+const DASHBOARD_SUPPORT_LINKS = [
+  { icon: "💬", title: "Live chat support", desc: "Get help from our highly trained support team", href: "https://secomapp.com/contact" },
+  { icon: "❓", title: "View frequently asked questions", desc: "See FAQs and learn about BOGOS functionality", href: "https://help.secomapp.com" },
+  { icon: "▶️", title: "Watch our YouTube series", desc: "See all guides step by step on our YouTube series", href: "https://www.youtube.com/@secomapp" },
+  { icon: "✉️", title: "Contact via email", desc: "Send us an email at support@secomapp.com for help", href: "mailto:support@secomapp.com" },
+];
+
+const DASHBOARD_RECOMMENDED_APPS = [
+  { color: "#f97316", initial: "N", badge: "20% OFF – FATHERS20PER", name: "Notim: Back In Stock+Notify Me", desc: "Notify customers on restocks, get inventory alerts, and manage stock across locations." },
+  { color: "#16a34a", initial: "X", badge: null, name: "XFlow Back in Stock Alert", desc: "Automated, personalized back in stock alerts that re-engage customers and recover lost sales." },
+  { color: "#7c3aed", initial: "E", badge: null, name: "Ego Cart Drawer Cart Upsell", desc: "Boost AOV & CR with the top upsell solution. Try Ego Cart Upsell with upsell cart, cross-selling." },
+];
+
 export default function Dashboard() {
   const { activeOffers, shopDisplayName, currencyCode, totalSalesCents, orderCount, avgOrderCents } = useLoaderData<typeof loader>();
   const [showOnboarding, setShowOnboarding] = useState(true);
   const [showRecommended, setShowRecommended] = useState(true);
 
-  const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: currencyCode, maximumFractionDigits: 0 });
+  const fmt = getDashboardCurrencyFormatter(currencyCode);
   const totalSalesFmt = fmt.format(totalSalesCents / 100);
   const avgOrderFmt = fmt.format(avgOrderCents / 100);
 
@@ -102,19 +131,6 @@ export default function Dashboard() {
   ];
   const completedSteps = onboardingSteps.filter((s) => s.done).length;
   const progressPct = Math.round((completedSteps / onboardingSteps.length) * 100);
-
-  const supportLinks = [
-    { icon: "💬", title: "Live chat support", desc: "Get help from our highly trained support team", href: "https://secomapp.com/contact" },
-    { icon: "❓", title: "View frequently asked questions", desc: "See FAQs and learn about BOGOS functionality", href: "https://help.secomapp.com" },
-    { icon: "▶️", title: "Watch our YouTube series", desc: "See all guides step by step on our YouTube series", href: "https://www.youtube.com/@secomapp" },
-    { icon: "✉️", title: "Contact via email", desc: "Send us an email at support@secomapp.com for help", href: "mailto:support@secomapp.com" },
-  ];
-
-  const recApps = [
-    { color: "#f97316", initial: "N", badge: "20% OFF – FATHERS20PER", name: "Notim: Back In Stock+Notify Me", desc: "Notify customers on restocks, get inventory alerts, and manage stock across locations." },
-    { color: "#16a34a", initial: "X", badge: null, name: "XFlow Back in Stock Alert", desc: "Automated, personalized back in stock alerts that re-engage customers and recover lost sales." },
-    { color: "#7c3aed", initial: "E", badge: null, name: "Ego Cart Drawer Cart Upsell", desc: "Boost AOV & CR with the top upsell solution. Try Ego Cart Upsell with upsell cart, cross-selling." },
-  ];
 
   return (
     <div className="b-page">
@@ -154,7 +170,7 @@ export default function Dashboard() {
         <div className="b-dark-banner-body">
           <h3 className="b-dark-banner-title">FREE check with experts</h3>
           <p className="b-dark-banner-sub">Don&apos;t miss it! A quick consultation with our team guarantees your personalized discounts will be active and ready to get you more sales. 🚀</p>
-          <button className="b-dark-banner-btn">View offers</button>
+          <button type="button" className="b-dark-banner-btn">View offers</button>
         </div>
         <div className="b-team-avatars">
           <div className="b-avatar b-avatar-1">A</div>
@@ -228,7 +244,7 @@ export default function Dashboard() {
           <div className="b-card-body">
             <div className="b-row-between" style={{ marginBottom: 4 }}>
               <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>BOGOS Getting Started Guide</h3>
-              <button
+              <button type="button"
                 onClick={() => setShowOnboarding(false)}
                 style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-sub)", fontSize: 18, lineHeight: 1, padding: "2px 4px" }}
                 aria-label="Dismiss"
@@ -262,7 +278,7 @@ export default function Dashboard() {
           <div className="b-card-body">
             <div className="b-row-between" style={{ marginBottom: 14 }}>
               <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Recommended apps for you</h3>
-              <button
+              <button type="button"
                 onClick={() => setShowRecommended(false)}
                 style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-sub)", fontSize: 18, lineHeight: 1, padding: "2px 4px" }}
                 aria-label="Dismiss"
@@ -271,7 +287,7 @@ export default function Dashboard() {
               </button>
             </div>
             <div className="b-rec-apps">
-              {recApps.map((app) => (
+              {DASHBOARD_RECOMMENDED_APPS.map((app) => (
                 <div key={app.name} className="b-rec-app-card">
                   <div
                     className="b-rec-app-icon"
@@ -282,7 +298,7 @@ export default function Dashboard() {
                   {app.badge && <div className="b-rec-app-badge">{app.badge}</div>}
                   <div className="b-rec-app-name">{app.name}</div>
                   <div className="b-rec-app-desc">{app.desc}</div>
-                  <button className="b-btn b-btn-secondary b-btn-sm">Install now</button>
+                  <button type="button" className="b-btn b-btn-secondary b-btn-sm">Install now</button>
                 </div>
               ))}
             </div>
@@ -295,7 +311,7 @@ export default function Dashboard() {
         <div className="b-card-body">
           <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 14px" }}>Get support</h3>
           <div className="b-support-grid">
-            {supportLinks.map((link) => (
+            {DASHBOARD_SUPPORT_LINKS.map((link) => (
               <a key={link.title} href={link.href} className="b-support-card">
                 <div className="b-support-icon" style={{ background: "var(--border-light)" }}>{link.icon}</div>
                 <div>

@@ -15,7 +15,7 @@ interface BogosSwitchProps {
  *
  * Styles are defined in bogos.css.
  */
-export function BogosSwitch({ on, onChange, label }: BogosSwitchProps) {
+function BogosSwitch({ on, onChange, label }: BogosSwitchProps) {
   return (
     <button
       type="button"

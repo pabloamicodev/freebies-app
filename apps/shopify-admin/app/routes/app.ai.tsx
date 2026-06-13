@@ -27,14 +27,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 type Message =
-  | { role: "user"; text: string }
-  | { role: "assistant"; text: string; isDraft?: boolean; title?: string };
+  | { id: string; role: "user"; text: string }
+  | { id: string; role: "assistant"; text: string; isDraft?: boolean; title?: string };
+
+function createMessageId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `message-${Date.now()}-${Math.random()}`;
+}
 
 export default function AiAssistantPage() {
   const actionData = useActionData<typeof action>();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([
     {
+      id: createMessageId(),
       role: "assistant",
       text: "Hi! I can help you generate offer configurations from natural language. Describe the offer you want to create and I'll build a draft for you to review.",
     },
@@ -56,7 +61,7 @@ export default function AiAssistantPage() {
     if ("error" in actionData && actionData.error) {
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", text: actionData.error as string },
+        { id: createMessageId(), role: "assistant", text: actionData.error as string },
       ]);
     }
   }, [actionData]);
@@ -64,7 +69,7 @@ export default function AiAssistantPage() {
   function handleSend() {
     const text = input.trim();
     if (!text) return;
-    setMessages((prev) => [...prev, { role: "user", text }]);
+    setMessages((prev) => [...prev, { id: createMessageId(), role: "user", text }]);
     setInput("");
     // Submit the hidden form programmatically
     formRef.current?.requestSubmit();
@@ -113,9 +118,9 @@ export default function AiAssistantPage() {
           gap: "12px",
         }}
       >
-        {messages.map((msg, i) => (
+        {messages.map((msg) => (
           <div
-            key={i}
+            key={msg.id}
             style={{
               display: "flex",
               justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
@@ -123,20 +128,7 @@ export default function AiAssistantPage() {
           >
             {msg.role === "assistant" && (
               <div
-                style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: "50%",
-                  background: "var(--blue-light)",
-                  border: "1px solid var(--blue-border)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  flexShrink: 0,
-                  marginRight: 8,
-                  marginTop: 2,
-                  fontSize: 14,
-                }}
+                className="rd-style-018"
               >
                 ✦
               </div>
@@ -161,16 +153,7 @@ export default function AiAssistantPage() {
               )}
               {(msg.role !== "assistant" || !msg.isDraft) && (
                 <div
-                  style={{
-                    padding: "10px 14px",
-                    borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
-                    background: msg.role === "user" ? "var(--blue)" : "var(--bg-card)",
-                    color: msg.role === "user" ? "#fff" : "var(--text)",
-                    border: msg.role === "user" ? "none" : "1px solid var(--border)",
-                    boxShadow: "var(--shadow)",
-                    fontSize: 14,
-                    lineHeight: 1.5,
-                  }}
+                  className="rd-style-019" style={{ borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px", background: msg.role === "user" ? "var(--blue)" : "var(--bg-card)", color: msg.role === "user" ? "#fff" : "var(--text)", border: msg.role === "user" ? "none" : "1px solid var(--border)" }}
                 >
                   {msg.text}
                 </div>
@@ -200,18 +183,8 @@ export default function AiAssistantPage() {
         }}
       >
         <textarea
-          className="b-input"
-          style={{
-            flex: 1,
-            resize: "none",
-            minHeight: 40,
-            maxHeight: 120,
-            paddingTop: 9,
-            paddingBottom: 9,
-            lineHeight: 1.4,
-            overflow: "auto",
-            opacity: 0.5,
-          }}
+          aria-label="AI assistant prompt"
+          className="b-input rd-style-020"
           placeholder="AI assistant coming soon…"
           value={input}
           onChange={(e) => setInput(e.target.value)}

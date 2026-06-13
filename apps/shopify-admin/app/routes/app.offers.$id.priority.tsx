@@ -129,8 +129,8 @@ export default function OfferPriorityPage() {
             <div className="b-card-body">
               {offerConflicts.length > 0 ? (
                 <div className="b-stack b-stack-3">
-                  {offerConflicts.map((c, i) => (
-                    <div key={i} className="b-banner b-banner-orange">
+                  {offerConflicts.map((c) => (
+                    <div key={`${c.type}:${c.message}`} className="b-banner b-banner-orange">
                       <span className="b-banner-icon">&#9888;</span>
                       <div className="b-banner-body">
                         <p className="b-banner-title">{c.type}</p>

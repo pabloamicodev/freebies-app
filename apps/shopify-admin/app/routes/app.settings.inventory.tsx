@@ -37,8 +37,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
-  const formData = await request.formData();
+  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
+  const { shopId, db } = context;
 
   const updates = {
     "gift.oos_behavior": formData.get("oos_behavior") as string ?? "hide",
@@ -47,14 +47,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     "gift.hide_oos_gifts": formData.get("hide_oos") === "on",
   };
 
-  for (const [key, value] of Object.entries(updates)) {
-    await db.insert(appSettings)
+  await Promise.all(Object.entries(updates).map(([key, value]) =>
+    db.insert(appSettings)
       .values({ shopId, key, value: JSON.stringify(value) })
       .onConflictDoUpdate({
         target: [appSettings.shopId, appSettings.key],
         set: { value: JSON.stringify(value), updatedAt: new Date() },
-      });
-  }
+      }),
+  ));
 
   return { success: true };
 };

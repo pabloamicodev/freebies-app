@@ -83,10 +83,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
+  const { shopId, db } = context;
   if (!shopId) throw new Response("Shop not found", { status: 404 });
 
-  const formData = await request.formData();
   const intent = formData.get("intent") as string;
   const offerIds = formData.getAll("offerIds[]") as string[];
 
@@ -95,12 +95,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (!offerId) throw new Response("Missing offerId", { status: 400 });
 
     await db.transaction(async (tx) => {
-      await tx.delete(analyticsEvents).where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.offerId, offerId)));
-      await tx.delete(cartMutationLogs).where(and(eq(cartMutationLogs.shopId, shopId), eq(cartMutationLogs.offerId, offerId)));
-      await tx.delete(giftCloneProducts).where(and(eq(giftCloneProducts.shopId, shopId), eq(giftCloneProducts.offerId, offerId)));
-      await tx.delete(appSettings).where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, `widget.market_overrides.${offerId}`)));
-      await tx.delete(widgets).where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId)));
-      await tx.delete(bundleDefinitions).where(and(eq(bundleDefinitions.shopId, shopId), eq(bundleDefinitions.offerId, offerId)));
+      await Promise.all([
+        tx.delete(analyticsEvents).where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.offerId, offerId))),
+        tx.delete(cartMutationLogs).where(and(eq(cartMutationLogs.shopId, shopId), eq(cartMutationLogs.offerId, offerId))),
+        tx.delete(giftCloneProducts).where(and(eq(giftCloneProducts.shopId, shopId), eq(giftCloneProducts.offerId, offerId))),
+        tx.delete(appSettings).where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, `widget.market_overrides.${offerId}`))),
+        tx.delete(widgets).where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId))),
+        tx.delete(bundleDefinitions).where(and(eq(bundleDefinitions.shopId, shopId), eq(bundleDefinitions.offerId, offerId))),
+      ]);
       await tx.delete(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
     });
 
@@ -109,14 +111,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   switch (intent) {
     case "bulk_pause":
-      for (const id of offerIds) {
-        await db.update(offers).set({ status: "paused", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, id)));
-      }
+      await Promise.all(offerIds.map((id) =>
+        db.update(offers).set({ status: "paused", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, id))),
+      ));
       break;
     case "bulk_activate":
-      for (const id of offerIds) {
-        await db.update(offers).set({ status: "active", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, id)));
-      }
+      await Promise.all(offerIds.map((id) =>
+        db.update(offers).set({ status: "active", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, id))),
+      ));
       break;
     case "toggle_status": {
       const offerId = formData.get("offerId") as string;
@@ -215,7 +217,7 @@ function OfferCreateModalFallback({ onClose }: { onClose: () => void }) {
     <AccessibleModal ariaLabel="Create offer" className="b-modal-sm" onClose={onClose}>
         <div className="b-modal-header">
           <h2 className="b-modal-title">Create offer</h2>
-          <button className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+          <button type="button" className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div className="b-modal-body">
           <div className="b-route-loader-mark" aria-hidden="true">
@@ -337,10 +339,10 @@ export default function OffersPage() {
       <div className="b-page-header">
         <h1 className="b-page-title">All Offers</h1>
         <div className="b-page-actions">
-          <button className="b-btn b-btn-secondary">
+          <button type="button" className="b-btn b-btn-secondary">
             More actions <IconChevronDown />
           </button>
-          <button className="b-btn b-btn-primary" onClick={() => setModal("type")}>
+          <button type="button" className="b-btn b-btn-primary" onClick={() => setModal("type")}>
             Create offer
           </button>
         </div>
@@ -363,7 +365,7 @@ export default function OffersPage() {
               <button type="button" className="b-btn b-btn-plain" style={{ color: "var(--blue)", textDecoration: "underline" }}>Send us a message</button> for support.
             </p>
           </div>
-          <button className="b-banner-close" onClick={() => setBannerVisible(false)} aria-label="Dismiss">×</button>
+          <button type="button" className="b-banner-close" onClick={() => setBannerVisible(false)} aria-label="Dismiss">×</button>
         </div>
       )}
 
@@ -374,7 +376,7 @@ export default function OffersPage() {
               <h2 className="b-modal-title">
                 {confirmAction.type === "delete" ? "Delete offer permanently?" : "Archive offer?"}
               </h2>
-              <button className="b-modal-close" onClick={closeConfirmAction} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+              <button type="button" className="b-modal-close" onClick={closeConfirmAction} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </div>
             <div className="b-modal-body">
               <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0, lineHeight: 1.6 }}>
@@ -389,13 +391,13 @@ export default function OffersPage() {
               </p>
             </div>
             <div className="b-modal-footer">
-              <button className="b-btn b-btn-secondary" onClick={closeConfirmAction}>Cancel</button>
+              <button type="button" className="b-btn b-btn-secondary" onClick={closeConfirmAction}>Cancel</button>
               {confirmAction.type === "delete" ? (
-                <button className="b-btn b-btn-danger" onClick={() => executeDelete(confirmAction.offer.id)}>
+                <button type="button" className="b-btn b-btn-danger" onClick={() => executeDelete(confirmAction.offer.id)}>
                   Delete permanently
                 </button>
               ) : (
-                <button className="b-btn b-btn-secondary" onClick={() => executeArchive(confirmAction.offer.id)} style={{ borderColor: "#9ca3af" }}>
+                <button type="button" className="b-btn b-btn-secondary" onClick={() => executeArchive(confirmAction.offer.id)} style={{ borderColor: "#9ca3af" }}>
                   Archive offer
                 </button>
               )}
@@ -405,29 +407,25 @@ export default function OffersPage() {
 
       {/* ── Bulk actions toolbar ─────────────────────────────── */}
       {checkedIds.size > 0 && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 8, padding: "10px 16px",
-          background: "var(--bg-hover)", border: "1px solid var(--border)",
-          borderRadius: "var(--r)", marginBottom: 12,
-        }}>
+        <div className="rd-style-008">
           <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginRight: 4 }}>
             {checkedIds.size} selected
           </span>
-          <button
+          <button type="button"
             className="b-btn b-btn-secondary b-btn-sm"
             onClick={() => bulkAction("bulk_activate")}
             disabled={bulkFetcher.state !== "idle"}
           >
             Activate
           </button>
-          <button
+          <button type="button"
             className="b-btn b-btn-secondary b-btn-sm"
             onClick={() => bulkAction("bulk_pause")}
             disabled={bulkFetcher.state !== "idle"}
           >
             Pause
           </button>
-          <button
+          <button type="button"
             className="b-btn b-btn-plain b-btn-sm"
             style={{ marginLeft: "auto", color: "var(--text-sub)", fontSize: 13 }}
             onClick={() => setCheckedIds(new Set())}
@@ -444,7 +442,7 @@ export default function OffersPage() {
           <ul className="b-tabs-list">
             {TABS.map((tab) => (
               <li key={tab.value}>
-                <button
+                <button type="button"
                   className={`b-tab${activeTab === tab.value ? " active" : ""}`}
                   style={{ background: "none", border: "none", cursor: "pointer" }}
                   onClick={() => setTab(tab.value)}
@@ -455,8 +453,8 @@ export default function OffersPage() {
             ))}
           </ul>
           <div className="b-tabs-actions">
-            <button className="b-btn-icon" aria-label="Search"><IconSearch /></button>
-            <button className="b-btn-icon" aria-label="Filter"><IconFilter /></button>
+            <button type="button" className="b-btn-icon" aria-label="Search"><IconSearch /></button>
+            <button type="button" className="b-btn-icon" aria-label="Filter"><IconFilter /></button>
           </div>
         </div>
 
@@ -466,6 +464,7 @@ export default function OffersPage() {
             <tr>
               <th style={{ width: 36 }}>
                 <input
+                  aria-label="Select all offers"
                   type="checkbox"
                   style={{ accentColor: "var(--blue)", width: 15, height: 15, cursor: "pointer" }}
                   checked={checkedIds.size === offerRows.length && offerRows.length > 0}
@@ -510,7 +509,7 @@ export default function OffersPage() {
                     <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0 }}>
                       Add free gifts, bundles, upsells and discounts to your store.
                     </p>
-                    <button className="b-btn b-btn-primary" onClick={() => setModal("type")}>Create offer</button>
+                    <button type="button" className="b-btn b-btn-primary" onClick={() => setModal("type")}>Create offer</button>
                   </div>
                 </td>
               </tr>
@@ -519,6 +518,7 @@ export default function OffersPage() {
                 <tr key={offer.id}>
                   <td>
                     <input
+                      aria-label={`Select offer ${offer.internalName}`}
                       type="checkbox"
                       style={{ accentColor: "var(--blue)", width: 15, height: 15, cursor: "pointer" }}
                       checked={checkedIds.has(offer.id)}

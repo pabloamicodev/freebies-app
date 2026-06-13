@@ -106,19 +106,7 @@ export default function IntegrationsPage() {
 
       {/* Banner */}
       <div
-        className="b-banner"
-        style={{
-          backgroundColor: "#eff6ff",
-          border: "1px solid #bfdbfe",
-          borderRadius: "8px",
-          padding: "16px 20px",
-          marginBottom: "28px",
-          color: "#1e40af",
-          fontSize: "14px",
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-        }}
+        className="b-banner rd-style-001"
       >
         <svg
           width="18"
@@ -154,36 +142,12 @@ export default function IntegrationsPage() {
           return (
             <div
               key={integration.id}
-              className="b-card b-card-body"
-              style={{
-                flex: "1 1 calc(33.333% - 12px)",
-                minWidth: "260px",
-                backgroundColor: "#ffffff",
-                border: "1px solid #e5e7eb",
-                borderRadius: "10px",
-                padding: "20px",
-                display: "flex",
-                flexDirection: "column",
-                gap: "12px",
-                boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-              }}
+              className="b-card b-card-body rd-style-002"
             >
               {/* Icon + Name row */}
               <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                 <div
-                  style={{
-                    width: "32px",
-                    height: "32px",
-                    borderRadius: "6px",
-                    backgroundColor: integration.color,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "#ffffff",
-                    fontSize: "14px",
-                    fontWeight: "700",
-                    flexShrink: 0,
-                  }}
+                  className="rd-style-003" style={{ backgroundColor: integration.color }}
                 >
                   {integration.initial}
                 </div>
@@ -216,17 +180,7 @@ export default function IntegrationsPage() {
               >
                 {/* Status Badge */}
                 <span
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "5px",
-                    fontSize: "12px",
-                    fontWeight: "600",
-                    padding: "3px 8px",
-                    borderRadius: "999px",
-                    backgroundColor: isConnected ? "#dcfce7" : "#f3f4f6",
-                    color: isConnected ? "#16a34a" : "#6b7280",
-                  }}
+                  className="rd-style-004" style={{ backgroundColor: isConnected ? "#dcfce7" : "#f3f4f6", color: isConnected ? "#16a34a" : "#6b7280" }}
                 >
                   <span
                     style={{
@@ -242,37 +196,16 @@ export default function IntegrationsPage() {
 
                 {/* Action Button */}
                 {isConnected ? (
-                  <button
+                  <button type="button"
                     onClick={() => handleDisconnect(integration.id)}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      cursor: "pointer",
-                      fontSize: "13px",
-                      color: "#6b7280",
-                      padding: "4px 8px",
-                      borderRadius: "6px",
-                      fontWeight: "500",
-                      textDecoration: "underline",
-                      textUnderlineOffset: "2px",
-                    }}
+                    className="rd-style-005"
                   >
                     Disconnect
                   </button>
                 ) : (
-                  <button
+                  <button type="button"
                     onClick={() => handleConnect(integration.id)}
-                    style={{
-                      background: "none",
-                      border: "1px solid #d1d5db",
-                      cursor: "pointer",
-                      fontSize: "13px",
-                      color: "#374151",
-                      padding: "5px 14px",
-                      borderRadius: "6px",
-                      fontWeight: "500",
-                      backgroundColor: "#ffffff",
-                    }}
+                    className="rd-style-006"
                   >
                     Connect
                   </button>
@@ -333,6 +266,7 @@ export default function IntegrationsPage() {
         ) : (
           <form onSubmit={handleRequestSubmit} style={{ display: "flex", gap: "10px" }}>
             <input
+              aria-label="Request integration email"
               type="email"
               placeholder="your@email.com"
               value={requestEmail}
@@ -350,17 +284,7 @@ export default function IntegrationsPage() {
             />
             <button
               type="submit"
-              style={{
-                backgroundColor: "#1a1a1a",
-                color: "#ffffff",
-                border: "none",
-                borderRadius: "6px",
-                padding: "8px 18px",
-                fontSize: "13px",
-                fontWeight: "600",
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-              }}
+              className="rd-style-007"
             >
               Submit
             </button>

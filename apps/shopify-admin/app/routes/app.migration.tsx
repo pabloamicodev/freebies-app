@@ -36,9 +36,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopId } = await getShopContext(request);
-
-  const formData = await request.formData();
+  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
+  const { shopId } = context;
   const intent = formData.get("intent") as string;
 
   switch (intent) {
@@ -67,14 +66,15 @@ const MIGRATION_STEPS = [
 
 type StepStatus = "pending" | "running" | "done" | "error";
 
+const STATUS_BADGE_META: Record<StepStatus, { cls: string; label: string }> = {
+  pending: { cls: "b-badge b-badge-gray",   label: "Pending"  },
+  running: { cls: "b-badge b-badge-blue",   label: "Running"  },
+  done:    { cls: "b-badge b-badge-green",  label: "Done"     },
+  error:   { cls: "b-badge",                label: "Error"    },
+};
+
 function StatusBadge({ status }: { status: StepStatus }) {
-  const map: Record<StepStatus, { cls: string; label: string }> = {
-    pending: { cls: "b-badge b-badge-gray",   label: "Pending"  },
-    running: { cls: "b-badge b-badge-blue",   label: "Running"  },
-    done:    { cls: "b-badge b-badge-green",  label: "Done"     },
-    error:   { cls: "b-badge",                label: "Error"    },
-  };
-  const { cls, label } = map[status];
+  const { cls, label } = STATUS_BADGE_META[status];
   const style = status === "error"
     ? { background: "var(--red-bg)", color: "var(--red)", borderRadius: "var(--r-pill)", fontSize: 12, fontWeight: 500, padding: "2px 10px", lineHeight: 1.4 }
     : undefined;

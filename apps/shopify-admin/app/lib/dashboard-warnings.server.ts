@@ -3,8 +3,8 @@
  * Shown prominently in the admin dashboard.
  */
 
-import { getDb, offers, offerRewards, productCache, appSettings } from "@promo/db";
-import { eq, and } from "drizzle-orm";
+import { getDb, offers, offerRewards, productCache, appSettings, variantCache } from "@promo/db";
+import { eq, and, count, inArray } from "drizzle-orm";
 
 export interface DashboardWarning {
   code: string;
@@ -52,43 +52,50 @@ export async function getDashboardWarnings(shopId: string, _shopDomain: string):
   const activeOffers = await db.select({ id: offers.id, internalName: offers.internalName })
     .from(offers)
     .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")));
+  const activeOfferById = new Map(activeOffers.map((offer) => [offer.id, offer]));
 
   if (activeOffers.length > 0) {
     const rewards = await db.select().from(offerRewards)
       .where(eq(offerRewards.shopId, shopId));
 
-    for (const reward of rewards) {
-      if (reward.rewardType !== "product_gift") continue;
+    const giftVariantChecks = rewards.flatMap((reward) => {
+      if (reward.rewardType !== "product_gift") return [];
       const target = reward.target as Record<string, unknown>;
       const variantIds = (target["variantIds"] as string[]) ?? [];
+      return variantIds.slice(0, 5).map((variantId) => ({ reward, variantId }));
+    });
+    const giftVariantIds = [...new Set(giftVariantChecks.map(({ variantId }) => variantId))];
+    const giftVariants = giftVariantIds.length > 0
+      ? await db.select({
+        variantGid: variantCache.variantGid,
+        availableForSale: variantCache.availableForSale,
+        inventoryQuantity: variantCache.inventoryQuantity,
+        inventoryPolicy: variantCache.inventoryPolicy,
+      })
+        .from(variantCache)
+        .where(and(
+          eq(variantCache.shopId, shopId),
+          inArray(variantCache.variantGid, giftVariantIds),
+        ))
+      : [];
+    const giftVariantById = new Map(giftVariants.map((variant) => [variant.variantGid, variant]));
+    const warnedOfferIds = new Set<string>();
 
-      for (const variantId of variantIds.slice(0, 5)) {
-        // Check if gift variant is in cache and available
-        const [variant] = await db.select({
-          availableForSale: (await import("@promo/db")).variantCache.availableForSale,
-          inventoryQuantity: (await import("@promo/db")).variantCache.inventoryQuantity,
-          inventoryPolicy: (await import("@promo/db")).variantCache.inventoryPolicy,
-        })
-          .from((await import("@promo/db")).variantCache)
-          .where(and(
-            eq((await import("@promo/db")).variantCache.shopId, shopId),
-            eq((await import("@promo/db")).variantCache.variantGid, variantId),
-          ))
-          .limit(1);
-
-        if (variant && !variant.availableForSale &&
-          variant.inventoryPolicy !== "CONTINUE" &&
-          (variant.inventoryQuantity ?? 0) <= 0) {
-          const offer = activeOffers.find((o) => o.id === reward.offerId);
-          warnings.push({
-            code: `gift_oos_${reward.id}`,
-            severity: "warning",
-            title: "Gift product is out of stock",
-            message: `Offer "${offer?.internalName ?? reward.offerId.slice(0, 8)}" has a gift product with 0 inventory. Buyers won't receive the gift.`,
-            action: { label: "Edit Offer", url: `/app/offers/${reward.offerId}` },
-          });
-          break; // One warning per offer
-        }
+    for (const { reward, variantId } of giftVariantChecks) {
+      if (warnedOfferIds.has(reward.offerId)) continue;
+      const variant = giftVariantById.get(variantId);
+      if (variant && !variant.availableForSale &&
+        variant.inventoryPolicy !== "CONTINUE" &&
+        (variant.inventoryQuantity ?? 0) <= 0) {
+        const offer = activeOfferById.get(reward.offerId);
+        warnings.push({
+          code: `gift_oos_${reward.id}`,
+          severity: "warning",
+          title: "Gift product is out of stock",
+          message: `Offer "${offer?.internalName ?? reward.offerId.slice(0, 8)}" has a gift product with 0 inventory. Buyers won't receive the gift.`,
+          action: { label: "Edit Offer", url: `/app/offers/${reward.offerId}` },
+        });
+        warnedOfferIds.add(reward.offerId);
       }
     }
   }
@@ -112,7 +119,7 @@ export async function getDashboardWarnings(shopId: string, _shopDomain: string):
   }
 
   // ── 7. Product cache empty ────────────────────────────────────────────────────
-  const [cacheCount] = await db.select({ count: (await import("drizzle-orm")).count() })
+  const [cacheCount] = await db.select({ count: count() })
     .from(productCache)
     .where(eq(productCache.shopId, shopId));
 

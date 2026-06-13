@@ -6,10 +6,11 @@
  */
 
 import { Form, useNavigate, redirect, useParams } from "react-router";
-import { useState } from "react";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
+import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import { eq } from "drizzle-orm";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
@@ -35,8 +36,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 // ─── Action ──────────────────────────────────────────────────────────────────
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
-  const formData = await request.formData();
+  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
+  const { shopId, db } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
@@ -117,30 +118,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const status = intent === "publish" ? "active" : "draft";
 
-  // ── Create offer with 23505 retry ──
+  async function createOffer(candidateName: string) {
+    const [offer] = await db
+      .insert(offers)
+      .values({
+        shopId,
+        type: "discount",
+        status,
+        internalName: candidateName,
+        publicTitle,
+        description: description ?? undefined,
+        priority: 100,
+        startsAt: startsAt ? new Date(startsAt) : new Date(),
+        endsAt: endsAt ? new Date(endsAt) : null,
+      })
+      .returning({ id: offers.id });
+    return offer;
+  }
+
   let newOffer: { id: string } | undefined;
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const candidateName = attempt === 0 ? internalName : `${internalName} (${attempt + 1})`;
-    try {
-      [newOffer] = await db
-        .insert(offers)
-        .values({
-          shopId,
-          type: "discount",
-          status,
-          internalName: candidateName,
-          publicTitle,
-          description: description ?? undefined,
-          priority: 100,
-          startsAt: startsAt ? new Date(startsAt) : new Date(),
-          endsAt: endsAt ? new Date(endsAt) : null,
-        })
-        .returning({ id: offers.id });
-      break;
-    } catch (err) {
-      if ((err as { code?: string }).code === "23505") continue;
-      throw err;
-    }
+  try {
+    newOffer = await createOffer(internalName);
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    newOffer = await createOffer(withUniqueOfferSuffix(internalName));
   }
 
   if (!newOffer) return { error: "Failed to create offer" };
@@ -159,18 +160,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     upsellProducts,
   };
 
-  await db.insert(offerConditions).values({
-    shopId,
-    offerId: newOffer.id,
-    scope: "main",
-    conditionType: "cart_value",
-    operator: "gte",
-    value: conditionValue,
-    sortOrder: 0,
-    isEnabled: true,
-  });
-
-  // ── Reward ──
   const tiersPayload =
     discountTemplate === "volume"
       ? volumeTiers
@@ -178,33 +167,43 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       ? cheapestTiers
       : cartTiers;
 
-  await db.insert(offerRewards).values({
-    shopId,
-    offerId: newOffer.id,
-    rewardType: "order_discount",
-    discountType: "percentage",
-    value: {
-      discountTemplate,
-      tiers: tiersPayload,
-    },
-    target: { scope: "cart" },
-    sortOrder: 0,
-    trackMode: "product",
-    isAutoAdd: false,
-    isCustomerSelectable: false,
-  });
-
-  // ── Combination policies ──
-  await db.insert(offerCombinationPolicies).values({
-    shopId,
-    offerId: newOffer.id,
-    combinesWithOrderDiscounts: combinesOrderDiscounts,
-    combinesWithProductDiscounts: combinesProductDiscounts,
-    combinesWithShippingDiscounts: combinesShippingDiscounts,
-    combinesWithOtherAppOffers: true,
-    stopLowerPriority: false,
-    giftValueCountsForOtherOffers: false,
-  });
+  await Promise.all([
+    db.insert(offerConditions).values({
+      shopId,
+      offerId: newOffer.id,
+      scope: "main",
+      conditionType: "cart_value",
+      operator: "gte",
+      value: conditionValue,
+      sortOrder: 0,
+      isEnabled: true,
+    }),
+    db.insert(offerRewards).values({
+      shopId,
+      offerId: newOffer.id,
+      rewardType: "order_discount",
+      discountType: "percentage",
+      value: {
+        discountTemplate,
+        tiers: tiersPayload,
+      },
+      target: { scope: "cart" },
+      sortOrder: 0,
+      trackMode: "product",
+      isAutoAdd: false,
+      isCustomerSelectable: false,
+    }),
+    db.insert(offerCombinationPolicies).values({
+      shopId,
+      offerId: newOffer.id,
+      combinesWithOrderDiscounts: combinesOrderDiscounts,
+      combinesWithProductDiscounts: combinesProductDiscounts,
+      combinesWithShippingDiscounts: combinesShippingDiscounts,
+      combinesWithOtherAppOffers: true,
+      stopLowerPriority: false,
+      giftValueCountsForOtherOffers: false,
+    }),
+  ]);
 
   return redirect(`/app/offers/${newOffer.id}`);
 };
@@ -229,6 +228,7 @@ const TEMPLATE_DEFAULTS: Record<string, { internalName: string; publicTitle: str
 // ─── Tier types ──────────────────────────────────────────────────────────────
 
 interface VolumeTier {
+  id: string;
   qty: string;
   label: string;
   discountType: string;
@@ -239,6 +239,7 @@ interface VolumeTier {
 }
 
 interface CheapestTier {
+  id: string;
   requiredQty: string;
   discountedQty: string;
   discountType: string;
@@ -247,10 +248,27 @@ interface CheapestTier {
 }
 
 interface CartTier {
+  id: string;
   threshold: string;
   discountType: string;
   discountValue: string;
   label: string;
+}
+
+function createClientId(prefix: string): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${prefix}-${Date.now()}-${Math.random()}`;
+}
+
+function createVolumeTier(values: Omit<VolumeTier, "id">): VolumeTier {
+  return { id: createClientId("volume-tier"), ...values };
+}
+
+function createCheapestTier(values: Omit<CheapestTier, "id">): CheapestTier {
+  return { id: createClientId("cheapest-tier"), ...values };
+}
+
+function createCartTier(values: Omit<CartTier, "id">): CartTier {
+  return { id: createClientId("cart-tier"), ...values };
 }
 
 // ─── Currency chips (visual only) ────────────────────────────────────────────
@@ -270,10 +288,89 @@ export default function NewDiscountOfferPage() {
   const templateId = SLUG_TO_TEMPLATE[templateSlug] ?? "volume";
   const defaults = TEMPLATE_DEFAULTS[templateId] ?? { internalName: "Volume discount 1", publicTitle: "Volume discount save" };
 
-  // Validation
-  const [fieldErrors, setFieldErrors] = useState<{ internalName?: string; publicTitle?: string }>({});
-  const [showToast, setShowToast] = useState(false);
-  const [toastMsg, setToastMsg] = useState("");
+  const [formState, setFormField] = useObjectState(() => ({
+    fieldErrors: {} as { internalName?: string; publicTitle?: string },
+    showToast: false,
+    toastMsg: "",
+    internalName: defaults.internalName,
+    publicTitle: defaults.publicTitle,
+    description: "",
+    startsAt: new Date().toISOString().slice(0, 16),
+    endsAt: "",
+    applyTo: templateId === "volume" ? "selected_products" : "any_product",
+    productPickerOpen: false,
+    selectedProducts: [] as string[],
+    displayType: "quantity_options",
+    countRule: "all",
+    tiers: [
+      createVolumeTier({ qty: "2", label: "Double", discountType: "percentage", value: "20", tag1: "20% OFF", tag2: "Most popular", preselected: false }),
+      createVolumeTier({ qty: "3", label: "Triple", discountType: "percentage", value: "30", tag1: "30% OFF", tag2: "Most value", preselected: true }),
+    ] as VolumeTier[],
+    discountOnItem: "cheapest",
+    cheapestTiers: [
+      createCheapestTier({ requiredQty: "3", discountedQty: "1", discountType: "percentage", discountValue: "100", label: "Buy 3, get 1 cheapest for free" }),
+    ] as CheapestTier[],
+    cartDiscountBy: "cart_value",
+    cartDiscountType: "percentage",
+    maxUsesEnabled: false,
+    maxUsePerCustomerEnabled: false,
+    cartTiers: [
+      createCartTier({ threshold: "100", discountType: "percentage", discountValue: "5", label: "Buy $100 get 5% OFF" }),
+    ] as CartTier[],
+    combinesOrderDiscounts: true,
+    combinesShippingDiscounts: true,
+    combinesProductDiscounts: true,
+  }));
+  const {
+    fieldErrors,
+    showToast,
+    toastMsg,
+    internalName,
+    publicTitle,
+    description,
+    startsAt,
+    endsAt,
+    applyTo,
+    productPickerOpen,
+    selectedProducts,
+    displayType,
+    countRule,
+    tiers,
+    discountOnItem,
+    cheapestTiers,
+    cartDiscountBy,
+    cartDiscountType,
+    maxUsesEnabled,
+    maxUsePerCustomerEnabled,
+    cartTiers,
+    combinesOrderDiscounts,
+    combinesShippingDiscounts,
+    combinesProductDiscounts,
+  } = formState;
+  const setFieldErrors = createFieldSetter(setFormField, "fieldErrors");
+  const setShowToast = createFieldSetter(setFormField, "showToast");
+  const setToastMsg = createFieldSetter(setFormField, "toastMsg");
+  const setInternalName = createFieldSetter(setFormField, "internalName");
+  const setPublicTitle = createFieldSetter(setFormField, "publicTitle");
+  const setDescription = createFieldSetter(setFormField, "description");
+  const setStartsAt = createFieldSetter(setFormField, "startsAt");
+  const setEndsAt = createFieldSetter(setFormField, "endsAt");
+  const setApplyTo = createFieldSetter(setFormField, "applyTo");
+  const setProductPickerOpen = createFieldSetter(setFormField, "productPickerOpen");
+  const setSelectedProducts = createFieldSetter(setFormField, "selectedProducts");
+  const setDisplayType = createFieldSetter(setFormField, "displayType");
+  const setCountRule = createFieldSetter(setFormField, "countRule");
+  const setTiers = createFieldSetter(setFormField, "tiers");
+  const setDiscountOnItem = createFieldSetter(setFormField, "discountOnItem");
+  const setCheapestTiers = createFieldSetter(setFormField, "cheapestTiers");
+  const setCartDiscountBy = createFieldSetter(setFormField, "cartDiscountBy");
+  const setCartDiscountType = createFieldSetter(setFormField, "cartDiscountType");
+  const setMaxUsesEnabled = createFieldSetter(setFormField, "maxUsesEnabled");
+  const setMaxUsePerCustomerEnabled = createFieldSetter(setFormField, "maxUsePerCustomerEnabled");
+  const setCartTiers = createFieldSetter(setFormField, "cartTiers");
+  const setCombinesOrderDiscounts = createFieldSetter(setFormField, "combinesOrderDiscounts");
+  const setCombinesShippingDiscounts = createFieldSetter(setFormField, "combinesShippingDiscounts");
+  const setCombinesProductDiscounts = createFieldSetter(setFormField, "combinesProductDiscounts");
 
   function validate() {
     const errs: { internalName?: string; publicTitle?: string } = {};
@@ -288,54 +385,12 @@ export default function NewDiscountOfferPage() {
     return true;
   }
 
-  // Basic info
-  const [internalName, setInternalName] = useState(defaults.internalName);
-  const [publicTitle, setPublicTitle] = useState(defaults.publicTitle);
-  const [description, setDescription] = useState("");
-  const [startsAt, setStartsAt] = useState(new Date().toISOString().slice(0, 16));
-  const [endsAt, setEndsAt] = useState("");
-
-  // Shared settings
-  const [applyTo, setApplyTo] = useState<string>(
-    templateId === "volume" ? "selected_products" : "any_product"
-  );
-  const [productPickerOpen, setProductPickerOpen] = useState(false);
-  const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
-
-  // Volume-specific
-  const [displayType, setDisplayType] = useState("quantity_options");
-  const [countRule, setCountRule] = useState("all");
-  const [tiers, setTiers] = useState<VolumeTier[]>([
-    { qty: "2", label: "Double", discountType: "percentage", value: "20", tag1: "20% OFF", tag2: "Most popular", preselected: false },
-    { qty: "3", label: "Triple", discountType: "percentage", value: "30", tag1: "30% OFF", tag2: "Most value", preselected: true },
-  ]);
-
-  // Cheapest-specific
-  const [discountOnItem, setDiscountOnItem] = useState("cheapest");
-  const [cheapestTiers, setCheapestTiers] = useState<CheapestTier[]>([
-    { requiredQty: "3", discountedQty: "1", discountType: "percentage", discountValue: "100", label: "Buy 3, get 1 cheapest for free" },
-  ]);
-
-  // Cart-specific
-  const [cartDiscountBy, setCartDiscountBy] = useState("cart_value");
-  const [cartDiscountType, setCartDiscountType] = useState("percentage");
-  const [maxUsesEnabled, setMaxUsesEnabled] = useState(false);
-  const [maxUsePerCustomerEnabled, setMaxUsePerCustomerEnabled] = useState(false);
-  const [cartTiers, setCartTiers] = useState<CartTier[]>([
-    { threshold: "100", discountType: "percentage", discountValue: "5", label: "Buy $100 get 5% OFF" },
-  ]);
-
-  // Combination policies
-  const [combinesOrderDiscounts, setCombinesOrderDiscounts] = useState(true);
-  const [combinesShippingDiscounts, setCombinesShippingDiscounts] = useState(true);
-  const [combinesProductDiscounts, setCombinesProductDiscounts] = useState(true);
-
   // ── Tier helpers ──
 
   function addVolumeTier() {
     setTiers((prev) => [
       ...prev,
-      { qty: "", label: "", discountType: "percentage", value: "", tag1: "", tag2: "", preselected: false },
+      createVolumeTier({ qty: "", label: "", discountType: "percentage", value: "", tag1: "", tag2: "", preselected: false }),
     ]);
   }
   function removeVolumeTier(i: number) {
@@ -348,7 +403,7 @@ export default function NewDiscountOfferPage() {
   function addCheapestTier() {
     setCheapestTiers((prev) => [
       ...prev,
-      { requiredQty: "", discountedQty: "1", discountType: "percentage", discountValue: "100", label: "" },
+      createCheapestTier({ requiredQty: "", discountedQty: "1", discountType: "percentage", discountValue: "100", label: "" }),
     ]);
   }
   function removeCheapestTier(i: number) {
@@ -361,7 +416,7 @@ export default function NewDiscountOfferPage() {
   function addCartTier() {
     setCartTiers((prev) => [
       ...prev,
-      { threshold: "", discountType: "percentage", discountValue: "", label: "" },
+      createCartTier({ threshold: "", discountType: "percentage", discountValue: "", label: "" }),
     ]);
   }
   function removeCartTier(i: number) {
@@ -396,14 +451,14 @@ export default function NewDiscountOfferPage() {
           All Offers
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ width: 44, height: 44, borderRadius: 14, background: "var(--discount-grad)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 4px 14px rgba(225,29,72,0.28)" }}>
+          <div className="rd-style-076">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
           </div>
           <div>
             <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, color: "var(--text)", lineHeight: 1.2 }}>{pageTitle}</h1>
             <div style={{ fontSize: 12, color: "var(--text-sub)", marginTop: 2 }}>Configure your discount offer</div>
           </div>
-          <span style={{ marginLeft: "auto", background: "rgba(225,29,72,0.1)", color: "var(--discount-color)", border: "1.5px solid rgba(225,29,72,0.2)", borderRadius: 20, fontSize: 11, fontWeight: 700, padding: "4px 12px", letterSpacing: "0.2px" }}>Discount</span>
+          <span className="rd-style-077">Discount</span>
         </div>
       </div>
 
@@ -414,7 +469,7 @@ export default function NewDiscountOfferPage() {
 
         {/* Tier arrays — volume */}
         {templateId === "volume" && tiers.map((tier, i) => (
-          <span key={i}>
+          <span key={tier.id}>
             <input type="hidden" name="tier_qty[]" value={tier.qty} />
             <input type="hidden" name="tier_label[]" value={tier.label} />
             <input type="hidden" name="tier_discount_type[]" value={tier.discountType} />
@@ -427,7 +482,7 @@ export default function NewDiscountOfferPage() {
 
         {/* Tier arrays — cheapest */}
         {templateId === "cheapest_item" && cheapestTiers.map((tier, i) => (
-          <span key={i}>
+          <span key={tier.id}>
             <input type="hidden" name="cheapest_required_qty[]" value={tier.requiredQty} />
             <input type="hidden" name="cheapest_discounted_qty[]" value={tier.discountedQty} />
             <input type="hidden" name="cheapest_discount_type[]" value={tier.discountType} />
@@ -438,7 +493,7 @@ export default function NewDiscountOfferPage() {
 
         {/* Tier arrays — cart */}
         {templateId === "cart" && cartTiers.map((tier, i) => (
-          <span key={i}>
+          <span key={tier.id}>
             <input type="hidden" name="cart_tier_threshold[]" value={tier.threshold} />
             <input type="hidden" name="cart_tier_discount_type[]" value={tier.discountType} />
             <input type="hidden" name="cart_tier_discount_value[]" value={tier.discountValue} />
@@ -457,9 +512,9 @@ export default function NewDiscountOfferPage() {
             {templateId === "volume" && (
               <div className="b-card" style={{ borderTop: "3px solid var(--discount-color)" }}>
                 <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
-                  <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--discount-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>1</div>
+                  <div className="rd-style-078">1</div>
                   <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Basic information</span>
-                  <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(225,29,72,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>1</span>
+                  <span className="rd-style-079">1</span>
                 </div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
@@ -604,8 +659,8 @@ export default function NewDiscountOfferPage() {
                   {/* Regla de cantidad */}
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                     <div style={{ flex: 1 }}>
-                      <label className="b-label">Count rule</label>
-                      <select className="b-select" name="countRule"
+                      <label className="b-label" htmlFor="discount-count-rule">Count rule</label>
+                      <select id="discount-count-rule" aria-label="Count rule" className="b-select" name="countRule"
                         value={countRule} onChange={(e) => setCountRule(e.target.value)}>
                         <option value="all">Count all products</option>
                         <option value="unique">Count identical products only</option>
@@ -618,17 +673,17 @@ export default function NewDiscountOfferPage() {
 
                   {/* Display type */}
                   <div>
-                    <label className="b-label">Choose display type:</label>
+                    <div className="b-label">Choose display type:</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
-                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                        <input type="radio" name="displayType" value="quantity_options"
+                      <label className="b-checkbox-row" htmlFor="discount-display-quantity-options" style={{ cursor: "pointer", gap: 8 }}>
+                        <input id="discount-display-quantity-options" aria-label="Quantity options" type="radio" name="displayType" value="quantity_options"
                           checked={displayType === "quantity_options"}
                           onChange={() => setDisplayType("quantity_options")}
                           style={{ accentColor: "var(--discount-color)", width: 14, height: 14 }} />
                         <span style={{ fontSize: 13, color: "var(--text)" }}>Quantity options</span>
                       </label>
-                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                        <input type="radio" name="displayType" value="discount_table"
+                      <label className="b-checkbox-row" htmlFor="discount-display-table" style={{ cursor: "pointer", gap: 8 }}>
+                        <input id="discount-display-table" aria-label="Quantity discount table" type="radio" name="displayType" value="discount_table"
                           checked={displayType === "discount_table"}
                           onChange={() => setDisplayType("discount_table")}
                           style={{ accentColor: "var(--discount-color)", width: 14, height: 14 }} />
@@ -639,8 +694,8 @@ export default function NewDiscountOfferPage() {
 
                   {/* Referirse a */}
                   <div>
-                    <label className="b-label">Apply to:</label>
-                    <select className="b-select" name="applyTo"
+                    <label className="b-label" htmlFor="discount-volume-apply-to">Apply to:</label>
+                    <select id="discount-volume-apply-to" aria-label="Apply to" className="b-select" name="applyTo"
                       value={applyTo} onChange={(e) => setApplyTo(e.target.value)}>
                       <option value="selected_products">selected products</option>
                       <option value="any_product">any product</option>
@@ -673,8 +728,8 @@ export default function NewDiscountOfferPage() {
                 <div className="b-card-header">Offers</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
-                    <label className="b-label">Apply to:</label>
-                    <select className="b-select" name="applyTo"
+                    <label className="b-label" htmlFor="discount-cheapest-apply-to">Apply to:</label>
+                    <select id="discount-cheapest-apply-to" aria-label="Apply to" className="b-select" name="applyTo"
                       value={applyTo} onChange={(e) => setApplyTo(e.target.value)}>
                       <option value="any_product">any product</option>
                       <option value="selected_products">selected products</option>
@@ -693,8 +748,8 @@ export default function NewDiscountOfferPage() {
                       </div>
                     </div>
                   )}
-                  <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                    <input type="checkbox" name="countRule" value="unique"
+                  <label className="b-checkbox-row" htmlFor="discount-count-unique" style={{ cursor: "pointer", gap: 8 }}>
+                    <input id="discount-count-unique" aria-label="Count unique products only" type="checkbox" name="countRule" value="unique"
                       checked={countRule === "unique"}
                       onChange={(e) => setCountRule(e.target.checked ? "unique" : "all")} />
                     <span style={{ fontSize: 13, color: "var(--text)" }}>Count unique products only</span>
@@ -711,8 +766,8 @@ export default function NewDiscountOfferPage() {
                 <div className="b-card-header">Offers</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
-                    <label className="b-label">Apply to cart with:</label>
-                    <select className="b-select" name="applyTo"
+                    <label className="b-label" htmlFor="discount-cart-apply-to">Apply to cart with:</label>
+                    <select id="discount-cart-apply-to" aria-label="Apply to cart with" className="b-select" name="applyTo"
                       value={applyTo} onChange={(e) => setApplyTo(e.target.value)}>
                       <option value="any_product">any product</option>
                       <option value="selected_products">selected products</option>
@@ -732,16 +787,16 @@ export default function NewDiscountOfferPage() {
                   <div>
                     <div className="b-label" style={{ marginBottom: 8 }}>Maximum discount usage</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                        <input type="checkbox" name="maxUsesEnabled"
+                      <label className="b-checkbox-row" htmlFor="discount-max-uses-enabled" style={{ cursor: "pointer", gap: 8 }}>
+                        <input id="discount-max-uses-enabled" aria-label="Limit the number of times this discount can be used in total" type="checkbox" name="maxUsesEnabled"
                           checked={maxUsesEnabled}
                           onChange={(e) => setMaxUsesEnabled(e.target.checked)} />
                         <span style={{ fontSize: 13, color: "var(--text)" }}>
                           Limit the number of times this discount can be used in total
                         </span>
                       </label>
-                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                        <input type="checkbox" name="maxUsePerCustomerEnabled"
+                      <label className="b-checkbox-row" htmlFor="discount-max-use-per-customer" style={{ cursor: "pointer", gap: 8 }}>
+                        <input id="discount-max-use-per-customer" aria-label="Limit to one use per customer" type="checkbox" name="maxUsePerCustomerEnabled"
                           checked={maxUsePerCustomerEnabled}
                           onChange={(e) => setMaxUsePerCustomerEnabled(e.target.checked)} />
                         <span style={{ fontSize: 13, color: "var(--text)" }}>
@@ -756,7 +811,7 @@ export default function NewDiscountOfferPage() {
 
             {/* ── Agregar subcondición (all templates) ── */}
             <div className="b-card" style={{ background: "var(--bg)", border: "1.5px dashed var(--border)" }}>
-              <div className="b-card-body" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px 16px", color: "var(--discount-color)", cursor: "pointer", fontWeight: 500, fontSize: 14 }}>
+              <div className="b-card-body rd-style-080">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
                 </svg>
@@ -772,10 +827,10 @@ export default function NewDiscountOfferPage() {
                 <div className="b-card-header">Tiers</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   {tiers.map((tier, i) => (
-                    <div key={i} className="b-card" style={{ background: "var(--bg-hover)" }}>
+                    <div key={tier.id} className="b-card" style={{ background: "var(--bg-hover)" }}>
                       <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ fontSize: 13, fontWeight: 600 }}>Tier {i + 1}</span>
-                        <button type="button" onClick={() => removeVolumeTier(i)}
+                        <button type="button" aria-label={`Remove tier ${i + 1}`} onClick={() => removeVolumeTier(i)}
                           className="b-modal-close" style={{ width: 22, height: 22 }}>
                           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                         </button>
@@ -783,22 +838,22 @@ export default function NewDiscountOfferPage() {
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
-                            <label className="b-label">Quantity</label>
-                            <input className="b-input" type="number" min="1"
+                            <label className="b-label" htmlFor={`volume-tier-${tier.id}-qty`}>Quantity</label>
+                            <input id={`volume-tier-${tier.id}-qty`} aria-label={`Tier ${i + 1} quantity`} className="b-input" type="number" min="1"
                               value={tier.qty} onChange={(e) => updateVolumeTier(i, "qty", e.target.value)}
                               autoComplete="off" />
                           </div>
                           <div>
-                            <label className="b-label">Title</label>
-                            <input className="b-input"
+                            <label className="b-label" htmlFor={`volume-tier-${tier.id}-label`}>Title</label>
+                            <input id={`volume-tier-${tier.id}-label`} aria-label={`Tier ${i + 1} title`} className="b-input"
                               value={tier.label} onChange={(e) => updateVolumeTier(i, "label", e.target.value)}
                               autoComplete="off" />
                           </div>
                         </div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
-                            <label className="b-label">Discount type</label>
-                            <select className="b-select"
+                            <label className="b-label" htmlFor={`volume-tier-${tier.id}-discount-type`}>Discount type</label>
+                            <select id={`volume-tier-${tier.id}-discount-type`} aria-label={`Tier ${i + 1} discount type`} className="b-select"
                               value={tier.discountType} onChange={(e) => updateVolumeTier(i, "discountType", e.target.value)}>
                               <option value="percentage">Percentage</option>
                               <option value="fixed_amount">Fixed amount</option>
@@ -806,8 +861,8 @@ export default function NewDiscountOfferPage() {
                             </select>
                           </div>
                           <div>
-                            <label className="b-label">Value</label>
-                            <input className="b-input" type="number" min="0"
+                            <label className="b-label" htmlFor={`volume-tier-${tier.id}-value`}>Value</label>
+                            <input id={`volume-tier-${tier.id}-value`} aria-label={`Tier ${i + 1} value`} className="b-input" type="number" min="0"
                               value={tier.value} onChange={(e) => updateVolumeTier(i, "value", e.target.value)}
                               autoComplete="off" />
                           </div>
@@ -816,20 +871,20 @@ export default function NewDiscountOfferPage() {
                           Add: Shipping discount
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          <label className="b-checkbox-row" style={{ gap: 8, alignItems: "center", cursor: "pointer" }}>
-                            <input type="checkbox" defaultChecked style={{ accentColor: "var(--discount-color)" }} />
-                            <input className="b-input" style={{ flex: 1 }}
+                          <div className="b-checkbox-row" style={{ gap: 8, alignItems: "center" }}>
+                            <input aria-label={`Enable tier ${i + 1} label 1`} type="checkbox" defaultChecked style={{ accentColor: "var(--discount-color)" }} />
+                            <input aria-label={`Tier ${i + 1} label 1`} className="b-input" style={{ flex: 1 }}
                               value={tier.tag1} onChange={(e) => updateVolumeTier(i, "tag1", e.target.value)}
                               placeholder="Label 1" autoComplete="off" />
-                          </label>
-                          <label className="b-checkbox-row" style={{ gap: 8, alignItems: "center", cursor: "pointer" }}>
-                            <input type="checkbox" defaultChecked style={{ accentColor: "var(--discount-color)" }} />
-                            <input className="b-input" style={{ flex: 1 }}
+                          </div>
+                          <div className="b-checkbox-row" style={{ gap: 8, alignItems: "center" }}>
+                            <input aria-label={`Enable tier ${i + 1} label 2`} type="checkbox" defaultChecked style={{ accentColor: "var(--discount-color)" }} />
+                            <input aria-label={`Tier ${i + 1} label 2`} className="b-input" style={{ flex: 1 }}
                               value={tier.tag2} onChange={(e) => updateVolumeTier(i, "tag2", e.target.value)}
                               placeholder="Label 2" autoComplete="off" />
-                          </label>
-                          <label className="b-checkbox-row" style={{ gap: 8, cursor: "pointer" }}>
-                            <input type="checkbox"
+                          </div>
+                          <label className="b-checkbox-row" htmlFor={`volume-tier-${tier.id}-preselected`} style={{ gap: 8, cursor: "pointer" }}>
+                            <input id={`volume-tier-${tier.id}-preselected`} aria-label={`Tier ${i + 1} preselected`} type="checkbox"
                               checked={tier.preselected}
                               onChange={(e) => updateVolumeTier(i, "preselected", e.target.checked)}
                               style={{ accentColor: "var(--discount-color)" }} />
@@ -861,17 +916,17 @@ export default function NewDiscountOfferPage() {
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   {/* Descuento sobre */}
                   <div>
-                    <label className="b-label">Discount on:</label>
+                    <div className="b-label">Discount on:</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
-                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                        <input type="radio" name="discountOnItem" value="cheapest"
+                      <label className="b-checkbox-row" htmlFor="discount-on-cheapest" style={{ cursor: "pointer", gap: 8 }}>
+                        <input id="discount-on-cheapest" aria-label="Cheapest item" type="radio" name="discountOnItem" value="cheapest"
                           checked={discountOnItem === "cheapest"}
                           onChange={() => setDiscountOnItem("cheapest")}
                           style={{ accentColor: "var(--discount-color)", width: 14, height: 14 }} />
                         <span style={{ fontSize: 13, color: "var(--text)" }}>Cheapest item</span>
                       </label>
-                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                        <input type="radio" name="discountOnItem" value="most_expensive"
+                      <label className="b-checkbox-row" htmlFor="discount-on-most-expensive" style={{ cursor: "pointer", gap: 8 }}>
+                        <input id="discount-on-most-expensive" aria-label="Most expensive item" type="radio" name="discountOnItem" value="most_expensive"
                           checked={discountOnItem === "most_expensive"}
                           onChange={() => setDiscountOnItem("most_expensive")}
                           style={{ accentColor: "var(--discount-color)", width: 14, height: 14 }} />
@@ -881,10 +936,10 @@ export default function NewDiscountOfferPage() {
                   </div>
 
                   {cheapestTiers.map((tier, i) => (
-                    <div key={i} className="b-card" style={{ background: "var(--bg-hover)" }}>
+                    <div key={tier.id} className="b-card" style={{ background: "var(--bg-hover)" }}>
                       <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ fontSize: 13, fontWeight: 600 }}>Tier {i + 1}</span>
-                        <button type="button" onClick={() => removeCheapestTier(i)}
+                        <button type="button" aria-label={`Remove tier ${i + 1}`} onClick={() => removeCheapestTier(i)}
                           className="b-modal-close" style={{ width: 22, height: 22 }}>
                           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                         </button>
@@ -892,37 +947,37 @@ export default function NewDiscountOfferPage() {
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
-                            <label className="b-label">Required items count</label>
-                            <input className="b-input" type="number" min="1"
+                            <label className="b-label" htmlFor={`cheapest-tier-${tier.id}-required`}>Required items count</label>
+                            <input id={`cheapest-tier-${tier.id}-required`} aria-label={`Tier ${i + 1} required items count`} className="b-input" type="number" min="1"
                               value={tier.requiredQty} onChange={(e) => updateCheapestTier(i, "requiredQty", e.target.value)}
                               autoComplete="off" />
                           </div>
                           <div>
-                            <label className="b-label">Discounted items count</label>
-                            <input className="b-input" type="number" min="1"
+                            <label className="b-label" htmlFor={`cheapest-tier-${tier.id}-discounted`}>Discounted items count</label>
+                            <input id={`cheapest-tier-${tier.id}-discounted`} aria-label={`Tier ${i + 1} discounted items count`} className="b-input" type="number" min="1"
                               value={tier.discountedQty} onChange={(e) => updateCheapestTier(i, "discountedQty", e.target.value)}
                               autoComplete="off" />
                           </div>
                         </div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
-                            <label className="b-label">Type</label>
-                            <select className="b-select"
+                            <label className="b-label" htmlFor={`cheapest-tier-${tier.id}-type`}>Type</label>
+                            <select id={`cheapest-tier-${tier.id}-type`} aria-label={`Tier ${i + 1} discount type`} className="b-select"
                               value={tier.discountType} onChange={(e) => updateCheapestTier(i, "discountType", e.target.value)}>
                               <option value="percentage">Percentage</option>
                               <option value="fixed_amount">Fixed amount</option>
                             </select>
                           </div>
                           <div>
-                            <label className="b-label">Value</label>
-                            <input className="b-input" type="number" min="0"
+                            <label className="b-label" htmlFor={`cheapest-tier-${tier.id}-value`}>Value</label>
+                            <input id={`cheapest-tier-${tier.id}-value`} aria-label={`Tier ${i + 1} discount value`} className="b-input" type="number" min="0"
                               value={tier.discountValue} onChange={(e) => updateCheapestTier(i, "discountValue", e.target.value)}
                               autoComplete="off" />
                           </div>
                         </div>
                         <div>
-                          <label className="b-label">Label text</label>
-                          <input className="b-input"
+                          <label className="b-label" htmlFor={`cheapest-tier-${tier.id}-label`}>Label text</label>
+                          <input id={`cheapest-tier-${tier.id}-label`} aria-label={`Tier ${i + 1} label text`} className="b-input"
                             value={tier.label} onChange={(e) => updateCheapestTier(i, "label", e.target.value)}
                             autoComplete="off" />
                         </div>
@@ -935,8 +990,8 @@ export default function NewDiscountOfferPage() {
                       onClick={addCheapestTier}>
                       + Add tier
                     </button>
-                    <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                      <input type="checkbox" style={{ accentColor: "var(--discount-color)" }} />
+                    <label className="b-checkbox-row" htmlFor="discount-multiply-last-tier" style={{ cursor: "pointer", gap: 8 }}>
+                      <input id="discount-multiply-last-tier" aria-label="Multiply the last tier" type="checkbox" style={{ accentColor: "var(--discount-color)" }} />
                       <span style={{ fontSize: 13, color: "var(--text)" }}>Multiply the last tier</span>
                     </label>
                   </div>
@@ -953,16 +1008,16 @@ export default function NewDiscountOfferPage() {
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div>
-                      <label className="b-label">Discount by:</label>
-                      <select className="b-select" name="cartDiscountBy"
+                      <label className="b-label" htmlFor="discount-cart-discount-by">Discount by:</label>
+                      <select id="discount-cart-discount-by" aria-label="Discount by" className="b-select" name="cartDiscountBy"
                         value={cartDiscountBy} onChange={(e) => setCartDiscountBy(e.target.value)}>
                         <option value="cart_value">Cart value</option>
                         <option value="quantity">Quantity</option>
                       </select>
                     </div>
                     <div>
-                      <label className="b-label">Discount type:</label>
-                      <select className="b-select" name="cartDiscountType"
+                      <label className="b-label" htmlFor="discount-cart-discount-type">Discount type:</label>
+                      <select id="discount-cart-discount-type" aria-label="Discount type" className="b-select" name="cartDiscountType"
                         value={cartDiscountType} onChange={(e) => setCartDiscountType(e.target.value)}>
                         <option value="percentage">Percentage</option>
                         <option value="fixed_amount">Fixed amount</option>
@@ -973,10 +1028,10 @@ export default function NewDiscountOfferPage() {
                   <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginTop: 4 }}>Tiers</div>
 
                   {cartTiers.map((tier, i) => (
-                    <div key={i} className="b-card" style={{ background: "var(--bg-hover)" }}>
+                    <div key={tier.id} className="b-card" style={{ background: "var(--bg-hover)" }}>
                       <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ fontSize: 13, fontWeight: 600 }}>Tier {i + 1}</span>
-                        <button type="button" onClick={() => removeCartTier(i)}
+                        <button type="button" aria-label={`Remove tier ${i + 1}`} onClick={() => removeCartTier(i)}
                           className="b-modal-close" style={{ width: 22, height: 22 }}>
                           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                         </button>
@@ -984,19 +1039,19 @@ export default function NewDiscountOfferPage() {
                       <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
-                            <label className="b-label">Required cart value</label>
+                            <label className="b-label" htmlFor={`cart-tier-${tier.id}-threshold`}>Required cart value</label>
                             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                               <span style={{ fontSize: 13, color: "var(--text-sub)", fontWeight: 500 }}>$</span>
-                              <input className="b-input" type="number" min="0" step="0.01"
+                              <input id={`cart-tier-${tier.id}-threshold`} aria-label={`Tier ${i + 1} required cart value`} className="b-input" type="number" min="0" step="0.01"
                                 value={tier.threshold} onChange={(e) => updateCartTier(i, "threshold", e.target.value)}
                                 autoComplete="off" />
                             </div>
                           </div>
                           <div>
-                            <label className="b-label">Discount value</label>
+                            <label className="b-label" htmlFor={`cart-tier-${tier.id}-discount-value`}>Discount value</label>
                             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                               <span style={{ fontSize: 13, color: "var(--text-sub)", fontWeight: 500 }}>%</span>
-                              <input className="b-input" type="number" min="0"
+                              <input id={`cart-tier-${tier.id}-discount-value`} aria-label={`Tier ${i + 1} discount value`} className="b-input" type="number" min="0"
                                 value={tier.discountValue} onChange={(e) => updateCartTier(i, "discountValue", e.target.value)}
                                 autoComplete="off" />
                             </div>
@@ -1008,25 +1063,21 @@ export default function NewDiscountOfferPage() {
                           <div style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 6 }}>Add currency</div>
                           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                             {CURRENCY_CHIPS.map((code) => (
-                              <span key={code} style={{
-                                fontSize: 11, padding: "2px 7px", borderRadius: 4,
-                                background: "var(--bg)", border: "1px solid var(--border)",
-                                color: "var(--text-sub)", cursor: "pointer", userSelect: "none",
-                              }}>
+                              <span key={code} className="rd-style-081">
                                 {code}
                               </span>
                             ))}
                           </div>
                         </div>
 
-                        <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                          <input type="checkbox" style={{ accentColor: "var(--discount-color)" }} />
+                        <label className="b-checkbox-row" htmlFor={`cart-tier-${tier.id}-maximum`} style={{ cursor: "pointer", gap: 8 }}>
+                          <input id={`cart-tier-${tier.id}-maximum`} aria-label={`Tier ${i + 1} maximum discount value`} type="checkbox" style={{ accentColor: "var(--discount-color)" }} />
                           <span style={{ fontSize: 13, color: "var(--text)" }}>Maximum discount value</span>
                         </label>
 
                         <div>
-                          <label className="b-label">Tier label text</label>
-                          <input className="b-input"
+                          <label className="b-label" htmlFor={`cart-tier-${tier.id}-label`}>Tier label text</label>
+                          <input id={`cart-tier-${tier.id}-label`} aria-label={`Tier ${i + 1} label text`} className="b-input"
                             value={tier.label} onChange={(e) => updateCartTier(i, "label", e.target.value)}
                             autoComplete="off" />
                         </div>
@@ -1144,7 +1195,7 @@ export default function NewDiscountOfferPage() {
         </div>
 
         {/* ── Footer ── */}
-        <div style={{ position: "sticky", bottom: 0, zIndex: 10, display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, padding: "14px 0", background: "rgba(250,249,247,0.9)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", borderTop: "1px solid var(--border)" }}>
+        <div className="rd-style-031">
           <button type="button" className="b-btn b-btn-secondary"
             onClick={() => void navigate("/app/offers")}>
             Cancel
@@ -1194,7 +1245,7 @@ function VolumePreview({
       {displayType === "quantity_options" ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {tiers.map((tier, i) => (
-            <div key={i} style={{
+            <div key={tier.id} style={{
               border: tier.preselected ? "2px solid var(--discount-color)" : "1px solid var(--border)",
               borderRadius: 6, padding: "8px 10px", background: tier.preselected ? "rgba(225,29,72,0.04)" : "var(--bg)",
               display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -1203,10 +1254,10 @@ function VolumePreview({
                 <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>
                   {tier.qty ? `${tier.qty}x` : `—`} {tier.label || `Tier ${i + 1}`}
                 </div>
-                {tier.tag2 && <div style={{ fontSize: 11, color: "var(--text-sub)" }}>{tier.tag2}</div>}
+                {tier.tag2 && <div style={{ fontSize: 12, color: "var(--text-sub)" }}>{tier.tag2}</div>}
               </div>
               {tier.tag1 && (
-                <span style={{ fontSize: 11, background: "#008060", color: "white", borderRadius: 4, padding: "2px 6px" }}>
+                <span style={{ fontSize: 12, background: "#008060", color: "white", borderRadius: 4, padding: "2px 6px" }}>
                   {tier.tag1}
                 </span>
               )}
@@ -1222,8 +1273,8 @@ function VolumePreview({
             </tr>
           </thead>
           <tbody>
-            {tiers.map((tier, i) => (
-              <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+            {tiers.map((tier) => (
+              <tr key={tier.id} style={{ borderBottom: "1px solid var(--border)" }}>
                 <td style={{ padding: "4px 6px", color: "var(--text)" }}>{tier.qty || "—"}</td>
                 <td style={{ padding: "4px 6px", color: "var(--text)" }}>
                   {tier.value ? `${tier.value}${tier.discountType === "percentage" ? "%" : "$"}` : "—"}
@@ -1252,8 +1303,8 @@ function CheapestPreview({
         {title || "Buy more, Free for the cheapest!"}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {tiers.map((tier, i) => (
-          <div key={i} style={{
+        {tiers.map((tier) => (
+          <div key={tier.id} style={{
             border: "1px solid var(--border)", borderRadius: 6, padding: "8px 10px",
             background: "var(--bg)", fontSize: 12, color: "var(--text)",
           }}>
@@ -1268,17 +1319,15 @@ function CheapestPreview({
 // ─── Cart right panel accordion section ──────────────────────────────────────
 
 function CartPreviewSection({ title }: { title: string }) {
-  const [open, setOpen] = useState(false);
+  const [sectionState, setSectionField] = useObjectState({ open: false });
+  const { open } = sectionState;
+  const setOpen = createFieldSetter(setSectionField, "open");
   return (
     <div style={{ borderBottom: "1px solid var(--border)" }}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        style={{
-          width: "100%", background: "none", border: "none", cursor: "pointer",
-          display: "flex", justifyContent: "space-between", alignItems: "center",
-          padding: "12px 0", fontSize: 13, color: "var(--text)", fontWeight: 500, textAlign: "left",
-        }}
+        className="rd-style-082"
       >
         {title}
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"

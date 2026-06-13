@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { AccessibleModal } from "./AccessibleModal.js";
 import type { SubconditionDef, SubconditionId } from "./subconditions/types.js";
 import { SUB_ICONS, ICrown } from "./subconditions/icons.js";
@@ -20,13 +20,26 @@ function ICheck() {
 }
 
 export function SubconditionModal({ open, active, types, onClose, onConfirm }: SubconditionModalProps) {
-  const [selected, setSelected] = useState<SubconditionId[]>([...active]);
-
-  useEffect(() => {
-    if (open) setSelected([...active]);
-  }, [open, active]);
-
   if (!open) return null;
+
+  return (
+    <SubconditionModalContent
+      key={active.join("|")}
+      active={active}
+      types={types}
+      onClose={onClose}
+      onConfirm={onConfirm}
+    />
+  );
+}
+
+function SubconditionModalContent({
+  active,
+  types,
+  onClose,
+  onConfirm,
+}: Omit<SubconditionModalProps, "open">) {
+  const [selected, setSelected] = useState<SubconditionId[]>(() => [...active]);
 
   function toggle(id: SubconditionId) {
     setSelected((prev) =>
@@ -48,7 +61,7 @@ export function SubconditionModal({ open, active, types, onClose, onConfirm }: S
               Refine when this offer triggers. Multiple sub-conditions are combined with AND logic.
             </p>
           </div>
-          <button className="b-modal-close" onClick={onClose} aria-label="Close">
+          <button type="button" className="b-modal-close" onClick={onClose} aria-label="Close">
             <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/></svg>
           </button>
         </div>
@@ -69,43 +82,18 @@ export function SubconditionModal({ open, active, types, onClose, onConfirm }: S
                   type="button"
                   onClick={() => toggle(sub.id)}
                   aria-pressed={isSelected}
-                  style={{
-                    border: `1.5px solid ${isSelected ? "var(--blue)" : "var(--border)"}`,
-                    borderRadius: 10,
-                    padding: "14px 16px",
-                    cursor: "pointer",
-                    background: isSelected ? "var(--blue-light, #f0f4ff)" : "var(--bg-card)",
-                    position: "relative",
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 14,
-                    transition: "border-color 0.12s, background 0.12s, box-shadow 0.12s",
-                    boxShadow: isSelected ? "0 0 0 3px rgba(44,110,203,0.12)" : "none",
-                    textAlign: "left",
-                    fontFamily: "inherit",
-                  }}
+                  className="rd-style-093" style={{ border: `1.5px solid ${isSelected ? "var(--blue)" : "var(--border)"}`, background: isSelected ? "var(--blue-light, #f0f4ff)" : "var(--bg-card)", boxShadow: isSelected ? "0 0 0 3px rgba(44,110,203,0.12)" : "none" }}
                 >
                   {/* Plus badge */}
                   {sub.plus && (
-                    <div style={{
-                      position: "absolute", top: 8, right: 8,
-                      background: "#fbbf24", borderRadius: 4,
-                      padding: "2px 6px", display: "flex", alignItems: "center", gap: 3,
-                      fontSize: 10, fontWeight: 600, color: "#78350f",
-                    }}>
+                    <div className="rd-style-094">
                       <ICrown />
                       <span>Plus</span>
                     </div>
                   )}
 
                   {/* Icon */}
-                  <div style={{
-                    width: 38, height: 38, borderRadius: 8, flexShrink: 0,
-                    background: isSelected ? "var(--blue)" : "var(--bg-hover)",
-                    color: isSelected ? "#fff" : "var(--text-sub)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    transition: "background 0.12s, color 0.12s",
-                  }}>
+                  <div className="rd-style-095" style={{ background: isSelected ? "var(--blue)" : "var(--bg-hover)", color: isSelected ? "#fff" : "var(--text-sub)" }}>
                     <Icon />
                   </div>
 
@@ -121,12 +109,7 @@ export function SubconditionModal({ open, active, types, onClose, onConfirm }: S
 
                   {/* Check indicator */}
                   {isSelected && (
-                    <div style={{
-                      position: "absolute", top: 10, right: 10,
-                      width: 18, height: 18, borderRadius: "50%",
-                      background: "var(--blue)", color: "#fff",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>
+                    <div className="rd-style-096">
                       <ICheck />
                     </div>
                   )}
@@ -137,8 +120,8 @@ export function SubconditionModal({ open, active, types, onClose, onConfirm }: S
         </div>
 
         <div className="b-modal-footer">
-          <button className="b-btn b-btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="b-btn b-btn-dark" onClick={handleConfirm}>
+          <button type="button" className="b-btn b-btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="button" className="b-btn b-btn-dark" onClick={handleConfirm}>
             {selected.length > 0 ? `Apply ${selected.length} sub-condition${selected.length !== 1 ? "s" : ""}` : "Apply"}
           </button>
         </div>

@@ -157,7 +157,7 @@ export default function OfferDebugPage() {
           <div className="b-card">
             <div className="b-card-header b-row-between">
               <span>Function Config</span>
-              <button
+              <button type="button"
                 className="b-btn b-btn-secondary b-btn-sm"
                 onClick={() => {
                   if (offer.compiledConfigJson) {
@@ -172,18 +172,7 @@ export default function OfferDebugPage() {
             <div className="b-card-body">
               {offer.compiledConfigJson ? (
                 <pre
-                  style={{
-                    margin: 0,
-                    fontSize: 12,
-                    lineHeight: 1.55,
-                    overflow: "auto",
-                    maxHeight: 320,
-                    background: "#111827",
-                    color: "#e5e7eb",
-                    padding: "14px 16px",
-                    borderRadius: 6,
-                    fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
-                  }}
+                  className="rd-style-010"
                 >
                   <code>{offer.compiledConfigJson}</code>
                 </pre>
@@ -236,8 +225,8 @@ export default function OfferDebugPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {allErrors.map((row, i) => (
-                      <tr key={i}>
+                    {allErrors.map((row) => (
+                      <tr key={`${row.time}:${row.event}:${row.cartId}:${row.message}`}>
                         <td style={{ paddingLeft: 16, whiteSpace: "nowrap" }}>
                           {new Date(row.time).toLocaleString()}
                         </td>

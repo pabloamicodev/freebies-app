@@ -42,20 +42,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       priority: o.priority,
       updatedAt: o.updatedAt.toISOString(),
     })),
-    widgets: boosterWidgets.filter((w) =>
+    widgets: boosterWidgets.flatMap((w) => (
       ["today_offer_widget", "today_offer_block", "progress_bar"].includes(w.type)
-    ).map((w) => ({
-      id: w.id,
-      type: w.type,
-      internalName: w.internalName,
-      isEnabled: w.isEnabled,
-    })),
+        ? [{
+            id: w.id,
+            type: w.type,
+            internalName: w.internalName,
+            isEnabled: w.isEnabled,
+          }]
+        : []
+    )),
   };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
-  const formData = await request.formData();
+  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
+  const { shopId, db } = context;
   const intent = formData.get("intent") as string;
   const widgetId = formData.get("widgetId") as string;
 
@@ -220,7 +222,7 @@ export default function BoostersPage() {
             <div className="b-checklist">
               <div className="b-check-item">
                 <div className="b-check-circle b-check-circle-todo">
-                  <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-sub)" }}>1</span>
+                  <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-sub)" }}>1</span>
                 </div>
                 <div>
                   <p className="b-text-sm" style={{ margin: 0 }}>
@@ -230,7 +232,7 @@ export default function BoostersPage() {
               </div>
               <div className="b-check-item">
                 <div className="b-check-circle b-check-circle-todo">
-                  <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-sub)" }}>2</span>
+                  <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-sub)" }}>2</span>
                 </div>
                 <div>
                   <p className="b-text-sm" style={{ margin: 0 }}>
@@ -240,7 +242,7 @@ export default function BoostersPage() {
               </div>
               <div className="b-check-item">
                 <div className="b-check-circle b-check-circle-todo">
-                  <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-sub)" }}>3</span>
+                  <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-sub)" }}>3</span>
                 </div>
                 <div>
                   <p className="b-text-sm" style={{ margin: 0 }}>
@@ -250,7 +252,7 @@ export default function BoostersPage() {
               </div>
               <div className="b-check-item">
                 <div className="b-check-circle b-check-circle-todo">
-                  <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-sub)" }}>4</span>
+                  <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-sub)" }}>4</span>
                 </div>
                 <div>
                   <p className="b-text-sm" style={{ margin: 0 }}>

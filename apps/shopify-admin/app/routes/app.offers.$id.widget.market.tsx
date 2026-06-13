@@ -67,15 +67,15 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   return { success: true, savedCount: overrides.length };
 };
 
+async function saveMarketOverrides(overrides: Array<{ marketId: string; thresholdCents: number | null }>) {
+  const form = new FormData();
+  form.append("overrides", JSON.stringify(overrides));
+  await fetch("", { method: "POST", body: form });
+}
+
 export default function WidgetMarketPage() {
   const { offerId, markets, marketOverrides, baseThresholdCents, widgetId } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
-
-  async function handleSave(overrides: Array<{ marketId: string; thresholdCents: number | null }>) {
-    const form = new FormData();
-    form.append("overrides", JSON.stringify(overrides));
-    await fetch("", { method: "POST", body: form });
-  }
 
   return (
     <div className="b-page">
@@ -142,8 +142,9 @@ export default function WidgetMarketPage() {
                   <MarketWidgetConfig
                     widgetId={widgetId}
                     baseThresholdCents={baseThresholdCents}
+                    markets={markets}
                     defaultOverrides={marketOverrides}
-                    onSave={handleSave}
+                    onSave={saveMarketOverrides}
                   />
                 </div>
               </div>

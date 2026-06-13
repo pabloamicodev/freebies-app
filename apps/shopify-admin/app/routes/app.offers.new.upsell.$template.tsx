@@ -6,10 +6,12 @@
  */
 
 import { Form, useNavigate, redirect, useParams } from "react-router";
-import { useState } from "react";
+import { useMemo } from "react";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
+import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
@@ -33,6 +35,12 @@ const SLUG_DEFAULT_NAME: Record<string, string> = {
   "thank-you": "Thank You Upsell",
 };
 
+const UPSELL_PAGE_TITLES: Record<string, string> = {
+  "checkout": "Create Checkout upsell",
+  "fbt": "Create upsell",
+  "thank-you": "Create a thank-you page to boost sales",
+};
+
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -43,8 +51,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 // ─── Action ──────────────────────────────────────────────────────────────────
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
-  const formData = await request.formData();
+  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
+  const { shopId, db } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
@@ -83,82 +91,133 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     discountType === "percentage" ? discountValue
     : Math.round(discountValue * 100);
 
+  async function createOffer(candidateName: string) {
+    const [offer] = await db
+      .insert(offers)
+      .values({
+        shopId,
+        type: "upsell",
+        status,
+        internalName: candidateName,
+        publicTitle: publicTitle || candidateName,
+        description,
+        priority: 100,
+        startsAt: startsAt ? new Date(startsAt) : new Date(),
+        endsAt: endsAt ? new Date(endsAt) : null,
+      })
+      .returning({ id: offers.id });
+    return offer;
+  }
+
   let newOffer: { id: string } | undefined;
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const candidateName = attempt === 0 ? internalName : `${internalName} (${attempt + 1})`;
-    try {
-      [newOffer] = await db
-        .insert(offers)
-        .values({
-          shopId,
-          type: "upsell",
-          status,
-          internalName: candidateName,
-          publicTitle: publicTitle || candidateName,
-          description,
-          priority: 100,
-          startsAt: startsAt ? new Date(startsAt) : new Date(),
-          endsAt: endsAt ? new Date(endsAt) : null,
-        })
-        .returning({ id: offers.id });
-      break;
-    } catch (err) {
-      if ((err as { code?: string }).code === "23505") continue;
-      throw err;
-    }
+  try {
+    newOffer = await createOffer(internalName);
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    newOffer = await createOffer(withUniqueOfferSuffix(internalName));
   }
 
   if (!newOffer) return { error: "Failed to create offer" };
 
-  await db.insert(offerConditions).values({
-    shopId,
-    offerId: newOffer.id,
-    scope: "visibility",
-    conditionType: "sales_channels",
-    operator: "eq",
-    value: {
-      upsellType: templateRaw,
-      triggerType,
-      upsellMethod,
-      widgetType: templateRaw === "fbt" ? widgetType : undefined,
-      checkoutTarget: templateRaw === "checkout" ? checkoutTarget : undefined,
-      allowCustomerQty: templateRaw === "fbt" ? allowCustomerQty : undefined,
-      discountEnabled: templateRaw === "fbt" ? discountEnabled : undefined,
-      discountMinProducts: templateRaw === "fbt" ? discountMinProducts : undefined,
-      discountApplyTo: templateRaw === "fbt" ? discountApplyTo : undefined,
-    },
-    sortOrder: 0,
-    isEnabled: true,
-  });
-
-  await db.insert(offerRewards).values({
-    shopId,
-    offerId: newOffer.id,
-    rewardType: "upsell_discount",
-    discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
-    value: { amount: rewardAmount, currencyCode: "USD" },
-    target: { variantIds: upsellProducts },
-    isAutoAdd: false,
-    isCustomerSelectable: true,
-    trackMode: "product",
-    sortOrder: 0,
-  });
-
-  await db.insert(offerCombinationPolicies).values({
-    shopId,
-    offerId: newOffer.id,
-    combinesWithOrderDiscounts: combinesOrderDiscounts,
-    combinesWithProductDiscounts: true,
-    combinesWithShippingDiscounts: combinesShippingDiscounts,
-    combinesWithOtherAppOffers: true,
-    stopLowerPriority: false,
-    giftValueCountsForOtherOffers: false,
-  });
+  await Promise.all([
+    db.insert(offerConditions).values({
+      shopId,
+      offerId: newOffer.id,
+      scope: "visibility",
+      conditionType: "sales_channels",
+      operator: "eq",
+      value: {
+        upsellType: templateRaw,
+        triggerType,
+        upsellMethod,
+        widgetType: templateRaw === "fbt" ? widgetType : undefined,
+        checkoutTarget: templateRaw === "checkout" ? checkoutTarget : undefined,
+        allowCustomerQty: templateRaw === "fbt" ? allowCustomerQty : undefined,
+        discountEnabled: templateRaw === "fbt" ? discountEnabled : undefined,
+        discountMinProducts: templateRaw === "fbt" ? discountMinProducts : undefined,
+        discountApplyTo: templateRaw === "fbt" ? discountApplyTo : undefined,
+      },
+      sortOrder: 0,
+      isEnabled: true,
+    }),
+    db.insert(offerRewards).values({
+      shopId,
+      offerId: newOffer.id,
+      rewardType: "upsell_discount",
+      discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
+      value: { amount: rewardAmount, currencyCode: "USD" },
+      target: { variantIds: upsellProducts },
+      isAutoAdd: false,
+      isCustomerSelectable: true,
+      trackMode: "product",
+      sortOrder: 0,
+    }),
+    db.insert(offerCombinationPolicies).values({
+      shopId,
+      offerId: newOffer.id,
+      combinesWithOrderDiscounts: combinesOrderDiscounts,
+      combinesWithProductDiscounts: true,
+      combinesWithShippingDiscounts: combinesShippingDiscounts,
+      combinesWithOtherAppOffers: true,
+      stopLowerPriority: false,
+      giftValueCountsForOtherOffers: false,
+    }),
+  ]);
 
   return redirect(`/app/offers/${newOffer.id}`);
 };
 
 // ─── Component ───────────────────────────────────────────────────────────────
+
+function FbtPreviewCard({
+  publicTitle,
+  description,
+  upsellProducts,
+  discountEnabled,
+  discountType,
+  discountValue,
+}: {
+  publicTitle: string;
+  description: string;
+  upsellProducts: string[];
+  discountEnabled: boolean;
+  discountType: string;
+  discountValue: string;
+}) {
+  return (
+    <div className="b-card">
+      <div className="b-card-header">Preview</div>
+      <div className="b-card-body">
+        <div className="rd-style-064">
+          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)" }}>
+            {publicTitle || "Frequently bought together"}
+          </div>
+          {description && (
+            <div style={{ fontSize: 12, color: "var(--text-sub)" }}>{description}</div>
+          )}
+          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+            {upsellProducts.length === 0 ? (
+              <div style={{ fontSize: 12, color: "var(--text-sub)", fontStyle: "italic" }}>
+                Select products to see a preview
+              </div>
+            ) : (
+              upsellProducts.slice(0, 3).map((id) => (
+                <div key={id} className="rd-style-065">
+                  img
+                </div>
+              ))
+            )}
+          </div>
+          {discountEnabled && (
+            <div style={{ fontSize: 12, color: "var(--upsell-color)", fontWeight: 500 }}>
+              {discountType === "percentage" ? `${discountValue}% OFF` : `$${discountValue} OFF`}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function NewUpsellOfferPage() {
   const navigate = useNavigate();
@@ -167,36 +226,82 @@ export default function NewUpsellOfferPage() {
   const templateId = SLUG_TO_TEMPLATE[templateSlug] ?? "checkout";
 
   // ── State ────────────────────────────────────────────────────────────────
-  const [internalName, setInternalName] = useState(SLUG_DEFAULT_NAME[templateSlug] ?? "Upsell");
-  const [publicTitle, setPublicTitle] = useState("Frequently bought together");
-  const [description, setDescription] = useState("");
-  const [startsAt, setStartsAt] = useState(new Date().toISOString().slice(0, 16));
-  const [endsAt, setEndsAt] = useState("");
-
-  const [triggerType, setTriggerType] = useState("always");
-  const [upsellMethod, setUpsellMethod] = useState("manual");
-  const [widgetType, setWidgetType] = useState("fbt");
-  const [discountEnabled, setDiscountEnabled] = useState(false);
-  const [discountMinProducts, setDiscountMinProducts] = useState("2");
-  const [discountApplyTo, setDiscountApplyTo] = useState("any");
-  const [discountType, setDiscountType] = useState("percentage");
-  const [discountValue, setDiscountValue] = useState("10");
-  const [allowCustomerQty, setAllowCustomerQty] = useState(false);
-  const [checkoutTarget, setCheckoutTarget] = useState("");
-
-  const [upsellProducts, setUpsellProducts] = useState<string[]>([]);
-  const [productPickerOpen, setProductPickerOpen] = useState(false);
-
-  const [combinesOrderDiscounts, setCombinesOrderDiscounts] = useState(true);
-  const [combinesShippingDiscounts, setCombinesShippingDiscounts] = useState(true);
-
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [infoBannerDismissed, setInfoBannerDismissed] = useState(false);
-
-  // Validation
-  const [fieldErrors, setFieldErrors] = useState<{ internalName?: string }>({});
-  const [showToast, setShowToast] = useState(false);
-  const [toastMsg, setToastMsg] = useState("");
+  const [formState, setFormField] = useObjectState(() => ({
+    internalName: SLUG_DEFAULT_NAME[templateSlug] ?? "Upsell",
+    publicTitle: "Frequently bought together",
+    description: "",
+    startsAt: new Date().toISOString().slice(0, 16),
+    endsAt: "",
+    triggerType: "always",
+    upsellMethod: "manual",
+    widgetType: "fbt",
+    discountEnabled: false,
+    discountMinProducts: "2",
+    discountApplyTo: "any",
+    discountType: "percentage",
+    discountValue: "10",
+    allowCustomerQty: false,
+    checkoutTarget: "",
+    upsellProducts: [] as string[],
+    productPickerOpen: false,
+    combinesOrderDiscounts: true,
+    combinesShippingDiscounts: true,
+    advancedOpen: false,
+    infoBannerDismissed: false,
+    fieldErrors: {} as { internalName?: string },
+    showToast: false,
+    toastMsg: "",
+  }));
+  const {
+    internalName,
+    publicTitle,
+    description,
+    startsAt,
+    endsAt,
+    triggerType,
+    upsellMethod,
+    widgetType,
+    discountEnabled,
+    discountMinProducts,
+    discountApplyTo,
+    discountType,
+    discountValue,
+    allowCustomerQty,
+    checkoutTarget,
+    upsellProducts,
+    productPickerOpen,
+    combinesOrderDiscounts,
+    combinesShippingDiscounts,
+    advancedOpen,
+    infoBannerDismissed,
+    fieldErrors,
+    showToast,
+    toastMsg,
+  } = formState;
+  const setInternalName = createFieldSetter(setFormField, "internalName");
+  const setPublicTitle = createFieldSetter(setFormField, "publicTitle");
+  const setDescription = createFieldSetter(setFormField, "description");
+  const setStartsAt = createFieldSetter(setFormField, "startsAt");
+  const setEndsAt = createFieldSetter(setFormField, "endsAt");
+  const setTriggerType = createFieldSetter(setFormField, "triggerType");
+  const setUpsellMethod = createFieldSetter(setFormField, "upsellMethod");
+  const setWidgetType = createFieldSetter(setFormField, "widgetType");
+  const setDiscountEnabled = createFieldSetter(setFormField, "discountEnabled");
+  const setDiscountMinProducts = createFieldSetter(setFormField, "discountMinProducts");
+  const setDiscountApplyTo = createFieldSetter(setFormField, "discountApplyTo");
+  const setDiscountType = createFieldSetter(setFormField, "discountType");
+  const setDiscountValue = createFieldSetter(setFormField, "discountValue");
+  const setAllowCustomerQty = createFieldSetter(setFormField, "allowCustomerQty");
+  const setCheckoutTarget = createFieldSetter(setFormField, "checkoutTarget");
+  const setUpsellProducts = createFieldSetter(setFormField, "upsellProducts");
+  const setProductPickerOpen = createFieldSetter(setFormField, "productPickerOpen");
+  const setCombinesOrderDiscounts = createFieldSetter(setFormField, "combinesOrderDiscounts");
+  const setCombinesShippingDiscounts = createFieldSetter(setFormField, "combinesShippingDiscounts");
+  const setAdvancedOpen = createFieldSetter(setFormField, "advancedOpen");
+  const setInfoBannerDismissed = createFieldSetter(setFormField, "infoBannerDismissed");
+  const setFieldErrors = createFieldSetter(setFormField, "fieldErrors");
+  const setShowToast = createFieldSetter(setFormField, "showToast");
+  const setToastMsg = createFieldSetter(setFormField, "toastMsg");
 
   function validate() {
     const errs: { internalName?: string } = {};
@@ -214,17 +319,25 @@ export default function NewUpsellOfferPage() {
   const hasProducts = upsellProducts.length > 0;
 
   // ── Page title ───────────────────────────────────────────────────────────
-  const PAGE_TITLE: Record<string, string> = {
-    "checkout": "Create Checkout upsell",
-    "fbt": "Create upsell",
-    "thank-you": "Create a thank-you page to boost sales",
-  };
-  const pageTitle = PAGE_TITLE[templateSlug] ?? "Create upsell";
+  const pageTitle = UPSELL_PAGE_TITLES[templateSlug] ?? "Create upsell";
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   const isCheckout = templateSlug === "checkout";
   const isFbt = templateSlug === "fbt";
   const isThankYou = templateSlug === "thank-you";
+  const aboveSummary = useMemo(
+    () => isFbt ? (
+      <FbtPreviewCard
+        publicTitle={publicTitle}
+        description={description}
+        upsellProducts={upsellProducts}
+        discountEnabled={discountEnabled}
+        discountType={discountType}
+        discountValue={discountValue}
+      />
+    ) : undefined,
+    [description, discountEnabled, discountType, discountValue, isFbt, publicTitle, upsellProducts],
+  );
 
   return (
     <div className="b-page">
@@ -243,24 +356,20 @@ export default function NewUpsellOfferPage() {
           All Offers
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ width: 44, height: 44, borderRadius: 14, background: "var(--upsell-grad)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 4px 14px rgba(124,58,237,0.28)" }}>
+          <div className="rd-style-054">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
           </div>
           <div>
             <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, color: "var(--text)", lineHeight: 1.2 }}>{pageTitle}</h1>
             <div style={{ fontSize: 12, color: "var(--text-sub)", marginTop: 2 }}>Configure your upsell offer</div>
           </div>
-          <span style={{ marginLeft: "auto", background: "rgba(124,58,237,0.1)", color: "var(--upsell-color)", border: "1.5px solid rgba(124,58,237,0.2)", borderRadius: 20, fontSize: 11, fontWeight: 700, padding: "4px 12px", letterSpacing: "0.2px" }}>Upsell</span>
+          <span className="rd-style-055">Upsell</span>
         </div>
       </div>
 
       {/* ── Info banner ── */}
       {!infoBannerDismissed && (
-        <div style={{
-          background: "var(--blue-bg, #e8f0fe)", border: "1px solid var(--blue-border, #b3cdf9)",
-          borderRadius: 8, padding: "12px 16px", marginBottom: 20,
-          display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12,
-        }}>
+        <div className="rd-style-056">
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>
               Quick tour: How to create an upsell
@@ -274,7 +383,7 @@ export default function NewUpsellOfferPage() {
           <button
             type="button"
             onClick={() => setInfoBannerDismissed(true)}
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, lineHeight: 1, color: "var(--text-sub)", padding: 0, flexShrink: 0 }}
+            className="rd-style-057"
             aria-label="Close"
           >
             ×
@@ -300,9 +409,9 @@ export default function NewUpsellOfferPage() {
             {/* ── Card: Información de venta adicional ── */}
             <div className="b-card" style={{ borderTop: "3px solid var(--upsell-color)" }}>
               <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
-                <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--upsell-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>1</div>
+                <div className="rd-style-058">1</div>
                 <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Upsell information</span>
-                <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(124,58,237,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>1</span>
+                <span className="rd-style-059">1</span>
               </div>
               <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <div>
@@ -362,9 +471,9 @@ export default function NewUpsellOfferPage() {
             {/* ── Card: Upsell trigger ── */}
             <div className="b-card" style={{ borderTop: "3px solid var(--upsell-color)" }}>
               <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
-                <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--upsell-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>2</div>
+                <div className="rd-style-058">2</div>
                 <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Upsell trigger</span>
-                <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(124,58,237,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>2</span>
+                <span className="rd-style-059">2</span>
               </div>
               <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {isFbt ? (
@@ -418,7 +527,7 @@ export default function NewUpsellOfferPage() {
 
             {/* ── Agregar subcondición (dashed) ── */}
             <div className="b-card" style={{ background: "var(--bg)", border: "1.5px dashed var(--border)" }}>
-              <div className="b-card-body" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px 16px", color: "var(--upsell-color)", cursor: "pointer", fontWeight: 500, fontSize: 14 }}>
+              <div className="b-card-body rd-style-060">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
                 </svg>
@@ -429,9 +538,9 @@ export default function NewUpsellOfferPage() {
             {/* ── Card: Upsell method ── */}
             <div className="b-card" style={{ borderTop: "3px solid var(--upsell-color)" }}>
               <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
-                <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--upsell-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>3</div>
+                <div className="rd-style-058">3</div>
                 <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Upsell method</span>
-                <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(124,58,237,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>3</span>
+                <span className="rd-style-059">3</span>
               </div>
               <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
@@ -448,13 +557,7 @@ export default function NewUpsellOfferPage() {
                           key={value}
                           type="button"
                           onClick={() => setWidgetType(value)}
-                          style={{
-                            border: `2px solid ${widgetType === value ? "var(--upsell-color)" : "var(--border)"}`,
-                            borderRadius: 8, padding: "14px 12px", background: widgetType === value ? "rgba(124,58,237,0.06)" : "var(--bg)",
-                            cursor: "pointer", textAlign: "center", fontSize: 13,
-                            fontWeight: widgetType === value ? 600 : 400,
-                            color: widgetType === value ? "var(--upsell-color)" : "var(--text)",
-                          }}
+                          className="rd-style-061" style={{ border: `2px solid ${widgetType === value ? "var(--upsell-color)" : "var(--border)"}`, background: widgetType === value ? "rgba(124,58,237,0.06)" : "var(--bg)", fontWeight: widgetType === value ? 600 : 400, color: widgetType === value ? "var(--upsell-color)" : "var(--text)" }}
                         >
                           {label}
                         </button>
@@ -474,16 +577,7 @@ export default function NewUpsellOfferPage() {
                           key={m}
                           type="button"
                           onClick={() => setUpsellMethod(m)}
-                          style={{
-                            padding: "8px 16px", fontSize: 13,
-                            fontWeight: upsellMethod === m ? 600 : 400,
-                            color: upsellMethod === m ? "var(--upsell-color)" : "var(--text-sub)",
-                            borderBottom: upsellMethod === m ? "2px solid var(--upsell-color)" : "2px solid transparent",
-                            background: "none", border: "none",
-                            borderBottomWidth: 2, borderBottomStyle: "solid",
-                            borderBottomColor: upsellMethod === m ? "var(--upsell-color)" : "transparent",
-                            cursor: "pointer",
-                          }}
+                          className="rd-style-062" style={{ fontWeight: upsellMethod === m ? 600 : 400, color: upsellMethod === m ? "var(--upsell-color)" : "var(--text-sub)", borderBottom: upsellMethod === m ? "2px solid var(--upsell-color)" : "2px solid transparent", borderBottomColor: upsellMethod === m ? "var(--upsell-color)" : "transparent" }}
                         >
                           {labels[m]}
                         </button>
@@ -566,8 +660,10 @@ export default function NewUpsellOfferPage() {
                     <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                         <div>
-                          <label className="b-label">Type:</label>
+                          <label className="b-label" htmlFor="checkout-discount-type">Type:</label>
                           <select
+                            id="checkout-discount-type"
+                            aria-label="Checkout discount type"
                             className="b-select" name="discountType" value={discountType}
                             onChange={(e) => setDiscountType(e.target.value)}
                           >
@@ -576,12 +672,14 @@ export default function NewUpsellOfferPage() {
                           </select>
                         </div>
                         <div>
-                          <label className="b-label">Value:</label>
+                          <label className="b-label" htmlFor="checkout-discount-value">Value:</label>
                           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                             <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
                               {discountType === "percentage" ? "%" : "$"}
                             </span>
                             <input
+                              id="checkout-discount-value"
+                              aria-label="Checkout discount value"
                               className="b-input" type="number" name="discountValue"
                               value={discountValue} onChange={(e) => setDiscountValue(e.target.value)}
                               min="0" autoComplete="off"
@@ -605,8 +703,10 @@ export default function NewUpsellOfferPage() {
               <div className="b-card">
                 <div className="b-card-header">Discount</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
+                  <label className="b-checkbox-row" htmlFor="fbt-discount-enabled" style={{ cursor: "pointer", gap: 10 }}>
                     <input
+                      id="fbt-discount-enabled"
+                      aria-label="Enable discount"
                       type="checkbox" name="discountEnabled"
                       checked={discountEnabled}
                       onChange={(e) => setDiscountEnabled(e.target.checked)}
@@ -621,7 +721,7 @@ export default function NewUpsellOfferPage() {
                           Number of unique products required for discount
                         </label>
                         <input
-                          id="discountMinProducts" className="b-input" type="number"
+                          id="discountMinProducts" aria-label="Number of unique products required for discount" className="b-input" type="number"
                           name="discountMinProducts"
                           value={discountMinProducts}
                           onChange={(e) => setDiscountMinProducts(e.target.value)}
@@ -631,7 +731,7 @@ export default function NewUpsellOfferPage() {
                       <div>
                         <label className="b-label" htmlFor="discountApplyTo">Apply discount to:</label>
                         <select
-                          id="discountApplyTo" className="b-select" name="discountApplyTo"
+                          id="discountApplyTo" aria-label="Apply discount to" className="b-select" name="discountApplyTo"
                           value={discountApplyTo}
                           onChange={(e) => setDiscountApplyTo(e.target.value)}
                         >
@@ -642,8 +742,10 @@ export default function NewUpsellOfferPage() {
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                         <div>
-                          <label className="b-label">Type:</label>
+                          <label className="b-label" htmlFor="fbt-discount-type">Type:</label>
                           <select
+                            id="fbt-discount-type"
+                            aria-label="Frequently bought together discount type"
                             className="b-select" name="discountType" value={discountType}
                             onChange={(e) => setDiscountType(e.target.value)}
                           >
@@ -652,12 +754,14 @@ export default function NewUpsellOfferPage() {
                           </select>
                         </div>
                         <div>
-                          <label className="b-label">Value:</label>
+                          <label className="b-label" htmlFor="fbt-discount-value">Value:</label>
                           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                             <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
                               {discountType === "percentage" ? "%" : "$"}
                             </span>
                             <input
+                              id="fbt-discount-value"
+                              aria-label="Frequently bought together discount value"
                               className="b-input" type="number" name="discountValue"
                               value={discountValue} onChange={(e) => setDiscountValue(e.target.value)}
                               min="0" autoComplete="off"
@@ -683,8 +787,10 @@ export default function NewUpsellOfferPage() {
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div>
-                      <label className="b-label">Tipo:</label>
+                      <label className="b-label" htmlFor="thank-you-discount-type">Tipo:</label>
                       <select
+                        id="thank-you-discount-type"
+                        aria-label="Tipo de descuento"
                         className="b-select" name="discountType" value={discountType}
                         onChange={(e) => setDiscountType(e.target.value)}
                       >
@@ -693,12 +799,14 @@ export default function NewUpsellOfferPage() {
                       </select>
                     </div>
                     <div>
-                      <label className="b-label">Valor:</label>
+                      <label className="b-label" htmlFor="thank-you-discount-value">Valor:</label>
                       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                         <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
                           {discountType === "percentage" ? "%" : "$"}
                         </span>
                         <input
+                          id="thank-you-discount-value"
+                          aria-label="Valor del descuento"
                           className="b-input" type="number" name="discountValue"
                           value={discountValue} onChange={(e) => setDiscountValue(e.target.value)}
                           min="0" autoComplete="off"
@@ -720,8 +828,7 @@ export default function NewUpsellOfferPage() {
               <div className="b-card">
                 <button
                   type="button"
-                  className="b-card-header"
-                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", background: "none", border: "none", cursor: "pointer", padding: "12px 16px", textAlign: "left" }}
+                  className="b-card-header rd-style-063"
                   onClick={() => setAdvancedOpen(!advancedOpen)}
                 >
                   <span>Advanced settings (optional)</span>
@@ -842,47 +949,7 @@ export default function NewUpsellOfferPage() {
           <OfferSummarySidebar
             accentColor="var(--upsell-color)"
             helpCard={null}
-            aboveSummary={isFbt ? (
-              <div className="b-card">
-                <div className="b-card-header">Preview</div>
-                <div className="b-card-body">
-                  <div style={{
-                    border: "1px solid var(--border)", borderRadius: 8, padding: 16,
-                    background: "var(--bg-hover, #f9f9f9)", minHeight: 160,
-                    display: "flex", flexDirection: "column", gap: 10,
-                  }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)" }}>
-                      {publicTitle || "Frequently bought together"}
-                    </div>
-                    {description && (
-                      <div style={{ fontSize: 12, color: "var(--text-sub)" }}>{description}</div>
-                    )}
-                    <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                      {upsellProducts.length === 0 ? (
-                        <div style={{ fontSize: 12, color: "var(--text-sub)", fontStyle: "italic" }}>
-                          Select products to see a preview
-                        </div>
-                      ) : (
-                        upsellProducts.slice(0, 3).map((id) => (
-                          <div key={id} style={{
-                            width: 52, height: 52, background: "var(--border)", borderRadius: 6,
-                            display: "flex", alignItems: "center", justifyContent: "center",
-                            fontSize: 10, color: "var(--text-sub)",
-                          }}>
-                            img
-                          </div>
-                        ))
-                      )}
-                    </div>
-                    {discountEnabled && (
-                      <div style={{ fontSize: 12, color: "var(--upsell-color)", fontWeight: 500 }}>
-                        {discountType === "percentage" ? `${discountValue}% OFF` : `$${discountValue} OFF`}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ) : undefined}
+            aboveSummary={aboveSummary}
             steps={[
               {
                 label: "Basic information",
@@ -908,7 +975,7 @@ export default function NewUpsellOfferPage() {
         </div>
 
         {/* ── Footer ── */}
-        <div style={{ position: "sticky", bottom: 0, zIndex: 10, display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, padding: "14px 0", background: "rgba(250,249,247,0.9)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", borderTop: "1px solid var(--border)" }}>
+        <div className="rd-style-031">
           <button
             type="button" className="b-btn b-btn-secondary"
             onClick={() => void navigate("/app/offers")}

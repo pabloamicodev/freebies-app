@@ -7,8 +7,27 @@
 
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
+import { decryptToken } from "../lib/token-crypto.server.js";
 import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
+
+type ShopRecord = typeof shops.$inferSelect;
+type ProductSyncQueue = {
+  add: (name: string, data: unknown, opts?: any) => Promise<unknown>;
+};
+
+async function enqueueProductSync(
+  productSyncQueue: ProductSyncQueue,
+  shop: Pick<ShopRecord, "id" | "myshopifyDomain" | "accessTokenEncrypted">,
+) {
+  const accessToken = await decryptToken(shop.accessTokenEncrypted);
+  return productSyncQueue.add("manual-product-sync", {
+    shopId: shop.id,
+    shopDomain: shop.myshopifyDomain,
+    accessToken,
+    mode: "full" as const,
+  }, { priority: 2 });
+}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -26,20 +45,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ error: "Redis not configured" }, { status: 503 });
   }
 
-  const { Queue } = await import("bullmq");
-  const { default: Redis } = await import("ioredis");
+  const [{ Queue }, { default: Redis }] = await Promise.all([
+    import("bullmq"),
+    import("ioredis"),
+  ]);
   const redis = new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false });
   const productSyncQueue = new Queue("product-sync", { connection: redis });
 
   switch (syncType) {
     case "products": {
-      const { decryptToken } = await import("../lib/token-crypto.server.js");
-      await productSyncQueue.add("manual-product-sync", {
-        shopId: shop.id,
-        shopDomain: shop.myshopifyDomain,
-        accessToken: await decryptToken(shop.accessTokenEncrypted),
-        mode: "full" as const,
-      }, { priority: 2 });
+      await enqueueProductSync(productSyncQueue, shop);
       await redis.quit();
       return Response.json({ queued: true, type: "products" });
     }

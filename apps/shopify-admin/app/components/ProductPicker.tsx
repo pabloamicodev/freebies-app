@@ -5,7 +5,7 @@
  * Devuelve los GIDs de las variantes seleccionadas.
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useEffect, useCallback } from "react";
 import {
   Modal, TextField, ResourceList, ResourceItem, Thumbnail,
   Text, Badge, InlineStack, BlockStack, Spinner, Button,
@@ -13,6 +13,7 @@ import {
 } from "@shopify/polaris";
 import { SearchIcon } from "@shopify/polaris-icons";
 import { useDebouncedCallback } from "use-debounce";
+import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 
 interface ProductVariant {
   id: string;
@@ -50,50 +51,71 @@ interface ProductPickerProps {
   onSelect: (gids: string[]) => void;
 }
 
+const EMPTY_SELECTED_IDS: string[] = [];
+
 export function ProductPicker({
+  open,
+  selectedIds = EMPTY_SELECTED_IDS,
+  ...props
+}: ProductPickerProps) {
+  if (!open) return null;
+
+  return (
+    <ProductPickerContent
+      key={`${props.mode ?? "variants"}:${selectedIds.join("|")}`}
+      open={open}
+      selectedIds={selectedIds}
+      {...props}
+    />
+  );
+}
+
+function ProductPickerContent({
   open,
   onClose,
   mode = "variants",
   allowMultiple = true,
   title = "Select Products",
-  selectedIds = [],
+  selectedIds = EMPTY_SELECTED_IDS,
   onSelect,
 }: ProductPickerProps) {
-  const [query, setQuery] = useState("");
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set(selectedIds));
-  const [expandedProducts, setExpandedProducts] = useState<Set<string>>(new Set());
+  const [pickerState, setPickerField] = useObjectState(() => ({
+    query: "",
+    products: [] as Product[],
+    loading: false,
+    selected: new Set(selectedIds),
+    expandedProducts: new Set<string>(),
+  }));
+  const { query, products, loading, selected, expandedProducts } = pickerState;
+  const setQuery = createFieldSetter(setPickerField, "query");
+  const setSelected = createFieldSetter(setPickerField, "selected");
+  const setExpandedProducts = createFieldSetter(setPickerField, "expandedProducts");
 
   // Fetch products from search API
   const fetchProducts = useCallback(async (q: string) => {
-    setLoading(true);
+    setPickerField("loading", true);
     try {
       const params = new URLSearchParams({ q, limit: "20", variants: "true" });
       const res = await fetch(`/api/products/search?${params}`);
       if (!res.ok) return;
       const data = await res.json() as { products: Product[] };
-      setProducts(data.products);
+      setPickerField("products", data.products);
     } catch {
-      setProducts([]);
+      setPickerField("products", []);
     } finally {
-      setLoading(false);
+      setPickerField("loading", false);
     }
-  }, []);
+  }, [setPickerField]);
 
   const debouncedFetch = useDebouncedCallback(fetchProducts, 300);
 
-  // Load on open
   useEffect(() => {
-    if (open) {
-      setSelected(new Set(selectedIds));
-      void fetchProducts("");
-    }
-  }, [open]);
+    void fetchProducts("");
+  }, [fetchProducts]);
 
   useEffect(() => {
     void debouncedFetch(query);
-  }, [query]);
+  }, [debouncedFetch, query]);
 
   function toggleVariant(variantGid: string) {
     const next = new Set(selected);

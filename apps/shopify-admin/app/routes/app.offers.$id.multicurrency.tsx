@@ -213,6 +213,7 @@ export default function MultiCurrencyPage() {
                                   </label>
                                   <input
                                     id={`threshold-${market.currencyCode}`}
+                                    aria-label={`${market.currencyCode} amount`}
                                     className="b-input"
                                     type="number"
                                     name="threshold_cents[]"
@@ -235,6 +236,7 @@ export default function MultiCurrencyPage() {
                                   </label>
                                   <input
                                     id={`fixed-${market.currencyCode}`}
+                                    aria-label={`Fixed ${market.currencyCode}`}
                                     className="b-input"
                                     type="number"
                                     name="fixed_amount[]"

@@ -21,7 +21,7 @@ export interface SubconditionDef {
 // ─── Offer-type specific sets ─────────────────────────────────────────────────
 // Each offer type can expose all or a subset of subconditions.
 
-export const ALL_SUBCONDITIONS: SubconditionDef[] = [
+const ALL_SUBCONDITIONS: SubconditionDef[] = [
   {
     id: "link",
     name: "Dirección de enlace específica",
@@ -75,6 +75,3 @@ export const ALL_SUBCONDITIONS: SubconditionDef[] = [
 // Convenience: gift and discount offers use the full set.
 // Bundle / upsell can narrow this down if needed.
 export const GIFT_SUBCONDITIONS = ALL_SUBCONDITIONS;
-export const DISCOUNT_SUBCONDITIONS = ALL_SUBCONDITIONS;
-export const BUNDLE_SUBCONDITIONS = ALL_SUBCONDITIONS;
-export const UPSELL_SUBCONDITIONS = ALL_SUBCONDITIONS;

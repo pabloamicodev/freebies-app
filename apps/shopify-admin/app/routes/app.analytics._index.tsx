@@ -71,29 +71,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   let totalSalesCents = 0;
-  const orders = recentOrderEvents
-    .filter((ev) => Boolean(ev.orderId))
-    .map((ev) => {
-      const props = ev.properties as Record<string, unknown> | null;
-      const subtotalCents = typeof props?.subtotalCents === "number" ? props.subtotalCents : 0;
-      const giftName = ev.offerId ? (offerNames[ev.offerId] ?? "Gift Offer") : "Gift Offer";
+  const orders = recentOrderEvents.flatMap((ev) => {
+    if (!ev.orderId) return [];
 
-      totalSalesCents += subtotalCents;
+    const props = ev.properties as Record<string, unknown> | null;
+    const subtotalCents = typeof props?.subtotalCents === "number" ? props.subtotalCents : 0;
+    const giftName = ev.offerId ? (offerNames[ev.offerId] ?? "Gift Offer") : "Gift Offer";
 
-      const dayKey = new Date(ev.occurredAt).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      if (dayBuckets[dayKey]) {
-        dayBuckets[dayKey]!.sales += subtotalCents;
-        dayBuckets[dayKey]!.orders += 1;
-      }
+    totalSalesCents += subtotalCents;
 
-      return {
+    const dayKey = new Date(ev.occurredAt).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    if (dayBuckets[dayKey]) {
+      dayBuckets[dayKey]!.sales += subtotalCents;
+      dayBuckets[dayKey]!.orders += 1;
+    }
+
+    return [{
         id: ev.id,
         orderId: ev.orderId!,
         date: ev.occurredAt.toISOString(),
         giftName,
         totalCents: subtotalCents,
-      };
-    });
+    }];
+  });
 
   const orderCount = orders.length;
   const avgOrderCents = orderCount > 0 ? Math.round(totalSalesCents / orderCount) : 0;
@@ -119,11 +119,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   };
 };
 
+const LINE_CHART_PAD = { top: 20, right: 16, bottom: 32, left: 44 };
+
 /** Simple SVG line chart — renders a smooth line with area fill */
 function LineChart({ data, yLabel, color = "#2c6ecb" }: { data: { x: string; y: number }[]; yLabel: string; color?: string }) {
   const W = 400;
   const H = 160;
-  const PAD = { top: 20, right: 16, bottom: 32, left: 44 };
+  const PAD = LINE_CHART_PAD;
   const chartW = W - PAD.left - PAD.right;
   const chartH = H - PAD.top - PAD.bottom;
 
@@ -207,16 +209,16 @@ export default function AnalyticsPage() {
       {/* ── Header ──────────────────────────────────────────── */}
       <div className="b-page-header">
         <h1 className="b-page-title">Analytics</h1>
-        <button className="b-btn b-btn-secondary">
+        <button type="button" className="b-btn b-btn-secondary">
           Export data <IconChevronDown />
         </button>
       </div>
 
       {/* ── Filter chips ────────────────────────────────────── */}
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        <button className="b-filter-chip">Gift offer <IconChevronDown /></button>
-        <button className="b-filter-chip">All offers <IconChevronDown /></button>
-        <button
+        <button type="button" className="b-filter-chip">Gift offer <IconChevronDown /></button>
+        <button type="button" className="b-filter-chip">All offers <IconChevronDown /></button>
+        <button type="button"
           className="b-filter-chip"
           onClick={() => {
             const d = days === 7 ? 30 : days === 30 ? 90 : 7;
@@ -288,6 +290,7 @@ export default function AnalyticsPage() {
           <div className="b-search-wrap">
             <span className="b-search-icon"><IconSearch /></span>
             <input
+              aria-label="Search orders"
               className="b-search-input"
               placeholder="Search orders"
               value={search}
@@ -330,8 +333,8 @@ export default function AnalyticsPage() {
                   <td><span className="b-text-sm">${(order.totalCents / 100).toFixed(2)}</span></td>
                   <td>
                     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                      <button className="b-btn-icon" aria-label="View"><IconEye /></button>
-                      <button className="b-btn-icon b-btn-icon-red" aria-label="Delete"><IconTrash /></button>
+                      <button type="button" className="b-btn-icon" aria-label="View"><IconEye /></button>
+                      <button type="button" className="b-btn-icon b-btn-icon-red" aria-label="Delete"><IconTrash /></button>
                     </div>
                   </td>
                 </tr>
@@ -340,11 +343,11 @@ export default function AnalyticsPage() {
           </tbody>
         </table>
         <div className="b-pagination">
-          <button className="b-page-btn" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
+          <button type="button" className="b-page-btn" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
             <IconChevronLeft />
           </button>
-          <button className="b-page-btn current">{page}</button>
-          <button className="b-page-btn" onClick={() => setPage((p) => p + 1)}>
+          <button type="button" className="b-page-btn current">{page}</button>
+          <button type="button" className="b-page-btn" onClick={() => setPage((p) => p + 1)}>
             <IconChevronRight />
           </button>
         </div>

@@ -49,7 +49,7 @@ const MARKETS_QUERY = `
 /**
  * Fetch markets directly from Shopify Admin API.
  */
-export async function fetchMarketsFromShopify(
+async function fetchMarketsFromShopify(
   shopDomain: string,
   accessToken: string,
 ): Promise<ShopifyMarket[]> {
@@ -93,7 +93,7 @@ export async function fetchMarketsFromShopify(
     enabled: m.enabled,
     primary: m.primary,
     currencyCode: m.currencySettings.baseCurrency.currencyCode,
-    countryCodes: m.regions.nodes.map((r) => r.code ?? "").filter(Boolean),
+    countryCodes: m.regions.nodes.flatMap((r) => r.code ? [r.code] : []),
     primaryLocale: m.primaryLocale.locale,
   }));
 }
@@ -133,14 +133,4 @@ export async function getMarketsForShop(shopId: string): Promise<ShopifyMarket[]
   } catch {}
 
   return markets;
-}
-
-/**
- * Invalidate the markets cache for a shop (called after markets webhook).
- */
-export async function invalidateMarketsCache(shopId: string): Promise<void> {
-  try {
-    const { redis } = await import("./queues.server.js");
-    await redis.del(`markets:${shopId}`);
-  } catch {}
 }

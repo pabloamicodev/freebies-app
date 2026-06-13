@@ -12,45 +12,58 @@ import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
+const FUNNEL_EVENTS = [
+  { event: "promo_engine:widget_viewed", label: "Widget Viewed" },
+  { event: "promo_engine:offer_qualified", label: "Offer Qualified" },
+  { event: "promo_engine:gift_auto_added", label: "Gift Added" },
+  { event: "checkout_started", label: "Checkout Started" },
+  { event: "order_placed_attributed", label: "Order Placed" },
+];
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
 
   const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-  const offerRows = await db.select().from(offers)
-    .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1);
+  const [offerRows, funnelData, errorCounts, recentEventRows] = await Promise.all([
+    db.select().from(offers)
+      .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1),
+    Promise.all(
+      FUNNEL_EVENTS.map(async (step) => {
+        const res = await db.select({ count: count() }).from(analyticsEvents)
+          .where(and(
+            eq(analyticsEvents.shopId, shopId),
+            eq(analyticsEvents.eventName, step.event),
+            eq(analyticsEvents.offerId, offerId),
+            gte(analyticsEvents.occurredAt, since30d),
+          ));
+        return { label: step.label, count: res[0]?.count ?? 0 };
+      }),
+    ),
+    Promise.all([
+      db.select({ count: count() }).from(analyticsEvents)
+        .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.offerId, offerId), eq(analyticsEvents.eventName, "promo_engine:cart_mutation_error"), gte(analyticsEvents.occurredAt, since30d))),
+      db.select({ count: count() }).from(analyticsEvents)
+        .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.offerId, offerId), gte(analyticsEvents.occurredAt, since30d))),
+    ]),
+    db
+      .select({
+        id: analyticsEvents.id,
+        eventName: analyticsEvents.eventName,
+        occurredAt: analyticsEvents.occurredAt,
+      })
+      .from(analyticsEvents)
+      .where(and(
+        eq(analyticsEvents.shopId, shopId),
+        eq(analyticsEvents.offerId, offerId),
+      ))
+      .orderBy(sql`${analyticsEvents.occurredAt} desc`)
+      .limit(10),
+  ]);
   const offer = offerRows[0];
   if (!offer) throw new Response("Not found", { status: 404 });
-
-  const FUNNEL_EVENTS = [
-    { event: "promo_engine:widget_viewed", label: "Widget Viewed" },
-    { event: "promo_engine:offer_qualified", label: "Offer Qualified" },
-    { event: "promo_engine:gift_auto_added", label: "Gift Added" },
-    { event: "checkout_started", label: "Checkout Started" },
-    { event: "order_placed_attributed", label: "Order Placed" },
-  ];
-
-  const funnelData = await Promise.all(
-    FUNNEL_EVENTS.map(async (step) => {
-      const res = await db.select({ count: count() }).from(analyticsEvents)
-        .where(and(
-          eq(analyticsEvents.shopId, shopId),
-          eq(analyticsEvents.eventName, step.event),
-          eq(analyticsEvents.offerId, offerId),
-          gte(analyticsEvents.occurredAt, since30d),
-        ));
-      return { label: step.label, count: res[0]?.count ?? 0 };
-    }),
-  );
-
-  // Error rate
-  const [errorCount, mutationCount] = await Promise.all([
-    db.select({ count: count() }).from(analyticsEvents)
-      .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.offerId, offerId), eq(analyticsEvents.eventName, "promo_engine:cart_mutation_error"), gte(analyticsEvents.occurredAt, since30d))),
-    db.select({ count: count() }).from(analyticsEvents)
-      .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.offerId, offerId), gte(analyticsEvents.occurredAt, since30d))),
-  ]);
+  const [errorCount, mutationCount] = errorCounts;
 
   const totalEvents = mutationCount[0]?.count ?? 0;
   const errorEvents = errorCount[0]?.count ?? 0;
@@ -60,21 +73,6 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const impressions = funnelData[0]?.count ?? 0;
   const giftAdds = funnelData[2]?.count ?? 0;
   const addRate = impressions > 0 ? ((giftAdds / impressions) * 100).toFixed(1) : "0";
-
-  // Recent events — last 10 from analyticsEvents for this offer
-  const recentEventRows = await db
-    .select({
-      id: analyticsEvents.id,
-      eventName: analyticsEvents.eventName,
-      occurredAt: analyticsEvents.occurredAt,
-    })
-    .from(analyticsEvents)
-    .where(and(
-      eq(analyticsEvents.shopId, shopId),
-      eq(analyticsEvents.offerId, offerId),
-    ))
-    .orderBy(sql`${analyticsEvents.occurredAt} desc`)
-    .limit(10);
 
   return {
     offer: { id: offer.id, internalName: offer.internalName, type: offer.type, status: offer.status },
@@ -130,6 +128,7 @@ export default function OfferAnalyticsPage() {
             href="/app/analytics"
             className="b-btn-icon"
             title="Back to All Analytics"
+            aria-label="Back to All Analytics"
             style={{ color: "var(--text-sub)" }}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none"

@@ -5,16 +5,30 @@
  */
 
 import { useLoaderData, Form, Link, useActionData, useNavigation } from "react-router";
-import { useState } from "react";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
+function splitCsvList(value: string | null): string[] {
+  return (value ?? "").split(",").flatMap((item) => {
+    const trimmed = item.trim();
+    return trimmed ? [trimmed] : [];
+  });
+}
+
+function splitCountryCsv(value: string | null): string[] {
+  return (value ?? "").split(",").flatMap((item) => {
+    const code = item.trim().toUpperCase();
+    return code ? [code] : [];
+  });
+}
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
@@ -68,8 +82,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         break;
       case "customer_tags":
         value = {
-          includeTags: (formData.get("includeTags") as string).split(",").map((t) => t.trim()).filter(Boolean),
-          excludeTags: (formData.get("excludeTags") as string).split(",").map((t) => t.trim()).filter(Boolean),
+          includeTags: splitCsvList(formData.get("includeTags") as string | null),
+          excludeTags: splitCsvList(formData.get("excludeTags") as string | null),
           treatGuestAsNoTags: formData.get("treatGuestAsNoTags") === "on",
         };
         break;
@@ -85,14 +99,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         break;
       case "markets":
         value = {
-          includeMarketIds: (formData.get("includeMarkets") as string).split(",").map((m) => m.trim()).filter(Boolean),
-          excludeMarketIds: (formData.get("excludeMarkets") as string).split(",").map((m) => m.trim()).filter(Boolean),
+          includeMarketIds: splitCsvList(formData.get("includeMarkets") as string | null),
+          excludeMarketIds: splitCsvList(formData.get("excludeMarkets") as string | null),
         };
         break;
       case "customer_location":
         value = {
-          includeCountryCodes: (formData.get("includeCountries") as string).split(",").map((c) => c.trim().toUpperCase()).filter(Boolean),
-          excludeCountryCodes: (formData.get("excludeCountries") as string).split(",").map((c) => c.trim().toUpperCase()).filter(Boolean),
+          includeCountryCodes: splitCountryCsv(formData.get("includeCountries") as string | null),
+          excludeCountryCodes: splitCountryCsv(formData.get("excludeCountries") as string | null),
         };
         break;
       case "sales_channels":
@@ -101,7 +115,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       case "specific_product":
       case "pack_of_products": {
         const gidsRaw = (formData.get("requiredVariantGids") as string | null) ?? "";
-        const variantIds = gidsRaw.split(",").map((g) => g.trim()).filter(Boolean);
+        const variantIds = splitCsvList(gidsRaw);
         if (variantIds.length === 0) {
           // Return early with validation error rather than inserting an empty condition
           return { error: "Select at least one product before adding this condition." };
@@ -165,14 +179,34 @@ export default function OfferConditionsPage() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
-  const [addingScope, setAddingScope] = useState<"main" | "sub" | null>(null);
-  const [selectedType, setSelectedType] = useState("");
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickerTarget, setPickerTarget] = useState<"required" | "exclude" | "gift">("required");
-  const [requiredVariantGids, setRequiredVariantGids] = useState<string[]>([]);
-  const [excludeVariantGids, setExcludeVariantGids] = useState<string[]>([]);
-  const [currencyCode, setCurrencyCode] = useState("USD");
-  const [minQtyPerProduct, setMinQtyPerProduct] = useState("1");
+  const [conditionState, setConditionField] = useObjectState({
+    addingScope: null as "main" | "sub" | null,
+    selectedType: "",
+    pickerOpen: false,
+    pickerTarget: "required" as "required" | "exclude" | "gift",
+    requiredVariantGids: [] as string[],
+    excludeVariantGids: [] as string[],
+    currencyCode: "USD",
+    minQtyPerProduct: "1",
+  });
+  const {
+    addingScope,
+    selectedType,
+    pickerOpen,
+    pickerTarget,
+    requiredVariantGids,
+    excludeVariantGids,
+    currencyCode,
+    minQtyPerProduct,
+  } = conditionState;
+  const setAddingScope = createFieldSetter(setConditionField, "addingScope");
+  const setSelectedType = createFieldSetter(setConditionField, "selectedType");
+  const setPickerOpen = createFieldSetter(setConditionField, "pickerOpen");
+  const setPickerTarget = createFieldSetter(setConditionField, "pickerTarget");
+  const setRequiredVariantGids = createFieldSetter(setConditionField, "requiredVariantGids");
+  const setExcludeVariantGids = createFieldSetter(setConditionField, "excludeVariantGids");
+  const setCurrencyCode = createFieldSetter(setConditionField, "currencyCode");
+  const setMinQtyPerProduct = createFieldSetter(setConditionField, "minQtyPerProduct");
 
   if (!offer) return <NotFound message="Offer not found." />;
 

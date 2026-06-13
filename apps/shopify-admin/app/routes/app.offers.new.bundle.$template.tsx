@@ -6,10 +6,11 @@
  */
 
 import { Form, useNavigate, redirect, useParams } from "react-router";
-import { useState } from "react";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
+import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import {
   offers, offerCombinationPolicies,
   bundleDefinitions, bundleSteps, bundleTiers,
@@ -28,6 +29,39 @@ const SLUG_TO_TEMPLATE: Record<string, string> = {
   "bundle-page": "bundle_page",
 };
 
+const BUNDLE_PAGE_TITLES: Record<string, string> = {
+  classic: "Create classic bundle",
+  mix_match: "Create Mix & Match",
+  bundle_page: "Create bundle page",
+};
+
+interface MixItem {
+  id: string;
+  products: string[];
+  minQty: string;
+  useMinQty: boolean;
+}
+
+interface BundleTier {
+  id: string;
+  qty: string;
+  label: string;
+  discountType: string;
+  value: string;
+}
+
+function createClientId(prefix: string): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${prefix}-${Date.now()}-${Math.random()}`;
+}
+
+function createMixItem(): MixItem {
+  return { id: createClientId("mix-item"), products: [], minQty: "1", useMinQty: false };
+}
+
+function createBundleTier(): BundleTier {
+  return { id: createClientId("bundle-tier"), qty: "", label: "", discountType: "percentage", value: "" };
+}
+
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -38,8 +72,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 // ─── Action ──────────────────────────────────────────────────────────────────
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
-  const formData = await request.formData();
+  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
+  const { shopId, db } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
@@ -63,51 +97,52 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const status = intent === "publish" ? "active" : "draft";
 
+  async function createOffer(candidateName: string) {
+    const [offer] = await db
+      .insert(offers)
+      .values({
+        shopId, type: "bundle", status,
+        internalName: candidateName, publicTitle,
+        description: description,
+        priority: 100,
+        startsAt: startsAt ? new Date(startsAt) : new Date(),
+        endsAt: endsAt ? new Date(endsAt) : null,
+      })
+      .returning({ id: offers.id });
+    return offer;
+  }
+
   let newOffer: { id: string } | undefined;
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const candidateName = attempt === 0 ? internalName : `${internalName} (${attempt + 1})`;
-    try {
-      [newOffer] = await db
-        .insert(offers)
-        .values({
-          shopId, type: "bundle", status,
-          internalName: candidateName, publicTitle,
-          description: description,
-          priority: 100,
-          startsAt: startsAt ? new Date(startsAt) : new Date(),
-          endsAt: endsAt ? new Date(endsAt) : null,
-        })
-        .returning({ id: offers.id });
-      break;
-    } catch (err) {
-      if ((err as { code?: string }).code === "23505") continue;
-      throw err;
-    }
+  try {
+    newOffer = await createOffer(internalName);
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    newOffer = await createOffer(withUniqueOfferSuffix(internalName));
   }
 
   if (!newOffer) return { error: "Failed to create offer" };
 
-  // Combination policy
-  await db.insert(offerCombinationPolicies).values({
-    shopId, offerId: newOffer.id,
-    combinesWithOrderDiscounts: combinesOrderDiscounts,
-    combinesWithProductDiscounts: true,
-    combinesWithShippingDiscounts: combinesShippingDiscounts,
-    combinesWithOtherAppOffers: true,
-    stopLowerPriority: false,
-    giftValueCountsForOtherOffers: false,
-  });
-
-  // Bundle definition
-  const [bundleDef] = await db.insert(bundleDefinitions).values({
-    shopId, offerId: newOffer.id,
-    bundleType,
-    title: publicTitle,
-    description,
-    layoutMode: bundleType === "bundle_page" ? layoutMode : "all_steps_one_page",
-    createBundleProduct: false,
-    config: { productLevel },
-  }).returning({ id: bundleDefinitions.id });
+  const [bundleDefs] = await Promise.all([
+    db.insert(bundleDefinitions).values({
+      shopId, offerId: newOffer.id,
+      bundleType,
+      title: publicTitle,
+      description,
+      layoutMode: bundleType === "bundle_page" ? layoutMode : "all_steps_one_page",
+      createBundleProduct: false,
+      config: { productLevel },
+    }).returning({ id: bundleDefinitions.id }),
+    db.insert(offerCombinationPolicies).values({
+      shopId, offerId: newOffer.id,
+      combinesWithOrderDiscounts: combinesOrderDiscounts,
+      combinesWithProductDiscounts: true,
+      combinesWithShippingDiscounts: combinesShippingDiscounts,
+      combinesWithOtherAppOffers: true,
+      stopLowerPriority: false,
+      giftValueCountsForOtherOffers: false,
+    }),
+  ]);
+  const bundleDef = bundleDefs[0];
 
   if (bundleDef) {
     if (bundleType === "classic") {
@@ -127,13 +162,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     } else if (bundleType === "mix_match") {
       // One step per mix item
       const mixItemCount = parseInt(formData.get("mix_item_count") as string || "0", 10);
-      for (let i = 0; i < mixItemCount; i++) {
+      await Promise.all(Array.from({ length: mixItemCount }, (_, i) => {
         const rawProducts = formData.get(`mix_products_${i}`) as string;
         let productGids: string[] = [];
         try { productGids = JSON.parse(rawProducts) as string[]; } catch { /* noop */ }
         const minQty = parseInt(formData.get(`mix_min_qty_${i}`) as string || "1", 10) || 1;
 
-        await db.insert(bundleSteps).values({
+        return db.insert(bundleSteps).values({
           shopId, bundleId: bundleDef.id,
           title: `Mix item ${i + 1}`,
           sourceType: "products",
@@ -145,7 +180,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           filterOptions: [],
           sortOrder: i,
         });
-      }
+      }));
 
       // Ensure at least one placeholder step if none submitted
       if (mixItemCount === 0) {
@@ -184,10 +219,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const tierDiscountTypes = formData.getAll("tier_discount_type[]") as string[];
     const tierDiscountValues = formData.getAll("tier_discount_value[]") as string[];
 
-    for (let i = 0; i < tierQtys.length; i++) {
-      const qty = parseInt(tierQtys[i] ?? "0", 10);
-      if (qty > 0) {
-        await db.insert(bundleTiers).values({
+    await Promise.all(tierQtys.flatMap((rawQty, i) => {
+      const qty = parseInt(rawQty ?? "0", 10);
+      if (qty <= 0) return [];
+      return db.insert(bundleTiers).values({
           shopId, bundleId: bundleDef.id,
           minQuantity: qty,
           label: tierLabels[i] ?? "",
@@ -195,8 +230,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           value: { amount: parseFloat(tierDiscountValues[i] ?? "0"), currencyCode },
           sortOrder: i,
         });
-      }
-    }
+    }));
   }
 
   return redirect(`/app/offers/${newOffer.id}`);
@@ -210,10 +244,70 @@ export default function NewBundleOfferPage() {
 
   const bundleTypeFromSlug = (SLUG_TO_TEMPLATE[templateSlug] ?? "classic") as "classic" | "mix_match" | "bundle_page";
 
-  // Validation
-  const [fieldErrors, setFieldErrors] = useState<{ internalName?: string; publicTitle?: string }>({});
-  const [showToast, setShowToast] = useState(false);
-  const [toastMsg, setToastMsg] = useState("");
+  const [formState, setFormField] = useObjectState(() => ({
+    fieldErrors: {} as { internalName?: string; publicTitle?: string },
+    showToast: false,
+    toastMsg: "",
+    internalName: "",
+    publicTitle: "",
+    description: "",
+    startsAt: new Date().toISOString().slice(0, 16),
+    endsAt: "",
+    discountType: "percentage",
+    discountValue: "0",
+    productLevel: "product" as "product" | "variant",
+    conditionProductsForClassic: [] as string[],
+    classicPickerOpen: false,
+    mixItems: [createMixItem()] as MixItem[],
+    productPickerOpen: false,
+    productPickerForItem: null as number | null,
+    layoutMode: "all_steps_one_page" as "all_steps_one_page" | "one_step_per_page",
+    tiers: [] as BundleTier[],
+    combinesOrderDiscounts: true,
+    combinesShippingDiscounts: true,
+  }));
+  const {
+    fieldErrors,
+    showToast,
+    toastMsg,
+    internalName,
+    publicTitle,
+    description,
+    startsAt,
+    endsAt,
+    discountType,
+    discountValue,
+    productLevel,
+    conditionProductsForClassic,
+    classicPickerOpen,
+    mixItems,
+    productPickerOpen,
+    productPickerForItem,
+    layoutMode,
+    tiers,
+    combinesOrderDiscounts,
+    combinesShippingDiscounts,
+  } = formState;
+  const setFieldErrors = createFieldSetter(setFormField, "fieldErrors");
+  const setShowToast = createFieldSetter(setFormField, "showToast");
+  const setToastMsg = createFieldSetter(setFormField, "toastMsg");
+  const setInternalName = createFieldSetter(setFormField, "internalName");
+  const setPublicTitle = createFieldSetter(setFormField, "publicTitle");
+  const setDescription = createFieldSetter(setFormField, "description");
+  const setStartsAt = createFieldSetter(setFormField, "startsAt");
+  const setEndsAt = createFieldSetter(setFormField, "endsAt");
+  const setDiscountType = createFieldSetter(setFormField, "discountType");
+  const setDiscountValue = createFieldSetter(setFormField, "discountValue");
+  const setProductLevel = createFieldSetter(setFormField, "productLevel");
+  const setConditionProductsForClassic = createFieldSetter(setFormField, "conditionProductsForClassic");
+  const setClassicPickerOpen = createFieldSetter(setFormField, "classicPickerOpen");
+  const setMixItems = createFieldSetter(setFormField, "mixItems");
+  const setProductPickerOpen = createFieldSetter(setFormField, "productPickerOpen");
+  const setProductPickerForItem = createFieldSetter(setFormField, "productPickerForItem");
+  const setLayoutMode = createFieldSetter(setFormField, "layoutMode");
+  const setTiers = createFieldSetter(setFormField, "tiers");
+  const setCombinesOrderDiscounts = createFieldSetter(setFormField, "combinesOrderDiscounts");
+  const setCombinesShippingDiscounts = createFieldSetter(setFormField, "combinesShippingDiscounts");
 
   function validate() {
     const errs: { internalName?: string; publicTitle?: string } = {};
@@ -228,46 +322,8 @@ export default function NewBundleOfferPage() {
     return true;
   }
 
-  // Offer info
-  const [internalName, setInternalName] = useState("");
-  const [publicTitle, setPublicTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [startsAt, setStartsAt] = useState(new Date().toISOString().slice(0, 16));
-  const [endsAt, setEndsAt] = useState("");
-
-  // Discount
-  const [discountType, setDiscountType] = useState("percentage");
-  const [discountValue, setDiscountValue] = useState("0");
-
-  // Classic
-  const [productLevel, setProductLevel] = useState<"product" | "variant">("product");
-  const [conditionProductsForClassic, setConditionProductsForClassic] = useState<string[]>([]);
-  const [classicPickerOpen, setClassicPickerOpen] = useState(false);
-
-  // Mix & match
-  const [mixItems, setMixItems] = useState<{ products: string[]; minQty: string; useMinQty: boolean }[]>([
-    { products: [], minQty: "1", useMinQty: false },
-  ]);
-  const [productPickerOpen, setProductPickerOpen] = useState(false);
-  const [productPickerForItem, setProductPickerForItem] = useState<number | null>(null);
-
-  // Bundle page
-  const [layoutMode, setLayoutMode] = useState<"all_steps_one_page" | "one_step_per_page">("all_steps_one_page");
-
-  // Tiers (for mix & match)
-  const [tiers, setTiers] = useState<{ qty: string; label: string; discountType: string; value: string }[]>([]);
-
-  // Combination policy
-  const [combinesOrderDiscounts, setCombinesOrderDiscounts] = useState(true);
-  const [combinesShippingDiscounts, setCombinesShippingDiscounts] = useState(true);
-
   // Page title per bundle type
-  const pageTitles: Record<string, string> = {
-    classic: "Create classic bundle",
-    mix_match: "Create Mix & Match",
-    bundle_page: "Create bundle page",
-  };
-  const pageTitle = pageTitles[bundleTypeFromSlug] ?? "Create bundle";
+  const pageTitle = BUNDLE_PAGE_TITLES[bundleTypeFromSlug] ?? "Create bundle";
 
   return (
     <div className="b-page">
@@ -286,14 +342,14 @@ export default function NewBundleOfferPage() {
           All Offers
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ width: 44, height: 44, borderRadius: 14, background: "var(--bundle-grad)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 4px 14px rgba(13,148,136,0.28)" }}>
+          <div className="rd-style-087">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="17"/><line x1="9.5" y1="14.5" x2="14.5" y2="14.5"/></svg>
           </div>
           <div>
             <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, color: "var(--text)", lineHeight: 1.2 }}>{pageTitle}</h1>
             <div style={{ fontSize: 12, color: "var(--text-sub)", marginTop: 2 }}>Configure your bundle offer</div>
           </div>
-          <span style={{ marginLeft: "auto", background: "rgba(13,148,136,0.1)", color: "var(--bundle-color)", border: "1.5px solid rgba(13,148,136,0.2)", borderRadius: 20, fontSize: 11, fontWeight: 700, padding: "4px 12px", letterSpacing: "0.2px" }}>Bundle</span>
+          <span className="rd-style-088">Bundle</span>
         </div>
       </div>
 
@@ -304,7 +360,7 @@ export default function NewBundleOfferPage() {
           <>
             <input type="hidden" name="mix_item_count" value={mixItems.length} />
             {mixItems.map((item, i) => (
-              <span key={i}>
+              <span key={item.id}>
                 <input type="hidden" name={`mix_products_${i}`} value={JSON.stringify(item.products)} />
                 <input type="hidden" name={`mix_min_qty_${i}`} value={item.minQty} />
               </span>
@@ -323,9 +379,9 @@ export default function NewBundleOfferPage() {
                 {/* Bundle information */}
                 <div className="b-card" style={{ borderTop: "3px solid var(--bundle-color)" }}>
                   <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
-                    <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--bundle-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>1</div>
+                    <div className="rd-style-089">1</div>
                     <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Bundle information</span>
-                    <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(13,148,136,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>1</span>
+                    <span className="rd-style-090">1</span>
                   </div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div>
@@ -373,16 +429,16 @@ export default function NewBundleOfferPage() {
                 {/* Seleccionar paquete */}
                 <div className="b-card" style={{ borderTop: "3px solid var(--bundle-color)" }}>
                   <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
-                    <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--bundle-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>2</div>
+                    <div className="rd-style-089">2</div>
                     <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Bundle products</span>
-                    <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(13,148,136,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>2</span>
+                    <span className="rd-style-090">2</span>
                   </div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div>
-                      <label className="b-label">Bundle item level</label>
+                      <div className="b-label">Bundle item level</div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>
-                        <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-                          <input type="radio" name="productLevel" value="product"
+                        <label className="b-checkbox-row" htmlFor="bundle-product-level-product" style={{ cursor: "pointer", gap: 10 }}>
+                          <input id="bundle-product-level-product" aria-label="Product level" type="radio" name="productLevel" value="product"
                             checked={productLevel === "product"}
                             onChange={() => setProductLevel("product")}
                             style={{ accentColor: "var(--bundle-color)", width: 15, height: 15 }} />
@@ -391,8 +447,8 @@ export default function NewBundleOfferPage() {
                             <div className="b-checkbox-help">Each product counts as a bundle item</div>
                           </div>
                         </label>
-                        <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-                          <input type="radio" name="productLevel" value="variant"
+                        <label className="b-checkbox-row" htmlFor="bundle-product-level-variant" style={{ cursor: "pointer", gap: 10 }}>
+                          <input id="bundle-product-level-variant" aria-label="Variant level" type="radio" name="productLevel" value="variant"
                             checked={productLevel === "variant"}
                             onChange={() => setProductLevel("variant")}
                             style={{ accentColor: "var(--bundle-color)", width: 15, height: 15 }} />
@@ -419,15 +475,15 @@ export default function NewBundleOfferPage() {
                 {/* Bundle discount */}
                 <div className="b-card" style={{ borderTop: "3px solid var(--bundle-color)" }}>
                   <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
-                    <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--bundle-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>3</div>
+                    <div className="rd-style-089">3</div>
                     <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Bundle discount</span>
-                    <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(13,148,136,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>3</span>
+                    <span className="rd-style-090">3</span>
                   </div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <div>
-                        <label className="b-label">Type</label>
-                        <select className="b-select" name="discountType" value={discountType}
+                        <label className="b-label" htmlFor="bundle-discount-type">Type</label>
+                        <select id="bundle-discount-type" aria-label="Bundle discount type" className="b-select" name="discountType" value={discountType}
                           onChange={(e) => setDiscountType(e.target.value)}>
                           <option value="percentage">Percentage</option>
                           <option value="fixed_amount">Fixed amount</option>
@@ -435,12 +491,12 @@ export default function NewBundleOfferPage() {
                         </select>
                       </div>
                       <div>
-                        <label className="b-label">Amount</label>
+                        <label className="b-label" htmlFor="bundle-discount-value">Amount</label>
                         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                           <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
                             {discountType === "percentage" ? "%" : "$"}
                           </span>
-                          <input className="b-input" type="number" name="discountValue"
+                          <input id="bundle-discount-value" aria-label="Bundle discount amount" className="b-input" type="number" name="discountValue"
                             value={discountValue} onChange={(e) => setDiscountValue(e.target.value)}
                             min="0" autoComplete="off" />
                         </div>
@@ -554,24 +610,25 @@ export default function NewBundleOfferPage() {
                   <div className="b-card-header">Mix items</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-                        <input type="radio" name="mixMode" value="one_list"
+                      <label className="b-checkbox-row" htmlFor="bundle-mix-one-list" style={{ cursor: "pointer", gap: 10 }}>
+                        <input id="bundle-mix-one-list" aria-label="Mix items from a product list" type="radio" name="mixMode" value="one_list"
                           style={{ accentColor: "var(--bundle-color)", width: 15, height: 15 }} />
                         <span className="b-checkbox-label">Mix items from a product list</span>
                       </label>
-                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-                        <input type="radio" name="mixMode" value="per_item" defaultChecked
+                      <label className="b-checkbox-row" htmlFor="bundle-mix-per-item" style={{ cursor: "pointer", gap: 10 }}>
+                        <input id="bundle-mix-per-item" aria-label="Each Mix item contains a different product list" type="radio" name="mixMode" value="per_item" defaultChecked
                           style={{ accentColor: "var(--bundle-color)", width: 15, height: 15 }} />
                         <span className="b-checkbox-label">Each Mix item contains a different product list.</span>
                       </label>
                     </div>
 
                     {mixItems.map((item, i) => (
-                      <div key={i} className="b-card" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                      <div key={item.id} className="b-card" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
                         <div className="b-card-header" style={{ fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                           <span>Mix item {i + 1}</span>
                           {mixItems.length > 1 && (
                             <button type="button"
+                              aria-label={`Remove mix item ${i + 1}`}
                               className="b-modal-close" style={{ width: 22, height: 22 }}
                               onClick={() => setMixItems(mixItems.filter((_, idx) => idx !== i))}>
                               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -580,8 +637,8 @@ export default function NewBundleOfferPage() {
                         </div>
                         <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                           <div>
-                            <label className="b-label">Select a product list:</label>
-                            <select className="b-select" defaultValue="">
+                            <label className="b-label" htmlFor={`mix-item-${item.id}-product-list`}>Select a product list:</label>
+                            <select id={`mix-item-${item.id}-product-list`} aria-label={`Mix item ${i + 1} product list`} className="b-select" defaultValue="">
                               <option value="">selected products</option>
                             </select>
                           </div>
@@ -598,8 +655,8 @@ export default function NewBundleOfferPage() {
                               {item.products.length} products selected
                             </span>
                           </div>
-                          <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-                            <input type="checkbox"
+                          <label className="b-checkbox-row" htmlFor={`mix-item-${item.id}-use-min-qty`} style={{ cursor: "pointer", gap: 10 }}>
+                            <input id={`mix-item-${item.id}-use-min-qty`} aria-label={`Mix item ${i + 1} set minimum quantity`} type="checkbox"
                               checked={item.useMinQty}
                               onChange={(e) => {
                                 const next = [...mixItems];
@@ -610,8 +667,8 @@ export default function NewBundleOfferPage() {
                           </label>
                           {item.useMinQty && (
                             <div>
-                              <label className="b-label">Minimum quantity</label>
-                              <input className="b-input" type="number" min="1"
+                              <label className="b-label" htmlFor={`mix-item-${item.id}-min-qty`}>Minimum quantity</label>
+                              <input id={`mix-item-${item.id}-min-qty`} aria-label={`Mix item ${i + 1} minimum quantity`} className="b-input" type="number" min="1"
                                 value={item.minQty}
                                 onChange={(e) => {
                                   const next = [...mixItems];
@@ -627,7 +684,7 @@ export default function NewBundleOfferPage() {
 
                     <div>
                       <button type="button" className="b-btn b-btn-secondary"
-                        onClick={() => setMixItems([...mixItems, { products: [], minQty: "1", useMinQty: false }])}>
+                        onClick={() => setMixItems([...mixItems, createMixItem()])}>
                         + Add Mix item
                       </button>
                     </div>
@@ -643,10 +700,11 @@ export default function NewBundleOfferPage() {
                     <input type="hidden" name="discountValue" value={discountValue} />
 
                     {tiers.map((tier, i) => (
-                      <div key={i} className="b-card" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                      <div key={tier.id} className="b-card" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
                         <div className="b-card-header" style={{ fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                           <span>Tier {i + 1}</span>
                           <button type="button"
+                            aria-label={`Remove tier ${i + 1}`}
                             className="b-modal-close" style={{ width: 22, height: 22 }}
                             onClick={() => setTiers(tiers.filter((_, idx) => idx !== i))}>
                             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -655,8 +713,8 @@ export default function NewBundleOfferPage() {
                         <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                             <div>
-                              <label className="b-label">Quantity</label>
-                              <input className="b-input" type="number" name="tier_qty[]"
+                              <label className="b-label" htmlFor={`bundle-tier-${tier.id}-qty`}>Quantity</label>
+                              <input id={`bundle-tier-${tier.id}-qty`} aria-label={`Tier ${i + 1} quantity`} className="b-input" type="number" name="tier_qty[]"
                                 value={tier.qty}
                                 onChange={(e) => {
                                   const t = [...tiers];
@@ -666,8 +724,8 @@ export default function NewBundleOfferPage() {
                                 min="1" autoComplete="off" />
                             </div>
                             <div>
-                              <label className="b-label">Label text</label>
-                              <input className="b-input" type="text" name="tier_label[]"
+                              <label className="b-label" htmlFor={`bundle-tier-${tier.id}-label`}>Label text</label>
+                              <input id={`bundle-tier-${tier.id}-label`} aria-label={`Tier ${i + 1} label text`} className="b-input" type="text" name="tier_label[]"
                                 value={tier.label}
                                 onChange={(e) => {
                                   const t = [...tiers];
@@ -679,8 +737,8 @@ export default function NewBundleOfferPage() {
                           </div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                             <div>
-                              <label className="b-label">Type</label>
-                              <select className="b-select" name="tier_discount_type[]"
+                              <label className="b-label" htmlFor={`bundle-tier-${tier.id}-discount-type`}>Type</label>
+                              <select id={`bundle-tier-${tier.id}-discount-type`} aria-label={`Tier ${i + 1} discount type`} className="b-select" name="tier_discount_type[]"
                                 value={tier.discountType}
                                 onChange={(e) => {
                                   const t = [...tiers];
@@ -693,12 +751,12 @@ export default function NewBundleOfferPage() {
                               </select>
                             </div>
                             <div>
-                              <label className="b-label">Value</label>
+                              <label className="b-label" htmlFor={`bundle-tier-${tier.id}-value`}>Value</label>
                               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                                 <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
                                   {tier.discountType === "percentage" ? "%" : "$"}
                                 </span>
-                                <input className="b-input" type="number" name="tier_discount_value[]"
+                                <input id={`bundle-tier-${tier.id}-value`} aria-label={`Tier ${i + 1} discount value`} className="b-input" type="number" name="tier_discount_value[]"
                                   value={tier.value}
                                   onChange={(e) => {
                                     const t = [...tiers];
@@ -720,7 +778,7 @@ export default function NewBundleOfferPage() {
 
                     <div>
                       <button type="button" className="b-btn b-btn-secondary"
-                        onClick={() => setTiers([...tiers, { qty: "", label: "", discountType: "percentage", value: "" }])}>
+                        onClick={() => setTiers([...tiers, createBundleTier()])}>
                         + Add tier
                       </button>
                     </div>
@@ -814,17 +872,7 @@ export default function NewBundleOfferPage() {
                 {/* Layout selector */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <label
-                    style={{
-                      border: `2px solid ${layoutMode === "one_step_per_page" ? "var(--bundle-color)" : "var(--border)"}`,
-                      borderRadius: "var(--r)",
-                      padding: 16,
-                      cursor: "pointer",
-                      background: layoutMode === "one_step_per_page" ? "rgba(13,148,136,0.06)" : "var(--bg-card)",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 10,
-                      alignItems: "center",
-                    }}
+                    className="rd-style-091" style={{ border: `2px solid ${layoutMode === "one_step_per_page" ? "var(--bundle-color)" : "var(--border)"}`, background: layoutMode === "one_step_per_page" ? "rgba(13,148,136,0.06)" : "var(--bg-card)" }}
                   >
                     <input type="radio" name="layoutMode" value="one_step_per_page"
                       checked={layoutMode === "one_step_per_page"}
@@ -840,17 +888,7 @@ export default function NewBundleOfferPage() {
                   </label>
 
                   <label
-                    style={{
-                      border: `2px solid ${layoutMode === "all_steps_one_page" ? "var(--bundle-color)" : "var(--border)"}`,
-                      borderRadius: "var(--r)",
-                      padding: 16,
-                      cursor: "pointer",
-                      background: layoutMode === "all_steps_one_page" ? "rgba(13,148,136,0.06)" : "var(--bg-card)",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 10,
-                      alignItems: "center",
-                    }}
+                    className="rd-style-091" style={{ border: `2px solid ${layoutMode === "all_steps_one_page" ? "var(--bundle-color)" : "var(--border)"}`, background: layoutMode === "all_steps_one_page" ? "rgba(13,148,136,0.06)" : "var(--bg-card)" }}
                   >
                     <input type="radio" name="layoutMode" value="all_steps_one_page"
                       checked={layoutMode === "all_steps_one_page"}
@@ -871,11 +909,7 @@ export default function NewBundleOfferPage() {
                 <div className="b-card">
                   <div className="b-card-header">Banner image</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                    <div style={{
-                      border: "2px dashed var(--border)", borderRadius: "var(--r)",
-                      padding: "32px 16px", textAlign: "center",
-                      display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
-                    }}>
+                    <div className="rd-style-092">
                       <button type="button" className="b-btn b-btn-secondary">Add file</button>
                     </div>
                     <div className="b-help">
@@ -1011,7 +1045,7 @@ export default function NewBundleOfferPage() {
         </div>
 
         {/* ── Footer ── */}
-        <div style={{ position: "sticky", bottom: 0, zIndex: 10, display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, padding: "14px 0", background: "rgba(250,249,247,0.9)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", borderTop: "1px solid var(--border)" }}>
+        <div className="rd-style-031">
           <button type="button" className="b-btn b-btn-secondary"
             onClick={() => void navigate("/app/offers")}>
             Cancel

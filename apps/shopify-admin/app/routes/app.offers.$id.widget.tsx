@@ -178,8 +178,9 @@ export default function OfferWidgetPage() {
                               <input type="hidden" name="intent" value="toggle_widget" />
                               <input type="hidden" name="widgetId" value={w.id} />
                               <input type="hidden" name="isEnabled" value={String(w.isEnabled)} />
-                              <label className="b-toggle" title={w.isEnabled ? "Disable" : "Enable"}>
+                              <label className="b-toggle" title={w.isEnabled ? "Disable" : "Enable"} aria-label={w.isEnabled ? "Disable widget" : "Enable widget"}>
                                 <input
+                                  aria-label={w.isEnabled ? "Disable widget" : "Enable widget"}
                                   type="checkbox"
                                   defaultChecked={w.isEnabled ?? false}
                                   onChange={(e) => {
@@ -303,19 +304,11 @@ export default function OfferWidgetPage() {
                           title={primaryColor}
                         />
                         <input
+                          aria-label="Primary widget color"
                           type="color"
                           value={primaryColor.startsWith("#") && primaryColor.length === 7 ? primaryColor : "#111111"}
                           onChange={(e) => setPrimaryColor(e.target.value)}
-                          style={{
-                            width: 36,
-                            height: 36,
-                            padding: 2,
-                            border: "1px solid var(--border)",
-                            borderRadius: "var(--r-sm)",
-                            cursor: "pointer",
-                            flexShrink: 0,
-                            background: "var(--bg-card)",
-                          }}
+                          className="rd-style-053"
                           title="Pick color"
                         />
                       </div>

@@ -26,9 +26,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
-
-  const formData = await request.formData();
+  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
+  const { shopId, db } = context;
   const posEnabled = formData.get("pos_enabled") === "on";
 
   await db.insert(appSettings)
@@ -83,8 +82,9 @@ export default function PosSettingsPage() {
             </div>
             <div className="b-settings-control-col">
               <div className="b-checkbox-row">
-                <label className="b-toggle">
+                <label className="b-toggle" aria-label="Enable POS promotions">
                   <input
+                    aria-label="Enable POS promotions"
                     type="checkbox"
                     name="pos_enabled"
                     defaultChecked={posEnabled}

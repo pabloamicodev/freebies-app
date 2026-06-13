@@ -4,16 +4,23 @@
  */
 
 import { useLoaderData, useNavigate, useNavigation, useActionData, Form } from "react-router";
-import { useState } from "react";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerRewards } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
+function splitTextareaList(value: string | null): string[] {
+  return (value ?? "").split("\n").flatMap((item) => {
+    const trimmed = item.trim();
+    return trimmed ? [trimmed] : [];
+  });
+}
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
@@ -58,10 +65,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
 
     // Build target from variant GIDs input
-    const variantGids = (formData.get("variantGids") as string)
-      .split("\n")
-      .map((v) => v.trim())
-      .filter(Boolean);
+    const variantGids = splitTextareaList(formData.get("variantGids") as string | null);
 
     const target = variantGids.length > 0
       ? { variantIds: variantGids }
@@ -126,13 +130,23 @@ export default function OfferRewardsPage() {
   const navigation = useNavigation();
   const actionData = useActionData<typeof action>();
   const isSubmitting = navigation.state !== "idle";
-  const [adding, setAdding] = useState(false);
-  const [rewardType, setRewardType] = useState("product_gift");
-  const [discountType, setDiscountType] = useState("free");
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [selectedGiftGids, setSelectedGiftGids] = useState<string[]>([]);
-  const [currencyCode, setCurrencyCode] = useState("USD");
-  const [giftQuantity, setGiftQuantity] = useState("1");
+  const [rewardState, setRewardField] = useObjectState({
+    adding: false,
+    rewardType: "product_gift",
+    discountType: "free",
+    pickerOpen: false,
+    selectedGiftGids: [] as string[],
+    currencyCode: "USD",
+    giftQuantity: "1",
+  });
+  const { adding, rewardType, discountType, pickerOpen, selectedGiftGids, currencyCode, giftQuantity } = rewardState;
+  const setAdding = createFieldSetter(setRewardField, "adding");
+  const setRewardType = createFieldSetter(setRewardField, "rewardType");
+  const setDiscountType = createFieldSetter(setRewardField, "discountType");
+  const setPickerOpen = createFieldSetter(setRewardField, "pickerOpen");
+  const setSelectedGiftGids = createFieldSetter(setRewardField, "selectedGiftGids");
+  const setCurrencyCode = createFieldSetter(setRewardField, "currencyCode");
+  const setGiftQuantity = createFieldSetter(setRewardField, "giftQuantity");
 
   if (!offer) return <NotFound message="Offer not found." />;
 

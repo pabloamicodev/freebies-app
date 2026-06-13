@@ -189,17 +189,7 @@ function HealthCard({ check }: { check: HealthCheck }) {
         <div className="b-row-between" style={{ gap: 12 }}>
           <div className="b-row b-gap-3" style={{ flex: 1, minWidth: 0 }}>
             <div
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: "var(--r-sm)",
-                background: iconBg,
-                color: iconColor,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0,
-              }}
+              className="rd-style-066" style={{ background: iconBg, color: iconColor }}
             >
               {check.icon}
             </div>
@@ -214,7 +204,7 @@ function HealthCard({ check }: { check: HealthCheck }) {
           <div className="b-row b-gap-3" style={{ flexShrink: 0 }}>
             <span className="b-text-bold" style={{ fontSize: 16 }}>{check.value}</span>
             {check.detail && (
-              <button
+              <button type="button"
                 className="b-btn-icon"
                 onClick={() => setExpanded((v) => !v)}
                 aria-label={expanded ? "Collapse details" : "Expand details"}
@@ -229,18 +219,7 @@ function HealthCard({ check }: { check: HealthCheck }) {
           <>
             <hr className="b-divider" />
             <div
-              style={{
-                background: "var(--bg-hover)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--r-sm)",
-                padding: "10px 14px",
-                fontFamily: "monospace",
-                fontSize: 12,
-                color: "var(--text-sub)",
-                lineHeight: 1.6,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-              }}
+              className="rd-style-067"
             >
               {check.detail}
             </div>
@@ -353,7 +332,7 @@ export default function DiagnosticsPage() {
           <StatusBadge status={overallStatus} />
         </div>
         <div className="b-page-actions">
-          <button
+          <button type="button"
             className="b-btn b-btn-secondary"
             onClick={handleRunChecks}
             disabled={running}

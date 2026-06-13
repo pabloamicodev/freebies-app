@@ -5,10 +5,11 @@
 
 import { Form, useNavigate, redirect, useParams } from "react-router";
 import { SUPPORTED_CURRENCIES } from "@promo/shared-types";
-import { useState } from "react";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
+import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
@@ -16,8 +17,9 @@ import { SubconditionModal } from "../components/SubconditionModal.js";
 import { SubconditionCard } from "../components/SubconditionCard.js";
 import type { MainConditionType } from "../components/MainConditionModal.js";
 import { MainConditionModal } from "../components/MainConditionModal.js";
-import { GIFT_SUBCONDITIONS, SUB_FORMS } from "../components/subconditions/index.js";
-import type { SubconditionId } from "../components/subconditions/index.js";
+import { SUB_FORMS } from "../components/subconditions/registry.js";
+import { GIFT_SUBCONDITIONS } from "../components/subconditions/types.js";
+import type { SubconditionId } from "../components/subconditions/types.js";
 import { OfferSummarySidebar } from "../components/OfferSummarySidebar.js";
 import { IconCondition, IconSettings } from "../components/Icons.js";
 
@@ -53,6 +55,14 @@ const CONDITION_TYPE_LABEL: Record<ConditionType, string> = {
 
 const CURRENCIES = SUPPORTED_CURRENCIES;
 
+function formatOfferStartDate(iso: string) {
+  try {
+    return new Date(iso).toLocaleDateString("es-ES", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return iso;
+  }
+}
+
 // ─── Local icons (only used within this file) ─────────────────────────────────
 function IChevDown() { return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>; }
 function IChevUp()   { return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>; }
@@ -66,8 +76,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 // ─── Action ──────────────────────────────────────────────────────────────────
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
-  const formData = await request.formData();
+  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
+  const { shopId, db } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const intent      = formData.get("intent") as string;
@@ -111,39 +121,41 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const rewardAmount = discountType === "free" ? 100 : discountType === "percentage" ? discountValue : Math.round(discountValue * 100);
   const status = intent === "publish" ? "active" : "draft";
 
+  async function createOffer(candidateName: string) {
+    const [offer] = await db.insert(offers).values({
+      shopId, type: "gift", status,
+      internalName: candidateName, publicTitle, priority,
+      startsAt: startsAt ? new Date(startsAt) : new Date(),
+      endsAt: endsAt ? new Date(endsAt) : null,
+    }).returning({ id: offers.id });
+    return offer;
+  }
+
   let newOffer: { id: string } | undefined;
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const candidateName = attempt === 0 ? internalName : `${internalName} (${attempt + 1})`;
-    try {
-      [newOffer] = await db.insert(offers).values({
-        shopId, type: "gift", status,
-        internalName: candidateName, publicTitle, priority,
-        startsAt: startsAt ? new Date(startsAt) : new Date(),
-        endsAt: endsAt ? new Date(endsAt) : null,
-      }).returning({ id: offers.id });
-      break;
-    } catch (err) {
-      if ((err as { code?: string }).code === "23505") continue;
-      throw err;
-    }
+  try {
+    newOffer = await createOffer(internalName);
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    newOffer = await createOffer(withUniqueOfferSuffix(internalName));
   }
   if (!newOffer) return { error: "Failed to create offer" };
 
-  // Main condition
-  await db.insert(offerConditions).values({ shopId, offerId: newOffer.id, scope: "main", conditionType, operator: "gte", value: conditionValue, sortOrder: 0, isEnabled: true });
-
-  // Subconditions
   const subconditionsJson = (formData.get("subconditions") as string) || "{}";
   let subconditions: Record<string, Record<string, unknown>> = {};
   try { subconditions = JSON.parse(subconditionsJson) as Record<string, Record<string, unknown>>; } catch {}
-  let subSortOrder = 1;
-  for (const [subId, subVal] of Object.entries(subconditions)) {
-    if (!subVal || Object.keys(subVal).length === 0) continue;
-    await db.insert(offerConditions).values({ shopId, offerId: newOffer.id, scope: "sub", conditionType: subId, operator: "eq", value: subVal as Record<string, unknown>, sortOrder: subSortOrder++, isEnabled: true });
-  }
 
-  await db.insert(offerRewards).values({ shopId, offerId: newOffer.id, rewardType: "product_gift", discountType: discountType as "free" | "percentage" | "fixed_amount" | "fixed_price" | "cheapest_item_free" | "most_expensive_item_discount", value: { amount: rewardAmount, currencyCode: "USD" }, target: { scope: "cart", variantIds: rewardProducts }, quantity: giftCount, isAutoAdd, isCustomerSelectable: !isAutoAdd, trackMode: "product", sortOrder: 0 });
-  await db.insert(offerCombinationPolicies).values({ shopId, offerId: newOffer.id, combinesWithOrderDiscounts: true, combinesWithProductDiscounts: true, combinesWithShippingDiscounts: true, combinesWithOtherAppOffers: true, stopLowerPriority: false, giftValueCountsForOtherOffers: false });
+  const validSubconditions = Object.entries(subconditions).filter(([, subVal]) =>
+    subVal && Object.keys(subVal).length > 0,
+  );
+
+  await Promise.all([
+    db.insert(offerConditions).values({ shopId, offerId: newOffer.id, scope: "main", conditionType, operator: "gte", value: conditionValue, sortOrder: 0, isEnabled: true }),
+    ...validSubconditions.map(([subId, subVal], index) =>
+      db.insert(offerConditions).values({ shopId, offerId: newOffer.id, scope: "sub", conditionType: subId, operator: "eq", value: subVal as Record<string, unknown>, sortOrder: index + 1, isEnabled: true }),
+    ),
+    db.insert(offerRewards).values({ shopId, offerId: newOffer.id, rewardType: "product_gift", discountType: discountType as "free" | "percentage" | "fixed_amount" | "fixed_price" | "cheapest_item_free" | "most_expensive_item_discount", value: { amount: rewardAmount, currencyCode: "USD" }, target: { scope: "cart", variantIds: rewardProducts }, quantity: giftCount, isAutoAdd, isCustomerSelectable: !isAutoAdd, trackMode: "product", sortOrder: 0 }),
+    db.insert(offerCombinationPolicies).values({ shopId, offerId: newOffer.id, combinesWithOrderDiscounts: true, combinesWithProductDiscounts: true, combinesWithShippingDiscounts: true, combinesWithOtherAppOffers: true, stopLowerPriority: false, giftValueCountsForOtherOffers: false }),
+  ]);
 
   return redirect(`/app/offers/${newOffer.id}`);
 };
@@ -160,10 +172,118 @@ export default function NewGiftOfferPage() {
   const effectivePreset = isScratch ? null : preset;
   const conditionType: ConditionType = effectivePreset?.conditionType ?? "cart_value";
 
-  // ── Validation ──
-  const [fieldErrors, setFieldErrors] = useState<{ internalName?: string; publicTitle?: string }>({});
-  const [showToast, setShowToast] = useState(false);
-  const [toastMsg, setToastMsg] = useState("");
+  const [formState, setFormField] = useObjectState(() => ({
+    fieldErrors: {} as { internalName?: string; publicTitle?: string },
+    showToast: false,
+    toastMsg: "",
+    internalName: preset?.internalName ?? "",
+    publicTitle: preset?.publicTitle ?? "",
+    startsAt: new Date().toISOString().slice(0, 16),
+    endsAt: "",
+    minAmount: "500",
+    maxAmount: "0.00",
+    selectedCurrencies: [] as string[],
+    appliesTo: "any_product",
+    minQty: 1,
+    multiplyGifts: false,
+    giftsMatchProducts: preset?.giftsMatchProducts ?? false,
+    trackMode: "product",
+    conditionProducts: [] as string[],
+    condPickerOpen: false,
+    subModalOpen: false,
+    activeSubs: [] as SubconditionId[],
+    subValues: {} as Record<string, unknown>,
+    mainCondModalOpen: false,
+    selectedMainCond: conditionType as MainConditionType,
+    giftTab: "product" as "product" | "shipping",
+    discountType: "percentage",
+    discountValue: "100",
+    isAutoAdd: false,
+    giftCount: 1,
+    rewardProducts: [] as string[],
+    rewardPickerOpen: false,
+    advancedOpen: false,
+    priority: "1",
+    stopLower: false,
+    giftAppliesOther: false,
+    addCartMessage: false,
+    offerTodayTitle: "",
+    addRedirectBtn: false,
+  }));
+  const {
+    fieldErrors,
+    showToast,
+    toastMsg,
+    internalName,
+    publicTitle,
+    startsAt,
+    endsAt,
+    minAmount,
+    maxAmount,
+    selectedCurrencies,
+    appliesTo,
+    minQty,
+    multiplyGifts,
+    giftsMatchProducts,
+    trackMode,
+    conditionProducts,
+    condPickerOpen,
+    subModalOpen,
+    activeSubs,
+    subValues,
+    mainCondModalOpen,
+    selectedMainCond,
+    giftTab,
+    discountType,
+    discountValue,
+    isAutoAdd,
+    giftCount,
+    rewardProducts,
+    rewardPickerOpen,
+    advancedOpen,
+    priority,
+    stopLower,
+    giftAppliesOther,
+    addCartMessage,
+    offerTodayTitle,
+    addRedirectBtn,
+  } = formState;
+  const setFieldErrors = createFieldSetter(setFormField, "fieldErrors");
+  const setShowToast = createFieldSetter(setFormField, "showToast");
+  const setToastMsg = createFieldSetter(setFormField, "toastMsg");
+  const setInternalName = createFieldSetter(setFormField, "internalName");
+  const setPublicTitle = createFieldSetter(setFormField, "publicTitle");
+  const setStartsAt = createFieldSetter(setFormField, "startsAt");
+  const setEndsAt = createFieldSetter(setFormField, "endsAt");
+  const setMinAmount = createFieldSetter(setFormField, "minAmount");
+  const setMaxAmount = createFieldSetter(setFormField, "maxAmount");
+  const setSelectedCurrencies = createFieldSetter(setFormField, "selectedCurrencies");
+  const setAppliesTo = createFieldSetter(setFormField, "appliesTo");
+  const setMinQty = createFieldSetter(setFormField, "minQty");
+  const setMultiplyGifts = createFieldSetter(setFormField, "multiplyGifts");
+  const setGiftsMatchProducts = createFieldSetter(setFormField, "giftsMatchProducts");
+  const setTrackMode = createFieldSetter(setFormField, "trackMode");
+  const setConditionProducts = createFieldSetter(setFormField, "conditionProducts");
+  const setCondPickerOpen = createFieldSetter(setFormField, "condPickerOpen");
+  const setSubModalOpen = createFieldSetter(setFormField, "subModalOpen");
+  const setActiveSubs = createFieldSetter(setFormField, "activeSubs");
+  const setSubValues = createFieldSetter(setFormField, "subValues");
+  const setMainCondModalOpen = createFieldSetter(setFormField, "mainCondModalOpen");
+  const setSelectedMainCond = createFieldSetter(setFormField, "selectedMainCond");
+  const setGiftTab = createFieldSetter(setFormField, "giftTab");
+  const setDiscountType = createFieldSetter(setFormField, "discountType");
+  const setDiscountValue = createFieldSetter(setFormField, "discountValue");
+  const setIsAutoAdd = createFieldSetter(setFormField, "isAutoAdd");
+  const setGiftCount = createFieldSetter(setFormField, "giftCount");
+  const setRewardProducts = createFieldSetter(setFormField, "rewardProducts");
+  const setRewardPickerOpen = createFieldSetter(setFormField, "rewardPickerOpen");
+  const setAdvancedOpen = createFieldSetter(setFormField, "advancedOpen");
+  const setPriority = createFieldSetter(setFormField, "priority");
+  const setStopLower = createFieldSetter(setFormField, "stopLower");
+  const setGiftAppliesOther = createFieldSetter(setFormField, "giftAppliesOther");
+  const setAddCartMessage = createFieldSetter(setFormField, "addCartMessage");
+  const setOfferTodayTitle = createFieldSetter(setFormField, "offerTodayTitle");
+  const setAddRedirectBtn = createFieldSetter(setFormField, "addRedirectBtn");
 
   function validate() {
     const errs: { internalName?: string; publicTitle?: string } = {};
@@ -178,51 +298,7 @@ export default function NewGiftOfferPage() {
     return true;
   }
 
-  // ── Block 1: Offer info ──
-  const [internalName, setInternalName] = useState(preset?.internalName ?? "");
-  const [publicTitle, setPublicTitle]   = useState(preset?.publicTitle ?? "");
-  const [startsAt, setStartsAt]         = useState(() => new Date().toISOString().slice(0, 16));
-  const [endsAt, setEndsAt]             = useState("");
-
-  // ── Block 2: Main condition ──
-  const [minAmount, setMinAmount]           = useState("500");
-  const [maxAmount, setMaxAmount]           = useState("0.00");
-  const [selectedCurrencies, setSelectedCurrencies] = useState<string[]>([]);
-  const [appliesTo, setAppliesTo]           = useState("any_product");
-  const [minQty, setMinQty]                 = useState(1);
-  const [multiplyGifts, setMultiplyGifts]   = useState(false);
-  const [giftsMatchProducts, setGiftsMatchProducts] = useState(preset?.giftsMatchProducts ?? false);
   const isBogo = templateId === "bogo"; // BOGO: auto-add disabled, gifts match by default
-  const [trackMode, setTrackMode]           = useState("product");
-  const [conditionProducts, setConditionProducts] = useState<string[]>([]);
-  const [condPickerOpen, setCondPickerOpen] = useState(false);
-
-  // ── Block 3: Subconditions ──
-  const [subModalOpen, setSubModalOpen]   = useState(false);
-  const [activeSubs, setActiveSubs]       = useState<SubconditionId[]>([]);
-  const [subValues, setSubValues]         = useState<Record<string, unknown>>({});
-
-  // ── Main condition modal (scratch template) ──
-  const [mainCondModalOpen, setMainCondModalOpen] = useState(false);
-  const [selectedMainCond, setSelectedMainCond] = useState<MainConditionType>(conditionType);
-
-  // ── Block 4: Gifts ──
-  const [giftTab, setGiftTab]             = useState<"product" | "shipping">("product");
-  const [discountType, setDiscountType]   = useState("percentage");
-  const [discountValue, setDiscountValue] = useState("100");
-  const [isAutoAdd, setIsAutoAdd]         = useState(false);
-  const [giftCount, setGiftCount]         = useState(1);
-  const [rewardProducts, setRewardProducts] = useState<string[]>([]);
-  const [rewardPickerOpen, setRewardPickerOpen] = useState(false);
-
-  // ── Block 5: Advanced ──
-  const [advancedOpen, setAdvancedOpen]   = useState(false);
-  const [priority, setPriority]           = useState("1");
-  const [stopLower, setStopLower]         = useState(false);
-  const [giftAppliesOther, setGiftAppliesOther] = useState(false);
-  const [addCartMessage, setAddCartMessage]     = useState(false);
-  const [offerTodayTitle, setOfferTodayTitle]   = useState("");
-  const [addRedirectBtn, setAddRedirectBtn]     = useState(false);
 
   // ── Derived ──
   const hasName = Boolean(internalName.trim());
@@ -230,12 +306,6 @@ export default function NewGiftOfferPage() {
 
   function toggleCurrency(c: string) {
     setSelectedCurrencies((prev) => prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]);
-  }
-
-  function formatDate(iso: string) {
-    try {
-      return new Date(iso).toLocaleDateString("es-ES", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
-    } catch { return iso; }
   }
 
   function conditionSummaryLine() {
@@ -268,14 +338,14 @@ export default function NewGiftOfferPage() {
           All Offers
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ width: 44, height: 44, borderRadius: 14, background: "var(--gift-grad)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 4px 14px rgba(217,119,6,0.28)" }}>
+          <div className="rd-style-021">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg>
           </div>
           <div>
             <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, color: "var(--text)", lineHeight: 1.2 }}>New Gift Offer</h1>
             <div style={{ fontSize: 12, color: "var(--text-sub)", marginTop: 2 }}>{preset?.label ?? "From scratch"}</div>
           </div>
-          <span style={{ marginLeft: "auto", background: "rgba(217,119,6,0.1)", color: "var(--gift-color)", border: "1.5px solid rgba(217,119,6,0.2)", borderRadius: 20, fontSize: 11, fontWeight: 700, padding: "4px 12px", letterSpacing: "0.2px" }}>Gift</span>
+          <span className="rd-style-022">Gift</span>
         </div>
       </div>
 
@@ -298,9 +368,9 @@ export default function NewGiftOfferPage() {
             {/* ── Block 1: Offer information ── */}
             <div className="b-card" style={{ borderTop: "3px solid var(--gift-color)" }}>
               <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
-                <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--gift-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>1</div>
+                <div className="rd-style-023">1</div>
                 <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Offer information</span>
-                <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(217,119,6,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>1</span>
+                <span className="rd-style-024">1</span>
               </div>
               <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <div>
@@ -340,14 +410,14 @@ export default function NewGiftOfferPage() {
             {!isScratch && (
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--gift-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>2</div>
+                <div className="rd-style-023">2</div>
                 <span style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 600, color: "var(--text)" }}>Main condition</span>
               </div>
 
               <div className="b-card">
                 <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>{CONDITION_TYPE_LABEL[conditionType]}</span>
-                  <button type="button" className="b-modal-close" style={{ width: 24, height: 24, flexShrink: 0 }}>
+                  <button type="button" className="b-modal-close" aria-label="Clear main condition" style={{ width: 24, height: 24, flexShrink: 0 }}>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                   </button>
                 </div>
@@ -358,19 +428,19 @@ export default function NewGiftOfferPage() {
                     <>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                         <div>
-                          <label className="b-label">Min.</label>
+                          <label className="b-label" htmlFor="gift-min-amount">Min.</label>
                           <div style={{ position: "relative" }}>
                             <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--text-sub)" }}>$</span>
-                            <input className="b-input" type="number" name="minAmount" value={minAmount}
+                            <input id="gift-min-amount" aria-label="Minimum amount" className="b-input" type="number" name="minAmount" value={minAmount}
                               onChange={(e) => setMinAmount(e.target.value)}
                               min="0" step="0.01" style={{ paddingLeft: 22 }} autoComplete="off" />
                           </div>
                         </div>
                         <div>
-                          <label className="b-label">Max.</label>
+                          <label className="b-label" htmlFor="gift-max-amount">Max.</label>
                           <div style={{ position: "relative" }}>
                             <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--text-sub)" }}>$</span>
-                            <input className="b-input" type="number" name="maxAmount" value={maxAmount}
+                            <input id="gift-max-amount" aria-label="Maximum amount" className="b-input" type="number" name="maxAmount" value={maxAmount}
                               onChange={(e) => setMaxAmount(e.target.value)}
                               min="0" step="0.01" style={{ paddingLeft: 22, paddingRight: 28 }} autoComplete="off" />
                             <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: "var(--text-sub)" }}>%</span>
@@ -382,17 +452,17 @@ export default function NewGiftOfferPage() {
                         <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Currency filter</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                           {CURRENCIES.map((c) => (
-                            <button key={c} type="button" onClick={() => toggleCurrency(c)} style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1.5px solid ${selectedCurrencies.includes(c) ? "var(--gift-color)" : "var(--border)"}`, background: selectedCurrencies.includes(c) ? "rgba(217,119,6,0.08)" : "var(--bg)", color: selectedCurrencies.includes(c) ? "var(--gift-color)" : "var(--text-sub)", transition: "all 0.12s" }}>
+                            <button key={c} type="button" onClick={() => toggleCurrency(c)} className="rd-style-025" style={{ border: `1.5px solid ${selectedCurrencies.includes(c) ? "var(--gift-color)" : "var(--border)"}`, background: selectedCurrencies.includes(c) ? "rgba(217,119,6,0.08)" : "var(--bg)", color: selectedCurrencies.includes(c) ? "var(--gift-color)" : "var(--text-sub)" }}>
                               {c}
                             </button>
                           ))}
-                          <button type="button" style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "1.5px solid var(--border)", background: "var(--bg)", color: "var(--text-sub)" }}>···</button>
+                          <button type="button" className="rd-style-026">···</button>
                         </div>
                       </div>
 
                       <div>
-                        <label className="b-label">Condition applies to:</label>
-                        <select className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
+                        <label className="b-label" htmlFor="gift-cart-value-applies-to">Condition applies to:</label>
+                        <select id="gift-cart-value-applies-to" aria-label="Condition applies to" className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
                           <option value="any_product">any product</option>
                           <option value="exclude_variants_ids">all except selected products</option>
                           <option value="exclude_type_vendor_collection">all except selected types/vendors/collections</option>
@@ -407,10 +477,10 @@ export default function NewGiftOfferPage() {
                   {conditionType === "cart_value_multiplier" && (
                     <>
                       <div>
-                        <label className="b-label">Base multiplier value</label>
+                        <label className="b-label" htmlFor="gift-base-multiplier-value">Base multiplier value</label>
                         <div style={{ position: "relative", maxWidth: 280 }}>
                           <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--text-sub)" }}>$</span>
-                          <input className="b-input" type="number" name="minAmount" value={minAmount}
+                          <input id="gift-base-multiplier-value" aria-label="Base multiplier value" className="b-input" type="number" name="minAmount" value={minAmount}
                             onChange={(e) => setMinAmount(e.target.value)}
                             min="0" step="0.01" style={{ paddingLeft: 22 }} autoComplete="off" placeholder="0.00" />
                         </div>
@@ -429,17 +499,17 @@ export default function NewGiftOfferPage() {
                         <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Currency filter</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                           {CURRENCIES.map((c) => (
-                            <button key={c} type="button" onClick={() => toggleCurrency(c)} style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1.5px solid ${selectedCurrencies.includes(c) ? "var(--gift-color)" : "var(--border)"}`, background: selectedCurrencies.includes(c) ? "rgba(217,119,6,0.08)" : "var(--bg)", color: selectedCurrencies.includes(c) ? "var(--gift-color)" : "var(--text-sub)", transition: "all 0.12s" }}>
+                            <button key={c} type="button" onClick={() => toggleCurrency(c)} className="rd-style-025" style={{ border: `1.5px solid ${selectedCurrencies.includes(c) ? "var(--gift-color)" : "var(--border)"}`, background: selectedCurrencies.includes(c) ? "rgba(217,119,6,0.08)" : "var(--bg)", color: selectedCurrencies.includes(c) ? "var(--gift-color)" : "var(--text-sub)" }}>
                               {c}
                             </button>
                           ))}
-                          <button type="button" style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "1.5px solid var(--border)", background: "var(--bg)", color: "var(--text-sub)" }}>···</button>
+                          <button type="button" className="rd-style-026">···</button>
                         </div>
                       </div>
 
                       <div>
-                        <label className="b-label">Condition applies to:</label>
-                        <select className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
+                        <label className="b-label" htmlFor="gift-multiplier-applies-to">Condition applies to:</label>
+                        <select id="gift-multiplier-applies-to" aria-label="Condition applies to" className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
                           <option value="any_product">any product</option>
                           <option value="exclude_variants_ids">all except selected products</option>
                           <option value="exclude_type_vendor_collection">all except selected types/vendors/collections</option>
@@ -455,18 +525,18 @@ export default function NewGiftOfferPage() {
                     <>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                         <div>
-                          <label className="b-label">Min.</label>
-                          <input className="b-input" type="number" name="minQty" value={minQty}
+                          <label className="b-label" htmlFor="gift-min-qty">Min.</label>
+                          <input id="gift-min-qty" aria-label="Minimum quantity" className="b-input" type="number" name="minQty" value={minQty}
                             onChange={(e) => setMinQty(parseInt(e.target.value) || 1)} min="1" autoComplete="off" />
                         </div>
                         <div>
-                          <label className="b-label">Max.</label>
-                          <input className="b-input" type="number" name="maxQty" autoComplete="off" placeholder="0" />
+                          <label className="b-label" htmlFor="gift-max-qty">Max.</label>
+                          <input id="gift-max-qty" aria-label="Maximum quantity" className="b-input" type="number" name="maxQty" autoComplete="off" placeholder="0" />
                         </div>
                       </div>
                       <div>
-                        <label className="b-label">Condition applies to:</label>
-                        <select className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
+                        <label className="b-label" htmlFor="gift-quantity-applies-to">Condition applies to:</label>
+                        <select id="gift-quantity-applies-to" aria-label="Condition applies to" className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
                           <option value="any_product">any product</option>
                           <option value="exclude_variants_ids">all except selected products</option>
                           <option value="exclude_type_vendor_collection">all except selected types/vendors/collections</option>
@@ -481,34 +551,34 @@ export default function NewGiftOfferPage() {
                   {conditionType === "specific_product" && (
                     <>
                       <div>
-                        <label className="b-label">Required product quantity</label>
-                        <input className="b-input" type="number" name="minQty" value={minQty}
+                        <label className="b-label" htmlFor="gift-required-product-quantity">Required product quantity</label>
+                        <input id="gift-required-product-quantity" aria-label="Required product quantity" className="b-input" type="number" name="minQty" value={minQty}
                           onChange={(e) => setMinQty(parseInt(e.target.value) || 1)}
                           min="1" style={{ maxWidth: 120 }} autoComplete="off" />
                       </div>
-                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-                        <input type="checkbox" name="multiplyGifts" checked={multiplyGifts} onChange={(e) => setMultiplyGifts(e.target.checked)} />
+                      <label className="b-checkbox-row" htmlFor="gift-multiply-gifts" style={{ cursor: "pointer", gap: 10 }}>
+                        <input id="gift-multiply-gifts" aria-label="Multiply gifts by product quantity" type="checkbox" name="multiplyGifts" checked={multiplyGifts} onChange={(e) => setMultiplyGifts(e.target.checked)} />
                         <div>
                           <div className="b-checkbox-label">Multiply gifts by product quantity</div>
                           <div className="b-checkbox-help">Customers get more gifts the more qualifying products they buy.</div>
                         </div>
                       </label>
-                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-                        <input type="checkbox" name="giftsMatchProducts" checked={giftsMatchProducts} onChange={(e) => setGiftsMatchProducts(e.target.checked)} />
+                      <label className="b-checkbox-row" htmlFor="gift-match-products" style={{ cursor: "pointer", gap: 10 }}>
+                        <input id="gift-match-products" aria-label="Gifts match the selected products" type="checkbox" name="giftsMatchProducts" checked={giftsMatchProducts} onChange={(e) => setGiftsMatchProducts(e.target.checked)} />
                         <div className="b-checkbox-label">Gifts match the selected products (BOGO).</div>
                       </label>
                       <div style={{ marginLeft: 26, display: "flex", flexDirection: "column", gap: 6 }}>
                         {[{ v: "variant", l: "Track by variant" }, { v: "product", l: "Track by product" }].map((opt) => (
-                          <label key={opt.v} className="b-checkbox-row" style={{ cursor: giftsMatchProducts ? "pointer" : "not-allowed", gap: 8, opacity: giftsMatchProducts ? 1 : 0.5 }}>
-                            <input type="radio" name="trackMode" value={opt.v} checked={trackMode === opt.v} disabled={!giftsMatchProducts}
+                          <label key={opt.v} className="b-checkbox-row" htmlFor={`gift-track-${opt.v}`} style={{ cursor: giftsMatchProducts ? "pointer" : "not-allowed", gap: 8, opacity: giftsMatchProducts ? 1 : 0.5 }}>
+                            <input id={`gift-track-${opt.v}`} aria-label={opt.l} type="radio" name="trackMode" value={opt.v} checked={trackMode === opt.v} disabled={!giftsMatchProducts}
                               onChange={() => setTrackMode(opt.v)} style={{ accentColor: "var(--gift-color)", width: 14, height: 14 }} />
                             <span style={{ fontSize: 13, color: giftsMatchProducts ? "var(--text)" : "var(--text-sub)" }}>{opt.l}</span>
                           </label>
                         ))}
                       </div>
                       <div>
-                        <label className="b-label">Condition applies to:</label>
-                        <select className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
+                        <label className="b-label" htmlFor="gift-specific-applies-to">Condition applies to:</label>
+                        <select id="gift-specific-applies-to" aria-label="Condition applies to" className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
                           <option value="variants_ids">selected products</option>
                           <option value="type_vendor_collection">products in selected types/vendors/collections</option>
                         </select>
@@ -538,9 +608,9 @@ export default function NewGiftOfferPage() {
             {isScratch && (
               <div className="b-card" style={{ borderTop: "3px solid var(--gift-color)" }}>
                 <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
-                  <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--gift-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>2</div>
+                  <div className="rd-style-023">2</div>
                   <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Main condition</span>
-                  <span style={{ position: "absolute", right: 14, fontSize: 48, fontWeight: 800, fontFamily: "var(--font-display)", color: "rgba(217,119,6,0.06)", lineHeight: 1, userSelect: "none", pointerEvents: "none", top: "50%", transform: "translateY(-50%)" }}>2</span>
+                  <span className="rd-style-024">2</span>
                 </div>
                 <div className="b-card-body">
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -561,7 +631,7 @@ export default function NewGiftOfferPage() {
               {activeSubs.length > 0 && (
                 <div style={{ marginBottom: 12 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                    <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--gift-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>3</div>
+                    <div className="rd-style-023">3</div>
                     <span style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 600, color: "var(--text)" }}>Sub-conditions</span>
                   </div>
                   {activeSubs.map((id) => {
@@ -583,11 +653,11 @@ export default function NewGiftOfferPage() {
               )}
 
               <div className="b-card" style={{ background: "rgba(217,119,6,0.02)", border: "1.5px dashed rgba(217,119,6,0.3)" }}>
-                <div className="b-card-body" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px 16px", color: "var(--gift-color)", cursor: "pointer", fontWeight: 500, fontSize: 14 }}
+                <button type="button" className="b-card-body b-add-subcondition-trigger"
                   onClick={() => setSubModalOpen(true)}>
-                  <div style={{ width: 22, height: 22, borderRadius: "50%", border: "1.5px solid var(--gift-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, lineHeight: 1, flexShrink: 0 }}>+</div>
+                  <div className="rd-style-027">+</div>
                   Add sub-condition
-                </div>
+                </button>
               </div>
 
               {activeSubs.length > 0 && (
@@ -600,7 +670,7 @@ export default function NewGiftOfferPage() {
             {/* ── Block 4: Seleccionar regalos ── */}
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--gift-color)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "white", flexShrink: 0 }}>4</div>
+                <div className="rd-style-023">4</div>
                 <span style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 600, color: "var(--text)" }}>Gift reward</span>
               </div>
               <div className="b-card">
@@ -611,7 +681,7 @@ export default function NewGiftOfferPage() {
                     { key: "shipping", label: "Free Shipping" },
                   ].map((tab) => (
                     <button key={tab.key} type="button" onClick={() => setGiftTab(tab.key as "product" | "shipping")}
-                      style={{ padding: "10px 16px", fontSize: 13, fontWeight: giftTab === tab.key ? 600 : 400, color: giftTab === tab.key ? "var(--gift-color)" : "var(--text-sub)", borderTop: "none", borderLeft: "none", borderRight: "none", borderBottom: giftTab === tab.key ? "2px solid var(--gift-color)" : "2px solid transparent", background: "none", cursor: "pointer" }}>
+                      className="rd-style-028" style={{ fontWeight: giftTab === tab.key ? 600 : 400, color: giftTab === tab.key ? "var(--gift-color)" : "var(--text-sub)", borderBottom: giftTab === tab.key ? "2px solid var(--gift-color)" : "2px solid transparent" }}>
                       {tab.label}
                     </button>
                   ))}
@@ -624,20 +694,20 @@ export default function NewGiftOfferPage() {
                         <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Gift discount type</div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                           <div>
-                            <label className="b-label">Type:</label>
-                            <select className="b-select" name="discountType" value={discountType} onChange={(e) => setDiscountType(e.target.value)}>
+                            <label className="b-label" htmlFor="gift-discount-type">Type:</label>
+                            <select id="gift-discount-type" aria-label="Gift discount type" className="b-select" name="discountType" value={discountType} onChange={(e) => setDiscountType(e.target.value)}>
                               <option value="percentage">Percentage</option>
                               <option value="fixed_amount">Amount</option>
                               <option value="fixed_price">Fixed price</option>
                             </select>
                           </div>
                           <div>
-                            <label className="b-label">Value:</label>
+                            <label className="b-label" htmlFor="gift-discount-value">Value:</label>
                             <div style={{ position: "relative" }}>
                               <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--text-sub)" }}>
                                 {discountType === "fixed_amount" ? "$" : "%"}
                               </span>
-                              <input className="b-input" type="number" name="discountValue" value={discountValue}
+                              <input id="gift-discount-value" aria-label="Gift discount value" className="b-input" type="number" name="discountValue" value={discountValue}
                                 onChange={(e) => setDiscountValue(e.target.value)}
                                 min="0" style={{ paddingLeft: 22 }} autoComplete="off" />
                             </div>
@@ -647,19 +717,19 @@ export default function NewGiftOfferPage() {
 
                       <div>
                         <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Customer will receive:</div>
-                        <label className="b-checkbox-row" style={{ cursor: isBogo ? "not-allowed" : "pointer", gap: 10, marginBottom: 6, opacity: isBogo ? 0.5 : 1 }}>
-                          <input type="radio" name="_autoAddRadio" checked={isAutoAdd} disabled={isBogo}
+                        <label className="b-checkbox-row" htmlFor="gift-auto-add-all" style={{ cursor: isBogo ? "not-allowed" : "pointer", gap: 10, marginBottom: 6, opacity: isBogo ? 0.5 : 1 }}>
+                          <input id="gift-auto-add-all" aria-label="Automatically add all gifts" type="radio" name="_autoAddRadio" checked={isAutoAdd} disabled={isBogo}
                             onChange={() => setIsAutoAdd(true)}
                             style={{ accentColor: "var(--gift-color)", width: 15, height: 15 }} />
                           <span style={{ fontSize: 13, color: isBogo ? "var(--text-sub)" : "var(--text)" }}>Automatically add all gifts</span>
                         </label>
-                        <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-                          <input type="radio" name="_autoAddRadio" checked={!isAutoAdd} onChange={() => setIsAutoAdd(false)}
+                        <label className="b-checkbox-row" htmlFor="gift-customer-selects" style={{ cursor: "pointer", gap: 10 }}>
+                          <input id="gift-customer-selects" aria-label="Customer selects number of gifts" type="radio" name="_autoAddRadio" checked={!isAutoAdd} onChange={() => setIsAutoAdd(false)}
                             style={{ accentColor: "var(--gift-color)", width: 15, height: 15 }} />
                           <span style={{ fontSize: 13, color: "var(--text)" }}>Customer selects number of gifts</span>
                         </label>
                         {!isAutoAdd && (
-                          <input className="b-input" type="number" name="giftCount" value={giftCount}
+                          <input aria-label="Gift count" className="b-input" type="number" name="giftCount" value={giftCount}
                             onChange={(e) => setGiftCount(parseInt(e.target.value) || 1)}
                             min="1" style={{ maxWidth: 80, marginTop: 8 }} autoComplete="off" />
                         )}
@@ -686,16 +756,16 @@ export default function NewGiftOfferPage() {
 
             {/* ── Block 5: Configuración avanzada ── */}
             <div className="b-card">
-              <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", position: "relative", overflow: "hidden" }}
+              <button type="button" className="b-card-header rd-style-029"
                 onClick={() => setAdvancedOpen((v) => !v)}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{ width: 22, height: 22, borderRadius: "50%", background: "rgba(217,119,6,0.12)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "var(--gift-color)", flexShrink: 0 }}>5</div>
+                  <div className="rd-style-030">5</div>
                   <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Advanced settings</span>
                   <span style={{ color: "var(--text-sub)", display: "flex" }}><IInfo /></span>
-                  <span style={{ fontSize: 10, color: "var(--text-muted)", background: "var(--border-light)", padding: "1px 6px", borderRadius: 100, border: "1px solid var(--border)" }}>optional</span>
+                  <span style={{ fontSize: 12, color: "var(--text-muted)", background: "var(--border-light)", padding: "1px 6px", borderRadius: 100, border: "1px solid var(--border)" }}>optional</span>
                 </div>
                 <span style={{ color: "var(--text-sub)", display: "flex" }}>{advancedOpen ? <IChevUp /> : <IChevDown />}</span>
-              </div>
+              </button>
 
               {advancedOpen && (
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -742,20 +812,20 @@ export default function NewGiftOfferPage() {
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                       <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>Today's offer</span>
-                      <span style={{ background: "#fef3c7", color: "#92400e", fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 10, border: "1px solid #fbbf24" }}>legacy</span>
+                      <span style={{ background: "#fef3c7", color: "#92400e", fontSize: 12, fontWeight: 600, padding: "2px 7px", borderRadius: 10, border: "1px solid #fbbf24" }}>legacy</span>
                     </div>
                     <div style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 10 }}>
                       The latest version of the Today offer is now available in Boosters. If you&apos;re still using this version, you can configure the display text and redirect link here.
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                       <div>
-                        <label className="b-label">Offer title</label>
-                        <input className="b-input" value={offerTodayTitle} onChange={(e) => setOfferTodayTitle(e.target.value)}
+                        <label className="b-label" htmlFor="today-offer-title">Offer title</label>
+                        <input id="today-offer-title" aria-label="Offer title" className="b-input" value={offerTodayTitle} onChange={(e) => setOfferTodayTitle(e.target.value)}
                           placeholder="Enter offer title" autoComplete="off" />
                         <div className="b-help">If blank, the original title will be used. Changing this won&apos;t affect the original offer title.</div>
                       </div>
-                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-                        <input type="checkbox" checked={addRedirectBtn} onChange={(e) => setAddRedirectBtn(e.target.checked)} />
+                      <label className="b-checkbox-row" htmlFor="today-offer-add-redirect" style={{ cursor: "pointer", gap: 10 }}>
+                        <input id="today-offer-add-redirect" aria-label="Add a redirect button" type="checkbox" checked={addRedirectBtn} onChange={(e) => setAddRedirectBtn(e.target.checked)} />
                         <span style={{ fontSize: 13, color: "var(--text)" }}>Add a redirect button</span>
                       </label>
                     </div>
@@ -770,7 +840,7 @@ export default function NewGiftOfferPage() {
           <OfferSummarySidebar
             accentColor="var(--gift-color)"
             title={hasName ? (publicTitle || internalName) : undefined}
-            startDate={hasName ? formatDate(startsAt) : undefined}
+            startDate={hasName ? formatOfferStartDate(startsAt) : undefined}
             steps={[
               {
                 label: "Basic information",
@@ -805,7 +875,7 @@ export default function NewGiftOfferPage() {
         </div>
 
         {/* ── Footer ── */}
-        <div style={{ position: "sticky", bottom: 0, zIndex: 10, display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, padding: "14px 0", background: "rgba(250,249,247,0.9)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", borderTop: "1px solid var(--border)" }}>
+        <div className="rd-style-031">
           <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary">
             Save draft
           </button>

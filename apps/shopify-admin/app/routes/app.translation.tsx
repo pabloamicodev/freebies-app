@@ -137,16 +137,7 @@ export default function TranslationPage() {
                       {hint.match(/\{\{[^}]+\}\}/g)?.map((token) => (
                         <span
                           key={token}
-                          style={{
-                            display: "inline-block",
-                            background: "#f3f4f6",
-                            color: "#6d7175",
-                            borderRadius: 3,
-                            padding: "0 4px",
-                            fontFamily: "monospace",
-                            fontSize: 11,
-                            marginLeft: 2,
-                          }}
+                          className="rd-style-086"
                         >
                           {token}
                         </span>
@@ -155,6 +146,7 @@ export default function TranslationPage() {
                   )}
                   <input
                     id={`field-${key}`}
+                    aria-label={`${locale} ${key}`}
                     className="b-input"
                     type="text"
                     name={`${locale}.${key}`}

@@ -3,7 +3,7 @@
  * Import from here instead of defining locally in routes.
  *
  * Usage:
- *   import { IconChevronLeft, IconTrash, GiftIcon } from "../components/Icons.js";
+ *   import { IconChevronLeft, IconTrash } from "../components/Icons.js";
  */
 
 /* ── Navigation ─────────────────────────────────────────── */
@@ -28,22 +28,6 @@ export function IconChevronDown() {
   return (
     <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor" focusable="false" aria-hidden="true">
       <path fillRule="evenodd" d="M5.72 8.47a.75.75 0 0 1 1.06 0l3.47 3.47 3.47-3.47a.75.75 0 1 1 1.06 1.06l-4 4a.75.75 0 0 1-1.06 0l-4-4a.75.75 0 0 1 0-1.06Z"/>
-    </svg>
-  );
-}
-
-export function IconChevronUp() {
-  return (
-    <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor" focusable="false" aria-hidden="true">
-      <path fillRule="evenodd" d="M14.28 11.53a.75.75 0 0 1-1.06 0L10 8.06l-3.22 3.47a.75.75 0 1 1-1.06-1.06l4-4a.75.75 0 0 1 1.06 0l4 4a.75.75 0 0 1 0 1.06Z"/>
-    </svg>
-  );
-}
-
-export function IconX() {
-  return (
-    <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor" focusable="false" aria-hidden="true">
-      <path d="M10 8.586 6.707 5.293a1 1 0 0 0-1.414 1.414L8.586 10l-3.293 3.293a1 1 0 1 0 1.414 1.414L10 11.414l3.293 3.293a1 1 0 0 0 1.414-1.414L11.414 10l3.293-3.293a1 1 0 0 0-1.414-1.414L10 8.586Z"/>
     </svg>
   );
 }
@@ -95,15 +79,6 @@ export function IconCheck() {
   return (
     <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" focusable="false" aria-hidden="true">
       <polyline points="20 6 9 17 4 12"/>
-    </svg>
-  );
-}
-
-/** Larger check for pricing/feature lists */
-export function IconCheckLg({ color = "currentColor" }: { color?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" focusable="false" aria-hidden="true">
-      <polyline points="17 5 8 16 3 11"/>
     </svg>
   );
 }
@@ -162,20 +137,6 @@ export function SortIcon({ active }: { active?: "asc" | "desc" }) {
     <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor" focusable="false" aria-hidden="true">
       <path fillRule="evenodd" fillOpacity={active === "asc" ? 1 : 0.33} d="M9.116 4.823a1.25 1.25 0 0 1 1.768 0l2.646 2.647a.75.75 0 0 1-1.06 1.06l-2.47-2.47-2.47 2.47a.75.75 0 1 1-1.06-1.06l2.646-2.647Z"/>
       <path fillRule="evenodd" fillOpacity={active === "desc" ? 1 : 0.33} d="M9.116 15.177a1.25 1.25 0 0 0 1.768 0l2.646-2.647a.75.75 0 0 0-1.06-1.06l-2.47 2.47-2.47-2.47a.75.75 0 0 0-1.06 1.06l2.646 2.647Z"/>
-    </svg>
-  );
-}
-
-/* ── Offer-specific ─────────────────────────────────────── */
-
-/** Gift box SVG — exact data URI paths used by BOGOS in the type column */
-export function GiftIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">
-      <path fillRule="evenodd" clipRule="evenodd" d="M5.5 10.5V14.5L14.5 14.5V10.5H16.5V14.5C16.5 15.6046 15.6046 16.5 14.5 16.5H5.5C4.39543 16.5 3.5 15.6046 3.5 14.5V10.5H5.5Z" fill="#4A4A4A"/>
-      <path fillRule="evenodd" clipRule="evenodd" d="M2.5 6C2.5 5.44772 2.94772 5 3.5 5H16.5C17.0523 5 17.5 5.44772 17.5 6V8C17.5 8.55228 17.0523 9 16.5 9H3.5C2.94772 9 2.5 8.55228 2.5 8V6Z" fill="#4A4A4A"/>
-      <path fillRule="evenodd" clipRule="evenodd" d="M7.25707 2.08594L9.93798 4.76681L12.6189 2.08594L14.0331 3.50015L11.3522 6.18102C10.5712 6.96206 9.30483 6.96207 8.52378 6.18103L5.84287 3.50016L7.25707 2.08594Z" fill="#4A4A4A"/>
-      <path fillRule="evenodd" clipRule="evenodd" d="M11 6.56641L11 15.7881L9 15.7881L9 6.56641L11 6.56641Z" fill="#4A4A4A"/>
     </svg>
   );
 }
@@ -248,56 +209,6 @@ export function IconCondition() {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" focusable="false" aria-hidden="true">
       <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-    </svg>
-  );
-}
-
-export function IconDatabase() {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" focusable="false" aria-hidden="true">
-      <ellipse cx="12" cy="5" rx="9" ry="3"/>
-      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
-      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
-    </svg>
-  );
-}
-
-export function IconQueue() {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" focusable="false" aria-hidden="true">
-      <line x1="8" y1="6" x2="21" y2="6"/>
-      <line x1="8" y1="12" x2="21" y2="12"/>
-      <line x1="8" y1="18" x2="21" y2="18"/>
-      <line x1="3" y1="6" x2="3.01" y2="6"/>
-      <line x1="3" y1="12" x2="3.01" y2="12"/>
-      <line x1="3" y1="18" x2="3.01" y2="18"/>
-    </svg>
-  );
-}
-
-export function IconWarning() {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" focusable="false" aria-hidden="true">
-      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
-      <line x1="12" y1="9" x2="12" y2="13"/>
-      <line x1="12" y1="17" x2="12.01" y2="17"/>
-    </svg>
-  );
-}
-
-export function IconShopify() {
-  return (
-    <svg viewBox="0 0 109.5 124.5" width="16" height="16" fill="currentColor" focusable="false" aria-hidden="true">
-      <path d="M74.7 14.8s-.3 0-.8.1c-.4-1.2-1-2.3-1.9-3.2-2.8-3.1-6.8-4.6-11.1-4.6-.3 0-.6 0-.9.1-.1-.2-.3-.4-.4-.6C58.3 4.4 55.9 3.5 53 3.6c-5.6.1-11.2 4.2-15.7 11.4-3.2 5.1-5.6 11.5-6.3 16.5L18.9 35c-3.5 1.1-3.6 1.2-4 4.5L6 116.7l68.3 11.8 36.9-9.5L74.7 14.8zM60.4 19.1c-3.8 1.2-8 1.3-8 1.3-.1 0-2.1-5.1-5.8-8.8 1.7-.4 3.5-.6 5.3-.6 1.8 0 3.6.4 5.2 1.1 1.5.7 3 2.3 3.3 7zm-10.7-11.7c.8 0 1.5.1 2.2.3-5.2 2.4-10.6 8.6-12.9 21l-7.5 2.3c2.1-10 9.3-23.6 18.2-23.6z"/>
-    </svg>
-  );
-}
-
-export function IconFunction() {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" focusable="false" aria-hidden="true">
-      <path d="M6 4a2 2 0 0 1 2-2 8 8 0 0 1 8 8 2 2 0 0 0 2 2 2 2 0 0 1 0 4 2 2 0 0 0-2 2 8 8 0 0 1-8 8 2 2 0 0 1-2-2"/>
-      <line x1="2" y1="12" x2="22" y2="12"/>
     </svg>
   );
 }

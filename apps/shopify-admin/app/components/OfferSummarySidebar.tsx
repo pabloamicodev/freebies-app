@@ -35,17 +35,10 @@ export interface OfferSummarySidebarProps {
 
 function StepDot({ checked, index, accentColor }: { checked: boolean; index: number; accentColor: string }) {
   return (
-    <div style={{
-      width: 26, height: 26, borderRadius: "50%", flexShrink: 0, zIndex: 1,
-      background: checked ? accentColor : "var(--bg-card, #fff)",
-      border: `2px solid ${checked ? "transparent" : "var(--border, #e1e3e5)"}`,
-      display: "flex", alignItems: "center", justifyContent: "center",
-      transition: "all 0.24s ease",
-      boxShadow: checked ? `0 2px 6px ${accentColor}55` : "0 1px 2px rgba(0,0,0,0.06)",
-    }}>
+    <div className="rd-style-014" style={{ background: checked ? accentColor : "var(--bg-card, #fff)", border: `2px solid ${checked ? "transparent" : "var(--border, #e1e3e5)"}`, boxShadow: checked ? `0 2px 6px ${accentColor}55` : "0 1px 2px rgba(0,0,0,0.06)" }}>
       {checked
         ? <IconCheck />
-        : <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted, #9ca3af)", lineHeight: 1 }}>{index + 1}</span>
+        : <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted, #9ca3af)", lineHeight: 1 }}>{index + 1}</span>
       }
     </div>
   );
@@ -54,6 +47,10 @@ function StepDot({ checked, index, accentColor }: { checked: boolean; index: num
 function ItemIcon({ icon }: { icon?: () => JSX.Element }) {
   const Icon = icon ?? IconCondition;
   return <span style={{ color: "var(--text-muted)", flexShrink: 0, marginTop: 1, opacity: 0.7 }}><Icon /></span>;
+}
+
+function summaryItemKey(item: SummaryStepItem): string {
+  return item.text ?? item.lines?.join("|") ?? item.icon?.name ?? "summary-item";
 }
 
 // ─── Help card ───────────────────────────────────────────────────────────────
@@ -67,12 +64,7 @@ function DefaultHelpCard() {
     }}>
       <div style={{ padding: "16px 18px" }}>
         <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
-          <div style={{
-            width: 38, height: 38, borderRadius: 10, flexShrink: 0,
-            background: "rgba(255,255,255,0.15)",
-            border: "1px solid rgba(255,255,255,0.2)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
+          <div className="rd-style-015">
             <svg width="18" height="18" viewBox="0 0 20 20" fill="white">
               <path fillRule="evenodd" d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0ZM8.94 6.94a.75.75 0 1 1-1.061-1.061 3 3 0 1 1 2.871 5.026v.345a.75.75 0 0 1-1.5 0v-.5c0-.72.57-1.172 1.081-1.287A1.5 1.5 0 1 0 8.94 6.94ZM10 15a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd"/>
             </svg>
@@ -88,15 +80,7 @@ function DefaultHelpCard() {
         </div>
         <button
           type="button"
-          style={{
-            width: "100%", padding: "7px 12px",
-            background: "rgba(255,255,255,0.12)",
-            border: "1px solid rgba(255,255,255,0.2)",
-            borderRadius: 6, fontSize: 13, fontWeight: 600,
-            color: "rgba(255,255,255,0.9)", cursor: "pointer",
-            fontFamily: "inherit", transition: "background 0.15s",
-            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-          }}
+          className="rd-style-016"
           onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.2)")}
           onMouseLeave={e => (e.currentTarget.style.background = "rgba(255,255,255,0.12)")}
         >
@@ -159,25 +143,17 @@ export function OfferSummarySidebar({
           <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", letterSpacing: "0.4px", textTransform: "uppercase" }}>
             Setup checklist
           </span>
-          <span style={{
-            fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 100,
-            letterSpacing: "0.2px",
-            background: isComplete ? "var(--green-badge)" : "var(--border-light)",
-            color: isComplete ? "var(--green-txt)" : "var(--text-sub)",
-            border: isComplete ? "1px solid #a7f3d0" : "1px solid var(--border)",
-          }}>
+          <span className="rd-style-017" style={{ background: isComplete ? "var(--green-badge)" : "var(--border-light)", color: isComplete ? "var(--green-txt)" : "var(--text-sub)", border: isComplete ? "1px solid #a7f3d0" : "1px solid var(--border)" }}>
             {completedCount}/{totalRequired}
           </span>
         </div>
 
         {/* Progress bar */}
         <div style={{ height: 3, background: "var(--border-light)" }}>
-          <div style={{
-            height: "100%", width: `${progress}%`,
-            background: accentColor,
-            transition: "width 0.4s ease",
-            borderRadius: "0 2px 2px 0",
-          }} />
+          <div
+            className="b-summary-progress-fill"
+            style={{ background: accentColor, transform: `scaleX(${progress / 100})` }}
+          />
         </div>
 
         {/* Steps */}
@@ -194,7 +170,7 @@ export function OfferSummarySidebar({
 
           {enrichedSteps.map((step, i) => (
             <div
-              key={i}
+              key={step.label}
               style={{
                 display: "flex", gap: 12, alignItems: "flex-start",
                 marginBottom: i < enrichedSteps.length - 1 ? 20 : 0,
@@ -210,7 +186,7 @@ export function OfferSummarySidebar({
                   {step.label}
                   {step.optional && !step.checked && (
                     <span style={{
-                      fontSize: 10, fontWeight: 500, color: "var(--text-muted)",
+                      fontSize: 12, fontWeight: 500, color: "var(--text-muted)",
                       background: "var(--border-light)", padding: "1px 6px",
                       borderRadius: 100, border: "1px solid var(--border)",
                     }}>
@@ -221,8 +197,8 @@ export function OfferSummarySidebar({
 
                 {step.checked && step.items && step.items.length > 0 ? (
                   <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
-                    {step.items.map((item, j) => (
-                      <div key={j} style={{ display: "flex", gap: 5, alignItems: "flex-start" }}>
+                    {step.items.map((item) => (
+                      <div key={summaryItemKey(item)} style={{ display: "flex", gap: 5, alignItems: "flex-start" }}>
                         <ItemIcon icon={item.icon} />
                         {item.text ? (
                           <span style={{
@@ -231,8 +207,8 @@ export function OfferSummarySidebar({
                           }}>{item.text}</span>
                         ) : item.lines ? (
                           <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                            {item.lines.map((l, k) => (
-                              <span key={k} style={{ fontSize: 12, color: "var(--text-sub)", lineHeight: 1.5 }}>{l}</span>
+                            {item.lines.map((l) => (
+                              <span key={l} style={{ fontSize: 12, color: "var(--text-sub)", lineHeight: 1.5 }}>{l}</span>
                             ))}
                           </div>
                         ) : null}

@@ -152,7 +152,7 @@ export function MainConditionModal({ open, initialSelected, onClose, onConfirm }
               This determines when the offer triggers for customers.
             </p>
           </div>
-          <button className="b-modal-close" onClick={onClose} aria-label="Close">
+          <button type="button" className="b-modal-close" onClick={onClose} aria-label="Close">
             <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/></svg>
           </button>
         </div>
@@ -162,9 +162,9 @@ export function MainConditionModal({ open, initialSelected, onClose, onConfirm }
           {/* Combinable section */}
           <div style={{ marginBottom: 24 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-sub)" }}>Combinable conditions</span>
+              <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-sub)" }}>Combinable conditions</span>
               <div style={{ flex: 1, height: 1, background: "var(--border-light)" }} />
-              <span style={{ fontSize: 11, background: "#e8f5e9", color: "#2e7d32", padding: "2px 8px", borderRadius: 100, fontWeight: 500 }}>Can stack with other conditions</span>
+              <span style={{ fontSize: 12, background: "#e8f5e9", color: "#2e7d32", padding: "2px 8px", borderRadius: 100, fontWeight: 500 }}>Can stack with other conditions</span>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               {COMBINABLE_OPTIONS.map((opt) => (
@@ -176,9 +176,9 @@ export function MainConditionModal({ open, initialSelected, onClose, onConfirm }
           {/* Independent section */}
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-sub)" }}>Independent conditions</span>
+              <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-sub)" }}>Independent conditions</span>
               <div style={{ flex: 1, height: 1, background: "var(--border-light)" }} />
-              <span style={{ fontSize: 11, background: "#fff3e0", color: "#e65100", padding: "2px 8px", borderRadius: 100, fontWeight: 500 }}>Used standalone only</span>
+              <span style={{ fontSize: 12, background: "#fff3e0", color: "#e65100", padding: "2px 8px", borderRadius: 100, fontWeight: 500 }}>Used standalone only</span>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               {INDEPENDENT_OPTIONS.map((opt) => (
@@ -190,8 +190,8 @@ export function MainConditionModal({ open, initialSelected, onClose, onConfirm }
 
         {/* Footer */}
         <div className="b-modal-footer">
-          <button className="b-btn b-btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="b-btn b-btn-dark" onClick={handleConfirm} disabled={!selected}>
+          <button type="button" className="b-btn b-btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="button" className="b-btn b-btn-dark" onClick={handleConfirm} disabled={!selected}>
             Use this condition
           </button>
         </div>
@@ -207,30 +207,10 @@ function ConditionCard({ opt, selected, onSelect }: { opt: MainConditionOption; 
       type="button"
       onClick={onSelect}
       aria-pressed={selected}
-      style={{
-        border: `1.5px solid ${selected ? "var(--blue)" : "var(--border)"}`,
-        borderRadius: 10,
-        background: selected ? "var(--blue-light, #f0f4ff)" : "var(--bg-card)",
-        cursor: "pointer",
-        padding: "14px 16px",
-        display: "flex",
-        alignItems: "flex-start",
-        gap: 14,
-        position: "relative",
-        transition: "border-color 0.12s, background 0.12s, box-shadow 0.12s",
-        boxShadow: selected ? "0 0 0 3px rgba(44,110,203,0.12)" : "none",
-        textAlign: "left",
-        fontFamily: "inherit",
-      }}
+      className="rd-style-097" style={{ border: `1.5px solid ${selected ? "var(--blue)" : "var(--border)"}`, background: selected ? "var(--blue-light, #f0f4ff)" : "var(--bg-card)", boxShadow: selected ? "0 0 0 3px rgba(44,110,203,0.12)" : "none" }}
     >
       {/* Icon pill */}
-      <div style={{
-        width: 40, height: 40, borderRadius: 10, flexShrink: 0,
-        background: selected ? opt.color : `${opt.color}18`,
-        color: selected ? "#fff" : opt.color,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        transition: "background 0.12s, color 0.12s",
-      }}>
+      <div className="rd-style-098" style={{ background: selected ? opt.color : `${opt.color}18`, color: selected ? "#fff" : opt.color }}>
         {opt.icon}
       </div>
 
@@ -242,12 +222,7 @@ function ConditionCard({ opt, selected, onSelect }: { opt: MainConditionOption; 
 
       {/* Check */}
       {selected && (
-        <div style={{
-          position: "absolute", top: 10, right: 10,
-          width: 20, height: 20, borderRadius: "50%",
-          background: "var(--blue)", color: "#fff",
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}>
+        <div className="rd-style-099">
           <ICheck />
         </div>
       )}

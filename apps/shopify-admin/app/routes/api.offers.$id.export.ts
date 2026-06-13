@@ -7,7 +7,7 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { offers, offerConditions, offerRewards } from "@promo/db";
+import { offers, offerConditions, offerRewards, shops } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 
 function escapeCSV(value: unknown): string {
@@ -28,18 +28,38 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const offerId = params["id"];
 
   const shopRows = await db
-    .select({ id: (await import("@promo/db")).shops.id })
-    .from((await import("@promo/db")).shops)
-    .where(eq((await import("@promo/db")).shops.myshopifyDomain, session.shop))
+    .select({ id: shops.id })
+    .from(shops)
+    .where(eq(shops.myshopifyDomain, session.shop))
     .limit(1);
   const shopId = shopRows[0]?.id ?? "";
 
-  const offerRows = offerId
-    ? await db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
-    : await db.select().from(offers).where(eq(offers.shopId, shopId));
+  const [offerRows, allConditions, allRewards] = await Promise.all([
+    offerId
+      ? db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
+      : db.select().from(offers).where(eq(offers.shopId, shopId)),
+    db.select().from(offerConditions).where(eq(offerConditions.shopId, shopId)),
+    db.select().from(offerRewards).where(eq(offerRewards.shopId, shopId)),
+  ]);
+  const conditionsByOfferId = new Map<string, typeof allConditions>();
+  const rewardsByOfferId = new Map<string, typeof allRewards>();
+  const mainConditionByOfferId = new Map<string, typeof allConditions[number]>();
 
-  const allConditions = await db.select().from(offerConditions).where(eq(offerConditions.shopId, shopId));
-  const allRewards = await db.select().from(offerRewards).where(eq(offerRewards.shopId, shopId));
+  for (const condition of allConditions) {
+    const group = conditionsByOfferId.get(condition.offerId);
+    if (group) group.push(condition);
+    else conditionsByOfferId.set(condition.offerId, [condition]);
+
+    if (condition.scope === "main" && !mainConditionByOfferId.has(condition.offerId)) {
+      mainConditionByOfferId.set(condition.offerId, condition);
+    }
+  }
+
+  for (const reward of allRewards) {
+    const group = rewardsByOfferId.get(reward.offerId);
+    if (group) group.push(reward);
+    else rewardsByOfferId.set(reward.offerId, [reward]);
+  }
 
   const headers = [
     "offer_id", "internal_name", "public_title", "type", "status",
@@ -53,10 +73,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const rows: string[] = [rowToCSV(headers)];
 
   for (const offer of offerRows) {
-    const conditions = allConditions.filter((c) => c.offerId === offer.id);
-    const rewards = allRewards.filter((r) => r.offerId === offer.id);
+    const conditions = conditionsByOfferId.get(offer.id) ?? [];
+    const rewards = rewardsByOfferId.get(offer.id) ?? [];
 
-    const mainCondition = conditions.find((c) => c.scope === "main");
+    const mainCondition = mainConditionByOfferId.get(offer.id);
     const condValue = (mainCondition?.value ?? {}) as Record<string, unknown>;
 
     for (const reward of rewards.length > 0 ? rewards : [null]) {
