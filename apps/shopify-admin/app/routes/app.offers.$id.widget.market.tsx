@@ -7,6 +7,8 @@
 import { useLoaderData, useActionData, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { loadOwnedOffer } from "../lib/owned-offer.server.js";
+import { parseJsonArray } from "../lib/offer-validation.server.js";
 import { widgets, appSettings } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import { getMarketsForShop } from "../lib/markets.server.js";
@@ -16,9 +18,38 @@ import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
+type StoredMarketOverride = {
+  marketId: string;
+  thresholdCents: number | null;
+  widgetTitle: string | null;
+  enabled: boolean;
+};
+
+function normalizeMarketOverrides(items: unknown[]): StoredMarketOverride[] {
+  return items.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const override = item as {
+      marketId?: unknown;
+      thresholdCents?: unknown;
+      widgetTitle?: unknown;
+      enabled?: unknown;
+    };
+    if (typeof override.marketId !== "string") return [];
+    const thresholdCents = typeof override.thresholdCents === "number" && Number.isFinite(override.thresholdCents)
+      ? override.thresholdCents
+      : null;
+    const widgetTitle = typeof override.widgetTitle === "string" && override.widgetTitle.trim()
+      ? override.widgetTitle.trim()
+      : null;
+    const enabled = typeof override.enabled === "boolean" ? override.enabled : true;
+    return [{ marketId: override.marketId, thresholdCents, widgetTitle, enabled }];
+  });
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
+  await loadOwnedOffer(db, shopId, offerId);
 
   const [offerWidgets, markets, marketOverrideRow] = await Promise.all([
     db.select().from(widgets).where(and(eq(widgets.offerId, offerId), eq(widgets.shopId, shopId))).limit(1),
@@ -30,9 +61,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   ]);
 
   const widget = offerWidgets[0];
-  const marketOverrides = marketOverrideRow[0]?.value
-    ? JSON.parse(marketOverrideRow[0].value)
-    : [];
+  const overridesForm = new FormData();
+  overridesForm.set("overrides", marketOverrideRow[0]?.value || "[]");
+  const marketOverridesResult = parseJsonArray(overridesForm, "overrides");
+  const marketOverrides = marketOverridesResult.error
+    ? []
+    : normalizeMarketOverrides(marketOverridesResult.data!);
 
   // Get base threshold from widget config
   const widgetConfig = (widget?.config ?? {}) as Record<string, unknown>;
@@ -52,10 +86,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
+  await loadOwnedOffer(db, shopId, offerId);
 
   const overridesJson = formData.get("overrides") as string;
-  let overrides = [];
-  try { overrides = JSON.parse(overridesJson); } catch {}
+  const overridesForm = new FormData();
+  overridesForm.set("overrides", overridesJson || "[]");
+  const overridesResult = parseJsonArray(overridesForm, "overrides");
+  if (overridesResult.error) return { error: overridesResult.error };
+  const overrides = normalizeMarketOverrides(overridesResult.data!);
 
   await db.insert(appSettings)
     .values({ shopId, key: `widget.market_overrides.${offerId}`, value: JSON.stringify(overrides) })
@@ -106,6 +144,14 @@ export default function WidgetMarketPage() {
           </div>
           <div className="b-banner-body">
             <p className="b-banner-text">{actionData.savedCount} market override(s) saved</p>
+          </div>
+        </div>
+      )}
+
+      {actionData?.error && (
+        <div className="b-banner b-banner-critical" style={{ marginBottom: 16 }}>
+          <div className="b-banner-body">
+            <p className="b-banner-text">{actionData.error}</p>
           </div>
         </div>
       )}

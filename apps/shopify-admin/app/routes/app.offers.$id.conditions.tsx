@@ -9,6 +9,7 @@ import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions } from "@promo/db";
 import { and, eq } from "drizzle-orm";
@@ -33,14 +34,12 @@ function splitCountryCsv(value: string | null): string[] {
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
-  const [offerRows, conditionRows] = await Promise.all([
-    db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1),
-    db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId))),
-  ]);
+  const conditionRows = await db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
 
   return {
-    offer: offerRows[0],
+    offer,
     conditions: conditionRows.sort((a, b) => a.sortOrder - b.sortOrder),
   };
 };
@@ -50,6 +49,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const offerId = params["id"]!;
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
+  await loadOwnedOffer(db, shopId, offerId);
 
   if (intent === "add_condition") {
     const conditionType = formData.get("conditionType") as string;
@@ -133,7 +133,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
 
     const existingCount = await db.select({ id: offerConditions.id })
-      .from(offerConditions).where(eq(offerConditions.offerId, offerId));
+      .from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
 
     await db.insert(offerConditions).values({
       shopId, offerId,
@@ -148,7 +148,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (intent === "delete_condition") {
     const conditionId = formData.get("conditionId") as string;
-    await db.delete(offerConditions).where(eq(offerConditions.id, conditionId));
+    await db.delete(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)));
   }
 
   return null;

@@ -2,8 +2,8 @@ import "./lib/pg-ssl-patch.js";
 import "@shopify/shopify-app-react-router/adapters/node";
 import { shopifyApp } from "@shopify/shopify-app-react-router/server";
 import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";
-import { ApiVersion } from "@shopify/shopify-api";
 import { getDb, shops } from "@promo/db";
+import { SHOPIFY_API_VERSION } from "./lib/shopify-api-version.js";
 import { eq } from "drizzle-orm";
 import { encryptToken } from "./lib/token-crypto.server.js";
 
@@ -18,7 +18,7 @@ const sessionStorage = new PostgreSQLSessionStorage(rawDbUrl);
 const shopify = shopifyApp({
   apiKey: process.env["SHOPIFY_API_KEY"] ?? "",
   apiSecretKey: process.env["SHOPIFY_API_SECRET"] ?? "",
-  apiVersion: ApiVersion.October25,
+  apiVersion: SHOPIFY_API_VERSION,
   scopes: process.env["SCOPES"]?.split(",") ?? [],
   appUrl: process.env["SHOPIFY_APP_URL"] ?? "",
   authPathPrefix: "/auth",

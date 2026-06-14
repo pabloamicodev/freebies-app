@@ -2,30 +2,31 @@ import { useLoaderData, useNavigate, useFetcher, useActionData, redirect } from 
 import { useState } from "react";
 import { SUPPORTED_CURRENCIES } from "@promo/shared-types";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { loadOwnedOffer } from "../lib/owned-offer.server.js";
+import { parseJsonRecord, parseJsonStringArray } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies, offerVersions } from "@promo/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
   IconChevronLeft, IconChevronDown, IconInfo, IconRefresh,
   IconPlus, IconCheck, IconBot, IconLink, IconCondition,
 } from "../components/Icons.js";
+import { ProductPicker } from "../components/ProductPicker.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { currencyCode: shopCurrencyCode, db } = await getShopContext(request);
+  const { shopId, currencyCode: shopCurrencyCode, db } = await getShopContext(request);
   const offerId = params["id"];
   if (!offerId) throw new Response("Not found", { status: 404 });
 
-  const offerRows = await db.select().from(offers).where(eq(offers.id, offerId)).limit(1);
-  const offer = offerRows[0];
-  if (!offer) throw new Response("Not found", { status: 404 });
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const [conditions, rewards, policy] = await Promise.all([
-    db.select().from(offerConditions).where(eq(offerConditions.offerId, offerId)),
-    db.select().from(offerRewards).where(eq(offerRewards.offerId, offerId)),
-    db.select().from(offerCombinationPolicies).where(eq(offerCombinationPolicies.offerId, offerId)).limit(1),
+    db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId))),
+    db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))),
+    db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId))).limit(1),
   ]);
 
   return {
@@ -52,6 +53,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const offerId = params["id"];
   if (!offerId) throw new Response("Not found", { status: 404 });
   const intent = formData.get("intent") as string;
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
   switch (intent) {
     case "update": {
@@ -64,29 +66,29 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         startsAt: startsAt ? new Date(startsAt) : null,
         endsAt: endsAt ? new Date(endsAt) : null,
         updatedAt: new Date(),
-      }).where(eq(offers.id, offerId));
+      }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
       break;
     }
     case "update_condition": {
       const conditionId = formData.get("conditionId") as string;
-      const rawValue = formData.get("conditionValue") as string;
-      let value: Record<string, unknown> = {};
-      try { value = JSON.parse(rawValue); } catch {}
-      await db.update(offerConditions).set({ value }).where(eq(offerConditions.id, conditionId));
+      const valueResult = parseJsonRecord(formData, "conditionValue");
+      if (valueResult.error) return { error: valueResult.error };
+      const value = valueResult.data!;
+      await db.update(offerConditions).set({ value }).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)));
       break;
     }
     case "delete_condition": {
       const conditionId = formData.get("conditionId") as string;
-      await db.delete(offerConditions).where(eq(offerConditions.id, conditionId));
+      await db.delete(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)));
       break;
     }
     case "add_condition": {
       const conditionType = formData.get("conditionType") as string;
       const scope = (formData.get("scope") as "main" | "sub") ?? "main";
-      const rawValue = formData.get("conditionValue") as string;
-      let value: Record<string, unknown> = {};
-      try { value = JSON.parse(rawValue); } catch {}
-      const existing = await db.select({ id: offerConditions.id }).from(offerConditions).where(eq(offerConditions.offerId, offerId));
+      const valueResult = parseJsonRecord(formData, "conditionValue");
+      if (valueResult.error) return { error: valueResult.error };
+      const value = valueResult.data!;
+      const existing = await db.select({ id: offerConditions.id }).from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
       await db.insert(offerConditions).values({
         shopId, offerId, scope, conditionType,
         operator: "gte", value, sortOrder: existing.length, isEnabled: true,
@@ -95,25 +97,40 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
     case "update_reward": {
       const rewardId = formData.get("rewardId") as string;
+      if (!rewardId) return { error: "Missing reward id" };
       const quantity = parseInt(formData.get("quantity") as string, 10) || 1;
       const discountType = formData.get("discountType") as string;
-      const discountValue = parseFloat(formData.get("discountValue") as string) || 100;
+      const parsedValue = parseFloat(formData.get("discountValue") as string);
+      const discountValue = Number.isFinite(parsedValue) ? parsedValue : 100;
       const isAutoAdd = formData.get("isAutoAdd") === "on";
-      await db.update(offerRewards).set({
+
+      // Optional product target — variant GIDs from the picker. Only update
+      // `target` when the field is present so plain discount edits don't wipe it.
+      const targetRaw = formData.get("targetVariantIds");
+      const set: Record<string, unknown> = {
         discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
-        value: { amount: discountValue, currencyCode: "USD" },
+        value: { amount: discountValue, currencyCode: shopCurrencyCode },
         quantity,
         isAutoAdd,
-      }).where(eq(offerRewards.id, rewardId));
+      };
+      if (typeof targetRaw === "string") {
+        const targetForm = new FormData();
+        targetForm.set("targetVariantIds", targetRaw);
+        const variantIdsResult = parseJsonStringArray(targetForm, "targetVariantIds");
+        if (variantIdsResult.error) return { error: variantIdsResult.error };
+        const variantIds = variantIdsResult.data!;
+        set["target"] = { scope: "cart", variantIds };
+      }
+      await db.update(offerRewards).set(set).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId)));
       break;
     }
     case "publish": {
       // Guard: must have at least one main condition and one reward
       const [existingConditions, existingRewards] = await Promise.all([
         db.select({ id: offerConditions.id }).from(offerConditions)
-          .where(eq(offerConditions.offerId, offerId)),
+          .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId))),
         db.select({ id: offerRewards.id }).from(offerRewards)
-          .where(eq(offerRewards.offerId, offerId)),
+          .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))),
       ]);
       if (existingConditions.length === 0) {
         return { error: "Cannot publish: add at least one main condition before publishing." };
@@ -123,15 +140,15 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       }
 
       const now = new Date();
-      await db.update(offers).set({ status: "active", updatedAt: now }).where(eq(offers.id, offerId));
+      await db.update(offers).set({ status: "active", updatedAt: now }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
 
       // Write version snapshot
       const [offerSnapshot, condSnapshot, rewSnapshot, existingVersions] = await Promise.all([
-        db.select().from(offers).where(eq(offers.id, offerId)).limit(1),
-        db.select().from(offerConditions).where(eq(offerConditions.offerId, offerId)),
-        db.select().from(offerRewards).where(eq(offerRewards.offerId, offerId)),
+        db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1),
+        db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId))),
+        db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))),
         db.select({ versionNumber: offerVersions.versionNumber })
-          .from(offerVersions).where(eq(offerVersions.offerId, offerId))
+          .from(offerVersions).where(and(eq(offerVersions.shopId, shopId), eq(offerVersions.offerId, offerId)))
           .orderBy(offerVersions.versionNumber),
       ]);
       const nextVersion = (existingVersions[existingVersions.length - 1]?.versionNumber ?? 0) + 1;
@@ -148,23 +165,22 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         if (offerPublishQueue) {
           await offerPublishQueue.add(`publish-${offerId}`, { offerId, shopDomain: session.shop }, { priority: 1 });
         }
-      } catch {}
+      } catch (err) {
+        console.warn("Failed to enqueue offer publish job", { offerId, err });
+      }
       break;
     }
     case "pause": {
-      await db.update(offers).set({ status: "paused", updatedAt: new Date() }).where(eq(offers.id, offerId));
+      await db.update(offers).set({ status: "paused", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
       break;
     }
     case "archive": {
-      await db.update(offers).set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() }).where(eq(offers.id, offerId));
+      await db.update(offers).set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
       return redirect("/app/offers");
     }
     case "duplicate": {
-      const originalRows = await db.select().from(offers).where(eq(offers.id, offerId)).limit(1);
-      const original = originalRows[0];
-      if (!original) break;
       const [newOffer] = await db.insert(offers).values({
-        ...original, id: undefined as unknown as string, internalName: `${original.internalName}-copy`,
+        ...offer, id: undefined as unknown as string, internalName: `${offer.internalName}-copy`,
         status: "draft", createdAt: new Date(), updatedAt: new Date(),
       }).returning({ id: offers.id });
       if (newOffer) return redirect(`/app/offers/${newOffer.id}`);
@@ -278,6 +294,8 @@ function ConditionCard({
   const fetcher = useFetcher();
   const isSaving = fetcher.state !== "idle";
   const [val, setVal] = useState<ConditionValue>({ ...initialValue });
+  const [productPickerOpen, setProductPickerOpen] = useState(false);
+  const selectedVariantIds = Array.isArray(val.variantIds) ? (val.variantIds as string[]) : [];
 
   function update(patch: Partial<ConditionValue>) {
     setVal((prev) => ({ ...prev, ...patch }));
@@ -543,15 +561,23 @@ function ConditionCard({
             </div>
 
             <div className="b-gift-selector-row" style={{ marginTop: 0 }}>
-              <button type="button" className="b-btn b-btn-secondary b-btn-sm">
+              <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setProductPickerOpen(true)}>
                 Select products
               </button>
               <span className="b-gift-count-text">
-                {Array.isArray(val.variantIds) && (val.variantIds as string[]).length > 0
-                  ? `${(val.variantIds as string[]).length} product(s) selected`
+                {selectedVariantIds.length > 0
+                  ? `${selectedVariantIds.length} product(s) selected`
                   : "0 products selected"}
               </span>
             </div>
+
+            <ProductPicker
+              open={productPickerOpen}
+              onClose={() => setProductPickerOpen(false)}
+              title="Select condition products"
+              selectedIds={selectedVariantIds}
+              onSelect={(gids) => { const next = { ...val, variantIds: gids }; setVal(next); save(next); }}
+            />
           </>
         )}
       </div>
@@ -662,7 +688,6 @@ export default function OfferDetailPage() {
     publicTitle: offer.publicTitle ?? "",
     startsAt: offer.startsAt ? new Date(offer.startsAt).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16),
     endsAt: offer.endsAt ? new Date(offer.endsAt).toISOString().slice(0, 16) : "",
-    giftTab: "product" as "product" | "shipping",
     discountType: firstReward?.discountType ?? "free",
     discountValue: String((firstReward?.value as { amount?: number } | null)?.amount ?? 100),
     receivesAll: firstReward?.isAutoAdd !== false,
@@ -676,7 +701,6 @@ export default function OfferDetailPage() {
     publicTitle,
     startsAt,
     endsAt,
-    giftTab,
     discountType,
     discountValue,
     receivesAll,
@@ -689,7 +713,6 @@ export default function OfferDetailPage() {
   const setPublicTitle = createFieldSetter(setDetailField, "publicTitle");
   const setStartsAt = createFieldSetter(setDetailField, "startsAt");
   const setEndsAt = createFieldSetter(setDetailField, "endsAt");
-  const setGiftTab = createFieldSetter(setDetailField, "giftTab");
   const setDiscountType = createFieldSetter(setDetailField, "discountType");
   const setDiscountValue = createFieldSetter(setDetailField, "discountValue");
   const setReceivesAll = createFieldSetter(setDetailField, "receivesAll");
@@ -697,6 +720,32 @@ export default function OfferDetailPage() {
   const setAddingCondition = createFieldSetter(setDetailField, "addingCondition");
   const setNewCondType = createFieldSetter(setDetailField, "newCondType");
   const setAdvancedOpen = createFieldSetter(setDetailField, "advancedOpen");
+
+  const initialGiftIds = (firstReward?.target as { variantIds?: string[] } | null)?.variantIds ?? [];
+  const [giftProductIds, setGiftProductIds] = useState<string[]>(initialGiftIds);
+  const [giftPickerOpen, setGiftPickerOpen] = useState(false);
+
+  // Persist the reward (discount type/value/qty/auto-add + product target).
+  // The editor previously never submitted update_reward, so gift edits were lost.
+  // Accepts explicit overrides so callers that also setState don't read a stale closure.
+  function saveReward(overrides?: {
+    discountType?: string;
+    discountValue?: string;
+    giftCount?: string;
+    receivesAll?: boolean;
+    variantIds?: string[];
+  }) {
+    if (!firstReward) return;
+    const fd = new FormData();
+    fd.append("intent", "update_reward");
+    fd.append("rewardId", firstReward.id);
+    fd.append("discountType", overrides?.discountType ?? discountType);
+    fd.append("discountValue", overrides?.discountValue ?? discountValue);
+    fd.append("quantity", overrides?.giftCount ?? giftCount);
+    if (overrides?.receivesAll ?? receivesAll) fd.append("isAutoAdd", "on");
+    fd.append("targetVariantIds", JSON.stringify(overrides?.variantIds ?? giftProductIds));
+    void fetcher.submit(fd, { method: "POST" });
+  }
 
   const canPublish = offer.status === "draft" || offer.status === "paused";
   const hasName = Boolean(internalName.trim());
@@ -745,6 +794,131 @@ export default function OfferDetailPage() {
     const fd = new FormData();
     fd.append("intent", intent);
     void fetcher.submit(fd, { method: "POST" });
+  }
+
+  if (offer.type !== "gift") {
+    return (
+      <div className="b-page">
+        <div style={{ marginBottom: 16 }}>
+          <button
+            type="button"
+            className="b-btn-plain b-text-sm"
+            style={{ display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 10 }}
+            onClick={() => navigate("/app/offers")}
+          >
+            <IconChevronLeft />
+            All Offers
+          </button>
+        </div>
+
+        <div className="b-editor-layout">
+          <div className="b-editor-main">
+            <div className="b-editor-section">
+              <p className="b-editor-section-title">Offer information</p>
+              <div className="b-editor-section-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                <div>
+                  <label className="b-label" htmlFor="internalName">Offer name</label>
+                  <input
+                    id="internalName"
+                    className="b-input"
+                    value={internalName}
+                    onChange={(e) => setInternalName(e.target.value)}
+                    onBlur={saveInfo}
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <label className="b-label" htmlFor="publicTitle">Offer title</label>
+                  <input
+                    id="publicTitle"
+                    className="b-input"
+                    value={publicTitle}
+                    onChange={(e) => setPublicTitle(e.target.value)}
+                    onBlur={saveInfo}
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="b-datetime-row">
+                  <div>
+                    <label className="b-label" htmlFor="offer-start-time">Start time</label>
+                    <input id="offer-start-time" className="b-input" type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} onBlur={saveInfo} />
+                  </div>
+                  <div>
+                    <label className="b-label" htmlFor="offer-end-time">End time</label>
+                    <input id="offer-end-time" className="b-input" type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} onBlur={saveInfo} />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="b-editor-section">
+              <p className="b-editor-section-title">{offer.type[0]?.toUpperCase()}{offer.type.slice(1)} configuration</p>
+              <div className="b-editor-section-body">
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => navigate(`/app/offers/${offer.id}/conditions`)}>Conditions</button>
+                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => navigate(`/app/offers/${offer.id}/rewards`)}>Rewards</button>
+                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => navigate(`/app/offers/${offer.id}/combination`)}>Combination</button>
+                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => navigate(`/app/offers/${offer.id}/schedule`)}>Schedule</button>
+                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => navigate(`/app/offers/${offer.id}/widget`)}>Widgets</button>
+                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => navigate(`/app/offers/${offer.id}/preview`)}>Preview</button>
+                </div>
+                <div className="b-stack b-stack-3">
+                  <div className="b-card">
+                    <div className="b-card-header">Conditions</div>
+                    <div className="b-card-body">
+                      {conditions.length > 0 ? conditions.map((condition) => (
+                        <p key={condition.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>
+                          {CONDITION_TYPE_NAMES[condition.conditionType] ?? condition.conditionType}
+                        </p>
+                      )) : <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>No conditions configured.</p>}
+                    </div>
+                  </div>
+                  <div className="b-card">
+                    <div className="b-card-header">Rewards</div>
+                    <div className="b-card-body">
+                      {rewards.length > 0 ? rewards.map((reward) => (
+                        <p key={reward.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>
+                          {reward.rewardType} - {reward.discountType}
+                        </p>
+                      )) : <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>No rewards configured.</p>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {actionData && "error" in actionData && actionData.error && (
+              <div className="b-banner b-banner-red" style={{ marginBottom: 12 }}>
+                <span className="b-banner-icon">!</span>
+                <div className="b-banner-body">
+                  <p className="b-banner-text" style={{ margin: 0 }}>{actionData.error}</p>
+                </div>
+              </div>
+            )}
+
+            <div className="b-editor-footer">
+              <button type="button" className="b-btn b-btn-secondary" onClick={saveInfo}>Save draft</button>
+              {canPublish ? (
+                <button type="button" className="b-btn b-btn-dark" onClick={() => submitAction("publish")}>Publish</button>
+              ) : (
+                <button type="button" className="b-btn b-btn-secondary" onClick={() => submitAction("pause")}>Pause</button>
+              )}
+            </div>
+          </div>
+
+          <div className="b-editor-side">
+            <div className="b-card">
+              <div className="b-card-header">Summary</div>
+              <div className="b-card-body">
+                <p className="b-text-sm" style={{ margin: "0 0 6px" }}>Type: {offer.type}</p>
+                <p className="b-text-sm" style={{ margin: "0 0 6px" }}>Status: {offer.status}</p>
+                <p className="b-text-sm" style={{ margin: 0 }}>{formatStartDate(offer.startsAt)}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -909,99 +1083,100 @@ export default function OfferDetailPage() {
           <div className="b-editor-section">
             <p className="b-editor-section-title">Select gifts</p>
             <div className="b-editor-section-body">
-              <div className="b-pill-tabs">
-                <button type="button" className={`b-pill-tab${giftTab === "product" ? " active" : ""}`} onClick={() => setGiftTab("product")}>
-                  Product gift
-                </button>
-                <button type="button" className={`b-pill-tab${giftTab === "shipping" ? " active" : ""}`} onClick={() => setGiftTab("shipping")}>
-                  Shipping discount as gift
-                </button>
+              <p className="b-text-sm b-text-bold" style={{ marginBottom: 10 }}>Gift discount type</p>
+              <div className="b-discount-type-row">
+                <div>
+                  <div className="b-discount-type-label">Type:</div>
+                  <select aria-label="Gift discount type" className="b-select" value={discountType} onChange={(e) => { const v = e.target.value as typeof discountType; setDiscountType(v); saveReward({ discountType: v }); }}>
+                    <option value="free">Free</option>
+                    <option value="percentage">Percentage</option>
+                    <option value="fixed_amount">Fixed amount</option>
+                  </select>
+                </div>
+                <div>
+                  <div className="b-discount-type-label">Value:</div>
+                  <div style={{ position: "relative" }}>
+                    {discountType !== "free" && (
+                      <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-sub)", fontSize: 13, pointerEvents: "none" }}>
+                        {discountType === "percentage" ? "%" : "$"}
+                      </span>
+                    )}
+                    <input
+                      aria-label="Gift discount value"
+                      className="b-input"
+                      type="number"
+                      value={discountValue}
+                      onChange={(e) => setDiscountValue(e.target.value)}
+                      onBlur={() => saveReward()}
+                      disabled={discountType === "free"}
+                      style={{ paddingLeft: discountType !== "free" ? 26 : 12 }}
+                      min="0"
+                      max={discountType === "percentage" ? "100" : undefined}
+                    />
+                  </div>
+                </div>
               </div>
 
-              {giftTab === "product" && (
-                <>
-                  <p className="b-text-sm b-text-bold" style={{ marginBottom: 10 }}>Gift discount type</p>
-                  <div className="b-discount-type-row">
-                    <div>
-                      <div className="b-discount-type-label">Type:</div>
-                      <select aria-label="Gift discount type" className="b-select" value={discountType} onChange={(e) => setDiscountType(e.target.value as typeof discountType)}>
-                        <option value="free">Percentage</option>
-                        <option value="percentage">Fixed amount</option>
-                      </select>
-                    </div>
-                    <div>
-                      <div className="b-discount-type-label">Value:</div>
-                      <div style={{ position: "relative" }}>
-                        <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-sub)", fontSize: 13, pointerEvents: "none" }}>%</span>
-                        <input
-                          aria-label="Gift discount value"
-                          className="b-input"
-                          type="number"
-                          value={discountValue}
-                          onChange={(e) => setDiscountValue(e.target.value)}
-                          style={{ paddingLeft: 26 }}
-                          min="0" max="100"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <p className="b-text-sm b-text-bold" style={{ marginBottom: 10 }}>The customer will receive:</p>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
-                    <div className="b-checkbox-row">
+              <p className="b-text-sm b-text-bold" style={{ marginBottom: 10 }}>The customer will receive:</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+                <div className="b-checkbox-row">
+                  <input
+                    type="radio"
+                    id="all-gifts"
+                    aria-label="Automatically all gifts"
+                    name="receives"
+                    checked={receivesAll}
+                    onChange={() => { setReceivesAll(true); saveReward({ receivesAll: true }); }}
+                    style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
+                  />
+                  <label htmlFor="all-gifts" className="b-checkbox-label">
+                    Automatically all gifts
+                  </label>
+                </div>
+                <div className="b-checkbox-row" style={{ alignItems: "flex-start" }}>
+                  <input
+                    type="radio"
+                    id="num-gifts"
+                    aria-label="Number of gifts the customer will receive"
+                    name="receives"
+                    checked={!receivesAll}
+                    onChange={() => { setReceivesAll(false); saveReward({ receivesAll: false }); }}
+                    style={{ accentColor: "var(--blue)", width: 15, height: 15, marginTop: 2 }}
+                  />
+                  <div>
+                    <label htmlFor="num-gifts" className="b-checkbox-label">
+                      Number of gifts the customer will receive
+                    </label>
+                    {!receivesAll && (
                       <input
-                        type="radio"
-                        id="all-gifts"
-                        aria-label="Automatically all gifts"
-                        name="receives"
-                        checked={receivesAll}
-                        onChange={() => setReceivesAll(true)}
-                        style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
+                        aria-label="Gift count"
+                        className="b-input b-mt-2"
+                        type="number"
+                        value={giftCount}
+                        onChange={(e) => setGiftCount(e.target.value)}
+                        onBlur={() => saveReward()}
+                        min="1"
+                        style={{ maxWidth: 120 }}
                       />
-                      <label htmlFor="all-gifts" className="b-checkbox-label">
-                        Automatically all gifts
-                      </label>
-                    </div>
-                    <div className="b-checkbox-row" style={{ alignItems: "flex-start" }}>
-                      <input
-                        type="radio"
-                        id="num-gifts"
-                        aria-label="Number of gifts the customer will receive"
-                        name="receives"
-                        checked={!receivesAll}
-                        onChange={() => setReceivesAll(false)}
-                        style={{ accentColor: "var(--blue)", width: 15, height: 15, marginTop: 2 }}
-                      />
-                      <div>
-                        <label htmlFor="num-gifts" className="b-checkbox-label">
-                          Number of gifts the customer will receive
-                        </label>
-                        {!receivesAll && (
-                          <input
-                            aria-label="Gift count"
-                            className="b-input b-mt-2"
-                            type="number"
-                            value={giftCount}
-                            onChange={(e) => setGiftCount(e.target.value)}
-                            min="1"
-                            style={{ maxWidth: 120 }}
-                          />
-                        )}
-                      </div>
-                    </div>
+                    )}
                   </div>
+                </div>
+              </div>
 
-                  <div className="b-gift-selector-row">
-                    <button type="button" className="b-btn b-btn-secondary b-btn-sm">Select gifts</button>
-                    <span className="b-gift-count-text">
-                      {rewards.length > 0 ? `${rewards.length} product(s) configured` : "0 products selected"}
-                    </span>
-                  </div>
-                </>
-              )}
-              {giftTab === "shipping" && (
-                <p className="b-text-sm b-text-sub">Configure a shipping discount as the gift.</p>
-              )}
+              <div className="b-gift-selector-row">
+                <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setGiftPickerOpen(true)} disabled={!firstReward}>Select gifts</button>
+                <span className="b-gift-count-text">
+                  {giftProductIds.length > 0 ? `${giftProductIds.length} product(s) selected` : "0 products selected"}
+                </span>
+              </div>
+
+              <ProductPicker
+                open={giftPickerOpen}
+                onClose={() => setGiftPickerOpen(false)}
+                title="Select gift products"
+                selectedIds={giftProductIds}
+                onSelect={(gids) => { setGiftProductIds(gids); saveReward({ variantIds: gids }); }}
+              />
             </div>
           </div>
 

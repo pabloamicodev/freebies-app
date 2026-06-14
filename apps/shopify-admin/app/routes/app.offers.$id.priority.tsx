@@ -6,6 +6,7 @@
 import { useLoaderData, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { offers, offerCombinationPolicies } from "@promo/db";
 import { eq, and, ne } from "drizzle-orm";
 import { detectConflicts } from "../lib/conflict-detection.server.js";
@@ -16,18 +17,15 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
-  const [offerRows, policyRows, otherActiveOffers] = await Promise.all([
-    db.select().from(offers).where(eq(offers.id, offerId)).limit(1),
-    db.select().from(offerCombinationPolicies).where(eq(offerCombinationPolicies.offerId, offerId)).limit(1),
+  const [policyRows, otherActiveOffers] = await Promise.all([
+    db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId))).limit(1),
     db.select({ id: offers.id, internalName: offers.internalName, priority: offers.priority, type: offers.type })
       .from(offers)
       .where(and(eq(offers.shopId, shopId), eq(offers.status, "active"), ne(offers.id, offerId)))
       .orderBy(offers.priority),
   ]);
-
-  const offer = offerRows[0];
-  if (!offer) throw new Response("Not found", { status: 404 });
 
   const conflicts = await detectConflicts(shopId);
   const offerConflicts = conflicts.filter((c) => c.offerIds.includes(offerId));
@@ -50,8 +48,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
+  await loadOwnedOffer(db, shopId, offerId);
 
   const newPriority = parseInt(formData.get("priority") as string, 10);
+  if (!Number.isInteger(newPriority)) {
+    throw new Response("Invalid priority", { status: 400 });
+  }
   const stopLowerPriority = formData.get("stop_lower_priority") === "on";
 
   await db.update(offers).set({ priority: newPriority, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));

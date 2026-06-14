@@ -5,15 +5,16 @@
  *         /app/offers/new/discount/cart     → Cart discount wizard
  */
 
-import { Form, useNavigate, redirect, useParams } from "react-router";
+import { Form, useActionData, useNavigate, redirect, useParams } from "react-router";
 import { useCallback } from "react";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
+import { statusForSubmit } from "../lib/offer-scheduling.server.js";
+import { parseDateRange, parseJsonStringArray, requiredText } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
-import { eq } from "drizzle-orm";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
 
@@ -42,16 +43,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
-  const internalName = (formData.get("internalName") as string)?.trim();
-  const publicTitle = (formData.get("publicTitle") as string)?.trim();
+  const internalNameResult = requiredText(formData, "internalName", "Internal name");
+  if (internalNameResult.error) return { error: internalNameResult.error };
+  const publicTitleResult = requiredText(formData, "publicTitle", "Public title");
+  if (publicTitleResult.error) return { error: publicTitleResult.error };
+  const internalName = internalNameResult.data!;
+  const publicTitle = publicTitleResult.data!;
   const description = (formData.get("description") as string)?.trim() || null;
-  const startsAt = formData.get("startsAt") as string;
-  const endsAt = formData.get("endsAt") as string;
+  const dateRange = parseDateRange(formData);
+  if (dateRange.error) return { error: dateRange.error };
+  const { startsAt, endsAt } = dateRange.data!;
   const discountTemplate = formData.get("discountTemplate") as string;
-
-  if (!internalName || !publicTitle) {
-    return { error: "Internal name and public title are required" };
-  }
 
   const applyTo = (formData.get("applyTo") as string) || "any_product";
   const countRule = (formData.get("countRule") as string) || "all";
@@ -66,9 +68,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const combinesShippingDiscounts = formData.get("combinesShippingDiscounts") === "on";
   const combinesProductDiscounts = formData.get("combinesProductDiscounts") === "on";
 
-  const upsellProductsJson = (formData.get("upsellProducts") as string) || "[]";
-  let upsellProducts: string[] = [];
-  try { upsellProducts = JSON.parse(upsellProductsJson) as string[]; } catch {}
+  const upsellProductsResult = parseJsonStringArray(formData, "upsellProducts");
+  if (upsellProductsResult.error) return { error: upsellProductsResult.error };
+  const upsellProducts = upsellProductsResult.data!;
+  if (intent === "publish" && applyTo === "selected_products" && upsellProducts.length === 0) {
+    return { error: "Select at least one product before publishing." };
+  }
 
   // ── Parse tiers (volume) ──
   const tierQtys = formData.getAll("tier_qty[]") as string[];
@@ -117,35 +122,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     label: cartTierLabels[i] ?? "",
   }));
 
-  const status = intent === "publish" ? "active" : "draft";
-
-  async function createOffer(candidateName: string) {
-    const [offer] = await db
-      .insert(offers)
-      .values({
-        shopId,
-        type: "discount",
-        status,
-        internalName: candidateName,
-        publicTitle,
-        description: description ?? undefined,
-        priority: 100,
-        startsAt: startsAt ? new Date(startsAt) : new Date(),
-        endsAt: endsAt ? new Date(endsAt) : null,
-      })
-      .returning({ id: offers.id });
-    return offer;
+  const allTierValues = [...volumeTiers, ...cheapestTiers, ...cartTiers].map((tier) => tier.discountValue);
+  if (allTierValues.some((value) => !Number.isFinite(value) || value < 0)) {
+    return { error: "Discount tier values must be valid positive numbers." };
+  }
+  const percentageValues = [
+    ...volumeTiers.filter((tier) => tier.discountType === "percentage").map((tier) => tier.discountValue),
+    ...cheapestTiers.filter((tier) => tier.discountType === "percentage").map((tier) => tier.discountValue),
+    ...cartTiers.filter((tier) => tier.discountType === "percentage").map((tier) => tier.discountValue),
+  ];
+  if (percentageValues.some((value) => value > 100)) {
+    return { error: "Percentage discounts cannot exceed 100%." };
   }
 
-  let newOffer: { id: string } | undefined;
-  try {
-    newOffer = await createOffer(internalName);
-  } catch (err) {
-    if (!isUniqueViolation(err)) throw err;
-    newOffer = await createOffer(withUniqueOfferSuffix(internalName));
-  }
-
-  if (!newOffer) return { error: "Failed to create offer" };
+  const status = statusForSubmit(intent, startsAt);
 
   // ── Condition ──
   const conditionValue: Record<string, unknown> = {
@@ -168,43 +158,77 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       ? cheapestTiers
       : cartTiers;
 
-  await Promise.all([
-    db.insert(offerConditions).values({
-      shopId,
-      offerId: newOffer.id,
-      scope: "main",
-      conditionType: "cart_value",
-      operator: "gte",
-      value: conditionValue,
-      sortOrder: 0,
-      isEnabled: true,
-    }),
-    db.insert(offerRewards).values({
-      shopId,
-      offerId: newOffer.id,
-      rewardType: "order_discount",
-      discountType: "percentage",
-      value: {
-        discountTemplate,
-        tiers: tiersPayload,
-      },
-      target: { scope: "cart" },
-      sortOrder: 0,
-      trackMode: "product",
-      isAutoAdd: false,
-      isCustomerSelectable: false,
-    }),
-    db.insert(offerCombinationPolicies).values({
-      shopId,
-      offerId: newOffer.id,
-      combinesWithOrderDiscounts: combinesOrderDiscounts,
-      combinesWithProductDiscounts: combinesProductDiscounts,
-      combinesWithShippingDiscounts: combinesShippingDiscounts,
-      combinesWithOtherAppOffers: true,
-      stopLowerPriority: false,
-      giftValueCountsForOtherOffers: false,
-    }),
-  ]);
+  // Offer + condition + reward + policy created atomically. Unique-name retry
+  // wraps the whole tx (a failed insert aborts the Postgres transaction).
+  async function createOfferWithChildren(candidateName: string) {
+    return db.transaction(async (tx) => {
+      const [offer] = await tx
+        .insert(offers)
+        .values({
+          shopId,
+          type: "discount",
+          status,
+          internalName: candidateName,
+          publicTitle,
+          description: description ?? undefined,
+          priority: 100,
+          startsAt: startsAt ?? new Date(),
+          endsAt,
+        })
+        .returning({ id: offers.id });
+      if (!offer) throw new Error("Failed to create offer");
+
+      await Promise.all([
+        tx.insert(offerConditions).values({
+          shopId,
+          offerId: offer.id,
+          scope: "main",
+          conditionType: "cart_value",
+          operator: "gte",
+          value: conditionValue,
+          sortOrder: 0,
+          isEnabled: true,
+        }),
+        tx.insert(offerRewards).values({
+          shopId,
+          offerId: offer.id,
+          rewardType: "order_discount",
+          discountType: "percentage",
+          value: {
+            discountTemplate,
+            tiers: tiersPayload,
+          },
+          target: { scope: "cart" },
+          sortOrder: 0,
+          trackMode: "product",
+          isAutoAdd: false,
+          isCustomerSelectable: false,
+        }),
+        tx.insert(offerCombinationPolicies).values({
+          shopId,
+          offerId: offer.id,
+          combinesWithOrderDiscounts: combinesOrderDiscounts,
+          combinesWithProductDiscounts: combinesProductDiscounts,
+          combinesWithShippingDiscounts: combinesShippingDiscounts,
+          combinesWithOtherAppOffers: true,
+          stopLowerPriority: false,
+          giftValueCountsForOtherOffers: false,
+        }),
+      ]);
+
+      return offer;
+    });
+  }
+
+  let newOffer: { id: string } | undefined;
+  try {
+    newOffer = await createOfferWithChildren(internalName);
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    newOffer = await createOfferWithChildren(withUniqueOfferSuffix(internalName));
+  }
+
+  if (!newOffer) return { error: "Failed to create offer" };
 
   return redirect(`/app/offers/${newOffer.id}`);
 };
@@ -272,17 +296,10 @@ function createCartTier(values: Omit<CartTier, "id">): CartTier {
   return { id: createClientId("cart-tier"), ...values };
 }
 
-// ─── Currency chips (visual only) ────────────────────────────────────────────
-
-const CURRENCY_CHIPS = [
-  "AFN","AUD","AWG","BBD","BZD","CAD","CNY","DJF","EUR","FKP",
-  "GBP","GHS","HKD","IDR","INR","JPY","KES","MXN","NGN","NZD",
-  "PKR","PLN","SEK","SGD","THB","TRY","USD","ZAR",
-];
-
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function NewDiscountOfferPage() {
+  const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const { template: templateSlug = "volume" } = useParams<{ template: string }>();
 
@@ -466,7 +483,7 @@ export default function NewDiscountOfferPage() {
         <input type="hidden" name="upsellProducts" value={JSON.stringify(selectedProducts)} />
 
         {/* Tier arrays — volume */}
-        {templateId === "volume" && tiers.map((tier, i) => (
+        {templateId === "volume" && tiers.map((tier) => (
           <span key={tier.id}>
             <input type="hidden" name="tier_qty[]" value={tier.qty} />
             <input type="hidden" name="tier_label[]" value={tier.label} />
@@ -479,7 +496,7 @@ export default function NewDiscountOfferPage() {
         ))}
 
         {/* Tier arrays — cheapest */}
-        {templateId === "cheapest_item" && cheapestTiers.map((tier, i) => (
+        {templateId === "cheapest_item" && cheapestTiers.map((tier) => (
           <span key={tier.id}>
             <input type="hidden" name="cheapest_required_qty[]" value={tier.requiredQty} />
             <input type="hidden" name="cheapest_discounted_qty[]" value={tier.discountedQty} />
@@ -490,7 +507,7 @@ export default function NewDiscountOfferPage() {
         ))}
 
         {/* Tier arrays — cart */}
-        {templateId === "cart" && cartTiers.map((tier, i) => (
+        {templateId === "cart" && cartTiers.map((tier) => (
           <span key={tier.id}>
             <input type="hidden" name="cart_tier_threshold[]" value={tier.threshold} />
             <input type="hidden" name="cart_tier_discount_type[]" value={tier.discountType} />
@@ -664,9 +681,6 @@ export default function NewDiscountOfferPage() {
                         <option value="unique">Count identical products only</option>
                       </select>
                     </div>
-                    <button type="button" className="b-btn b-btn-secondary" style={{ marginTop: 20, whiteSpace: "nowrap" }}>
-                      Selection logic
-                    </button>
                   </div>
 
                   {/* Display type */}
@@ -775,7 +789,7 @@ export default function NewDiscountOfferPage() {
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <button type="button" className="b-btn b-btn-secondary"
                         onClick={() => setProductPickerOpen(true)}>
-                        Seleccionar productos
+                        Select products
                       </button>
                       <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
                         {selectedProducts.length} products selected
@@ -807,7 +821,7 @@ export default function NewDiscountOfferPage() {
               </div>
             )}
 
-            {/* ── Agregar subcondición (all templates) ── */}
+            {/* Add sub-condition (all templates) */}
             <div className="b-card" style={{ background: "var(--bg)", border: "1.5px dashed var(--border)" }}>
               <div className="b-card-body rd-style-080">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -818,7 +832,7 @@ export default function NewDiscountOfferPage() {
             </div>
 
             {/* ────────────────────────────────────────────────
-                VOLUME — Card "Niveles"
+                VOLUME - Card "Tiers"
             ──────────────────────────────────────────────── */}
             {templateId === "volume" && (
               <div className="b-card">
@@ -865,9 +879,6 @@ export default function NewDiscountOfferPage() {
                               autoComplete="off" />
                           </div>
                         </div>
-                        <div style={{ fontSize: 12, color: "var(--discount-color)", cursor: "pointer" }}>
-                          Add: Shipping discount
-                        </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                           <div className="b-checkbox-row" style={{ gap: 8, alignItems: "center" }}>
                             <input aria-label={`Enable tier ${i + 1} label 1`} type="checkbox" defaultChecked style={{ accentColor: "var(--discount-color)" }} />
@@ -906,13 +917,13 @@ export default function NewDiscountOfferPage() {
             )}
 
             {/* ────────────────────────────────────────────────
-                CHEAPEST — Card "Niveles"
+                CHEAPEST - Card "Tiers"
             ──────────────────────────────────────────────── */}
             {templateId === "cheapest_item" && (
               <div className="b-card">
                 <div className="b-card-header">Tiers</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {/* Descuento sobre */}
+                  {/* Discount on */}
                   <div>
                     <div className="b-label">Discount on:</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
@@ -998,11 +1009,11 @@ export default function NewDiscountOfferPage() {
             )}
 
             {/* ────────────────────────────────────────────────
-                CART — Card "Descuento"
+                CART - Card "Discount"
             ──────────────────────────────────────────────── */}
             {templateId === "cart" && (
               <div className="b-card">
-                <div className="b-card-header">Descuento</div>
+                <div className="b-card-header">Discount</div>
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div>
@@ -1053,18 +1064,6 @@ export default function NewDiscountOfferPage() {
                                 value={tier.discountValue} onChange={(e) => updateCartTier(i, "discountValue", e.target.value)}
                                 autoComplete="off" />
                             </div>
-                          </div>
-                        </div>
-
-                        {/* Currency chips (visual only) */}
-                        <div>
-                          <div style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 6 }}>Add currency</div>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                            {CURRENCY_CHIPS.map((code) => (
-                              <span key={code} className="rd-style-081">
-                                {code}
-                              </span>
-                            ))}
                           </div>
                         </div>
 
@@ -1217,8 +1216,8 @@ export default function NewDiscountOfferPage() {
         onSelect={(gids) => setSelectedProducts(gids)}
       />
 
-      {showToast && (
-        <Toast message={toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+      {(showToast || actionData?.error) && (
+        <Toast message={actionData?.error ?? toastMsg} type="error" onDismiss={() => setShowToast(false)} />
       )}
     </div>
   );

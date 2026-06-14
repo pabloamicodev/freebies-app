@@ -5,8 +5,8 @@
 
 import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
+import { shopifyGraphQL } from "./shopify-fetch.server.js";
 
-const SHOPIFY_API_VERSION = "2026-04";
 const MARKETS_CACHE_TTL = 3600; // 1 hour
 
 export interface ShopifyMarket {
@@ -21,6 +21,11 @@ export interface ShopifyMarket {
   primaryLocale: string;
 }
 
+// NOTE: `enabled`, `primary`, `regions` and `primaryLocale` are deprecated on
+// the Market object as of 2024-2025 (superseded by `status`, `conditions`,
+// `webPresences`). They still resolve in 2026-04 but must be migrated before
+// Shopify removes them — that migration requires validating the new nested
+// shapes (MarketConditions / MarketWebPresence) against a live store.
 const MARKETS_QUERY = `
   query GetMarkets {
     markets(first: 50) {
@@ -46,55 +51,40 @@ const MARKETS_QUERY = `
   }
 `;
 
+interface MarketNode {
+  id: string;
+  name: string;
+  handle: string;
+  enabled: boolean;
+  primary: boolean;
+  currencySettings?: { baseCurrency?: { currencyCode?: string } | null } | null;
+  regions?: { nodes?: Array<{ code?: string | null }> } | null;
+  primaryLocale?: { locale?: string } | null;
+}
+
 /**
- * Fetch markets directly from Shopify Admin API.
+ * Fetch markets directly from Shopify Admin API (resilient: retries on
+ * throttling / transient errors). Null-safe against partial market payloads.
  */
 async function fetchMarketsFromShopify(
   shopDomain: string,
   accessToken: string,
 ): Promise<ShopifyMarket[]> {
-  const response = await fetch(
-    `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": accessToken,
-      },
-      body: JSON.stringify({ query: MARKETS_QUERY }),
-    },
-  );
+  const data = await shopifyGraphQL<{ markets: { nodes: MarketNode[] } }>({
+    shopDomain,
+    accessToken,
+    query: MARKETS_QUERY,
+  });
 
-  if (!response.ok) {
-    throw new Error(`Markets API error: ${response.status} ${response.statusText}`);
-  }
-
-  const data = (await response.json()) as {
-    data: {
-      markets: {
-        nodes: Array<{
-          id: string;
-          name: string;
-          handle: string;
-          enabled: boolean;
-          primary: boolean;
-          currencySettings: { baseCurrency: { currencyCode: string } };
-          regions: { nodes: Array<{ code?: string }> };
-          primaryLocale: { locale: string };
-        }>;
-      };
-    };
-  };
-
-  return data.data.markets.nodes.map((m) => ({
+  return (data.markets?.nodes ?? []).map((m) => ({
     id: m.id,
     name: m.name,
     handle: m.handle,
     enabled: m.enabled,
     primary: m.primary,
-    currencyCode: m.currencySettings.baseCurrency.currencyCode,
-    countryCodes: m.regions.nodes.flatMap((r) => r.code ? [r.code] : []),
-    primaryLocale: m.primaryLocale.locale,
+    currencyCode: m.currencySettings?.baseCurrency?.currencyCode ?? "USD",
+    countryCodes: (m.regions?.nodes ?? []).flatMap((r) => (r.code ? [r.code] : [])),
+    primaryLocale: m.primaryLocale?.locale ?? "en",
   }));
 }
 

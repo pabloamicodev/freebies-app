@@ -8,8 +8,8 @@
 import { useLoaderData, Form, useActionData, useNavigation } from "react-router";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
-import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { offers, offerConditions } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -17,16 +17,13 @@ import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
-  const db = getDb();
+  const { admin, shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
-  const [offerRows, conditionRows] = await Promise.all([
-    db.select().from(offers).where(eq(offers.id, offerId)).limit(1),
-    db.select().from(offerConditions).where(
-      and(eq(offerConditions.offerId, offerId), eq(offerConditions.conditionType, "cart_value"))
-    ).limit(1),
-  ]);
+  const conditionRows = await db.select().from(offerConditions).where(
+    and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.conditionType, "cart_value"))
+  ).limit(1);
 
   // Fetch markets from Shopify Admin API
   let markets: Array<{ id: string; name: string; currencyCode: string; handle: string }> = [];
@@ -55,7 +52,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const currencyOverrides = (existingValue["currencyOverrides"] ?? {}) as Record<string, number>;
 
   return {
-    offer: offerRows[0],
+    offer,
     offerId,
     markets,
     currencyOverrides,
@@ -65,10 +62,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
+  await loadOwnedOffer(db, shopId, offerId);
 
   // Build currency overrides from form
   const overrides: Record<string, number> = {};
@@ -97,7 +94,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   // Update the cart_value condition with currency overrides
   const existing = await db.select()
     .from(offerConditions)
-    .where(and(eq(offerConditions.offerId, offerId), eq(offerConditions.conditionType, "cart_value")))
+    .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.conditionType, "cart_value")))
     .limit(1);
 
   if (!existing[0]) {
@@ -107,7 +104,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const currentValue = existing[0].value as Record<string, unknown>;
   await db.update(offerConditions)
     .set({ value: { ...currentValue, currencyOverrides: overrides, fixedAmountOverrides: fixedOverrides }, updatedAt: new Date() })
-    .where(eq(offerConditions.id, existing[0].id));
+    .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, existing[0].id)));
 
   return { success: true };
 };

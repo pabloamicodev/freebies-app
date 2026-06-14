@@ -9,6 +9,7 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { appSettings } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import { SUPPORTED_LOCALES, type WidgetTranslations } from "@promo/shared-types";
+import { parseStoredJson } from "../lib/offer-validation.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import "../styles/bogos.css";
 
@@ -40,7 +41,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   let translations: Record<string, Partial<WidgetTranslations>> = {};
   if (settingRows[0]) {
-    try { translations = JSON.parse(settingRows[0].value); } catch {}
+    const parsedTranslations = parseStoredJson(settingRows[0].value);
+    if (parsedTranslations && typeof parsedTranslations === "object" && !Array.isArray(parsedTranslations)) {
+      translations = parsedTranslations as Record<string, Partial<WidgetTranslations>>;
+    }
   }
 
   return { translations, shopId };
@@ -67,7 +71,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   let allTranslations: Record<string, Partial<WidgetTranslations>> = {};
   if (existing[0]) {
-    try { allTranslations = JSON.parse(existing[0].value); } catch {}
+    const parsedTranslations = parseStoredJson(existing[0].value);
+    if (parsedTranslations && typeof parsedTranslations === "object" && !Array.isArray(parsedTranslations)) {
+      allTranslations = parsedTranslations as Record<string, Partial<WidgetTranslations>>;
+    }
   }
   allTranslations[locale] = strings;
 

@@ -4,10 +4,12 @@
 
 import { useLoaderData, Form, useActionData, useNavigation } from "react-router";
 import { BackButton } from "../components/BackButton.js";
-import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { loadOwnedOffer } from "../lib/owned-offer.server.js";
+import { parseDateRange } from "../lib/offer-validation.server.js";
+import { statusForScheduleSave } from "../lib/offer-scheduling.server.js";
 import { offers } from "@promo/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import "../styles/bogos.css";
 
@@ -20,12 +22,9 @@ const TIMEZONES = [
 ];
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
-  const offerRows = await db.select().from(offers).where(eq(offers.id, offerId)).limit(1);
-  const offer = offerRows[0];
-  if (!offer) throw new Response("Not found", { status: 404 });
+  const offer = await loadOwnedOffer(db, shopId, offerId);
   return {
     offer: {
       id: offer.id, internalName: offer.internalName, status: offer.status,
@@ -37,33 +36,25 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
-
-  const startsAtStr = formData.get("starts_at") as string;
-  const endsAtStr = formData.get("ends_at") as string;
+  const offer = await loadOwnedOffer(db, shopId, offerId);
   const timezone = (formData.get("timezone") as string) || "UTC";
-
-  if (startsAtStr && endsAtStr) {
-    const start = new Date(startsAtStr);
-    const end = new Date(endsAtStr);
-    if (end <= start) {
-      return { error: "End time must be after start time." };
-    }
-  }
-
-  if (endsAtStr && !startsAtStr) {
-    return { error: "Set a start time before setting an end time." };
-  }
+  const proxyFormData = new FormData();
+  proxyFormData.set("startsAt", (formData.get("starts_at") as string | null) ?? "");
+  proxyFormData.set("endsAt", (formData.get("ends_at") as string | null) ?? "");
+  const dateRange = parseDateRange(proxyFormData);
+  if (dateRange.error) return { error: dateRange.error };
+  const { startsAt, endsAt } = dateRange.data!;
 
   await db.update(offers).set({
-    startsAt: startsAtStr ? new Date(startsAtStr) : null,
-    endsAt: endsAtStr ? new Date(endsAtStr) : null,
+    startsAt,
+    endsAt,
+    status: statusForScheduleSave(offer.status, startsAt, endsAt),
     timezone,
     updatedAt: new Date(),
-  }).where(eq(offers.id, offerId));
+  }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
 
   return { success: true };
 };

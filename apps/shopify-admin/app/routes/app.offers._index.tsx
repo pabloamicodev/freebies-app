@@ -343,9 +343,9 @@ export default function OffersPage() {
       <div className="b-page-header">
         <h1 className="b-page-title">All Offers</h1>
         <div className="b-page-actions">
-          <button type="button" className="b-btn b-btn-secondary">
-            More actions <IconChevronDown />
-          </button>
+          <a href="/api/offers/export" className="b-btn b-btn-secondary">
+            Export CSV
+          </a>
           <button type="button" className="b-btn b-btn-primary" onClick={openModal}>
             Create offer
           </button>
@@ -366,7 +366,7 @@ export default function OffersPage() {
             <div className="b-banner-title">Cart integration</div>
             <p className="b-banner-text">
               If you&apos;re using a custom cart drawer/XHR, BOGOS may need a larger integration.{" "}
-              <button type="button" className="b-btn b-btn-plain" style={{ color: "var(--blue)", textDecoration: "underline" }}>Send us a message</button> for support.
+              <a href="mailto:support@secomapp.com" className="b-btn b-btn-plain" style={{ color: "var(--blue)", textDecoration: "underline" }}>Send us a message</a> for support.
             </p>
           </div>
           <button type="button" className="b-banner-close" onClick={dismissBanner} aria-label="Dismiss">×</button>

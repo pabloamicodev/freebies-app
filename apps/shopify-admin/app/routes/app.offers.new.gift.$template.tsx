@@ -3,13 +3,14 @@
  * Routes: /app/offers/new/gift/bxgy  /bogo  /free-sample  /cart-value  /tiered  /scratch
  */
 
-import { Form, useNavigate, redirect, useParams } from "react-router";
+import { Form, useActionData, useNavigate, redirect, useParams } from "react-router";
 import { useCallback } from "react";
-import { SUPPORTED_CURRENCIES } from "@promo/shared-types";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
+import { statusForSubmit } from "../lib/offer-scheduling.server.js";
+import { parseDateRange, parseInteger, parseJsonRecord, parseJsonStringArray, parseMoneyAmount, requiredText } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
@@ -52,8 +53,6 @@ const CONDITION_TYPE_LABEL: Record<ConditionType, string> = {
   cart_value_multiplier:  "Tiered cart value condition",
 };
 
-const CURRENCIES = SUPPORTED_CURRENCIES;
-
 // ─── Local icons (only used within this file) ─────────────────────────────────
 function IChevDown() { return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>; }
 function IChevUp()   { return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>; }
@@ -72,25 +71,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (!shopId) return { error: "Shop not found" };
 
   const intent      = formData.get("intent") as string;
-  const internalName = (formData.get("internalName") as string)?.trim();
-  const publicTitle  = (formData.get("publicTitle") as string)?.trim();
-  const startsAt    = formData.get("startsAt") as string;
-  const endsAt      = formData.get("endsAt") as string;
-  const priority    = parseInt(formData.get("priority") as string || "1", 10) || 1;
-
-  if (!internalName || !publicTitle) return { error: "Internal name and public title are required" };
+  const internalNameResult = requiredText(formData, "internalName", "Internal name");
+  if (internalNameResult.error) return { error: internalNameResult.error };
+  const publicTitleResult = requiredText(formData, "publicTitle", "Public title");
+  if (publicTitleResult.error) return { error: publicTitleResult.error };
+  const internalName = internalNameResult.data!;
+  const publicTitle = publicTitleResult.data!;
+  const dateRange = parseDateRange(formData);
+  if (dateRange.error) return { error: dateRange.error };
+  const { startsAt, endsAt } = dateRange.data!;
+  const priorityResult = parseInteger(formData, "priority", 1, { min: 1, label: "Priority" });
+  if (priorityResult.error) return { error: priorityResult.error };
+  const priority = priorityResult.data!;
 
   const conditionType  = formData.get("conditionType") as ConditionType;
-  const minAmount      = parseFloat(formData.get("minAmount") as string || "500");
-  const maxAmount      = parseFloat(formData.get("maxAmount") as string || "0");
+  const minAmountResult = parseMoneyAmount(formData, "minAmount", 500, { min: 0, label: "Minimum amount" });
+  if (minAmountResult.error) return { error: minAmountResult.error };
+  const maxAmountResult = parseMoneyAmount(formData, "maxAmount", 0, { min: 0, label: "Maximum amount" });
+  if (maxAmountResult.error) return { error: maxAmountResult.error };
+  const minAmount = minAmountResult.data!;
+  const maxAmount = maxAmountResult.data!;
   const appliesTo      = (formData.get("appliesTo") as string) || "any_product";
-  const minQty         = parseInt(formData.get("minQty") as string || "1", 10) || 1;
+  const minQtyResult = parseInteger(formData, "minQty", 1, { min: 1, label: "Minimum quantity" });
+  if (minQtyResult.error) return { error: minQtyResult.error };
+  const minQty = minQtyResult.data!;
   const multiplyGifts  = formData.get("multiplyGifts") === "on";
   const giftsMatchProd = formData.get("giftsMatchProducts") === "on";
   const trackMode      = (formData.get("trackMode") as string) || "product";
-  const condProductsJson = (formData.get("conditionProducts") as string) || "[]";
-  let conditionProducts: string[] = [];
-  try { conditionProducts = JSON.parse(condProductsJson) as string[]; } catch {}
+  const conditionProductsResult = parseJsonStringArray(formData, "conditionProducts");
+  if (conditionProductsResult.error) return { error: conditionProductsResult.error };
+  const conditionProducts = conditionProductsResult.data!;
 
   let conditionValue: Record<string, unknown>;
   if (conditionType === "specific_product") {
@@ -102,51 +112,67 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const discountType   = (formData.get("discountType") as string) || "percentage";
-  const discountValue  = parseFloat(formData.get("discountValue") as string || "100");
-  const giftCount      = parseInt(formData.get("giftCount") as string || "1", 10) || 1;
+  const discountValueResult = parseMoneyAmount(formData, "discountValue", 100, { min: 0, max: discountType === "percentage" ? 100 : undefined, label: "Discount value" });
+  if (discountValueResult.error) return { error: discountValueResult.error };
+  const discountValue = discountValueResult.data!;
+  const giftCountResult = parseInteger(formData, "giftCount", 1, { min: 1, label: "Gift count" });
+  if (giftCountResult.error) return { error: giftCountResult.error };
+  const giftCount = giftCountResult.data!;
   const isAutoAdd      = formData.get("isAutoAdd") === "true";
-  const rewardProductsJson = (formData.get("rewardProducts") as string) || "[]";
-  let rewardProducts: string[] = [];
-  try { rewardProducts = JSON.parse(rewardProductsJson) as string[]; } catch {}
+  const rewardProductsResult = parseJsonStringArray(formData, "rewardProducts");
+  if (rewardProductsResult.error) return { error: rewardProductsResult.error };
+  const rewardProducts = rewardProductsResult.data!;
+  if (intent === "publish" && conditionType === "specific_product" && conditionProducts.length === 0) {
+    return { error: "Select at least one qualifying product before publishing." };
+  }
+  if (intent === "publish" && !giftsMatchProd && rewardProducts.length === 0) {
+    return { error: "Select at least one gift product before publishing." };
+  }
 
   const rewardAmount = discountType === "free" ? 100 : discountType === "percentage" ? discountValue : Math.round(discountValue * 100);
-  const status = intent === "publish" ? "active" : "draft";
+  const status = statusForSubmit(intent, startsAt);
 
-  async function createOffer(candidateName: string) {
-    const [offer] = await db.insert(offers).values({
-      shopId, type: "gift", status,
-      internalName: candidateName, publicTitle, priority,
-      startsAt: startsAt ? new Date(startsAt) : new Date(),
-      endsAt: endsAt ? new Date(endsAt) : null,
-    }).returning({ id: offers.id });
-    return offer;
+  const subconditionsResult = parseJsonRecord(formData, "subconditions");
+  if (subconditionsResult.error) return { error: subconditionsResult.error };
+  const subconditions = subconditionsResult.data!;
+
+  const validSubconditions = Object.entries(subconditions).filter(([, subVal]) =>
+    subVal && typeof subVal === "object" && !Array.isArray(subVal) && Object.keys(subVal).length > 0,
+  );
+
+  // Offer + conditions + reward + policy created atomically (no orphan offers
+  // on partial failure). Unique-name retry wraps the whole tx.
+  async function createOfferWithChildren(candidateName: string) {
+    return db.transaction(async (tx) => {
+      const [offer] = await tx.insert(offers).values({
+        shopId, type: "gift", status,
+        internalName: candidateName, publicTitle, priority,
+        startsAt: startsAt ?? new Date(),
+        endsAt,
+      }).returning({ id: offers.id });
+      if (!offer) throw new Error("Failed to create offer");
+
+      await Promise.all([
+        tx.insert(offerConditions).values({ shopId, offerId: offer.id, scope: "main", conditionType, operator: "gte", value: conditionValue, sortOrder: 0, isEnabled: true }),
+        ...validSubconditions.map(([subId, subVal], index) =>
+          tx.insert(offerConditions).values({ shopId, offerId: offer.id, scope: "sub", conditionType: subId, operator: "eq", value: subVal as Record<string, unknown>, sortOrder: index + 1, isEnabled: true }),
+        ),
+        tx.insert(offerRewards).values({ shopId, offerId: offer.id, rewardType: "product_gift", discountType: discountType as "free" | "percentage" | "fixed_amount" | "fixed_price" | "cheapest_item_free" | "most_expensive_item_discount", value: { amount: rewardAmount, currencyCode: "USD" }, target: { scope: "cart", variantIds: rewardProducts }, quantity: giftCount, isAutoAdd, isCustomerSelectable: !isAutoAdd, trackMode: "product", sortOrder: 0 }),
+        tx.insert(offerCombinationPolicies).values({ shopId, offerId: offer.id, combinesWithOrderDiscounts: true, combinesWithProductDiscounts: true, combinesWithShippingDiscounts: true, combinesWithOtherAppOffers: true, stopLowerPriority: false, giftValueCountsForOtherOffers: false }),
+      ]);
+
+      return offer;
+    });
   }
 
   let newOffer: { id: string } | undefined;
   try {
-    newOffer = await createOffer(internalName);
+    newOffer = await createOfferWithChildren(internalName);
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
-    newOffer = await createOffer(withUniqueOfferSuffix(internalName));
+    newOffer = await createOfferWithChildren(withUniqueOfferSuffix(internalName));
   }
   if (!newOffer) return { error: "Failed to create offer" };
-
-  const subconditionsJson = (formData.get("subconditions") as string) || "{}";
-  let subconditions: Record<string, Record<string, unknown>> = {};
-  try { subconditions = JSON.parse(subconditionsJson) as Record<string, Record<string, unknown>>; } catch {}
-
-  const validSubconditions = Object.entries(subconditions).filter(([, subVal]) =>
-    subVal && Object.keys(subVal).length > 0,
-  );
-
-  await Promise.all([
-    db.insert(offerConditions).values({ shopId, offerId: newOffer.id, scope: "main", conditionType, operator: "gte", value: conditionValue, sortOrder: 0, isEnabled: true }),
-    ...validSubconditions.map(([subId, subVal], index) =>
-      db.insert(offerConditions).values({ shopId, offerId: newOffer.id, scope: "sub", conditionType: subId, operator: "eq", value: subVal as Record<string, unknown>, sortOrder: index + 1, isEnabled: true }),
-    ),
-    db.insert(offerRewards).values({ shopId, offerId: newOffer.id, rewardType: "product_gift", discountType: discountType as "free" | "percentage" | "fixed_amount" | "fixed_price" | "cheapest_item_free" | "most_expensive_item_discount", value: { amount: rewardAmount, currencyCode: "USD" }, target: { scope: "cart", variantIds: rewardProducts }, quantity: giftCount, isAutoAdd, isCustomerSelectable: !isAutoAdd, trackMode: "product", sortOrder: 0 }),
-    db.insert(offerCombinationPolicies).values({ shopId, offerId: newOffer.id, combinesWithOrderDiscounts: true, combinesWithProductDiscounts: true, combinesWithShippingDiscounts: true, combinesWithOtherAppOffers: true, stopLowerPriority: false, giftValueCountsForOtherOffers: false }),
-  ]);
 
   return redirect(`/app/offers/${newOffer.id}`);
 };
@@ -154,6 +180,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function NewGiftOfferPage() {
+  const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const { template: slug = "scratch" } = useParams<{ template: string }>();
   const templateId = SLUG_TO_TEMPLATE[slug] ?? "scratch";
@@ -173,7 +200,6 @@ export default function NewGiftOfferPage() {
     endsAt: "",
     minAmount: "500",
     maxAmount: "0.00",
-    selectedCurrencies: [] as string[],
     appliesTo: "any_product",
     minQty: 1,
     multiplyGifts: false,
@@ -186,7 +212,6 @@ export default function NewGiftOfferPage() {
     subValues: {} as Record<string, unknown>,
     mainCondModalOpen: false,
     selectedMainCond: conditionType as MainConditionType,
-    giftTab: "product" as "product" | "shipping",
     discountType: "percentage",
     discountValue: "100",
     isAutoAdd: false,
@@ -211,7 +236,6 @@ export default function NewGiftOfferPage() {
     endsAt,
     minAmount,
     maxAmount,
-    selectedCurrencies,
     appliesTo,
     minQty,
     multiplyGifts,
@@ -224,7 +248,6 @@ export default function NewGiftOfferPage() {
     subValues,
     mainCondModalOpen,
     selectedMainCond,
-    giftTab,
     discountType,
     discountValue,
     isAutoAdd,
@@ -248,7 +271,6 @@ export default function NewGiftOfferPage() {
   const setEndsAt = createFieldSetter(setFormField, "endsAt");
   const setMinAmount = createFieldSetter(setFormField, "minAmount");
   const setMaxAmount = createFieldSetter(setFormField, "maxAmount");
-  const setSelectedCurrencies = createFieldSetter(setFormField, "selectedCurrencies");
   const setAppliesTo = createFieldSetter(setFormField, "appliesTo");
   const setMinQty = createFieldSetter(setFormField, "minQty");
   const setMultiplyGifts = createFieldSetter(setFormField, "multiplyGifts");
@@ -261,7 +283,6 @@ export default function NewGiftOfferPage() {
   const setSubValues = createFieldSetter(setFormField, "subValues");
   const setMainCondModalOpen = createFieldSetter(setFormField, "mainCondModalOpen");
   const setSelectedMainCond = createFieldSetter(setFormField, "selectedMainCond");
-  const setGiftTab = createFieldSetter(setFormField, "giftTab");
   const setDiscountType = createFieldSetter(setFormField, "discountType");
   const setDiscountValue = createFieldSetter(setFormField, "discountValue");
   const setIsAutoAdd = createFieldSetter(setFormField, "isAutoAdd");
@@ -290,10 +311,6 @@ export default function NewGiftOfferPage() {
   }, [internalName, publicTitle, setFieldErrors, setToastMsg, setShowToast]);
 
   const isBogo = templateId === "bogo"; // BOGO: auto-add disabled, gifts match by default
-
-  const toggleCurrency = useCallback((c: string) => {
-    setSelectedCurrencies((prev) => prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]);
-  }, [setSelectedCurrencies]);
 
   return (
     <div className="b-page">
@@ -415,18 +432,6 @@ export default function NewGiftOfferPage() {
                       </div>
 
                       <div>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Currency filter</div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                          {CURRENCIES.map((c) => (
-                            <button key={c} type="button" onClick={() => toggleCurrency(c)} className="rd-style-025" style={{ border: `1.5px solid ${selectedCurrencies.includes(c) ? "var(--gift-color)" : "var(--border)"}`, background: selectedCurrencies.includes(c) ? "rgba(217,119,6,0.08)" : "var(--bg)", color: selectedCurrencies.includes(c) ? "var(--gift-color)" : "var(--text-sub)" }}>
-                              {c}
-                            </button>
-                          ))}
-                          <button type="button" className="rd-style-026">···</button>
-                        </div>
-                      </div>
-
-                      <div>
                         <label className="b-label" htmlFor="gift-cart-value-applies-to">Condition applies to:</label>
                         <select id="gift-cart-value-applies-to" aria-label="Condition applies to" className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
                           <option value="any_product">any product</option>
@@ -459,18 +464,6 @@ export default function NewGiftOfferPage() {
                         <span style={{ color: "var(--text-sub)", display: "flex" }}>
                           <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M6.5 5.275v-1.025c0-.69.56-1.25 1.25-1.25h4.5c.69 0 1.25.56 1.25 1.25v1.025c0 .448-.24.862-.63 1.085l-.43.246.866 3.894h.694c.69 0 1.25.56 1.25 1.25v1c0 .69-.56 1.25-1.25 1.25h-2.781l-.48 2.873a.75.75 0 0 1-1.479 0l-.479-2.873h-2.781c-.69 0-1.25-.56-1.25-1.25v-1c0-.69.56-1.25 1.25-1.25h.694l.866-3.894-.43-.246a1.25 1.25 0 0 1-.63-1.085Z"/></svg>
                         </span>
-                      </div>
-
-                      <div>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Currency filter</div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                          {CURRENCIES.map((c) => (
-                            <button key={c} type="button" onClick={() => toggleCurrency(c)} className="rd-style-025" style={{ border: `1.5px solid ${selectedCurrencies.includes(c) ? "var(--gift-color)" : "var(--border)"}`, background: selectedCurrencies.includes(c) ? "rgba(217,119,6,0.08)" : "var(--bg)", color: selectedCurrencies.includes(c) ? "var(--gift-color)" : "var(--text-sub)" }}>
-                              {c}
-                            </button>
-                          ))}
-                          <button type="button" className="rd-style-026">···</button>
-                        </div>
                       </div>
 
                       <div>
@@ -559,14 +552,6 @@ export default function NewGiftOfferPage() {
                 </div>
               </div>
 
-              <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-                <button type="button" className="b-btn b-btn-primary b-btn-sm" disabled>
-                  + Add main condition
-                </button>
-                <div style={{ fontSize: 12, color: "var(--text-sub)" }}>
-                  Cart quantity and cart value conditions can be combined
-                </div>
-              </div>
             </div>
             )}
 
@@ -633,89 +618,70 @@ export default function NewGiftOfferPage() {
               )}
             </div>
 
-            {/* ── Block 4: Seleccionar regalos ── */}
+            {/* Block 4: Select gifts */}
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                 <div className="rd-style-023">4</div>
                 <span style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 600, color: "var(--text)" }}>Gift reward</span>
               </div>
               <div className="b-card">
-                {/* Tabs */}
-                <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 16px" }}>
-                  {[
-                    { key: "product",  label: "Product Gift" },
-                    { key: "shipping", label: "Free Shipping" },
-                  ].map((tab) => (
-                    <button key={tab.key} type="button" onClick={() => setGiftTab(tab.key as "product" | "shipping")}
-                      className="rd-style-028" style={{ fontWeight: giftTab === tab.key ? 600 : 400, color: giftTab === tab.key ? "var(--gift-color)" : "var(--text-sub)", borderBottom: giftTab === tab.key ? "2px solid var(--gift-color)" : "2px solid transparent" }}>
-                      {tab.label}
-                    </button>
-                  ))}
+                <div style={{ borderBottom: "1px solid var(--border)", padding: "12px 16px" }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>Product gift</span>
                 </div>
 
                 <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                  {giftTab === "product" && (
-                    <>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Gift discount type</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>Gift discount type</div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                          <div>
-                            <label className="b-label" htmlFor="gift-discount-type">Type:</label>
-                            <select id="gift-discount-type" aria-label="Gift discount type" className="b-select" name="discountType" value={discountType} onChange={(e) => setDiscountType(e.target.value)}>
-                              <option value="percentage">Percentage</option>
-                              <option value="fixed_amount">Amount</option>
-                              <option value="fixed_price">Fixed price</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="b-label" htmlFor="gift-discount-value">Value:</label>
-                            <div style={{ position: "relative" }}>
-                              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--text-sub)" }}>
-                                {discountType === "fixed_amount" ? "$" : "%"}
-                              </span>
-                              <input id="gift-discount-value" aria-label="Gift discount value" className="b-input" type="number" name="discountValue" value={discountValue}
-                                onChange={(e) => setDiscountValue(e.target.value)}
-                                min="0" style={{ paddingLeft: 22 }} autoComplete="off" />
-                            </div>
-                          </div>
+                        <label className="b-label" htmlFor="gift-discount-type">Type:</label>
+                        <select id="gift-discount-type" aria-label="Gift discount type" className="b-select" name="discountType" value={discountType} onChange={(e) => setDiscountType(e.target.value)}>
+                          <option value="percentage">Percentage</option>
+                          <option value="fixed_amount">Amount</option>
+                          <option value="fixed_price">Fixed price</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="gift-discount-value">Value:</label>
+                        <div style={{ position: "relative" }}>
+                          <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--text-sub)" }}>
+                            {discountType === "fixed_amount" ? "$" : "%"}
+                          </span>
+                          <input id="gift-discount-value" aria-label="Gift discount value" className="b-input" type="number" name="discountValue" value={discountValue}
+                            onChange={(e) => setDiscountValue(e.target.value)}
+                            min="0" style={{ paddingLeft: 22 }} autoComplete="off" />
                         </div>
                       </div>
-
-                      <div>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Customer will receive:</div>
-                        <label className="b-checkbox-row" htmlFor="gift-auto-add-all" style={{ cursor: isBogo ? "not-allowed" : "pointer", gap: 10, marginBottom: 6, opacity: isBogo ? 0.5 : 1 }}>
-                          <input id="gift-auto-add-all" aria-label="Automatically add all gifts" type="radio" name="_autoAddRadio" checked={isAutoAdd} disabled={isBogo}
-                            onChange={() => setIsAutoAdd(true)}
-                            style={{ accentColor: "var(--gift-color)", width: 15, height: 15 }} />
-                          <span style={{ fontSize: 13, color: isBogo ? "var(--text-sub)" : "var(--text)" }}>Automatically add all gifts</span>
-                        </label>
-                        <label className="b-checkbox-row" htmlFor="gift-customer-selects" style={{ cursor: "pointer", gap: 10 }}>
-                          <input id="gift-customer-selects" aria-label="Customer selects number of gifts" type="radio" name="_autoAddRadio" checked={!isAutoAdd} onChange={() => setIsAutoAdd(false)}
-                            style={{ accentColor: "var(--gift-color)", width: 15, height: 15 }} />
-                          <span style={{ fontSize: 13, color: "var(--text)" }}>Customer selects number of gifts</span>
-                        </label>
-                        {!isAutoAdd && (
-                          <input aria-label="Gift count" className="b-input" type="number" name="giftCount" value={giftCount}
-                            onChange={(e) => setGiftCount(parseInt(e.target.value) || 1)}
-                            min="1" style={{ maxWidth: 80, marginTop: 8 }} autoComplete="off" />
-                        )}
-                        {isAutoAdd && <input type="hidden" name="giftCount" value="1" />}
-                      </div>
-
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <button type="button" className="b-btn b-btn-secondary" onClick={() => setRewardPickerOpen(true)}>
-                          Select gifts
-                        </button>
-                        <span style={{ fontSize: 13, color: "var(--text-sub)" }}>{rewardProducts.length} selected products</span>
-                      </div>
-                    </>
-                  )}
-
-                  {giftTab === "shipping" && (
-                    <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-sub)", fontSize: 13 }}>
-                      Free shipping as gift — coming soon
                     </div>
-                  )}
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Customer will receive:</div>
+                    <label className="b-checkbox-row" htmlFor="gift-auto-add-all" style={{ cursor: isBogo ? "not-allowed" : "pointer", gap: 10, marginBottom: 6, opacity: isBogo ? 0.5 : 1 }}>
+                      <input id="gift-auto-add-all" aria-label="Automatically add all gifts" type="radio" name="_autoAddRadio" checked={isAutoAdd} disabled={isBogo}
+                        onChange={() => setIsAutoAdd(true)}
+                        style={{ accentColor: "var(--gift-color)", width: 15, height: 15 }} />
+                      <span style={{ fontSize: 13, color: isBogo ? "var(--text-sub)" : "var(--text)" }}>Automatically add all gifts</span>
+                    </label>
+                    <label className="b-checkbox-row" htmlFor="gift-customer-selects" style={{ cursor: "pointer", gap: 10 }}>
+                      <input id="gift-customer-selects" aria-label="Customer selects number of gifts" type="radio" name="_autoAddRadio" checked={!isAutoAdd} onChange={() => setIsAutoAdd(false)}
+                        style={{ accentColor: "var(--gift-color)", width: 15, height: 15 }} />
+                      <span style={{ fontSize: 13, color: "var(--text)" }}>Customer selects number of gifts</span>
+                    </label>
+                    {!isAutoAdd && (
+                      <input aria-label="Gift count" className="b-input" type="number" name="giftCount" value={giftCount}
+                        onChange={(e) => setGiftCount(parseInt(e.target.value) || 1)}
+                        min="1" style={{ maxWidth: 80, marginTop: 8 }} autoComplete="off" />
+                    )}
+                    {isAutoAdd && <input type="hidden" name="giftCount" value="1" />}
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <button type="button" className="b-btn b-btn-secondary" onClick={() => setRewardPickerOpen(true)}>
+                      Select gifts
+                    </button>
+                    <span style={{ fontSize: 13, color: "var(--text-sub)" }}>{rewardProducts.length} selected products</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -817,8 +783,8 @@ export default function NewGiftOfferPage() {
 
       </Form>
 
-      {showToast && (
-        <Toast message={toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+      {(showToast || actionData?.error) && (
+        <Toast message={actionData?.error ?? toastMsg} type="error" onDismiss={() => setShowToast(false)} />
       )}
 
       {/* ── Modals ── */}

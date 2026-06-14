@@ -6,6 +6,7 @@ export interface CartAction {
   quantity?: number;
   properties?: Record<string, string>;
   lineKey?: string;
+  offerId?: string;
   reason?: string;
 }
 

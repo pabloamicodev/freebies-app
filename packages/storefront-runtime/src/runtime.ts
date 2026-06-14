@@ -13,6 +13,7 @@
 import { AjaxCartAdapter, type CartData } from "./cart-adapter.js";
 import { debounce, AbortableRequest } from "./debounce.js";
 import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
+import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
 import type { EvaluationResult, CartAction } from "./types.js";
 
 const EVAL_DEBOUNCE_MS = 300;
@@ -151,7 +152,7 @@ class PromoEngineRuntime {
       const result: EvaluationResult = await response.json();
       this.lastCartHash = cartHash;
 
-      await this.applyCartActions(result.cartActions, cart);
+      await this.applyCartActions(Array.isArray(result.cartActions) ? result.cartActions : []);
       emit(PromoEvents.EvaluationCompleted, result);
 
     } catch (e: unknown) {
@@ -164,8 +165,7 @@ class PromoEngineRuntime {
     }
   }
 
-  private async applyCartActions(actions: CartAction[], currentCart: CartData): Promise<void> {
-    const lineKeyMap = new Map(currentCart.items.map((item) => [item.key, item]));
+  private async applyCartActions(actions: CartAction[]): Promise<void> {
 
     for (const action of actions) {
       try {
@@ -191,30 +191,42 @@ class PromoEngineRuntime {
           }
 
           case "update_line": {
+            const freshCart = await fetchFreshCart();
+            const currentLine = freshCart.items.find((item) => item.key === action.lineKey)
+              ?? (action.offerId ? findGiftLineByOfferId(freshCart, action.offerId) : null);
+            const lineKey = currentLine?.key
+              ?? (action.variantId ? resolveLineKey(freshCart, parseInt(action.variantId.split("/").pop() ?? action.variantId, 10), action.properties ?? {}) : null);
+            if (!lineKey) break;
             if (action.quantity === 0) {
-              await AjaxCartAdapter.removeLine({ key: action.lineKey });
-              emit(PromoEvents.GiftRemoved, { lineKey: action.lineKey });
+              await AjaxCartAdapter.removeLine({ key: lineKey });
+              emit(PromoEvents.GiftRemoved, { lineKey });
               publishAnalytics("promo_engine:gift_removed", {
-                line_key: action.lineKey,
+                line_key: lineKey,
                 reason: "quantity_correction",
                 session_id: this.sessionId,
               });
             } else {
               await AjaxCartAdapter.updateLine({
-                key: action.lineKey,
+                key: lineKey,
                 quantity: action.quantity ?? 1,
                 properties: action.properties,
               });
-              emit(PromoEvents.GiftUpdated, { lineKey: action.lineKey, quantity: action.quantity });
+              emit(PromoEvents.GiftUpdated, { lineKey, quantity: action.quantity });
             }
             break;
           }
 
           case "remove_line": {
-            await AjaxCartAdapter.removeLine({ key: action.lineKey });
-            emit(PromoEvents.GiftRemoved, { lineKey: action.lineKey });
+            const freshCart = await fetchFreshCart();
+            const currentLine = freshCart.items.find((item) => item.key === action.lineKey)
+              ?? (action.offerId ? findGiftLineByOfferId(freshCart, action.offerId) : null);
+            const lineKey = currentLine?.key
+              ?? (action.variantId ? resolveLineKey(freshCart, parseInt(action.variantId.split("/").pop() ?? action.variantId, 10), action.properties ?? {}) : null);
+            if (!lineKey) break;
+            await AjaxCartAdapter.removeLine({ key: lineKey });
+            emit(PromoEvents.GiftRemoved, { lineKey });
             publishAnalytics("promo_engine:gift_removed", {
-              line_key: action.lineKey,
+              line_key: lineKey,
               reason: action.reason ?? "offer_disqualified",
               session_id: this.sessionId,
             });

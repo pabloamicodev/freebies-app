@@ -6,11 +6,11 @@
 
 import { useLoaderData, Form, useActionData } from "react-router";
 import { BackButton } from "../components/BackButton.js";
-import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import { evaluate } from "@promo/rule-engine";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import type { EvaluationInput } from "@promo/shared-types";
 
@@ -24,27 +24,24 @@ function splitCsvList(value: string | null): string[] {
 }
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const offerId = params["id"];
   if (!offerId) throw new Response("Not found", { status: 404 });
 
-  const offerRows = await db.select().from(offers).where(eq(offers.id, offerId)).limit(1);
-  const offer = offerRows[0];
-  if (!offer) throw new Response("Not found", { status: 404 });
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
   return { offer: { id: offer.id, internalName: offer.internalName, type: offer.type } };
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const [admin, formData] = await Promise.all([
-    authenticate.admin(request),
+  const [context, formData] = await Promise.all([
+    getShopContext(request),
     request.formData(),
   ]);
-  const { session } = admin;
-  const db = getDb();
+  const { session, shopId, db } = context;
   const offerId = params["id"];
   if (!offerId) throw new Response("Not found", { status: 404 });
+  await loadOwnedOffer(db, shopId, offerId);
 
   const cartValueUsd = parseFloat(formData.get("cartTotal") as string) || 0;
   const cartQty = parseInt(formData.get("cartQty") as string, 10) || 1;
@@ -55,10 +52,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   // Load offer definitions
   const [conditionRows, rewardRows, policyRows, offerRows] = await Promise.all([
-    db.select().from(offerConditions).where(eq(offerConditions.offerId, offerId)),
-    db.select().from(offerRewards).where(eq(offerRewards.offerId, offerId)),
-    db.select().from(offerCombinationPolicies).where(eq(offerCombinationPolicies.offerId, offerId)).limit(1),
-    db.select().from(offers).where(eq(offers.id, offerId)).limit(1),
+    db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId))),
+    db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))),
+    db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId))).limit(1),
+    db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1),
   ]);
 
   const offer = offerRows[0];

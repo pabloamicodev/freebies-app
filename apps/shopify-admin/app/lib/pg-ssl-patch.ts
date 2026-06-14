@@ -25,5 +25,8 @@ class SSLPool extends OriginalPool {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-(pg as any).Pool = SSLPool;
+Object.defineProperty(pg, "Pool", {
+  configurable: true,
+  writable: true,
+  value: SSLPool,
+});

@@ -13,7 +13,7 @@ import { eq } from "drizzle-orm";
 
 type ShopRecord = typeof shops.$inferSelect;
 type ProductSyncQueue = {
-  add: (name: string, data: unknown, opts?: any) => Promise<unknown>;
+  add: (name: string, data: unknown, opts?: { priority?: number }) => Promise<unknown>;
 };
 
 async function enqueueProductSync(

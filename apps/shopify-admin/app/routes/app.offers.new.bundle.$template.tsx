@@ -5,17 +5,18 @@
  *         /app/offers/new/bundle/bundle-page    → Bundle Page wizard
  */
 
-import { Form, useNavigate, redirect, useParams } from "react-router";
+import { Form, useActionData, useNavigate, redirect, useParams } from "react-router";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
+import { statusForSubmit } from "../lib/offer-scheduling.server.js";
+import { parseDateRange, parseInteger, parseJsonStringArray, parseMoneyAmount, requiredText } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import {
   offers, offerCombinationPolicies,
   bundleDefinitions, bundleSteps, bundleTiers,
 } from "@promo/db";
-import { eq } from "drizzle-orm";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
 
@@ -77,116 +78,140 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
-  const internalName = (formData.get("internalName") as string)?.trim();
-  const publicTitle = (formData.get("publicTitle") as string)?.trim();
+  const internalNameResult = requiredText(formData, "internalName", "Internal name");
+  if (internalNameResult.error) return { error: internalNameResult.error };
+  const publicTitleResult = requiredText(formData, "publicTitle", "Public title");
+  if (publicTitleResult.error) return { error: publicTitleResult.error };
+  const internalName = internalNameResult.data!;
+  const publicTitle = publicTitleResult.data!;
   const description = (formData.get("description") as string)?.trim() || null;
-  const startsAt = formData.get("startsAt") as string;
-  const endsAt = formData.get("endsAt") as string;
+  const dateRange = parseDateRange(formData);
+  if (dateRange.error) return { error: dateRange.error };
+  const { startsAt, endsAt } = dateRange.data!;
   const bundleType = formData.get("bundleType") as string;
   const discountType = (formData.get("discountType") as string) || "percentage";
-  const _discountValue = parseFloat(formData.get("discountValue") as string || "0") || 0;
+  const discountValueResult = parseMoneyAmount(formData, "discountValue", 0, { min: 0, label: "Discount value" });
+  if (discountValueResult.error) return { error: discountValueResult.error };
   const currencyCode = (formData.get("currencyCode") as string) || "USD";
   const productLevel = (formData.get("productLevel") as string) || "product";
   const combinesOrderDiscounts = formData.get("combinesOrderDiscounts") === "on";
   const combinesShippingDiscounts = formData.get("combinesShippingDiscounts") === "on";
   const layoutMode = (formData.get("layoutMode") as string) || "all_steps_one_page";
 
-  if (!internalName || !publicTitle) {
-    return { error: "Internal name and public title are required" };
+  const status = statusForSubmit(intent, startsAt);
+
+  const classicProductsResult = parseJsonStringArray(formData, "classicProducts");
+  if (classicProductsResult.error) return { error: classicProductsResult.error };
+  const classicProducts = classicProductsResult.data!;
+  if (bundleType === "classic" && intent === "publish" && classicProducts.length === 0) {
+    return { error: "Select at least one bundle product before publishing." };
   }
 
-  const status = intent === "publish" ? "active" : "draft";
+  // Parse tier inputs up front (pure, no DB).
+  const tierQtys = formData.getAll("tier_qty[]") as string[];
+  const tierLabels = formData.getAll("tier_label[]") as string[];
+  const tierDiscountTypes = formData.getAll("tier_discount_type[]") as string[];
+  const tierDiscountValues = formData.getAll("tier_discount_value[]") as string[];
 
-  async function createOffer(candidateName: string) {
-    const [offer] = await db
-      .insert(offers)
-      .values({
-        shopId, type: "bundle", status,
-        internalName: candidateName, publicTitle,
-        description: description,
-        priority: 100,
-        startsAt: startsAt ? new Date(startsAt) : new Date(),
-        endsAt: endsAt ? new Date(endsAt) : null,
-      })
-      .returning({ id: offers.id });
-    return offer;
-  }
+  // Offer + bundle definition + policy + steps + tiers are created atomically —
+  // a partial failure must not leave an orphan offer or a bundle with no steps.
+  // Inserts run sequentially because a Postgres transaction shares one connection.
+  // Unique-name retry wraps the whole tx.
+  async function createOfferWithChildren(candidateName: string) {
+    return db.transaction(async (tx) => {
+      const [offer] = await tx
+        .insert(offers)
+        .values({
+          shopId, type: "bundle", status,
+          internalName: candidateName, publicTitle,
+          description: description,
+          priority: 100,
+          startsAt: startsAt ?? new Date(),
+          endsAt,
+        })
+        .returning({ id: offers.id });
+      if (!offer) throw new Error("Failed to create offer");
 
-  let newOffer: { id: string } | undefined;
-  try {
-    newOffer = await createOffer(internalName);
-  } catch (err) {
-    if (!isUniqueViolation(err)) throw err;
-    newOffer = await createOffer(withUniqueOfferSuffix(internalName));
-  }
+      const [bundleDef] = await tx.insert(bundleDefinitions).values({
+        shopId, offerId: offer.id,
+        bundleType,
+        title: publicTitle,
+        description,
+        layoutMode: bundleType === "bundle_page" ? layoutMode : "all_steps_one_page",
+        createBundleProduct: false,
+        config: { productLevel },
+      }).returning({ id: bundleDefinitions.id });
 
-  if (!newOffer) return { error: "Failed to create offer" };
-
-  const [bundleDefs] = await Promise.all([
-    db.insert(bundleDefinitions).values({
-      shopId, offerId: newOffer.id,
-      bundleType,
-      title: publicTitle,
-      description,
-      layoutMode: bundleType === "bundle_page" ? layoutMode : "all_steps_one_page",
-      createBundleProduct: false,
-      config: { productLevel },
-    }).returning({ id: bundleDefinitions.id }),
-    db.insert(offerCombinationPolicies).values({
-      shopId, offerId: newOffer.id,
-      combinesWithOrderDiscounts: combinesOrderDiscounts,
-      combinesWithProductDiscounts: true,
-      combinesWithShippingDiscounts: combinesShippingDiscounts,
-      combinesWithOtherAppOffers: true,
-      stopLowerPriority: false,
-      giftValueCountsForOtherOffers: false,
-    }),
-  ]);
-  const bundleDef = bundleDefs[0];
-
-  if (bundleDef) {
-    if (bundleType === "classic") {
-      // One step — products added later via detail page
-      await db.insert(bundleSteps).values({
-        shopId, bundleId: bundleDef.id,
-        title: "Paso 1 — Seleccionar productos",
-        sourceType: "products",
-        sourceConfig: { productGids: [] },
-        minQuantity: 1,
-        maxQuantity: null,
-        searchEnabled: false,
-        sortOptions: [],
-        filterOptions: [],
-        sortOrder: 0,
+      await tx.insert(offerCombinationPolicies).values({
+        shopId, offerId: offer.id,
+        combinesWithOrderDiscounts: combinesOrderDiscounts,
+        combinesWithProductDiscounts: true,
+        combinesWithShippingDiscounts: combinesShippingDiscounts,
+        combinesWithOtherAppOffers: true,
+        stopLowerPriority: false,
+        giftValueCountsForOtherOffers: false,
       });
-    } else if (bundleType === "mix_match") {
-      // One step per mix item
-      const mixItemCount = parseInt(formData.get("mix_item_count") as string || "0", 10);
-      await Promise.all(Array.from({ length: mixItemCount }, (_, i) => {
-        const rawProducts = formData.get(`mix_products_${i}`) as string;
-        let productGids: string[] = [];
-        try { productGids = JSON.parse(rawProducts) as string[]; } catch { /* noop */ }
-        const minQty = parseInt(formData.get(`mix_min_qty_${i}`) as string || "1", 10) || 1;
 
-        return db.insert(bundleSteps).values({
+      if (!bundleDef) throw new Error("Failed to create bundle definition");
+
+      if (bundleType === "classic") {
+        await tx.insert(bundleSteps).values({
           shopId, bundleId: bundleDef.id,
-          title: `Mix item ${i + 1}`,
+          title: "Step 1 — Select products",
           sourceType: "products",
-          sourceConfig: { productGids },
-          minQuantity: minQty,
+          sourceConfig: { productGids: classicProducts },
+          minQuantity: 1,
           maxQuantity: null,
           searchEnabled: false,
           sortOptions: [],
           filterOptions: [],
-          sortOrder: i,
+          sortOrder: 0,
         });
-      }));
+      } else if (bundleType === "mix_match") {
+        // One step per mix item
+        const mixItemCount = parseInt(formData.get("mix_item_count") as string || "0", 10);
+        for (let i = 0; i < mixItemCount; i++) {
+          const productGidsResult = parseJsonStringArray(formData, `mix_products_${i}`);
+          if (productGidsResult.error) throw new Error(productGidsResult.error);
+          const minQtyResult = parseInteger(formData, `mix_min_qty_${i}`, 1, { min: 1, label: `Mix item ${i + 1} minimum quantity` });
+          if (minQtyResult.error) throw new Error(minQtyResult.error);
+          const productGids = productGidsResult.data!;
+          const minQty = minQtyResult.data!;
 
-      // Ensure at least one placeholder step if none submitted
-      if (mixItemCount === 0) {
-        await db.insert(bundleSteps).values({
+          await tx.insert(bundleSteps).values({
+            shopId, bundleId: bundleDef.id,
+            title: `Mix item ${i + 1}`,
+            sourceType: "products",
+            sourceConfig: { productGids },
+            minQuantity: minQty,
+            maxQuantity: null,
+            searchEnabled: false,
+            sortOptions: [],
+            filterOptions: [],
+            sortOrder: i,
+          });
+        }
+
+        // Ensure at least one placeholder step if none submitted
+        if (mixItemCount === 0) {
+          await tx.insert(bundleSteps).values({
+            shopId, bundleId: bundleDef.id,
+            title: "Mix item 1",
+            sourceType: "products",
+            sourceConfig: { productGids: [] },
+            minQuantity: 1,
+            maxQuantity: null,
+            searchEnabled: false,
+            sortOptions: [],
+            filterOptions: [],
+            sortOrder: 0,
+          });
+        }
+      } else if (bundleType === "bundle_page") {
+        // Placeholder step — steps added on detail page
+        await tx.insert(bundleSteps).values({
           shopId, bundleId: bundleDef.id,
-          title: "Mix item 1",
+          title: "Step 1",
           sourceType: "products",
           sourceConfig: { productGids: [] },
           minQuantity: 1,
@@ -197,32 +222,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           sortOrder: 0,
         });
       }
-    } else if (bundleType === "bundle_page") {
-      // Placeholder step — steps added on detail page
-      await db.insert(bundleSteps).values({
-        shopId, bundleId: bundleDef.id,
-        title: "Paso 1",
-        sourceType: "products",
-        sourceConfig: { productGids: [] },
-        minQuantity: 1,
-        maxQuantity: null,
-        searchEnabled: false,
-        sortOptions: [],
-        filterOptions: [],
-        sortOrder: 0,
-      });
-    }
 
-    // Tiers
-    const tierQtys = formData.getAll("tier_qty[]") as string[];
-    const tierLabels = formData.getAll("tier_label[]") as string[];
-    const tierDiscountTypes = formData.getAll("tier_discount_type[]") as string[];
-    const tierDiscountValues = formData.getAll("tier_discount_value[]") as string[];
-
-    await Promise.all(tierQtys.flatMap((rawQty, i) => {
-      const qty = parseInt(rawQty ?? "0", 10);
-      if (qty <= 0) return [];
-      return db.insert(bundleTiers).values({
+      // Tiers
+      for (let i = 0; i < tierQtys.length; i++) {
+        const qty = parseInt(tierQtys[i] ?? "0", 10);
+        if (qty <= 0) continue;
+        await tx.insert(bundleTiers).values({
           shopId, bundleId: bundleDef.id,
           minQuantity: qty,
           label: tierLabels[i] ?? "",
@@ -230,8 +235,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           value: { amount: parseFloat(tierDiscountValues[i] ?? "0"), currencyCode },
           sortOrder: i,
         });
-    }));
+      }
+
+      return offer;
+    });
   }
+
+  let newOffer: { id: string } | undefined;
+  try {
+    newOffer = await createOfferWithChildren(internalName);
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    newOffer = await createOfferWithChildren(withUniqueOfferSuffix(internalName));
+  }
+
+  if (!newOffer) return { error: "Failed to create offer" };
 
   return redirect(`/app/offers/${newOffer.id}`);
 };
@@ -239,6 +257,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function NewBundleOfferPage() {
+  const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const { template: templateSlug = "classic-bundle" } = useParams<{ template: string }>();
 
@@ -356,6 +375,7 @@ export default function NewBundleOfferPage() {
       <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
         {/* Hidden fields */}
         <input type="hidden" name="bundleType" value={bundleTypeFromSlug} />
+        <input type="hidden" name="classicProducts" value={JSON.stringify(conditionProductsForClassic)} />
         {bundleTypeFromSlug === "mix_match" && (
           <>
             <input type="hidden" name="mix_item_count" value={mixItems.length} />
@@ -426,7 +446,7 @@ export default function NewBundleOfferPage() {
                   </div>
                 </div>
 
-                {/* Seleccionar paquete */}
+                {/* Select bundle */}
                 <div className="b-card" style={{ borderTop: "3px solid var(--bundle-color)" }}>
                   <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
                     <div className="rd-style-089">2</div>
@@ -501,11 +521,6 @@ export default function NewBundleOfferPage() {
                             min="0" autoComplete="off" />
                         </div>
                       </div>
-                    </div>
-                    <div>
-                      <span className="b-help" style={{ color: "var(--bundle-color)", cursor: "pointer" }}>
-                        Add: Shipping discount
-                      </span>
                     </div>
                   </div>
                 </div>
@@ -605,7 +620,7 @@ export default function NewBundleOfferPage() {
                   </div>
                 </div>
 
-                {/* Seleccionar elementos mixtos */}
+                {/* Select mix-and-match items */}
                 <div className="b-card">
                   <div className="b-card-header">Mix items</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -691,7 +706,7 @@ export default function NewBundleOfferPage() {
                   </div>
                 </div>
 
-                {/* Descuento (tiers) */}
+                {/* Discount tiers */}
                 <div className="b-card">
                   <div className="b-card-header">Discount</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -766,11 +781,6 @@ export default function NewBundleOfferPage() {
                                   min="0" autoComplete="off" />
                               </div>
                             </div>
-                          </div>
-                          <div>
-                            <span className="b-help" style={{ color: "var(--bundle-color)", cursor: "pointer" }}>
-                              Add: Shipping discount
-                            </span>
                           </div>
                         </div>
                       </div>
@@ -905,22 +915,6 @@ export default function NewBundleOfferPage() {
                   </label>
                 </div>
 
-                {/* Imagen del banner */}
-                <div className="b-card">
-                  <div className="b-card-header">Banner image</div>
-                  <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                    <div className="rd-style-092">
-                      <button type="button" className="b-btn b-btn-secondary">Add file</button>
-                    </div>
-                    <div className="b-help">
-                      Recommended image specs: 1200x240px, under 1 MB, supported formats: gif, jpg, png.
-                    </div>
-                    <div>
-                      <span style={{ fontSize: 13, color: "var(--bundle-color)", cursor: "pointer" }}>Transparent banner</span>
-                    </div>
-                  </div>
-                </div>
-
                 {/* Estructura del paquete */}
                 <div className="b-card">
                   <div className="b-card-header">Bundle structure</div>
@@ -928,21 +922,6 @@ export default function NewBundleOfferPage() {
                     <div className="b-help">
                       Each step contains a different set of products. Customers select from each step to complete the bundle.
                     </div>
-                    <div>
-                      <button type="button" className="b-btn b-btn-secondary">
-                        + Add step
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Bundle discount */}
-                <div className="b-card">
-                  <div className="b-card-header">Bundle discount</div>
-                  <div className="b-card-body">
-                    <button type="button" className="b-btn b-btn-secondary">
-                      + Add discount
-                    </button>
                   </div>
                 </div>
 
@@ -1033,10 +1012,6 @@ export default function NewBundleOfferPage() {
                       </div>
                     </div>
                   </div>
-                  <button type="button" className="b-btn b-btn-secondary"
-                    disabled style={{ opacity: 0.5, cursor: "not-allowed" }}>
-                    Bundle preview
-                  </button>
                 </div>
               </div>
             )}
@@ -1090,8 +1065,8 @@ export default function NewBundleOfferPage() {
         }}
       />
 
-      {showToast && (
-        <Toast message={toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+      {(showToast || actionData?.error) && (
+        <Toast message={actionData?.error ?? toastMsg} type="error" onDismiss={() => setShowToast(false)} />
       )}
     </div>
   );

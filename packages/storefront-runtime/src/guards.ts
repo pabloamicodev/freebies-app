@@ -7,6 +7,14 @@
 
 import type { CartData } from "./cart-adapter.js";
 
+type ShopifyThemeWindow = Window & {
+  Shopify?: {
+    theme?: {
+      sections?: unknown;
+    };
+  };
+};
+
 // ── Pitfall 30.1: Cart line keys change after mutations ───────────────────────
 
 /**
@@ -137,7 +145,7 @@ export const APP_BLOCK_POSITION_IS_MERCHANT_CONTROLLED = true;
 export function hasSectionRendering(): boolean {
   try {
     // Check if the theme supports Shopify's section rendering
-    return typeof (window as any).Shopify?.theme?.sections !== "undefined";
+    return typeof (window as ShopifyThemeWindow).Shopify?.theme?.sections !== "undefined";
   } catch {
     return false;
   }

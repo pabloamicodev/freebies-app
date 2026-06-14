@@ -7,9 +7,8 @@
 
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
-import { productCache, variantCache } from "@promo/db";
-import { eq, and, like, or, sql } from "drizzle-orm";
+import { getDb, shops, productCache, variantCache } from "@promo/db";
+import { and, desc, eq, like, ne, or, sql } from "drizzle-orm";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -20,15 +19,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const db = getDb();
   const shopRows = await db
-    .select({ id: (await import("@promo/db")).shops.id })
-    .from((await import("@promo/db")).shops)
-    .where(eq((await import("@promo/db")).shops.myshopifyDomain, session.shop))
+    .select({ id: shops.id })
+    .from(shops)
+    .where(eq(shops.myshopifyDomain, session.shop))
     .limit(1);
 
   const shopId = shopRows[0]?.id;
   if (!shopId) {
     return Response.json({ products: [] }, { status: 200 });
   }
+
+  const lastSynced = await db
+    .select({ syncedAt: productCache.syncedAt })
+    .from(productCache)
+    .where(eq(productCache.shopId, shopId))
+    .orderBy(desc(productCache.syncedAt))
+    .limit(1);
+  const cache = { lastSyncedAt: lastSynced[0]?.syncedAt?.toISOString() ?? null };
 
   // Search in cached products (fast, no API call)
   const searchPattern = `%${q}%`;
@@ -48,6 +55,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     .where(
       and(
         eq(productCache.shopId, shopId),
+        ne(productCache.status, "ARCHIVED"),
         q
           ? or(
               like(productCache.title, searchPattern),
@@ -61,7 +69,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     .limit(limit);
 
   if (!includeVariants) {
-    return Response.json({ products }, { status: 200 });
+    return Response.json({ products, cache }, { status: 200 });
   }
 
   // Enrich with variants for offer configuration
@@ -103,5 +111,5 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     variants: variantsByProduct[p.id] ?? [],
   }));
 
-  return Response.json({ products: enriched }, { status: 200 });
+  return Response.json({ products: enriched, cache }, { status: 200 });
 };

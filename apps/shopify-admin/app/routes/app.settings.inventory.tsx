@@ -8,6 +8,7 @@ import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { appSettings } from "@promo/db";
 import { and, eq } from "drizzle-orm";
+import { parseStoredJson } from "../lib/offer-validation.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import bogosStyles from "../styles/bogos.css?url";
 
@@ -24,7 +25,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const settings: Record<string, unknown> = {};
   for (const row of settingRows) {
-    try { settings[row.key] = JSON.parse(row.value); } catch { settings[row.key] = row.value; }
+    settings[row.key] = parseStoredJson(row.value);
   }
 
   return {

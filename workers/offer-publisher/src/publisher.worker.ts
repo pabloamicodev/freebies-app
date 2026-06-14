@@ -93,7 +93,6 @@ export function startOfferPublisherWorker() {
       }
 
       // Load all conditions, rewards, policies for active offers
-      const offerIds = activeOffers.map((o) => o.id);
       const [conditionRows, rewardRows, policyRows] = await Promise.all([
         db.select().from(offerConditions).where(eq(offerConditions.shopId, shopId)),
         db.select().from(offerRewards).where(eq(offerRewards.shopId, shopId)),
@@ -132,7 +131,7 @@ export function startOfferPublisherWorker() {
       for (const compiledOffer of compiledOffers) {
         await db
           .update(offers)
-          .set({ compiledConfig: compiledOffer as any, updatedAt: new Date() })
+          .set({ compiledConfig: compiledOffer, updatedAt: new Date() })
           .where(eq(offers.id, compiledOffer.id));
       }
 
@@ -148,11 +147,53 @@ export function startOfferPublisherWorker() {
   );
 }
 
+async function shopGraphQL<T>(
+  shopDomain: string,
+  accessToken: string,
+  query: string,
+  variables?: Record<string, unknown>,
+): Promise<T> {
+  const response = await fetch(
+    `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": accessToken,
+      },
+      body: JSON.stringify({ query, variables }),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Shopify API error: ${response.status} ${response.statusText}`);
+  }
+
+  const body = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
+  if (body.errors?.length) {
+    throw new Error(`Shopify GraphQL errors: ${body.errors.map((e) => e.message).join(", ")}`);
+  }
+  if (!body.data) throw new Error("Shopify GraphQL returned no data");
+  return body.data;
+}
+
+/** Resolve the real Shop GID — metafields must be owned by the actual shop, not a hardcoded id. */
+async function getShopGid(shopDomain: string, accessToken: string): Promise<string> {
+  const data = await shopGraphQL<{ shop: { id: string } }>(
+    shopDomain,
+    accessToken,
+    `query { shop { id } }`,
+  );
+  return data.shop.id;
+}
+
 async function pushMetafield(
   shopDomain: string,
   accessToken: string,
   config: CompiledFunctionConfig,
 ): Promise<void> {
+  const ownerId = await getShopGid(shopDomain, accessToken);
+
   const mutation = `
     mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
       metafieldsSet(metafields: $metafields) {
@@ -162,40 +203,24 @@ async function pushMetafield(
     }
   `;
 
-  const response = await fetch(
-    `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+  const data = await shopGraphQL<{ metafieldsSet: { userErrors: Array<{ message: string }> } }>(
+    shopDomain,
+    accessToken,
+    mutation,
     {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": accessToken,
-      },
-      body: JSON.stringify({
-        query: mutation,
-        variables: {
-          metafields: [
-            {
-              ownerId: `gid://shopify/Shop/1`, // Will be resolved via separate query in production
-              namespace: METAFIELD_NAMESPACE,
-              key: METAFIELD_KEY,
-              type: "json",
-              value: JSON.stringify(config),
-            },
-          ],
+      metafields: [
+        {
+          ownerId,
+          namespace: METAFIELD_NAMESPACE,
+          key: METAFIELD_KEY,
+          type: "json",
+          value: JSON.stringify(config),
         },
-      }),
+      ],
     },
   );
 
-  if (!response.ok) {
-    throw new Error(`Metafield push failed: ${response.status} ${response.statusText}`);
-  }
-
-  const data = (await response.json()) as {
-    data: { metafieldsSet: { userErrors: Array<{ message: string }> } };
-  };
-
-  const errors = data.data.metafieldsSet.userErrors;
+  const errors = data.metafieldsSet.userErrors;
   if (errors.length > 0) {
     throw new Error(`Metafield user errors: ${errors.map((e) => e.message).join(", ")}`);
   }

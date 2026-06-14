@@ -5,11 +5,13 @@
  *         /app/offers/new/upsell/thank-you   → Thank You page upsell
  */
 
-import { Form, useNavigate, redirect, useParams } from "react-router";
+import { Form, useActionData, useNavigate, redirect, useParams } from "react-router";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
+import { statusForSubmit } from "../lib/offer-scheduling.server.js";
+import { parseDateRange, parseInteger, parseJsonStringArray, parseMoneyAmount, requiredText } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
@@ -54,113 +56,126 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
-  const internalName = (formData.get("internalName") as string)?.trim();
+  const internalNameResult = requiredText(formData, "internalName", "Internal name");
+  if (internalNameResult.error) return { error: internalNameResult.error };
+  const internalName = internalNameResult.data!;
   const publicTitle = (formData.get("publicTitle") as string)?.trim() || internalName;
   const descriptionRaw = (formData.get("description") as string)?.trim();
   const description = descriptionRaw || undefined;
-  const startsAt = formData.get("startsAt") as string;
-  const endsAt = formData.get("endsAt") as string;
+  const dateRange = parseDateRange(formData);
+  if (dateRange.error) return { error: dateRange.error };
+  const { startsAt, endsAt } = dateRange.data!;
 
   const templateRaw = (formData.get("template") as string) || "checkout";
   const triggerType = (formData.get("triggerType") as string) || "always";
   const upsellMethod = (formData.get("upsellMethod") as string) || "manual";
   const widgetType = (formData.get("widgetType") as string) || "fbt";
   const discountEnabled = formData.get("discountEnabled") === "on";
-  const discountMinProducts = parseInt(formData.get("discountMinProducts") as string || "2", 10) || 2;
+  const discountMinProductsResult = parseInteger(formData, "discountMinProducts", 2, { min: 1, label: "Discount minimum products" });
+  if (discountMinProductsResult.error) return { error: discountMinProductsResult.error };
+  const discountMinProducts = discountMinProductsResult.data!;
   const discountApplyTo = (formData.get("discountApplyTo") as string) || "any";
   const discountType = (formData.get("discountType") as string) || "percentage";
-  const discountValue = parseFloat(formData.get("discountValue") as string || "10");
+  const discountValueResult = parseMoneyAmount(formData, "discountValue", 10, { min: 0, max: discountType === "percentage" ? 100 : undefined, label: "Discount value" });
+  if (discountValueResult.error) return { error: discountValueResult.error };
+  const discountValue = discountValueResult.data!;
   const allowCustomerQty = formData.get("allowCustomerQty") === "true";
   const checkoutTarget = (formData.get("checkoutTarget") as string) || null;
   const combinesOrderDiscounts = formData.get("combinesOrderDiscounts") !== "off";
   const combinesShippingDiscounts = formData.get("combinesShippingDiscounts") !== "off";
 
-  const upsellProductsJson = (formData.get("upsellProducts") as string) || "[]";
-  let upsellProducts: string[] = [];
-  try { upsellProducts = JSON.parse(upsellProductsJson) as string[]; } catch {}
-
-  if (!internalName) {
-    return { error: "Internal name is required" };
+  const upsellProductsResult = parseJsonStringArray(formData, "upsellProducts");
+  if (upsellProductsResult.error) return { error: upsellProductsResult.error };
+  const upsellProducts = upsellProductsResult.data!;
+  if (intent === "publish" && upsellProducts.length === 0) {
+    return { error: "Select at least one upsell product before publishing." };
   }
 
-  const status: "active" | "draft" = intent === "publish" ? "active" : "draft";
+  const status = statusForSubmit(intent, startsAt);
 
   const rewardAmount =
     discountType === "percentage" ? discountValue
     : Math.round(discountValue * 100);
 
-  async function createOffer(candidateName: string) {
-    const [offer] = await db
-      .insert(offers)
-      .values({
-        shopId,
-        type: "upsell",
-        status,
-        internalName: candidateName,
-        publicTitle: publicTitle || candidateName,
-        description,
-        priority: 100,
-        startsAt: startsAt ? new Date(startsAt) : new Date(),
-        endsAt: endsAt ? new Date(endsAt) : null,
-      })
-      .returning({ id: offers.id });
-    return offer;
+  // Offer + its children are created atomically — a mid-sequence failure must
+  // not leave an orphan offer row. The unique-name retry wraps the whole tx
+  // because a failed insert aborts the surrounding Postgres transaction.
+  async function createOfferWithChildren(candidateName: string) {
+    return db.transaction(async (tx) => {
+      const [offer] = await tx
+        .insert(offers)
+        .values({
+          shopId,
+          type: "upsell",
+          status,
+          internalName: candidateName,
+          publicTitle: publicTitle || candidateName,
+          description,
+          priority: 100,
+          startsAt: startsAt ?? new Date(),
+          endsAt,
+        })
+        .returning({ id: offers.id });
+      if (!offer) throw new Error("Failed to create offer");
+
+      await Promise.all([
+        tx.insert(offerConditions).values({
+          shopId,
+          offerId: offer.id,
+          scope: "visibility",
+          conditionType: "sales_channels",
+          operator: "eq",
+          value: {
+            upsellType: templateRaw,
+            triggerType,
+            upsellMethod,
+            widgetType: templateRaw === "fbt" ? widgetType : undefined,
+            checkoutTarget: templateRaw === "checkout" ? checkoutTarget : undefined,
+            allowCustomerQty: templateRaw === "fbt" ? allowCustomerQty : undefined,
+            discountEnabled: templateRaw === "fbt" ? discountEnabled : undefined,
+            discountMinProducts: templateRaw === "fbt" ? discountMinProducts : undefined,
+            discountApplyTo: templateRaw === "fbt" ? discountApplyTo : undefined,
+          },
+          sortOrder: 0,
+          isEnabled: true,
+        }),
+        tx.insert(offerRewards).values({
+          shopId,
+          offerId: offer.id,
+          rewardType: "upsell_discount",
+          discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
+          value: { amount: rewardAmount, currencyCode: "USD" },
+          target: { variantIds: upsellProducts },
+          isAutoAdd: false,
+          isCustomerSelectable: true,
+          trackMode: "product",
+          sortOrder: 0,
+        }),
+        tx.insert(offerCombinationPolicies).values({
+          shopId,
+          offerId: offer.id,
+          combinesWithOrderDiscounts: combinesOrderDiscounts,
+          combinesWithProductDiscounts: true,
+          combinesWithShippingDiscounts: combinesShippingDiscounts,
+          combinesWithOtherAppOffers: true,
+          stopLowerPriority: false,
+          giftValueCountsForOtherOffers: false,
+        }),
+      ]);
+
+      return offer;
+    });
   }
 
   let newOffer: { id: string } | undefined;
   try {
-    newOffer = await createOffer(internalName);
+    newOffer = await createOfferWithChildren(internalName);
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
-    newOffer = await createOffer(withUniqueOfferSuffix(internalName));
+    newOffer = await createOfferWithChildren(withUniqueOfferSuffix(internalName));
   }
 
   if (!newOffer) return { error: "Failed to create offer" };
-
-  await Promise.all([
-    db.insert(offerConditions).values({
-      shopId,
-      offerId: newOffer.id,
-      scope: "visibility",
-      conditionType: "sales_channels",
-      operator: "eq",
-      value: {
-        upsellType: templateRaw,
-        triggerType,
-        upsellMethod,
-        widgetType: templateRaw === "fbt" ? widgetType : undefined,
-        checkoutTarget: templateRaw === "checkout" ? checkoutTarget : undefined,
-        allowCustomerQty: templateRaw === "fbt" ? allowCustomerQty : undefined,
-        discountEnabled: templateRaw === "fbt" ? discountEnabled : undefined,
-        discountMinProducts: templateRaw === "fbt" ? discountMinProducts : undefined,
-        discountApplyTo: templateRaw === "fbt" ? discountApplyTo : undefined,
-      },
-      sortOrder: 0,
-      isEnabled: true,
-    }),
-    db.insert(offerRewards).values({
-      shopId,
-      offerId: newOffer.id,
-      rewardType: "upsell_discount",
-      discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
-      value: { amount: rewardAmount, currencyCode: "USD" },
-      target: { variantIds: upsellProducts },
-      isAutoAdd: false,
-      isCustomerSelectable: true,
-      trackMode: "product",
-      sortOrder: 0,
-    }),
-    db.insert(offerCombinationPolicies).values({
-      shopId,
-      offerId: newOffer.id,
-      combinesWithOrderDiscounts: combinesOrderDiscounts,
-      combinesWithProductDiscounts: true,
-      combinesWithShippingDiscounts: combinesShippingDiscounts,
-      combinesWithOtherAppOffers: true,
-      stopLowerPriority: false,
-      giftValueCountsForOtherOffers: false,
-    }),
-  ]);
 
   return redirect(`/app/offers/${newOffer.id}`);
 };
@@ -169,6 +184,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 
 export default function NewUpsellOfferPage() {
+  const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const { template: templateSlug = "checkout" } = useParams<{ template: string }>();
 
@@ -254,7 +270,7 @@ export default function NewUpsellOfferPage() {
 
   function validate() {
     const errs: { internalName?: string } = {};
-    if (!internalName.trim()) errs.internalName = "Nombre de venta adicional es requerido";
+    if (!internalName.trim()) errs.internalName = "Upsell name is required";
     setFieldErrors(errs);
     if (Object.keys(errs).length > 0) {
       setToastMsg(Object.values(errs)[0]!);
@@ -308,9 +324,9 @@ export default function NewUpsellOfferPage() {
               Quick tour: How to create an upsell
             </div>
             <div style={{ fontSize: 13, color: "var(--text-sub)" }}>
-              <button type="button" className="b-btn b-btn-plain" style={{ color: "var(--upsell-color)", textDecoration: "underline" }}>
+              <a href="https://help.secomapp.com" className="b-btn b-btn-plain" style={{ color: "var(--upsell-color)", textDecoration: "underline" }}>
                 Get familiar with our tour or learn more in our onboarding guide.
-              </button>
+              </a>
             </div>
           </div>
           <button
@@ -458,7 +474,7 @@ export default function NewUpsellOfferPage() {
               </div>
             </div>
 
-            {/* ── Agregar subcondición (dashed) ── */}
+            {/* Add sub-condition (dashed) */}
             <div className="b-card" style={{ background: "var(--bg)", border: "1.5px dashed var(--border)" }}>
               <div className="b-card-body rd-style-060">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -620,11 +636,6 @@ export default function NewUpsellOfferPage() {
                           </div>
                         </div>
                       </div>
-                      <div>
-                        <button type="button" className="b-btn b-btn-plain" style={{ fontSize: 13, color: "var(--upsell-color)", textDecoration: "none" }}>
-                          + Add: Shipping discount
-                        </button>
-                      </div>
                     </div>
                   </div>
                 )}
@@ -702,11 +713,6 @@ export default function NewUpsellOfferPage() {
                           </div>
                         </div>
                       </div>
-                      <div>
-                        <button type="button" className="b-btn b-btn-plain" style={{ fontSize: 13, color: "var(--upsell-color)", textDecoration: "none" }}>
-                          + Add: Shipping discount
-                        </button>
-                      </div>
                     </>
                   )}
                 </div>
@@ -746,11 +752,6 @@ export default function NewUpsellOfferPage() {
                         />
                       </div>
                     </div>
-                  </div>
-                  <div>
-                    <button type="button" className="b-btn b-btn-plain" style={{ fontSize: 13, color: "var(--upsell-color)", textDecoration: "none" }}>
-                      + Add: Shipping discount
-                    </button>
                   </div>
                 </div>
               </div>
@@ -910,8 +911,8 @@ export default function NewUpsellOfferPage() {
         onSelect={(gids) => setUpsellProducts(gids)}
       />
 
-      {showToast && (
-        <Toast message={toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+      {(showToast || actionData?.error) && (
+        <Toast message={actionData?.error ?? toastMsg} type="error" onDismiss={() => setShowToast(false)} />
       )}
     </div>
   );

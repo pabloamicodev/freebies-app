@@ -7,7 +7,7 @@ import { and, desc, eq, gte } from "drizzle-orm";
 import type { LoaderFunctionArgs } from "react-router";
 import {
   IconChevronDown, IconChevronLeft, IconChevronRight,
-  IconEye, IconTrash, IconSearch, IconDollar, IconClipboard, IconBox,
+  IconSearch, IconDollar, IconClipboard, IconBox,
 } from "../components/Icons.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -209,15 +209,10 @@ export default function AnalyticsPage() {
       {/* ── Header ──────────────────────────────────────────── */}
       <div className="b-page-header">
         <h1 className="b-page-title">Analytics</h1>
-        <button type="button" className="b-btn b-btn-secondary">
-          Export data <IconChevronDown />
-        </button>
       </div>
 
       {/* ── Filter chips ────────────────────────────────────── */}
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        <button type="button" className="b-filter-chip">Gift offer <IconChevronDown /></button>
-        <button type="button" className="b-filter-chip">All offers <IconChevronDown /></button>
         <button type="button"
           className="b-filter-chip"
           onClick={() => {
@@ -305,7 +300,6 @@ export default function AnalyticsPage() {
               <th>Date</th>
               <th>Gift</th>
               <th>Total</th>
-              <th>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -319,9 +313,9 @@ export default function AnalyticsPage() {
               filteredOrders.map((order) => (
                 <tr key={order.id}>
                   <td>
-                    <button type="button" className="b-btn b-btn-plain" style={{ color: "var(--blue)", textDecoration: "none", fontSize: 13, fontWeight: 500 }}>
+                    <span className="b-text-sm" style={{ color: "var(--blue)", fontWeight: 500 }}>
                       {order.orderId}
-                    </button>
+                    </span>
                   </td>
                   <td><span className="b-text-sm b-text-sub">{formatDate(order.date)}</span></td>
                   <td>
@@ -331,12 +325,6 @@ export default function AnalyticsPage() {
                     </div>
                   </td>
                   <td><span className="b-text-sm">${(order.totalCents / 100).toFixed(2)}</span></td>
-                  <td>
-                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                      <button type="button" className="b-btn-icon" aria-label="View"><IconEye /></button>
-                      <button type="button" className="b-btn-icon b-btn-icon-red" aria-label="Delete"><IconTrash /></button>
-                    </div>
-                  </td>
                 </tr>
               ))
             )}

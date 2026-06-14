@@ -10,6 +10,7 @@ import { useState, useCallback } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { appSettings } from "@promo/db";
 import { and, eq } from "drizzle-orm";
+import { parseStoredJson } from "../lib/offer-validation.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import "../styles/bogos.css";
 
@@ -45,7 +46,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   let theme = DEFAULTS;
   if (settingRow?.value) {
-    try { theme = { ...DEFAULTS, ...JSON.parse(settingRow.value) }; } catch {}
+    const parsedTheme = parseStoredJson(settingRow.value);
+    if (parsedTheme && typeof parsedTheme === "object" && !Array.isArray(parsedTheme)) {
+      theme = { ...DEFAULTS, ...(parsedTheme as Partial<typeof DEFAULTS>) };
+    }
   }
 
   return { shopId, theme };

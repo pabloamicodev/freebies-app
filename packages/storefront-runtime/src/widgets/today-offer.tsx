@@ -4,6 +4,7 @@ import { h } from "preact";
 import { render } from "preact";
 import { on, PromoEvents, emit, publishAnalytics } from "../event-bus.js";
 import type { EvaluationResult } from "../types.js";
+import type { JSX } from "preact";
 
 interface TodayOfferItem {
   offerId: string;
@@ -105,14 +106,24 @@ function TodayOfferWidget({
       widget_type: "today_offer",
       session_id: sessionId,
     });
-    if (item.redirectUrl) window.location.href = item.redirectUrl;
-    else setOpen(false);
+    if (item.redirectUrl) {
+      try {
+        const url = new URL(item.redirectUrl, window.location.href);
+        if (url.protocol === "http:" || url.protocol === "https:") {
+          window.location.href = url.href;
+          return;
+        }
+      } catch {
+        // Ignore invalid or unsafe redirect URLs.
+      }
+    }
+    setOpen(false);
   }
 
   return (
     <div
       class={`pe-today-wrap ${posClass}`}
-      style={{ "--pe-primary": config.primaryColor } as any}
+      style={{ "--pe-primary": config.primaryColor } as JSX.CSSProperties & Record<"--pe-primary", string>}
     >
       {open && (
         <div class="pe-today-panel" role="dialog" aria-label="Today's offers">
@@ -190,7 +201,7 @@ export function initTodayOfferWidget(config: Partial<TodayOfferConfig>, sessionI
   }
 
   on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
-    const todayOffers = result.qualifiedOffers.map((o) => ({
+    const todayOffers = (Array.isArray(result.qualifiedOffers) ? result.qualifiedOffers : []).map((o) => ({
       offerId: o.offerId,
       title: o.type + " offer",
       description: "",

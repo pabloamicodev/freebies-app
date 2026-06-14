@@ -1,8 +1,9 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
+import { decryptToken } from "../lib/token-crypto.server.js";
 import { getDb } from "@promo/db";
-import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs } from "@promo/db";
-import { eq, and } from "drizzle-orm";
+import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs } from "@promo/db";
+import { eq, and, inArray } from "drizzle-orm";
 
 /**
  * Central webhook handler for all Shopify webhooks.
@@ -11,50 +12,57 @@ import { eq, and } from "drizzle-orm";
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { topic, shop, payload } = await authenticate.webhook(request);
 
-  switch (topic) {
-    case "PRODUCTS_UPDATE":
-    case "PRODUCTS_CREATE":
-      await handleProductUpdate(shop, payload as ProductWebhookPayload);
-      break;
+  // Each handler is wrapped: a thrown error (e.g. transient DB failure) must NOT
+  // surface as a 500, or Shopify retries the delivery indefinitely. We log and
+  // ack with 200 — the next webhook or scheduled sync reconciles any drift.
+  try {
+    switch (topic) {
+      case "PRODUCTS_UPDATE":
+      case "PRODUCTS_CREATE":
+        await handleProductUpdate(shop, payload as ProductWebhookPayload);
+        break;
 
-    case "PRODUCTS_DELETE":
-      await handleProductDelete(shop, (payload as { id: number }).id);
-      break;
+      case "PRODUCTS_DELETE":
+        await handleProductDelete(shop, (payload as { id: number }).id);
+        break;
 
-    case "INVENTORY_LEVELS_UPDATE":
-      await handleInventoryUpdate(shop, payload as InventoryWebhookPayload);
-      break;
+      case "INVENTORY_LEVELS_UPDATE":
+        await handleInventoryUpdate(shop, payload as InventoryWebhookPayload);
+        break;
 
-    case "ORDERS_PAID":
-      await handleOrderPaid(shop, payload as OrderWebhookPayload);
-      break;
+      case "ORDERS_PAID":
+        await handleOrderPaid(shop, payload as OrderWebhookPayload);
+        break;
 
-    case "ORDERS_CANCELLED":
-      await handleOrderCancelled(shop, payload as OrderWebhookPayload);
-      break;
+      case "ORDERS_CANCELLED":
+        await handleOrderCancelled(shop, payload as OrderWebhookPayload);
+        break;
 
-    case "CUSTOMERS_UPDATE":
-      await handleCustomersUpdate(shop, payload as CustomerGdprPayload);
-      break;
+      case "CUSTOMERS_UPDATE":
+        await handleCustomersUpdate(shop, payload as CustomerGdprPayload);
+        break;
 
-    case "APP_UNINSTALLED":
-      await handleAppUninstalled(shop);
-      break;
+      case "APP_UNINSTALLED":
+        await handleAppUninstalled(shop);
+        break;
 
-    case "CUSTOMERS_DATA_REQUEST":
-      await handleCustomersDataRequest(shop, payload as CustomerGdprPayload);
-      break;
+      case "CUSTOMERS_DATA_REQUEST":
+        await handleCustomersDataRequest(shop, payload as CustomerGdprPayload);
+        break;
 
-    case "CUSTOMERS_REDACT":
-      await handleCustomersRedact(shop, payload as CustomerGdprPayload);
-      break;
+      case "CUSTOMERS_REDACT":
+        await handleCustomersRedact(shop, payload as CustomerGdprPayload);
+        break;
 
-    case "SHOP_REDACT":
-      await handleShopRedact(shop);
-      break;
+      case "SHOP_REDACT":
+        await handleShopRedact(shop);
+        break;
 
-    default:
-      console.warn(`Unhandled webhook topic: ${topic}`);
+      default:
+        console.warn(`Unhandled webhook topic: ${topic}`);
+    }
+  } catch (err) {
+    console.error(`Webhook handler failed: topic=${topic} shop=${shop}`, err instanceof Error ? err.message : err);
   }
 
   return new Response("OK", { status: 200 });
@@ -96,6 +104,8 @@ interface OrderWebhookPayload {
   id: number;
   admin_graphql_api_id: string;
   cart_token: string | null;
+  total_price?: string;
+  total_price_set?: { shop_money?: { amount?: string } };
   line_items: Array<{
     id: number;
     variant_id: number;
@@ -103,6 +113,16 @@ interface OrderWebhookPayload {
     properties: Array<{ name: string; value: string }>;
   }>;
   note_attributes: Array<{ name: string; value: string }>;
+}
+
+async function getShopForWebhook(shopDomain: string) {
+  const db = getDb();
+  const rows = await db
+    .select({ id: shops.id, accessTokenEncrypted: shops.accessTokenEncrypted })
+    .from(shops)
+    .where(eq(shops.myshopifyDomain, shopDomain))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 interface CustomerGdprPayload {
@@ -143,7 +163,7 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
       vendor: product.vendor,
       productType: product.product_type,
       tags: product.tags ? product.tags.split(",").map((t) => t.trim()) : [],
-      status: product.status.toUpperCase(),
+      status: (product.status ?? "ACTIVE").toUpperCase(),
       imageUrl,
       raw: product as unknown,
       syncedAt: new Date(),
@@ -156,7 +176,7 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
         vendor: product.vendor,
         productType: product.product_type,
         tags: product.tags ? product.tags.split(",").map((t) => t.trim()) : [],
-        status: product.status.toUpperCase(),
+        status: (product.status ?? "ACTIVE").toUpperCase(),
         imageUrl,
         raw: product as unknown,
         syncedAt: new Date(),
@@ -179,7 +199,7 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
           compareAtPrice: variant.compare_at_price,
           currencyCode: "USD", // updated per store on sync
           inventoryQuantity: variant.inventory_quantity,
-          inventoryPolicy: variant.inventory_policy.toUpperCase(),
+          inventoryPolicy: (variant.inventory_policy ?? "DENY").toUpperCase(),
           availableForSale: variant.available,
           requiresSellingPlan: variant.requires_selling_plan,
           raw: variant as unknown,
@@ -193,7 +213,7 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
             price: variant.price,
             compareAtPrice: variant.compare_at_price,
             inventoryQuantity: variant.inventory_quantity,
-            inventoryPolicy: variant.inventory_policy.toUpperCase(),
+            inventoryPolicy: (variant.inventory_policy ?? "DENY").toUpperCase(),
             availableForSale: variant.available,
             raw: variant as unknown,
             syncedAt: new Date(),
@@ -207,26 +227,83 @@ async function handleProductDelete(shop: string, legacyProductId: number) {
   const shopId = await getShopId(shop);
   if (!shopId) return;
   const db = getDb();
-  await db
+  const productRows = await db
     .update(productCache)
     .set({ status: "ARCHIVED", syncedAt: new Date() })
-    .where(
-      eq(productCache.legacyProductId, legacyProductId),
-    );
+    .where(and(eq(productCache.shopId, shopId), eq(productCache.legacyProductId, legacyProductId)))
+    .returning({ productGid: productCache.productGid });
+
+  const productGid = productRows[0]?.productGid;
+  if (!productGid) return;
+
+  await db
+    .delete(variantCache)
+    .where(and(eq(variantCache.shopId, shopId), eq(variantCache.productGid, productGid)));
 }
 
 async function handleInventoryUpdate(_shop: string, _payload: InventoryWebhookPayload) {
-  // Enqueue full variant re-sync via BullMQ worker (handled asynchronously)
-  // The sync worker will update variantCache.inventoryQuantity via Admin API
+  const shopRecord = await getShopForWebhook(_shop);
+  if (!shopRecord) return;
+  const accessToken = await decryptToken(shopRecord.accessTokenEncrypted);
+  try {
+    const { inventorySyncQueue } = await import("../lib/queues.server.js");
+    await inventorySyncQueue.add("inventory-webhook", {
+      shopId: shopRecord.id,
+      shopDomain: _shop,
+      accessToken,
+      inventoryItemId: _payload.inventory_item_id,
+      locationId: _payload.location_id,
+      availableQuantity: _payload.available,
+    }, { priority: 1, attempts: 3, backoff: { type: "exponential", delay: 1000 } });
+  } catch (err) {
+    console.warn("Inventory webhook queue unavailable", err instanceof Error ? err.message : err);
+  }
 }
 
-async function handleOrderPaid(_shop: string, _order: OrderWebhookPayload) {
-  // Enqueue attribution reconciliation job — match cart_token / note_attributes
-  // to analyticsEvents, update offerAttribution records
+async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
+  const shopId = await getShopId(shop);
+  if (!shopId) return;
+  const offerIds = order.note_attributes
+    ?.filter((attr) => attr.name === "_promo_engine_offer_id" || attr.name === "promo_engine_offer_id")
+    .map((attr) => attr.value)
+    .filter(Boolean) ?? [];
+  const sessionId = order.note_attributes
+    ?.find((attr) => attr.name === "_promo_engine_session_id" || attr.name === "promo_engine_session_id")
+    ?.value ?? null;
+  const amount = Number.parseFloat(order.total_price_set?.shop_money?.amount ?? order.total_price ?? "0");
+  const totalPriceCents = Number.isFinite(amount) ? Math.round(amount * 100) : 0;
+
+  try {
+    const { analyticsReconcileQueue } = await import("../lib/queues.server.js");
+    await analyticsReconcileQueue.add("order-paid", {
+      shopId,
+      shopDomain: shop,
+      orderId: String(order.id),
+      orderGid: order.admin_graphql_api_id,
+      cartToken: order.cart_token,
+      totalPriceCents,
+      offerIds,
+      sessionId,
+    }, { priority: 2, attempts: 3, backoff: { type: "exponential", delay: 1000 } });
+  } catch (err) {
+    console.warn("Analytics reconcile queue unavailable", err instanceof Error ? err.message : err);
+  }
 }
 
-async function handleOrderCancelled(_shop: string, _order: OrderWebhookPayload) {
-  // Reverse attribution for cancelled order
+async function handleOrderCancelled(shop: string, order: OrderWebhookPayload) {
+  const shopId = await getShopId(shop);
+  if (!shopId) return;
+  const db = getDb();
+  await db.insert(analyticsEvents).values({
+    shopId,
+    eventName: "order_cancelled",
+    sessionId: order.cart_token,
+    cartToken: order.cart_token,
+    orderId: order.admin_graphql_api_id,
+    properties: {
+      order_id: order.id,
+    },
+  });
 }
 
 async function handleAppUninstalled(shop: string) {
@@ -272,9 +349,37 @@ async function handleCustomersDataRequest(shop: string, payload: CustomerGdprPay
     .from(analyticsEvents)
     .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.customerId, customerId)));
 
-  // In production: email export to customer or submit via Shopify data request API.
-  // For now we log the count so there's a verifiable audit trail.
-  console.info(`GDPR CUSTOMERS_DATA_REQUEST: found ${events.length} analytics events for customer ${customerId}`);
+  const cartTokens = Array.from(new Set(events.flatMap((event) => event.cartToken ? [event.cartToken] : [])));
+  const mutationLogs = cartTokens.length > 0
+    ? await db
+        .select()
+        .from(cartMutationLogs)
+        .where(and(eq(cartMutationLogs.shopId, shopId), inArray(cartMutationLogs.cartToken, cartTokens)))
+    : [];
+
+  const exportPayload = {
+    requestedAt: new Date().toISOString(),
+    customer: {
+      id: customerId,
+      email: customerEmail,
+      phone: payload.customer?.phone ?? null,
+    },
+    ordersRequested: payload.orders_requested ?? [],
+    analyticsEvents: events,
+    cartMutationLogs: mutationLogs,
+  };
+
+  await db.insert(auditLogs).values({
+    shopId,
+    entityType: "gdpr_customer_data_request",
+    entityId: customerId,
+    action: "export",
+    before: null,
+    after: exportPayload,
+    performedBy: "shopify_webhook",
+  });
+
+  console.info(`GDPR CUSTOMERS_DATA_REQUEST: exported ${events.length} analytics events and ${mutationLogs.length} mutation logs for customer ${customerId}`);
 }
 
 async function handleCustomersRedact(shop: string, payload: CustomerGdprPayload) {

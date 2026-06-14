@@ -130,10 +130,14 @@ export default function AppLayout() {
 
 export function ErrorBoundary() {
   const error = useRouteError();
+  const isDev = import.meta.env.DEV;
   return (
-    <div style={{ padding: "2rem" }}>
-      <h1>Error</h1>
-      <pre>{error instanceof Error ? error.message : "Unknown error"}</pre>
+    <div style={{ padding: "2rem", fontFamily: "system-ui" }}>
+      <h1>Something went wrong</h1>
+      <p>An unexpected error occurred. Please try again.</p>
+      {isDev && error instanceof Error && (
+        <pre style={{ color: "red", whiteSpace: "pre-wrap" }}>{error.message}</pre>
+      )}
     </div>
   );
 }

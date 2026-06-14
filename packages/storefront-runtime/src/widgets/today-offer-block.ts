@@ -9,6 +9,22 @@
 import { on, PromoEvents, publishAnalytics } from "../event-bus.js";
 import type { EvaluationResult } from "../types.js";
 
+function escapeHtml(raw: unknown): string {
+  const div = document.createElement("div");
+  div.textContent = String(raw ?? "");
+  return div.innerHTML;
+}
+
+function safeImageUrl(raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const url = new URL(raw, window.location.href);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 const BLOCK_STYLES = `
 :host { display: block; }
 .pe-tob-wrap { border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
@@ -40,7 +56,7 @@ class PromoTodayOfferBlock extends HTMLElement {
     this.render([]);
 
     this.unsubscribe = on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
-      let items = result.qualifiedOffers;
+      let items = Array.isArray(result.qualifiedOffers) ? result.qualifiedOffers : [];
       if (this.filterOfferIds.length > 0) {
         items = items.filter((o) => this.filterOfferIds.includes(o.offerId));
       }
@@ -61,26 +77,34 @@ class PromoTodayOfferBlock extends HTMLElement {
   private render(items: Array<{ offerId: string; title: string; description: string; imageUrl: string | null; badgeText: string }>) {
     if (!this.shadowRoot) return;
 
-    const title = this.getAttribute("title") ?? "Today's Offers";
+    const title = escapeHtml(this.getAttribute("title") ?? "Today's Offers");
 
     if (items.length === 0) {
       this.shadowRoot.innerHTML = `<style>${BLOCK_STYLES}</style><div class="pe-tob-empty"></div>`;
       return;
     }
 
-    const itemsHtml = items.map((item) => `
-      <div class="pe-tob-item" data-offer="${item.offerId}" role="button" tabindex="0">
-        ${item.imageUrl
-          ? `<img class="pe-tob-img" src="${item.imageUrl}" alt="${item.title}" loading="lazy">`
+    const itemsHtml = items.map((item) => {
+      const offerId = escapeHtml(item.offerId);
+      const itemTitle = escapeHtml(item.title);
+      const description = escapeHtml(item.description);
+      const badgeText = escapeHtml(item.badgeText);
+      const imageUrl = safeImageUrl(item.imageUrl);
+
+      return `
+      <div class="pe-tob-item" data-offer="${offerId}" role="button" tabindex="0">
+        ${imageUrl
+          ? `<img class="pe-tob-img" src="${imageUrl}" alt="${itemTitle}" loading="lazy">`
           : `<div class="pe-tob-img" aria-hidden="true">🎁</div>`
         }
         <div class="pe-tob-info">
-          <p class="pe-tob-title">${item.title}</p>
-          ${item.description ? `<p class="pe-tob-desc">${item.description}</p>` : ""}
+          <p class="pe-tob-title">${itemTitle}</p>
+          ${description ? `<p class="pe-tob-desc">${description}</p>` : ""}
         </div>
-        <span class="pe-tob-badge">${item.badgeText}</span>
+        <span class="pe-tob-badge">${badgeText}</span>
       </div>
-    `).join("");
+    `;
+    }).join("");
 
     this.shadowRoot.innerHTML = `
       <style>${BLOCK_STYLES}</style>

@@ -5,6 +5,7 @@ import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { getDb } from "@promo/db";
 import { shops, appSettings } from "@promo/db";
 import { eq } from "drizzle-orm";
+import { parseStoredJson } from "../lib/offer-validation.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -54,13 +55,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const settings: Record<string, unknown> = {};
   for (const row of settingRows) {
-    try { settings[row.key] = JSON.parse(row.value); }
-    catch { settings[row.key] = row.value; }
+    settings[row.key] = parseStoredJson(row.value);
   }
 
   const defaults: Record<SettingKey, unknown> = {
     "app.enabled": true,
-    "gift.logic_mode": "clone_product",
+    "gift.logic_mode": "function",
     "gift.auto_add": true,
     "gift.discount_by": "current_price",
     "gift.price_constraint": false,
@@ -112,9 +112,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  const requestedGiftLogicMode = strField("gift_logic_mode");
+  const giftLogicMode = requestedGiftLogicMode === "function" ? requestedGiftLogicMode : "function";
+
   const updates: Record<string, unknown> = {
     "app.enabled": boolField("app_enabled"),
-    "gift.logic_mode": strField("gift_logic_mode"),
+    "gift.logic_mode": giftLogicMode,
     "gift.auto_add": boolField("gift_auto_add"),
     "gift.discount_by": strField("gift_discount_by"),
     "gift.price_constraint": boolField("gift_price_constraint"),
@@ -214,23 +217,6 @@ function RadioRow({
   );
 }
 
-/* ── Clone product illustration (shopping bag + copy badge) ─ */
-function CloneIllustration() {
-  return (
-    <div style={{ position: "relative", width: 64, height: 56, margin: "0 auto 12px" }}>
-      {/* Bag 1 */}
-      <div className="rd-style-070">
-        <div className="rd-style-071" />
-        <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🛍️</span>
-      </div>
-      {/* Arrow badge */}
-      <div className="rd-style-072">
-        ↗
-      </div>
-    </div>
-  );
-}
-
 /* ── Function logic illustration (discount tag) ─────────── */
 function FunctionIllustration() {
   return (
@@ -249,7 +235,7 @@ export default function SettingsPage() {
 
   const [settingsState, setSettingsField] = useObjectState(() => ({
     appEnabled: Boolean(s["app.enabled"]),
-    logicMode: String(s["gift.logic_mode"] ?? "clone_product"),
+    logicMode: "function",
     autoAdd: Boolean(s["gift.auto_add"]),
     discountBy: String(s["gift.discount_by"] ?? "current_price"),
     priceConstraint: Boolean(s["gift.price_constraint"]),
@@ -304,7 +290,6 @@ export default function SettingsPage() {
     draftOrderApi,
   } = settingsState;
   const setAppEnabled = createFieldSetter(setSettingsField, "appEnabled");
-  const setLogicMode = createFieldSetter(setSettingsField, "logicMode");
   const setAutoAdd = createFieldSetter(setSettingsField, "autoAdd");
   const setDiscountBy = createFieldSetter(setSettingsField, "discountBy");
   const setPriceConstraint = createFieldSetter(setSettingsField, "priceConstraint");
@@ -399,31 +384,12 @@ export default function SettingsPage() {
 
           {/* ── Gift logic mechanism ─────────────────────────── */}
           <Section title="Gift logic mechanism" desc="Manage the logical mechanism of the gift offer.">
-            <p className="b-text-sm b-text-sub" style={{ margin: "0 0 14px" }}>Choose between these logics:</p>
+            <p className="b-text-sm b-text-sub" style={{ margin: "0 0 14px" }}>The app uses Shopify discount functions for gift logic.</p>
             <div className="b-logic-cards">
-              {/* Clone product card */}
-              <button
-                type="button"
-                className={`b-logic-card${logicMode === "clone_product" ? " active" : ""}`}
-                onClick={() => setLogicMode("clone_product")}
-              >
-                {logicMode === "clone_product" && (
-                  <div className="b-logic-card-active-badge">Currently enabled</div>
-                )}
-                <CloneIllustration />
-                <div className="b-logic-card-title">Cloned product</div>
-                <div className="b-logic-card-desc">
-                  Gift products are added indirectly via their duplicates and discounted using the BOGOS function.
-                </div>
-                <div style={{ textAlign: "center" }}>
-                  <span className="b-btn b-btn-secondary b-btn-sm">Change logic</span>
-                </div>
-              </button>
               {/* Gift function card */}
               <button
                 type="button"
                 className={`b-logic-card${logicMode === "function" ? " active" : ""}`}
-                onClick={() => setLogicMode("function")}
               >
                 {logicMode === "function" && (
                   <div className="b-logic-card-active-badge">Currently enabled</div>
@@ -432,9 +398,6 @@ export default function SettingsPage() {
                 <div className="b-logic-card-title">Gift function</div>
                 <div className="b-logic-card-desc">
                   Gift products are added directly and discounted using Shopify&apos;s discount function.
-                </div>
-                <div style={{ textAlign: "center" }}>
-                  <span className="b-btn b-btn-secondary b-btn-sm">Change logic</span>
                 </div>
               </button>
             </div>
@@ -446,9 +409,9 @@ export default function SettingsPage() {
                   ⚠️ If you want to change the gift logic mechanism, it is recommended to contact support for help.
                 </div>
               </div>
-              <button type="button" className="b-btn b-btn-secondary b-btn-sm" style={{ flexShrink: 0, marginLeft: 12 }}>
+              <a href="mailto:support@secomapp.com" className="b-btn b-btn-secondary b-btn-sm" style={{ flexShrink: 0, marginLeft: 12 }}>
                 Contact support
-              </button>
+              </a>
             </div>
           </Section>
 
@@ -537,7 +500,6 @@ export default function SettingsPage() {
               <div>
                 <div className="b-row-between" style={{ marginBottom: 6 }}>
                   <div className="b-label" style={{ margin: 0 }}>Sales channels</div>
-                  <button type="button" className="b-btn-plain b-text-sm">Edit</button>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text)" }}>
                   <span style={{ width: 8, height: 8, background: "var(--green)", borderRadius: "50%", display: "inline-block" }} />
@@ -673,27 +635,19 @@ export default function SettingsPage() {
           {/* ── Reset ────────────────────────────────────────── */}
           <Section title="Reset application data" desc="Reset the application to disable it and clean up.">
             <p className="b-text-sm b-text-sub" style={{ margin: "0 0 12px" }}>
-              To uninstall or disable BOGOS in the theme, click the &quot;Reset&quot; button to complete all application codes and products from your store and discount codes.
+              To uninstall or disable the app, remove the app blocks from your theme and contact support if you need a full data cleanup.
             </p>
             <div className="b-banner b-banner-red" style={{ marginBottom: 12 }}>
               <div className="b-banner-body">
                 <div className="b-banner-title" style={{ color: "var(--red)" }}>⚠️ This action cannot be undone!</div>
-                <p className="b-banner-text">Resetting the app will cause all offers to stop working and will remove all cloned gift products and discount codes.</p>
+                <p className="b-banner-text">A full reset stops all offers and removes app-created discount configuration.</p>
               </div>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button type="button" className="b-btn b-btn-secondary">Contact support</button>
-              <button
-                type="button"
-                className="b-btn b-btn-danger"
-                onClick={() => {
-                  if (confirm("Are you sure you want to reset the application? This cannot be undone.")) {
-                    alert("Reset initiated. Contact support if you need help.");
-                  }
-                }}
-              >
-                Reset application
-              </button>
+              <a href="mailto:support@secomapp.com" className="b-btn b-btn-secondary">Contact support</a>
+              <a href="mailto:support@secomapp.com?subject=Reset%20application%20data" className="b-btn b-btn-danger">
+                Request reset
+              </a>
             </div>
           </Section>
         </div>
@@ -706,9 +660,9 @@ export default function SettingsPage() {
 
       {/* Terms */}
       <div style={{ marginTop: 16, textAlign: "center" }}>
-        <button type="button" className="b-btn b-btn-plain b-text-sm b-text-sub" style={{ textDecoration: "underline" }}>
+        <a href="https://secomapp.com/terms" className="b-btn b-btn-plain b-text-sm b-text-sub" style={{ textDecoration: "underline" }}>
           BOGOS Terms and Conditions ↗
-        </button>
+        </a>
       </div>
     </div>
   );

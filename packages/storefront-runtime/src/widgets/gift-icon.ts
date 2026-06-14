@@ -10,6 +10,22 @@
 import { on, emit, PromoEvents, publishAnalytics } from "../event-bus.js";
 import type { EvaluationResult } from "../types.js";
 
+function escapeHtml(raw: unknown): string {
+  const div = document.createElement("div");
+  div.textContent = String(raw ?? "");
+  return div.innerHTML;
+}
+
+function safeImageUrl(raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const url = new URL(raw, window.location.href);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Gift Icon ─────────────────────────────────────────────────────────────────
 
 const ICON_STYLES = `
@@ -37,7 +53,9 @@ class PromoGiftIcon extends HTMLElement {
     this.render(null);
 
     this.unsubscribe = on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
-      const qualified = result.qualifiedOffers.find((o) => o.offerId === this.offerId);
+      const qualified = Array.isArray(result.qualifiedOffers)
+        ? result.qualifiedOffers.find((o) => o.offerId === this.offerId)
+        : null;
       this.render(qualified ? { offerName: "Free Gift Available" } : null);
     });
 
@@ -53,18 +71,20 @@ class PromoGiftIcon extends HTMLElement {
 
   private render(offer: { offerName: string } | null) {
     if (!this.shadowRoot) return;
-    const customText = this.getAttribute("label") ?? "Free Gift";
+    const customText = escapeHtml(this.getAttribute("label") ?? "Free Gift");
     const countdownSeconds = parseInt(this.getAttribute("countdown-seconds") ?? "0", 10);
+    const title = escapeHtml(offer?.offerName ?? "");
+    const countdownId = escapeHtml(this.offerId);
 
     this.shadowRoot.innerHTML = `
       <style>${ICON_STYLES}</style>
       <div class="pe-gift-icon-wrap${offer ? "" : " pe-hidden"}"
            role="button" tabindex="0"
            aria-label="View free gift offer"
-           title="${offer?.offerName ?? ""}">
+           title="${title}">
         <span class="pe-gift-emoji" aria-hidden="true">🎁</span>
         <span>${customText}</span>
-        ${countdownSeconds > 0 ? `<span class="pe-countdown" id="cd-${this.offerId}"></span>` : ""}
+        ${countdownSeconds > 0 ? `<span class="pe-countdown" id="cd-${countdownId}"></span>` : ""}
       </div>
     `;
 
@@ -128,7 +148,9 @@ class PromoGiftThumbnail extends HTMLElement {
     this.render(null);
 
     this.unsubscribe = on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
-      const qualified = result.qualifiedOffers.find((o) => o.offerId === this.offerId);
+      const qualified = Array.isArray(result.qualifiedOffers)
+        ? result.qualifiedOffers.find((o) => o.offerId === this.offerId)
+        : null;
       const giftSlider = result.giftSlider;
       this.render(qualified && giftSlider ? giftSlider.selectableGifts : null);
     });
@@ -148,17 +170,19 @@ class PromoGiftThumbnail extends HTMLElement {
 
     const displayGifts = gifts.slice(0, 4);
     const productsHtml = displayGifts
-      .map((g) =>
-        g.imageUrl
+      .map((g) => {
+        const imageUrl = safeImageUrl(g.imageUrl);
+        const title = escapeHtml(g.title);
+        return imageUrl
           ? `<div class="pe-thumb-product">
-               <img class="pe-thumb-img" src="${g.imageUrl}" alt="${g.title}" loading="lazy"/>
-               <span class="pe-thumb-name">${g.title}</span>
+               <img class="pe-thumb-img" src="${imageUrl}" alt="${title}" loading="lazy"/>
+               <span class="pe-thumb-name">${title}</span>
              </div>`
           : `<div class="pe-thumb-product">
                <div class="pe-thumb-img-ph" aria-hidden="true">🎁</div>
-               <span class="pe-thumb-name">${g.title}</span>
-             </div>`,
-      )
+               <span class="pe-thumb-name">${title}</span>
+             </div>`;
+      })
       .join("");
 
     this.shadowRoot.innerHTML = `

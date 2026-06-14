@@ -1,8 +1,9 @@
-import { useNavigate, useLoaderData, Form, redirect } from "react-router";
+import { useActionData, useNavigate, useLoaderData, Form, redirect } from "react-router";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
+import { ensureOneOf, parseInteger, requiredText } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerCombinationPolicies, offerConditions, offerRewards } from "@promo/db";
 import { eq } from "drizzle-orm";
@@ -89,7 +90,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { shopId, db } = context;
   if (!shopId) return { error: "Shop not found" };
 
-  const offerType = formData.get("offerType") as string;
+  const offerTypeResult = ensureOneOf(formData.get("offerType") as string | null, VALID_TYPES, "gift", "Offer type");
+  if (offerTypeResult.error) return { error: offerTypeResult.error };
+  const offerType = offerTypeResult.data!;
   const template = (formData.get("template") as string) ?? "scratch";
   const preset = TEMPLATE_PRESETS[template];
 
@@ -98,72 +101,79 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const formTitle = (formData.get("publicTitle") as string)?.trim();
   const internalName = formName || preset?.internalName || "";
   const publicTitle = formTitle || preset?.publicTitle || "";
-  const priority = parseInt(formData.get("priority") as string, 10) || 100;
+  const priorityResult = parseInteger(formData, "priority", 100, { min: 1, label: "Priority" });
+  if (priorityResult.error) return { error: priorityResult.error };
+  const priority = priorityResult.data!;
 
-  if (!internalName || !publicTitle || !offerType) {
-    return { error: "Internal name, public title, and type are required" };
-  }
+  if (!internalName) return { error: requiredText(formData, "internalName", "Internal name").error ?? "Internal name is required." };
+  if (!publicTitle) return { error: requiredText(formData, "publicTitle", "Public title").error ?? "Public title is required." };
 
-  async function createOffer(candidateName: string) {
-    const [offer] = await db
-      .insert(offers)
-      .values({ shopId, type: offerType as "gift" | "bundle" | "upsell" | "discount" | "booster", status: "draft", internalName: candidateName, publicTitle, priority })
-      .returning({ id: offers.id });
-    return offer;
+  // Offer + policy (+ preset condition/reward) created atomically. Unique-name
+  // retry wraps the whole tx (a failed insert aborts the Postgres transaction).
+  async function createOfferWithChildren(candidateName: string) {
+    return db.transaction(async (tx) => {
+      const [offer] = await tx
+        .insert(offers)
+        .values({ shopId, type: offerType as "gift" | "bundle" | "upsell" | "discount" | "booster", status: "draft", internalName: candidateName, publicTitle, priority })
+        .returning({ id: offers.id });
+      if (!offer) throw new Error("Failed to create offer");
+
+      const setupTasks: Array<PromiseLike<unknown>> = [
+        tx.insert(offerCombinationPolicies).values({
+          shopId,
+          offerId: offer.id,
+          combinesWithOrderDiscounts: true,
+          combinesWithProductDiscounts: true,
+          combinesWithShippingDiscounts: true,
+          combinesWithOtherAppOffers: true,
+          stopLowerPriority: false,
+          giftValueCountsForOtherOffers: false,
+        }),
+      ];
+
+      // Pre-create condition + reward from template preset
+      if (preset) {
+        setupTasks.push(
+          tx.insert(offerConditions).values({
+            shopId,
+            offerId: offer.id,
+            scope: preset.condition.scope,
+            conditionType: preset.condition.conditionType,
+            operator: preset.condition.operator as "gte" | "lte" | "eq" | "in",
+            value: preset.condition.value,
+            sortOrder: 0,
+            isEnabled: true,
+          }),
+          tx.insert(offerRewards).values({
+            shopId,
+            offerId: offer.id,
+            rewardType: preset.reward.rewardType as "product_gift" | "order_discount" | "bundle_discount" | "upsell_discount",
+            discountType: preset.reward.discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
+            value: { amount: 100, currencyCode: "USD" },
+            target: { scope: "cart" },
+            quantity: preset.reward.quantity,
+            isAutoAdd: preset.reward.isAutoAdd,
+            isCustomerSelectable: true,
+            trackMode: "product",
+            sortOrder: 0,
+          }),
+        );
+      }
+      await Promise.all(setupTasks);
+
+      return offer;
+    });
   }
 
   let newOffer: { id: string } | undefined;
   try {
-    newOffer = await createOffer(internalName);
+    newOffer = await createOfferWithChildren(internalName);
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
-    newOffer = await createOffer(withUniqueOfferSuffix(internalName));
+    newOffer = await createOfferWithChildren(withUniqueOfferSuffix(internalName));
   }
 
   if (!newOffer) return { error: "Failed to create offer" };
-
-  const setupTasks: Array<PromiseLike<unknown>> = [
-    db.insert(offerCombinationPolicies).values({
-      shopId,
-      offerId: newOffer.id,
-      combinesWithOrderDiscounts: true,
-      combinesWithProductDiscounts: true,
-      combinesWithShippingDiscounts: true,
-      combinesWithOtherAppOffers: true,
-      stopLowerPriority: false,
-      giftValueCountsForOtherOffers: false,
-    }),
-  ];
-
-  // Pre-create condition + reward from template preset
-  if (preset) {
-    setupTasks.push(
-      db.insert(offerConditions).values({
-        shopId,
-        offerId: newOffer.id,
-        scope: preset.condition.scope,
-        conditionType: preset.condition.conditionType,
-        operator: preset.condition.operator as "gte" | "lte" | "eq" | "in",
-        value: preset.condition.value,
-        sortOrder: 0,
-        isEnabled: true,
-      }),
-      db.insert(offerRewards).values({
-        shopId,
-        offerId: newOffer.id,
-        rewardType: preset.reward.rewardType as "product_gift" | "order_discount" | "bundle_discount" | "upsell_discount",
-        discountType: preset.reward.discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
-        value: { amount: 100, currencyCode: "USD" },
-        target: { scope: "cart" },
-        quantity: preset.reward.quantity,
-        isAutoAdd: preset.reward.isAutoAdd,
-        isCustomerSelectable: true,
-        trackMode: "product",
-        sortOrder: 0,
-      }),
-    );
-  }
-  await Promise.all(setupTasks);
 
   return redirect(`/app/offers/${newOffer.id}`);
 };
@@ -227,6 +237,7 @@ const OFFER_TYPES = [
 ];
 
 export default function NewOfferPage() {
+  const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const { initialType } = useLoaderData<typeof loader>();
   const [formState, setFormField] = useObjectState(() => ({
@@ -393,8 +404,8 @@ export default function NewOfferPage() {
         </div>
       </Form>
 
-      {showToast && (
-        <Toast message={toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+      {(showToast || actionData?.error) && (
+        <Toast message={actionData?.error ?? toastMsg} type="error" onDismiss={() => setShowToast(false)} />
       )}
     </div>
   );

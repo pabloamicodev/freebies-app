@@ -8,7 +8,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, offerConditions, offerRewards, shops } from "@promo/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 
 function escapeCSV(value: unknown): string {
   const str = value === null || value === undefined ? "" : String(value);
@@ -34,13 +34,21 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     .limit(1);
   const shopId = shopRows[0]?.id ?? "";
 
-  const [offerRows, allConditions, allRewards] = await Promise.all([
-    offerId
-      ? db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
-      : db.select().from(offers).where(eq(offers.shopId, shopId)),
-    db.select().from(offerConditions).where(eq(offerConditions.shopId, shopId)),
-    db.select().from(offerRewards).where(eq(offerRewards.shopId, shopId)),
-  ]);
+  const offerRows = offerId
+    ? await db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
+    : await db.select().from(offers).where(eq(offers.shopId, shopId));
+
+  if (offerId && offerRows.length === 0) {
+    throw new Response("Offer not found", { status: 404 });
+  }
+
+  const offerIds = offerRows.map((offer) => offer.id);
+  const [allConditions, allRewards] = offerIds.length > 0
+    ? await Promise.all([
+        db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), inArray(offerConditions.offerId, offerIds))),
+        db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, offerIds))),
+      ])
+    : [[], []];
   const conditionsByOfferId = new Map<string, typeof allConditions>();
   const rewardsByOfferId = new Map<string, typeof allRewards>();
   const mainConditionByOfferId = new Map<string, typeof allConditions[number]>();

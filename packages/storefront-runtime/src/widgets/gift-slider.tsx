@@ -311,7 +311,7 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string) {
 /** Initialize the gift slider — listens for slider requests from runtime. */
 export function initGiftSlider(sessionId: string) {
   on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
-    if (result.giftSlider) {
+    if (result.giftSlider && Array.isArray(result.giftSlider.selectableGifts)) {
       mountSlider(result.giftSlider, sessionId);
     }
   });

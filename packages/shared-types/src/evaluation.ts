@@ -15,6 +15,8 @@ export const CartLineUpdateActionSchema = z.object({
   lineKey: z.string(),
   quantity: z.number().int().nonnegative(),
   properties: z.record(z.string(), z.string()).optional(),
+  offerId: z.string().uuid().optional(),
+  variantId: z.string().optional(),
 });
 export type CartLineUpdateAction = z.infer<typeof CartLineUpdateActionSchema>;
 
@@ -23,6 +25,9 @@ export const CartLineRemoveActionSchema = z.object({
   action: z.literal("remove_line"),
   lineKey: z.string(),
   reason: z.string().optional(),
+  offerId: z.string().uuid().optional(),
+  variantId: z.string().optional(),
+  properties: z.record(z.string(), z.string()).optional(),
 });
 export type CartLineRemoveAction = z.infer<typeof CartLineRemoveActionSchema>;
 

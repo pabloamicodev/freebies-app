@@ -3,6 +3,7 @@ import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
 
 export interface ShopContext {
+  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"];
   session: Awaited<ReturnType<typeof authenticate.admin>>["session"];
   shopDomain: string;
   shopId: string;
@@ -11,7 +12,8 @@ export interface ShopContext {
 }
 
 export async function getShopContext(request: Request): Promise<ShopContext> {
-  const { session } = await authenticate.admin(request);
+  const adminContext = await authenticate.admin(request);
+  const { admin, session } = adminContext;
   const db = getDb();
 
   const shopRows = await db
@@ -21,6 +23,7 @@ export async function getShopContext(request: Request): Promise<ShopContext> {
     .limit(1);
 
   return {
+    admin,
     session,
     shopDomain: session.shop,
     shopId: shopRows[0]?.id ?? "",

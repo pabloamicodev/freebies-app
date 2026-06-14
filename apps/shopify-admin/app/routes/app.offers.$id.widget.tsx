@@ -7,27 +7,26 @@ import { useLoaderData, Form } from "react-router";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { useState } from "react";
-import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
-import { getDb } from "@promo/db";
-import { offers, widgets, widgetPlacements } from "@promo/db";
-import { eq } from "drizzle-orm";
+import { loadOwnedOffer } from "../lib/owned-offer.server.js";
+import { widgets, widgetPlacements } from "@promo/db";
+import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  const db = getDb();
+  const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
-  const [offerRows, widgetRows] = await Promise.all([
-    db.select().from(offers).where(eq(offers.id, offerId)).limit(1),
-    db.select().from(widgets).where(eq(widgets.offerId, offerId)),
-  ]);
+  const widgetRows = await db
+    .select()
+    .from(widgets)
+    .where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId)));
 
   return {
-    offer: offerRows[0],
+    offer,
     widgets: widgetRows,
   };
 };
@@ -37,6 +36,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const offerId = params["id"]!;
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
+  await loadOwnedOffer(db, shopId, offerId);
 
   if (intent === "add_widget") {
     const widgetType = formData.get("widgetType") as string;
@@ -85,12 +85,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (intent === "toggle_widget") {
     const widgetId = formData.get("widgetId") as string;
     const isEnabled = formData.get("isEnabled") === "true";
-    await db.update(widgets).set({ isEnabled: !isEnabled }).where(eq(widgets.id, widgetId));
+    await db.update(widgets).set({ isEnabled: !isEnabled }).where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId), eq(widgets.id, widgetId)));
   }
 
   if (intent === "delete_widget") {
     const widgetId = formData.get("widgetId") as string;
-    await db.delete(widgets).where(eq(widgets.id, widgetId));
+    await db.delete(widgets).where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId), eq(widgets.id, widgetId)));
   }
 
   return null;

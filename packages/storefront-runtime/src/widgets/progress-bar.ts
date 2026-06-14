@@ -20,7 +20,7 @@ class PromoProgressBar extends HTMLElement {
     this.renderSkeleton();
 
     this.unsubscribe = on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
-      const payload = result.progressBars.find(
+      const payload = (Array.isArray(result.progressBars) ? result.progressBars : []).find(
         (pb) => pb.offerId === this.offerId || pb.widgetId === this.widgetId,
       );
       if (payload) this.renderPayload(payload);

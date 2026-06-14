@@ -165,19 +165,19 @@ export function CustomerTagsForm({ value, onChange }: SubFormProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <label className="b-label" htmlFor={`${idPrefix}-tags`}>Seleccionar etiquetas</label>
-        <input id={`${idPrefix}-tags`} aria-label="Seleccionar etiquetas" className="b-input" placeholder="Seleccionar..." autoComplete="off" value={tags}
+        <label className="b-label" htmlFor={`${idPrefix}-tags`}>Select tags</label>
+        <input id={`${idPrefix}-tags`} aria-label="Select tags" className="b-input" placeholder="Select..." autoComplete="off" value={tags}
           onChange={(e) => emit({ tags: e.target.value })} />
       </div>
       <label className="b-checkbox-row" htmlFor={`${idPrefix}-exclude`} style={{ cursor: "pointer", gap: 10 }}>
-        <input id={`${idPrefix}-exclude`} aria-label="Excluir clientes con estas etiquetas" type="checkbox" checked={exclude} onChange={(e) => emit({ exclude: e.target.checked })}
+        <input id={`${idPrefix}-exclude`} aria-label="Exclude customers with these tags" type="checkbox" checked={exclude} onChange={(e) => emit({ exclude: e.target.checked })}
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
-        <span style={{ fontSize: 13, color: "var(--text)" }}>Excluir clientes con estas etiquetas</span>
+        <span style={{ fontSize: 13, color: "var(--text)" }}>Exclude customers with these tags</span>
       </label>
       <label className="b-checkbox-row" htmlFor={`${idPrefix}-guest`} style={{ cursor: "pointer", gap: 10 }}>
-        <input id={`${idPrefix}-guest`} aria-label="Considere no iniciar sesión como cliente sin etiquetas" type="checkbox" checked={guest} onChange={(e) => emit({ guest: e.target.checked })}
+        <input id={`${idPrefix}-guest`} aria-label="Treat guest customers as having no tags" type="checkbox" checked={guest} onChange={(e) => emit({ guest: e.target.checked })}
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
-        <span style={{ fontSize: 13, color: "var(--text)" }}>Considere no iniciar sesión como cliente sin etiquetas</span>
+        <span style={{ fontSize: 13, color: "var(--text)" }}>Treat guest customers as having no tags</span>
       </label>
     </div>
   );
@@ -190,8 +190,8 @@ export function LocationForm({ value, onChange }: SubFormProps) {
 
   return (
     <div>
-      <label className="b-label" htmlFor={`${idPrefix}-countries`}>Seleccionar países</label>
-      <input id={`${idPrefix}-countries`} aria-label="Seleccionar países" className="b-input" placeholder="Seleccionar países..." autoComplete="off" value={countries}
+      <label className="b-label" htmlFor={`${idPrefix}-countries`}>Select countries</label>
+      <input id={`${idPrefix}-countries`} aria-label="Select countries" className="b-input" placeholder="Select countries..." autoComplete="off" value={countries}
         onChange={(e) => onChange?.({ countries: e.target.value })} />
     </div>
   );
@@ -204,10 +204,10 @@ export function SubscriptionForm({ value, onChange }: SubFormProps) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ fontSize: 13, color: "var(--text)", fontWeight: 500 }}>Aplicar la oferta a:</div>
+      <div style={{ fontSize: 13, color: "var(--text)", fontWeight: 500 }}>Apply offer to:</div>
       {[
-        { value: "subscription", label: "Solo productos de suscripción" },
-        { value: "one_time",     label: "Productos de compra única" },
+        { value: "subscription", label: "Subscription products only" },
+        { value: "one_time",     label: "One-time purchase products" },
       ].map((opt) => (
         <label key={opt.value} className="b-checkbox-row" htmlFor={`${idPrefix}-${opt.value}`} style={{ cursor: "pointer", gap: 10 }}>
           <input id={`${idPrefix}-${opt.value}`} aria-label={opt.label} type="radio" name="sub_subscription_mode" value={opt.value}
@@ -236,24 +236,24 @@ export function SalesChannelForm({ value, onChange }: SubFormProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <label className="b-checkbox-row" htmlFor={`${idPrefix}-online`} style={{ cursor: "pointer", gap: 10 }}>
-        <input id={`${idPrefix}-online`} aria-label="Tienda en línea" type="checkbox" checked={online} onChange={(e) => emit({ online: e.target.checked })}
+        <input id={`${idPrefix}-online`} aria-label="Online store" type="checkbox" checked={online} onChange={(e) => emit({ online: e.target.checked })}
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
-        <span style={{ fontSize: 13, color: "var(--text)" }}>Tienda en línea</span>
+        <span style={{ fontSize: 13, color: "var(--text)" }}>Online store</span>
       </label>
       <label className="b-checkbox-row" htmlFor={`${idPrefix}-mobile`} style={{ cursor: "pointer", gap: 10 }}>
-        <input id={`${idPrefix}-mobile`} aria-label="Canal de aplicaciones móvil" type="checkbox" checked={mobile} onChange={(e) => emit({ mobile: e.target.checked })}
+        <input id={`${idPrefix}-mobile`} aria-label="Mobile app channel" type="checkbox" checked={mobile} onChange={(e) => emit({ mobile: e.target.checked })}
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
-        <span style={{ fontSize: 13, color: "var(--text)" }}>Canal de aplicaciones móvil</span>
+        <span style={{ fontSize: 13, color: "var(--text)" }}>Mobile app channel</span>
       </label>
       <label className="b-checkbox-row" htmlFor={`${idPrefix}-pos`} style={{ cursor: "pointer", gap: 10 }}>
-        <input id={`${idPrefix}-pos`} aria-label="Canal de punto de venta" type="checkbox" checked={pos} onChange={(e) => emit({ pos: e.target.checked })}
+        <input id={`${idPrefix}-pos`} aria-label="Point of sale channel" type="checkbox" checked={pos} onChange={(e) => emit({ pos: e.target.checked })}
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
-        <span style={{ fontSize: 13, color: "var(--text)" }}>Canal de punto de venta</span>
+        <span style={{ fontSize: 13, color: "var(--text)" }}>Point of sale channel</span>
       </label>
       <div style={{ background: "#f0f4ff", border: "1px solid #c4d0fb", borderRadius: 6, padding: "10px 12px", fontSize: 12, color: "var(--text)", lineHeight: 1.5 }}>
-        De forma predeterminada, BOGOS trabaja con nuestro socio creador de aplicaciones móviles:{" "}
-        <strong>OneMobile</strong>, <strong>Superflux</strong>. Si está utilizando una aplicación móvil
-        personalizada, Contáctenos para la integración.
+        By default, BOGOS works with our mobile app builder partners:{" "}
+        <strong>OneMobile</strong>, <strong>Superflux</strong>. If you use a custom mobile app,
+        contact us for integration support.
       </div>
     </div>
   );
@@ -268,24 +268,24 @@ export function MarketsForm({ value, onChange }: SubFormProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ background: "#fff8e1", border: "1px solid #fbbf24", borderRadius: 6, padding: "10px 12px", fontSize: 12, color: "#78350f", lineHeight: 1.5 }}>
-        ⚠ Esta condición requiere acceso adicional para obtener sus mercados existentes.
+        This condition requires additional access to fetch existing markets.
         <div style={{ marginTop: 6 }}>
           <button type="button"
             style={{ fontSize: 12, color: "var(--blue)", background: "none", border: "none", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
-            Actualizar permisos
+            Update permissions
           </button>
         </div>
       </div>
       <div>
-        <label className="b-label" htmlFor={`${idPrefix}-markets`}>Seleccionar mercados</label>
-        <input id={`${idPrefix}-markets`} aria-label="Seleccionar mercados" className="b-input" placeholder="Seleccionar..." autoComplete="off" value={marketIds}
+        <label className="b-label" htmlFor={`${idPrefix}-markets`}>Select markets</label>
+        <input id={`${idPrefix}-markets`} aria-label="Select markets" className="b-input" placeholder="Select..." autoComplete="off" value={marketIds}
           onChange={(e) => onChange?.({ marketIds: e.target.value, exclude })} />
       </div>
       <label className="b-checkbox-row" htmlFor={`${idPrefix}-exclude-markets`} style={{ cursor: "pointer", gap: 10 }}>
-        <input id={`${idPrefix}-exclude-markets`} aria-label="Excluir clientes de mercados seleccionados" type="checkbox" checked={exclude}
+        <input id={`${idPrefix}-exclude-markets`} aria-label="Exclude selected markets" type="checkbox" checked={exclude}
           onChange={(e) => onChange?.({ marketIds, exclude: e.target.checked })}
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
-        <span style={{ fontSize: 13, color: "var(--text)" }}>Excluir clientes de mercados seleccionados</span>
+        <span style={{ fontSize: 13, color: "var(--text)" }}>Exclude selected markets</span>
       </label>
     </div>
   );
@@ -317,9 +317,9 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div>
-        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Los clientes deben tener:</div>
+        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Customers must have:</div>
         <div style={{ display: "flex", gap: 16 }}>
-          {[{ v: "all", l: "Todas las reglas" }, { v: "any", l: "Cualquier regla" }].map((opt) => (
+          {[{ v: "all", l: "All rules" }, { v: "any", l: "Any rule" }].map((opt) => (
             <label key={opt.v} className="b-checkbox-row" htmlFor={`${idPrefix}-match-${opt.v}`} style={{ cursor: "pointer", gap: 8 }}>
               <input id={`${idPrefix}-match-${opt.v}`} aria-label={opt.l} type="radio" name="qty_match_mode" value={opt.v}
                 checked={matchMode === opt.v}
@@ -334,16 +334,16 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
       {rules.map((rule, i) => (
         <div key={rule.id} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 13, color: "var(--text-sub)" }}>Comprar</span>
-            <select aria-label={`Operador de cantidad para regla ${i + 1}`} className="b-select" style={{ width: 120 }} value={rule.operator}
+            <span style={{ fontSize: 13, color: "var(--text-sub)" }}>Buy</span>
+            <select aria-label={`Quantity operator for rule ${i + 1}`} className="b-select" style={{ width: 120 }} value={rule.operator}
               onChange={(e) => {
                 const next = rules.map((x, idx) => idx === i ? { ...x, operator: e.target.value } : x);
                 emit(matchMode, next);
               }}>
-              <option value="at_least">Al menos</option>
-              <option value="exactly">Exactamente</option>
+              <option value="at_least">At least</option>
+              <option value="exactly">Exactly</option>
             </select>
-            <input aria-label={`Cantidad para regla ${i + 1}`} className="b-input" type="number" min="1" value={rule.qty}
+            <input aria-label={`Quantity for rule ${i + 1}`} className="b-input" type="number" min="1" value={rule.qty}
               onChange={(e) => {
                 const next = rules.map((x, idx) => idx === i ? { ...x, qty: parseInt(e.target.value) || 1 } : x);
                 emit(matchMode, next);
@@ -356,25 +356,25 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 13, color: "var(--text-sub)" }}>de</span>
-            <select aria-label={`Alcance de producto para regla ${i + 1}`} className="b-select" value={rule.scope}
+            <span style={{ fontSize: 13, color: "var(--text-sub)" }}>of</span>
+            <select aria-label={`Product scope for rule ${i + 1}`} className="b-select" value={rule.scope}
               onChange={(e) => {
                 const next = rules.map((x, idx) => idx === i ? { ...x, scope: e.target.value } : x);
                 emit(matchMode, next);
               }}>
-              <option value="specific_products">productos seleccionados</option>
-              <option value="any_product">cualquier producto</option>
+              <option value="specific_products">selected products</option>
+              <option value="any_product">any product</option>
             </select>
           </div>
 
           {rule.scope === "specific_products" && (
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 13, color: "var(--text-sub)" }}>Productos</span>
+              <span style={{ fontSize: 13, color: "var(--text-sub)" }}>Products</span>
               <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setPickerIdx(i)}>
-                Seleccionar productos
+                Select products
               </button>
               <span style={{ fontSize: 12, color: "var(--text-sub)" }}>
-                {rule.productIds.length} productos seleccionados
+                {rule.productIds.length} products selected
               </span>
             </div>
           )}
@@ -383,13 +383,13 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
 
       <button type="button" onClick={addRule}
         className="rd-style-083">
-        + Agregar regla
+        + Add rule
       </button>
 
       {pickerIdx !== null && (
         <ProductPicker
           open
-          title="Seleccionar productos"
+          title="Select products"
           allowMultiple
           selectedIds={rules[pickerIdx]?.productIds ?? []}
           onClose={() => setPickerIdx(null)}

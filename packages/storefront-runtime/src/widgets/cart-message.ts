@@ -20,7 +20,7 @@ class PromoCartMessage extends HTMLElement {
     this.render(null);
 
     this.unsubscribe = on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
-      const messages = result.cartMessages
+      const messages = (Array.isArray(result.cartMessages) ? result.cartMessages : [])
         .filter((m) => m.offerId === this.offerId || m.widgetId === this.widgetId)
         .sort((a, b) => a.priority - b.priority);
 

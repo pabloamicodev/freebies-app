@@ -7,6 +7,7 @@ import { useLoaderData, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { NotFound } from "../components/NotFound.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { offers, offerCombinationPolicies } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -16,19 +17,20 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
-  const [offerRows, policyRows] = await Promise.all([
-    db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1),
+  const [policyRows] = await Promise.all([
     db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId))).limit(1),
   ]);
 
-  return { offer: offerRows[0], policy: policyRows[0] ?? null };
+  return { offer, policy: policyRows[0] ?? null };
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
+  await loadOwnedOffer(db, shopId, offerId);
 
   const policy = {
     shopId,

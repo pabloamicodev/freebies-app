@@ -6,7 +6,8 @@
 import { useLoaderData, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
-import { offers, cartMutationLogs, analyticsEvents } from "@promo/db";
+import { loadOwnedOffer } from "../lib/owned-offer.server.js";
+import { cartMutationLogs, analyticsEvents } from "@promo/db";
 import { eq, and, desc, count, gte } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import "../styles/bogos.css";
@@ -16,11 +17,11 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-  const [offerRows, recentErrors, mutationErrors, statsViewed, statsAdded, statsErrors] = await Promise.all([
-    db.select().from(offers).where(eq(offers.id, offerId)).limit(1),
+  const [recentErrors, mutationErrors, statsViewed, statsAdded, statsErrors] = await Promise.all([
     db.select().from(analyticsEvents)
       .where(and(
         eq(analyticsEvents.shopId, shopId),
@@ -59,9 +60,6 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         gte(analyticsEvents.occurredAt, sevenDaysAgo),
       )),
   ]);
-
-  const offer = offerRows[0];
-  if (!offer) throw new Response("Not found", { status: 404 });
 
   const compiledConfig = offer.compiledConfig;
   const hasCompiledConfig = !!compiledConfig;

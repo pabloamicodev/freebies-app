@@ -164,10 +164,10 @@ export default function Dashboard() {
         <div className="b-card b-card-body">
           <div className="b-row b-gap-2 b-mb-4" style={{ marginBottom: 6 }}>
             <span className="b-text-sm b-text-sub">Application plan</span>
-            <span className="b-badge b-badge-green">Full plan</span>
+            <span className="b-badge b-badge-blue">Active</span>
           </div>
           <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
-            You&apos;re on the full plan.<br />All features unlocked!
+            Billing is not configured for this app.
           </p>
         </div>
       </div>
@@ -177,7 +177,7 @@ export default function Dashboard() {
         <div className="b-dark-banner-body">
           <h3 className="b-dark-banner-title">FREE check with experts</h3>
           <p className="b-dark-banner-sub">Don&apos;t miss it! A quick consultation with our team guarantees your personalized discounts will be active and ready to get you more sales. 🚀</p>
-          <button type="button" className="b-dark-banner-btn">View offers</button>
+          <a href="/app/offers" className="b-dark-banner-btn">View offers</a>
         </div>
         <div className="b-team-avatars">
           <div className="b-avatar b-avatar-1">A</div>
@@ -301,7 +301,6 @@ export default function Dashboard() {
                   {app.badge && <div className="b-rec-app-badge">{app.badge}</div>}
                   <div className="b-rec-app-name">{app.name}</div>
                   <div className="b-rec-app-desc">{app.desc}</div>
-                  <button type="button" className="b-btn b-btn-secondary b-btn-sm">Install now</button>
                 </div>
               ))}
             </div>

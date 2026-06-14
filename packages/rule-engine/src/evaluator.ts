@@ -7,22 +7,24 @@ import type {
 } from "@promo/shared-types";
 import { ok, err, type Result } from "@promo/shared-types";
 import { buildCartHash, extractGiftLines } from "./cart-parser.js";
-import { evaluateCartValue } from "./conditions/cart-value.js";
-import { evaluateCartQuantity } from "./conditions/cart-quantity.js";
-import { evaluateSpecificProduct } from "./conditions/specific-product.js";
+import { evaluateCartValue, type CartValueConditionValue } from "./conditions/cart-value.js";
+import { evaluateCartQuantity, type CartQuantityConditionValue } from "./conditions/cart-quantity.js";
+import { evaluateSpecificProduct, type SpecificProductConditionValue } from "./conditions/specific-product.js";
 import {
   evaluateCustomerTags,
   evaluateOrderHistory,
   evaluateOneUsePerCustomer,
   evaluateSalesChannel,
   evaluateMarket,
+  type CustomerTagsConditionValue,
+  type OrderHistoryConditionValue,
 } from "./conditions/customer.js";
-import { evaluateCartValueMultiplier } from "./conditions/cart-value-multiplier.js";
-import { evaluatePack } from "./conditions/pack.js";
-import { evaluateProductQuantityLimits } from "./conditions/product-quantity-limits.js";
-import { evaluateSubscriptionCondition } from "./conditions/subscription.js";
-import { evaluateUrlParam } from "./conditions/url-param.js";
-import { evaluateCountry } from "./conditions/country.js";
+import { evaluateCartValueMultiplier, type CartValueMultiplierConditionValue } from "./conditions/cart-value-multiplier.js";
+import { evaluatePack, type PackConditionValue } from "./conditions/pack.js";
+import { evaluateProductQuantityLimits, type ProductQuantityLimitsConditionValue } from "./conditions/product-quantity-limits.js";
+import { evaluateSubscriptionCondition, type SubscriptionConditionValue } from "./conditions/subscription.js";
+import { evaluateUrlParam, type UrlParamConditionValue } from "./conditions/url-param.js";
+import { evaluateCountry, type CountryConditionValue } from "./conditions/country.js";
 import { applyPriority } from "./priority-resolver.js";
 
 /**
@@ -214,6 +216,8 @@ export async function evaluate(
                   action: "update_line",
                   lineKey: toUpdate.lineKey,
                   quantity: qty,
+                  offerId: offer.id,
+                  variantId,
                 });
               }
             }
@@ -227,6 +231,8 @@ export async function evaluate(
         cartActions.push({
           action: "remove_line",
           lineKey: gift.lineKey,
+          offerId: offer.id,
+          variantId: gift.variantId,
           reason: "offer_disqualified",
         });
       }
@@ -297,6 +303,8 @@ export async function evaluate(
         .map((g) => ({
           action: "remove_line" as const,
           lineKey: g.lineKey,
+          offerId: o.offerId,
+          variantId: g.variantId,
           reason: "blocked_by_priority",
         }));
     }),
@@ -334,50 +342,50 @@ function evaluateCondition(
 ): Result<EligibilityReason, EligibilityReason> {
   switch (cond.conditionType) {
     case "cart_value":
-      return evaluateCartValue(input.cart, cond.value as any, currency);
+      return evaluateCartValue(input.cart, cond.value as CartValueConditionValue, currency);
 
     case "cart_quantity":
-      return evaluateCartQuantity(input.cart, cond.value as any);
+      return evaluateCartQuantity(input.cart, cond.value as CartQuantityConditionValue);
 
     case "specific_product":
-      return evaluateSpecificProduct(input.cart, cond.value as any);
+      return evaluateSpecificProduct(input.cart, cond.value as SpecificProductConditionValue);
 
     case "customer_tags":
-      return evaluateCustomerTags(input.customer, cond.value as any);
+      return evaluateCustomerTags(input.customer, cond.value as CustomerTagsConditionValue);
 
     case "order_history_total_spent":
     case "order_history_last_order_spent":
     case "order_history_total_orders":
-      return evaluateOrderHistory(input.customer, cond.value as any);
+      return evaluateOrderHistory(input.customer, cond.value as OrderHistoryConditionValue);
 
     case "markets":
-      return evaluateMarket(input.market?.id ?? null, cond.value as any);
+      return evaluateMarket(input.market?.id ?? null, cond.value as { includeMarketIds?: string[]; excludeMarketIds?: string[] });
 
     case "sales_channels":
       return evaluateSalesChannel(input.salesChannel, (cond.value as { channels: string[] }).channels);
 
     case "cart_value_multiplier":
-      return evaluateCartValueMultiplier(input.cart, cond.value as any, currency);
+      return evaluateCartValueMultiplier(input.cart, cond.value as CartValueMultiplierConditionValue, currency);
 
     case "pack_of_products":
-      return evaluatePack(input.cart, cond.value as any);
+      return evaluatePack(input.cart, cond.value as PackConditionValue);
 
     case "product_quantity_limits":
     case "collection_quantity_limits":
     case "vendor_quantity_limits":
     case "product_type_quantity_limits":
-      return evaluateProductQuantityLimits(input.cart, cond.value as any);
+      return evaluateProductQuantityLimits(input.cart, cond.value as ProductQuantityLimitsConditionValue);
 
     case "subscription_product_type":
-      return evaluateSubscriptionCondition(input.cart, cond.value as any);
+      return evaluateSubscriptionCondition(input.cart, cond.value as SubscriptionConditionValue);
 
     case "specific_link":
-      return evaluateUrlParam(input.requestedUrl, cond.value as any);
+      return evaluateUrlParam(input.requestedUrl, cond.value as UrlParamConditionValue);
 
     case "customer_location":
       return evaluateCountry(
         input.customer?.countryCode ?? input.market?.countryCode ?? null,
-        cond.value as any,
+        cond.value as CountryConditionValue,
       );
 
     default:

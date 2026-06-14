@@ -1,7 +1,7 @@
 import { Worker, type Job } from "bullmq";
 import { redis, QUEUES } from "./queues.js";
 import { getDb, productCache, variantCache, shops } from "@promo/db";
-import { eq } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import pino from "pino";
 
 const log = pino({ name: "product-sync-worker" });
@@ -104,7 +104,7 @@ async function syncProduct(shopId: string, product: ShopifyProduct, currencyCode
       status: product.status,
       imageUrl: product.featuredImage?.url ?? null,
       collections: product.collections.nodes.map((c) => c.id),
-      raw: product as any,
+      raw: product,
       syncedAt: new Date(),
     })
     .onConflictDoUpdate({
@@ -118,7 +118,7 @@ async function syncProduct(shopId: string, product: ShopifyProduct, currencyCode
         status: product.status,
         imageUrl: product.featuredImage?.url ?? null,
         collections: product.collections.nodes.map((c) => c.id),
-        raw: product as any,
+        raw: product,
         syncedAt: new Date(),
       },
     });
@@ -140,7 +140,7 @@ async function syncProduct(shopId: string, product: ShopifyProduct, currencyCode
         inventoryPolicy: variant.inventoryPolicy,
         availableForSale: variant.availableForSale,
         requiresSellingPlan: variant.requiresSellingPlan,
-        raw: variant as any,
+        raw: variant,
         syncedAt: new Date(),
       })
       .onConflictDoUpdate({
@@ -153,7 +153,7 @@ async function syncProduct(shopId: string, product: ShopifyProduct, currencyCode
           inventoryQuantity: variant.inventoryQuantity,
           inventoryPolicy: variant.inventoryPolicy,
           availableForSale: variant.availableForSale,
-          raw: variant as any,
+          raw: variant,
           syncedAt: new Date(),
         },
       });
@@ -200,6 +200,7 @@ export function startProductSyncWorker() {
 
       // Full sync
       log.info({ shopDomain }, "Starting full product sync");
+      const syncStartedAt = new Date();
       let cursor: string | null = null;
       let totalSynced = 0;
       let hasMore = true;
@@ -215,7 +216,13 @@ export function startProductSyncWorker() {
         await job.updateProgress(Math.round((totalSynced / 250) * 100));
       }
 
-      log.info({ shopDomain, totalSynced }, "Full product sync complete");
+      const archivedMissing = await db
+        .update(productCache)
+        .set({ status: "ARCHIVED", syncedAt: new Date() })
+        .where(and(eq(productCache.shopId, shopId), lt(productCache.syncedAt, syncStartedAt)))
+        .returning({ id: productCache.id });
+
+      log.info({ shopDomain, totalSynced, archivedMissing: archivedMissing.length }, "Full product sync complete");
     },
     {
       connection: redis,

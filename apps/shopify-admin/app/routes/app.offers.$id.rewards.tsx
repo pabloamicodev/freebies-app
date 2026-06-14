@@ -8,8 +8,9 @@ import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
-import { offers, offerRewards } from "@promo/db";
+import { offerRewards } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
@@ -25,14 +26,12 @@ function splitTextareaList(value: string | null): string[] {
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
-  const [offerRows, rewardRows] = await Promise.all([
-    db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1),
-    db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))),
-  ]);
+  const rewardRows = await db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
 
   return {
-    offer: offerRows[0],
+    offer,
     rewards: rewardRows.sort((a, b) => a.sortOrder - b.sortOrder),
   };
 };
@@ -42,6 +41,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const offerId = params["id"]!;
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
+  await loadOwnedOffer(db, shopId, offerId);
 
   if (intent === "add_reward") {
     const rewardType = formData.get("rewardType") as string;
@@ -72,7 +72,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       : { scope: "cart" };
 
     const existing = await db.select({ id: offerRewards.id })
-      .from(offerRewards).where(eq(offerRewards.offerId, offerId));
+      .from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
 
     await db.insert(offerRewards).values({
       shopId, offerId,
@@ -95,7 +95,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (intent === "delete_reward") {
     const rewardId = formData.get("rewardId") as string;
     if (!rewardId) return { error: "Reward ID missing." };
-    await db.delete(offerRewards).where(eq(offerRewards.id, rewardId));
+    await db.delete(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId)));
   }
 
   return { success: true };
