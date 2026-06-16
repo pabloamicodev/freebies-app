@@ -13,15 +13,26 @@ import type Redis from "ioredis";
 import pino from "pino";
 import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
+import { SHOPIFY_API_VERSION } from "@promo/shared-types";
 
 const log = pino({ name: "market-sync-worker" });
-const SHOPIFY_API_VERSION = "2026-04";
 const MARKET_CACHE_TTL = 3600; // 1 hour
+
+async function decryptAccessToken(stored: string): Promise<string> {
+  const sep = stored.indexOf(":");
+  if (sep === -1) return stored;
+  const keyHex = process.env["TOKEN_ENCRYPTION_KEY"];
+  if (!keyHex) return stored;
+  try {
+    const key = await crypto.subtle.importKey("raw", Buffer.from(keyHex, "hex"), { name: "AES-GCM" }, false, ["decrypt"]);
+    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: Buffer.from(stored.slice(0, sep), "hex") }, key, Buffer.from(stored.slice(sep + 1), "hex"));
+    return new TextDecoder().decode(plaintext);
+  } catch { return stored; }
+}
 
 export interface MarketSyncJobData {
   shopId: string;
   shopDomain: string;
-  accessToken: string;
 }
 
 interface ShopifyMarket {
@@ -64,11 +75,17 @@ const MARKETS_QUERY = `
 `;
 
 export function startMarketSyncWorker(redis: Redis) {
-  return new Worker<MarketSyncJobData>(
+  const worker = new Worker<MarketSyncJobData>(
     "market-sync",
     async (job: Job<MarketSyncJobData>) => {
-      const { shopId, shopDomain, accessToken } = job.data;
+      const { shopId, shopDomain } = job.data;
       log.info({ shopDomain }, "Starting market sync");
+
+      const db = getDb();
+      const shopRow = await db.select({ accessTokenEncrypted: shops.accessTokenEncrypted })
+        .from(shops).where(eq(shops.id, shopId)).limit(1).then((r) => r[0]);
+      if (!shopRow) throw new Error(`Shop ${shopId} not found`);
+      const accessToken = await decryptAccessToken(shopRow.accessTokenEncrypted);
 
       const response = await fetch(
         `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
@@ -91,12 +108,13 @@ export function startMarketSyncWorker(redis: Redis) {
       };
 
       const markets = data.data.markets.nodes;
-
-      // Cache market data in Redis as a hash
       const cacheKey = `markets:${shopId}`;
-      const pipeline = redis.pipeline();
+      const tmpKey = `markets:${shopId}:tmp`;
 
-      pipeline.del(cacheKey);
+      // Write all market data to a temp key first, then atomically rename it
+      // over the live key so readers never see an empty/partial cache.
+      const pipeline = redis.pipeline();
+      pipeline.del(tmpKey);
       for (const market of markets) {
         const marketData = {
           id: market.id,
@@ -109,14 +127,30 @@ export function startMarketSyncWorker(redis: Redis) {
             .flatMap((r) => r.countries.nodes.map((c) => c.code))
             .join(","),
         };
-        pipeline.hset(cacheKey, market.handle, JSON.stringify(marketData));
+        pipeline.hset(tmpKey, market.handle, JSON.stringify(marketData));
       }
-      pipeline.expire(cacheKey, MARKET_CACHE_TTL);
-
+      pipeline.expire(tmpKey, MARKET_CACHE_TTL);
       await pipeline.exec();
+
+      // RENAME is atomic — readers see either the old complete data or the new complete data.
+      if (markets.length > 0) {
+        await redis.rename(tmpKey, cacheKey);
+      } else {
+        await redis.del(cacheKey);
+        await redis.del(tmpKey);
+      }
 
       log.info({ shopDomain, marketCount: markets.length }, "Markets synced to Redis");
     },
-    { connection: redis, concurrency: 2 },
+    { connection: redis, concurrency: 2, lockDuration: 60_000 },
   );
+
+  worker.on("failed", (job, err) => {
+    log.error(
+      { jobId: job?.id, shopDomain: job?.data.shopDomain, err: err.message },
+      "market-sync job failed permanently",
+    );
+  });
+
+  return worker;
 }

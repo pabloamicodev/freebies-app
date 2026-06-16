@@ -43,16 +43,19 @@ pub struct Money {
     pub currency_code: String,
 }
 
+pub fn is_zero_decimal(currency_code: &str) -> bool {
+    matches!(
+        currency_code,
+        "JPY" | "KRW" | "VND" | "BIF" | "CLP" | "GNF" | "ISK" | "KMF"
+            | "MGA" | "PYG" | "RWF" | "UGX" | "VUV" | "XAF" | "XOF" | "XPF"
+    )
+}
+
 impl Money {
-    /// Parse to integer cents — safe for discount calculations.
+    /// Parse to integer smallest-unit amount — safe for discount calculations.
     pub fn to_cents(&self) -> i64 {
         let amount: f64 = self.amount.parse().unwrap_or(0.0);
-        // Zero-decimal currencies
-        if matches!(
-            self.currency_code.as_str(),
-            "JPY" | "KRW" | "VND" | "BIF" | "CLP" | "GNF" | "ISK" | "KMF"
-                | "MGA" | "PYG" | "RWF" | "UGX" | "VUV" | "XAF" | "XOF" | "XPF"
-        ) {
+        if is_zero_decimal(&self.currency_code) {
             return amount.round() as i64;
         }
         (amount * 100.0).round() as i64
@@ -198,16 +201,13 @@ pub struct CartLineTarget {
     pub quantity: Option<i64>,
 }
 
-#[derive(Debug, Serialize, Clone)]
-#[serde(tag = "percentage", rename_all = "camelCase")]
-pub enum DiscountValue {
-    Percentage { value: String },
-    FixedAmount { amount: MoneyInput, applies_to_each_item: bool },
-}
-
+// Externally-tagged (serde default) + camelCase produces:
+//   Percentage  → { "percentage": { "value": "10.0" } }
+//   FixedAmount → { "fixedAmount": { "amount": "5.00", "currencyCode": "USD", "appliesToEachItem": false } }
+// matching the Shopify Discount Function output schema exactly.
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct MoneyInput {
-    pub amount: String,
-    pub currency_code: String,
+pub enum DiscountValue {
+    Percentage { value: String },
+    FixedAmount { amount: String, currency_code: String, applies_to_each_item: bool },
 }

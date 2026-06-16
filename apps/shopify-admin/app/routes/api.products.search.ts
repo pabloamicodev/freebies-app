@@ -14,7 +14,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const q = url.searchParams.get("q") ?? "";
-  const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "20", 10), 50);
+  const limitRaw = parseInt(url.searchParams.get("limit") ?? "20", 10);
+  const limit = Math.min(Number.isNaN(limitRaw) ? 20 : limitRaw, 50);
   const includeVariants = url.searchParams.get("variants") === "true";
 
   const db = getDb();

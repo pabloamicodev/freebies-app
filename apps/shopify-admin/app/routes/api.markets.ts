@@ -12,7 +12,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId } = await getShopContext(request);
 
   if (!shopId) {
-    return Response.json({ markets: [] }, { status: 200 });
+    return Response.json({ error: "Shop not found" }, { status: 404 });
   }
 
   const markets = await getMarketsForShop(shopId);
@@ -20,7 +20,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return Response.json({ markets }, {
     status: 200,
     headers: {
-      "Cache-Control": "private, max-age=300", // 5 min browser cache
+      "Cache-Control": "private, max-age=300",
     },
   });
 };

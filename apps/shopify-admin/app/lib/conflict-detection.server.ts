@@ -10,7 +10,7 @@
  */
 
 import { getDb, offers, offerConditions, offerRewards } from "@promo/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 
 export interface OfferConflict {
   type: "gift_variant_overlap" | "threshold_overlap" | "stop_lower_priority_warning" | "auto_add_duplicate";
@@ -30,10 +30,12 @@ export async function detectConflicts(shopId: string): Promise<OfferConflict[]> 
 
   if (activeOffers.length < 2) return conflicts;
 
-  // Load conditions and rewards for all active offers
+  const activeOfferIds = activeOffers.map((o) => o.id);
+
+  // Load conditions and rewards scoped to active offers only
   const [, rewardRows] = await Promise.all([
-    db.select().from(offerConditions).where(eq(offerConditions.shopId, shopId)),
-    db.select().from(offerRewards).where(eq(offerRewards.shopId, shopId)),
+    db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), inArray(offerConditions.offerId, activeOfferIds))),
+    db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, activeOfferIds))),
   ]);
 
   // Check for gift variant overlaps (same gift offered by multiple offers)

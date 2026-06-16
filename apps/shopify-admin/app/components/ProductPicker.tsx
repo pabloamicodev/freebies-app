@@ -83,10 +83,11 @@ function ProductPickerContent({
     query: "",
     products: [] as Product[],
     loading: false,
+    error: null as string | null,
     selected: new Set(selectedIds),
     expandedProducts: new Set<string>(),
   }));
-  const { query, products, loading, selected, expandedProducts } = pickerState;
+  const { query, products, loading, error, selected, expandedProducts } = pickerState;
   const setQuery = createFieldSetter(setPickerField, "query");
   const setSelected = createFieldSetter(setPickerField, "selected");
   const setExpandedProducts = createFieldSetter(setPickerField, "expandedProducts");
@@ -94,13 +95,19 @@ function ProductPickerContent({
   // Fetch products from search API
   const fetchProducts = useCallback(async (q: string) => {
     setPickerField("loading", true);
+    setPickerField("error", null);
     try {
       const params = new URLSearchParams({ q, limit: "20", variants: "true" });
       const res = await fetch(`/api/products/search?${params}`);
-      if (!res.ok) return;
+      if (!res.ok) {
+        setPickerField("error", `Search failed (${res.status}). Please try again.`);
+        setPickerField("products", []);
+        return;
+      }
       const data = await res.json() as { products: Product[] };
       setPickerField("products", data.products);
     } catch {
+      setPickerField("error", "Search unavailable. Check your connection and try again.");
       setPickerField("products", []);
     } finally {
       setPickerField("loading", false);
@@ -177,6 +184,10 @@ function ProductPickerContent({
           <div style={{ padding: "40px", textAlign: "center" }}>
             <Spinner size="large" />
           </div>
+        ) : error ? (
+          <EmptyState heading="Could not load products" image="">
+            <p>{error}</p>
+          </EmptyState>
         ) : products.length === 0 ? (
           <EmptyState heading="No products found" image="">
             <p>Try a different search term.</p>

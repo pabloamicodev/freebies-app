@@ -7,6 +7,7 @@ import { getDashboardWarnings } from "../lib/dashboard-warnings.server.js";
 import type { LoaderFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
 
 const dashboardCurrencyFormatters = new Map<string, Intl.NumberFormat>();
 
@@ -102,29 +103,22 @@ function IconChevron() {
 }
 
 const DASHBOARD_SUPPORT_LINKS = [
-  { icon: "💬", title: "Live chat support", desc: "Get help from our highly trained support team", href: "https://secomapp.com/contact" },
-  { icon: "❓", title: "View frequently asked questions", desc: "See FAQs and learn about BOGOS functionality", href: "https://help.secomapp.com" },
-  { icon: "▶️", title: "Watch our YouTube series", desc: "See all guides step by step on our YouTube series", href: "https://www.youtube.com/@secomapp" },
-  { icon: "✉️", title: "Contact via email", desc: "Send us an email at support@secomapp.com for help", href: "mailto:support@secomapp.com" },
+  { icon: "💬", title: "Live chat support", desc: "Get help from our support team", href: "#" },
+  { icon: "❓", title: "View frequently asked questions", desc: "See FAQs and learn about Promo Engine", href: "/app/help" },
+  { icon: "✉️", title: "Contact via email", desc: "Contact us by email for help", href: "#" },
 ];
 
-const DASHBOARD_RECOMMENDED_APPS = [
-  { color: "#f97316", initial: "N", badge: "20% OFF – FATHERS20PER", name: "Notim: Back In Stock+Notify Me", desc: "Notify customers on restocks, get inventory alerts, and manage stock across locations." },
-  { color: "#16a34a", initial: "X", badge: null, name: "XFlow Back in Stock Alert", desc: "Automated, personalized back in stock alerts that re-engage customers and recover lost sales." },
-  { color: "#7c3aed", initial: "E", badge: null, name: "Ego Cart Drawer Cart Upsell", desc: "Boost AOV & CR with the top upsell solution. Try Ego Cart Upsell with upsell cart, cross-selling." },
-];
 
 export default function Dashboard() {
   const { activeOffers, shopDisplayName, currencyCode, totalSalesCents, orderCount, avgOrderCents } = useLoaderData<typeof loader>();
   const [showOnboarding, setShowOnboarding] = useState(true);
-  const [showRecommended, setShowRecommended] = useState(true);
 
   const fmt = getDashboardCurrencyFormatter(currencyCode);
   const totalSalesFmt = fmt.format(totalSalesCents / 100);
   const avgOrderFmt = fmt.format(avgOrderCents / 100);
 
   const onboardingSteps = useMemo(() => [
-    { label: "Enable BOGOS in themes", done: true },
+    { label: "Enable Promo Engine in themes", done: true },
     { label: "Create your first offer", done: activeOffers > 0 },
     { label: "Check the offer in your Online Store", done: false },
     { label: "Customize the appearance", done: false },
@@ -137,7 +131,6 @@ export default function Dashboard() {
     { label: "Orders with gifts (30d)", value: String(orderCount) },
   ], [totalSalesFmt, avgOrderFmt, orderCount]);
   const dismissOnboarding = useCallback(() => setShowOnboarding(false), []);
-  const dismissRecommended = useCallback(() => setShowRecommended(false), []);
 
   return (
     <div className="b-page">
@@ -152,14 +145,14 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ── BOGOS Status + Plan row ─────────────────────────── */}
+      {/* ── App Status + Plan row ─────────────────────────── */}
       <div className="b-grid-2 b-mb-4">
         <div className="b-card b-card-body">
           <div className="b-row b-gap-2 b-mb-4" style={{ marginBottom: 6 }}>
-            <span className="b-text-sm b-text-sub">BOGOS Status</span>
+            <span className="b-text-sm b-text-sub">App Status</span>
             <span className="b-badge b-badge-green">Activated</span>
           </div>
-          <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>BOGOS is active in your theme.</p>
+          <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>Promo Engine is active in your theme.</p>
         </div>
         <div className="b-card b-card-body">
           <div className="b-row b-gap-2 b-mb-4" style={{ marginBottom: 6 }}>
@@ -193,7 +186,7 @@ export default function Dashboard() {
         <div className="b-card b-card-body" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div>
             <h2 style={{ fontSize: 18, fontWeight: 700, margin: "0 0 6px", color: "var(--text)" }}>
-              Welcome to BOGOS, {shopDisplayName}
+              Welcome to Promo Engine, {shopDisplayName}
             </h2>
             <p style={{ fontSize: 14, color: "var(--text-sub)", margin: "0 0 16px" }}>
               Create an offer and increase your AOV now
@@ -246,7 +239,7 @@ export default function Dashboard() {
         <div className="b-card b-mb-4">
           <div className="b-card-body">
             <div className="b-row-between" style={{ marginBottom: 4 }}>
-              <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>BOGOS Getting Started Guide</h3>
+              <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Getting Started Guide</h3>
               <button type="button"
                 onClick={dismissOnboarding}
                 style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-sub)", fontSize: 18, lineHeight: 1, padding: "2px 4px" }}
@@ -275,38 +268,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── Recommended Apps ─────────────────────────────────── */}
-      {showRecommended && (
-        <div className="b-card b-mb-4">
-          <div className="b-card-body">
-            <div className="b-row-between" style={{ marginBottom: 14 }}>
-              <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Recommended apps for you</h3>
-              <button type="button"
-                onClick={dismissRecommended}
-                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-sub)", fontSize: 18, lineHeight: 1, padding: "2px 4px" }}
-                aria-label="Dismiss"
-              >
-                ×
-              </button>
-            </div>
-            <div className="b-rec-apps">
-              {DASHBOARD_RECOMMENDED_APPS.map((app) => (
-                <div key={app.name} className="b-rec-app-card">
-                  <div
-                    className="b-rec-app-icon"
-                    style={{ background: app.color, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 20 }}
-                  >
-                    {app.initial}
-                  </div>
-                  {app.badge && <div className="b-rec-app-badge">{app.badge}</div>}
-                  <div className="b-rec-app-name">{app.name}</div>
-                  <div className="b-rec-app-desc">{app.desc}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Support ──────────────────────────────────────────── */}
       <div className="b-card">

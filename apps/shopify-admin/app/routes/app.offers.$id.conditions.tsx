@@ -5,6 +5,7 @@
  */
 
 import { useLoaderData, Form, Link, useActionData, useNavigation } from "react-router";
+import { RouteErrorBoundary } from "../components/RouteErrorBoundary.js";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
@@ -16,6 +17,7 @@ import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
 
 function splitCsvList(value: string | null): string[] {
   return (value ?? "").split(",").flatMap((item) => {
@@ -58,28 +60,41 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     // Build value object based on condition type
     let value: Record<string, unknown> = {};
     switch (conditionType) {
-      case "cart_value":
+      case "cart_value": {
+        const thresh = parseFloat(formData.get("threshold") as string);
+        if (!Number.isFinite(thresh) || thresh < 0) return { error: "Threshold must be a valid positive number." };
         value = {
-          thresholdCents: Math.round(parseFloat(formData.get("threshold") as string) * 100),
+          thresholdCents: Math.round(thresh * 100),
           currencyCode: formData.get("currencyCode") ?? "USD",
           includeGiftValues: formData.get("includeGiftValues") === "on",
         };
         break;
-      case "cart_quantity":
+      }
+      case "cart_quantity": {
+        const minQty = parseInt(formData.get("minQty") as string, 10);
+        if (!Number.isFinite(minQty) || minQty < 1) return { error: "Minimum quantity must be at least 1." };
+        const maxQtyRaw = formData.get("maxQty");
+        const maxQty = maxQtyRaw ? parseInt(maxQtyRaw as string, 10) : undefined;
         value = {
-          minQuantity: parseInt(formData.get("minQty") as string, 10),
-          maxQuantity: formData.get("maxQty") ? parseInt(formData.get("maxQty") as string, 10) : undefined,
+          minQuantity: minQty,
+          maxQuantity: maxQty !== undefined && Number.isFinite(maxQty) ? maxQty : undefined,
           includeGiftValues: false,
         };
         break;
-      case "cart_value_multiplier":
+      }
+      case "cart_value_multiplier": {
+        const multThresh = parseFloat(formData.get("threshold") as string);
+        if (!Number.isFinite(multThresh) || multThresh < 0) return { error: "Threshold must be a valid positive number." };
+        const multRaw = formData.get("maxMultiplier");
+        const maxMult = multRaw ? parseInt(multRaw as string, 10) : undefined;
         value = {
-          thresholdCents: Math.round(parseFloat(formData.get("threshold") as string) * 100),
+          thresholdCents: Math.round(multThresh * 100),
           currencyCode: formData.get("currencyCode") ?? "USD",
-          maxMultiplier: formData.get("maxMultiplier") ? parseInt(formData.get("maxMultiplier") as string, 10) : undefined,
+          maxMultiplier: maxMult !== undefined && Number.isFinite(maxMult) ? maxMult : undefined,
           includeGiftValues: false,
         };
         break;
+      }
       case "customer_tags":
         value = {
           includeTags: splitCsvList(formData.get("includeTags") as string | null),
@@ -87,13 +102,16 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           treatGuestAsNoTags: formData.get("treatGuestAsNoTags") === "on",
         };
         break;
-      case "order_history_total_spent":
+      case "order_history_total_spent": {
+        const orderVal = parseFloat(formData.get("orderValue") as string);
+        if (!Number.isFinite(orderVal) || orderVal < 0) return { error: "Order value must be a valid positive number." };
         value = {
           type: "total_spent",
           operator: formData.get("operator") as string,
-          valueCents: Math.round(parseFloat(formData.get("orderValue") as string) * 100),
+          valueCents: Math.round(orderVal * 100),
         };
         break;
+      }
       case "one_use_per_customer":
         value = {};
         break;
@@ -151,7 +169,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     await db.delete(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)));
   }
 
-  return null;
+  return { success: true };
 };
 
 const MAIN_CONDITION_TYPES = [
@@ -226,12 +244,20 @@ export default function OfferConditionsPage() {
       />
 
       <div className="b-page">
-        {/* Action error banner */}
+        {/* Action feedback banners */}
         {actionData && "error" in actionData && actionData.error && (
           <div className="b-banner b-banner-red b-mb-4">
             <span className="b-banner-icon">⚠</span>
             <div className="b-banner-body">
               <p className="b-banner-text" style={{ margin: 0 }}>{actionData.error}</p>
+            </div>
+          </div>
+        )}
+        {actionData && "success" in actionData && actionData.success && (
+          <div className="b-banner b-banner-green b-mb-4">
+            <span className="b-banner-icon">✓</span>
+            <div className="b-banner-body">
+              <p className="b-banner-text" style={{ margin: 0 }}>Saved successfully.</p>
             </div>
           </div>
         )}
@@ -286,7 +312,8 @@ export default function OfferConditionsPage() {
                       {JSON.stringify(c.value)}
                     </span>
                   </div>
-                  <Form method="POST">
+                  <Form method="POST"
+                    onSubmit={(e) => { if (!window.confirm("Remove this condition?")) e.preventDefault(); }}>
                     <input type="hidden" name="intent" value="delete_condition" />
                     <input type="hidden" name="conditionId" value={c.id} />
                     <button
@@ -366,6 +393,9 @@ export default function OfferConditionsPage() {
                           type="number"
                           name="threshold"
                           className="b-input"
+                          min="0"
+                          step="0.01"
+                          required
                           autoComplete="off"
                         />
                       </div>
@@ -406,6 +436,8 @@ export default function OfferConditionsPage() {
                           type="number"
                           name="minQty"
                           className="b-input"
+                          min="1"
+                          required
                           autoComplete="off"
                         />
                       </div>

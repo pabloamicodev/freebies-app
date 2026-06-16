@@ -1,6 +1,7 @@
 import pino from "pino";
 import { startProductSyncWorker } from "./product-sync.worker.js";
 import { redis } from "./queues.js";
+import { closeDb } from "@promo/db";
 
 const log = pino({ name: "workers" });
 
@@ -21,18 +22,15 @@ productSyncWorker.on("error", (error) => {
 });
 
 // Graceful shutdown
-process.on("SIGTERM", async () => {
-  log.info("SIGTERM received — shutting down workers");
+async function shutdown() {
+  log.info("Shutting down product-sync worker");
   await productSyncWorker.close();
+  await closeDb();
   await redis.quit();
   process.exit(0);
-});
+}
 
-process.on("SIGINT", async () => {
-  log.info("SIGINT received — shutting down workers");
-  await productSyncWorker.close();
-  await redis.quit();
-  process.exit(0);
-});
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
 
 log.info("Workers running. Waiting for jobs...");

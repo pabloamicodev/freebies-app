@@ -5,6 +5,7 @@
 
 import { useLoaderData, useNavigate, useNavigation, useActionData, Form } from "react-router";
 import { NotFound } from "../components/NotFound.js";
+export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -47,7 +48,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const rewardType = formData.get("rewardType") as string;
     const discountType = formData.get("discountType") as string;
     const discountValue = parseFloat(formData.get("discountValue") as string) || 0;
-    const quantity = formData.get("quantity") ? parseInt(formData.get("quantity") as string, 10) : null;
+    const quantityRaw = formData.get("quantity");
+    const quantity = quantityRaw ? parseInt(quantityRaw as string, 10) : null;
+    if (quantity !== null && (!Number.isFinite(quantity) || quantity < 1)) {
+      return { error: "Quantity must be at least 1." };
+    }
     const isAutoAdd = formData.get("isAutoAdd") === "on";
     const isCustomerSelectable = formData.get("isCustomerSelectable") === "on";
     const trackMode = (formData.get("trackMode") as "product" | "variant") ?? "product";
@@ -176,7 +181,7 @@ export default function OfferRewardsPage() {
           actions={<button type="button" className="b-btn b-btn-primary" onClick={() => navigate(`/app/offers/${offer.id}`)}>Widget →</button>}
         />
 
-        {/* ── Action error banner ─────────────────────────── */}
+        {/* ── Action feedback banners ─────────────────────── */}
         {"error" in (actionData ?? {}) && (actionData as { error: string }).error && (
           <div className="b-banner b-banner-red b-mb-4">
             <span className="b-banner-icon">✕</span>
@@ -184,6 +189,14 @@ export default function OfferRewardsPage() {
               <p className="b-banner-text" style={{ margin: 0 }}>
                 {(actionData as { error: string }).error}
               </p>
+            </div>
+          </div>
+        )}
+        {"success" in (actionData ?? {}) && (actionData as { success: boolean }).success && (
+          <div className="b-banner b-banner-green b-mb-4">
+            <span className="b-banner-icon">✓</span>
+            <div className="b-banner-body">
+              <p className="b-banner-text" style={{ margin: 0 }}>Saved successfully.</p>
             </div>
           </div>
         )}
@@ -235,7 +248,8 @@ export default function OfferRewardsPage() {
                   </div>
 
                   {/* Right: delete button */}
-                  <Form method="POST" style={{ flexShrink: 0, marginLeft: 16 }}>
+                  <Form method="POST" style={{ flexShrink: 0, marginLeft: 16 }}
+                    onSubmit={(e) => { if (!window.confirm("Remove this reward?")) e.preventDefault(); }}>
                     <input type="hidden" name="intent" value="delete_reward" />
                     <input type="hidden" name="rewardId" value={r.id} />
                     <button
@@ -332,8 +346,9 @@ export default function OfferRewardsPage() {
                           name="discountValue"
                           type="number"
                           className="b-input"
-                          min="0"
+                          min="0.01"
                           step="0.01"
+                          required
                           autoComplete="off"
                         />
                       </div>
@@ -457,6 +472,7 @@ export default function OfferRewardsPage() {
                           value={giftQuantity}
                           onChange={(e) => setGiftQuantity(e.target.value)}
                           min="1"
+                          required
                           autoComplete="off"
                         />
                       </div>

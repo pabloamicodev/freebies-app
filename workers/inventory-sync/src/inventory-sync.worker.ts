@@ -12,14 +12,25 @@ import pino from "pino";
 import { getDb, variantCache, shops } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import type Redis from "ioredis";
+import { SHOPIFY_API_VERSION } from "@promo/shared-types";
 
 const log = pino({ name: "inventory-sync-worker" });
-const SHOPIFY_API_VERSION = "2026-04";
+
+async function decryptAccessToken(stored: string): Promise<string> {
+  const sep = stored.indexOf(":");
+  if (sep === -1) return stored;
+  const keyHex = process.env["TOKEN_ENCRYPTION_KEY"];
+  if (!keyHex) return stored;
+  try {
+    const key = await crypto.subtle.importKey("raw", Buffer.from(keyHex, "hex"), { name: "AES-GCM" }, false, ["decrypt"]);
+    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: Buffer.from(stored.slice(0, sep), "hex") }, key, Buffer.from(stored.slice(sep + 1), "hex"));
+    return new TextDecoder().decode(plaintext);
+  } catch { return stored; }
+}
 
 export interface InventorySyncJobData {
   shopId: string;
   shopDomain: string;
-  accessToken: string;
   /** For partial sync: specific inventory item ID from webhook. */
   inventoryItemId?: number;
   locationId?: number;
@@ -36,10 +47,15 @@ const INVENTORY_QUERY = `
 `;
 
 export function startInventorySyncWorker(redis: Redis) {
-  return new Worker<InventorySyncJobData>(
+  const worker = new Worker<InventorySyncJobData>(
     "inventory-sync",
     async (job: Job<InventorySyncJobData>) => {
-      const { shopId, shopDomain, accessToken, inventoryItemId, availableQuantity } = job.data;
+      const { shopId, shopDomain, inventoryItemId, availableQuantity } = job.data;
+      const db = getDb();
+      const shopRow = await db.select({ accessTokenEncrypted: shops.accessTokenEncrypted })
+        .from(shops).where(eq(shops.id, shopId)).limit(1).then((r) => r[0]);
+      if (!shopRow) throw new Error(`Shop ${shopId} not found`);
+      const accessToken = await decryptAccessToken(shopRow.accessTokenEncrypted);
 
       if (inventoryItemId !== undefined && availableQuantity !== undefined) {
         // Webhook partial update — use the webhook payload directly
@@ -83,7 +99,6 @@ export function startInventorySyncWorker(redis: Redis) {
           return;
         }
 
-        const db = getDb();
         await db
           .update(variantCache)
           .set({
@@ -103,60 +118,80 @@ export function startInventorySyncWorker(redis: Redis) {
         return;
       }
 
-      // Full inventory re-sync — fetch all variants with inventory
+      // Full inventory re-sync — cursor-paginate through ALL cached variants.
+      // Previously used LIMIT 500 which silently skipped variants beyond page 1.
       log.info({ shopDomain }, "Starting full inventory re-sync");
-      const db = getDb();
       let processed = 0;
+      const PAGE_SIZE = 250;
+      let offset = 0;
+      let hasMore = true;
 
-      // Get all cached variants for this shop and re-fetch their inventory
-      const variants = await db
-        .select({ variantGid: variantCache.variantGid })
-        .from(variantCache)
-        .where(eq(variantCache.shopId, shopId))
-        .limit(500); // Process in chunks
+      while (hasMore) {
+        const variants = await db
+          .select({ variantGid: variantCache.variantGid })
+          .from(variantCache)
+          .where(eq(variantCache.shopId, shopId))
+          .limit(PAGE_SIZE)
+          .offset(offset);
 
-      for (const v of variants) {
-        try {
-          const response = await fetch(
-            `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "X-Shopify-Access-Token": accessToken,
+        if (variants.length === 0) break;
+        hasMore = variants.length === PAGE_SIZE;
+        offset += variants.length;
+
+        for (const v of variants) {
+          try {
+            const response = await fetch(
+              `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-Shopify-Access-Token": accessToken,
+                },
+                body: JSON.stringify({
+                  query: `query { productVariant(id: "${v.variantGid}") { id inventoryQuantity inventoryPolicy availableForSale } }`,
+                }),
               },
-              body: JSON.stringify({
-                query: `query { productVariant(id: "${v.variantGid}") { id inventoryQuantity inventoryPolicy availableForSale } }`,
-              }),
-            },
-          );
+            );
 
-          if (!response.ok) continue;
-          const data = (await response.json()) as {
-            data: { productVariant: { inventoryQuantity: number; inventoryPolicy: string; availableForSale: boolean } | null };
-          };
+            if (!response.ok) continue;
+            const data = (await response.json()) as {
+              data: { productVariant: { inventoryQuantity: number; inventoryPolicy: string; availableForSale: boolean } | null };
+            };
 
-          const pv = data.data.productVariant;
-          if (!pv) continue;
+            const pv = data.data.productVariant;
+            if (!pv) continue;
 
-          await db
-            .update(variantCache)
-            .set({
-              inventoryQuantity: pv.inventoryQuantity,
-              inventoryPolicy: pv.inventoryPolicy,
-              availableForSale: pv.availableForSale,
-              syncedAt: new Date(),
-            })
-            .where(and(eq(variantCache.shopId, shopId), eq(variantCache.variantGid, v.variantGid)));
+            await db
+              .update(variantCache)
+              .set({
+                inventoryQuantity: pv.inventoryQuantity,
+                inventoryPolicy: pv.inventoryPolicy,
+                availableForSale: pv.availableForSale,
+                syncedAt: new Date(),
+              })
+              .where(and(eq(variantCache.shopId, shopId), eq(variantCache.variantGid, v.variantGid)));
 
-          processed++;
-        } catch {
-          // Continue on individual variant error
+            processed++;
+          } catch {
+            // Continue on individual variant error so one bad variant doesn't abort the full sync
+          }
         }
+
+        await job.updateProgress(Math.round((processed / Math.max(offset, 1)) * 100));
       }
 
       log.info({ shopDomain, processed }, "Full inventory re-sync complete");
     },
-    { connection: redis, concurrency: 3 },
+    { connection: redis, concurrency: 3, lockDuration: 120_000 },
   );
+
+  worker.on("failed", (job, err) => {
+    log.error(
+      { jobId: job?.id, shopDomain: job?.data.shopDomain, inventoryItemId: job?.data.inventoryItemId, err: err.message },
+      "inventory-sync job failed permanently",
+    );
+  });
+
+  return worker;
 }

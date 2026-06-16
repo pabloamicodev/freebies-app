@@ -1,6 +1,5 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
-import { decryptToken } from "../lib/token-crypto.server.js";
 import { getDb } from "@promo/db";
 import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs } from "@promo/db";
 import { eq, and, inArray } from "drizzle-orm";
@@ -27,7 +26,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         break;
 
       case "INVENTORY_LEVELS_UPDATE":
+      case "INVENTORY_LEVELS_CONNECT":
         await handleInventoryUpdate(shop, payload as InventoryWebhookPayload);
+        break;
+
+      case "COLLECTIONS_UPDATE":
+      case "COLLECTIONS_CREATE":
+        await handleCollectionChange(shop, (payload as { id: number }).id);
+        break;
+
+      case "MARKETS_CREATE":
+      case "MARKETS_UPDATE":
+      case "MARKETS_DELETE":
+        await handleMarketChange(shop);
         break;
 
       case "ORDERS_PAID":
@@ -183,43 +194,42 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
       },
     });
 
-  // Sync variants
-  if (product.variants) {
-    await Promise.all(product.variants.map((variant) =>
-      db
-        .insert(variantCache)
-        .values({
-          shopId,
-          productGid,
-          variantGid: variant.admin_graphql_api_id,
-          legacyVariantId: variant.id,
-          sku: variant.sku || null,
-          title: variant.title,
-          price: variant.price,
-          compareAtPrice: variant.compare_at_price,
-          currencyCode: "USD", // updated per store on sync
-          inventoryQuantity: variant.inventory_quantity,
-          inventoryPolicy: (variant.inventory_policy ?? "DENY").toUpperCase(),
-          availableForSale: variant.available,
-          requiresSellingPlan: variant.requires_selling_plan,
-          raw: variant as unknown,
-          syncedAt: new Date(),
-        })
-        .onConflictDoUpdate({
-          target: [variantCache.shopId, variantCache.variantGid],
-          set: {
-            sku: variant.sku || null,
-            title: variant.title,
-            price: variant.price,
-            compareAtPrice: variant.compare_at_price,
-            inventoryQuantity: variant.inventory_quantity,
-            inventoryPolicy: (variant.inventory_policy ?? "DENY").toUpperCase(),
-            availableForSale: variant.available,
-            raw: variant as unknown,
-            syncedAt: new Date(),
-          },
-        })
-    ));
+  // Sync variants — single batch upsert instead of N parallel inserts
+  if (product.variants && product.variants.length > 0) {
+    const now = new Date();
+    await db
+      .insert(variantCache)
+      .values(product.variants.map((variant) => ({
+        shopId,
+        productGid,
+        variantGid: variant.admin_graphql_api_id,
+        legacyVariantId: variant.id,
+        sku: variant.sku || null,
+        title: variant.title,
+        price: variant.price,
+        compareAtPrice: variant.compare_at_price,
+        currencyCode: "USD",
+        inventoryQuantity: variant.inventory_quantity,
+        inventoryPolicy: (variant.inventory_policy ?? "DENY").toUpperCase(),
+        availableForSale: variant.available,
+        requiresSellingPlan: variant.requires_selling_plan,
+        raw: variant as unknown,
+        syncedAt: now,
+      })))
+      .onConflictDoUpdate({
+        target: [variantCache.shopId, variantCache.variantGid],
+        set: {
+          sku: sql`excluded.sku`,
+          title: sql`excluded.title`,
+          price: sql`excluded.price`,
+          compareAtPrice: sql`excluded.compare_at_price`,
+          inventoryQuantity: sql`excluded.inventory_quantity`,
+          inventoryPolicy: sql`excluded.inventory_policy`,
+          availableForSale: sql`excluded.available_for_sale`,
+          raw: sql`excluded.raw`,
+          syncedAt: sql`excluded.synced_at`,
+        },
+      });
   }
 }
 
@@ -244,19 +254,40 @@ async function handleProductDelete(shop: string, legacyProductId: number) {
 async function handleInventoryUpdate(_shop: string, _payload: InventoryWebhookPayload) {
   const shopRecord = await getShopForWebhook(_shop);
   if (!shopRecord) return;
-  const accessToken = await decryptToken(shopRecord.accessTokenEncrypted);
   try {
     const { inventorySyncQueue } = await import("../lib/queues.server.js");
     await inventorySyncQueue.add("inventory-webhook", {
       shopId: shopRecord.id,
       shopDomain: _shop,
-      accessToken,
       inventoryItemId: _payload.inventory_item_id,
       locationId: _payload.location_id,
       availableQuantity: _payload.available,
     }, { priority: 1, attempts: 3, backoff: { type: "exponential", delay: 1000 } });
   } catch (err) {
     console.warn("Inventory webhook queue unavailable", err instanceof Error ? err.message : err);
+  }
+}
+
+async function handleMarketChange(shop: string) {
+  const shopId = await getShopId(shop);
+  if (!shopId) return;
+  try {
+    const { marketSyncQueue } = await import("../lib/queues.server.js");
+    await marketSyncQueue.add("market-webhook", { shopId, shopDomain: shop }, { priority: 1 });
+  } catch (err) {
+    console.warn("Market sync queue unavailable", err instanceof Error ? err.message : err);
+  }
+}
+
+async function handleCollectionChange(shop: string, legacyCollectionId: number) {
+  const shopId = await getShopId(shop);
+  if (!shopId) return;
+  const collectionGid = `gid://shopify/Collection/${legacyCollectionId}`;
+  try {
+    const { collectionSyncQueue } = await import("../lib/queues.server.js");
+    await collectionSyncQueue.add("collection-webhook", { shopId, shopDomain: shop, collectionGid }, { priority: 1 });
+  } catch (err) {
+    console.warn("Collection sync queue unavailable", err instanceof Error ? err.message : err);
   }
 }
 

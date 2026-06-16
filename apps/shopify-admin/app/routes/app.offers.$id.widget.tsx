@@ -3,7 +3,7 @@
  * Configure widget type, placement, theme, and copy for each offer.
  */
 
-import { useLoaderData, Form } from "react-router";
+import { useLoaderData, useActionData, useNavigation, Form } from "react-router";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { useState } from "react";
@@ -14,6 +14,7 @@ import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
@@ -38,6 +39,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const intent = formData.get("intent") as string;
   await loadOwnedOffer(db, shopId, offerId);
 
+  const isValidHex = (c: string) => /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(c);
+
   if (intent === "add_widget") {
     const widgetType = formData.get("widgetType") as string;
     const title = formData.get("widgetTitle") as string;
@@ -46,54 +49,73 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const buttonText = (formData.get("buttonText") as string) || "Add to Cart";
     const placementType = formData.get("placementType") as string;
 
-    const [newWidget] = await db.insert(widgets).values({
-      shopId, offerId,
-      type: widgetType as "gift_slider" | "gift_popup" | "cart_message" | "today_offer_widget" | "today_offer_block" | "progress_bar" | "gift_icon" | "gift_thumbnail" | "classic_bundle" | "mix_match_bundle" | "bundle_page" | "checkout_upsell" | "fbt" | "thank_you_upsell" | "volume_discount",
-      internalName: `${widgetType}-${offerId.slice(0, 8)}`,
-      title: title || null,
-      subtitle: subtitle || null,
-      config: {
-        buttonText,
-        maxSelectableCount: parseInt(formData.get("maxSelectable") as string, 10) || 1,
-        layout: formData.get("layout") as string || "popup",
-        showPrice: formData.get("showPrice") === "on",
-        showOutOfStock: formData.get("showOutOfStock") === "on",
-      },
-      theme: {
-        primaryColor,
-        buttonColor: formData.get("buttonColor") as string || primaryColor,
-        textColor: formData.get("textColor") as string || "#ffffff",
-        backgroundColor: formData.get("backgroundColor") as string || "#ffffff",
-      },
-      isEnabled: true,
-    }).returning({ id: widgets.id });
-
-    if (newWidget && placementType) {
-      await db.insert(widgetPlacements).values({
-        shopId, widgetId: newWidget.id,
-        placementType,
-        selector: formData.get("cssSelector") as string || null,
-        pageRule: {
-          pageType: formData.get("pageType") as string || "all",
-          urlPattern: formData.get("urlPattern") as string || undefined,
-        },
-        sortOrder: 0, isEnabled: true,
-      });
+    const colorFields = [
+      ["primaryColor", primaryColor],
+      ["buttonColor", (formData.get("buttonColor") as string) || primaryColor],
+      ["textColor", (formData.get("textColor") as string) || "#ffffff"],
+      ["backgroundColor", (formData.get("backgroundColor") as string) || "#ffffff"],
+    ];
+    for (const [field, val] of colorFields) {
+      if (val && !isValidHex(val)) return { error: `${field} must be a valid hex color (e.g. #ff0000).` };
     }
+
+    // Widget + its first placement must be atomic — an orphaned widget with no
+    // placement would be invisible in the storefront but still appear in the list.
+    await db.transaction(async (tx) => {
+      const [newWidget] = await tx.insert(widgets).values({
+        shopId, offerId,
+        type: widgetType as "gift_slider" | "gift_popup" | "cart_message" | "today_offer_widget" | "today_offer_block" | "progress_bar" | "gift_icon" | "gift_thumbnail" | "classic_bundle" | "mix_match_bundle" | "bundle_page" | "checkout_upsell" | "fbt" | "thank_you_upsell" | "volume_discount",
+        internalName: `${widgetType}-${offerId.slice(0, 8)}`,
+        title: title || null,
+        subtitle: subtitle || null,
+        config: {
+          buttonText,
+          maxSelectableCount: parseInt(formData.get("maxSelectable") as string, 10) || 1,
+          layout: (formData.get("layout") as string) || "popup",
+          showPrice: formData.get("showPrice") === "on",
+          showOutOfStock: formData.get("showOutOfStock") === "on",
+        },
+        theme: {
+          primaryColor,
+          buttonColor: (formData.get("buttonColor") as string) || primaryColor,
+          textColor: (formData.get("textColor") as string) || "#ffffff",
+          backgroundColor: (formData.get("backgroundColor") as string) || "#ffffff",
+        },
+        isEnabled: true,
+      }).returning({ id: widgets.id });
+
+      if (newWidget && placementType) {
+        await tx.insert(widgetPlacements).values({
+          shopId, widgetId: newWidget.id,
+          placementType,
+          selector: (formData.get("cssSelector") as string) || null,
+          pageRule: {
+            pageType: (formData.get("pageType") as string) || "all",
+            urlPattern: (formData.get("urlPattern") as string) || undefined,
+          },
+          sortOrder: 0, isEnabled: true,
+        });
+      }
+    });
+
+    return { success: true, intent: "add_widget" };
   }
 
   if (intent === "toggle_widget") {
     const widgetId = formData.get("widgetId") as string;
     const isEnabled = formData.get("isEnabled") === "true";
     await db.update(widgets).set({ isEnabled: !isEnabled }).where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId), eq(widgets.id, widgetId)));
+    return { success: true, intent: "toggle_widget" };
   }
 
   if (intent === "delete_widget") {
     const widgetId = formData.get("widgetId") as string;
+    if (!widgetId) return { error: "Widget ID missing." };
     await db.delete(widgets).where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId), eq(widgets.id, widgetId)));
+    return { success: true, intent: "delete_widget" };
   }
 
-  return null;
+  return { error: "Unknown intent." };
 };
 
 const WIDGET_TYPE_OPTIONS = [
@@ -126,6 +148,9 @@ const WIDGET_TYPE_LABELS: Record<string, string> = {
 
 export default function OfferWidgetPage() {
   const { offer, widgets: existingWidgets } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
+  const navigation = useNavigation();
+  const isSubmitting = navigation.state !== "idle";
   const [adding, setAdding] = useState(false);
   const [widgetType, setWidgetType] = useState("gift_slider");
   const [placementType, setPlacementType] = useState("cart_drawer");
@@ -137,6 +162,16 @@ export default function OfferWidgetPage() {
     <div className="b-page">
       {/* ── Header ── */}
       <PageHeader title="Widget Settings" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
+
+      {/* ── Action feedback banners ── */}
+      {actionData && "success" in actionData && actionData.success && (
+        <div className="b-banner b-banner-green b-mb-4">
+          <span className="b-banner-icon">✓</span>
+          <div className="b-banner-body">
+            <p className="b-banner-text" style={{ margin: 0 }}>Saved successfully.</p>
+          </div>
+        </div>
+      )}
 
       {/* ── Body layout ── */}
       <div className="b-editor-layout">
@@ -192,7 +227,8 @@ export default function OfferWidgetPage() {
                               </label>
                             </Form>
                             {/* Remove */}
-                            <Form method="POST" style={{ display: "inline-flex" }}>
+                            <Form method="POST" style={{ display: "inline-flex" }}
+                              onSubmit={(e) => { if (!window.confirm("Remove this widget?")) e.preventDefault(); }}>
                               <input type="hidden" name="intent" value="delete_widget" />
                               <input type="hidden" name="widgetId" value={w.id} />
                               <button
@@ -349,17 +385,25 @@ export default function OfferWidgetPage() {
 
                     {/* Actions */}
                     <div className="b-row b-gap-2 b-mt-2">
-                      <button type="submit" className="b-btn b-btn-primary">
-                        Add Widget
+                      <button type="submit" className="b-btn b-btn-primary" disabled={isSubmitting}>
+                        {isSubmitting ? "Adding…" : "Add Widget"}
                       </button>
                       <button
                         type="button"
                         className="b-btn b-btn-secondary"
                         onClick={() => setAdding(false)}
+                        disabled={isSubmitting}
                       >
                         Cancel
                       </button>
                     </div>
+
+                    {actionData && "error" in actionData && (
+                      <div className="b-banner b-banner-red">
+                        <span className="b-banner-icon">✕</span>
+                        <p className="b-banner-text" style={{ margin: 0 }}>{actionData.error}</p>
+                      </div>
+                    )}
                   </div>
                 </Form>
               </div>

@@ -28,9 +28,10 @@ export function verifyAppProxySignature(request: Request): string {
     entries.set(key, values);
   }
 
+  // Shopify spec: sort by key name (not by "key=value"), join without separator
   const signedMessage = Array.from(entries.entries())
+    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
     .map(([key, values]) => `${key}=${values.join(",")}`)
-    .sort()
     .join("");
   const calculated = createHmac("sha256", secret).update(signedMessage).digest("hex");
 

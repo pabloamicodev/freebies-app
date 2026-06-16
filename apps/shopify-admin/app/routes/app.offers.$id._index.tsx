@@ -15,6 +15,7 @@ import {
 import { ProductPicker } from "../components/ProductPicker.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, currencyCode: shopCurrencyCode, db } = await getShopContext(request);
@@ -98,7 +99,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     case "update_reward": {
       const rewardId = formData.get("rewardId") as string;
       if (!rewardId) return { error: "Missing reward id" };
-      const quantity = parseInt(formData.get("quantity") as string, 10) || 1;
+      const quantityParsed = parseInt(formData.get("quantity") as string, 10);
+      const quantity = Number.isFinite(quantityParsed) && quantityParsed >= 1 ? quantityParsed : 1;
       const discountType = formData.get("discountType") as string;
       const parsedValue = parseFloat(formData.get("discountValue") as string);
       const discountValue = Number.isFinite(parsedValue) ? parsedValue : 100;
@@ -125,24 +127,34 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       break;
     }
     case "publish": {
-      // Guard: must have at least one main condition and one reward
-      const [existingConditions, existingRewards] = await Promise.all([
+      // Guard: must have at least one scope='main' condition and one reward
+      const [existingMainConditions, existingRewards] = await Promise.all([
         db.select({ id: offerConditions.id }).from(offerConditions)
-          .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId))),
+          .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.scope, "main"))),
         db.select({ id: offerRewards.id }).from(offerRewards)
           .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))),
       ]);
-      if (existingConditions.length === 0) {
+      if (existingMainConditions.length === 0) {
         return { error: "Cannot publish: add at least one main condition before publishing." };
       }
       if (existingRewards.length === 0) {
         return { error: "Cannot publish: add at least one reward (gift) before publishing." };
       }
 
+      // Enqueue FIRST — if the queue is down, we do not mark the offer active.
+      try {
+        const { offerPublishQueue } = await import("../lib/queues.server.js") as { offerPublishQueue?: { add: (name: string, data: unknown, opts?: unknown) => Promise<unknown> } };
+        if (!offerPublishQueue) return { error: "Publish queue unavailable — please try again." };
+        await offerPublishQueue.add(`publish-${offerId}`, { offerId, shopDomain: session.shop }, { priority: 1 });
+      } catch (err) {
+        console.warn("Failed to enqueue offer publish job", { offerId, err });
+        return { error: "Could not queue publish job — please try again." };
+      }
+
+      // Queue accepted the job; now persist status + version snapshot atomically.
       const now = new Date();
       await db.update(offers).set({ status: "active", updatedAt: now }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
 
-      // Write version snapshot
       const [offerSnapshot, condSnapshot, rewSnapshot, existingVersions] = await Promise.all([
         db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1),
         db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId))),
@@ -160,14 +172,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         createdBy: session.shop,
       }).onConflictDoNothing();
 
-      try {
-        const { offerPublishQueue } = await import("../lib/queues.server.js") as { offerPublishQueue?: { add: (name: string, data: unknown, opts?: unknown) => Promise<unknown> } };
-        if (offerPublishQueue) {
-          await offerPublishQueue.add(`publish-${offerId}`, { offerId, shopDomain: session.shop }, { priority: 1 });
-        }
-      } catch (err) {
-        console.warn("Failed to enqueue offer publish job", { offerId, err });
-      }
       break;
     }
     case "pause": {
@@ -188,7 +192,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
   }
 
-  return null;
+  return { success: true };
 };
 
 
@@ -895,6 +899,14 @@ export default function OfferDetailPage() {
                 </div>
               </div>
             )}
+            {actionData && "success" in actionData && actionData.success && (
+              <div className="b-banner b-banner-green" style={{ marginBottom: 12 }}>
+                <span className="b-banner-icon">✓</span>
+                <div className="b-banner-body">
+                  <p className="b-banner-text" style={{ margin: 0 }}>Saved successfully.</p>
+                </div>
+              </div>
+            )}
 
             <div className="b-editor-footer">
               <button type="button" className="b-btn b-btn-secondary" onClick={saveInfo}>Save draft</button>
@@ -1211,12 +1223,20 @@ export default function OfferDetailPage() {
             )}
           </div>
 
-          {/* Publish error banner */}
+          {/* Action feedback banners */}
           {actionData && "error" in actionData && actionData.error && (
             <div className="b-banner b-banner-red" style={{ marginBottom: 12 }}>
               <span className="b-banner-icon">⚠</span>
               <div className="b-banner-body">
                 <p className="b-banner-text" style={{ margin: 0 }}>{actionData.error}</p>
+              </div>
+            </div>
+          )}
+          {actionData && "success" in actionData && actionData.success && (
+            <div className="b-banner b-banner-green" style={{ marginBottom: 12 }}>
+              <span className="b-banner-icon">✓</span>
+              <div className="b-banner-body">
+                <p className="b-banner-text" style={{ margin: 0 }}>Saved successfully.</p>
               </div>
             </div>
           )}

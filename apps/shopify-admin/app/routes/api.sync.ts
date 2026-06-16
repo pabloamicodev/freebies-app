@@ -7,27 +7,9 @@
 
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
-import { decryptToken } from "../lib/token-crypto.server.js";
 import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
 
-type ShopRecord = typeof shops.$inferSelect;
-type ProductSyncQueue = {
-  add: (name: string, data: unknown, opts?: { priority?: number }) => Promise<unknown>;
-};
-
-async function enqueueProductSync(
-  productSyncQueue: ProductSyncQueue,
-  shop: Pick<ShopRecord, "id" | "myshopifyDomain" | "accessTokenEncrypted">,
-) {
-  const accessToken = await decryptToken(shop.accessTokenEncrypted);
-  return productSyncQueue.add("manual-product-sync", {
-    shopId: shop.id,
-    shopDomain: shop.myshopifyDomain,
-    accessToken,
-    mode: "full" as const,
-  }, { priority: 2 });
-}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -50,22 +32,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     import("ioredis"),
   ]);
   const redis = new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false });
-  const productSyncQueue = new Queue("product-sync", { connection: redis });
+
+  const jobData = { shopId: shop.id, shopDomain: shop.myshopifyDomain };
 
   switch (syncType) {
     case "products": {
-      await enqueueProductSync(productSyncQueue, shop);
+      const productSyncQueue = new Queue("product-sync", { connection: redis });
+      await productSyncQueue.add("manual-product-sync", { ...jobData, mode: "full" as const }, { priority: 2 });
       await redis.quit();
       return Response.json({ queued: true, type: "products" });
     }
 
-    case "markets":
+    case "markets": {
+      const marketSyncQueue = new Queue("market-sync", { connection: redis });
+      await marketSyncQueue.add("manual-market-sync", jobData, { priority: 2 });
       await redis.quit();
       return Response.json({ queued: true, type: "markets" });
+    }
 
-    case "inventory":
+    case "inventory": {
+      const inventorySyncQueue = new Queue("inventory-sync", { connection: redis });
+      await inventorySyncQueue.add("manual-inventory-sync", jobData, { priority: 2 });
       await redis.quit();
       return Response.json({ queued: true, type: "inventory" });
+    }
 
     default:
       await redis.quit();

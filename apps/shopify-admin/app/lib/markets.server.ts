@@ -21,11 +21,6 @@ export interface ShopifyMarket {
   primaryLocale: string;
 }
 
-// NOTE: `enabled`, `primary`, `regions` and `primaryLocale` are deprecated on
-// the Market object as of 2024-2025 (superseded by `status`, `conditions`,
-// `webPresences`). They still resolve in 2026-04 but must be migrated before
-// Shopify removes them — that migration requires validating the new nested
-// shapes (MarketConditions / MarketWebPresence) against a live store.
 const MARKETS_QUERY = `
   query GetMarkets {
     markets(first: 50) {
@@ -33,19 +28,19 @@ const MARKETS_QUERY = `
         id
         name
         handle
-        enabled
-        primary
+        status
         currencySettings {
           baseCurrency { currencyCode }
         }
-        regions(first: 50) {
+        conditions {
+          allMarkets
+          countries { code }
+        }
+        webPresences(first: 5) {
           nodes {
-            ... on MarketRegionCountry {
-              code
-            }
+            defaultLocale { locale }
           }
         }
-        primaryLocale { locale }
       }
     }
   }
@@ -55,11 +50,10 @@ interface MarketNode {
   id: string;
   name: string;
   handle: string;
-  enabled: boolean;
-  primary: boolean;
+  status: string;
   currencySettings?: { baseCurrency?: { currencyCode?: string } | null } | null;
-  regions?: { nodes?: Array<{ code?: string | null }> } | null;
-  primaryLocale?: { locale?: string } | null;
+  conditions?: { allMarkets?: boolean; countries?: Array<{ code?: string | null }> } | null;
+  webPresences?: { nodes?: Array<{ defaultLocale?: { locale?: string } | null }> } | null;
 }
 
 /**
@@ -80,11 +74,11 @@ async function fetchMarketsFromShopify(
     id: m.id,
     name: m.name,
     handle: m.handle,
-    enabled: m.enabled,
-    primary: m.primary,
+    enabled: m.status === "ACTIVE",
+    primary: m.conditions?.allMarkets ?? false,
     currencyCode: m.currencySettings?.baseCurrency?.currencyCode ?? "USD",
-    countryCodes: (m.regions?.nodes ?? []).flatMap((r) => (r.code ? [r.code] : [])),
-    primaryLocale: m.primaryLocale?.locale ?? "en",
+    countryCodes: (m.conditions?.countries ?? []).flatMap((c) => (c.code ? [c.code] : [])),
+    primaryLocale: m.webPresences?.nodes?.[0]?.defaultLocale?.locale ?? "en",
   }));
 }
 

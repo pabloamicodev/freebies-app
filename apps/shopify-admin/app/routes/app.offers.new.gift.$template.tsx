@@ -3,7 +3,7 @@
  * Routes: /app/offers/new/gift/bxgy  /bogo  /free-sample  /cart-value  /tiered  /scratch
  */
 
-import { Form, useActionData, useNavigate, redirect, useParams } from "react-router";
+import { Form, useActionData, useNavigate, useNavigation, redirect, useParams } from "react-router";
 import { useCallback } from "react";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
@@ -182,6 +182,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 export default function NewGiftOfferPage() {
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
+  const { state } = useNavigation();
+  const isSubmitting = state !== "idle";
   const { template: slug = "scratch" } = useParams<{ template: string }>();
   const templateId = SLUG_TO_TEMPLATE[slug] ?? "scratch";
   const preset = TEMPLATE_PRESETS[templateId];
@@ -773,11 +775,11 @@ export default function NewGiftOfferPage() {
 
         {/* ── Footer ── */}
         <div className="rd-style-031">
-          <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary">
-            Save draft
+          <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary" disabled={isSubmitting}>
+            {isSubmitting ? "Saving…" : "Save draft"}
           </button>
-          <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary" style={{ background: "var(--gift-grad)", boxShadow: "0 4px 12px rgba(217,119,6,0.3)" }}>
-            Publish offer
+          <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary" style={{ background: "var(--gift-grad)", boxShadow: "0 4px 12px rgba(217,119,6,0.3)" }} disabled={isSubmitting}>
+            {isSubmitting ? "Publishing…" : "Publish offer"}
           </button>
         </div>
 

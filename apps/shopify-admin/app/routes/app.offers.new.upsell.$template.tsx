@@ -5,7 +5,7 @@
  *         /app/offers/new/upsell/thank-you   → Thank You page upsell
  */
 
-import { Form, useActionData, useNavigate, redirect, useParams } from "react-router";
+import { Form, useActionData, useNavigate, useNavigation, redirect, useParams } from "react-router";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -186,6 +186,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 export default function NewUpsellOfferPage() {
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
+  const { state } = useNavigation();
+  const isSubmitting = state !== "idle";
   const { template: templateSlug = "checkout" } = useParams<{ template: string }>();
 
   const templateId = SLUG_TO_TEMPLATE[templateSlug] ?? "checkout";
@@ -890,13 +892,11 @@ export default function NewUpsellOfferPage() {
           >
             Cancel
           </button>
-          <button
-            type="submit" name="intent" value="draft" className="b-btn b-btn-secondary"
-          >
-            Save draft
+          <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary" disabled={isSubmitting}>
+            {isSubmitting ? "Saving…" : "Save draft"}
           </button>
-          <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary" style={{ background: "var(--upsell-grad)", boxShadow: "0 4px 12px rgba(124,58,237,0.3)" }}>
-            Publish offer
+          <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary" style={{ background: "var(--upsell-grad)", boxShadow: "0 4px 12px rgba(124,58,237,0.3)" }} disabled={isSubmitting}>
+            {isSubmitting ? "Publishing…" : "Publish offer"}
           </button>
         </div>
 

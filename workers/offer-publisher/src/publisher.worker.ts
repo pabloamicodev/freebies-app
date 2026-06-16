@@ -37,11 +37,10 @@ async function decryptAccessToken(stored: string): Promise<string> {
   }
 }
 import pino from "pino";
+import { SHOPIFY_API_VERSION } from "@promo/shared-types";
 import { compileOfferConfig, estimateConfigSize, type CompiledFunctionConfig } from "./compile-config.js";
 
 const log = pino({ name: "offer-publisher-worker" });
-
-const SHOPIFY_API_VERSION = "2026-04";
 const METAFIELD_NAMESPACE = "promo_engine";
 const METAFIELD_KEY = "function_config";
 const MAX_METAFIELD_BYTES = 9500; // Leave headroom under 10KB limit
@@ -54,7 +53,7 @@ export interface OfferPublishJobData {
 }
 
 export function startOfferPublisherWorker() {
-  return new Worker<OfferPublishJobData>(
+  const worker = new Worker<OfferPublishJobData>(
     "offer-publish",
     async (job: Job<OfferPublishJobData>) => {
       const { shopDomain } = job.data;
@@ -145,6 +144,15 @@ export function startOfferPublisherWorker() {
       concurrency: 2,
     },
   );
+
+  worker.on("failed", (job, err) => {
+    log.error(
+      { jobId: job?.id, shopDomain: job?.data.shopDomain, offerId: job?.data.offerId, err: err.message },
+      "offer-publish job failed permanently",
+    );
+  });
+
+  return worker;
 }
 
 async function shopGraphQL<T>(

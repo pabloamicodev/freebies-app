@@ -9,17 +9,28 @@
 
 import { Worker, type Job } from "bullmq";
 import pino from "pino";
-import { getDb, productCache } from "@promo/db";
+import { getDb, productCache, shops } from "@promo/db";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import type Redis from "ioredis";
+import { SHOPIFY_API_VERSION } from "@promo/shared-types";
 
 const log = pino({ name: "collection-sync-worker" });
-const SHOPIFY_API_VERSION = "2026-04";
+
+async function decryptAccessToken(stored: string): Promise<string> {
+  const sep = stored.indexOf(":");
+  if (sep === -1) return stored;
+  const keyHex = process.env["TOKEN_ENCRYPTION_KEY"];
+  if (!keyHex) return stored;
+  try {
+    const key = await crypto.subtle.importKey("raw", Buffer.from(keyHex, "hex"), { name: "AES-GCM" }, false, ["decrypt"]);
+    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: Buffer.from(stored.slice(0, sep), "hex") }, key, Buffer.from(stored.slice(sep + 1), "hex"));
+    return new TextDecoder().decode(plaintext);
+  } catch { return stored; }
+}
 
 export interface CollectionSyncJobData {
   shopId: string;
   shopDomain: string;
-  accessToken: string;
   /** Specific collection GID for partial sync. */
   collectionGid?: string;
 }
@@ -46,11 +57,15 @@ const ALL_COLLECTIONS_QUERY = `
 `;
 
 export function startCollectionSyncWorker(redis: Redis) {
-  return new Worker<CollectionSyncJobData>(
+  const worker = new Worker<CollectionSyncJobData>(
     "collection-sync",
     async (job: Job<CollectionSyncJobData>) => {
-      const { shopId, shopDomain, accessToken, collectionGid } = job.data;
+      const { shopId, shopDomain, collectionGid } = job.data;
       const db = getDb();
+      const shopRow = await db.select({ accessTokenEncrypted: shops.accessTokenEncrypted })
+        .from(shops).where(eq(shops.id, shopId)).limit(1).then((r) => r[0]);
+      if (!shopRow) throw new Error(`Shop ${shopId} not found`);
+      const accessToken = await decryptAccessToken(shopRow.accessTokenEncrypted);
 
       if (collectionGid) {
         // Partial sync: sync just this collection's products
@@ -89,8 +104,17 @@ export function startCollectionSyncWorker(redis: Redis) {
 
       log.info({ shopDomain, synced }, "Collection sync complete");
     },
-    { connection: redis, concurrency: 2 },
+    { connection: redis, concurrency: 2, lockDuration: 300_000 },
   );
+
+  worker.on("failed", (job, err) => {
+    log.error(
+      { jobId: job?.id, shopDomain: job?.data.shopDomain, collectionGid: job?.data.collectionGid, err: err.message },
+      "collection-sync job failed permanently",
+    );
+  });
+
+  return worker;
 }
 
 async function syncCollectionProducts(

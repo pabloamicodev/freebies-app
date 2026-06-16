@@ -5,7 +5,7 @@
  *         /app/offers/new/discount/cart     → Cart discount wizard
  */
 
-import { Form, useActionData, useNavigate, redirect, useParams } from "react-router";
+import { Form, useActionData, useNavigate, useNavigation, redirect, useParams } from "react-router";
 import { useCallback } from "react";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
@@ -301,6 +301,8 @@ function createCartTier(values: Omit<CartTier, "id">): CartTier {
 export default function NewDiscountOfferPage() {
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
+  const { state } = useNavigation();
+  const isSubmitting = state !== "idle";
   const { template: templateSlug = "volume" } = useParams<{ template: string }>();
 
   const templateId = SLUG_TO_TEMPLATE[templateSlug] ?? "volume";
@@ -1197,11 +1199,11 @@ export default function NewDiscountOfferPage() {
             onClick={() => void navigate("/app/offers")}>
             Cancel
           </button>
-          <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary">
-            Save draft
+          <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary" disabled={isSubmitting}>
+            {isSubmitting ? "Saving…" : "Save draft"}
           </button>
-          <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary" style={{ background: "var(--discount-grad)", boxShadow: "0 4px 12px rgba(225,29,72,0.3)" }}>
-            Publish offer
+          <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary" style={{ background: "var(--discount-grad)", boxShadow: "0 4px 12px rgba(225,29,72,0.3)" }} disabled={isSubmitting}>
+            {isSubmitting ? "Publishing…" : "Publish offer"}
           </button>
         </div>
 

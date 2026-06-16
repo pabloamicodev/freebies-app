@@ -3,7 +3,7 @@
  * Controls stacking, combination with other discounts, max applications.
  */
 
-import { useLoaderData, Form } from "react-router";
+import { useLoaderData, useActionData, useNavigation, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { NotFound } from "../components/NotFound.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -43,6 +43,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     giftValueCountsForOtherOffers: formData.get("gift_value_counts") === "on",
     maxApplicationsPerCart: formData.get("max_per_cart") ? parseInt(formData.get("max_per_cart") as string, 10) : null,
     maxApplicationsPerCustomer: formData.get("max_per_customer") ? parseInt(formData.get("max_per_customer") as string, 10) : null,
+
   };
 
   await db.insert(offerCombinationPolicies)
@@ -62,11 +63,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       },
     });
 
-  return null;
+  return { success: true };
 };
 
 export default function OfferCombinationPage() {
   const { offer, policy } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
+  const navigation = useNavigation();
+  const isSubmitting = navigation.state !== "idle";
   if (!offer) return <NotFound message="Not found." />;
 
   return (
@@ -168,26 +172,50 @@ export default function OfferCombinationPage() {
 
                   <hr className="b-divider" />
 
-                  {/* max applications */}
+                  {/* max applications per cart */}
                   <div>
-                    <label className="b-label" htmlFor="max_applications">Max applications per cart</label>
+                    <label className="b-label" htmlFor="max_per_cart">Max applications per cart</label>
                     <input
-                      id="max_applications"
+                      id="max_per_cart"
                       className="b-input"
                       type="number"
-                      name="max_applications"
+                      name="max_per_cart"
                       min={1}
                       defaultValue={policy?.maxApplicationsPerCart?.toString() ?? ""}
                       placeholder="Unlimited"
                       style={{ maxWidth: 200 }}
                     />
-                    <p className="b-help">Limit how many times this offer can apply in a single cart (e.g., 1 for one-time only). Leave blank for unlimited.</p>
+                    <p className="b-help">Limit how many times this offer can apply in a single cart. Leave blank for unlimited.</p>
                   </div>
+
+                  {/* max applications per customer */}
+                  <div>
+                    <label className="b-label" htmlFor="max_per_customer">Max applications per customer</label>
+                    <input
+                      id="max_per_customer"
+                      className="b-input"
+                      type="number"
+                      name="max_per_customer"
+                      min={1}
+                      defaultValue={policy?.maxApplicationsPerCustomer?.toString() ?? ""}
+                      placeholder="Unlimited"
+                      style={{ maxWidth: 200 }}
+                    />
+                    <p className="b-help">Limit how many times a single customer can benefit from this offer. Leave blank for unlimited.</p>
+                  </div>
+
+                  {/* Feedback */}
+                  {actionData && "success" in actionData && (
+                    <div className="b-banner b-banner-green">
+                      <span className="b-banner-icon">✓</span>
+                      <p className="b-banner-text" style={{ margin: 0 }}>Combination policy saved.</p>
+                    </div>
+                  )}
 
                   {/* Save */}
                   <div className="b-editor-footer">
-                    <button type="submit" className="b-btn b-btn-primary">
-                      Save Combination Policy
+                    <button type="submit" className="b-btn b-btn-primary" disabled={isSubmitting}>
+                      {isSubmitting ? "Saving…" : "Save Combination Policy"}
                     </button>
                   </div>
 

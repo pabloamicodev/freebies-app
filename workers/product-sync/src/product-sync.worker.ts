@@ -3,19 +3,29 @@ import { redis, QUEUES } from "./queues.js";
 import { getDb, productCache, variantCache, shops } from "@promo/db";
 import { and, eq, lt } from "drizzle-orm";
 import pino from "pino";
+import { SHOPIFY_API_VERSION } from "@promo/shared-types";
 
 const log = pino({ name: "product-sync-worker" });
+
+async function decryptAccessToken(stored: string): Promise<string> {
+  const sep = stored.indexOf(":");
+  if (sep === -1) return stored;
+  const keyHex = process.env["TOKEN_ENCRYPTION_KEY"];
+  if (!keyHex) return stored;
+  try {
+    const key = await crypto.subtle.importKey("raw", Buffer.from(keyHex, "hex"), { name: "AES-GCM" }, false, ["decrypt"]);
+    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: Buffer.from(stored.slice(0, sep), "hex") }, key, Buffer.from(stored.slice(sep + 1), "hex"));
+    return new TextDecoder().decode(plaintext);
+  } catch { return stored; }
+}
 
 export interface ProductSyncJobData {
   shopId: string;
   shopDomain: string;
-  accessToken: string;
   /** "full" = sync all products; "partial" = sync specific product by GID. */
   mode: "full" | "partial";
   productGid?: string;
 }
-
-const SHOPIFY_API_VERSION = "2026-04";
 const PRODUCTS_PER_PAGE = 250;
 
 async function fetchProductsPage(
@@ -161,19 +171,21 @@ async function syncProduct(shopId: string, product: ShopifyProduct, currencyCode
 }
 
 export function startProductSyncWorker() {
-  return new Worker<ProductSyncJobData>(
+  const worker = new Worker<ProductSyncJobData>(
     QUEUES.PRODUCT_SYNC,
     async (job: Job<ProductSyncJobData>) => {
-      const { shopId, shopDomain, accessToken, mode, productGid } = job.data;
+      const { shopId, shopDomain, mode, productGid } = job.data;
 
-      // Get shop currency
+      // Get shop currency + decrypt access token
       const db = getDb();
       const shopRows = await db
-        .select({ currencyCode: shops.currencyCode })
+        .select({ currencyCode: shops.currencyCode, accessTokenEncrypted: shops.accessTokenEncrypted })
         .from(shops)
         .where(eq(shops.id, shopId))
         .limit(1);
-      const currencyCode = shopRows[0]?.currencyCode ?? "USD";
+      if (!shopRows[0]) throw new Error(`Shop ${shopId} not found`);
+      const currencyCode = shopRows[0].currencyCode ?? "USD";
+      const accessToken = await decryptAccessToken(shopRows[0].accessTokenEncrypted);
 
       if (mode === "partial" && productGid) {
         // Sync single product
@@ -227,9 +239,18 @@ export function startProductSyncWorker() {
     {
       connection: redis,
       concurrency: 3,
-      limiter: { max: 2, duration: 1000 }, // Respect Shopify rate limits
+      limiter: { max: 2, duration: 1000 },
     },
   );
+
+  worker.on("failed", (job, err) => {
+    log.error(
+      { jobId: job?.id, shopDomain: job?.data.shopDomain, mode: job?.data.mode, err: err.message },
+      "product-sync job failed permanently",
+    );
+  });
+
+  return worker;
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────

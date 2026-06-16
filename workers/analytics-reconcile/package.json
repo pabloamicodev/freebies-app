@@ -10,6 +10,7 @@
   "dependencies": {
     "@promo/db": "workspace:*",
     "bullmq": "^5.25.0",
+    "drizzle-orm": "^0.38.0",
     "ioredis": "^5.4.1",
     "pino": "^9.5.0"
   },

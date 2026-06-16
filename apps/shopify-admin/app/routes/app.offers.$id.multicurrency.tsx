@@ -75,7 +75,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   for (let i = 0; i < currencies.length; i++) {
     const currency = currencies[i]?.toUpperCase();
-    const cents = Math.round(parseFloat(thresholds[i] ?? "0") * 100);
+    const raw = parseFloat(thresholds[i] ?? "0");
+    const cents = Number.isFinite(raw) && raw > 0 ? Math.round(raw * 100) : 0;
     if (currency && cents > 0) {
       overrides[currency] = cents;
     }
@@ -85,7 +86,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const fixedOverrides: Record<string, number> = {};
   for (let i = 0; i < currencies.length; i++) {
     const currency = currencies[i]?.toUpperCase();
-    const fixed = Math.round(parseFloat(fixedAmounts[i] ?? "0") * 100);
+    const raw = parseFloat(fixedAmounts[i] ?? "0");
+    const fixed = Number.isFinite(raw) && raw > 0 ? Math.round(raw * 100) : 0;
     if (currency && fixed > 0) {
       fixedOverrides[currency] = fixed;
     }

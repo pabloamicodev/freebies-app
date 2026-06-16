@@ -11,6 +11,7 @@ import {
 } from "../components/Icons.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const timer = createRouteTimer("app.analytics._index");

@@ -3,6 +3,7 @@ import {
   numeric, index, unique,
 } from "drizzle-orm/pg-core";
 import { shops } from "./shops";
+import { offers } from "./offers";
 
 export const productCache = pgTable(
   "product_cache",
@@ -35,6 +36,7 @@ export const productCache = pgTable(
     unique("product_cache_shop_gid").on(t.shopId, t.productGid),
     index("product_cache_shop_handle_idx").on(t.shopId, t.handle),
     index("product_cache_shop_tags_idx").on(t.shopId, t.tags),
+    index("product_cache_shop_status_idx").on(t.shopId, t.status),
   ],
 );
 
@@ -69,6 +71,7 @@ export const variantCache = pgTable(
     unique("variant_cache_shop_gid").on(t.shopId, t.variantGid),
     index("variant_cache_shop_product_idx").on(t.shopId, t.productGid),
     index("variant_cache_shop_sku_idx").on(t.shopId, t.sku),
+    index("variant_cache_shop_available_idx").on(t.shopId, t.productGid, t.availableForSale),
   ],
 );
 
@@ -81,7 +84,9 @@ export const giftCloneProducts = pgTable("gift_clone_products", {
   shopId: uuid("shop_id")
     .notNull()
     .references(() => shops.id, { onDelete: "cascade" }),
-  offerId: uuid("offer_id").notNull(),
+  offerId: uuid("offer_id")
+    .notNull()
+    .references(() => offers.id, { onDelete: "cascade" }),
   rewardId: uuid("reward_id").notNull(),
   /** Source product GID (the actual product being gifted). */
   sourceProductGid: text("source_product_gid").notNull(),

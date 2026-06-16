@@ -8,7 +8,7 @@
 import { Worker, type Job } from "bullmq";
 import pino from "pino";
 import { getDb, analyticsEvents } from "@promo/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, lt } from "drizzle-orm";
 import type Redis from "ioredis";
 
 const log = pino({ name: "analytics-reconcile-worker" });
@@ -25,10 +25,21 @@ export interface ReconcileJobData {
   sessionId: string | null;
 }
 
+const RETENTION_DAYS = 90;
+
 export function startAnalyticsReconcileWorker(redis: Redis) {
-  return new Worker<ReconcileJobData>(
+  const worker = new Worker<ReconcileJobData>(
     "analytics-reconcile",
     async (job: Job<ReconcileJobData>) => {
+      // Daily retention cleanup — delete events older than RETENTION_DAYS
+      if (job.name === "cleanup-old-events") {
+        const db = getDb();
+        const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
+        const deleted = await db.delete(analyticsEvents).where(lt(analyticsEvents.occurredAt, cutoff)).returning({ id: analyticsEvents.id });
+        log.info({ deletedCount: deleted.length, cutoff }, "Analytics retention cleanup complete");
+        return;
+      }
+
       const { shopId, orderId, orderGid, cartToken, totalPriceCents, offerIds, sessionId } = job.data;
       const db = getDb();
 
@@ -43,7 +54,7 @@ export function startAnalyticsReconcileWorker(redis: Redis) {
         return;
       }
 
-      // Insert order_placed event with attribution data
+      // Insert order_placed event with attribution data — idempotent via onConflictDoNothing
       for (const offerId of offerIds) {
         await db.insert(analyticsEvents).values({
           shopId,
@@ -57,7 +68,7 @@ export function startAnalyticsReconcileWorker(redis: Redis) {
             total_price_cents: totalPriceCents,
             offer_ids: offerIds,
           },
-        });
+        }).onConflictDoNothing();
       }
 
       log.info({ orderId, offerCount: offerIds.length }, "Order attribution reconciled");
@@ -65,6 +76,16 @@ export function startAnalyticsReconcileWorker(redis: Redis) {
     {
       connection: redis,
       concurrency: 5,
+      lockDuration: 30_000,
     },
   );
+
+  worker.on("failed", (job, err) => {
+    log.error(
+      { jobId: job?.id, shopId: job?.data.shopId, orderId: job?.data.orderId, err: err.message },
+      "analytics-reconcile job failed permanently",
+    );
+  });
+
+  return worker;
 }

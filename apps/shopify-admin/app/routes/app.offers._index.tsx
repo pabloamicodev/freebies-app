@@ -9,7 +9,7 @@ import {
   offers,
   widgets,
 } from "@promo/db";
-import { eq, and, like, desc } from "drizzle-orm";
+import { eq, and, like, desc, count } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
   IconCopy, IconTrash, IconArchive, IconEye, IconSearch, IconFilter,
@@ -23,6 +23,7 @@ import { createRouteTimer } from "../lib/route-timing.server.js";
 import type { OfferCreateModalType } from "../components/offers/OfferCreateModalFlow.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
 
 type OfferStatus = "draft" | "active" | "paused" | "scheduled" | "expired" | "archived";
 
@@ -36,31 +37,40 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return { offers: [] };
   }
 
+  const PAGE_SIZE = 50;
   const url = new URL(request.url);
   const statusFilter = url.searchParams.get("status") as OfferStatus | "all" | null;
   const search = url.searchParams.get("q") ?? "";
+  const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10) || 1);
 
-  const conditions = [eq(offers.shopId, shopId)];
-  if (statusFilter && statusFilter !== "all") conditions.push(eq(offers.status, statusFilter));
-  if (search) conditions.push(like(offers.internalName, `%${search}%`));
+  const whereConditions = [eq(offers.shopId, shopId)];
+  if (statusFilter && statusFilter !== "all") whereConditions.push(eq(offers.status, statusFilter));
+  if (search) whereConditions.push(like(offers.internalName, `%${search}%`));
+  const where = and(...whereConditions);
 
-  const rows = await timer.time("offers.select_list", () =>
-    db
-      .select({
-        id: offers.id,
-        type: offers.type,
-        status: offers.status,
-        internalName: offers.internalName,
-        publicTitle: offers.publicTitle,
-        priority: offers.priority,
-        startsAt: offers.startsAt,
-        updatedAt: offers.updatedAt,
-      })
-      .from(offers)
-      .where(conditions.length > 0 ? and(...conditions) : undefined)
-      .orderBy(offers.priority, desc(offers.updatedAt))
-      .limit(100),
+  const [rows, [totalRow]] = await timer.time("offers.select_list", () =>
+    Promise.all([
+      db
+        .select({
+          id: offers.id,
+          type: offers.type,
+          status: offers.status,
+          internalName: offers.internalName,
+          publicTitle: offers.publicTitle,
+          priority: offers.priority,
+          startsAt: offers.startsAt,
+          updatedAt: offers.updatedAt,
+        })
+        .from(offers)
+        .where(where)
+        .orderBy(offers.priority, desc(offers.updatedAt))
+        .limit(PAGE_SIZE)
+        .offset((page - 1) * PAGE_SIZE),
+      db.select({ total: count() }).from(offers).where(where),
+    ]),
   );
+
+  const total = totalRow?.total ?? 0;
 
   const serializedOffers = await timer.time("offers.serialize_rows", () =>
     rows.map((row) => ({
@@ -73,12 +83,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   timer.done({
     shopFound: true,
     rowCount: rows.length,
+    total,
     statusFilter: statusFilter ?? "all",
     hasSearch: search.length > 0,
   });
 
   return {
     offers: serializedOffers,
+    total,
+    page,
+    pageSize: PAGE_SIZE,
   };
 };
 
@@ -231,7 +245,7 @@ function OfferCreateModalFallback({ onClose }: { onClose: () => void }) {
 }
 
 export default function OffersPage() {
-  const { offers: offerRows } = useLoaderData<typeof loader>();
+  const { offers: offerRows, total, page, pageSize } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [bannerVisible, setBannerVisible] = useState(true);
@@ -274,6 +288,7 @@ export default function OffersPage() {
     } else {
       setSearchParams({ status: val });
     }
+    // reset to page 1 on tab change
   }, [setSearchParams]);
 
   const toggleCheck = useCallback((id: string) => {
@@ -614,6 +629,41 @@ export default function OffersPage() {
             )}
           </tbody>
         </table>
+
+        {/* ── Pagination ── */}
+        {total > pageSize && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderTop: "1px solid var(--b-border)" }}>
+            <span style={{ fontSize: 13, color: "var(--b-text-sub)" }}>
+              {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}
+            </span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                className="b-btn b-btn-secondary"
+                disabled={page <= 1}
+                onClick={() => {
+                  const params = new URLSearchParams(searchParams);
+                  params.set("page", String(page - 1));
+                  setSearchParams(params);
+                }}
+              >
+                ← Prev
+              </button>
+              <button
+                type="button"
+                className="b-btn b-btn-secondary"
+                disabled={page * pageSize >= total}
+                onClick={() => {
+                  const params = new URLSearchParams(searchParams);
+                  params.set("page", String(page + 1));
+                  setSearchParams(params);
+                }}
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

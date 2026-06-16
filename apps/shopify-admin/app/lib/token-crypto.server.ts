@@ -26,12 +26,16 @@ async function getKey(): Promise<CryptoKey | null> {
 
 /**
  * Encrypt a Shopify access token.
- * If TOKEN_ENCRYPTION_KEY is not set, returns the token as-is with a warning.
+ * Throws in production if TOKEN_ENCRYPTION_KEY is not set — storing tokens
+ * in plaintext in production is a security violation.
  */
 export async function encryptToken(plaintext: string): Promise<string> {
   const key = await getKey();
   if (!key) {
-    console.warn("[token-crypto] TOKEN_ENCRYPTION_KEY not set — storing access token without encryption. Set TOKEN_ENCRYPTION_KEY in production.");
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("[token-crypto] TOKEN_ENCRYPTION_KEY must be set in production. Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"");
+    }
+    console.warn("[token-crypto] TOKEN_ENCRYPTION_KEY not set — storing access token without encryption. This will throw in production.");
     return plaintext;
   }
 

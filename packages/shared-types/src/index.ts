@@ -4,3 +4,4 @@ export * from "./offers.js";
 export * from "./cart.js";
 export * from "./evaluation.js";
 export * from "./translations.js";
+export * from "./shopify.js";

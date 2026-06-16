@@ -142,6 +142,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     "fraud.per_offer_config": boolField("fraud_per_offer_config"),
     "fraud.order_protection": boolField("fraud_order_protection"),
     "advanced.draft_order_api": boolField("advanced_draft_order_api"),
+    "app.timezone": strField("timezone"),
+    "app.language": strField("language"),
   };
 
   await Promise.all(Object.entries(updates).map(([key, value]) =>

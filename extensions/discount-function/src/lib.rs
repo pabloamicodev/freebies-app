@@ -65,6 +65,10 @@ fn evaluate_gift_offer(offer: &CompiledOffer, cart: &Cart) -> Vec<Discount> {
     let max_gift_qty = offer.max_gift_quantity.unwrap_or(i64::MAX);
 
     for line in &cart.lines {
+        if line.quantity <= 0 {
+            continue;
+        }
+
         let line_type = get_attr(&line.attributes, "_promo_engine_line_type");
         let line_offer_id = get_attr(&line.attributes, "_promo_engine_offer_id");
 
@@ -223,7 +227,7 @@ fn check_main_condition(offer: &CompiledOffer, cart: &Cart) -> bool {
         let cart_value = cart
             .lines
             .iter()
-            .filter(|line| get_attr(&line.attributes, "_promo_engine_line_type") != "gift")
+            .filter(|line| line.quantity > 0 && get_attr(&line.attributes, "_promo_engine_line_type") != "gift")
             .map(|line| line.cost.subtotal_amount.to_cents())
             .sum::<i64>();
 
@@ -244,7 +248,7 @@ fn check_main_condition(offer: &CompiledOffer, cart: &Cart) -> bool {
         let cart_qty: i64 = cart
             .lines
             .iter()
-            .filter(|line| get_attr(&line.attributes, "_promo_engine_line_type") != "gift")
+            .filter(|line| line.quantity > 0 && get_attr(&line.attributes, "_promo_engine_line_type") != "gift")
             .map(|line| line.quantity)
             .sum();
 
@@ -292,6 +296,10 @@ fn make_line_discount(
     offer: &CompiledOffer,
     message: &str,
 ) -> Option<Discount> {
+    if qty <= 0 || offer.discount_value < 0.0 {
+        return None;
+    }
+
     let price_cents = line.cost.amount_per_quantity.to_cents();
     let currency = &line.cost.amount_per_quantity.currency_code;
 
@@ -307,15 +315,18 @@ fn make_line_discount(
             }
         }
         "fixed_amount" => {
-            // Cap at item price (cannot exceed)
-            let discount_cents = (offer.discount_value * 100.0).round() as i64;
-            let capped = discount_cents.min(price_cents);
-            let amount = format!("{:.2}", capped as f64 / 100.0);
+            // Zero-decimal currencies (JPY, KRW, etc.) have no sub-unit; don't scale × 100.
+            let scale = if types::is_zero_decimal(currency) { 1.0 } else { 100.0 };
+            let discount_units = (offer.discount_value * scale).round() as i64;
+            let capped = discount_units.min(price_cents);
+            let amount = if scale == 1.0 {
+                format!("{}", capped)
+            } else {
+                format!("{:.2}", capped as f64 / scale)
+            };
             DiscountValue::FixedAmount {
-                amount: MoneyInput {
-                    amount,
-                    currency_code: currency.clone(),
-                },
+                amount,
+                currency_code: currency.clone(),
                 applies_to_each_item: false,
             }
         }

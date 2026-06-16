@@ -32,7 +32,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     .from(shops)
     .where(eq(shops.myshopifyDomain, session.shop))
     .limit(1);
-  const shopId = shopRows[0]?.id ?? "";
+
+  if (!shopRows[0]) {
+    throw new Response("Shop not found", { status: 404 });
+  }
+  const shopId = shopRows[0].id;
 
   const offerRows = offerId
     ? await db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))

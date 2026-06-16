@@ -4,9 +4,12 @@ import { runOfferScheduler } from "../lib/offer-scheduling.server.js";
 
 function isAuthorized(request: Request): boolean {
   const cronSecret = process.env.CRON_SECRET;
-  const authHeader = request.headers.get("authorization");
-  if (cronSecret && authHeader === `Bearer ${cronSecret}`) return true;
-  return request.headers.get("x-vercel-cron") === "1";
+  if (!cronSecret) {
+    // Misconfigured — reject rather than fall through to a forgeable header.
+    console.error("[cron] CRON_SECRET env var is not set. All cron requests will be rejected until it is configured.");
+    return false;
+  }
+  return request.headers.get("authorization") === `Bearer ${cronSecret}`;
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
