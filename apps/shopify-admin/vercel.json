@@ -4,7 +4,12 @@
   "buildCommand": "cd ../.. && pnpm --filter @promo/db db:migrate && cd apps/shopify-admin && pnpm exec react-router build",
   "outputDirectory": "build/client",
   "alias": ["freebies-app-shopify-admin.vercel.app"],
+  "functions": {
+    "app/routes/api.sync.ts": { "maxDuration": 60 },
+    "app/routes/webhooks.$.tsx": { "maxDuration": 30 }
+  },
   "crons": [
-    { "path": "/api/cron/offers", "schedule": "*/5 * * * *" }
+    { "path": "/api/cron/offers", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/analytics-cleanup", "schedule": "0 3 * * *" }
   ]
 }

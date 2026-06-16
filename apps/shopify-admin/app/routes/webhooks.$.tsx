@@ -1,8 +1,14 @@
 import type { ActionFunctionArgs } from "react-router";
+import { waitUntil } from "@vercel/functions";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs } from "@promo/db";
 import { eq, and, inArray, sql } from "drizzle-orm";
+import { decryptToken } from "../lib/token-crypto.server.js";
+import { syncInventoryFromWebhook } from "../lib/sync/inventory-sync.server.js";
+import { syncCollectionFromWebhook } from "../lib/sync/collection-sync.server.js";
+import { syncMarketsForShop } from "../lib/sync/market-sync.server.js";
+import { reconcileOrderAttribution } from "../lib/sync/analytics-reconcile.server.js";
 
 
 /**
@@ -252,53 +258,35 @@ async function handleProductDelete(shop: string, legacyProductId: number) {
     .where(and(eq(variantCache.shopId, shopId), eq(variantCache.productGid, productGid)));
 }
 
-async function handleInventoryUpdate(_shop: string, _payload: InventoryWebhookPayload) {
-  const shopRecord = await getShopForWebhook(_shop);
+async function handleInventoryUpdate(shop: string, payload: InventoryWebhookPayload) {
+  const shopRecord = await getShopForWebhook(shop);
   if (!shopRecord) return;
-  try {
-    const { inventorySyncQueue } = await import("../lib/queues.server.js");
-    await inventorySyncQueue.add("inventory-webhook", {
-      shopId: shopRecord.id,
-      shopDomain: _shop,
-      inventoryItemId: _payload.inventory_item_id,
-      locationId: _payload.location_id,
-      availableQuantity: _payload.available,
-    }, {
-      jobId: `inv-${shopRecord.id}-${_payload.inventory_item_id}-${_payload.location_id}`,
-      priority: 1, attempts: 3, backoff: { type: "exponential", delay: 1000 },
-    });
-  } catch (err) {
-    console.warn("Inventory webhook queue unavailable", err instanceof Error ? err.message : err);
-  }
+  const accessToken = await decryptToken(shopRecord.accessTokenEncrypted);
+  waitUntil(
+    syncInventoryFromWebhook(shopRecord.id, shop, accessToken, payload.inventory_item_id, payload.available)
+      .catch((err) => console.error("inventory-sync failed", err instanceof Error ? err.message : err)),
+  );
 }
 
 async function handleMarketChange(shop: string) {
-  const shopId = await getShopId(shop);
-  if (!shopId) return;
-  try {
-    const { marketSyncQueue } = await import("../lib/queues.server.js");
-    await marketSyncQueue.add("market-webhook", { shopId, shopDomain: shop }, {
-      jobId: `market-${shopId}-${Math.floor(Date.now() / 30_000)}`,
-      priority: 1,
-    });
-  } catch (err) {
-    console.warn("Market sync queue unavailable", err instanceof Error ? err.message : err);
-  }
+  const shopRecord = await getShopForWebhook(shop);
+  if (!shopRecord) return;
+  const accessToken = await decryptToken(shopRecord.accessTokenEncrypted);
+  waitUntil(
+    syncMarketsForShop(shopRecord.id, shop, accessToken)
+      .catch((err) => console.error("market-sync failed", err instanceof Error ? err.message : err)),
+  );
 }
 
 async function handleCollectionChange(shop: string, legacyCollectionId: number) {
-  const shopId = await getShopId(shop);
-  if (!shopId) return;
+  const shopRecord = await getShopForWebhook(shop);
+  if (!shopRecord) return;
   const collectionGid = `gid://shopify/Collection/${legacyCollectionId}`;
-  try {
-    const { collectionSyncQueue } = await import("../lib/queues.server.js");
-    await collectionSyncQueue.add("collection-webhook", { shopId, shopDomain: shop, collectionGid }, {
-      jobId: `col-${shopId}-${legacyCollectionId}`,
-      priority: 1,
-    });
-  } catch (err) {
-    console.warn("Collection sync queue unavailable", err instanceof Error ? err.message : err);
-  }
+  const accessToken = await decryptToken(shopRecord.accessTokenEncrypted);
+  waitUntil(
+    syncCollectionFromWebhook(shopRecord.id, shop, accessToken, collectionGid)
+      .catch((err) => console.error("collection-sync failed", err instanceof Error ? err.message : err)),
+  );
 }
 
 async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
@@ -314,24 +302,17 @@ async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
   const amount = Number.parseFloat(order.total_price_set?.shop_money?.amount ?? order.total_price ?? "0");
   const totalPriceCents = Number.isFinite(amount) ? Math.round(amount * 100) : 0;
 
-  try {
-    const { analyticsReconcileQueue } = await import("../lib/queues.server.js");
-    await analyticsReconcileQueue.add("order-paid", {
+  waitUntil(
+    reconcileOrderAttribution({
       shopId,
-      shopDomain: shop,
       orderId: String(order.id),
       orderGid: order.admin_graphql_api_id,
       cartToken: order.cart_token,
       totalPriceCents,
       offerIds,
       sessionId,
-    }, {
-      jobId: `order-${order.id}`,
-      priority: 2, attempts: 3, backoff: { type: "exponential", delay: 1000 },
-    });
-  } catch (err) {
-    console.warn("Analytics reconcile queue unavailable", err instanceof Error ? err.message : err);
-  }
+    }).catch((err) => console.error("analytics-reconcile failed", err instanceof Error ? err.message : err)),
+  );
 }
 
 async function handleOrderCancelled(shop: string, order: OrderWebhookPayload) {
@@ -361,21 +342,8 @@ async function handleAppUninstalled(shop: string) {
   // Enqueue cleanup job: archive clone products, remove Function configs
 }
 
-async function handleCustomersUpdate(shop: string, payload: CustomerGdprPayload) {
-  const customerId = String(payload.customer?.id ?? "");
-  if (!customerId) return;
-  try {
-    const { redis } = await import("../lib/queues.server.js") as { redis?: { del: (...keys: string[]) => Promise<number> } };
-    if (redis) {
-      await redis.del(
-        `customer:${shop}:${customerId}:tags`,
-        `customer:${shop}:${customerId}:segments`,
-        `customer:${shop}:${customerId}:orders`,
-      );
-    }
-  } catch {
-    // Redis unavailable — cache will expire naturally
-  }
+async function handleCustomersUpdate(_shop: string, _payload: CustomerGdprPayload) {
+  // No-op: customer cache is no longer Redis-backed; module-level cache expires naturally.
 }
 
 async function handleCustomersDataRequest(shop: string, payload: CustomerGdprPayload) {

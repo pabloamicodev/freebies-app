@@ -1,4 +1,6 @@
 import { useLoaderData, useNavigate, useFetcher, useActionData, redirect } from "react-router";
+import { waitUntil } from "@vercel/functions";
+import { publishOffersForShop } from "../lib/sync/offer-publisher.server.js";
 import { useState } from "react";
 import { SUPPORTED_CURRENCIES } from "@promo/shared-types";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -141,17 +143,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         return { error: "Cannot publish: add at least one reward (gift) before publishing." };
       }
 
-      // Enqueue FIRST — if the queue is down, we do not mark the offer active.
-      try {
-        const { offerPublishQueue } = await import("../lib/queues.server.js") as { offerPublishQueue?: { add: (name: string, data: unknown, opts?: unknown) => Promise<unknown> } };
-        if (!offerPublishQueue) return { error: "Publish queue unavailable — please try again." };
-        await offerPublishQueue.add(`publish-${offerId}`, { offerId, shopDomain: session.shop }, { priority: 1 });
-      } catch (err) {
-        console.warn("Failed to enqueue offer publish job", { offerId, err });
-        return { error: "Could not queue publish job — please try again." };
-      }
-
-      // Queue accepted the job; now persist status + version snapshot atomically.
+      // Persist status + version snapshot atomically, then publish in background.
       const now = new Date();
       await db.update(offers).set({ status: "active", updatedAt: now }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
 
@@ -172,6 +164,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         snapshot: { offer: offerSnapshot[0], conditions: condSnapshot, rewards: rewSnapshot, combinationPolicy: policySnapshot[0] ?? null },
         createdBy: session.shop,
       }).onConflictDoNothing();
+
+      waitUntil(
+        publishOffersForShop(shopId, session.shop)
+          .catch((err) => console.error("offer-publish failed", err instanceof Error ? err.message : err)),
+      );
 
       break;
     }

@@ -6,10 +6,12 @@
  */
 
 import type { ActionFunctionArgs } from "react-router";
+import { waitUntil } from "@vercel/functions";
 import { authenticate } from "../shopify.server.js";
 import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
-
+import { decryptToken } from "../lib/token-crypto.server.js";
+import { syncMarketsForShop } from "../lib/sync/market-sync.server.js";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -22,43 +24,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (!shop) return Response.json({ error: "Shop not found" }, { status: 404 });
 
-  const redisUrl = process.env["REDIS_URL"];
-  if (!redisUrl || redisUrl.includes("PASSWORD@HOST")) {
-    return Response.json({ error: "Redis not configured" }, { status: 503 });
-  }
+  const accessToken = await decryptToken(shop.accessTokenEncrypted);
 
-  const [{ Queue }, { default: Redis }] = await Promise.all([
-    import("bullmq"),
-    import("ioredis"),
-  ]);
-  const redis = new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false });
-
-  const jobData = { shopId: shop.id, shopDomain: shop.myshopifyDomain };
-
-  try {
-    switch (syncType) {
-      case "products": {
-        const productSyncQueue = new Queue("product-sync", { connection: redis });
-        await productSyncQueue.add("manual-product-sync", { ...jobData, mode: "full" as const }, { priority: 2 });
-        return Response.json({ queued: true, type: "products" });
-      }
-
-      case "markets": {
-        const marketSyncQueue = new Queue("market-sync", { connection: redis });
-        await marketSyncQueue.add("manual-market-sync", jobData, { priority: 2 });
-        return Response.json({ queued: true, type: "markets" });
-      }
-
-      case "inventory": {
-        const inventorySyncQueue = new Queue("inventory-sync", { connection: redis });
-        await inventorySyncQueue.add("manual-inventory-sync", jobData, { priority: 2 });
-        return Response.json({ queued: true, type: "inventory" });
-      }
-
-      default:
-        return Response.json({ error: "Unknown sync type" }, { status: 400 });
+  switch (syncType) {
+    case "markets": {
+      waitUntil(
+        syncMarketsForShop(shop.id, shop.myshopifyDomain, accessToken)
+          .catch((err) => console.error("manual market-sync failed", err instanceof Error ? err.message : err)),
+      );
+      return Response.json({ queued: true, type: "markets" });
     }
-  } finally {
-    await redis.quit();
+
+    case "products":
+    case "inventory":
+      return Response.json({ error: "Full re-sync runs via Vercel Cron — trigger manually from Vercel dashboard" }, { status: 400 });
+
+    default:
+      return Response.json({ error: "Unknown sync type" }, { status: 400 });
   }
 };
