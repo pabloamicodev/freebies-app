@@ -81,6 +81,7 @@ async function fetchProductsPage(
         "X-Shopify-Access-Token": accessToken,
       },
       body: JSON.stringify({ query, variables: { first: PRODUCTS_PER_PAGE } }),
+      signal: AbortSignal.timeout(10_000),
     },
   );
 
@@ -88,8 +89,9 @@ async function fetchProductsPage(
     throw new Error(`Shopify Admin API error: ${response.status} ${response.statusText}`);
   }
 
-  const data = (await response.json()) as { data: { products: ShopifyProductsResponse } };
-  const products = data.data.products;
+  const data = (await response.json()) as { data?: { products: ShopifyProductsResponse }; errors?: unknown[] };
+  if (data.errors?.length) throw new Error(`GraphQL error: ${JSON.stringify(data.errors[0])}`);
+  const products = data.data!.products;
   return {
     products: products.nodes,
     hasNextPage: products.pageInfo.hasNextPage,
@@ -188,7 +190,7 @@ export function startProductSyncWorker() {
       const accessToken = await decryptAccessToken(shopRows[0].accessTokenEncrypted);
 
       if (mode === "partial" && productGid) {
-        // Sync single product
+        // Sync single product — use variables to avoid GraphQL injection
         log.info({ shopDomain, productGid }, "Syncing single product");
         const response = await fetch(
           `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
@@ -199,12 +201,16 @@ export function startProductSyncWorker() {
               "X-Shopify-Access-Token": accessToken,
             },
             body: JSON.stringify({
-              query: `query { product(id: "${productGid}") { id legacyResourceId title handle vendor productType tags status featuredImage { url } collections(first: 100) { nodes { id } } variants(first: 100) { nodes { id legacyResourceId sku title price compareAtPrice inventoryQuantity inventoryPolicy availableForSale requiresSellingPlan } } } }`,
+              query: `query GetProduct($id: ID!) { product(id: $id) { id legacyResourceId title handle vendor productType tags status featuredImage { url } collections(first: 100) { nodes { id } } variants(first: 100) { nodes { id legacyResourceId sku title price compareAtPrice inventoryQuantity inventoryPolicy availableForSale requiresSellingPlan } } } }`,
+              variables: { id: productGid },
             }),
+            signal: AbortSignal.timeout(10_000),
           },
         );
-        const data = (await response.json()) as { data: { product: ShopifyProduct } };
-        if (data.data.product) {
+        if (!response.ok) throw new Error(`Shopify API error: ${response.status}`);
+        const data = (await response.json()) as { data?: { product: ShopifyProduct }; errors?: unknown[] };
+        if (data.errors?.length) throw new Error(`GraphQL error: ${JSON.stringify(data.errors[0])}`);
+        if (data.data?.product) {
           await syncProduct(shopId, data.data.product, currencyCode);
         }
         return;

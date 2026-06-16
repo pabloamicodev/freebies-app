@@ -38,6 +38,10 @@ api_version = "2026-04"
   topics = [ "markets/create", "markets/update", "markets/delete" ]
 
   [[webhooks.subscriptions]]
+  uri = "/webhooks/collections"
+  topics = [ "collections/create", "collections/update" ]
+
+  [[webhooks.subscriptions]]
   uri = "/webhooks/app-uninstalled"
   topics = [ "app/uninstalled" ]
 

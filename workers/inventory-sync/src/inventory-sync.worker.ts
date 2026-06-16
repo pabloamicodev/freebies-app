@@ -73,6 +73,7 @@ export function startInventorySyncWorker(redis: Redis) {
               "X-Shopify-Access-Token": accessToken,
             },
             body: JSON.stringify({ query: INVENTORY_QUERY, variables: { inventoryItemId: gid } }),
+            signal: AbortSignal.timeout(10_000),
           },
         );
 
@@ -81,7 +82,7 @@ export function startInventorySyncWorker(redis: Redis) {
         }
 
         const data = (await response.json()) as {
-          data: {
+          data?: {
             inventoryItem: {
               variant: {
                 id: string;
@@ -91,8 +92,10 @@ export function startInventorySyncWorker(redis: Redis) {
               };
             } | null;
           };
+          errors?: unknown[];
         };
 
+        if (data.errors?.length) throw new Error(`GraphQL error: ${JSON.stringify(data.errors[0])}`);
         const variant = data.data?.inventoryItem?.variant;
         if (!variant) {
           log.warn({ shopDomain, inventoryItemId }, "Variant not found for inventory item");
@@ -149,17 +152,21 @@ export function startInventorySyncWorker(redis: Redis) {
                   "X-Shopify-Access-Token": accessToken,
                 },
                 body: JSON.stringify({
-                  query: `query { productVariant(id: "${v.variantGid}") { id inventoryQuantity inventoryPolicy availableForSale } }`,
+                  query: `query GetVariant($id: ID!) { productVariant(id: $id) { id inventoryQuantity inventoryPolicy availableForSale } }`,
+                  variables: { id: v.variantGid },
                 }),
+                signal: AbortSignal.timeout(10_000),
               },
             );
 
             if (!response.ok) continue;
             const data = (await response.json()) as {
-              data: { productVariant: { inventoryQuantity: number; inventoryPolicy: string; availableForSale: boolean } | null };
+              data?: { productVariant: { inventoryQuantity: number; inventoryPolicy: string; availableForSale: boolean } | null };
+              errors?: unknown[];
             };
 
-            const pv = data.data.productVariant;
+            if (data.errors?.length) continue;
+            const pv = data.data?.productVariant;
             if (!pv) continue;
 
             await db

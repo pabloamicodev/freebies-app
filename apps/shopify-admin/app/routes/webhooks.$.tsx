@@ -2,7 +2,8 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs } from "@promo/db";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
+
 
 /**
  * Central webhook handler for all Shopify webhooks.
@@ -441,17 +442,12 @@ async function handleShopRedact(shop: string) {
 
   const db = getDb();
 
-  // Delete PII-containing analytics data before marking the shop inactive.
-  // Offer/conditions/rewards cascade via FK ON DELETE CASCADE when shop is deleted.
-  await Promise.all([
-    db.delete(analyticsEvents).where(eq(analyticsEvents.shopId, shopId)),
-    db.delete(cartMutationLogs).where(eq(cartMutationLogs.shopId, shopId)),
-  ]);
-
-  await db
-    .update(shops)
-    .set({ isActive: false, uninstalledAt: new Date() })
-    .where(eq(shops.id, shopId));
+  // All deletions inside a transaction — GDPR requires all-or-nothing.
+  await db.transaction(async (tx) => {
+    await tx.delete(analyticsEvents).where(eq(analyticsEvents.shopId, shopId));
+    await tx.delete(cartMutationLogs).where(eq(cartMutationLogs.shopId, shopId));
+    await tx.update(shops).set({ isActive: false, uninstalledAt: new Date() }).where(eq(shops.id, shopId));
+  });
 
   console.info(`GDPR SHOP_REDACT: completed for shop=${shop} shopId=${shopId}`);
 }
