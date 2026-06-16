@@ -7,9 +7,7 @@
     "moduleResolution": "bundler",
     "paths": {
       "@promo/db": ["../../packages/db/src/index.ts"],
-      "@promo/db/*": ["../../packages/db/src/*"],
-      "@promo/shared-types": ["../../packages/shared-types/src/index.ts"],
-      "@promo/shared-types/*": ["../../packages/shared-types/src/*"]
+      "@promo/db/*": ["../../packages/db/src/*"]
     }
   },
   "include": ["src"]

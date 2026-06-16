@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node --import tsx/esm src/index.ts",
-    "dev": "tsx watch src/index.ts"
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@promo/db": "workspace:*",

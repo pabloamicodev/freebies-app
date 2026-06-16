@@ -42,12 +42,22 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const isValidHex = (c: string) => /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(c);
 
   if (intent === "add_widget") {
+    const VALID_WIDGET_TYPES = ["gift_slider", "gift_popup", "cart_message", "today_offer_widget", "today_offer_block", "progress_bar", "gift_icon", "gift_thumbnail", "classic_bundle", "mix_match_bundle", "bundle_page", "checkout_upsell", "fbt", "thank_you_upsell", "volume_discount"] as const;
+    const VALID_PLACEMENT_TYPES = ["cart_drawer", "cart_page", "product_page", "global", "product_page_inline", "checkout"] as const;
+
     const widgetType = formData.get("widgetType") as string;
     const title = formData.get("widgetTitle") as string;
     const subtitle = formData.get("widgetSubtitle") as string;
     const primaryColor = (formData.get("primaryColor") as string) || "#111111";
     const buttonText = (formData.get("buttonText") as string) || "Add to Cart";
     const placementType = formData.get("placementType") as string;
+
+    if (!VALID_WIDGET_TYPES.includes(widgetType as typeof VALID_WIDGET_TYPES[number])) {
+      return { error: `Invalid widget type: ${widgetType}` };
+    }
+    if (placementType && !VALID_PLACEMENT_TYPES.includes(placementType as typeof VALID_PLACEMENT_TYPES[number])) {
+      return { error: `Invalid placement type: ${placementType}` };
+    }
 
     const colorFields = [
       ["primaryColor", primaryColor],
@@ -64,7 +74,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     await db.transaction(async (tx) => {
       const [newWidget] = await tx.insert(widgets).values({
         shopId, offerId,
-        type: widgetType as "gift_slider" | "gift_popup" | "cart_message" | "today_offer_widget" | "today_offer_block" | "progress_bar" | "gift_icon" | "gift_thumbnail" | "classic_bundle" | "mix_match_bundle" | "bundle_page" | "checkout_upsell" | "fbt" | "thank_you_upsell" | "volume_discount",
+        type: widgetType as typeof VALID_WIDGET_TYPES[number],
         internalName: `${widgetType}-${offerId.slice(0, 8)}`,
         title: title || null,
         subtitle: subtitle || null,

@@ -9,7 +9,7 @@
  * 4. Multiple offers with auto-add could add the same gift
  */
 
-import { getDb, offers, offerConditions, offerRewards } from "@promo/db";
+import { getDb, offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import { eq, and, inArray } from "drizzle-orm";
 
 export interface OfferConflict {
@@ -32,10 +32,11 @@ export async function detectConflicts(shopId: string): Promise<OfferConflict[]> 
 
   const activeOfferIds = activeOffers.map((o) => o.id);
 
-  // Load conditions and rewards scoped to active offers only
-  const [, rewardRows] = await Promise.all([
+  // Load conditions, rewards, and combination policies scoped to active offers only
+  const [, rewardRows, policyRows] = await Promise.all([
     db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), inArray(offerConditions.offerId, activeOfferIds))),
     db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, activeOfferIds))),
+    db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), inArray(offerCombinationPolicies.offerId, activeOfferIds))),
   ]);
 
   // Check for gift variant overlaps (same gift offered by multiple offers)
@@ -78,8 +79,21 @@ export async function detectConflicts(shopId: string): Promise<OfferConflict[]> 
     }
   }
 
-  // Check for stop-lower-priority that may unexpectedly block other offers
-  // TODO: check combination policies for stop_lower_priority behavior
+  // Check for stop-lower-priority that would block other active offers
+  const sortedOffers = [...activeOffers].sort((a, b) => a.priority - b.priority);
+  for (const policy of policyRows) {
+    if (!policy.stopLowerPriority) continue;
+    const thisIndex = sortedOffers.findIndex((o) => o.id === policy.offerId);
+    if (thisIndex === -1) continue;
+    const blockedOffers = sortedOffers.slice(thisIndex + 1);
+    if (blockedOffers.length === 0) continue;
+    conflicts.push({
+      type: "stop_lower_priority_warning",
+      severity: "warning",
+      offerIds: [policy.offerId, ...blockedOffers.map((o) => o.id)],
+      message: `Offer has "stop lower priority" enabled. When it applies, ${blockedOffers.length} lower-priority offer${blockedOffers.length > 1 ? "s" : ""} will not activate.`,
+    });
+  }
 
   return conflicts;
 }

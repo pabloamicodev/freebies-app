@@ -155,10 +155,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const now = new Date();
       await db.update(offers).set({ status: "active", updatedAt: now }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
 
-      const [offerSnapshot, condSnapshot, rewSnapshot, existingVersions] = await Promise.all([
+      const [offerSnapshot, condSnapshot, rewSnapshot, policySnapshot, existingVersions] = await Promise.all([
         db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1),
         db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId))),
         db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))),
+        db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId))).limit(1),
         db.select({ versionNumber: offerVersions.versionNumber })
           .from(offerVersions).where(and(eq(offerVersions.shopId, shopId), eq(offerVersions.offerId, offerId)))
           .orderBy(offerVersions.versionNumber),
@@ -168,7 +169,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         shopId,
         offerId,
         versionNumber: nextVersion,
-        snapshot: { offer: offerSnapshot[0], conditions: condSnapshot, rewards: rewSnapshot },
+        snapshot: { offer: offerSnapshot[0], conditions: condSnapshot, rewards: rewSnapshot, combinationPolicy: policySnapshot[0] ?? null },
         createdBy: session.shop,
       }).onConflictDoNothing();
 

@@ -35,30 +35,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const jobData = { shopId: shop.id, shopDomain: shop.myshopifyDomain };
 
-  switch (syncType) {
-    case "products": {
-      const productSyncQueue = new Queue("product-sync", { connection: redis });
-      await productSyncQueue.add("manual-product-sync", { ...jobData, mode: "full" as const }, { priority: 2 });
-      await redis.quit();
-      return Response.json({ queued: true, type: "products" });
-    }
+  try {
+    switch (syncType) {
+      case "products": {
+        const productSyncQueue = new Queue("product-sync", { connection: redis });
+        await productSyncQueue.add("manual-product-sync", { ...jobData, mode: "full" as const }, { priority: 2 });
+        return Response.json({ queued: true, type: "products" });
+      }
 
-    case "markets": {
-      const marketSyncQueue = new Queue("market-sync", { connection: redis });
-      await marketSyncQueue.add("manual-market-sync", jobData, { priority: 2 });
-      await redis.quit();
-      return Response.json({ queued: true, type: "markets" });
-    }
+      case "markets": {
+        const marketSyncQueue = new Queue("market-sync", { connection: redis });
+        await marketSyncQueue.add("manual-market-sync", jobData, { priority: 2 });
+        return Response.json({ queued: true, type: "markets" });
+      }
 
-    case "inventory": {
-      const inventorySyncQueue = new Queue("inventory-sync", { connection: redis });
-      await inventorySyncQueue.add("manual-inventory-sync", jobData, { priority: 2 });
-      await redis.quit();
-      return Response.json({ queued: true, type: "inventory" });
-    }
+      case "inventory": {
+        const inventorySyncQueue = new Queue("inventory-sync", { connection: redis });
+        await inventorySyncQueue.add("manual-inventory-sync", jobData, { priority: 2 });
+        return Response.json({ queued: true, type: "inventory" });
+      }
 
-    default:
-      await redis.quit();
-      return Response.json({ error: "Unknown sync type" }, { status: 400 });
+      default:
+        return Response.json({ error: "Unknown sync type" }, { status: 400 });
+    }
+  } finally {
+    await redis.quit();
   }
 };

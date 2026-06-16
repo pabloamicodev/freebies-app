@@ -41,8 +41,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     combinesWithOtherAppOffers: formData.get("other_app_offers") === "on",
     stopLowerPriority: formData.get("stop_lower_priority") === "on",
     giftValueCountsForOtherOffers: formData.get("gift_value_counts") === "on",
-    maxApplicationsPerCart: formData.get("max_per_cart") ? parseInt(formData.get("max_per_cart") as string, 10) : null,
-    maxApplicationsPerCustomer: formData.get("max_per_customer") ? parseInt(formData.get("max_per_customer") as string, 10) : null,
+    maxApplicationsPerCart: (() => { const v = parseInt(formData.get("max_per_cart") as string, 10); return Number.isFinite(v) && v > 0 ? v : null; })(),
+    maxApplicationsPerCustomer: (() => { const v = parseInt(formData.get("max_per_customer") as string, 10); return Number.isFinite(v) && v > 0 ? v : null; })(),
 
   };
 

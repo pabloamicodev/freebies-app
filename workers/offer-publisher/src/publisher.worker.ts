@@ -10,10 +10,12 @@
  */
 
 import { Worker, type Job } from "bullmq";
-import { redis } from "../../product-sync/src/queues.js";
+import { redis } from "./queues.js";
 import { getDb, shops, offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import { eq, and } from "drizzle-orm";
-
+import pino from "pino";
+import { SHOPIFY_API_VERSION } from "@promo/shared-types";
+import { compileOfferConfig, estimateConfigSize, type CompiledFunctionConfig } from "./compile-config.js";
 /**
  * AES-256-GCM token decryption — mirrors token-crypto.server.ts.
  * Falls back to plaintext for legacy tokens (no ":" separator).
@@ -36,9 +38,7 @@ async function decryptAccessToken(stored: string): Promise<string> {
     return stored;
   }
 }
-import pino from "pino";
-import { SHOPIFY_API_VERSION } from "@promo/shared-types";
-import { compileOfferConfig, estimateConfigSize, type CompiledFunctionConfig } from "./compile-config.js";
+
 
 const log = pino({ name: "offer-publisher-worker" });
 const METAFIELD_NAMESPACE = "promo_engine";
@@ -170,6 +170,7 @@ async function shopGraphQL<T>(
         "X-Shopify-Access-Token": accessToken,
       },
       body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(10_000),
     },
   );
 

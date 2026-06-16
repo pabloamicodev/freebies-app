@@ -18,7 +18,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId, db } = await timer.time("shop_context", () => getShopContext(request));
 
   const url = new URL(request.url);
-  const days = parseInt(url.searchParams.get("days") ?? "7", 10);
+  const rawDays = parseInt(url.searchParams.get("days") ?? "7", 10);
+  const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(rawDays, 365) : 7;
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
   if (!shopId) {

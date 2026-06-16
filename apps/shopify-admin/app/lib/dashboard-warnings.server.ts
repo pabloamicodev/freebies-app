@@ -49,7 +49,7 @@ export async function getDashboardWarnings(shopId: string, _shopDomain: string):
   }
 
   // ── 3. Active offers with OOS gifts ──────────────────────────────────────────
-  const activeOffers = await db.select({ id: offers.id, internalName: offers.internalName })
+  const activeOffers = await db.select({ id: offers.id, internalName: offers.internalName, compiledConfig: offers.compiledConfig })
     .from(offers)
     .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")));
   const activeOfferById = new Map(activeOffers.map((offer) => [offer.id, offer]));
@@ -105,7 +105,18 @@ export async function getDashboardWarnings(shopId: string, _shopDomain: string):
   // (simplified check — full check would require Admin API calls)
 
   // ── 5. Function config stale ──────────────────────────────────────────────────
-  // TODO: check if compiledConfig matches current conditions/rewards
+  // Warn when an active offer has never been published (compiledConfig is null).
+  for (const offer of activeOffers) {
+    if (offer.compiledConfig === null) {
+      warnings.push({
+        code: `config_unpublished_${offer.id}`,
+        severity: "error",
+        title: "Offer not published",
+        message: `Offer "${offer.internalName ?? offer.id.slice(0, 8)}" is active but has never been published. Customers won't see this promotion.`,
+        action: { label: "Publish Now", url: `/app/offers/${offer.id}` },
+      });
+    }
+  }
 
   // ── 6. No active offers warning ───────────────────────────────────────────────
   if (activeOffers.length === 0) {

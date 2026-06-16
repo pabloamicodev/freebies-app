@@ -85,14 +85,17 @@ export function startCollectionSyncWorker(redis: Redis) {
             method: "POST",
             headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": accessToken },
             body: JSON.stringify({ query: ALL_COLLECTIONS_QUERY, variables: { after: cursor } }),
+            signal: AbortSignal.timeout(10_000),
           },
         );
 
         const data = (await res.json()) as {
-          data: { collections: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: Array<{ id: string }> } };
+          data?: { collections: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: Array<{ id: string }> } };
+          errors?: unknown[];
         };
 
-        const { nodes, pageInfo } = data.data.collections;
+        if (data.errors?.length) throw new Error(`GraphQL error: ${JSON.stringify(data.errors[0])}`);
+        const { nodes, pageInfo } = data.data!.collections;
 
         for (const col of nodes) {
           await syncCollectionProducts(shopDomain, accessToken, shopId, col.id, db);
@@ -136,11 +139,12 @@ async function syncCollectionProducts(
           query: COLLECTION_PRODUCTS_QUERY,
           variables: { collectionId: collectionGid, after: cursor },
         }),
+        signal: AbortSignal.timeout(10_000),
       },
     );
 
     const data = (await res.json()) as {
-      data: {
+      data?: {
         collection: {
           products: {
             pageInfo: { hasNextPage: boolean; endCursor: string | null };
@@ -148,9 +152,11 @@ async function syncCollectionProducts(
           };
         } | null;
       };
+      errors?: unknown[];
     };
 
-    const collection = data.data.collection;
+    if (data.errors?.length) throw new Error(`GraphQL error: ${JSON.stringify(data.errors[0])}`);
+    const collection = data.data?.collection ?? null;
     if (!collection) break;
 
     const productGids = collection.products.nodes.map((p) => p.id);

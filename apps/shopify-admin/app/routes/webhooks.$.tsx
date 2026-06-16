@@ -263,7 +263,10 @@ async function handleInventoryUpdate(_shop: string, _payload: InventoryWebhookPa
       inventoryItemId: _payload.inventory_item_id,
       locationId: _payload.location_id,
       availableQuantity: _payload.available,
-    }, { priority: 1, attempts: 3, backoff: { type: "exponential", delay: 1000 } });
+    }, {
+      jobId: `inv-${shopRecord.id}-${_payload.inventory_item_id}-${_payload.location_id}`,
+      priority: 1, attempts: 3, backoff: { type: "exponential", delay: 1000 },
+    });
   } catch (err) {
     console.warn("Inventory webhook queue unavailable", err instanceof Error ? err.message : err);
   }
@@ -274,7 +277,10 @@ async function handleMarketChange(shop: string) {
   if (!shopId) return;
   try {
     const { marketSyncQueue } = await import("../lib/queues.server.js");
-    await marketSyncQueue.add("market-webhook", { shopId, shopDomain: shop }, { priority: 1 });
+    await marketSyncQueue.add("market-webhook", { shopId, shopDomain: shop }, {
+      jobId: `market-${shopId}-${Math.floor(Date.now() / 30_000)}`,
+      priority: 1,
+    });
   } catch (err) {
     console.warn("Market sync queue unavailable", err instanceof Error ? err.message : err);
   }
@@ -286,7 +292,10 @@ async function handleCollectionChange(shop: string, legacyCollectionId: number) 
   const collectionGid = `gid://shopify/Collection/${legacyCollectionId}`;
   try {
     const { collectionSyncQueue } = await import("../lib/queues.server.js");
-    await collectionSyncQueue.add("collection-webhook", { shopId, shopDomain: shop, collectionGid }, { priority: 1 });
+    await collectionSyncQueue.add("collection-webhook", { shopId, shopDomain: shop, collectionGid }, {
+      jobId: `col-${shopId}-${legacyCollectionId}`,
+      priority: 1,
+    });
   } catch (err) {
     console.warn("Collection sync queue unavailable", err instanceof Error ? err.message : err);
   }
@@ -316,7 +325,10 @@ async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
       totalPriceCents,
       offerIds,
       sessionId,
-    }, { priority: 2, attempts: 3, backoff: { type: "exponential", delay: 1000 } });
+    }, {
+      jobId: `order-${order.id}`,
+      priority: 2, attempts: 3, backoff: { type: "exponential", delay: 1000 },
+    });
   } catch (err) {
     console.warn("Analytics reconcile queue unavailable", err instanceof Error ? err.message : err);
   }

@@ -33,6 +33,15 @@ export async function action({ request }: ActionFunctionArgs) {
     return Response.json({ error: "Missing required field: event or eventName" }, { status: 400 });
   }
 
+  if (eventName.length > 100) {
+    return Response.json({ error: "event name too long (max 100 chars)" }, { status: 400 });
+  }
+
+  const propertiesJson = JSON.stringify(body);
+  if (propertiesJson.length > 65_536) {
+    return Response.json({ error: "payload too large (max 64 KB)" }, { status: 413 });
+  }
+
   try {
     const db = getDb();
 

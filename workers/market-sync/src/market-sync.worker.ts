@@ -96,6 +96,7 @@ export function startMarketSyncWorker(redis: Redis) {
             "X-Shopify-Access-Token": accessToken,
           },
           body: JSON.stringify({ query: MARKETS_QUERY }),
+          signal: AbortSignal.timeout(10_000),
         },
       );
 
@@ -104,10 +105,12 @@ export function startMarketSyncWorker(redis: Redis) {
       }
 
       const data = (await response.json()) as {
-        data: { markets: { nodes: ShopifyMarket[] } };
+        data?: { markets: { nodes: ShopifyMarket[] } };
+        errors?: unknown[];
       };
 
-      const markets = data.data.markets.nodes;
+      if (data.errors?.length) throw new Error(`GraphQL error: ${JSON.stringify(data.errors[0])}`);
+      const markets = data.data?.markets.nodes ?? [];
       const cacheKey = `markets:${shopId}`;
       const tmpKey = `markets:${shopId}:tmp`;
 

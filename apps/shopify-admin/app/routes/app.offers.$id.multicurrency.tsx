@@ -93,22 +93,26 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
   }
 
-  // Update the cart_value condition with currency overrides
-  const existing = await db.select()
-    .from(offerConditions)
-    .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.conditionType, "cart_value")))
-    .limit(1);
+  let updateResult: { success: boolean } | { error: string } = { success: true };
 
-  if (!existing[0]) {
-    return { error: "No cart value condition found. Add a Cart Value condition on the Conditions page first." };
-  }
+  await db.transaction(async (tx) => {
+    const existing = await tx.select()
+      .from(offerConditions)
+      .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.conditionType, "cart_value")))
+      .limit(1);
 
-  const currentValue = existing[0].value as Record<string, unknown>;
-  await db.update(offerConditions)
-    .set({ value: { ...currentValue, currencyOverrides: overrides, fixedAmountOverrides: fixedOverrides }, updatedAt: new Date() })
-    .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, existing[0].id)));
+    if (!existing[0]) {
+      updateResult = { error: "No cart value condition found. Add a Cart Value condition on the Conditions page first." };
+      return;
+    }
 
-  return { success: true };
+    const currentValue = existing[0].value as Record<string, unknown>;
+    await tx.update(offerConditions)
+      .set({ value: { ...currentValue, currencyOverrides: overrides, fixedAmountOverrides: fixedOverrides }, updatedAt: new Date() })
+      .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, existing[0].id)));
+  });
+
+  return updateResult;
 };
 
 export default function MultiCurrencyPage() {
