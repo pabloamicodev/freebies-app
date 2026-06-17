@@ -79,7 +79,7 @@ test.describe("Today Offer Widget", () => {
     await page.waitForTimeout(3000); // Wait for promo engine to evaluate
 
     const todayWidget = page.locator("#pe-today-offer-root");
-    const isPresent = await todayWidget.isVisible().catch(() => false);
+    await todayWidget.isVisible().catch(() => false);
     // May or may not be visible depending on active offers
     // Just verify the container was mounted
     const container = await page.$(`#pe-today-offer-root`);

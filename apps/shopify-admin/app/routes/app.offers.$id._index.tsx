@@ -1,11 +1,11 @@
 import { useLoaderData, useNavigate, useFetcher, useActionData, redirect } from "react-router";
-import { waitUntil } from "@vercel/functions";
-import { publishOffersForShop } from "../lib/sync/offer-publisher.server.js";
 import { useState } from "react";
-import { SUPPORTED_CURRENCIES } from "@promo/shared-types";
+import { SUPPORTED_CURRENCIES, validateConditionValue, validateRewardPayload } from "@promo/shared-types";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { parseJsonRecord, parseJsonStringArray } from "../lib/offer-validation.server.js";
+import { normalizeConditionValue } from "../lib/offer-config-normalization.server.js";
+import { publishShopConfig, republishIfActive, validateOffersPublishable } from "../lib/offer-publish-flow.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies, offerVersions } from "@promo/db";
 import { and, eq } from "drizzle-orm";
@@ -57,7 +57,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (!offerId) throw new Response("Not found", { status: 404 });
   const intent = formData.get("intent") as string;
   const offer = await loadOwnedOffer(db, shopId, offerId);
-
   switch (intent) {
     case "update": {
       const publicTitle = formData.get("publicTitle") as string;
@@ -70,19 +69,48 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         endsAt: endsAt ? new Date(endsAt) : null,
         updatedAt: new Date(),
       }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+      const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+      if (publishError) return { error: publishError };
       break;
     }
     case "update_condition": {
       const conditionId = formData.get("conditionId") as string;
       const valueResult = parseJsonRecord(formData, "conditionValue");
       if (valueResult.error) return { error: valueResult.error };
-      const value = valueResult.data!;
+      const [condition] = await db.select({ conditionType: offerConditions.conditionType })
+        .from(offerConditions)
+        .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)))
+        .limit(1);
+      if (!condition) return { error: "Condition not found." };
+      const value = normalizeConditionValue(condition.conditionType, valueResult.data!);
+      if (offer.status === "active") {
+        const parsedValue = validateConditionValue(condition.conditionType, value);
+        if (!parsedValue.success) return { error: parsedValue.error.issues[0]?.message ?? "Condition value is invalid." };
+      }
       await db.update(offerConditions).set({ value }).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)));
+      const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+      if (publishError) return { error: publishError };
       break;
     }
     case "delete_condition": {
       const conditionId = formData.get("conditionId") as string;
+      if (offer.status === "active") {
+        const [conditionToDelete, mainConditions] = await Promise.all([
+          db.select({ scope: offerConditions.scope, isEnabled: offerConditions.isEnabled })
+            .from(offerConditions)
+            .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)))
+            .limit(1),
+          db.select({ id: offerConditions.id })
+            .from(offerConditions)
+            .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.scope, "main"), eq(offerConditions.isEnabled, true))),
+        ]);
+        if (conditionToDelete[0]?.scope === "main" && conditionToDelete[0].isEnabled && mainConditions.length <= 1) {
+          return { error: "Cannot delete the last enabled main condition from an active offer. Pause it first or add another main condition." };
+        }
+      }
       await db.delete(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)));
+      const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+      if (publishError) return { error: publishError };
       break;
     }
     case "add_condition": {
@@ -90,12 +118,20 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const scope = (formData.get("scope") as "main" | "sub") ?? "main";
       const valueResult = parseJsonRecord(formData, "conditionValue");
       if (valueResult.error) return { error: valueResult.error };
-      const value = valueResult.data!;
+      const value = normalizeConditionValue(conditionType, valueResult.data!);
+      if (offer.status === "active") {
+        const parsedValue = validateConditionValue(conditionType, value);
+        if (!parsedValue.success) return { error: parsedValue.error.issues[0]?.message ?? "Condition value is invalid." };
+      }
       const existing = await db.select({ id: offerConditions.id }).from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
       await db.insert(offerConditions).values({
         shopId, offerId, scope, conditionType,
         operator: "gte", value, sortOrder: existing.length, isEnabled: true,
       });
+      if (offer.status === "active") {
+        const publishError = await publishShopConfig(shopId, session.shop);
+        if (publishError) return { error: publishError };
+      }
       break;
     }
     case "update_reward": {
@@ -125,7 +161,25 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         const variantIds = variantIdsResult.data!;
         set["target"] = { scope: "cart", variantIds };
       }
+      if (offer.status === "active") {
+        const [reward] = await db.select({ rewardType: offerRewards.rewardType, target: offerRewards.target })
+          .from(offerRewards)
+          .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId)))
+          .limit(1);
+        if (!reward) return { error: "Reward not found." };
+        const rewardResult = validateRewardPayload(
+          reward.rewardType,
+          discountType,
+          set["value"],
+          set["target"] ?? reward.target,
+        );
+        if (!rewardResult.success) return { error: rewardResult.error.issues[0]?.message ?? "Reward configuration is invalid." };
+      }
       await db.update(offerRewards).set(set).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId)));
+      if (offer.status === "active") {
+        const publishError = await publishShopConfig(shopId, session.shop);
+        if (publishError) return { error: publishError };
+      }
       break;
     }
     case "publish": {
@@ -143,9 +197,18 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         return { error: "Cannot publish: add at least one reward (gift) before publishing." };
       }
 
-      // Persist status + version snapshot atomically, then publish in background.
+      // Persist status, publish synchronously, and rollback status if Shopify
+      // rejects the compiled config. The admin must not report "active" for a
+      // config that the storefront cannot read.
       const now = new Date();
       await db.update(offers).set({ status: "active", updatedAt: now }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+      const validation = await validateOffersPublishable(db, shopId, [offerId]);
+      if (!validation.ok) return { error: validation.error };
+      const publishError = await publishShopConfig(shopId, session.shop);
+      if (publishError) {
+        await db.update(offers).set({ status: offer.status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+        return { error: publishError };
+      }
 
       const [offerSnapshot, condSnapshot, rewSnapshot, policySnapshot, existingVersions] = await Promise.all([
         db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1),
@@ -165,19 +228,28 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         createdBy: session.shop,
       }).onConflictDoNothing();
 
-      waitUntil(
-        publishOffersForShop(shopId, session.shop)
-          .catch((err) => console.error("offer-publish failed", err instanceof Error ? err.message : err)),
-      );
-
       break;
     }
     case "pause": {
       await db.update(offers).set({ status: "paused", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+      if (offer.status === "active") {
+        const publishError = await publishShopConfig(shopId, session.shop);
+        if (publishError) {
+          await db.update(offers).set({ status: offer.status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+          return { error: publishError };
+        }
+      }
       break;
     }
     case "archive": {
       await db.update(offers).set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+      if (offer.status === "active") {
+        const publishError = await publishShopConfig(shopId, session.shop);
+        if (publishError) {
+          await db.update(offers).set({ status: offer.status, archivedAt: offer.archivedAt, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+          return { error: publishError };
+        }
+      }
       return redirect("/app/offers");
     }
     case "duplicate": {
@@ -780,7 +852,7 @@ export default function OfferDetailPage() {
       cart_value: { thresholdCents: 50000, currencyCode: "USD", appliesTo: "any_product" },
       cart_quantity: { minQuantity: 1, appliesTo: "any_product" },
       cart_value_multiplier: { thresholdCents: 50000, currencyCode: "USD", appliesTo: "any_product" },
-      specific_product: { minQtyPerProduct: 1, multiplyGifts: false, giftsMatchProducts: false, trackMode: "product", appliesTo: "specific_products", variantIds: [] },
+      specific_product: { minQtyPerProduct: 1, multiplyGifts: false, giftsMatchProducts: false, trackMode: "variant", appliesTo: "specific_products", variantIds: [] },
     };
     const fd = new FormData();
     fd.append("intent", "add_condition");

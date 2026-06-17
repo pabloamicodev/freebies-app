@@ -2,6 +2,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { getDb, analyticsEvents, offers, widgets } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import { getSignedShop } from "../lib/app-proxy-auth.server.js";
+import { checkRateLimit, getClientIp } from "../lib/rate-limit.server.js";
 
 function uuidOrNull(value: unknown): string | null {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
@@ -15,6 +16,13 @@ export function loader(_args: LoaderFunctionArgs) {
 
 export async function action({ request }: ActionFunctionArgs) {
   const { id: shopId } = await getSignedShop(request);
+  const rateLimit = checkRateLimit(`analytics:${shopId}:${getClientIp(request)}`, { limit: 300, windowMs: 60_000 });
+  if (!rateLimit.ok) {
+    return Response.json(
+      { error: "Too many analytics events" },
+      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } },
+    );
+  }
 
   let body: Record<string, unknown>;
   try {

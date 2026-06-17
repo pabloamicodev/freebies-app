@@ -44,7 +44,7 @@ class PromoEngineRuntime {
   init(): void {
     this.log("Promo Engine initialized", this.config);
     this.listenForCartChanges();
-    this.triggerEvaluation();
+    void this.triggerEvaluation();
   }
 
   private getOrCreateSessionId(): string {

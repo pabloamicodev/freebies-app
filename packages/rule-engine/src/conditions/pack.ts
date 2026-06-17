@@ -30,11 +30,21 @@ export function evaluatePack(
   condition: PackConditionValue,
 ): Result<EligibilityReason & { packCount: number }, EligibilityReason> {
   const qualifyingLines = extractQualifyingLines(cart, { includeGiftValues: false });
+  const legacyVariantIds = (condition as unknown as { variantIds?: string[] }).variantIds;
+  const requirements = condition.requirements ?? (
+    Array.isArray(legacyVariantIds)
+      ? legacyVariantIds.map((variantId) => ({
+          variantId,
+          trackMode: "variant" as const,
+          quantityPerPack: 1,
+        }))
+      : []
+  );
 
   let minPacks = Infinity;
   const failedRequirements: string[] = [];
 
-  for (const req of condition.requirements) {
+  for (const req of requirements) {
     const matchingLines = qualifyingLines.filter((line) => {
       if (req.trackMode === "product") return line.productId === req.productId;
       return line.variantId === req.variantId;
@@ -61,7 +71,7 @@ export function evaluatePack(
       passed: false,
       message: `Pack condition not met: ${failedRequirements.join("; ")}`,
       actual: 0,
-      required: condition.requirements.length,
+      required: requirements.length,
     });
   }
 

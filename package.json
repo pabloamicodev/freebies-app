@@ -12,7 +12,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:rust": "bash scripts/benchmark-functions.sh",
-    "test:e2e": "pnpm --filter shopify-admin playwright test",
+    "test:e2e": "pnpm --filter shopify-admin test:e2e",
     "test:load": "npx tsx apps/shopify-admin/tests/load/evaluation.load.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -21,6 +21,7 @@
     "setup:rust": "bash scripts/setup-rust.sh",
     "check:bundles": "node scripts/check-bundle-sizes.mjs",
     "ci": "pnpm typecheck && pnpm test && pnpm check:bundles",
+    "deploy:migrate": "pnpm db:migrate",
     "db:generate": "pnpm --filter @promo/db db:generate",
     "db:migrate": "pnpm --filter @promo/db db:migrate",
     "db:studio": "pnpm --filter @promo/db db:studio"
@@ -28,16 +29,25 @@
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.18.0",
     "@typescript-eslint/parser": "^8.18.0",
-    "@vitest/coverage-v8": "^2.1.0",
+    "@vitest/coverage-v8": "^3.2.6",
     "eslint": "^9.15.0",
     "jiti": "^2.4.2",
     "prettier": "^3.4.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0"
+    "vitest": "^3.2.6"
   },
   "engines": {
     "node": ">=22.0.0",
     "pnpm": ">=9.0.0"
   },
-  "packageManager": "pnpm@9.15.0"
+  "packageManager": "pnpm@9.15.0",
+  "pnpm": {
+    "overrides": {
+      "ioredis": "5.6.1",
+      "bullmq": "5.78.1",
+      "esbuild": "0.28.1",
+      "@vercel/static-config>ajv": "8.20.0",
+      "@shopify/shopify-api": "^13.0.0"
+    }
+  }
 }

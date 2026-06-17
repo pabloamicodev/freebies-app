@@ -5,15 +5,16 @@
  */
 
 import { useLoaderData, Form, Link, useActionData, useNavigation } from "react-router";
-import { RouteErrorBoundary } from "../components/RouteErrorBoundary.js";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
-import { offers, offerConditions } from "@promo/db";
+import { offerConditions } from "@promo/db";
+import { ConditionTypeSchema, validateConditionValue } from "@promo/shared-types";
 import { and, eq } from "drizzle-orm";
+import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -47,15 +48,18 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { session, shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
-  await loadOwnedOffer(db, shopId, offerId);
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
   if (intent === "add_condition") {
     const conditionType = formData.get("conditionType") as string;
-    const scope = formData.get("scope") as "main" | "sub";
+    const conditionTypeResult = ConditionTypeSchema.safeParse(conditionType);
+    if (!conditionTypeResult.success) return { error: "Condition type is invalid." };
+    const scopeRaw = formData.get("scope") as string | null;
+    const scope = scopeRaw === "sub" ? "sub" : "main";
 
     // Build value object based on condition type
     let value: Record<string, unknown> = {};
@@ -138,17 +142,30 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           // Return early with validation error rather than inserting an empty condition
           return { error: "Select at least one product before adding this condition." };
         }
-        value = {
-          variantIds,
-          minQtyPerProduct: parseInt((formData.get("minQtyPerProduct") as string | null) ?? "1", 10) || 1,
-          multiplyGifts: false,
-          giftsMatchProducts: false,
-          trackMode: "product",
-          appliesTo: "specific_products",
-        };
+        const minQty = parseInt((formData.get("minQtyPerProduct") as string | null) ?? "1", 10) || 1;
+        value = conditionType === "pack_of_products"
+          ? {
+              requirements: variantIds.map((variantId) => ({
+                variantId,
+                trackMode: "variant",
+                quantityPerPack: minQty,
+              })),
+              multiplyByPacks: false,
+            }
+          : {
+              requirements: variantIds.map((variantId) => ({
+                variantId,
+                trackMode: "variant",
+                minQuantity: minQty,
+              })),
+              multiplyByGroups: false,
+            };
         break;
       }
     }
+
+    const valueResult = validateConditionValue(conditionType, value);
+    if (!valueResult.success) return { error: valueResult.error.issues[0]?.message ?? "Condition value is invalid." };
 
     const existingCount = await db.select({ id: offerConditions.id })
       .from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
@@ -162,11 +179,29 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       sortOrder: existingCount.length,
       isEnabled: true,
     });
+    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+    if (publishError) return { error: publishError };
   }
 
   if (intent === "delete_condition") {
     const conditionId = formData.get("conditionId") as string;
+    if (offer.status === "active") {
+      const [conditionToDelete, mainConditions] = await Promise.all([
+        db.select({ scope: offerConditions.scope, isEnabled: offerConditions.isEnabled })
+          .from(offerConditions)
+          .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)))
+          .limit(1),
+        db.select({ id: offerConditions.id })
+          .from(offerConditions)
+          .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.scope, "main"), eq(offerConditions.isEnabled, true))),
+      ]);
+      if (conditionToDelete[0]?.scope === "main" && conditionToDelete[0].isEnabled && mainConditions.length <= 1) {
+        return { error: "Cannot delete the last enabled main condition from an active offer. Pause it first or add another main condition." };
+      }
+    }
     await db.delete(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)));
+    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+    if (publishError) return { error: publishError };
   }
 
   return { success: true };

@@ -6,7 +6,7 @@
  * Rerenders when variant changes.
  */
 
-import { on, emit, PromoEvents } from "../event-bus.js";
+import { on, PromoEvents } from "../event-bus.js";
 
 interface VolumeTier {
   minQuantity: number;
@@ -55,7 +55,7 @@ class PromoVolumeDiscount extends HTMLElement {
     this.currency = this.getAttribute("currency") ?? "USD";
 
     this.attachShadow({ mode: "open" });
-    this.loadAndRender();
+    void this.loadAndRender();
 
     // Listen for variant changes (product page variant selector)
     this.unsubscribeVariant = on<{ variantId: string }>(
@@ -63,7 +63,7 @@ class PromoVolumeDiscount extends HTMLElement {
       (detail) => {
         this.variantId = detail.variantId;
         this.setAttribute("variant-id", detail.variantId);
-        this.loadAndRender();
+        void this.loadAndRender();
       },
     );
   }

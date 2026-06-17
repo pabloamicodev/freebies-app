@@ -4,7 +4,6 @@
 
 import { useState, useId } from "react";
 import { ProductPicker } from "../ProductPicker.js";
-import type { SubconditionId } from "./types.js";
 
 // ─── Shared props ─────────────────────────────────────────────────────────────
 export interface SubFormProps {

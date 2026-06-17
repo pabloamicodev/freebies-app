@@ -351,7 +351,12 @@ async function handleCustomersDataRequest(shop: string, payload: CustomerGdprPay
   const customerEmail = payload.customer?.email ?? "";
   const shopId = await getShopId(shop);
 
-  console.info(`GDPR CUSTOMERS_DATA_REQUEST: shop=${shop} customerId=${customerId} email=${customerEmail}`);
+  console.info("GDPR CUSTOMERS_DATA_REQUEST received", {
+    shop,
+    hasCustomerId: Boolean(customerId),
+    hasCustomerEmail: Boolean(customerEmail),
+    ordersRequested: payload.orders_requested?.length ?? 0,
+  });
 
   if (!shopId || !customerId) return;
 
@@ -391,7 +396,11 @@ async function handleCustomersDataRequest(shop: string, payload: CustomerGdprPay
     performedBy: "shopify_webhook",
   });
 
-  console.info(`GDPR CUSTOMERS_DATA_REQUEST: exported ${events.length} analytics events and ${mutationLogs.length} mutation logs for customer ${customerId}`);
+  console.info("GDPR CUSTOMERS_DATA_REQUEST export recorded", {
+    shop,
+    analyticsEventCount: events.length,
+    mutationLogCount: mutationLogs.length,
+  });
 }
 
 async function handleCustomersRedact(shop: string, payload: CustomerGdprPayload) {
@@ -399,7 +408,10 @@ async function handleCustomersRedact(shop: string, payload: CustomerGdprPayload)
   const shopId = await getShopId(shop);
 
   if (!shopId || !customerId) {
-    console.warn(`GDPR CUSTOMERS_REDACT: missing shopId or customerId — shop=${shop}`);
+    console.warn("GDPR CUSTOMERS_REDACT missing shop or customer identifier", {
+      shop,
+      hasCustomerId: Boolean(customerId),
+    });
     return;
   }
 
@@ -409,7 +421,7 @@ async function handleCustomersRedact(shop: string, payload: CustomerGdprPayload)
     .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.customerId, customerId)))
     .returning({ id: analyticsEvents.id });
 
-  console.info(`GDPR CUSTOMERS_REDACT: deleted ${deleted.length} events for customer ${customerId} shop=${shop}`);
+  console.info("GDPR CUSTOMERS_REDACT completed", { shop, deletedEventCount: deleted.length });
 }
 
 async function handleShopRedact(shop: string) {

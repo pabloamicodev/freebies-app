@@ -198,6 +198,31 @@ describe("evaluate — cart value condition", () => {
     const removeAction = result.cartActions.find((a) => a.action === "remove_line");
     expect(removeAction).toBeDefined();
   });
+
+  it("fails closed when an offer contains an unsupported condition type", async () => {
+    const offer = makeGiftOffer("offer-unsupported", 1000);
+    offer.conditions.push({
+      id: "cond-unsupported",
+      scope: "sub",
+      conditionType: "future_condition",
+      operator: "eq",
+      value: {},
+      isEnabled: true,
+      sortOrder: 1,
+    });
+    const ctx: EvaluatorContext = { offers: [offer], oneUseStates: [], now: NOW };
+
+    const result = await evaluate(makeInput(makeCart(2000)), ctx);
+
+    expect(result.qualifiedOffers).toHaveLength(0);
+    expect(result.disqualifiedOffers).toHaveLength(1);
+    expect(result.disqualifiedOffers[0]?.reasons).toContainEqual(
+      expect.objectContaining({
+        conditionType: "future_condition",
+        passed: false,
+      }),
+    );
+  });
 });
 
 describe("evaluate — schedule", () => {

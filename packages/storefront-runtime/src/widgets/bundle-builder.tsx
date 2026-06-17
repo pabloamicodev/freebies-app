@@ -13,7 +13,7 @@
  */
 
 import { h } from "preact";
-import { useState, useEffect, useMemo } from "preact/hooks";
+import { useState, useMemo } from "preact/hooks";
 import { render } from "preact";
 import { AjaxCartAdapter } from "../cart-adapter.js";
 import { emit, PromoEvents, publishAnalytics } from "../event-bus.js";
@@ -83,7 +83,7 @@ function BundleBuilderComponent({
   const [currentStep, setCurrentStep] = useState(0);
   const [selections, setSelections] = useState<Map<string, Map<string, number>>>(new Map());
   const [searchQuery, setSearchQuery] = useState("");
-  const [sortBy, setSortBy] = useState("name_asc");
+  const sortBy: string = "name_asc";
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
 
@@ -196,7 +196,7 @@ function BundleBuilderComponent({
       )}
 
       {/* Steps */}
-      {(activeSteps as BundleStep[]).map((step, stepIdx) => {
+      {(activeSteps as BundleStep[]).map((step) => {
         const stepQty = getStepQty(step.id);
         const isValid = isStepValid(step);
 

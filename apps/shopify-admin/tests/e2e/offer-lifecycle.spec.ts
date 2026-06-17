@@ -30,22 +30,9 @@ async function go(page: Page, path: string) {
   await page.waitForLoadState("networkidle");
 }
 
-/** Submit a form and wait for navigation to settle. */
-async function submit(page: Page) {
-  await Promise.all([
-    page.waitForLoadState("networkidle"),
-    page.locator('button[type="submit"]').first().click(),
-  ]);
-}
-
 /** Banner with red class visible */
 async function hasErrorBanner(page: Page): Promise<boolean> {
   return page.locator(".b-banner-red, [role='alert']").isVisible().catch(() => false);
-}
-
-/** Banner with green class visible */
-async function hasSuccessBanner(page: Page): Promise<boolean> {
-  return page.locator(".b-banner-green").isVisible().catch(() => false);
 }
 
 /**
@@ -313,9 +300,8 @@ test.describe("UPDATE — conditions", () => {
     await page.locator('input[name="threshold"]').fill("50");
 
     // Intercept network to check button state mid-flight
-    let buttonDisabled = false;
     page.on("request", async () => {
-      buttonDisabled = await page.locator('button[type="submit"]').first()
+      await page.locator('button[type="submit"]').first()
         .getAttribute("disabled").then((v) => v !== null).catch(() => false);
     });
 
@@ -589,7 +575,7 @@ test.describe("PUBLISH", () => {
     await page.waitForLoadState("networkidle");
 
     await go(page, "/app/offers?status=active");
-    const offerName = await page
+    await page
       .locator(`[data-offer-id="${offerId}"], table tr`)
       .filter({ has: page.locator(`[href*="${offerId}"]`) })
       .first()

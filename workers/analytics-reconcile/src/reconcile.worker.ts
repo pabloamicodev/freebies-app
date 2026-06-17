@@ -8,7 +8,7 @@
 import { Worker, type Job } from "bullmq";
 import pino from "pino";
 import { getDb, analyticsEvents } from "@promo/db";
-import { eq, and, lt } from "drizzle-orm";
+import { lt } from "drizzle-orm";
 import type Redis from "ioredis";
 
 const log = pino({ name: "analytics-reconcile-worker" });

@@ -1,7 +1,7 @@
 import { getDb, shops, offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
-import { eq, and } from "drizzle-orm";
-import { SHOPIFY_API_VERSION } from "@promo/shared-types";
+import { eq, and, inArray } from "drizzle-orm";
 import { decryptToken } from "../token-crypto.server.js";
+import { shopifyGraphQL } from "../shopify-fetch.server.js";
 import { compileOfferConfig, estimateConfigSize, type CompiledFunctionConfig } from "./compile-config.js";
 
 const METAFIELD_NAMESPACE = "promo_engine";
@@ -31,10 +31,11 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     return;
   }
 
+  const activeOfferIds = activeOffers.map((offer) => offer.id);
   const [conditionRows, rewardRows, policyRows] = await Promise.all([
-    db.select().from(offerConditions).where(eq(offerConditions.shopId, shopId)),
-    db.select().from(offerRewards).where(eq(offerRewards.shopId, shopId)),
-    db.select().from(offerCombinationPolicies).where(eq(offerCombinationPolicies.shopId, shopId)),
+    db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), inArray(offerConditions.offerId, activeOfferIds))),
+    db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, activeOfferIds))),
+    db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), inArray(offerCombinationPolicies.offerId, activeOfferIds))),
   ]);
 
   const compiledOffers = activeOffers
@@ -54,7 +55,7 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
 
   const sizeBytes = estimateConfigSize(config);
   if (sizeBytes > MAX_METAFIELD_BYTES) {
-    console.warn(`[offer-publisher] Config ${sizeBytes}B exceeds ${MAX_METAFIELD_BYTES}B — consider reducing active offers`);
+    throw new Error(`Function config is ${sizeBytes}B, exceeding the safe ${MAX_METAFIELD_BYTES}B limit. Pause or simplify active offers before publishing.`);
   }
 
   await pushMetafield(shopDomain, accessToken, config);
@@ -67,48 +68,28 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
   }
 }
 
-async function shopGraphQL<T>(
-  shopDomain: string,
-  accessToken: string,
-  query: string,
-  variables?: Record<string, unknown>,
-): Promise<T> {
-  const response = await fetch(
-    `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": accessToken },
-      body: JSON.stringify({ query, variables }),
-      signal: AbortSignal.timeout(10_000),
-    },
-  );
-
-  if (!response.ok) throw new Error(`Shopify API error: ${response.status}`);
-
-  const body = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
-  if (body.errors?.length) throw new Error(`GraphQL errors: ${body.errors.map((e) => e.message).join(", ")}`);
-  if (!body.data) throw new Error("Shopify GraphQL returned no data");
-  return body.data;
-}
-
 async function pushMetafield(
   shopDomain: string,
   accessToken: string,
   config: CompiledFunctionConfig,
 ): Promise<void> {
-  const shopData = await shopGraphQL<{ shop: { id: string } }>(shopDomain, accessToken, `query { shop { id } }`);
-  const ownerId = shopData.shop.id;
-
-  const data = await shopGraphQL<{ metafieldsSet: { userErrors: Array<{ message: string }> } }>(
+  const shopData = await shopifyGraphQL<{ shop: { id: string } }>({
     shopDomain,
     accessToken,
-    `mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
+    query: `query { shop { id } }`,
+  });
+  const ownerId = shopData.shop.id;
+
+  const data = await shopifyGraphQL<{ metafieldsSet: { userErrors: Array<{ message: string }> } }>({
+    shopDomain,
+    accessToken,
+    query: `mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
       metafieldsSet(metafields: $metafields) {
         metafields { id key namespace value }
         userErrors { field message }
       }
     }`,
-    {
+    variables: {
       metafields: [{
         ownerId,
         namespace: METAFIELD_NAMESPACE,
@@ -117,7 +98,7 @@ async function pushMetafield(
         value: JSON.stringify(config),
       }],
     },
-  );
+  });
 
   const errors = data.metafieldsSet.userErrors;
   if (errors.length > 0) throw new Error(`Metafield errors: ${errors.map((e) => e.message).join(", ")}`);

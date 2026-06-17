@@ -16,10 +16,8 @@ import {
   BlockStack,
   InlineStack,
   Text,
-  Image,
   Badge,
   Divider,
-  useApi,
 } from "@shopify/ui-extensions-react/customer-account";
 import { useState, useEffect } from "react";
 
@@ -36,15 +34,21 @@ interface AttributionResponse {
   attributions: OfferAttribution[];
 }
 
+interface CustomerAccountApi {
+  order?: { current?: { id?: string } };
+  shop?: { myshopifyDomain?: string };
+  createComponent: (component: typeof OrderAttribution, props: { api: CustomerAccountApi }) => unknown;
+}
+
 export default extension("customer-account.order-status.block.render", (root, api) => {
   root.append(createComponent(api));
 });
 
-function createComponent(api: any) {
+function createComponent(api: CustomerAccountApi) {
   return api.createComponent(OrderAttribution, { api });
 }
 
-function OrderAttribution({ api }: { api: any }) {
+function OrderAttribution({ api }: { api: CustomerAccountApi }) {
   const order = api.order?.current;
   const shop = api.shop;
   const [attributions, setAttributions] = useState<OfferAttribution[]>([]);

@@ -6,7 +6,6 @@ import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-na
 import { ensureOneOf, parseInteger, requiredText } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerCombinationPolicies, offerConditions, offerRewards } from "@promo/db";
-import { eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";

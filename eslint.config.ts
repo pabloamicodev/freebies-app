@@ -34,7 +34,7 @@ const config: Linter.Config[] = [
       },
     },
     plugins: {
-      "@typescript-eslint": tseslint as any,
+      "@typescript-eslint": tseslint as unknown as Linter.Plugin,
     },
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",
@@ -56,7 +56,7 @@ const config: Linter.Config[] = [
       },
     },
     plugins: {
-      "@typescript-eslint": tseslint as any,
+      "@typescript-eslint": tseslint as unknown as Linter.Plugin,
     },
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",

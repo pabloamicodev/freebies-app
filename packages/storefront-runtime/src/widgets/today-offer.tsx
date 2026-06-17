@@ -1,8 +1,8 @@
 /** @jsxImportSource preact */
-import { useState, useEffect } from "preact/hooks";
+import { useState } from "preact/hooks";
 import { h } from "preact";
 import { render } from "preact";
-import { on, PromoEvents, emit, publishAnalytics } from "../event-bus.js";
+import { on, PromoEvents, publishAnalytics } from "../event-bus.js";
 import type { EvaluationResult } from "../types.js";
 import type { JSX } from "preact";
 
@@ -94,9 +94,7 @@ function TodayOfferWidget({
   sessionId: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [visible, setVisible] = useState(true);
-
-  if (!visible || items.length === 0) return null;
+  if (items.length === 0) return null;
 
   const posClass = config.position === "bottom_left" ? "pe-left" : "pe-right";
 

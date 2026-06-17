@@ -1,5 +1,3 @@
-import type { EvaluatedOffer } from "@promo/shared-types";
-
 export interface OfferWithPolicy {
   offerId: string;
   priority: number;

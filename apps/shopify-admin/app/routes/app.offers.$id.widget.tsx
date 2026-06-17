@@ -11,6 +11,7 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { widgets, widgetPlacements } from "@promo/db";
 import { and, eq } from "drizzle-orm";
+import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -33,11 +34,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { session, shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
-  await loadOwnedOffer(db, shopId, offerId);
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const isValidHex = (c: string) => /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(c);
 
@@ -108,6 +109,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       }
     });
 
+    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+    if (publishError) return { error: publishError };
     return { success: true, intent: "add_widget" };
   }
 
@@ -115,6 +118,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const widgetId = formData.get("widgetId") as string;
     const isEnabled = formData.get("isEnabled") === "true";
     await db.update(widgets).set({ isEnabled: !isEnabled }).where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId), eq(widgets.id, widgetId)));
+    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+    if (publishError) return { error: publishError };
     return { success: true, intent: "toggle_widget" };
   }
 
@@ -122,6 +127,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const widgetId = formData.get("widgetId") as string;
     if (!widgetId) return { error: "Widget ID missing." };
     await db.delete(widgets).where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId), eq(widgets.id, widgetId)));
+    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+    if (publishError) return { error: publishError };
     return { success: true, intent: "delete_widget" };
   }
 

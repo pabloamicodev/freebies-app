@@ -8,6 +8,7 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { parseDateRange } from "../lib/offer-validation.server.js";
 import { statusForScheduleSave } from "../lib/offer-scheduling.server.js";
+import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { offers } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -36,15 +37,16 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { session, shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
   const offer = await loadOwnedOffer(db, shopId, offerId);
   const timezone = (formData.get("timezone") as string) || "UTC";
+  if (!TIMEZONES.includes(timezone)) return { error: "Timezone is invalid." };
   const proxyFormData = new FormData();
   proxyFormData.set("startsAt", (formData.get("starts_at") as string | null) ?? "");
   proxyFormData.set("endsAt", (formData.get("ends_at") as string | null) ?? "");
-  const dateRange = parseDateRange(proxyFormData);
+  const dateRange = parseDateRange(proxyFormData, timezone);
   if (dateRange.error) return { error: dateRange.error };
   const { startsAt, endsAt } = dateRange.data!;
 
@@ -55,6 +57,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     timezone,
     updatedAt: new Date(),
   }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+  const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+  if (publishError) return { error: publishError };
 
   return { success: true };
 };

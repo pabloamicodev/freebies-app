@@ -11,22 +11,15 @@
  * Set DEV_STORE_URL, DEV_STORE_STOREFRONT_TOKEN in .env.test
  */
 
-import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 const DEV_STORE = process.env["DEV_STORE_URL"] ?? "https://your-dev-store.myshopify.com";
 const PRODUCT_URL = `${DEV_STORE}/products/test-product`; // Must exist in dev store
-const GIFT_PRODUCT_HANDLE = "test-gift-product"; // Must exist in dev store
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function clearCart(page: Page) {
   await page.goto(`${DEV_STORE}/cart/clear`);
   await page.waitForURL(/cart/);
-}
-
-async function addToCart(page: Page, variantId: string, quantity = 1) {
-  await page.goto(`${DEV_STORE}/cart/add?id=${variantId}&quantity=${quantity}`);
-  await page.waitForTimeout(500);
 }
 
 async function getCartJson(page: Page) {
@@ -177,6 +170,7 @@ test.describe("Cart message", () => {
     const cartMessage = page.locator("promo-cart-message");
     // Just verify the Web Component is mounted — content depends on cart state
     await page.waitForTimeout(1000);
+    await cartMessage.count();
     // Not asserting visible since cart may be empty in this test
   });
 });

@@ -64,7 +64,7 @@ function buildPayload(): EvaluationInput {
 }
 
 async function runLoadTest() {
-  console.log(`Load test: ${CONCURRENT} concurrent, ${DURATION_SECONDS}s, target: ${BASE_URL}`);
+  console.info(`Load test: ${CONCURRENT} concurrent, ${DURATION_SECONDS}s, target: ${BASE_URL}`);
 
   const results = { success: 0, error: 0, latencies: [] as number[] };
   const endTime = Date.now() + DURATION_SECONDS * 1000;
@@ -103,20 +103,20 @@ async function runLoadTest() {
   const p99 = sorted[Math.floor(sorted.length * 0.99)] ?? 0;
   const rps = results.success / DURATION_SECONDS;
 
-  console.log("\n=== Load Test Results ===");
-  console.log(`Total requests: ${results.success + results.error}`);
-  console.log(`Success: ${results.success} (${((results.success / (results.success + results.error)) * 100).toFixed(1)}%)`);
-  console.log(`Errors: ${results.error}`);
-  console.log(`RPS: ${rps.toFixed(1)}`);
-  console.log(`Latency P50: ${p50}ms (target: <50ms cache, <120ms origin)`);
-  console.log(`Latency P95: ${p95}ms (target: <120ms)`);
-  console.log(`Latency P99: ${p99}ms`);
+  console.info("\n=== Load Test Results ===");
+  console.info(`Total requests: ${results.success + results.error}`);
+  console.info(`Success: ${results.success} (${((results.success / (results.success + results.error)) * 100).toFixed(1)}%)`);
+  console.info(`Errors: ${results.error}`);
+  console.info(`RPS: ${rps.toFixed(1)}`);
+  console.info(`Latency P50: ${p50}ms (target: <50ms cache, <120ms origin)`);
+  console.info(`Latency P95: ${p95}ms (target: <120ms)`);
+  console.info(`Latency P99: ${p99}ms`);
 
   if (p95 > 120) {
     console.error("❌ P95 exceeds 120ms target");
     process.exit(1);
   } else {
-    console.log("✅ P95 within target");
+    console.info("✅ P95 within target");
   }
 }
 

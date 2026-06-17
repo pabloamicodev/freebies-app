@@ -8,7 +8,8 @@ import { PageHeader } from "../components/PageHeader.js";
 import { NotFound } from "../components/NotFound.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
-import { offers, offerCombinationPolicies } from "@promo/db";
+import { republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { offerCombinationPolicies } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
@@ -27,10 +28,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { session, shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
-  await loadOwnedOffer(db, shopId, offerId);
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const policy = {
     shopId,
@@ -62,6 +63,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         updatedAt: new Date(),
       },
     });
+
+  const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+  if (publishError) return { error: publishError };
 
   return { success: true };
 };

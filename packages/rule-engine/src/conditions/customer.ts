@@ -1,4 +1,4 @@
-import type { NormalizedCustomer, NormalizedCart, EligibilityReason } from "@promo/shared-types";
+import type { NormalizedCustomer, EligibilityReason } from "@promo/shared-types";
 import { ok, err, type Result } from "@promo/shared-types";
 
 // ─── Customer Tags ────────────────────────────────────────────────────────────

@@ -7,10 +7,11 @@ import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
 import { decryptToken } from "./token-crypto.server.js";
 import { getCachedMarkets, syncMarketsForShop } from "./sync/market-sync.server.js";
+import type { ShopifyMarket } from "./sync/market-sync.server.js";
 
 export type { ShopifyMarket } from "./sync/market-sync.server.js";
 
-export async function getMarketsForShop(shopId: string): Promise<import("./sync/market-sync.server.js").ShopifyMarket[]> {
+export async function getMarketsForShop(shopId: string): Promise<ShopifyMarket[]> {
   const cached = getCachedMarkets(shopId);
   if (cached) return cached;
 

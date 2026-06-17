@@ -29,12 +29,23 @@ export function evaluateSpecificProduct(
   condition: SpecificProductConditionValue,
 ): Result<EligibilityReason & { qualifiedGroups: number }, EligibilityReason> {
   const qualifyingLines = extractQualifyingLines(cart, { includeGiftValues: false });
+  const legacyVariantIds = (condition as unknown as { variantIds?: string[] }).variantIds;
+  const requirements = condition.requirements ?? (
+    Array.isArray(legacyVariantIds)
+      ? legacyVariantIds.map((variantId) => ({
+          variantId,
+          productId: "",
+          trackMode: "variant" as const,
+          minQuantity: 1,
+        }))
+      : []
+  );
 
   let allPassed = true;
   let minGroups = Infinity;
   const details: string[] = [];
 
-  for (const req of condition.requirements) {
+  for (const req of requirements) {
     const matchingLines = qualifyingLines.filter((line) => {
       if (req.trackMode === "product") return line.productId === req.productId;
       return line.variantId === (req.variantId ?? "");
@@ -64,7 +75,7 @@ export function evaluateSpecificProduct(
       ? `All product requirements met (${qualifiedGroups} group(s))`
       : `Product requirements not met: ${details.join("; ")}`,
     actual: qualifiedGroups,
-    required: condition.requirements.length,
+    required: requirements.length,
     qualifiedGroups,
   };
 

@@ -5,7 +5,7 @@ import type {
   CartAction,
   EligibilityReason,
 } from "@promo/shared-types";
-import { ok, err, type Result } from "@promo/shared-types";
+import { err, type Result } from "@promo/shared-types";
 import { buildCartHash, extractGiftLines } from "./cart-parser.js";
 import { evaluateCartValue, type CartValueConditionValue } from "./conditions/cart-value.js";
 import { evaluateCartQuantity, type CartQuantityConditionValue } from "./conditions/cart-quantity.js";
@@ -318,6 +318,16 @@ export async function evaluate(
     ]),
   ];
 
+  const giftSlider = buildGiftSliderPayload(finalQualified, ctx.offers, input.cart);
+  const progressBars = buildProgressBars([...finalQualified, ...disqualifiedOffers], ctx.offers, input.cart);
+  const cartMessages = progressBars.map((bar) => ({
+    offerId: bar.offerId,
+    widgetId: bar.offerId,
+    message: bar.isGoalReached ? bar.messageAfterGoal : bar.messageBeforeGoal,
+    type: bar.isGoalReached ? "success" as const : "progress" as const,
+    priority: ctx.offers.find((offer) => offer.id === bar.offerId)?.priority ?? 100,
+  }));
+
   return {
     requestId,
     cartHash,
@@ -325,12 +335,103 @@ export async function evaluate(
     disqualifiedOffers,
     cartActions: allCartActions,
     discountCodes: { add: codesToAdd, remove: codesToRemove },
-    giftSlider: null, // populated by storefront layer for non-auto-add gifts
-    cartMessages: [],
-    progressBars: [],
+    giftSlider,
+    cartMessages,
+    progressBars,
     warnings: [],
     evaluatedAt: now.toISOString(),
   };
+}
+
+function buildGiftSliderPayload(
+  qualifiedOffers: EvaluatedOffer[],
+  offers: OfferDefinition[],
+  cart: EvaluationInput["cart"],
+): EvaluationResult["giftSlider"] {
+  for (const evaluated of qualifiedOffers) {
+    const offer = offers.find((item) => item.id === evaluated.offerId);
+    const selectableRewards = offer?.rewards.filter((reward) =>
+      reward.rewardType === "product_gift" && reward.isCustomerSelectable && !reward.isAutoAdd
+    ) ?? [];
+    if (!offer || selectableRewards.length === 0) continue;
+
+    const selectableGifts = selectableRewards.flatMap((reward) => {
+      const target = reward.target as { variantId?: string; variantIds?: string[]; productId?: string; productIds?: string[] };
+      const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
+      const productIds = target.productIds ?? (target.productId ? [target.productId] : []);
+      return variantIds.map((variantId, index) => {
+        const cartLine = cart.lines.find((line) => line.variantId === variantId);
+        return {
+          variantId,
+          productId: cartLine?.productId ?? productIds[index] ?? "",
+          title: reward.label ?? cartLine?.productTitle ?? "Gift",
+          variantTitle: cartLine?.variantTitle ?? null,
+          imageUrl: null,
+          originalPriceCents: cartLine?.priceCents ?? 0,
+          discountedPriceCents: reward.discountType === "free" ? 0 : cartLine?.priceCents ?? 0,
+          isAvailable: cartLine?.availableForSale ?? true,
+          isSelected: cart.lines.some((line) =>
+            line.variantId === variantId &&
+            line.properties["_promo_engine_offer_id"] === offer.id &&
+            line.properties["_promo_engine_line_type"] === "gift"
+          ),
+        };
+      });
+    });
+
+    if (selectableGifts.length > 0) {
+      return {
+        offerId: offer.id,
+        title: selectableRewards[0]?.label ?? "Choose your gift",
+        subtitle: null,
+        selectableGifts,
+        maxSelectableCount: Math.max(1, selectableRewards[0]?.quantity ?? 1),
+        alreadySelectedCount: selectableGifts.filter((gift) => gift.isSelected).length,
+      };
+    }
+  }
+  return null;
+}
+
+function buildProgressBars(
+  evaluatedOffers: EvaluatedOffer[],
+  offers: OfferDefinition[],
+  cart: EvaluationInput["cart"],
+): EvaluationResult["progressBars"] {
+  return evaluatedOffers.flatMap((evaluated) => {
+    const offer = offers.find((item) => item.id === evaluated.offerId);
+    if (!offer) return [];
+    const condition = offer.conditions
+      .filter((item) => item.scope === "main" && item.isEnabled)
+      .find((item) => item.conditionType === "cart_value" || item.conditionType === "cart_quantity");
+    if (!condition) return [];
+
+    const value = condition.value as { thresholdCents?: number; minQuantity?: number };
+    const targetCents = condition.conditionType === "cart_value" ? Math.max(0, value.thresholdCents ?? 0) : 0;
+    const targetQuantity = condition.conditionType === "cart_quantity" ? Math.max(1, value.minQuantity ?? 1) : null;
+    const currentCents = cart.subtotalCents;
+    const currentQuantity = cart.totalQuantity;
+    const current = targetQuantity ? currentQuantity : currentCents;
+    const target = targetQuantity ?? targetCents;
+    const progressPercent = target > 0 ? Math.min(100, Math.round((current / target) * 100)) : 100;
+    const remaining = Math.max(0, target - current);
+    const isGoalReached = remaining === 0;
+
+    return [{
+      offerId: offer.id,
+      widgetId: offer.id,
+      currentCents,
+      targetCents,
+      currentQuantity,
+      targetQuantity,
+      progressPercent,
+      messageBeforeGoal: targetQuantity
+        ? `Add ${remaining} more item(s) to unlock this offer.`
+        : `Spend ${remaining} more cents to unlock this offer.`,
+      messageAfterGoal: "Offer unlocked.",
+      isGoalReached,
+    }];
+  });
 }
 
 // ── Internal condition dispatcher ─────────────────────────────────────────────
@@ -389,10 +490,10 @@ function evaluateCondition(
       );
 
     default:
-      return ok({
+      return err({
         conditionType: cond.conditionType,
-        passed: true,
-        message: `Condition type '${cond.conditionType}' not yet implemented — passing by default`,
+        passed: false,
+        message: `Condition type '${cond.conditionType}' is not supported by this evaluator version`,
       });
   }
 }

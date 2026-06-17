@@ -9,6 +9,7 @@ import type {
   offerRewards as RewardsTable,
   offerCombinationPolicies as PoliciesTable,
 } from "@promo/db";
+import { normalizeConditionValue } from "../offer-config-normalization.server.js";
 
 export interface CompiledFunctionConfig {
   offers: CompiledOffer[];
@@ -71,7 +72,7 @@ export function compileOfferConfig(
   };
 
   for (const cond of conditions.filter((c) => c.isEnabled)) {
-    const value = cond.value as Record<string, unknown>;
+    const value = normalizeConditionValue(cond.conditionType, cond.value as Record<string, unknown>);
     switch (cond.conditionType) {
       case "cart_value": {
         config.cartValueThresholdCents = Number(value["thresholdCents"] ?? 0);

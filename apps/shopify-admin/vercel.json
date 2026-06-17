@@ -1,7 +1,7 @@
 {
   "framework": "react-router",
   "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
-  "buildCommand": "cd ../.. && pnpm --filter @promo/db db:migrate && cd apps/shopify-admin && pnpm exec react-router build",
+  "buildCommand": "cd ../.. && cd apps/shopify-admin && pnpm exec react-router build",
   "outputDirectory": "build/client",
   "alias": ["freebies-app-shopify-admin.vercel.app"],
   "crons": [

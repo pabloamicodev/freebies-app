@@ -62,7 +62,8 @@ const shopify = shopifyApp({
             .where(eq(shops.myshopifyDomain, shopDomain));
         }
       } catch (dbError) {
-        console.warn("DB mirror after auth failed (non-fatal):", dbError instanceof Error ? dbError.message : dbError);
+        console.error("DB mirror after auth failed:", dbError instanceof Error ? dbError.message : dbError);
+        throw dbError;
       }
     },
   },

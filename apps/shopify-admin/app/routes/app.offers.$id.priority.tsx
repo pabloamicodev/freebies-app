@@ -10,6 +10,7 @@ import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { offers, offerCombinationPolicies } from "@promo/db";
 import { eq, and, ne } from "drizzle-orm";
 import { detectConflicts } from "../lib/conflict-detection.server.js";
+import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -45,10 +46,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { session, shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
-  await loadOwnedOffer(db, shopId, offerId);
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const newPriority = parseInt(formData.get("priority") as string, 10);
   if (!Number.isInteger(newPriority)) {
@@ -60,6 +61,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   await db.update(offerCombinationPolicies)
     .set({ stopLowerPriority, updatedAt: new Date() })
     .where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId)));
+  const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+  if (publishError) return { error: publishError };
 
   return null;
 };

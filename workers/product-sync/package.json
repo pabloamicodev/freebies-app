@@ -13,14 +13,14 @@
     "@promo/db": "workspace:*",
     "@promo/shared-types": "workspace:*",
     "@shopify/shopify-api": "^11.7.0",
-    "bullmq": "^5.25.0",
+    "bullmq": "^5.78.1",
     "ioredis": "^5.4.1",
     "pino": "^9.5.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "drizzle-orm": "^0.38.0",
+    "drizzle-orm": "^0.45.2",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }

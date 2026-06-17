@@ -7,6 +7,15 @@ import { test, expect, type Page } from "@playwright/test";
 
 const DEV_STORE = process.env["DEV_STORE_URL"] ?? "https://your-dev-store.myshopify.com";
 
+interface EvaluationResponse {
+  cartActions: unknown[];
+  qualifiedOffers: unknown[];
+}
+
+interface CartResponse {
+  items: unknown[];
+}
+
 async function clearCart(page: Page) {
   await page.goto(`${DEV_STORE}/cart/clear`);
   await page.waitForURL(/cart/);
@@ -48,7 +57,7 @@ test.describe("Multi-currency (requires international market configured)", () =>
 
     try {
       const response = await evalIntercepted;
-      const body = await response.json() as any;
+      const body = await response.json() as EvaluationResponse;
       // Verify the response has cart actions and is valid
       expect(body).toHaveProperty("cartActions");
       expect(body).toHaveProperty("qualifiedOffers");
@@ -81,7 +90,7 @@ test.describe("Customer targeting", () => {
 
       // Cart should have standard lines (guest cart works fine)
       const cart = await page.goto(`${DEV_STORE}/cart.js`);
-      const cartData = await cart?.json() as any;
+      const cartData = await cart?.json() as CartResponse | undefined;
       expect(cartData).toHaveProperty("items");
     }
   });

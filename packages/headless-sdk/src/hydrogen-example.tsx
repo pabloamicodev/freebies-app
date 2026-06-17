@@ -20,7 +20,7 @@
 
 import { createPromoClient } from "./client.js";
 import { usePromoOffers, usePromoTrack } from "./react/hooks.js";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 
 // ─── 1. Create the client (once per app) ─────────────────────────────────────
 
@@ -57,7 +57,7 @@ export function CartWithPromo({ cart }: { cart: Cart }) {
     currencyCode: cart.cost.subtotalAmount.currencyCode,
   };
 
-  const { data, loading } = usePromoOffers({
+  const { data } = usePromoOffers({
     client: promoClient,
     cart: cartForPromo,
     debounceMs: 300,
@@ -115,11 +115,21 @@ export function CartWithPromo({ cart }: { cart: Cart }) {
   );
 }
 
-function GiftSliderModal({ payload, onClose }: { payload: any; onClose: () => void }) {
+interface GiftSliderPayload {
+  title: string;
+  selectableGifts: Array<{
+    variantId: string;
+    imageUrl?: string | null;
+    title: string;
+    discountedPriceCents: number;
+  }>;
+}
+
+function GiftSliderModal({ payload, onClose }: { payload: GiftSliderPayload; onClose: () => void }) {
   return (
     <div className="promo-gift-slider">
       <h2>{payload.title}</h2>
-      {payload.selectableGifts.map((gift: any) => (
+      {payload.selectableGifts.map((gift) => (
         <div key={gift.variantId}>
           {gift.imageUrl && <img src={gift.imageUrl} alt={gift.title} width={80} height={80} />}
           <p>{gift.title}</p>

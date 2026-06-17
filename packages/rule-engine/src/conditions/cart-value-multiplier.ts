@@ -1,6 +1,6 @@
 import type { NormalizedCart, EligibilityReason, CurrencyContext } from "@promo/shared-types";
 import { ok, err, type Result } from "@promo/shared-types";
-import { extractQualifyingLines, sumQualifyingValue } from "../cart-parser.js";
+import { extractQualifyingLines } from "../cart-parser.js";
 
 export interface CartValueMultiplierConditionValue {
   thresholdCents: number;

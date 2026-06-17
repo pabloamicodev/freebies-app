@@ -10,11 +10,14 @@ import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
-import { offers, offerConditions } from "@promo/db";
+import { republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { offerConditions } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
+type ActionResult = { success: true } | { error: string };
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { admin, shopId, db } = await getShopContext(request);
@@ -61,11 +64,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   };
 };
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+export const action = async ({ request, params }: ActionFunctionArgs): Promise<ActionResult> => {
+  const { session, shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
-  await loadOwnedOffer(db, shopId, offerId);
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
   // Build currency overrides from form
   const overrides: Record<string, number> = {};
@@ -93,7 +96,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
   }
 
-  let updateResult: { success: boolean } | { error: string } = { success: true };
+  let updateResult: ActionResult = { success: true };
 
   await db.transaction(async (tx) => {
     const existing = await tx.select()
@@ -112,6 +115,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, existing[0].id)));
   });
 
+  if ("success" in updateResult && updateResult.success) {
+    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+    if (publishError) return { error: publishError };
+  }
+
   return updateResult;
 };
 
@@ -124,6 +132,9 @@ export default function MultiCurrencyPage() {
   if (!offer) return <NotFound message="Offer not found." />;
 
   const baseThreshold = baseThresholdCents / 100;
+  const actionError = actionData && "error" in actionData && typeof actionData.error === "string"
+    ? actionData.error
+    : null;
 
   return (
     <div className="b-page">
@@ -131,11 +142,11 @@ export default function MultiCurrencyPage() {
       <PageHeader title="Multi-Currency" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
 
       {/* Action feedback */}
-      {actionData && "error" in actionData && actionData.error && (
+      {actionError && (
         <div className="b-banner b-banner-red b-mb-4">
           <span className="b-banner-icon">✕</span>
           <div className="b-banner-body">
-            <p className="b-banner-text" style={{ margin: 0 }}>{actionData.error}</p>
+            <p className="b-banner-text" style={{ margin: 0 }}>{actionError}</p>
           </div>
         </div>
       )}

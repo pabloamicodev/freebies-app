@@ -12,8 +12,8 @@
     "@promo/db": "workspace:*",
     "@promo/shared-types": "workspace:*",
     "@shopify/shopify-api": "^11.7.0",
-    "bullmq": "^5.25.0",
-    "drizzle-orm": "^0.38.0",
+    "bullmq": "^5.78.1",
+    "drizzle-orm": "^0.45.2",
     "ioredis": "^5.4.1",
     "pino": "^9.5.0",
     "zod": "^3.23.0"

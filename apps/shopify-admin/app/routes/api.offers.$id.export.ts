@@ -85,7 +85,6 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const rows: string[] = [rowToCSV(headers)];
 
   for (const offer of offerRows) {
-    const conditions = conditionsByOfferId.get(offer.id) ?? [];
     const rewards = rewardsByOfferId.get(offer.id) ?? [];
 
     const mainCondition = mainConditionByOfferId.get(offer.id);

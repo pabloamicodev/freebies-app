@@ -10,6 +10,7 @@ import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
+import { ConditionTypeSchema, DiscountTypeSchema, RewardTypeSchema, validateConditionValue, validateRewardPayload, type ConditionType, type DiscountType, type RewardType } from "@promo/shared-types";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -124,6 +125,62 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { error: { row: rowNumber, message: `Invalid type "${offerType}". Must be one of: ${VALID_OFFER_TYPE_LABELS}` } };
     }
 
+    const priority = parseInt(row["priority"] ?? "100", 10);
+    if (!Number.isInteger(priority) || priority < 0) {
+      return { error: { row: rowNumber, message: "Priority must be a non-negative integer" } };
+    }
+
+    let validatedCondition: { conditionType: ConditionType; value: Record<string, unknown> } | null = null;
+    if (row["condition_type"] && row["condition_value_threshold_cents"]) {
+      const conditionType = row["condition_type"] ?? "";
+      const conditionTypeResult = ConditionTypeSchema.safeParse(conditionType);
+      if (!conditionTypeResult.success) {
+        return { error: { row: rowNumber, message: `Invalid condition_type "${conditionType}"` } };
+      }
+      const thresholdCents = parseInt(row["condition_value_threshold_cents"], 10);
+      if (!Number.isInteger(thresholdCents) || thresholdCents < 0) {
+        return { error: { row: rowNumber, message: "condition_value_threshold_cents must be a non-negative integer" } };
+      }
+      const conditionValue = { thresholdCents, currencyCode: "USD", includeGiftValues: false };
+      const conditionValueResult = validateConditionValue(conditionType, conditionValue);
+      if (!conditionValueResult.success) {
+        return { error: { row: rowNumber, message: conditionValueResult.error.issues[0]?.message ?? "Invalid condition value" } };
+      }
+      validatedCondition = { conditionType: conditionTypeResult.data, value: conditionValue };
+    }
+
+    let validatedReward: {
+      rewardType: RewardType;
+      discountType: DiscountType;
+      value: Record<string, unknown>;
+      target: Record<string, unknown>;
+    } | null = null;
+    if (row["reward_type"] && row["discount_type"]) {
+      const rewardTypeResult = RewardTypeSchema.safeParse(row["reward_type"]);
+      if (!rewardTypeResult.success) {
+        return { error: { row: rowNumber, message: `Invalid reward_type "${row["reward_type"]}"` } };
+      }
+      const discountTypeResult = DiscountTypeSchema.safeParse(row["discount_type"]);
+      if (!discountTypeResult.success) {
+        return { error: { row: rowNumber, message: `Invalid discount_type "${row["discount_type"]}"` } };
+      }
+      const variantIds = row["gift_variant_gids"] ? row["gift_variant_gids"].split("|").filter(Boolean) : [];
+      const rewardValueRaw = parseFloat(row["reward_value"] ?? "0");
+      const rewardValue = Number.isFinite(rewardValueRaw) ? rewardValueRaw : 0;
+      const rewardTarget = variantIds.length ? { variantIds } : { scope: "cart" };
+      const rewardValuePayload = { amount: discountTypeResult.data === "percentage" ? rewardValue : Math.round(rewardValue * 100), currencyCode: "USD" };
+      const rewardPayloadResult = validateRewardPayload(rewardTypeResult.data, discountTypeResult.data, rewardValuePayload, rewardTarget);
+      if (!rewardPayloadResult.success) {
+        return { error: { row: rowNumber, message: rewardPayloadResult.error.issues[0]?.message ?? "Invalid reward payload" } };
+      }
+      validatedReward = {
+        rewardType: rewardTypeResult.data,
+        discountType: discountTypeResult.data,
+        value: rewardValuePayload,
+        target: rewardTarget,
+      };
+    }
+
     try {
       const [newOffer] = await db.insert(offers).values({
         shopId,
@@ -131,7 +188,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         publicTitle,
         type: offerType,
         status: "draft",
-        priority: parseInt(row["priority"] ?? "100", 10) || 100,
+        priority,
         discountTags: row["discount_tags"] ? row["discount_tags"].split("|") : [],
       }).returning({ id: offers.id });
 
@@ -146,28 +203,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }),
       ];
 
-      if (row["condition_type"] && row["condition_value_threshold_cents"]) {
+      if (validatedCondition) {
         setupTasks.push(db.insert(offerConditions).values({
           shopId,
           offerId: newOffer.id,
           scope: "main",
-          conditionType: row["condition_type"],
+          conditionType: validatedCondition.conditionType,
           operator: "gte",
-          value: { thresholdCents: parseInt(row["condition_value_threshold_cents"], 10), currencyCode: "USD", includeGiftValues: false },
+          value: validatedCondition.value,
           sortOrder: 0,
           isEnabled: true,
         }));
       }
 
-      if (row["reward_type"] && row["discount_type"]) {
-        const variantIds = row["gift_variant_gids"] ? row["gift_variant_gids"].split("|").filter(Boolean) : [];
+      if (validatedReward) {
         setupTasks.push(db.insert(offerRewards).values({
           shopId,
           offerId: newOffer.id,
-          rewardType: row["reward_type"] as "product_gift" | "order_discount" | "bundle_discount" | "upsell_discount",
-          discountType: row["discount_type"] as "free" | "percentage" | "fixed_amount" | "fixed_price",
-          value: { amount: parseFloat(row["reward_value"] ?? "0") || 100 },
-          target: { variantIds },
+          rewardType: validatedReward.rewardType,
+          discountType: validatedReward.discountType,
+          value: validatedReward.value,
+          target: validatedReward.target,
           quantity: parseInt(row["gift_quantity"] ?? "1", 10) || 1,
           isAutoAdd: row["is_auto_add"] === "true",
           isCustomerSelectable: false,

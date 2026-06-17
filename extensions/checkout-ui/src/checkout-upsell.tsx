@@ -27,9 +27,7 @@ import {
   Image,
   Text,
   Button,
-  Banner,
   Divider,
-  Spinner,
   View,
 } from "@shopify/ui-extensions-react/checkout";
 
@@ -50,6 +48,10 @@ interface UpsellConfig {
   message: string;
   buttonText: string;
   discountPercent: number;
+}
+
+interface EvaluateResponse {
+  upsells?: UpsellConfig[];
 }
 
 export default reactExtension("purchase.checkout.block.render", () => <CheckoutUpsell />);
@@ -133,8 +135,8 @@ function CheckoutUpsell() {
       signal: controller.signal,
     })
       .then((r) => r.json())
-      .then((result: any) => {
-        const upsell = result.upsells?.find((u: any) => u.offerId === offerId);
+      .then((result: EvaluateResponse) => {
+        const upsell = result.upsells?.find((u) => u.offerId === offerId);
         if (upsell?.product) {
           // Check if product is already in cart
           const alreadyInCart = cartLines.some(

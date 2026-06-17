@@ -12,7 +12,9 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offerRewards } from "@promo/db";
+import { DiscountTypeSchema, RewardTypeSchema, validateRewardPayload } from "@promo/shared-types";
 import { and, eq } from "drizzle-orm";
+import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -38,15 +40,19 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { session, shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
-  await loadOwnedOffer(db, shopId, offerId);
+  const offer = await loadOwnedOffer(db, shopId, offerId);
 
   if (intent === "add_reward") {
     const rewardType = formData.get("rewardType") as string;
     const discountType = formData.get("discountType") as string;
+    const rewardTypeResult = RewardTypeSchema.safeParse(rewardType);
+    if (!rewardTypeResult.success) return { error: "Reward type is invalid." };
+    const discountTypeResult = DiscountTypeSchema.safeParse(discountType);
+    if (!discountTypeResult.success) return { error: "Discount type is invalid." };
     const discountValue = parseFloat(formData.get("discountValue") as string) || 0;
     const quantityRaw = formData.get("quantity");
     const quantity = quantityRaw ? parseInt(quantityRaw as string, 10) : null;
@@ -75,18 +81,21 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const target = variantGids.length > 0
       ? { variantIds: variantGids }
       : { scope: "cart" };
+    const value = {
+      amount: discountType === "percentage" ? discountValue : Math.round(discountValue * 100),
+      currencyCode,
+    };
+    const payloadResult = validateRewardPayload(rewardType, discountType, value, target);
+    if (!payloadResult.success) return { error: payloadResult.error.issues[0]?.message ?? "Reward configuration is invalid." };
 
     const existing = await db.select({ id: offerRewards.id })
       .from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
 
     await db.insert(offerRewards).values({
       shopId, offerId,
-      rewardType: rewardType as "product_gift" | "shipping_discount" | "product_discount" | "order_discount" | "bundle_discount" | "upsell_discount",
-      discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
-      value: {
-        amount: discountType === "percentage" ? discountValue : Math.round(discountValue * 100),
-        currencyCode,
-      },
+      rewardType: rewardTypeResult.data,
+      discountType: discountTypeResult.data,
+      value,
       target,
       quantity,
       isAutoAdd,
@@ -95,12 +104,24 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       sortOrder: existing.length,
       label,
     });
+    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+    if (publishError) return { error: publishError };
   }
 
   if (intent === "delete_reward") {
     const rewardId = formData.get("rewardId") as string;
     if (!rewardId) return { error: "Reward ID missing." };
+    if (offer.status === "active") {
+      const rewards = await db.select({ id: offerRewards.id })
+        .from(offerRewards)
+        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
+      if (rewards.length <= 1) {
+        return { error: "Cannot delete the last reward from an active offer. Pause it first or add another reward." };
+      }
+    }
     await db.delete(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId)));
+    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+    if (publishError) return { error: publishError };
   }
 
   return { success: true };

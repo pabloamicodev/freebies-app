@@ -9,17 +9,18 @@ import {
   offers,
   widgets,
 } from "@promo/db";
-import { eq, and, like, desc, count } from "drizzle-orm";
+import { eq, and, like, desc, count, inArray } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
   IconCopy, IconTrash, IconArchive, IconEye, IconSearch, IconFilter,
-  IconChevronDown, SortIcon,
+  SortIcon,
 } from "../components/Icons.js";
 import { AccessibleModal } from "../components/AccessibleModal.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { OfferToggle } from "../components/BogosSwitch.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
+import { publishShopConfig as publishShopConfigToShopify, validateOffersPublishable } from "../lib/offer-publish-flow.server.js";
 import type { OfferCreateModalType } from "../components/offers/OfferCreateModalFlow.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -28,16 +29,16 @@ export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBou
 type OfferStatus = "draft" | "active" | "paused" | "scheduled" | "expired" | "archived";
 
 const OfferCreateModalFlow = lazy(() => import("../components/offers/OfferCreateModalFlow.js"));
+const PAGE_SIZE = 50;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const timer = createRouteTimer("app.offers._index");
   const { shopId, db } = await timer.time("shop_context", () => getShopContext(request));
   if (!shopId) {
     timer.done({ shopFound: false });
-    return { offers: [] };
+    return { offers: [], total: 0, page: 1, pageSize: PAGE_SIZE };
   }
 
-  const PAGE_SIZE = 50;
   const url = new URL(request.url);
   const statusFilter = url.searchParams.get("status") as OfferStatus | "all" | null;
   const search = url.searchParams.get("q") ?? "";
@@ -98,11 +99,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
-  const { shopId, db } = context;
+  const { session, shopId, db } = context;
   if (!shopId) throw new Response("Shop not found", { status: 404 });
 
   const intent = formData.get("intent") as string;
   const offerIds = formData.getAll("offerIds[]") as string[];
+  const publishShopConfig = async () => {
+    return publishShopConfigToShopify(shopId, session.shop);
+  };
 
   if (request.method.toUpperCase() === "DELETE" || intent === "delete") {
     const offerId = formData.get("offerId") as string | null;
@@ -120,30 +124,77 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       await tx.delete(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
     });
 
+    const publishError = await publishShopConfig();
+    if (publishError) return { error: publishError };
     return null;
   }
 
   switch (intent) {
-    case "bulk_pause":
+    case "bulk_pause": {
+      const previous = await db
+        .select({ id: offers.id, status: offers.status })
+        .from(offers)
+        .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
       await Promise.all(offerIds.map((id) =>
         db.update(offers).set({ status: "paused", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, id))),
       ));
+      const publishError = await publishShopConfig();
+      if (publishError) {
+        await Promise.all(previous.map((row) =>
+          db.update(offers).set({ status: row.status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, row.id))),
+        ));
+        return { error: publishError };
+      }
       break;
-    case "bulk_activate":
+    }
+    case "bulk_activate": {
+      const validation = await validateOffersPublishable(db, shopId, offerIds);
+      if (!validation.ok) return { error: validation.error };
+      const previous = await db
+        .select({ id: offers.id, status: offers.status })
+        .from(offers)
+        .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
       await Promise.all(offerIds.map((id) =>
         db.update(offers).set({ status: "active", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, id))),
       ));
+      const publishError = await publishShopConfig();
+      if (publishError) {
+        await Promise.all(previous.map((row) =>
+          db.update(offers).set({ status: row.status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, row.id))),
+        ));
+        return { error: publishError };
+      }
       break;
+    }
     case "toggle_status": {
       const offerId = formData.get("offerId") as string;
       const currentStatus = formData.get("currentStatus") as string;
       const newStatus = currentStatus === "active" ? "paused" : "active";
+      if (newStatus === "active") {
+        const validation = await validateOffersPublishable(db, shopId, [offerId]);
+        if (!validation.ok) return { error: validation.error };
+      }
       await db.update(offers).set({ status: newStatus, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+      const publishError = await publishShopConfig();
+      if (publishError) {
+        await db.update(offers).set({ status: currentStatus as OfferStatus, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+        return { error: publishError };
+      }
       break;
     }
     case "archive": {
       const offerId = formData.get("offerId") as string;
+      const [previous] = await db
+        .select({ status: offers.status, archivedAt: offers.archivedAt })
+        .from(offers)
+        .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
+        .limit(1);
       await db.update(offers).set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+      const publishError = await publishShopConfig();
+      if (publishError && previous) {
+        await db.update(offers).set({ status: previous.status, archivedAt: previous.archivedAt, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+        return { error: publishError };
+      }
       break;
     }
   }

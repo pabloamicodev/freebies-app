@@ -102,7 +102,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter shopify-admin exec playwright install --with-deps chromium
       - name: Run E2E tests
-        run: pnpm --filter shopify-admin playwright test
+        run: pnpm --filter shopify-admin test:e2e
         env:
           DEV_STORE_URL: ${{ secrets.DEV_STORE_URL }}
           DEV_STORE_STOREFRONT_TOKEN: ${{ secrets.DEV_STORE_STOREFRONT_TOKEN }}

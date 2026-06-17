@@ -1,6 +1,5 @@
 import { defineConfig } from "vite";
 import { reactRouter } from "@react-router/dev/vite";
-import { vercelPreset } from "@vercel/react-router/vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
@@ -9,6 +8,7 @@ export default defineConfig({
     tsconfigPaths(),
   ],
   build: {
+    target: "esnext",
     assetsInlineLimit: 0,
     rollupOptions: {
       external: ["pg-native", "cloudflare:sockets"],

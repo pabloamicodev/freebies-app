@@ -96,11 +96,52 @@ export function parseStoredJson(value: string): unknown {
   }
 }
 
-export function parseDateRange(formData: FormData): ValidationResult<{ startsAt: Date | null; endsAt: Date | null }> {
+function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const parts = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
+  const asUtc = Date.UTC(
+    Number(parts["year"]),
+    Number(parts["month"]) - 1,
+    Number(parts["day"]),
+    Number(parts["hour"]),
+    Number(parts["minute"]),
+    Number(parts["second"]),
+  );
+  return asUtc - date.getTime();
+}
+
+function parseLocalDateTimeInZone(raw: string, timeZone: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(raw);
+  if (!match) {
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  const [, year, month, day, hour, minute] = match;
+  const utcGuess = new Date(Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+  ));
+  const offset = getTimeZoneOffsetMs(utcGuess, timeZone);
+  return new Date(utcGuess.getTime() - offset);
+}
+
+export function parseDateRange(formData: FormData, timeZone = "UTC"): ValidationResult<{ startsAt: Date | null; endsAt: Date | null }> {
   const startsAtRaw = (formData.get("startsAt") as string | null) ?? "";
   const endsAtRaw = (formData.get("endsAt") as string | null) ?? "";
-  const startsAt = startsAtRaw ? new Date(startsAtRaw) : null;
-  const endsAt = endsAtRaw ? new Date(endsAtRaw) : null;
+  const startsAt = startsAtRaw ? parseLocalDateTimeInZone(startsAtRaw, timeZone) : null;
+  const endsAt = endsAtRaw ? parseLocalDateTimeInZone(endsAtRaw, timeZone) : null;
 
   if (startsAtRaw && (!startsAt || Number.isNaN(startsAt.getTime()))) return fail("Start date is invalid.");
   if (endsAtRaw && (!endsAt || Number.isNaN(endsAt.getTime()))) return fail("End date is invalid.");

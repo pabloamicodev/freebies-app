@@ -2,9 +2,3 @@ packages:
   - "apps/*"
   - "packages/*"
   - "workers/*"
-
-# Force single versions across all workspaces to avoid type conflicts
-overrides:
-  ioredis: "5.6.1"
-  bullmq: "5.56.3"
-  "@shopify/shopify-api": "^13.0.0"
