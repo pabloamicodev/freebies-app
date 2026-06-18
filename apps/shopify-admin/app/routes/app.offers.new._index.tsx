@@ -76,6 +76,94 @@ const TEMPLATE_PRESETS: Record<string, {
 
 const VALID_TYPES = ["gift", "bundle", "upsell", "discount", "booster"] as const;
 
+function IllusGift() {
+  return (
+    <svg width="110" height="92" viewBox="0 0 110 92" fill="none">
+      <rect x="14" y="44" width="82" height="44" rx="6" fill="rgba(255,255,255,0.22)"/>
+      <rect x="8"  y="32" width="94" height="14" rx="5" fill="rgba(255,255,255,0.32)"/>
+      <rect x="50" y="32" width="10" height="56" fill="rgba(255,255,255,0.42)"/>
+      <rect x="14" y="60" width="82" height="9"  fill="rgba(255,255,255,0.18)"/>
+      <ellipse cx="35" cy="22" rx="18" ry="11" fill="rgba(255,255,255,0.36)" transform="rotate(-18 35 22)"/>
+      <ellipse cx="75" cy="22" rx="18" ry="11" fill="rgba(255,255,255,0.36)" transform="rotate(18 75 22)"/>
+      <circle  cx="55" cy="29" r="8"  fill="rgba(255,255,255,0.58)"/>
+      <circle  cx="16" cy="16" r="3.5" fill="rgba(255,255,255,0.32)"/>
+      <circle  cx="94" cy="20" r="2.5" fill="rgba(255,255,255,0.28)"/>
+      <circle  cx="100" cy="10" r="4" fill="rgba(255,255,255,0.18)"/>
+    </svg>
+  );
+}
+
+function IllusBundle() {
+  return (
+    <svg width="110" height="92" viewBox="0 0 110 92" fill="none">
+      <rect x="36" y="50" width="58" height="38" rx="7" fill="rgba(255,255,255,0.17)"/>
+      <rect x="22" y="38" width="58" height="38" rx="7" fill="rgba(255,255,255,0.25)"/>
+      <rect x="8"  y="26" width="58" height="38" rx="7" fill="rgba(255,255,255,0.36)"/>
+      <line x1="8"  y1="40" x2="66" y2="40" stroke="rgba(255,255,255,0.26)" strokeWidth="1.5"/>
+      <line x1="37" y1="26" x2="37" y2="64" stroke="rgba(255,255,255,0.26)" strokeWidth="1.5"/>
+      <rect x="16" y="47" width="22" height="4" rx="2" fill="rgba(255,255,255,0.28)"/>
+      <rect x="16" y="53" width="14" height="4" rx="2" fill="rgba(255,255,255,0.20)"/>
+      <rect x="64" y="9"  width="36" height="26" rx="6" fill="rgba(255,255,255,0.48)"/>
+      <circle cx="74" cy="20" r="5" fill="none" stroke="rgba(255,255,255,0.85)" strokeWidth="2.2"/>
+      <circle cx="90" cy="28" r="5" fill="none" stroke="rgba(255,255,255,0.85)" strokeWidth="2.2"/>
+      <line   x1="88" y1="14" x2="76" y2="34" stroke="rgba(255,255,255,0.85)" strokeWidth="2.2" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
+function IllusUpsell() {
+  return (
+    <svg width="110" height="92" viewBox="0 0 110 92" fill="none">
+      <rect x="10" y="64" width="20" height="24" rx="4" fill="rgba(255,255,255,0.20)"/>
+      <rect x="38" y="50" width="20" height="38" rx="4" fill="rgba(255,255,255,0.28)"/>
+      <rect x="66" y="32" width="20" height="56" rx="4" fill="rgba(255,255,255,0.40)"/>
+      <path d="M96 12 L104 23 M96 12 L87 23 M96 12 L96 56"
+            stroke="rgba(255,255,255,0.82)" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"/>
+      <circle cx="20" cy="61" r="5.5" fill="rgba(255,255,255,0.40)"/>
+      <circle cx="48" cy="47" r="5.5" fill="rgba(255,255,255,0.46)"/>
+      <circle cx="76" cy="29" r="5.5" fill="rgba(255,255,255,0.55)"/>
+    </svg>
+  );
+}
+
+function IllusDiscount() {
+  return (
+    <svg width="110" height="92" viewBox="0 0 110 92" fill="none">
+      <path d="M8 8 L60 8 Q80 8 88 28 Q80 48 60 48 L8 48 Q4 48 4 44 L4 12 Q4 8 8 8Z" fill="rgba(255,255,255,0.14)"/>
+      <circle cx="20" cy="28" r="6"  fill="none" stroke="rgba(255,255,255,0.52)" strokeWidth="2"/>
+      <circle cx="38" cy="26" r="14" fill="none" stroke="rgba(255,255,255,0.60)" strokeWidth="5"/>
+      <circle cx="72" cy="62" r="14" fill="none" stroke="rgba(255,255,255,0.60)" strokeWidth="5"/>
+      <line   x1="20" y1="80" x2="90" y2="14" stroke="rgba(255,255,255,0.70)" strokeWidth="5" strokeLinecap="round"/>
+      <path   d="M94 8 L96 3 L98 8 L103 10 L98 12 L96 17 L94 12 L89 10Z" fill="rgba(255,255,255,0.45)"/>
+      <circle cx="96" cy="72" r="3"  fill="rgba(255,255,255,0.30)"/>
+      <circle cx="14" cy="76" r="4"  fill="rgba(255,255,255,0.25)"/>
+    </svg>
+  );
+}
+
+function IllusBooster() {
+  return (
+    <svg width="200" height="92" viewBox="0 0 200 92" fill="none">
+      <rect x="20"  y="38" width="160" height="18" rx="9" fill="rgba(255,255,255,0.18)"/>
+      <rect x="20"  y="38" width="112" height="18" rx="9" fill="rgba(255,255,255,0.44)"/>
+      <circle cx="20"  cy="47" r="12" fill="rgba(255,255,255,0.28)"/>
+      <circle cx="132" cy="47" r="14" fill="rgba(255,255,255,0.64)"/>
+      <path d="M126 41 L124 38 L120 38 M126 41 L128 49 L140 49 L142 41 Z M130 52 a1.5 1.5 0 1 0 3 0 M137 52 a1.5 1.5 0 1 0 3 0"
+            stroke="rgba(180,83,9,0.75)" strokeWidth="1.6" strokeLinecap="round" fill="none"/>
+      <circle cx="65"  cy="47" r="4.5" fill="rgba(255,255,255,0.52)"/>
+      <circle cx="110" cy="47" r="4.5" fill="rgba(255,255,255,0.52)"/>
+      <rect x="38"  y="20" width="44" height="12" rx="3" fill="rgba(255,255,255,0.24)"/>
+      <rect x="90"  y="20" width="44" height="12" rx="3" fill="rgba(255,255,255,0.24)"/>
+      <circle cx="28"  cy="22" r="4"  fill="rgba(255,255,255,0.32)"/>
+      <circle cx="162" cy="20" r="3"  fill="rgba(255,255,255,0.28)"/>
+      <circle cx="176" cy="28" r="5"  fill="rgba(255,255,255,0.20)"/>
+      <rect x="150" y="60" width="46" height="22" rx="5" fill="rgba(255,255,255,0.32)"/>
+      <rect x="155" y="66" width="18" height="4" rx="2" fill="rgba(255,255,255,0.52)"/>
+      <rect x="155" y="72" width="12" height="3" rx="2" fill="rgba(255,255,255,0.38)"/>
+    </svg>
+  );
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
@@ -182,56 +270,46 @@ const OFFER_TYPES = [
     value: "gift",
     label: "Gift Offer",
     desc: "Auto-add or let customers select a free product when the cart hits a threshold.",
-    color: "#f97316",
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-        <path d="M10.75 4.5a.75.75 0 0 0-1.5 0v.75h-1.5A2.25 2.25 0 0 0 5.5 7.5v.75H3.75A.75.75 0 0 0 3 9v7.25A1.75 1.75 0 0 0 4.75 18h10.5A1.75 1.75 0 0 0 17 16.25V9a.75.75 0 0 0-.75-.75H14.5V7.5a2.25 2.25 0 0 0-2.25-2.25h-1.5V4.5ZM9.25 7.5h-1.5a.75.75 0 0 0 0 1.5H9.25v3.5H4.5V9.75h1.25V8.25H4.5V7.5a.75.75 0 0 1 .75-.75h4V7.5Zm1.5 0v-.75h1.5a.75.75 0 0 1 .75.75v.75h-1.25v1.5H14V9.75h-3.25V9h1.25V8.25H10.75V7.5Zm-1.5 5V9.75h1.5V12.5h-1.5Zm-4.75 0H9.25v4H4.75a.25.25 0 0 1-.25-.25V12.5Zm5.75 4V12.5h4.75v3.75a.25.25 0 0 1-.25.25H10.75Z"/>
-      </svg>
-    ),
+    color: "#d97706",
+    gradient: "linear-gradient(135deg, #fbbf24 0%, #d97706 100%)",
+    illus: <IllusGift />,
+    wide: false,
   },
   {
     value: "bundle",
     label: "Bundle Offer",
     desc: "Group products with a discount — classic bundles, mix & match, or build-your-own.",
-    color: "#3b82f6",
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-        <path fillRule="evenodd" d="M2 3.75A.75.75 0 0 1 2.75 3h14.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 3.75ZM2 7.5a.75.75 0 0 1 .75-.75h14.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 7.5ZM2.75 10.75a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5h-7.5ZM14.25 9.5a.75.75 0 0 1 .75.75v4.69l1.72-1.72a.75.75 0 1 1 1.06 1.06l-3 3a.75.75 0 0 1-1.06 0l-3-3a.75.75 0 1 1 1.06-1.06l1.72 1.72V10.25a.75.75 0 0 1 .75-.75Z" clipRule="evenodd"/>
-      </svg>
-    ),
+    color: "#0d9488",
+    gradient: "linear-gradient(135deg, #2dd4bf 0%, #0d9488 100%)",
+    illus: <IllusBundle />,
+    wide: false,
   },
   {
     value: "upsell",
     label: "Upsell Offer",
     desc: "Recommend products at checkout or on the product page (Frequently Bought Together).",
-    color: "#8b5cf6",
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-        <path fillRule="evenodd" d="M10 17a.75.75 0 0 1-.75-.75V5.612L5.29 9.77a.75.75 0 0 1-1.08-1.04l5.25-5.5a.75.75 0 0 1 1.08 0l5.25 5.5a.75.75 0 1 1-1.08 1.04l-3.96-4.158V16.25A.75.75 0 0 1 10 17Z" clipRule="evenodd"/>
-      </svg>
-    ),
+    color: "#7c3aed",
+    gradient: "linear-gradient(135deg, #a78bfa 0%, #7c3aed 100%)",
+    illus: <IllusUpsell />,
+    wide: false,
   },
   {
     value: "discount",
     label: "Discount Offer",
     desc: "Volume tiers, cart discounts, or cheapest/most expensive item promotions.",
-    color: "#10b981",
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-        <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM6.75 9.25a.75.75 0 0 0 0 1.5h6.5a.75.75 0 0 0 0-1.5h-6.5Z" clipRule="evenodd"/>
-      </svg>
-    ),
+    color: "#e11d48",
+    gradient: "linear-gradient(135deg, #fb7185 0%, #e11d48 100%)",
+    illus: <IllusDiscount />,
+    wide: false,
   },
   {
     value: "booster",
     label: "Booster",
     desc: "Today Offer widget or progress bar — surfaces active offers across the entire storefront.",
-    color: "#f59e0b",
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-        <path fillRule="evenodd" d="M10.38 1.103a.75.75 0 0 0-1.042.155L5.45 6.38H2.75a.75.75 0 0 0-.75.75v5.74a.75.75 0 0 0 .75.75H5.45l3.888 5.122a.75.75 0 0 0 1.31-.407l.001-.01.004-.04.012-.119a31.516 31.516 0 0 0 .115-2.047c.035-1.354.026-3.34-.395-5.293.421-1.952.43-3.94.395-5.293a31.55 31.55 0 0 0-.115-2.047l-.012-.119-.004-.04-.001-.01a.75.75 0 0 0-.268-.414Z" clipRule="evenodd"/>
-      </svg>
-    ),
+    color: "#b45309",
+    gradient: "linear-gradient(135deg, #fbbf24 0%, #b45309 100%)",
+    illus: <IllusBooster />,
+    wide: true,
   },
 ];
 
@@ -298,33 +376,35 @@ export default function NewOfferPage() {
             <span>Offer type</span>
             <span style={{ fontSize: 12, fontWeight: 400, color: "var(--text-sub)" }}>Select one</span>
           </div>
-          <div className="b-card-body" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, padding: 16 }}>
-            {OFFER_TYPES.map((type) => {
-              const active = offerType === type.value;
-              return (
-                <button
-                  key={type.value}
-                  type="button"
-                  onClick={() => setOfferType(type.value)}
-                  className="rd-style-012" style={{ border: `2px solid ${active ? "var(--blue)" : "var(--border)"}`, background: active ? "var(--blue-light, #f0f4ff)" : "var(--bg-card)", boxShadow: active ? "0 0 0 3px rgba(44,110,203,0.12)" : "none" }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
-                    <div className="rd-style-013" style={{ background: active ? type.color : `${type.color}1a`, color: active ? "#fff" : type.color }}>
-                      {type.icon}
+          <div style={{ padding: 16 }}>
+            <div className="ot-grid">
+              {OFFER_TYPES.map((type) => {
+                const active = offerType === type.value;
+                return (
+                  <button
+                    key={type.value}
+                    type="button"
+                    onClick={() => setOfferType(type.value)}
+                    className={`ot-card${type.wide ? " ot-wide" : ""}${active ? ` ot-active-${type.value}` : ""}`}
+                  >
+                    <div className="ot-card-illus" style={{ background: type.gradient }}>
+                      <div className="ot-illus-img">{type.illus}</div>
+                      {active && (
+                        <div className="ot-card-check">
+                          <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
+                            <path d="M4 10l4 4 8-8" stroke={type.color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </div>
+                      )}
                     </div>
-                    {active && (
-                      <div style={{ width: 18, height: 18, borderRadius: "50%", background: "var(--blue)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <svg width="10" height="10" viewBox="0 0 20 20" fill="white"><path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clipRule="evenodd"/></svg>
-                      </div>
-                    )}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 3 }}>{type.label}</div>
-                    <div style={{ fontSize: 12, color: "var(--text-sub)", lineHeight: 1.4 }}>{type.desc}</div>
-                  </div>
-                </button>
-              );
-            })}
+                    <div className="ot-card-body">
+                      <div className="ot-card-name">{type.label}</div>
+                      <p className="ot-card-desc">{type.desc}</p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 

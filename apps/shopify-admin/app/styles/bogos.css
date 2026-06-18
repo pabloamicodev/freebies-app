@@ -2271,3 +2271,85 @@ input.b-input-error, textarea.b-input-error { border-color: var(--red) !importan
 }
 
 /* React Doctor extracted inline styles - end */
+
+/* ── Offer type visual card grid ────────────────────────── */
+.ot-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.ot-card {
+  border: 2px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--bg-card);
+  width: 100%;
+  font-family: var(--font-body);
+  text-align: left;
+  padding: 0;
+  position: relative;
+  transition: border-color var(--t-base), box-shadow var(--t-slow), transform var(--t-spring);
+}
+.ot-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-3px);
+}
+.ot-card:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 3px; }
+.ot-card.ot-wide { grid-column: span 2; }
+
+.ot-card.ot-active-gift     { border-color: var(--gift-color);     box-shadow: 0 0 0 3px rgba(217,119,6,0.18),    var(--shadow-sm); }
+.ot-card.ot-active-bundle   { border-color: var(--bundle-color);   box-shadow: 0 0 0 3px rgba(13,148,136,0.18),   var(--shadow-sm); }
+.ot-card.ot-active-upsell   { border-color: var(--upsell-color);   box-shadow: 0 0 0 3px rgba(124,58,237,0.18),   var(--shadow-sm); }
+.ot-card.ot-active-discount { border-color: var(--discount-color); box-shadow: 0 0 0 3px rgba(225,29,72,0.18),    var(--shadow-sm); }
+.ot-card.ot-active-booster  { border-color: var(--gift-color);     box-shadow: 0 0 0 3px rgba(245,158,11,0.18),   var(--shadow-sm); }
+
+.ot-card-illus {
+  height: 126px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+.ot-illus-img {
+  transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  will-change: transform;
+  flex-shrink: 0;
+  display: flex;
+}
+.ot-card:hover .ot-illus-img {
+  transform: scale(1.10) rotate(5deg);
+}
+.ot-card-body {
+  padding: 14px 16px 16px;
+  border-top: 1px solid rgba(0,0,0,0.07);
+}
+.ot-card-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  letter-spacing: -0.2px;
+}
+.ot-card-desc {
+  font-size: 12px;
+  color: var(--text-sub);
+  line-height: 1.5;
+  margin: 0;
+}
+.ot-card-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+  z-index: 1;
+}
