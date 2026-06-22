@@ -24,6 +24,7 @@ import { evaluatePack, type PackConditionValue } from "./conditions/pack.js";
 import { evaluateProductQuantityLimits, type ProductQuantityLimitsConditionValue } from "./conditions/product-quantity-limits.js";
 import { evaluateSubscriptionCondition, type SubscriptionConditionValue } from "./conditions/subscription.js";
 import { evaluateUrlParam, type UrlParamConditionValue } from "./conditions/url-param.js";
+import { evaluatePageUrl, type PageUrlConditionValue } from "./conditions/page-url.js";
 import { evaluateCountry, type CountryConditionValue } from "./conditions/country.js";
 import { applyPriority } from "./priority-resolver.js";
 
@@ -482,6 +483,9 @@ function evaluateCondition(
 
     case "specific_link":
       return evaluateUrlParam(input.requestedUrl, cond.value as UrlParamConditionValue);
+
+    case "page_url":
+      return evaluatePageUrl(input.requestedUrl, cond.value as PageUrlConditionValue);
 
     case "customer_location":
       return evaluateCountry(

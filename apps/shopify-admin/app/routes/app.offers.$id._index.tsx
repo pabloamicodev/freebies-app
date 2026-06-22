@@ -279,6 +279,7 @@ const CONDITION_TYPE_NAMES: Record<string, string> = {
   markets:               "Shopify Markets",
   customer_location:     "Customer Location",
   sales_channels:        "Sales Channels",
+  page_url:              "Page URL",
 };
 
 /* ── Currency chips shown on monetary conditions ────────── */
@@ -353,6 +354,136 @@ function AppliesToSelect({ value, onChange }: { value: string; onChange: (v: str
 
 /* ── Inline condition editor ────────────────────────────── */
 type ConditionValue = Record<string, unknown>;
+
+/* ── Page URL condition editor ──────────────────────────── */
+function PageUrlConditionEditor({
+  conditionId,
+  val,
+  update,
+  save,
+}: {
+  conditionId: string;
+  val: ConditionValue;
+  update: (patch: Partial<ConditionValue>) => void;
+  save: (overrideVal?: ConditionValue) => void;
+}) {
+  const patterns = Array.isArray(val.patterns) ? (val.patterns as string[]) : [""];
+  const matchMode = (val.matchMode as string | undefined) ?? "starts_with";
+  const caseSensitive = Boolean(val.caseSensitive);
+
+  function setPatterns(next: string[]) {
+    const nextVal = { ...val, patterns: next };
+    update({ patterns: next });
+    save(nextVal);
+  }
+
+  function updatePattern(index: number, newValue: string) {
+    const next = patterns.map((p, i) => (i === index ? newValue : p));
+    update({ patterns: next });
+  }
+
+  function savePatterns() {
+    save({ ...val, patterns });
+  }
+
+  function addPattern() {
+    setPatterns([...patterns, ""]);
+  }
+
+  function removePattern(index: number) {
+    const next = patterns.filter((_, i) => i !== index);
+    setPatterns(next.length > 0 ? next : [""]);
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div>
+        <label htmlFor={`condition-${conditionId}-match-mode`} style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>
+          Match mode
+        </label>
+        <select
+          id={`condition-${conditionId}-match-mode`}
+          aria-label="URL match mode"
+          className="b-select"
+          value={matchMode}
+          onChange={(e) => {
+            const next = { ...val, matchMode: e.target.value };
+            update({ matchMode: e.target.value });
+            save(next);
+          }}
+        >
+          <option value="exact">Exact — pathname must equal pattern exactly</option>
+          <option value="starts_with">Starts with — pathname begins with pattern</option>
+          <option value="contains">Contains — pattern appears anywhere in pathname</option>
+          <option value="ends_with">Ends with — pathname ends with pattern</option>
+        </select>
+        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+          Matching is applied to the URL path (e.g. <code>/collections/sale</code>). Any pattern match activates the offer.
+        </div>
+      </div>
+
+      <div>
+        <div style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 6 }}>URL patterns</div>
+        {patterns.map((pattern, i) => (
+          <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+            <input
+              aria-label={`URL pattern ${i + 1}`}
+              className="b-input"
+              type="text"
+              placeholder="/collections/sale"
+              value={pattern}
+              onChange={(e) => updatePattern(i, e.target.value)}
+              onBlur={() => savePatterns()}
+              style={{ flex: 1 }}
+            />
+            <button
+              type="button"
+              aria-label="Remove pattern"
+              onClick={() => removePattern(i)}
+              style={{
+                background: "none", border: "none", cursor: "pointer",
+                color: "#dc2626", fontSize: 16, lineHeight: 1, padding: "2px 6px", flexShrink: 0,
+              }}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="b-btn b-btn-secondary b-btn-sm"
+          onClick={addPattern}
+          style={{ marginTop: 2 }}
+        >
+          + Add pattern
+        </button>
+      </div>
+
+      <div className="b-checkbox-row">
+        <input
+          type="checkbox"
+          id={`condition-${conditionId}-case-sensitive`}
+          aria-label="Case sensitive matching"
+          checked={caseSensitive}
+          onChange={(e) => {
+            const next = { ...val, caseSensitive: e.target.checked };
+            update({ caseSensitive: e.target.checked });
+            save(next);
+          }}
+          style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
+        />
+        <div>
+          <label htmlFor={`condition-${conditionId}-case-sensitive`} className="b-checkbox-label">
+            Case-sensitive matching
+          </label>
+          <div className="b-checkbox-help">
+            By default matching is case-insensitive. Enable to match exact casing.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ConditionCard({
   conditionId,
@@ -654,6 +785,11 @@ function ConditionCard({
             />
           </>
         )}
+
+        {/* ── Page URL ───────────────────────────────────────── */}
+        {conditionType === "page_url" && (
+          <PageUrlConditionEditor conditionId={conditionId} val={val} update={update} save={save} />
+        )}
       </div>
     </div>
   );
@@ -734,6 +870,13 @@ function conditionSummary(conditionType: string, value: ConditionValue, currency
       const qty = v.minQtyPerProduct as number ?? 1;
       const ids = Array.isArray(v.variantIds) ? (v.variantIds as string[]).length : 0;
       return [`Buy ${qty} item(s) of products to get 1 gift(s)`, `Applies to ${ids} products selected`];
+    }
+    case "page_url": {
+      const mode = (v.matchMode as string | undefined) ?? "starts_with";
+      const patterns = Array.isArray(v.patterns) ? (v.patterns as string[]) : [];
+      const label = mode.replace("_", " ");
+      if (patterns.length === 0) return ["No URL patterns configured"];
+      return [`URL ${label}: ${patterns.slice(0, 2).join(", ")}${patterns.length > 2 ? ` +${patterns.length - 2} more` : ""}`];
     }
     default:
       return [conditionType];
@@ -853,6 +996,7 @@ export default function OfferDetailPage() {
       cart_quantity: { minQuantity: 1, appliesTo: "any_product" },
       cart_value_multiplier: { thresholdCents: 50000, currencyCode: "USD", appliesTo: "any_product" },
       specific_product: { minQtyPerProduct: 1, multiplyGifts: false, giftsMatchProducts: false, trackMode: "variant", appliesTo: "specific_products", variantIds: [] },
+      page_url: { patterns: [""], matchMode: "starts_with", caseSensitive: false },
     };
     const fd = new FormData();
     fd.append("intent", "add_condition");
@@ -1113,6 +1257,7 @@ export default function OfferDetailPage() {
                     <option value="cart_quantity">Cart Quantity — item count</option>
                     <option value="cart_value_multiplier">Cart Value Multiplier — earn gifts per $ spent</option>
                     <option value="specific_product">Specific Product — must contain selected products</option>
+                    <option value="page_url">Page URL — restrict to specific storefront pages</option>
                   </select>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button

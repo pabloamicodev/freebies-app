@@ -11,5 +11,6 @@ export { evaluatePack } from "./conditions/pack.js";
 export { evaluateProductQuantityLimits } from "./conditions/product-quantity-limits.js";
 export { evaluateSubscriptionCondition } from "./conditions/subscription.js";
 export { evaluateUrlParam } from "./conditions/url-param.js";
+export { evaluatePageUrl, type PageUrlConditionValue } from "./conditions/page-url.js";
 export { evaluateCountry } from "./conditions/country.js";
 export { evaluateBogo } from "./conditions/bogo.js";

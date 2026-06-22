@@ -55,6 +55,7 @@ export const ConditionTypeSchema = z.enum([
   "exclude_collections",
   "exclude_vendors",
   "exclude_types",
+  "page_url",
 ]);
 export type ConditionType = z.infer<typeof ConditionTypeSchema>;
 
@@ -187,6 +188,13 @@ export const SubscriptionConditionValueSchema = z.object({
   mode: z.enum(["any", "subscription_only", "one_time_only"]),
 });
 
+export const PageUrlConditionValueSchema = z.object({
+  patterns: z.array(z.string().min(1, "Pattern cannot be empty")).min(1, "At least one URL pattern is required"),
+  matchMode: z.enum(["exact", "contains", "starts_with", "ends_with"]),
+  caseSensitive: z.boolean().default(false),
+});
+export type PageUrlConditionValue = z.infer<typeof PageUrlConditionValueSchema>;
+
 export function validateConditionValue(conditionType: string, value: unknown): z.SafeParseReturnType<unknown, unknown> {
   switch (conditionType) {
     case "cart_value":
@@ -214,6 +222,8 @@ export function validateConditionValue(conditionType: string, value: unknown): z
       return UrlParamConditionValueSchema.safeParse(value);
     case "subscription_product_type":
       return SubscriptionConditionValueSchema.safeParse(value);
+    case "page_url":
+      return PageUrlConditionValueSchema.safeParse(value);
     case "one_use_per_customer":
       return z.record(z.string(), z.unknown()).safeParse(value);
     default:

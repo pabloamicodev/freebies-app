@@ -134,6 +134,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       case "sales_channels":
         value = { channels: formData.getAll("channels[]") as string[] };
         break;
+      case "page_url": {
+        const patternsRaw = formData.get("urlPatterns") as string | null;
+        const patterns = splitCsvList(patternsRaw).filter((p) => p.length > 0);
+        if (patterns.length === 0) return { error: "Enter at least one URL pattern." };
+        const matchMode = (formData.get("matchMode") as string | null) ?? "starts_with";
+        value = { patterns, matchMode, caseSensitive: false };
+        break;
+      }
       case "specific_product":
       case "pack_of_products": {
         const gidsRaw = (formData.get("requiredVariantGids") as string | null) ?? "";
@@ -213,6 +221,7 @@ const MAIN_CONDITION_TYPES = [
   { label: "Cart Value Multiplier — earn gifts per $ spent", value: "cart_value_multiplier" },
   { label: "Specific Product — must contain selected products", value: "specific_product" },
   { label: "Pack of Products — all products must be present", value: "pack_of_products" },
+  { label: "Page URL — restrict to specific storefront pages", value: "page_url" },
 ];
 
 const SUB_CONDITION_TYPES = [
@@ -669,6 +678,34 @@ export default function OfferConditionsPage() {
                           className="b-input"
                           autoComplete="off"
                         />
+                      </div>
+                    </>
+                  )}
+
+                  {/* page_url fields */}
+                  {selectedType === "page_url" && (
+                    <>
+                      <div>
+                        <label className="b-label" htmlFor="urlPatterns">URL patterns (comma-separated)</label>
+                        <input
+                          id="urlPatterns"
+                          type="text"
+                          name="urlPatterns"
+                          className="b-input"
+                          autoComplete="off"
+                          placeholder="/collections/sale, /pages/promo"
+                          required
+                        />
+                        <div className="b-help">Enter path patterns. The offer activates when the current page matches any pattern.</div>
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="matchMode">Match mode</label>
+                        <select id="matchMode" name="matchMode" className="b-select">
+                          <option value="starts_with">Starts with</option>
+                          <option value="exact">Exact match</option>
+                          <option value="contains">Contains</option>
+                          <option value="ends_with">Ends with</option>
+                        </select>
                       </div>
                     </>
                   )}
