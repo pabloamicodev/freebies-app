@@ -8,25 +8,29 @@ import {
 } from "@promo/db";
 import type { OfferDefinition } from "@promo/rule-engine";
 
-const OFFER_DEFINITION_CACHE_MS = 5_000;
-const offerDefinitionCache = new Map<string, { expiresAt: number; offers: OfferDefinition[] }>();
+// Previously an in-memory cache (didn't survive across Vercel serverless instances).
+// Now we query directly — the DB indexes on (shopId, status) and (shopId, priority)
+// make this fast enough for the evaluate hot path.
 
-export function invalidateOfferDefinitions(shopId: string): void {
-  offerDefinitionCache.delete(shopId);
+export function invalidateOfferDefinitions(_shopId: string): void {
+  // No-op: kept for call-site compatibility.
 }
 
 export async function getOfferDefinitions(shopId: string, db: Db): Promise<OfferDefinition[]> {
-  const cached = offerDefinitionCache.get(shopId);
-  if (cached && cached.expiresAt > Date.now()) return cached.offers;
 
-  const activeOffers = await db
+  type OfferRow = typeof offers.$inferSelect;
+  type ConditionRow = typeof offerConditions.$inferSelect;
+  type RewardRow = typeof offerRewards.$inferSelect;
+  type PolicyRow = typeof offerCombinationPolicies.$inferSelect;
+
+  const activeOffers: OfferRow[] = await db
     .select()
     .from(offers)
     .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")))
     .orderBy(offers.priority);
 
   const offerIds = activeOffers.map((offer) => offer.id);
-  const [conditions, rewards, policies] = offerIds.length > 0
+  const [conditions, rewards, policies]: [ConditionRow[], RewardRow[], PolicyRow[]] = offerIds.length > 0
     ? await Promise.all([
         db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), inArray(offerConditions.offerId, offerIds))),
         db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, offerIds))),
@@ -85,6 +89,5 @@ export async function getOfferDefinitions(shopId: string, db: Db): Promise<Offer
     };
   });
 
-  offerDefinitionCache.set(shopId, { expiresAt: Date.now() + OFFER_DEFINITION_CACHE_MS, offers: offerDefinitions });
   return offerDefinitions;
 }

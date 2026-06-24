@@ -1,6 +1,15 @@
 import "./lib/pg-ssl-patch.js";
 import "@shopify/shopify-app-react-router/adapters/node";
+import * as Sentry from "@sentry/node";
 import { shopifyApp } from "@shopify/shopify-app-react-router/server";
+
+if (process.env["SENTRY_DSN"]) {
+  Sentry.init({
+    dsn: process.env["SENTRY_DSN"],
+    environment: process.env["NODE_ENV"] ?? "production",
+    tracesSampleRate: 0.1,
+  });
+}
 import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";
 import { getDb, shops } from "@promo/db";
 import { SHOPIFY_API_VERSION } from "./lib/shopify-api-version.js";

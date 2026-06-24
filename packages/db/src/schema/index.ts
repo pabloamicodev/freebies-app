@@ -4,3 +4,4 @@ export * from "./widgets";
 export * from "./bundles";
 export * from "./catalog";
 export * from "./analytics";
+export * from "./rate-limits";

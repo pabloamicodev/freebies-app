@@ -2,13 +2,16 @@ import type { ActionFunctionArgs } from "react-router";
 import { waitUntil } from "@vercel/functions";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs } from "@promo/db";
+import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs, giftCloneProducts, offers } from "@promo/db";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { decryptToken } from "../lib/token-crypto.server.js";
 import { syncInventoryFromWebhook } from "../lib/sync/inventory-sync.server.js";
 import { syncCollectionFromWebhook } from "../lib/sync/collection-sync.server.js";
 import { syncMarketsForShop } from "../lib/sync/market-sync.server.js";
 import { reconcileOrderAttribution } from "../lib/sync/analytics-reconcile.server.js";
+import { dispatchIntegrationEvents } from "../lib/integration-dispatcher.server.js";
+import { shopifyGraphQL } from "../lib/shopify-fetch.server.js";
+import * as Sentry from "@sentry/node";
 
 
 /**
@@ -81,6 +84,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   } catch (err) {
     console.error(`Webhook handler failed: topic=${topic} shop=${shop}`, err instanceof Error ? err.message : err);
+    Sentry.captureException(err, { tags: { topic, shop } });
   }
 
   return new Response("OK", { status: 200 });
@@ -152,19 +156,26 @@ interface CustomerGdprPayload {
   orders_requested?: Array<{ id: number; name: string }>;
 }
 
-async function getShopId(shopDomain: string): Promise<string | null> {
+async function getShopRecord(shopDomain: string): Promise<{ id: string; currencyCode: string } | null> {
   const db = getDb();
   const rows = await db
-    .select({ id: shops.id })
+    .select({ id: shops.id, currencyCode: shops.currencyCode })
     .from(shops)
     .where(eq(shops.myshopifyDomain, shopDomain))
     .limit(1);
-  return rows[0]?.id ?? null;
+  return rows[0] ?? null;
+}
+
+// Kept for callers that only need the id
+async function getShopId(shopDomain: string): Promise<string | null> {
+  return (await getShopRecord(shopDomain))?.id ?? null;
 }
 
 async function handleProductUpdate(shop: string, product: ProductWebhookPayload) {
-  const shopId = await getShopId(shop);
-  if (!shopId) return;
+  const shopRecord = await getShopRecord(shop);
+  if (!shopRecord) return;
+  const shopId = shopRecord.id;
+  const currencyCode = shopRecord.currencyCode || "USD";
 
   const db = getDb();
   const productGid = product.admin_graphql_api_id;
@@ -215,7 +226,7 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
         title: variant.title,
         price: variant.price,
         compareAtPrice: variant.compare_at_price,
-        currencyCode: "USD",
+        currencyCode,
         inventoryQuantity: variant.inventory_quantity,
         inventoryPolicy: (variant.inventory_policy ?? "DENY").toUpperCase(),
         availableForSale: variant.available,
@@ -292,6 +303,7 @@ async function handleCollectionChange(shop: string, legacyCollectionId: number) 
 async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
   const shopId = await getShopId(shop);
   if (!shopId) return;
+  const db = getDb();
   const offerIds = order.note_attributes
     ?.filter((attr) => attr.name === "_promo_engine_offer_id" || attr.name === "promo_engine_offer_id")
     .map((attr) => attr.value)
@@ -303,15 +315,26 @@ async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
   const totalPriceCents = Number.isFinite(amount) ? Math.round(amount * 100) : 0;
 
   waitUntil(
-    reconcileOrderAttribution({
-      shopId,
-      orderId: String(order.id),
-      orderGid: order.admin_graphql_api_id,
-      cartToken: order.cart_token,
-      totalPriceCents,
-      offerIds,
-      sessionId,
-    }).catch((err) => console.error("analytics-reconcile failed", err instanceof Error ? err.message : err)),
+    Promise.allSettled([
+      reconcileOrderAttribution({
+        shopId,
+        orderId: String(order.id),
+        orderGid: order.admin_graphql_api_id,
+        cartToken: order.cart_token,
+        totalPriceCents,
+        offerIds,
+        sessionId,
+      }).catch((err) => console.error("analytics-reconcile failed", err instanceof Error ? err.message : err)),
+      dispatchIntegrationEvents(shopId, db, {
+        event: "order_paid",
+        shopDomain: shop,
+        orderId: order.admin_graphql_api_id,
+        offerIds,
+        totalPriceCents,
+        sessionId,
+        timestamp: new Date().toISOString(),
+      }).catch((err) => console.error("integration-dispatch failed", err instanceof Error ? err.message : err)),
+    ]),
   );
 }
 
@@ -332,14 +355,97 @@ async function handleOrderCancelled(shop: string, order: OrderWebhookPayload) {
 }
 
 async function handleAppUninstalled(shop: string) {
-  const shopId = await getShopId(shop);
-  if (!shopId) return;
+  const shopRecord = await getShopForWebhook(shop);
+  if (!shopRecord) return;
+  const { id: shopId, accessTokenEncrypted } = shopRecord;
   const db = getDb();
+
+  // Mark shop inactive first so no new mutations can happen
   await db
     .update(shops)
     .set({ isActive: false, uninstalledAt: new Date() })
     .where(eq(shops.myshopifyDomain, shop));
-  // Enqueue cleanup job: archive clone products, remove Function configs
+
+  // Run cleanup in background — failures are logged, never rethrow
+  waitUntil(
+    cleanupAfterUninstall(shopId, shop, accessTokenEncrypted).catch((err) =>
+      console.error("uninstall-cleanup failed", err instanceof Error ? err.message : err),
+    ),
+  );
+}
+
+async function cleanupAfterUninstall(
+  shopId: string,
+  shopDomain: string,
+  accessTokenEncrypted: string,
+): Promise<void> {
+  const db = getDb();
+  let accessToken: string;
+  try {
+    accessToken = await decryptToken(accessTokenEncrypted);
+  } catch {
+    console.error("uninstall-cleanup: could not decrypt token, skipping Shopify API cleanup");
+    return;
+  }
+
+  // 1. Delete all gift clone products from the merchant's Shopify catalog
+  const clones = await db
+    .select({ cloneProductGid: giftCloneProducts.cloneProductGid })
+    .from(giftCloneProducts)
+    .where(eq(giftCloneProducts.shopId, shopId));
+
+  for (const clone of clones) {
+    try {
+      await shopifyGraphQL({
+        shopDomain,
+        accessToken,
+        query: `mutation ProductDelete($id: ID!) {
+          productDelete(input: { id: $id }) {
+            deletedProductId
+            userErrors { message }
+          }
+        }`,
+        variables: { id: clone.cloneProductGid },
+      });
+    } catch (err) {
+      console.error(`uninstall-cleanup: failed to delete clone ${clone.cloneProductGid}`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  // 2. Clear the compiled Discount Function config metafield (empty offers list)
+  try {
+    const shopData = await shopifyGraphQL<{ shop: { id: string } }>({
+      shopDomain,
+      accessToken,
+      query: `query { shop { id } }`,
+    });
+    await shopifyGraphQL({
+      shopDomain,
+      accessToken,
+      query: `mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
+        metafieldsSet(metafields: $metafields) {
+          userErrors { message }
+        }
+      }`,
+      variables: {
+        metafields: [{
+          ownerId: shopData.shop.id,
+          namespace: "promo_engine",
+          key: "function_config",
+          type: "json",
+          value: JSON.stringify({ offers: [], version: "1", compiledAt: new Date().toISOString() }),
+        }],
+      },
+    });
+  } catch (err) {
+    console.error("uninstall-cleanup: failed to clear metafield", err instanceof Error ? err.message : err);
+  }
+
+  // 3. Archive all active offers in DB
+  await db
+    .update(offers)
+    .set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")));
 }
 
 async function handleCustomersUpdate(_shop: string, _payload: CustomerGdprPayload) {

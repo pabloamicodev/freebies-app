@@ -9,7 +9,7 @@
  * 4. Multiple offers with auto-add could add the same gift
  */
 
-import { getDb, offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
+import { getDb, offers, offerConditions, offerRewards, offerCombinationPolicies, type OfferReward, type OfferCombinationPolicy } from "@promo/db";
 import { eq, and, inArray } from "drizzle-orm";
 
 export interface OfferConflict {
@@ -24,7 +24,7 @@ export async function detectConflicts(shopId: string): Promise<OfferConflict[]> 
   const conflicts: OfferConflict[] = [];
 
   // Load all active offers
-  const activeOffers = await db.select({ id: offers.id, priority: offers.priority })
+  const activeOffers: { id: string; priority: number }[] = await db.select({ id: offers.id, priority: offers.priority })
     .from(offers)
     .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")));
 
@@ -33,7 +33,11 @@ export async function detectConflicts(shopId: string): Promise<OfferConflict[]> 
   const activeOfferIds = activeOffers.map((o) => o.id);
 
   // Load conditions, rewards, and combination policies scoped to active offers only
-  const [, rewardRows, policyRows] = await Promise.all([
+  const [, rewardRows, policyRows]: [
+    (typeof offerConditions.$inferSelect)[],
+    OfferReward[],
+    OfferCombinationPolicy[]
+  ] = await Promise.all([
     db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), inArray(offerConditions.offerId, activeOfferIds))),
     db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, activeOfferIds))),
     db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), inArray(offerCombinationPolicies.offerId, activeOfferIds))),

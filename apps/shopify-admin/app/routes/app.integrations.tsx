@@ -1,14 +1,12 @@
-import { useLoaderData } from "react-router";
-import { authenticate } from "../shopify.server.js";
-import type { LoaderFunctionArgs } from "react-router";
+import { useLoaderData, useFetcher } from "react-router";
 import { useState } from "react";
+import { getShopContext } from "../lib/shop-context.server.js";
+import { appSettings } from "@promo/db";
+import { and, eq } from "drizzle-orm";
+import { validateKlaviyoApiKey } from "../lib/integration-dispatcher.server.js";
+import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
-
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  return { connected: [] };
-};
 
 const INTEGRATIONS = [
   {
@@ -16,138 +14,220 @@ const INTEGRATIONS = [
     name: "Klaviyo",
     initial: "K",
     color: "#7c3aed",
-    description: "Sync gift events to Klaviyo flows and segments",
-  },
-  {
-    id: "rebuy",
-    name: "Rebuy",
-    initial: "R",
-    color: "#2c6ecb",
-    description: "Use BOGOS offers in Rebuy Smart Cart widgets",
+    description: "Send gift and order events to Klaviyo flows and segments.",
+    fieldLabel: "Private API Key",
+    fieldPlaceholder: "pk_xxxxxxxxxxxxxxxxxxxxxxxx",
+    helpText: "Klaviyo → Settings → API Keys",
+    validates: true,
   },
   {
     id: "omnisend",
     name: "Omnisend",
     initial: "O",
     color: "#16a34a",
-    description: "Trigger Omnisend automations on gift events",
+    description: "Trigger Omnisend automations on gift events via webhook.",
+    fieldLabel: "Webhook URL",
+    fieldPlaceholder: "https://hooks.omnisend.com/...",
+    helpText: "Omnisend → Automation → Webhooks",
+    validates: false,
   },
   {
     id: "attentive",
     name: "Attentive",
     initial: "A",
     color: "#ea580c",
-    description: "Send gift SMS notifications via Attentive",
+    description: "Send gift event notifications to Attentive SMS flows.",
+    fieldLabel: "Webhook URL",
+    fieldPlaceholder: "https://hooks.attentivemobile.com/...",
+    helpText: "Attentive → Developer → Webhooks",
+    validates: false,
+  },
+  {
+    id: "rebuy",
+    name: "Rebuy",
+    initial: "R",
+    color: "#2c6ecb",
+    description: "Post promo events to a Rebuy webhook endpoint.",
+    fieldLabel: "Webhook URL",
+    fieldPlaceholder: "https://...",
+    helpText: "Your Rebuy custom webhook URL",
+    validates: false,
   },
   {
     id: "gorgias",
     name: "Gorgias",
     initial: "G",
     color: "#dc2626",
-    description: "Access offer data in Gorgias support tickets",
+    description: "Forward offer events to Gorgias for support ticket context.",
+    fieldLabel: "Webhook URL",
+    fieldPlaceholder: "https://...",
+    helpText: "Your Gorgias webhook URL",
+    validates: false,
   },
   {
     id: "postscript",
     name: "Postscript",
     initial: "P",
     color: "#4f46e5",
-    description: "BOGOS gift events in Postscript SMS flows",
+    description: "Send gift events to Postscript SMS flows.",
+    fieldLabel: "Webhook URL",
+    fieldPlaceholder: "https://...",
+    helpText: "Your Postscript webhook URL",
+    validates: false,
   },
 ];
 
-export default function IntegrationsPage() {
-  const { connected } = useLoaderData<typeof loader>();
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { shopId, db } = await getShopContext(request);
+  const settingRows = await db
+    .select({ key: appSettings.key, value: appSettings.value })
+    .from(appSettings)
+    .where(eq(appSettings.shopId, shopId));
 
-  const [connectedSet, setConnectedSet] = useState<Set<string>>(
-    new Set(connected)
-  );
-  const [requestEmail, setRequestEmail] = useState("");
-  const [requestSubmitted, setRequestSubmitted] = useState(false);
-
-  function handleConnect(id: string) {
-    setConnectedSet((prev) => {
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
-  }
-
-  function handleDisconnect(id: string) {
-    setConnectedSet((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-  }
-
-  function handleRequestSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (requestEmail.trim()) {
-      setRequestSubmitted(true);
-      setRequestEmail("");
+  const connected: Record<string, string> = {};
+  for (const row of settingRows) {
+    if (row.key.startsWith("integration.") && row.key.endsWith(".api_key")) {
+      const id = row.key.split(".")[1];
+      if (id) connected[id] = row.value;
     }
   }
+  return { connected };
+};
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { shopId, db } = await getShopContext(request);
+  const formData = await request.formData();
+  const intent = formData.get("intent") as string;
+
+  if (intent === "disconnect") {
+    const integrationId = formData.get("integrationId") as string;
+    if (!integrationId) return { error: "Missing integrationId" };
+    await db
+      .delete(appSettings)
+      .where(
+        and(
+          eq(appSettings.shopId, shopId),
+          eq(appSettings.key, `integration.${integrationId}.api_key`),
+        ),
+      );
+    return { ok: true, integrationId };
+  }
+
+  if (intent === "connect") {
+    const integrationId = formData.get("integrationId") as string;
+    const apiKey = (formData.get("apiKey") as string)?.trim();
+    if (!integrationId || !apiKey) return { error: "API key / webhook URL is required" };
+
+    const integration = INTEGRATIONS.find((i) => i.id === integrationId);
+    if (!integration) return { error: "Unknown integration" };
+
+    if (integrationId === "klaviyo" && integration.validates) {
+      const validation = await validateKlaviyoApiKey(apiKey);
+      if (!validation.ok) return { error: validation.error ?? "Invalid API key" };
+    }
+
+    if (!integration.validates && !apiKey.startsWith("https://")) {
+      return { error: "Webhook URL must start with https://" };
+    }
+
+    await db
+      .insert(appSettings)
+      .values({ shopId, key: `integration.${integrationId}.api_key`, value: apiKey })
+      .onConflictDoUpdate({
+        target: [appSettings.shopId, appSettings.key],
+        set: { value: apiKey, updatedAt: new Date() },
+      });
+    return { ok: true, integrationId };
+  }
+
+  return { error: "Unknown intent" };
+};
+
+export default function IntegrationsPage() {
+  const { connected } = useLoaderData<typeof loader>();
+  const fetcher = useFetcher<typeof action>();
+  const [modal, setModal] = useState<string | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState("");
+
+  const isBusy = fetcher.state !== "idle";
+  const actionResult = fetcher.data;
+
+  const connectedMap: Record<string, boolean> = Object.fromEntries(
+    Object.keys(connected).map((id) => [id, true]),
+  );
+  if (actionResult && "ok" in actionResult && actionResult.integrationId) {
+    const intId = actionResult.integrationId;
+    const lastIntent = fetcher.formData?.get("intent");
+    if (lastIntent === "connect") connectedMap[intId] = true;
+    if (lastIntent === "disconnect") delete connectedMap[intId];
+  }
+
+  const openModal = (id: string) => { setModal(id); setApiKeyInput(""); };
+  const closeModal = () => { setModal(null); setApiKeyInput(""); };
+
+  const handleConnect = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!modal || !apiKeyInput.trim()) return;
+    fetcher.submit(
+      { intent: "connect", integrationId: modal, apiKey: apiKeyInput.trim() },
+      { method: "post" },
+    );
+    closeModal();
+  };
+
+  const activeModal = INTEGRATIONS.find((i) => i.id === modal);
 
   return (
     <div className="b-page" style={{ padding: "24px", maxWidth: "1200px", margin: "0 auto" }}>
-      {/* Header */}
       <div style={{ marginBottom: "24px" }}>
-        <h1
-          style={{
-            fontSize: "24px",
-            fontWeight: "700",
-            color: "#1a1a1a",
-            margin: "0 0 4px 0",
-          }}
-        >
+        <h1 style={{ fontSize: "24px", fontWeight: "700", color: "#1a1a1a", margin: "0 0 4px 0" }}>
           Integrations
         </h1>
+        <p style={{ margin: 0, fontSize: "14px", color: "#6b7280" }}>
+          Connect your marketing tools to receive promo events automatically.
+        </p>
       </div>
 
-      {/* Banner */}
-      <div
-        className="b-banner rd-style-001"
-      >
-        <svg
-          width="18"
-          height="18"
-          viewBox="0 0 20 20"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-          style={{ flexShrink: 0 }}
+      {actionResult && "error" in actionResult && (
+        <div
+          style={{
+            background: "#fef2f2",
+            border: "1px solid #fecaca",
+            borderRadius: 8,
+            padding: "12px 16px",
+            marginBottom: 16,
+            color: "#dc2626",
+            fontSize: 14,
+          }}
         >
-          <circle cx="10" cy="10" r="9" stroke="#3b82f6" strokeWidth="2" />
-          <path
-            d="M10 9v5M10 7v.5"
-            stroke="#3b82f6"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-        </svg>
-        Connect BOGOS with your favorite marketing and analytics tools
-      </div>
+          {actionResult.error}
+        </div>
+      )}
 
-      {/* Integration Cards Grid */}
-      <div
-        className="b-grid-3"
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: "16px",
-          marginBottom: "28px",
-        }}
-      >
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", marginBottom: "28px" }}>
         {INTEGRATIONS.map((integration) => {
-          const isConnected = connectedSet.has(integration.id);
+          const isConnected = !!connectedMap[integration.id];
           return (
             <div
               key={integration.id}
-              className="b-card b-card-body rd-style-002"
+              className="b-card b-card-body"
+              style={{ minWidth: 260, flex: "1 1 260px" }}
             >
-              {/* Icon + Name row */}
               <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                 <div
-                  className="rd-style-003" style={{ backgroundColor: integration.color }}
+                  style={{
+                    backgroundColor: integration.color,
+                    color: "#fff",
+                    width: 36,
+                    height: 36,
+                    borderRadius: 8,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontWeight: 700,
+                    fontSize: 15,
+                    flexShrink: 0,
+                  }}
                 >
                   {integration.initial}
                 </div>
@@ -155,11 +235,9 @@ export default function IntegrationsPage() {
                   {integration.name}
                 </span>
               </div>
-
-              {/* Description */}
               <p
                 style={{
-                  margin: 0,
+                  margin: "8px 0 12px",
                   fontSize: "13px",
                   color: "#6b7280",
                   lineHeight: "1.5",
@@ -168,8 +246,6 @@ export default function IntegrationsPage() {
               >
                 {integration.description}
               </p>
-
-              {/* Status badge + action */}
               <div
                 style={{
                   display: "flex",
@@ -178,14 +254,23 @@ export default function IntegrationsPage() {
                   gap: "8px",
                 }}
               >
-                {/* Status Badge */}
                 <span
-                  className="rd-style-004" style={{ backgroundColor: isConnected ? "#dcfce7" : "#f3f4f6", color: isConnected ? "#16a34a" : "#6b7280" }}
+                  style={{
+                    backgroundColor: isConnected ? "#dcfce7" : "#f3f4f6",
+                    color: isConnected ? "#16a34a" : "#6b7280",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                    padding: "3px 10px",
+                    borderRadius: 20,
+                    fontSize: 12,
+                    fontWeight: 500,
+                  }}
                 >
                   <span
                     style={{
-                      width: "6px",
-                      height: "6px",
+                      width: 6,
+                      height: 6,
                       borderRadius: "50%",
                       backgroundColor: isConnected ? "#16a34a" : "#9ca3af",
                       display: "inline-block",
@@ -193,19 +278,42 @@ export default function IntegrationsPage() {
                   />
                   {isConnected ? "Connected" : "Not connected"}
                 </span>
-
-                {/* Action Button */}
                 {isConnected ? (
-                  <button type="button"
-                    onClick={() => handleDisconnect(integration.id)}
-                    className="rd-style-005"
+                  <button
+                    type="button"
+                    onClick={() =>
+                      fetcher.submit(
+                        { intent: "disconnect", integrationId: integration.id },
+                        { method: "post" },
+                      )
+                    }
+                    disabled={isBusy}
+                    style={{
+                      fontSize: 13,
+                      padding: "5px 12px",
+                      borderRadius: 6,
+                      border: "1px solid #e5e7eb",
+                      background: "#fff",
+                      cursor: "pointer",
+                      color: "#374151",
+                    }}
                   >
                     Disconnect
                   </button>
                 ) : (
-                  <button type="button"
-                    onClick={() => handleConnect(integration.id)}
-                    className="rd-style-006"
+                  <button
+                    type="button"
+                    onClick={() => openModal(integration.id)}
+                    disabled={isBusy}
+                    style={{
+                      fontSize: 13,
+                      padding: "5px 12px",
+                      borderRadius: 6,
+                      border: "none",
+                      background: "#111827",
+                      color: "#fff",
+                      cursor: "pointer",
+                    }}
                   >
                     Connect
                   </button>
@@ -216,81 +324,123 @@ export default function IntegrationsPage() {
         })}
       </div>
 
-      {/* Request an Integration */}
-      <div
-        className="b-card b-card-body"
-        style={{
-          backgroundColor: "#ffffff",
-          border: "1px solid #e5e7eb",
-          borderRadius: "10px",
-          padding: "24px",
-          boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-          maxWidth: "560px",
-        }}
-      >
-        <h2
+      {modal && activeModal && (
+        <div
           style={{
-            fontSize: "16px",
-            fontWeight: "700",
-            color: "#1a1a1a",
-            margin: "0 0 6px 0",
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
           }}
+          onClick={closeModal}
         >
-          Request an integration
-        </h2>
-        <p
-          style={{
-            fontSize: "13px",
-            color: "#6b7280",
-            margin: "0 0 16px 0",
-            lineHeight: "1.5",
-          }}
-        >
-          Don't see the tool you need? Let us know and we'll add it to our roadmap.
-        </p>
-
-        {requestSubmitted ? (
           <div
             style={{
-              backgroundColor: "#f0fdf4",
-              border: "1px solid #bbf7d0",
-              borderRadius: "6px",
-              padding: "12px 16px",
-              fontSize: "13px",
-              color: "#15803d",
-              fontWeight: "500",
+              background: "#fff",
+              borderRadius: 12,
+              padding: 28,
+              width: 420,
+              maxWidth: "90vw",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
             }}
+            onClick={(e) => e.stopPropagation()}
           >
-            Thanks! We've received your request and will be in touch.
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+              <div
+                style={{
+                  backgroundColor: activeModal.color,
+                  color: "#fff",
+                  width: 36,
+                  height: 36,
+                  borderRadius: 8,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontWeight: 700,
+                  fontSize: 15,
+                  flexShrink: 0,
+                }}
+              >
+                {activeModal.initial}
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>Connect {activeModal.name}</div>
+                <div style={{ fontSize: 12, color: "#6b7280" }}>{activeModal.description}</div>
+              </div>
+            </div>
+            <form onSubmit={handleConnect}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  marginBottom: 6,
+                  color: "#374151",
+                }}
+              >
+                {activeModal.fieldLabel}
+              </label>
+              <input
+                type={activeModal.validates ? "password" : "text"}
+                placeholder={activeModal.fieldPlaceholder}
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                required
+                autoFocus
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 6,
+                  padding: "8px 12px",
+                  fontSize: 13,
+                  marginBottom: 6,
+                }}
+              />
+              <p style={{ margin: "0 0 16px", fontSize: 12, color: "#9ca3af" }}>
+                {activeModal.helpText}
+              </p>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: 6,
+                    border: "1px solid #e5e7eb",
+                    background: "#fff",
+                    cursor: "pointer",
+                    fontSize: 13,
+                    color: "#374151",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!apiKeyInput.trim()}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: 6,
+                    border: "none",
+                    background: "#111827",
+                    color: "#fff",
+                    cursor: "pointer",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    opacity: !apiKeyInput.trim() ? 0.5 : 1,
+                  }}
+                >
+                  {activeModal.validates ? "Validate & Save" : "Save"}
+                </button>
+              </div>
+            </form>
           </div>
-        ) : (
-          <form onSubmit={handleRequestSubmit} style={{ display: "flex", gap: "10px" }}>
-            <input
-              aria-label="Request integration email"
-              type="email"
-              placeholder="your@email.com"
-              value={requestEmail}
-              onChange={(e) => setRequestEmail(e.target.value)}
-              required
-              style={{
-                flex: 1,
-                border: "1px solid #d1d5db",
-                borderRadius: "6px",
-                padding: "8px 12px",
-                fontSize: "13px",
-                color: "#1a1a1a",
-                backgroundColor: "#fafafa",
-              }}
-            />
-            <button
-              type="submit"
-              className="rd-style-007"
-            >
-              Submit
-            </button>
-          </form>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

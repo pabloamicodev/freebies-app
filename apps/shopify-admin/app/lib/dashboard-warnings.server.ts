@@ -3,7 +3,7 @@
  * Shown prominently in the admin dashboard.
  */
 
-import { getDb, offers, offerRewards, productCache, appSettings, variantCache } from "@promo/db";
+import { getDb, offers, offerRewards, productCache, appSettings, variantCache, type Offer, type OfferReward, type VariantCache } from "@promo/db";
 import { eq, and, count, inArray } from "drizzle-orm";
 
 export interface DashboardWarning {
@@ -49,13 +49,16 @@ export async function getDashboardWarnings(shopId: string, _shopDomain: string):
   }
 
   // ── 3. Active offers with OOS gifts ──────────────────────────────────────────
-  const activeOffers = await db.select({ id: offers.id, internalName: offers.internalName, compiledConfig: offers.compiledConfig })
+  type ActiveOffer = Pick<Offer, "id" | "internalName" | "compiledConfig">;
+  type GiftVariant = Pick<VariantCache, "variantGid" | "availableForSale" | "inventoryQuantity" | "inventoryPolicy">;
+
+  const activeOffers: ActiveOffer[] = await db.select({ id: offers.id, internalName: offers.internalName, compiledConfig: offers.compiledConfig })
     .from(offers)
     .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")));
   const activeOfferById = new Map(activeOffers.map((offer) => [offer.id, offer]));
 
   if (activeOffers.length > 0) {
-    const rewards = await db.select().from(offerRewards)
+    const rewards: OfferReward[] = await db.select().from(offerRewards)
       .where(eq(offerRewards.shopId, shopId));
 
     const giftVariantChecks = rewards.flatMap((reward) => {
@@ -65,7 +68,7 @@ export async function getDashboardWarnings(shopId: string, _shopDomain: string):
       return variantIds.slice(0, 5).map((variantId) => ({ reward, variantId }));
     });
     const giftVariantIds = [...new Set(giftVariantChecks.map(({ variantId }) => variantId))];
-    const giftVariants = giftVariantIds.length > 0
+    const giftVariants: GiftVariant[] = giftVariantIds.length > 0
       ? await db.select({
         variantGid: variantCache.variantGid,
         availableForSale: variantCache.availableForSale,

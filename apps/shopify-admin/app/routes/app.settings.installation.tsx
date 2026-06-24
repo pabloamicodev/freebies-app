@@ -14,28 +14,56 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
   const shopDomain = session.shop;
 
-  // Check theme app embed status via Admin API
   let appEmbedEnabled = false;
   let activeThemeId = "";
+
   try {
+    // Query the active theme's settings_data.json to check if the app embed is enabled
     const res = await admin.graphql(`
-      query {
-        themes(first: 10, roles: [MAIN]) {
-          nodes { id name role }
+      query CheckAppEmbed {
+        themes(first: 1, roles: [MAIN]) {
+          nodes {
+            id
+            name
+            files(filenames: ["config/settings_data.json"], first: 1) {
+              nodes {
+                body {
+                  ... on OnlineStoreThemeFileBodyText {
+                    content
+                  }
+                }
+              }
+            }
+          }
         }
       }
     `);
-    interface ThemeQueryResult {
-      data?: { themes?: { nodes?: Array<{ id: string; name: string; role: string }> } };
+
+    interface ThemeFileBody { content?: string }
+    interface ThemeFileNode { body?: ThemeFileBody }
+    interface ThemeNode {
+      id: string;
+      name: string;
+      files?: { nodes?: ThemeFileNode[] };
     }
+    interface ThemeQueryResult {
+      data?: { themes?: { nodes?: ThemeNode[] } };
+    }
+
     const data = await res.json() as ThemeQueryResult;
     const mainTheme = data.data?.themes?.nodes?.[0];
     activeThemeId = mainTheme?.id ?? "";
-    // Note: checking actual app embed status requires a separate API call
-    // We optimistically assume it may not be enabled
-    appEmbedEnabled = false;
+
+    const settingsContent = mainTheme?.files?.nodes?.[0]?.body?.content;
+    if (settingsContent) {
+      const settings = JSON.parse(settingsContent) as { current?: { enabled_apps?: string[] } };
+      const enabledApps = settings.current?.enabled_apps ?? [];
+      appEmbedEnabled = enabledApps.some(
+        (entry) => typeof entry === "string" && entry.toLowerCase().includes("promo-engine"),
+      );
+    }
   } catch {
-    // API unavailable
+    // API unavailable or theme files not yet accessible — appEmbedEnabled stays false
   }
 
   return {

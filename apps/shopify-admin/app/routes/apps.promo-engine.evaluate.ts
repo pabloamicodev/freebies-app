@@ -6,6 +6,7 @@ import { and, eq, inArray, count } from "drizzle-orm";
 import { getSignedShop } from "../lib/app-proxy-auth.server.js";
 import { checkRateLimit, getClientIp } from "../lib/rate-limit.server.js";
 import { getOfferDefinitions } from "../lib/offer-definitions.server.js";
+import * as Sentry from "@sentry/node";
 
 export function loader(_args: LoaderFunctionArgs) {
   throw new Response("Method not allowed", { status: 405 });
@@ -15,7 +16,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const signedShop = await getSignedShop(request);
   const signedShopDomain = signedShop.shopDomain;
   const sessionKey = request.headers.get("x-promo-session") ?? getClientIp(request);
-  const rateLimit = checkRateLimit(`evaluate:${signedShop.id}:${sessionKey}`, { limit: 120, windowMs: 60_000 });
+  const rateLimit = await checkRateLimit(`evaluate:${signedShop.id}:${sessionKey}`, { limit: 120, windowMs: 60_000 });
   if (!rateLimit.ok) {
     return Response.json(
       { error: "Too many evaluation requests" },
@@ -49,7 +50,9 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const parsedResult = EvaluationResultSchema.safeParse(result);
   if (!parsedResult.success) {
-    console.error("[evaluate] Generated invalid evaluation result", { shopId: signedShop.id, issues: parsedResult.error.issues });
+    const err = new Error("Generated invalid evaluation result");
+    console.error("[evaluate]", err.message, { shopId: signedShop.id, issues: parsedResult.error.issues });
+    Sentry.captureException(err, { extra: { shopId: signedShop.id, issues: parsedResult.error.issues } });
     return Response.json({ error: "Invalid evaluation result" }, { status: 500 });
   }
 
@@ -63,7 +66,7 @@ async function getOneUseStates(
   offerIds: string[],
 ) {
   if (!customerId || offerIds.length === 0) return [];
-  const rows = await db
+  const rows: { offerId: string | null; usedCount: number }[] = await db
     .select({ offerId: analyticsEvents.offerId, usedCount: count() })
     .from(analyticsEvents)
     .where(and(

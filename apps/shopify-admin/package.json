@@ -32,7 +32,8 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router": "^7.16.0",
-    "use-debounce": "^10.0.0"
+    "use-debounce": "^10.0.0",
+    "@sentry/node": "^8.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",
