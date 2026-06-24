@@ -6,7 +6,7 @@
 
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
-import { getDb } from "@promo/db";
+import { getDb, type Offer } from "@promo/db";
 import { offers, offerConditions, offerRewards, shops } from "@promo/db";
 import { eq, and, inArray } from "drizzle-orm";
 
@@ -38,7 +38,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   }
   const shopId = shopRows[0].id;
 
-  const offerRows = offerId
+  const offerRows: Offer[] = offerId
     ? await db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
     : await db.select().from(offers).where(eq(offers.shopId, shopId));
 

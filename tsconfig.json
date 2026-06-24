@@ -18,7 +18,10 @@
       "@promo/rule-engine": ["./packages/rule-engine/src/index.ts"],
       "@promo/rule-engine/*": ["./packages/rule-engine/src/*"],
       "@promo/db": ["./packages/db/src/index.ts"],
-      "@promo/db/*": ["./packages/db/src/*"]
+      "@promo/db/*": ["./packages/db/src/*"],
+      "drizzle-orm": ["./apps/shopify-admin/node_modules/drizzle-orm"],
+      "drizzle-orm/*": ["./apps/shopify-admin/node_modules/drizzle-orm/*"],
+      "postgres": ["./apps/shopify-admin/node_modules/postgres"]
     }
   },
   "exclude": ["node_modules", "dist", "build", "target"]

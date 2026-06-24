@@ -1,4 +1,4 @@
-import { getDb, shops, offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
+import { getDb, shops, offers, offerConditions, offerRewards, offerCombinationPolicies, type Offer, type OfferCondition, type OfferReward, type OfferCombinationPolicy } from "@promo/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { decryptToken } from "../token-crypto.server.js";
 import { shopifyGraphQL } from "../shopify-fetch.server.js";
@@ -21,7 +21,7 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
 
   const accessToken = await decryptToken(shopRow.accessTokenEncrypted);
 
-  const activeOffers = await db
+  const activeOffers: Offer[] = await db
     .select()
     .from(offers)
     .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")));
@@ -32,7 +32,7 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
   }
 
   const activeOfferIds = activeOffers.map((offer) => offer.id);
-  const [conditionRows, rewardRows, policyRows] = await Promise.all([
+  const [conditionRows, rewardRows, policyRows]: [OfferCondition[], OfferReward[], OfferCombinationPolicy[]] = await Promise.all([
     db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), inArray(offerConditions.offerId, activeOfferIds))),
     db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, activeOfferIds))),
     db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), inArray(offerCombinationPolicies.offerId, activeOfferIds))),

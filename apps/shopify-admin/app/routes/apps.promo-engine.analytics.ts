@@ -16,7 +16,7 @@ export function loader(_args: LoaderFunctionArgs) {
 
 export async function action({ request }: ActionFunctionArgs) {
   const { id: shopId } = await getSignedShop(request);
-  const rateLimit = checkRateLimit(`analytics:${shopId}:${getClientIp(request)}`, { limit: 300, windowMs: 60_000 });
+  const rateLimit = await checkRateLimit(`analytics:${shopId}:${getClientIp(request)}`, { limit: 300, windowMs: 60_000 });
   if (!rateLimit.ok) {
     return Response.json(
       { error: "Too many analytics events" },

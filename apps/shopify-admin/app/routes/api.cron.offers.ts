@@ -1,6 +1,7 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { getDb } from "@promo/db";
 import { runOfferScheduler } from "../lib/offer-scheduling.server.js";
+import * as Sentry from "@sentry/node";
 
 function getCronSecret(): string | null {
   const cronSecret = process.env.CRON_SECRET;
@@ -29,6 +30,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const result = await runOfferScheduler(getDb());
-  return Response.json({ ok: true, ...result });
+  try {
+    const result = await runOfferScheduler(getDb());
+    return Response.json({ ok: true, ...result });
+  } catch (err) {
+    Sentry.captureException(err, { tags: { cron: "offers" } });
+    console.error("[cron:offers]", err instanceof Error ? err.message : err);
+    return Response.json({ ok: false, error: "Scheduler failed" }, { status: 500 });
+  }
 }

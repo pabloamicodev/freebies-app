@@ -38,9 +38,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     .limit(1);
   const cache = { lastSyncedAt: lastSynced[0]?.syncedAt?.toISOString() ?? null };
 
+  type ProductRow = { id: string; legacyId: number | null; title: string; handle: string; vendor: string | null; productType: string | null; imageUrl: string | null; status: string | null; tags: string[] };
+  type VariantRow = { productGid: string; id: string; legacyId: number | null; sku: string | null; title: string; price: string; availableForSale: boolean; inventoryQuantity: number | null; inventoryPolicy: string | null; requiresSellingPlan: boolean };
+
   // Search in cached products (fast, no API call)
   const searchPattern = `%${q}%`;
-  const products = await db
+  const products: ProductRow[] = await db
     .select({
       id: productCache.productGid,
       legacyId: productCache.legacyProductId,
@@ -75,7 +78,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // Enrich with variants for offer configuration
   const productGids = products.map((p) => p.id);
-  const variants = productGids.length > 0
+  const variants: VariantRow[] = productGids.length > 0
     ? await db
         .select({
           productGid: variantCache.productGid,

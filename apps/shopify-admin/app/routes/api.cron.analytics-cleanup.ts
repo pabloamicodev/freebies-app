@@ -1,5 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { cleanupOldAnalyticsEvents } from "../lib/sync/analytics-reconcile.server.js";
+import * as Sentry from "@sentry/node";
 
 function isAuthorized(request: Request): boolean {
   const cronSecret = process.env["CRON_SECRET"];
@@ -21,6 +22,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const deleted = await cleanupOldAnalyticsEvents();
-  return Response.json({ ok: true, deleted });
+  try {
+    const deleted = await cleanupOldAnalyticsEvents();
+    return Response.json({ ok: true, deleted });
+  } catch (err) {
+    Sentry.captureException(err, { tags: { cron: "analytics-cleanup" } });
+    console.error("[cron:analytics-cleanup]", err instanceof Error ? err.message : err);
+    return Response.json({ ok: false, error: "Cleanup failed" }, { status: 500 });
+  }
 }

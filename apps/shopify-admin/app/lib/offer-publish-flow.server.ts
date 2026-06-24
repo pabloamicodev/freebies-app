@@ -4,6 +4,8 @@ import {
   offerConditions,
   offerRewards,
   type Db,
+  type OfferCondition,
+  type OfferReward,
 } from "@promo/db";
 import {
   ConditionTypeSchema,
@@ -26,7 +28,11 @@ function firstIssueMessage(result: { success: boolean; error?: { issues?: Array<
 export async function validateOffersPublishable(db: Db, shopId: string, offerIds: string[]): Promise<PublishValidationResult> {
   if (offerIds.length === 0) return { ok: true };
 
-  const [offerRows, conditionRows, rewardRows] = await Promise.all([
+  const [offerRows, conditionRows, rewardRows]: [
+    { id: string; internalName: string }[],
+    OfferCondition[],
+    OfferReward[],
+  ] = await Promise.all([
     db.select({ id: offers.id, internalName: offers.internalName }).from(offers)
       .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds))),
     db.select().from(offerConditions)

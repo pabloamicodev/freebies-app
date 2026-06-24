@@ -121,6 +121,7 @@ export default function AppLayout() {
           <a href="/app/settings">Settings</a>
           <a href="/app/translation">Translation</a>
           <a href="/app/integrations">Integrations</a>
+          <a href="/app/logs">Error Logs</a>
         </NavMenu>
         <Outlet />
       </PolarisAppProvider>
@@ -131,6 +132,17 @@ export default function AppLayout() {
 export function ErrorBoundary() {
   const error = useRouteError();
   const isDev = import.meta.env.DEV;
+
+  useEffect(() => {
+    const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? (error.stack ?? "") : "";
+    fetch("/api/report-error", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, stack, url: window.location.href }),
+    }).catch(() => undefined);
+  }, [error]);
+
   return (
     <div style={{ padding: "2rem", fontFamily: "system-ui" }}>
       <h1>Something went wrong</h1>

@@ -7,6 +7,7 @@
 
 import type { ActionFunctionArgs } from "react-router";
 import { waitUntil } from "@vercel/functions";
+import * as Sentry from "@sentry/node";
 import { authenticate } from "../shopify.server.js";
 import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
@@ -30,7 +31,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     case "markets": {
       waitUntil(
         syncMarketsForShop(shop.id, shop.myshopifyDomain, accessToken)
-          .catch((err) => console.error("manual market-sync failed", err instanceof Error ? err.message : err)),
+          .catch((err) => {
+            Sentry.captureException(err, { tags: { sync: "markets", shop: shop.myshopifyDomain } });
+            console.error("manual market-sync failed", err instanceof Error ? err.message : err);
+          }),
       );
       return Response.json({ queued: true, type: "markets" });
     }

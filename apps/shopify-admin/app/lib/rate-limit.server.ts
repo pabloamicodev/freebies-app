@@ -6,7 +6,7 @@ interface RateLimitOptions {
   windowMs: number;
 }
 
-interface RateLimitRow {
+interface RateLimitRow extends Record<string, unknown> {
   count: number;
   retry_after: number;
 }
