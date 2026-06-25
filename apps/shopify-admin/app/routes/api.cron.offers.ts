@@ -17,11 +17,9 @@ function isAuthorized(request: Request): boolean {
   const cronSecret = getCronSecret();
   if (!cronSecret) return false;
 
-  const url = new URL(request.url);
   return (
     request.headers.get("authorization") === `Bearer ${cronSecret}` ||
-    request.headers.get("x-vercel-cron-secret") === cronSecret ||
-    url.searchParams.get("secret") === cronSecret
+    request.headers.get("x-vercel-cron-secret") === cronSecret
   );
 }
 

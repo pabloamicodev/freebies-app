@@ -6,6 +6,9 @@
 import { getDb, offers, offerRewards, productCache, appSettings, variantCache, type Offer, type OfferReward, type VariantCache } from "@promo/db";
 import { eq, and, count, inArray } from "drizzle-orm";
 
+const CACHE_TTL_MS = 60_000;
+const warningsCache = new Map<string, { warnings: DashboardWarning[]; expiresAt: number }>();
+
 export interface DashboardWarning {
   code: string;
   severity: "error" | "warning" | "info";
@@ -14,25 +17,18 @@ export interface DashboardWarning {
   action?: { label: string; url: string };
 }
 
+export function invalidateDashboardWarningsCache(shopId: string) {
+  warningsCache.delete(shopId);
+}
+
 export async function getDashboardWarnings(shopId: string, _shopDomain: string): Promise<DashboardWarning[]> {
+  const cached = warningsCache.get(shopId);
+  if (cached && cached.expiresAt > Date.now()) return cached.warnings;
+
   const db = getDb();
   const warnings: DashboardWarning[] = [];
 
-  // ── 1. Scripts sunset warning (always show until June 30, 2026) ──────────────
-  const now = new Date();
-  const scriptsDeadline = new Date("2026-06-30T23:59:59Z");
-  if (now < scriptsDeadline) {
-    const daysLeft = Math.ceil((scriptsDeadline.getTime() - now.getTime()) / 86400000);
-    warnings.push({
-      code: "scripts_sunset",
-      severity: daysLeft < 30 ? "error" : "warning",
-      title: `Shopify Scripts sunset in ${daysLeft} days`,
-      message: `Scripts stop executing on June 30, 2026. If BOGOS used Scripts, they must be migrated to Discount Functions before cutover.`,
-      action: { label: "View Migration Guide", url: "/app/migration" },
-    });
-  }
-
-  // ── 2. App embed disabled check ───────────────────────────────────────────────
+  // ── 1. App embed disabled check ───────────────────────────────────────────────
   const [embedSetting] = await db.select({ value: appSettings.value })
     .from(appSettings)
     .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, "app.embed_verified")))
@@ -58,8 +54,9 @@ export async function getDashboardWarnings(shopId: string, _shopDomain: string):
   const activeOfferById = new Map(activeOffers.map((offer) => [offer.id, offer]));
 
   if (activeOffers.length > 0) {
+    const activeOfferIds = activeOffers.map((o) => o.id);
     const rewards: OfferReward[] = await db.select().from(offerRewards)
-      .where(eq(offerRewards.shopId, shopId));
+      .where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, activeOfferIds)));
 
     const giftVariantChecks = rewards.flatMap((reward) => {
       if (reward.rewardType !== "product_gift") return [];
@@ -147,5 +144,6 @@ export async function getDashboardWarnings(shopId: string, _shopDomain: string):
     });
   }
 
+  warningsCache.set(shopId, { warnings, expiresAt: Date.now() + CACHE_TTL_MS });
   return warnings;
 }

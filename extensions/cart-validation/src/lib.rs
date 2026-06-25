@@ -169,17 +169,23 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
     }
 
     // ── Check max gift quantity per offer ─────────────────────────────────────
+    // If an offer is not in offer_max_quantities, apply a conservative default of 1
+    // to prevent unlimited gifts from newly-created offers whose config wasn't published yet.
+    const DEFAULT_MAX_GIFT_QTY: i64 = 1;
     for (offer_id, qty) in &gift_qty_by_offer {
-        if let Some(&max_qty) = config.offer_max_quantities.get(offer_id) {
-            if *qty > max_qty {
-                errors.push(ValidationError {
-                    message: format!(
-                        "You can only add {} free gift(s) with this offer. Please update your cart.",
-                        max_qty
-                    ),
-                    target: ValidationTarget { cart_line_id: None },
-                });
-            }
+        let max_qty = config
+            .offer_max_quantities
+            .get(offer_id)
+            .copied()
+            .unwrap_or(DEFAULT_MAX_GIFT_QTY);
+        if *qty > max_qty {
+            errors.push(ValidationError {
+                message: format!(
+                    "You can only add {} free gift(s) with this offer. Please update your cart.",
+                    max_qty
+                ),
+                target: ValidationTarget { cart_line_id: None },
+            });
         }
     }
 
@@ -296,6 +302,30 @@ mod tests {
         let output = function(input);
         assert_eq!(output.errors.len(), 1);
         assert!(output.errors[0].message.contains("invalid"));
+    }
+
+    #[test]
+    fn test_offer_not_in_max_quantities_uses_default() {
+        // Config that knows about offer-1 but NOT offer-2
+        let config = ValidationConfig {
+            offer_max_quantities: {
+                let mut m = HashMap::new();
+                m.insert("offer-1".to_string(), 5_i64);
+                m
+            },
+            allowed_gift_variant_ids: vec!["gid://shopify/ProductVariant/gift-v1".to_string()],
+            clone_product_ids: vec![],
+            clone_min_price_cents: Some(100),
+        };
+        let config_json = serde_json::to_string(&config).unwrap();
+        // offer-2 is not in max_quantities — buyer tries to add 2 gifts (> DEFAULT_MAX of 1)
+        let line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-2", 2);
+        let input = FunctionInput {
+            cart: Cart { lines: vec![line] },
+            validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
+        };
+        let output = function(input);
+        assert_eq!(output.errors.len(), 1, "Unknown offer should fall back to DEFAULT_MAX_GIFT_QTY=1");
     }
 
     #[test]

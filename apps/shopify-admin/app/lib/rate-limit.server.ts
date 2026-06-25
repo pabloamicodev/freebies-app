@@ -11,12 +11,33 @@ interface RateLimitRow extends Record<string, unknown> {
   retry_after: number;
 }
 
+// In-memory first-tier: eliminates DB round-trip for well-behaved traffic.
+// Falls through to DB for enforcement near/over the limit — keeps cross-instance
+// correctness while removing the hot-path write cost.
+interface MemBucket { count: number; windowStart: number; }
+const memCounters = new Map<string, MemBucket>();
+const MEM_BYPASS_RATIO = 0.7; // skip DB when count < 70% of limit
+
+function getMemCount(key: string, windowMs: number): number {
+  const now = Date.now();
+  const bucket = memCounters.get(key);
+  if (!bucket || now - bucket.windowStart >= windowMs) {
+    memCounters.set(key, { count: 1, windowStart: now });
+    return 1;
+  }
+  bucket.count += 1;
+  return bucket.count;
+}
+
 // DB-backed sliding window — correct across Vercel serverless instances.
-// Adds ~3-5ms per call but eliminates the per-instance isolation problem.
 export async function checkRateLimit(
   key: string,
   options: RateLimitOptions,
 ): Promise<{ ok: true } | { ok: false; retryAfterSeconds: number }> {
+  const memCount = getMemCount(key, options.windowMs);
+  // Fast-path: well under limit — skip DB entirely.
+  if (memCount < Math.floor(options.limit * MEM_BYPASS_RATIO)) return { ok: true };
+
   const windowSeconds = Math.ceil(options.windowMs / 1000);
   const db = getDb();
 

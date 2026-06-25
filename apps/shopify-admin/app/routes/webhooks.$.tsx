@@ -3,7 +3,7 @@ import { waitUntil } from "@vercel/functions";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs, giftCloneProducts, offers } from "@promo/db";
-import { eq, and, inArray, sql } from "drizzle-orm";
+import { eq, and, inArray, or, sql } from "drizzle-orm";
 import { decryptToken } from "../lib/token-crypto.server.js";
 import { syncInventoryFromWebhook } from "../lib/sync/inventory-sync.server.js";
 import { syncCollectionFromWebhook } from "../lib/sync/collection-sync.server.js";
@@ -522,12 +522,40 @@ async function handleCustomersRedact(shop: string, payload: CustomerGdprPayload)
   }
 
   const db = getDb();
-  const deleted = await db
-    .delete(analyticsEvents)
-    .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.customerId, customerId)))
-    .returning({ id: analyticsEvents.id });
 
-  console.info("GDPR CUSTOMERS_REDACT completed", { shop, deletedEventCount: deleted.length });
+  // Collect session/cart identifiers linked to this customer before deletion,
+  // so we can also purge cartMutationLogs (which has no customerId column).
+  const customerEvents = await db
+    .select({ sessionId: analyticsEvents.sessionId, cartToken: analyticsEvents.cartToken })
+    .from(analyticsEvents)
+    .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.customerId, customerId)));
+
+  const sessionIds = [...new Set(customerEvents.map((e) => e.sessionId).filter(Boolean) as string[])];
+  const cartTokens = [...new Set(customerEvents.map((e) => e.cartToken).filter(Boolean) as string[])];
+
+  await db.transaction(async (tx) => {
+    const deleted = await tx
+      .delete(analyticsEvents)
+      .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.customerId, customerId)))
+      .returning({ id: analyticsEvents.id });
+
+    if (cartTokens.length > 0 || sessionIds.length > 0) {
+      const conditions = [
+        ...(cartTokens.length > 0 ? [inArray(cartMutationLogs.cartToken, cartTokens)] : []),
+        ...(sessionIds.length > 0 ? [inArray(cartMutationLogs.sessionId, sessionIds)] : []),
+      ];
+      await tx
+        .delete(cartMutationLogs)
+        .where(and(eq(cartMutationLogs.shopId, shopId), or(...conditions)));
+    }
+
+    console.info("GDPR CUSTOMERS_REDACT completed", {
+      shop,
+      deletedEventCount: deleted.length,
+      purgedSessionIds: sessionIds.length,
+      purgedCartTokens: cartTokens.length,
+    });
+  });
 }
 
 async function handleShopRedact(shop: string) {

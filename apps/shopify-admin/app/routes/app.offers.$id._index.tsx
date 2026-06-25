@@ -1,14 +1,15 @@
 import { useLoaderData, useNavigate, useFetcher, useActionData, redirect } from "react-router";
 import { useState } from "react";
-import { SUPPORTED_CURRENCIES, validateConditionValue, validateRewardPayload } from "@promo/shared-types";
+import { SUPPORTED_CURRENCIES, validateConditionValue, validateRewardPayload, ConditionTypeSchema, ConditionScopeSchema } from "@promo/shared-types";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
-import { parseJsonRecord, parseJsonStringArray } from "../lib/offer-validation.server.js";
+import { parseJsonRecord, parseJsonStringArray, parseDateRange } from "../lib/offer-validation.server.js";
 import { normalizeConditionValue } from "../lib/offer-config-normalization.server.js";
 import { publishShopConfig, republishIfActive, validateOffersPublishable } from "../lib/offer-publish-flow.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies, offerVersions } from "@promo/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, desc, sql } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
   IconChevronLeft, IconChevronDown, IconInfo, IconRefresh,
@@ -61,16 +62,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     case "update": {
       const publicTitle = formData.get("publicTitle") as string;
       const internalName = formData.get("internalName") as string;
-      const startsAt = formData.get("startsAt") as string;
-      const endsAt = formData.get("endsAt") as string;
+      const dateResult = parseDateRange(formData, offer.timezone ?? "UTC");
+      if (dateResult.error) return { error: dateResult.error };
       await db.update(offers).set({
         publicTitle, internalName,
-        startsAt: startsAt ? new Date(startsAt) : null,
-        endsAt: endsAt ? new Date(endsAt) : null,
+        startsAt: dateResult.data!.startsAt,
+        endsAt: dateResult.data!.endsAt,
         updatedAt: new Date(),
       }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
       const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
       if (publishError) return { error: publishError };
+      void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "update", before: { publicTitle: offer.publicTitle, internalName: offer.internalName, startsAt: offer.startsAt, endsAt: offer.endsAt }, after: { publicTitle, internalName, startsAt: dateResult.data!.startsAt, endsAt: dateResult.data!.endsAt }, performedBy: session.shop });
       break;
     }
     case "update_condition": {
@@ -114,8 +116,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       break;
     }
     case "add_condition": {
-      const conditionType = formData.get("conditionType") as string;
-      const scope = (formData.get("scope") as "main" | "sub") ?? "main";
+      const conditionTypeResult = ConditionTypeSchema.safeParse(formData.get("conditionType"));
+      if (!conditionTypeResult.success) return { error: "Condition type is invalid." };
+      const conditionType = conditionTypeResult.data;
+      const scopeResult = ConditionScopeSchema.safeParse(formData.get("scope") ?? "main");
+      if (!scopeResult.success) return { error: "Condition scope is invalid." };
+      const scope = scopeResult.data;
       const valueResult = parseJsonRecord(formData, "conditionValue");
       if (valueResult.error) return { error: valueResult.error };
       const value = normalizeConditionValue(conditionType, valueResult.data!);
@@ -197,36 +203,46 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         return { error: "Cannot publish: add at least one reward (gift) before publishing." };
       }
 
-      // Persist status, publish synchronously, and rollback status if Shopify
-      // rejects the compiled config. The admin must not report "active" for a
-      // config that the storefront cannot read.
-      const now = new Date();
-      await db.update(offers).set({ status: "active", updatedAt: now }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+      // Run full Zod validation BEFORE any DB mutation so a failed validation
+      // can never leave the offer in status="active" without a working config.
       const validation = await validateOffersPublishable(db, shopId, [offerId]);
       if (!validation.ok) return { error: validation.error };
+
+      // Update status, push to Shopify, then rollback if the push fails.
+      const now = new Date();
+      await db.update(offers).set({ status: "active", updatedAt: now }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
       const publishError = await publishShopConfig(shopId, session.shop);
       if (publishError) {
         await db.update(offers).set({ status: offer.status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
         return { error: publishError };
       }
 
-      const [offerSnapshot, condSnapshot, rewSnapshot, policySnapshot, existingVersions] = await Promise.all([
+      // Snapshot with atomic version number: FOR UPDATE lock prevents two concurrent
+      // publishes from computing the same version number and one silently dropping.
+      const [offerSnapshot, condSnapshot, rewSnapshot, policySnapshot] = await Promise.all([
         db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1),
         db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId))),
         db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))),
         db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId))).limit(1),
-        db.select({ versionNumber: offerVersions.versionNumber })
-          .from(offerVersions).where(and(eq(offerVersions.shopId, shopId), eq(offerVersions.offerId, offerId)))
-          .orderBy(offerVersions.versionNumber),
       ]);
-      const nextVersion = (existingVersions[existingVersions.length - 1]?.versionNumber ?? 0) + 1;
-      await db.insert(offerVersions).values({
-        shopId,
-        offerId,
-        versionNumber: nextVersion,
-        snapshot: { offer: offerSnapshot[0], conditions: condSnapshot, rewards: rewSnapshot, combinationPolicy: policySnapshot[0] ?? null },
-        createdBy: session.shop,
-      }).onConflictDoNothing();
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM offers WHERE id = ${offerId} AND shop_id = ${shopId} FOR UPDATE`);
+        const [lastVersion] = await tx
+          .select({ versionNumber: offerVersions.versionNumber })
+          .from(offerVersions)
+          .where(and(eq(offerVersions.shopId, shopId), eq(offerVersions.offerId, offerId)))
+          .orderBy(desc(offerVersions.versionNumber))
+          .limit(1);
+        const nextVersion = (lastVersion?.versionNumber ?? 0) + 1;
+        await tx.insert(offerVersions).values({
+          shopId,
+          offerId,
+          versionNumber: nextVersion,
+          snapshot: { offer: offerSnapshot[0], conditions: condSnapshot, rewards: rewSnapshot, combinationPolicy: policySnapshot[0] ?? null },
+          createdBy: session.shop,
+        });
+      });
+      void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "publish", before: { status: offer.status }, after: { status: "active" }, performedBy: session.shop });
 
       break;
     }
@@ -239,6 +255,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           return { error: publishError };
         }
       }
+      void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "pause", before: { status: offer.status }, after: { status: "paused" }, performedBy: session.shop });
       break;
     }
     case "archive": {
@@ -250,6 +267,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           return { error: publishError };
         }
       }
+      void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "archive", before: { status: offer.status }, after: { status: "archived" }, performedBy: session.shop });
       return redirect("/app/offers");
     }
     case "duplicate": {
@@ -1158,7 +1176,7 @@ export default function OfferDetailPage() {
           onClick={() => navigate("/app/offers")}
         >
           <IconChevronLeft />
-          Create gift offer
+          {offer.type === "gift" ? "Gift offers" : offer.type === "bundle" ? "Bundle offers" : offer.type === "upsell" ? "Upsell offers" : "All offers"}
         </button>
       </div>
 
@@ -1422,17 +1440,21 @@ export default function OfferDetailPage() {
               <div className="b-accordion-body">
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <div className="b-checkbox-row">
-                    <input type="checkbox" id="combine-orders" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} defaultChecked={policy?.combinesWithOrderDiscounts ?? false} />
+                    <input type="checkbox" id="combine-orders" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} checked={policy?.combinesWithOrderDiscounts ?? false} readOnly />
                     <label htmlFor="combine-orders" className="b-checkbox-label">Combines with order discounts</label>
                   </div>
                   <div className="b-checkbox-row">
-                    <input type="checkbox" id="combine-products" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} defaultChecked={policy?.combinesWithProductDiscounts ?? false} />
+                    <input type="checkbox" id="combine-products" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} checked={policy?.combinesWithProductDiscounts ?? false} readOnly />
                     <label htmlFor="combine-products" className="b-checkbox-label">Combines with product discounts</label>
                   </div>
                   <div className="b-checkbox-row">
-                    <input type="checkbox" id="combine-shipping" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} defaultChecked={policy?.combinesWithShippingDiscounts ?? false} />
+                    <input type="checkbox" id="combine-shipping" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} checked={policy?.combinesWithShippingDiscounts ?? false} readOnly />
                     <label htmlFor="combine-shipping" className="b-checkbox-label">Combines with shipping discounts</label>
                   </div>
+                  <p style={{ fontSize: 12, color: "var(--text-sub)", margin: 0 }}>
+                    To change combination policies, go to the{" "}
+                    <a href={`/app/offers/${offer.id}/combination`} style={{ color: "var(--blue)" }}>Combination settings</a> page.
+                  </p>
                 </div>
               </div>
             )}
@@ -1486,7 +1508,7 @@ export default function OfferDetailPage() {
             <div className="b-support-bot-icon" style={{ margin: "0 auto 10px" }}><IconBot /></div>
             <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 6px" }}>Need help creating offers?</p>
             <p style={{ fontSize: 13, color: "var(--text-sub)", margin: "0 0 14px" }}>Chat with us to get help</p>
-            <button type="button" className="b-btn b-btn-secondary b-w-full">Chat with us</button>
+            <button type="button" className="b-btn b-btn-secondary b-w-full" onClick={() => window.open("mailto:support@secomapp.com", "_blank")}>Chat with us</button>
           </div>
 
           {/* Summary card */}

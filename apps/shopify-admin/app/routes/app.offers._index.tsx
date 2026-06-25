@@ -1,4 +1,4 @@
-import { useLoaderData, useNavigate, useSearchParams, useFetcher } from "react-router";
+import { useLoaderData, useNavigate, useSearchParams, useFetcher, redirect } from "react-router";
 import { lazy, Suspense, useCallback, useMemo, useState } from "react";
 import {
   analyticsEvents,
@@ -19,6 +19,7 @@ import { AccessibleModal } from "../components/AccessibleModal.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { OfferToggle } from "../components/BogosSwitch.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { insertAuditLog } from "../lib/audit-log.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
 import { publishShopConfig as publishShopConfigToShopify, validateOffersPublishable } from "../lib/offer-publish-flow.server.js";
 import type { OfferCreateModalType } from "../components/offers/OfferCreateModalFlow.js";
@@ -31,23 +32,39 @@ type OfferStatus = "draft" | "active" | "paused" | "scheduled" | "expired" | "ar
 const OfferCreateModalFlow = lazy(() => import("../components/offers/OfferCreateModalFlow.js"));
 const PAGE_SIZE = 50;
 
+const SORT_COLUMNS = ["internalName", "type", "startsAt", "status", "updatedAt"] as const;
+type SortColumn = typeof SORT_COLUMNS[number];
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const timer = createRouteTimer("app.offers._index");
   const { shopId, db } = await timer.time("shop_context", () => getShopContext(request));
   if (!shopId) {
     timer.done({ shopFound: false });
-    return { offers: [], total: 0, page: 1, pageSize: PAGE_SIZE };
+    return { offers: [], total: 0, page: 1, pageSize: PAGE_SIZE, sortBy: "updatedAt" as SortColumn, sortDir: "desc" as "asc" | "desc", search: "" };
   }
 
   const url = new URL(request.url);
   const statusFilter = url.searchParams.get("status") as OfferStatus | "all" | null;
   const search = url.searchParams.get("q") ?? "";
   const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10) || 1);
+  const rawSortBy = url.searchParams.get("sortBy") ?? "updatedAt";
+  const sortBy: SortColumn = (SORT_COLUMNS as readonly string[]).includes(rawSortBy) ? rawSortBy as SortColumn : "updatedAt";
+  const sortDir: "asc" | "desc" = url.searchParams.get("sortDir") === "asc" ? "asc" : "desc";
 
   const whereConditions = [eq(offers.shopId, shopId)];
   if (statusFilter && statusFilter !== "all") whereConditions.push(eq(offers.status, statusFilter));
   if (search) whereConditions.push(like(offers.internalName, `%${search}%`));
   const where = and(...whereConditions);
+
+  const colMap = {
+    internalName: offers.internalName,
+    type: offers.type,
+    startsAt: offers.startsAt,
+    status: offers.status,
+    updatedAt: offers.updatedAt,
+  } as const;
+  const orderCol = colMap[sortBy];
+  const orderExpr = sortDir === "asc" ? orderCol : desc(orderCol);
 
   const [rows, [totalRow]] = await timer.time("offers.select_list", () =>
     Promise.all([
@@ -64,7 +81,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         })
         .from(offers)
         .where(where)
-        .orderBy(offers.priority, desc(offers.updatedAt))
+        .orderBy(orderExpr)
         .limit(PAGE_SIZE)
         .offset((page - 1) * PAGE_SIZE),
       db.select({ total: count() }).from(offers).where(where),
@@ -94,6 +111,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     total,
     page,
     pageSize: PAGE_SIZE,
+    sortBy,
+    sortDir,
+    search,
   };
 };
 
@@ -126,6 +146,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const publishError = await publishShopConfig();
     if (publishError) return { error: publishError };
+    void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "delete", performedBy: session.shop });
     return null;
   }
 
@@ -135,16 +156,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         .select({ id: offers.id, status: offers.status })
         .from(offers)
         .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
-      await Promise.all(offerIds.map((id) =>
-        db.update(offers).set({ status: "paused", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, id))),
-      ));
+      await db.update(offers)
+        .set({ status: "paused", updatedAt: new Date() })
+        .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
       const publishError = await publishShopConfig();
       if (publishError) {
-        await Promise.all(previous.map((row) =>
-          db.update(offers).set({ status: row.status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, row.id))),
-        ));
+        // Restore individual statuses inside a transaction so the rollback is also atomic.
+        await db.transaction(async (tx) => {
+          await Promise.all(previous.map((row) =>
+            tx.update(offers).set({ status: row.status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, row.id))),
+          ));
+        });
         return { error: publishError };
       }
+      void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerIds.join(","), action: "bulk_pause", after: { offerIds }, performedBy: session.shop });
       break;
     }
     case "bulk_activate": {
@@ -154,16 +179,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         .select({ id: offers.id, status: offers.status })
         .from(offers)
         .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
-      await Promise.all(offerIds.map((id) =>
-        db.update(offers).set({ status: "active", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, id))),
-      ));
+      await db.update(offers)
+        .set({ status: "active", updatedAt: new Date() })
+        .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
       const publishError = await publishShopConfig();
       if (publishError) {
-        await Promise.all(previous.map((row) =>
-          db.update(offers).set({ status: row.status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, row.id))),
-        ));
+        await db.transaction(async (tx) => {
+          await Promise.all(previous.map((row) =>
+            tx.update(offers).set({ status: row.status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, row.id))),
+          ));
+        });
         return { error: publishError };
       }
+      void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerIds.join(","), action: "bulk_activate", after: { offerIds }, performedBy: session.shop });
       break;
     }
     case "toggle_status": {
@@ -195,6 +223,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         await db.update(offers).set({ status: previous.status, archivedAt: previous.archivedAt, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
         return { error: publishError };
       }
+      break;
+    }
+    case "duplicate": {
+      const offerId = formData.get("offerId") as string;
+      if (!offerId) return { error: "Missing offerId" };
+      const [source] = await db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1);
+      if (!source) return { error: "Offer not found" };
+      const [newOffer] = await db.insert(offers).values({
+        ...source,
+        id: undefined as unknown as string,
+        internalName: `${source.internalName}-copy`,
+        status: "draft",
+        compiledConfig: null,
+        archivedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }).returning({ id: offers.id });
+      if (newOffer) return redirect(`/app/offers/${newOffer.id}`);
       break;
     }
   }
@@ -296,15 +342,18 @@ function OfferCreateModalFallback({ onClose }: { onClose: () => void }) {
 }
 
 export default function OffersPage() {
-  const { offers: offerRows, total, page, pageSize } = useLoaderData<typeof loader>();
+  const { offers: offerRows, total, page, pageSize, sortBy, sortDir, search: loaderSearch } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [bannerVisible, setBannerVisible] = useState(true);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [confirmAction, setConfirmAction] = useState<ConfirmActionState | null>(null);
+  const [searchOpen, setSearchOpen] = useState(loaderSearch.length > 0);
+  const [searchInput, setSearchInput] = useState(loaderSearch);
   const deleteFetcher = useFetcher();
   const archiveFetcher = useFetcher();
   const bulkFetcher = useFetcher();
+  const duplicateFetcher = useFetcher();
 
   // Modal state
   const [modal, setModal] = useState<OfferCreateModalType | null>(null);
@@ -312,6 +361,30 @@ export default function OffersPage() {
   const openModal = useCallback(() => setModal("type"), []);
   const dismissBanner = useCallback(() => setBannerVisible(false), []);
   const clearChecked = useCallback(() => setCheckedIds(new Set()), []);
+
+  const handleSort = useCallback((col: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (next.get("sortBy") === col) {
+        next.set("sortDir", next.get("sortDir") === "asc" ? "desc" : "asc");
+      } else {
+        next.set("sortBy", col);
+        next.set("sortDir", "asc");
+      }
+      next.set("page", "1");
+      return next;
+    });
+  }, [setSearchParams]);
+
+  const handleSearchSubmit = useCallback((value: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value.trim()) next.set("q", value.trim());
+      else next.delete("q");
+      next.set("page", "1");
+      return next;
+    });
+  }, [setSearchParams]);
 
   const activeTab = searchParams.get("status") ?? "all";
 
@@ -523,10 +596,35 @@ export default function OffersPage() {
             ))}
           </ul>
           <div className="b-tabs-actions">
-            <button type="button" className="b-btn-icon" aria-label="Search"><IconSearch /></button>
-            <button type="button" className="b-btn-icon" aria-label="Filter"><IconFilter /></button>
+            <button
+              type="button"
+              className="b-btn-icon"
+              aria-label={searchOpen ? "Close search" : "Search offers"}
+              aria-pressed={searchOpen}
+              onClick={() => { setSearchOpen((o) => !o); if (searchOpen) { setSearchInput(""); handleSearchSubmit(""); } }}
+            >
+              <IconSearch />
+            </button>
           </div>
         </div>
+
+        {/* Search input row */}
+        {searchOpen && (
+          <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border-mid)" }}>
+            <form onSubmit={(e) => { e.preventDefault(); handleSearchSubmit(searchInput); }}>
+              <input
+                autoFocus
+                type="search"
+                className="b-input"
+                placeholder="Search by offer name…"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Escape") { setSearchOpen(false); setSearchInput(""); handleSearchSubmit(""); } }}
+                style={{ width: "100%", maxWidth: 360 }}
+              />
+            </form>
+          </div>
+        )}
 
         {/* Table */}
         <table className="b-table">
@@ -542,30 +640,30 @@ export default function OffersPage() {
                 />
               </th>
               <th>
-                <button className="bogos-sort-btn" type="button">
-                  <SortIcon active="asc" />
+                <button className="bogos-sort-btn" type="button" onClick={() => handleSort("internalName")}>
+                  <SortIcon active={sortBy === "internalName" ? sortDir : undefined} />
                   <span>Title</span>
                 </button>
               </th>
               <th>
-                <button className="bogos-sort-btn" type="button">
-                  <SortIcon />
+                <button className="bogos-sort-btn" type="button" onClick={() => handleSort("type")}>
+                  <SortIcon active={sortBy === "type" ? sortDir : undefined} />
                   <span>Offer type</span>
                 </button>
               </th>
               <th>
-                <button className="bogos-sort-btn" type="button">
-                  <SortIcon />
+                <button className="bogos-sort-btn" type="button" onClick={() => handleSort("startsAt")}>
+                  <SortIcon active={sortBy === "startsAt" ? sortDir : undefined} />
                   <span>Start date</span>
                 </button>
               </th>
-              <th><span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-sub)" }}>Status</span></th>
               <th>
-                <button className="bogos-sort-btn" type="button">
-                  <SortIcon />
-                  <span>On / Off</span>
+                <button className="bogos-sort-btn" type="button" onClick={() => handleSort("status")}>
+                  <SortIcon active={sortBy === "status" ? sortDir : undefined} />
+                  <span>Status</span>
                 </button>
               </th>
+              <th><span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-sub)" }}>On / Off</span></th>
               <th><span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-sub)" }}>Actions</span></th>
             </tr>
           </thead>
@@ -648,7 +746,13 @@ export default function OffersPage() {
                       <button
                         type="button"
                         className="bogos-action-btn"
-                        onClick={(e) => { e.stopPropagation(); void navigate(`/app/offers/${offer.id}`); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const fd = new FormData();
+                          fd.append("intent", "duplicate");
+                          fd.append("offerId", offer.id);
+                          void duplicateFetcher.submit(fd, { method: "POST" });
+                        }}
                         aria-label="Duplicate offer"
                         title="Duplicate"
                       >

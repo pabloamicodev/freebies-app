@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb, shops } from "@promo/db";
 
 const SIGNATURE_TTL_SECONDS = 10 * 60;
@@ -50,10 +50,10 @@ export async function getSignedShop(request: Request) {
   const rows = await db
     .select({ id: shops.id, currencyCode: shops.currencyCode })
     .from(shops)
-    .where(eq(shops.myshopifyDomain, shopDomain))
+    .where(and(eq(shops.myshopifyDomain, shopDomain), eq(shops.isActive, true)))
     .limit(1);
 
   const shop = rows[0];
-  if (!shop) throw new Response("Shop not installed", { status: 404 });
+  if (!shop) throw new Response("Shop not found or app uninstalled", { status: 404 });
   return { ...shop, shopDomain, db };
 }

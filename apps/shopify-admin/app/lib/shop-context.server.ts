@@ -22,12 +22,15 @@ export async function getShopContext(request: Request): Promise<ShopContext> {
     .where(eq(shops.myshopifyDomain, session.shop))
     .limit(1);
 
+  const shopRow = shopRows[0];
+  if (!shopRow) throw new Response("Shop not found — re-install the app", { status: 404 });
+
   return {
     admin,
     session,
     shopDomain: session.shop,
-    shopId: shopRows[0]?.id ?? "",
-    currencyCode: shopRows[0]?.currencyCode ?? "USD",
+    shopId: shopRow.id,
+    currencyCode: shopRow.currencyCode ?? "USD",
     db,
   };
 }

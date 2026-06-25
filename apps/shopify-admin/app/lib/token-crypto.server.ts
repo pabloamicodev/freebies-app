@@ -62,8 +62,13 @@ export async function decryptToken(stored: string): Promise<string> {
     const ciphertext = Buffer.from(stored.slice(separatorIndex + 1), "hex");
     const plaintext = await crypto.subtle.decrypt({ name: ALGORITHM, iv }, key, ciphertext);
     return new TextDecoder().decode(plaintext);
-  } catch {
-    // Decryption failed — may be a legacy plaintext token containing a colon (e.g. URL format)
+  } catch (err) {
+    if (process.env.NODE_ENV === "production") {
+      // In production, returning ciphertext as a token silently breaks all API calls.
+      // Throw so Sentry captures the key rotation issue rather than masking it.
+      throw new Error("[token-crypto] Access token decryption failed. Rotate TOKEN_ENCRYPTION_KEY and re-authenticate the shop.", { cause: err });
+    }
+    // In development, fall back to the stored value (handles test tokens without encryption key).
     return stored;
   }
 }

@@ -9,6 +9,7 @@ export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBou
 import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offerRewards } from "@promo/db";
@@ -75,8 +76,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       return { error: "Percentage discount cannot exceed 100%." };
     }
 
-    // Build target from variant GIDs input
-    const variantGids = splitTextareaList(formData.get("variantGids") as string | null);
+    // Build target from variant GIDs — merge picker selection with manual textarea input.
+    const pickerGids = splitTextareaList(formData.get("variantGids") as string | null);
+    const manualGids = splitTextareaList(formData.get("variantGidsManual") as string | null);
+    const variantGids = [...new Set([...pickerGids, ...manualGids])];
 
     const target = variantGids.length > 0
       ? { variantIds: variantGids }
@@ -106,6 +109,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     });
     const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
     if (publishError) return { error: publishError };
+    void insertAuditLog(db, { shopId, entityType: "offer_reward", entityId: offerId, action: "add_reward", after: { rewardType, discountType }, performedBy: session.shop });
   }
 
   if (intent === "delete_reward") {
@@ -122,6 +126,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     await db.delete(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId)));
     const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
     if (publishError) return { error: publishError };
+    void insertAuditLog(db, { shopId, entityType: "offer_reward", entityId: rewardId, action: "delete_reward", before: { offerId }, performedBy: session.shop });
   }
 
   return { success: true };
