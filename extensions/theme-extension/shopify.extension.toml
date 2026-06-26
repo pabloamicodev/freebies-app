@@ -3,4 +3,4 @@ name = "Promo Engine"
 handle = "promo-engine"
 
 [[targeting]]
-target = "section"
+target = "body"
