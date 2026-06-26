@@ -61,33 +61,36 @@ class PromoEngineRuntime {
   }
 
   private listenForCartChanges(): void {
-    // Standard Shopify cart change events
+    // Patch window.fetch to catch themes (e.g. Dawn) that never fire cart events
+    this.patchFetch();
+
+    // Standard Shopify cart change events (fallback / other themes)
     document.addEventListener("cart:updated", () => this.debouncedEvaluate.call());
     document.addEventListener("cart:refresh", () => this.debouncedEvaluate.call());
-
-    // Custom events from theme cart drawers
     document.addEventListener("theme:cart:open", () => this.debouncedEvaluate.call());
 
     // Our own events
     on(PromoEvents.CartChanged, () => this.debouncedEvaluate.call());
+  }
 
-    // Mutation observer for cart quantity changes in themes that don't fire cart events.
-    // Scoped narrowly to avoid triggering on unrelated DOM mutations (spinners, lazy images, etc.).
-    const cartObserver = new MutationObserver(() => {
-      this.debouncedEvaluate.call();
-    });
+  private patchFetch(): void {
+    const CART_MUTATE_RE = /\/cart\/(add|change|update)(\.js)?(\?|$)/;
+    const originalFetch = window.fetch.bind(window);
 
-    // Observe direct children of cart forms only (line-item add/remove)
-    document.querySelectorAll('[action*="/cart"]').forEach((form) => {
-      cartObserver.observe(form, { childList: true, subtree: false });
-    });
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const method = (init?.method ?? "GET").toUpperCase();
+      const isCartMutation = method === "POST" && CART_MUTATE_RE.test(url);
 
-    // Observe quantity inputs for value attribute changes (themes that mutate value directly)
-    document.querySelectorAll<HTMLInputElement>(
-      'input[name="quantity"], input[name*="qty"], input[type="number"][data-quantity-input]',
-    ).forEach((input) => {
-      cartObserver.observe(input, { attributes: true, attributeFilter: ["value"] });
-    });
+      const response = await originalFetch(input, init);
+
+      if (isCartMutation && response.ok) {
+        console.info(`[PromoEngine] Cart mutation detected (${url}) — scheduling evaluation`);
+        this.debouncedEvaluate.call();
+      }
+
+      return response;
+    };
   }
 
   private async triggerEvaluation(): Promise<void> {
