@@ -14,6 +14,10 @@
 import { chromium } from "@playwright/test";
 import path from "path";
 import fs from "fs";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const APP_URL = process.env["APP_URL"] ?? "";
 const DEV_STORE_URL = process.env["DEV_STORE_URL"] ?? "";

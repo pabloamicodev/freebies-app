@@ -132,7 +132,7 @@ export async function checkRateLimit(
   options: RateLimitOptions,
 ): Promise<{ ok: true } | { ok: false; retryAfterSeconds: number }> {
   const memCount = getMemCount(key, options.windowMs);
-  if (memCount < Math.floor(options.limit * MEM_BYPASS_RATIO)) return { ok: true };
+  if (memCount <= Math.floor(options.limit * MEM_BYPASS_RATIO)) return { ok: true };
 
   const redisResult = await redisCheckRateLimit(key, options);
   if (redisResult !== null) return redisResult;

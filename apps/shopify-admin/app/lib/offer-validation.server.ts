@@ -29,8 +29,8 @@ export function parseInteger(
 ): ValidationResult<number> {
   const raw = (formData.get(name) as string | null) ?? "";
   if (!raw.trim()) return ok(fallback);
-  const value = Number.parseInt(raw, 10);
-  if (!Number.isInteger(value)) return fail(`${options.label ?? name} must be a valid number.`);
+  const value = Number(raw.trim());
+  if (!Number.isInteger(value)) return fail(`${options.label ?? name} must be a whole number.`);
   if (options.min !== undefined && value < options.min) return fail(`${options.label ?? name} must be at least ${options.min}.`);
   if (options.max !== undefined && value > options.max) return fail(`${options.label ?? name} must be at most ${options.max}.`);
   return ok(value);

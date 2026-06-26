@@ -8,5 +8,5 @@
     "noEmit": true
   },
   "include": [".react-router/types/**/*", "app/**/*", "server.ts"],
-  "exclude": ["node_modules", "build"]
+  "exclude": ["node_modules", "build", ".react-router"]
 }

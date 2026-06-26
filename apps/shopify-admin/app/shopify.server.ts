@@ -45,6 +45,9 @@ import { getDb, shops } from "@promo/db";
 import { SHOPIFY_API_VERSION } from "./lib/shopify-api-version.js";
 import { encryptToken } from "./lib/token-crypto.server.js";
 import { shopifyGraphQL } from "./lib/shopify-fetch.server.js";
+import { syncAllProducts } from "./lib/sync/product-sync.server.js";
+import { productCache } from "@promo/db";
+import { count, eq as drizzleEq } from "drizzle-orm";
 
 // Strip channel_binding param — Node.js pg library doesn't support it
 const rawDbUrl = new URL(
@@ -134,6 +137,38 @@ const shopify = shopifyApp({
       } catch (dbError) {
         console.error("DB mirror after auth failed:", dbError instanceof Error ? dbError.message : dbError);
         throw dbError;
+      }
+
+      // Trigger initial product catalog sync for new shops (no products cached yet).
+      // Fire-and-forget — don't block the auth response; sync runs in the background.
+      try {
+        const db2 = getDb();
+        const shopRows2 = await db2
+          .select({ id: shops.id, currencyCode: shops.currencyCode })
+          .from(shops)
+          .where(drizzleEq(shops.myshopifyDomain, session.shop))
+          .limit(1);
+        const shopRow2 = shopRows2[0];
+        if (shopRow2) {
+          const [countRow] = await db2
+            .select({ n: count() })
+            .from(productCache)
+            .where(drizzleEq(productCache.shopId, shopRow2.id));
+          if ((countRow?.n ?? 0) === 0) {
+            syncAllProducts(
+              shopRow2.id,
+              session.shop,
+              session.accessToken ?? "",
+              shopRow2.currencyCode ?? "USD",
+            ).catch((e: unknown) => {
+              Sentry.captureException(e, { extra: { shop: session.shop, context: "afterAuth-product-sync" } });
+              console.error("[afterAuth] Initial product sync failed:", e instanceof Error ? e.message : e);
+            });
+          }
+        }
+      } catch (syncErr) {
+        // Non-fatal — sync can be re-triggered from the UI
+        console.error("[afterAuth] Could not check/trigger product sync:", syncErr instanceof Error ? syncErr.message : syncErr);
       }
     },
   },

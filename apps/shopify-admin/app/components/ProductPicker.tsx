@@ -83,16 +83,17 @@ function ProductPickerContent({
     query: "",
     products: [] as Product[],
     loading: false,
+    syncing: false,
     error: null as string | null,
     selected: new Set(selectedIds),
     expandedProducts: new Set<string>(),
   }));
-  const { query, products, loading, error, selected, expandedProducts } = pickerState;
+  const { query, products, loading, syncing, error, selected, expandedProducts } = pickerState;
   const setQuery = createFieldSetter(setPickerField, "query");
   const setSelected = createFieldSetter(setPickerField, "selected");
   const setExpandedProducts = createFieldSetter(setPickerField, "expandedProducts");
 
-  // Fetch products from search API
+  // Fetch products from search API. If the cache has never been synced, trigger sync first.
   const fetchProducts = useCallback(async (q: string) => {
     setPickerField("loading", true);
     setPickerField("error", null);
@@ -104,13 +105,34 @@ function ProductPickerContent({
         setPickerField("products", []);
         return;
       }
-      const data = await res.json() as { products: Product[] };
+      const data = await res.json() as { products: Product[]; cache: { lastSyncedAt: string | null } };
+
+      // Cache is empty and has never been synced — trigger initial sync then reload.
+      if (data.products.length === 0 && data.cache.lastSyncedAt === null) {
+        setPickerField("loading", false);
+        setPickerField("syncing", true);
+        try {
+          await fetch("/api/products/sync", { method: "POST" });
+        } catch {
+          // Sync failure is non-fatal — will show empty state below
+        }
+        setPickerField("syncing", false);
+        // Re-fetch after sync
+        const res2 = await fetch(`/api/products/search?${params}`);
+        if (res2.ok) {
+          const data2 = await res2.json() as { products: Product[] };
+          setPickerField("products", data2.products);
+        }
+        return;
+      }
+
       setPickerField("products", data.products);
     } catch {
       setPickerField("error", "Search unavailable. Check your connection and try again.");
       setPickerField("products", []);
     } finally {
       setPickerField("loading", false);
+      setPickerField("syncing", false);
     }
   }, [setPickerField]);
 
@@ -180,9 +202,16 @@ function ProductPickerContent({
       </Modal.Section>
 
       <Modal.Section flush>
-        {loading ? (
+        {loading || syncing ? (
           <div style={{ padding: "40px", textAlign: "center" }}>
-            <Spinner size="large" />
+            <BlockStack gap="300" inlineAlign="center">
+              <Spinner size="large" />
+              {syncing && (
+                <Text as="p" tone="subdued">
+                  Syncing your product catalog… this only happens once.
+                </Text>
+              )}
+            </BlockStack>
           </div>
         ) : error ? (
           <EmptyState heading="Could not load products" image="">

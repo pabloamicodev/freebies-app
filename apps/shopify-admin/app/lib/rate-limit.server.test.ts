@@ -81,7 +81,7 @@ describe("checkRateLimit — in-memory fast path", () => {
 
 describe("checkRateLimit — DB enforcement", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("allows request when DB count is within limit", async () => {

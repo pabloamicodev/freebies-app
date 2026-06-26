@@ -1,8 +1,13 @@
 import { defineConfig, devices } from "@playwright/test";
 import { config } from "dotenv";
 import path from "path";
+import { fileURLToPath } from "url";
+import fs from "fs";
 
 config({ path: ".env.test" });
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const DEV_STORE_URL = process.env["DEV_STORE_URL"];
 const APP_URL = process.env["APP_URL"];
@@ -15,7 +20,7 @@ const isConfigured =
   APP_URL;
 
 if (!isConfigured) {
-  console.log(
+  console.info(
     "[playwright] Skipping E2E tests — DEV_STORE_URL and APP_URL must be set in .env.test or CI secrets.",
   );
 }
@@ -23,7 +28,7 @@ if (!isConfigured) {
 const AUTH_FILE = path.join(__dirname, "tests/e2e/.auth/shopify.json");
 const hasAuthFile = (() => {
   try {
-    require("fs").accessSync(AUTH_FILE);
+    fs.accessSync(AUTH_FILE);
     return true;
   } catch {
     return false;
