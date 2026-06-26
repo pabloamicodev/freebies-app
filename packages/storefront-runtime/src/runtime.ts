@@ -107,6 +107,8 @@ class PromoEngineRuntime {
       return;
     }
 
+    console.info("[PromoEngine] Evaluating cart —", cart.items.map(i => `${i.title} ×${i.quantity}`).join(", ") || "empty", `| subtotal: $${(cart.total_price / 100).toFixed(2)}`);
+
     const signal = this.evaluationAbort.start();
 
     // Build market context from Shopify global if a non-base currency is active
@@ -152,7 +154,14 @@ class PromoEngineRuntime {
       const result: EvaluationResult = await response.json();
       this.lastCartHash = cartHash;
 
-      await this.applyCartActions(Array.isArray(result.cartActions) ? result.cartActions : []);
+      const actions = Array.isArray(result.cartActions) ? result.cartActions : [];
+      if (actions.length > 0) {
+        console.info("[PromoEngine] Cart actions to apply:", actions.map(a => `${a.action}(${a.variantId ?? a.lineKey ?? ""}×${a.quantity ?? 0})`).join(", "));
+      } else {
+        console.info("[PromoEngine] Evaluation complete — no cart actions");
+      }
+
+      await this.applyCartActions(actions);
       emit(PromoEvents.EvaluationCompleted, result);
 
     } catch (e: unknown) {
@@ -173,6 +182,7 @@ class PromoEngineRuntime {
           case "add_line": {
             if (!action.variantId) break;
             const legacyId = parseInt(action.variantId.split("/").pop() ?? action.variantId, 10);
+            console.info(`[PromoEngine] → add_line variantId=${action.variantId} qty=${action.quantity ?? 1}`);
             await AjaxCartAdapter.addLines([{
               variantId: String(legacyId),
               quantity: action.quantity ?? 1,
@@ -191,6 +201,7 @@ class PromoEngineRuntime {
           }
 
           case "update_line": {
+            console.info(`[PromoEngine] → update_line key=${action.lineKey ?? "?"} qty=${action.quantity ?? 1}`);
             const freshCart = await fetchFreshCart();
             const currentLine = freshCart.items.find((item) => item.key === action.lineKey)
               ?? (action.offerId ? findGiftLineByOfferId(freshCart, action.offerId) : null);
@@ -217,6 +228,7 @@ class PromoEngineRuntime {
           }
 
           case "remove_line": {
+            console.info(`[PromoEngine] → remove_line key=${action.lineKey ?? "?"} reason=${action.reason ?? "offer_disqualified"}`);
             const freshCart = await fetchFreshCart();
             const currentLine = freshCart.items.find((item) => item.key === action.lineKey)
               ?? (action.offerId ? findGiftLineByOfferId(freshCart, action.offerId) : null);
