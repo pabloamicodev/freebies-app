@@ -96,15 +96,18 @@ class PromoEngineRuntime {
   }
 
   private async refreshCartUI(): Promise<void> {
-    // Collect every section ID currently rendered on the page
+    // Shopify wraps every section in <div id="shopify-section-{id}">
+    // Collect all section IDs currently rendered on the page
     const sectionIds: string[] = [];
+    document.querySelectorAll('[id^="shopify-section-"]').forEach((el) => {
+      sectionIds.push(el.id.replace("shopify-section-", ""));
+    });
+    // Some themes also use data-section-id directly on section elements
     document.querySelectorAll("[data-section-id]").forEach((el) => {
       const id = el.getAttribute("data-section-id");
-      if (id) sectionIds.push(id);
+      if (id && !sectionIds.includes(id)) sectionIds.push(id);
     });
 
-    // Section rendering (works on Dawn, Prestige, Turbo, Impulse, and all
-    // Shopify themes that use the standard section-rendering API)
     if (sectionIds.length > 0) {
       try {
         const resp = await this.savedFetch(
@@ -115,6 +118,14 @@ class PromoEngineRuntime {
           const data = await resp.json() as { sections?: Record<string, string> };
           let updated = 0;
           for (const [id, html] of Object.entries(data.sections ?? {})) {
+            // Standard Shopify pattern: set innerHTML of the #shopify-section-{id} wrapper
+            const wrapper = document.getElementById(`shopify-section-${id}`);
+            if (wrapper && html) {
+              wrapper.innerHTML = html;
+              updated++;
+              continue;
+            }
+            // Fallback for themes that use data-section-id on the element itself
             const el = document.querySelector(`[data-section-id="${id}"]`);
             if (el && html) {
               el.outerHTML = html;
@@ -131,8 +142,7 @@ class PromoEngineRuntime {
       }
     }
 
-    // Fallback: dispatch standard cart events for themes that listen to them
-    // (e.g. custom cart drawers, headless setups, older themes)
+    // Fallback: dispatch standard cart events for themes with custom event listeners
     document.dispatchEvent(new CustomEvent("cart:refresh", { bubbles: true }));
     document.dispatchEvent(new CustomEvent("cart:updated", { bubbles: true }));
   }
