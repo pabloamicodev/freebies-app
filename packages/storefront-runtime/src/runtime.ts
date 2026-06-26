@@ -36,6 +36,7 @@ class PromoEngineRuntime {
   private lastCartHash: string | null = null;
   private savedFetch: typeof window.fetch = window.fetch.bind(window);
   private refreshGuard = false;
+  private capturedThemeSectionIds: string[] = [];
 
   constructor(config: RuntimeConfig) {
     this.config = config;
@@ -45,8 +46,21 @@ class PromoEngineRuntime {
 
   init(): void {
     this.log("Promo Engine initialized", this.config);
+    this.detectTheme();
     this.listenForCartChanges();
     void this.triggerEvaluation();
+  }
+
+  private detectTheme(): void {
+    type ShopifyGlobal = { theme?: { schema_name?: string; name?: string }; shop?: string };
+    const sh = (window as unknown as { Shopify?: ShopifyGlobal }).Shopify;
+    const name = sh?.theme?.schema_name ?? sh?.theme?.name ?? "unknown";
+    console.info(`[PromoEngine] Theme detected: ${name}`);
+
+    // Dawn: exposes <cart-drawer> web component → section rendering works natively
+    // Others: we rely on patchFetch to capture the theme's own section IDs at runtime
+    const hasDawnDrawer = !!document.querySelector("cart-drawer");
+    if (hasDawnDrawer) console.info("[PromoEngine] Cart component: cart-drawer web component (Dawn-style)");
   }
 
   private getOrCreateSessionId(): string {
@@ -87,9 +101,33 @@ class PromoEngineRuntime {
 
       const response = await originalFetch(input, init);
 
-      if (isCartMutation && response.ok && !this.refreshGuard) {
-        console.info(`[PromoEngine] Cart mutation detected (${url}) — scheduling evaluation`);
-        this.debouncedEvaluate.call();
+      if (response.ok) {
+        // Spy on any response that carries rendered section HTML.
+        // Themes include sections in add/update responses (or in separate GET /cart?sections=…).
+        // We capture the section IDs so refreshCartUI can reuse them later.
+        const cloned = response.clone();
+        cloned.json().then((data: unknown) => {
+          if (
+            !this.refreshGuard &&
+            data !== null &&
+            typeof data === "object" &&
+            "sections" in (data as object)
+          ) {
+            const s = (data as { sections?: Record<string, unknown> }).sections ?? {};
+            const htmlKeys = Object.keys(s).filter(
+              (k) => typeof s[k] === "string" && (s[k] as string).length > 0,
+            );
+            if (htmlKeys.length > 0) {
+              this.capturedThemeSectionIds = htmlKeys;
+              this.log("Theme section IDs captured:", htmlKeys.join(", "));
+            }
+          }
+        }).catch(() => {});
+
+        if (isCartMutation && !this.refreshGuard) {
+          console.info(`[PromoEngine] Cart mutation detected (${url}) — scheduling evaluation`);
+          this.debouncedEvaluate.call();
+        }
       }
 
       return response;
@@ -97,12 +135,22 @@ class PromoEngineRuntime {
   }
 
   private async refreshCartUI(): Promise<void> {
-    // ── Tier 1: Dawn-style web component (getSectionsToRender API) ────────
     type CartDrawerEl = HTMLElement & {
       getSectionsToRender?: () => Array<{ id: string; selector?: string }>;
       getSectionInnerHTML?: (html: string, selector?: string) => string;
     };
     const cartDrawerEl = document.querySelector<CartDrawerEl>("cart-drawer");
+
+    // ── Tier 0: Reuse section IDs captured from the theme's own renders ───
+    // When the theme processes an add-to-cart it fetches /cart?sections=… or
+    // includes sections in its /cart/add.js response. We sniff those IDs in
+    // patchFetch and replay the same request here so the theme's DOM wrappers
+    // get refreshed with the current cart state (including our gifts).
+    const tier0 = this.capturedThemeSectionIds
+      .map((id) => ({ sectionId: id, selector: `#shopify-section-${id}` }))
+      .filter((t) => !!document.querySelector(t.selector));
+
+    // ── Tier 1: Dawn-style web component (getSectionsToRender API) ────────
     const nativeTargets: Array<{ sectionId: string; selector: string }> =
       cartDrawerEl?.getSectionsToRender
         ? cartDrawerEl.getSectionsToRender().map((s) => ({
@@ -112,9 +160,6 @@ class PromoEngineRuntime {
         : [];
 
     // ── Tier 2: Scan DOM for cart-related section wrappers ────────────────
-    // Works for any theme that includes the cart section in the page layout.
-    // Matches IDs like "shopify-section-cart-drawer" or
-    // "shopify-section-sections--123__cart-drawer".
     const CART_KEYWORDS = ["cart", "drawer", "mini"];
     const domSections: Array<{ sectionId: string; selector: string }> = [];
     document.querySelectorAll("[id^=\"shopify-section-\"]").forEach((el) => {
@@ -124,7 +169,7 @@ class PromoEngineRuntime {
       }
     });
 
-    // ── Tier 3: Hardcoded common cart section names ───────────────────────
+    // ── Tier 3: Hardcoded well-known cart section targets ────────────────
     const COMMON: Array<{ sectionId: string; selector: string }> = [
       { sectionId: "cart-drawer",      selector: "#CartDrawer" },
       { sectionId: "cart-drawer",      selector: "#shopify-section-cart-drawer" },
@@ -134,13 +179,20 @@ class PromoEngineRuntime {
       { sectionId: "cart",             selector: "#shopify-section-cart" },
     ];
 
-    // Merge all tiers, dedup by selector, keep only elements present in the DOM
+    // Tier 0 has highest priority; dedup and keep only DOM-present targets
     const seenSelectors = new Set<string>();
-    const allTargets = [...nativeTargets, ...domSections, ...COMMON].filter((t) => {
+    const allTargets = [...tier0, ...nativeTargets, ...domSections, ...COMMON].filter((t) => {
       if (seenSelectors.has(t.selector)) return false;
       seenSelectors.add(t.selector);
       return !!document.querySelector(t.selector);
     });
+
+    this.log(
+      "refreshCartUI — targets:",
+      allTargets.length > 0
+        ? allTargets.map((t) => `${t.sectionId}→${t.selector}`).join(", ")
+        : "none found",
+    );
 
     if (allTargets.length > 0) {
       const sectionIds = [...new Set(allTargets.map((t) => t.sectionId))];
@@ -151,6 +203,10 @@ class PromoEngineRuntime {
         );
         if (resp.ok) {
           const data = await resp.json() as { sections?: Record<string, string> };
+          this.log(
+            "refreshCartUI — section render response keys:",
+            Object.keys(data.sections ?? {}).join(", ") || "none (Shopify returned plain cart JSON — section IDs not valid for this theme)",
+          );
           if (data.sections) {
             let updated = 0;
             for (const { sectionId, selector } of allTargets) {
@@ -158,8 +214,6 @@ class PromoEngineRuntime {
               if (!rawHtml) continue;
               const el = document.querySelector(selector);
               if (!el) continue;
-              // Shopify section API wraps output in <div class="shopify-section">;
-              // extract its innerHTML so we don't double-wrap.
               const innerHtml = cartDrawerEl?.getSectionInnerHTML
                 ? cartDrawerEl.getSectionInnerHTML(rawHtml)
                 : (new DOMParser()
@@ -169,34 +223,20 @@ class PromoEngineRuntime {
               updated++;
             }
             if (updated > 0) {
-              console.info(`[PromoEngine] Cart UI refreshed (${updated} element(s))`);
+              console.info(`[PromoEngine] Cart UI refreshed via section rendering (${updated} element(s))`);
               return;
             }
           }
         }
       } catch {
-        // fall through
+        // fall through to events
       }
     }
 
-    // ── Tier 4: Re-trigger the theme's own cart update handlers ──────────
-    // POST a no-op to /cart/update.js through window.fetch (not savedFetch)
-    // so any theme that patches fetch to intercept cart mutations will
-    // see the response and refresh its own cart UI. Guard prevents re-entry.
-    if (!this.refreshGuard) {
-      this.refreshGuard = true;
-      try {
-        await window.fetch("/cart/update.js", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ updates: {} }),
-        });
-      } catch { /* ignore */ } finally {
-        this.refreshGuard = false;
-      }
-    }
-
-    // ── Tier 5: Dispatch standard cart events ─────────────────────────────
+    // ── Tier 4: Standard cart events ──────────────────────────────────────
+    // Note: avoid calling /cart/update.js here — it triggers extra evaluations
+    // via shop_events_listener's async event dispatch even with the guard set.
+    this.log("refreshCartUI — falling back to DOM events");
     document.dispatchEvent(new CustomEvent("cart:refresh", { bubbles: true }));
     document.dispatchEvent(new CustomEvent("cart:updated", { bubbles: true }));
     document.dispatchEvent(new CustomEvent("theme:cart:add", { bubbles: true }));
