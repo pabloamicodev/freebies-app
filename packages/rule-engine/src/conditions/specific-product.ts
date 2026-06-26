@@ -29,17 +29,31 @@ export function evaluateSpecificProduct(
   condition: SpecificProductConditionValue,
 ): Result<EligibilityReason & { qualifiedGroups: number }, EligibilityReason> {
   const qualifyingLines = extractQualifyingLines(cart, { includeGiftValues: false });
-  const legacyVariantIds = (condition as unknown as { variantIds?: string[] }).variantIds;
-  const requirements = condition.requirements ?? (
-    Array.isArray(legacyVariantIds)
-      ? legacyVariantIds.map((variantId) => ({
-          variantId,
-          productId: "",
-          trackMode: "variant" as const,
-          minQuantity: 1,
-        }))
-      : []
-  );
+
+  // Legacy format: { variantIds: string[], minQtyPerProduct?: number }
+  // Semantics: OR — any of the listed variants counts toward the minimum
+  const legacyRaw = condition as unknown as { variantIds?: string[]; minQtyPerProduct?: number };
+  if (!condition.requirements && Array.isArray(legacyRaw.variantIds)) {
+    const minQty = legacyRaw.minQtyPerProduct ?? 1;
+    const totalQty = qualifyingLines
+      .filter((line) => legacyRaw.variantIds!.includes(line.variantId))
+      .reduce((acc, l) => acc + l.quantity, 0);
+    const passed = totalQty >= minQty;
+    const qualifiedGroups = passed ? Math.floor(totalQty / minQty) : 0;
+    const reason = {
+      conditionType: "specific_product" as const,
+      passed,
+      message: passed
+        ? `Product qty met (${qualifiedGroups} group(s))`
+        : `Product qty ${totalQty} < required ${minQty}`,
+      actual: totalQty,
+      required: minQty,
+      qualifiedGroups,
+    };
+    return passed ? ok(reason) : err(reason);
+  }
+
+  const requirements = condition.requirements ?? [];
 
   let allPassed = true;
   let minGroups = Infinity;
