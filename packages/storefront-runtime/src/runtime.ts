@@ -149,7 +149,10 @@ class PromoEngineRuntime {
         signal,
       });
 
-      if (!response.ok) throw new Error(`Evaluation failed: ${response.status}`);
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "(no body)");
+        throw new Error(`Evaluation failed: ${response.status} — ${errText}`);
+      }
 
       const result: EvaluationResult = await response.json();
       this.lastCartHash = cartHash;

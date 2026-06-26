@@ -31,7 +31,8 @@ export async function action({ request }: ActionFunctionArgs) {
   });
 
   if (!parsed.success) {
-    return Response.json({ error: "Invalid evaluation payload" }, { status: 400 });
+    console.error("[evaluate] schema validation failed", JSON.stringify(parsed.error.issues));
+    return Response.json({ error: "Invalid evaluation payload", issues: parsed.error.issues }, { status: 400 });
   }
 
   const offerDefinitions = await getOfferDefinitions(signedShop.id, signedShop.db);
