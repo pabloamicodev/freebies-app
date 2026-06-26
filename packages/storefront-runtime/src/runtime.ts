@@ -34,6 +34,7 @@ class PromoEngineRuntime {
   private evaluationAbort = new AbortableRequest();
   private debouncedEvaluate: ReturnType<typeof debounce>;
   private lastCartHash: string | null = null;
+  private savedFetch: typeof window.fetch = window.fetch.bind(window);
 
   constructor(config: RuntimeConfig) {
     this.config = config;
@@ -75,7 +76,8 @@ class PromoEngineRuntime {
 
   private patchFetch(): void {
     const CART_MUTATE_RE = /\/cart\/(add|change|update)(\.js)?(\?|$)/;
-    const originalFetch = window.fetch.bind(window);
+    this.savedFetch = window.fetch.bind(window);
+    const originalFetch = this.savedFetch;
 
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -91,6 +93,48 @@ class PromoEngineRuntime {
 
       return response;
     };
+  }
+
+  private async refreshCartUI(): Promise<void> {
+    // Collect every section ID currently rendered on the page
+    const sectionIds: string[] = [];
+    document.querySelectorAll("[data-section-id]").forEach((el) => {
+      const id = el.getAttribute("data-section-id");
+      if (id) sectionIds.push(id);
+    });
+
+    // Section rendering (works on Dawn, Prestige, Turbo, Impulse, and all
+    // Shopify themes that use the standard section-rendering API)
+    if (sectionIds.length > 0) {
+      try {
+        const resp = await this.savedFetch(
+          `/cart?sections=${sectionIds.map(encodeURIComponent).join(",")}`,
+          { headers: { Accept: "application/json" } },
+        );
+        if (resp.ok) {
+          const data = await resp.json() as { sections?: Record<string, string> };
+          let updated = 0;
+          for (const [id, html] of Object.entries(data.sections ?? {})) {
+            const el = document.querySelector(`[data-section-id="${id}"]`);
+            if (el && html) {
+              el.outerHTML = html;
+              updated++;
+            }
+          }
+          if (updated > 0) {
+            console.info(`[PromoEngine] Cart UI refreshed (${updated} section(s))`);
+            return;
+          }
+        }
+      } catch {
+        // section rendering not available — fall through to event dispatch
+      }
+    }
+
+    // Fallback: dispatch standard cart events for themes that listen to them
+    // (e.g. custom cart drawers, headless setups, older themes)
+    document.dispatchEvent(new CustomEvent("cart:refresh", { bubbles: true }));
+    document.dispatchEvent(new CustomEvent("cart:updated", { bubbles: true }));
   }
 
   private async triggerEvaluation(): Promise<void> {
@@ -168,6 +212,9 @@ class PromoEngineRuntime {
       }
 
       await this.applyCartActions(actions);
+      if (actions.length > 0) {
+        await this.refreshCartUI();
+      }
       emit(PromoEvents.EvaluationCompleted, result);
 
     } catch (e: unknown) {
