@@ -18,7 +18,6 @@ interface ShopifyVariant {
   inventoryQuantity: number;
   inventoryPolicy: string;
   availableForSale: boolean;
-  requiresSellingPlan: boolean;
 }
 
 interface ShopifyProduct {
@@ -45,7 +44,7 @@ const PRODUCTS_QUERY = `
         variants(first: 100) {
           nodes {
             id sku title price compareAtPrice
-            inventoryQuantity inventoryPolicy availableForSale requiresSellingPlan
+            inventoryQuantity inventoryPolicy availableForSale
           }
         }
       }
@@ -129,7 +128,6 @@ async function upsertProduct(shopId: string, product: ShopifyProduct, currencyCo
         inventoryQuantity: v.inventoryQuantity,
         inventoryPolicy: v.inventoryPolicy,
         availableForSale: v.availableForSale,
-        requiresSellingPlan: v.requiresSellingPlan,
         raw: v,
         syncedAt: now,
       })
