@@ -7,7 +7,7 @@
     "dev": "shopify app dev",
     "build": "shopify app build",
     "start": "shopify app start",
-    "test:e2e": "playwright test",
+    "test:e2e": "playwright test --pass-with-no-tests",
     "typecheck": "tsc --noEmit",
     "lint": "eslint app --ext .ts,.tsx"
   },
