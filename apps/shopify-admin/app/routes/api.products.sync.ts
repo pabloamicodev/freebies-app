@@ -48,8 +48,9 @@ export async function action({ request }: ActionFunctionArgs) {
     );
     return Response.json({ ok: true, synced: result.synced });
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     Sentry.captureException(err, { tags: { route: "api.products.sync" } });
-    console.error("[api.products.sync] Sync failed:", err instanceof Error ? err.message : err);
-    return Response.json({ ok: false, error: "Sync failed" }, { status: 500 });
+    console.error("[api.products.sync] Sync failed:", message);
+    return Response.json({ ok: false, error: message }, { status: 500 });
   }
 }

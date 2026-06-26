@@ -11,7 +11,6 @@ const PRODUCTS_PER_PAGE = 250;
 
 interface ShopifyVariant {
   id: string;
-  legacyResourceId: string;
   sku: string | null;
   title: string;
   price: string;
@@ -24,7 +23,6 @@ interface ShopifyVariant {
 
 interface ShopifyProduct {
   id: string;
-  legacyResourceId: string;
   title: string;
   handle: string;
   vendor: string;
@@ -41,12 +39,12 @@ const PRODUCTS_QUERY = `
     products(first: $first, after: $after) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        id legacyResourceId title handle vendor productType tags status
+        id title handle vendor productType tags status
         featuredImage { url }
         collections(first: 100) { nodes { id } }
         variants(first: 100) {
           nodes {
-            id legacyResourceId sku title price compareAtPrice
+            id sku title price compareAtPrice
             inventoryQuantity inventoryPolicy availableForSale requiresSellingPlan
           }
         }
@@ -89,7 +87,6 @@ async function upsertProduct(shopId: string, product: ShopifyProduct, currencyCo
     .values({
       shopId,
       productGid: product.id,
-      legacyProductId: parseInt(product.legacyResourceId, 10),
       handle: product.handle,
       title: product.title,
       vendor: product.vendor,
@@ -124,7 +121,6 @@ async function upsertProduct(shopId: string, product: ShopifyProduct, currencyCo
         shopId,
         productGid: product.id,
         variantGid: v.id,
-        legacyVariantId: parseInt(v.legacyResourceId, 10),
         sku: v.sku || null,
         title: v.title,
         price: v.price,
