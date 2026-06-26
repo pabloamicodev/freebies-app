@@ -15,7 +15,7 @@ const tsProjects = [
 
 const config: Linter.Config[] = [
   {
-    ignores: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/target/**", "**/.shopify/**"],
+    ignores: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/target/**", "**/.shopify/**", "**/.react-router/**"],
   },
   // Type-aware rules for source files included in tsconfigs
   {
