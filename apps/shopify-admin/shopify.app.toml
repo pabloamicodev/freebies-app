@@ -55,7 +55,7 @@ shop_deletion_url = "https://freebies-app-shopify-admin.vercel.app/webhooks/gdpr
 # function config to a shop metafield (metafieldsSet) read by the discount function.
 # read_all_orders removed: it requires Shopify approval and is unnecessary —
 # read_orders covers the trailing-60-day window the analytics dashboard uses.
-scopes = "read_products,read_product_listings,read_inventory,read_publications,read_markets,read_discounts,write_discounts,read_customers,read_orders,read_metafields,write_metafields,read_metaobjects,write_metaobjects,read_locales,read_themes,write_app_proxy"
+scopes = "read_products,read_product_listings,read_inventory,read_publications,read_markets,read_discounts,write_discounts,read_customers,read_orders,read_metaobjects,write_metaobjects,read_locales,read_themes,write_app_proxy"
 
 [pos]
 embedded = false
