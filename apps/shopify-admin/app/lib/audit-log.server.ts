@@ -1,6 +1,5 @@
-import { getDb, auditLogs } from "@promo/db";
-import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import type * as schema from "@promo/db";
+import type { getDb } from "@promo/db";
+import { auditLogs } from "@promo/db";
 
 type Tx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
 type DbOrTx = ReturnType<typeof getDb> | Tx;
