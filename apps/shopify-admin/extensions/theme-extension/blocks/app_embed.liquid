@@ -1,0 +1,66 @@
+{% comment %}
+  Promo Engine App Embed
+  ─────────────────────
+  Auto-injected on every page when enabled in the theme editor under "App embeds".
+  Injects the runtime config and loads the compiled promo-engine.js bundle.
+
+  Settings: public_key, debug_mode, cart_debounce_ms, position (bottom_right/bottom_left)
+{% endcomment %}
+
+{%- liquid
+  assign pe_locale = request.locale.iso_code | default: 'en'
+  assign pe_currency = cart.currency.iso_code | default: shop.currency
+  assign pe_debug = false
+  if block.settings.debug_mode == true
+    assign pe_debug = true
+  endif
+  assign pe_debounce = block.settings.cart_debounce_ms | default: 300
+-%}
+
+<script>
+  window.__promoEngineConfig = {
+    shopDomain: {{ shop.permanent_domain | json }},
+    publicKey:  {{ block.settings.public_key | default: '' | json }},
+    locale:     {{ pe_locale | json }},
+    currency:   {{ pe_currency | json }},
+    debug:      {{ pe_debug | json }},
+    debounceMs: {{ pe_debounce }},
+    evalEndpoint:      "/apps/promo-engine/evaluate",
+    analyticsEndpoint: "/apps/promo-engine/analytics",
+    prepareCheckoutEndpoint: "/apps/promo-engine/prepare-checkout"
+  };
+</script>
+
+<script src="{{ 'promo-engine.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "Promo Engine",
+  "target": "body",
+  "settings": [
+    {
+      "type": "text",
+      "id": "public_key",
+      "label": "Public Key",
+      "info": "Found in Promo Engine admin → Settings → Installation"
+    },
+    {
+      "type": "checkbox",
+      "id": "debug_mode",
+      "label": "Debug mode",
+      "default": false,
+      "info": "Logs evaluation details to browser console. Disable in production."
+    },
+    {
+      "type": "range",
+      "id": "cart_debounce_ms",
+      "label": "Cart evaluation delay (ms)",
+      "min": 100,
+      "max": 1000,
+      "step": 50,
+      "default": 300,
+      "info": "How long to wait after a cart change before evaluating offers."
+    }
+  ]
+}
+{% endschema %}
