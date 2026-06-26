@@ -4,6 +4,8 @@ application_url = "https://freebies-app-shopify-admin.vercel.app"
 embedded = true
 handle = "promo-engine-hpn"
 
+extension_directories = ["../../extensions"]
+
 [build]
 automatically_update_urls_on_dev = true
 
