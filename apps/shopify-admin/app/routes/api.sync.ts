@@ -15,6 +15,7 @@ import { decryptToken } from "../lib/token-crypto.server.js";
 import { syncMarketsForShop } from "../lib/sync/market-sync.server.js";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
+  try {
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const syncType = url.pathname.split("/").pop(); // "products", "markets", "inventory"
@@ -45,5 +46,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     default:
       return Response.json({ error: "Unknown sync type" }, { status: 400 });
+  }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[api.sync]", message);
+    return Response.json({ error: message }, { status: 500 });
   }
 };

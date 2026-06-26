@@ -32,8 +32,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const result = await runOfferScheduler(getDb());
     return Response.json({ ok: true, ...result });
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     Sentry.captureException(err, { tags: { cron: "offers" } });
-    console.error("[cron:offers]", err instanceof Error ? err.message : err);
-    return Response.json({ ok: false, error: "Scheduler failed" }, { status: 500 });
+    console.error("[cron:offers]", message);
+    return Response.json({ ok: false, error: message }, { status: 500 });
   }
 }

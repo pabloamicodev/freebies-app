@@ -23,6 +23,7 @@ function rowToCSV(row: unknown[]): string {
 }
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
+  try {
   const { session } = await authenticate.admin(request);
   const db = getDb();
   const offerId = params["id"];
@@ -130,4 +131,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       "Content-Disposition": `attachment; filename="${filename}"`,
     },
   });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[api.offers.export]", message);
+    return Response.json({ error: message }, { status: 500 });
+  }
 };

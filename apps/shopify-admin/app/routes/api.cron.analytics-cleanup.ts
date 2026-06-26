@@ -25,8 +25,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const deleted = await cleanupOldAnalyticsEvents(Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays : 90);
     return Response.json({ ok: true, deleted });
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     Sentry.captureException(err, { tags: { cron: "analytics-cleanup" } });
-    console.error("[cron:analytics-cleanup]", err instanceof Error ? err.message : err);
-    return Response.json({ ok: false, error: "Cleanup failed" }, { status: 500 });
+    console.error("[cron:analytics-cleanup]", message);
+    return Response.json({ ok: false, error: message }, { status: 500 });
   }
 }

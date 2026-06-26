@@ -9,18 +9,24 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { getMarketsForShop } from "../lib/markets.server.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { shopId } = await getShopContext(request);
+  try {
+    const { shopId } = await getShopContext(request);
 
-  if (!shopId) {
-    return Response.json({ error: "Shop not found" }, { status: 404 });
+    if (!shopId) {
+      return Response.json({ error: "Shop not found" }, { status: 404 });
+    }
+
+    const markets = await getMarketsForShop(shopId);
+
+    return Response.json({ markets }, {
+      status: 200,
+      headers: {
+        "Cache-Control": "private, max-age=300",
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[api.markets]", message);
+    return Response.json({ error: message }, { status: 500 });
   }
-
-  const markets = await getMarketsForShop(shopId);
-
-  return Response.json({ markets }, {
-    status: 200,
-    headers: {
-      "Cache-Control": "private, max-age=300",
-    },
-  });
 };
