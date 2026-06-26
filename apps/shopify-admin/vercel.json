@@ -1,7 +1,7 @@
 {
   "framework": "react-router",
   "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
-  "buildCommand": "cd ../.. && cd apps/shopify-admin && pnpm exec react-router build",
+  "buildCommand": "cd ../.. && node -e \"if(!process.env.DATABASE_URL_UNPOOLED&&!process.env.DATABASE_URL)throw new Error('DATABASE_URL_UNPOOLED is required for migrations')\" && pnpm db:migrate && cd apps/shopify-admin && pnpm exec react-router build",
   "outputDirectory": "build/client",
   "alias": ["freebies-app-shopify-admin.vercel.app"],
   "crons": [

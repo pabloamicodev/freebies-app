@@ -1,13 +1,43 @@
 import "./lib/pg-ssl-patch.js";
 import "@shopify/shopify-app-react-router/adapters/node";
 import * as Sentry from "@sentry/node";
+
+// ── Startup env validation ────────────────────────────────────────────────────
+// Fail at module load time, not on the first request. Vercel surfaces this
+// as a deployment error rather than a runtime 500 mid-traffic.
+{
+  const always = ["SHOPIFY_API_KEY", "SHOPIFY_API_SECRET", "DATABASE_URL", "SHOPIFY_APP_URL"];
+  const prodOnly = ["TOKEN_ENCRYPTION_KEY", "CRON_SECRET"];
+  const isProdEnv = (process.env["NODE_ENV"] ?? "production") === "production";
+  const required = isProdEnv ? [...always, ...prodOnly] : always;
+  const missing = required.filter((v) => !process.env[v]);
+  if (missing.length > 0) {
+    throw new Error(`[startup] Missing required environment variables: ${missing.join(", ")}`);
+  }
+}
 import { shopifyApp } from "@shopify/shopify-app-react-router/server";
 
 if (process.env["SENTRY_DSN"]) {
+  const isProd = (process.env["NODE_ENV"] ?? "production") === "production";
   Sentry.init({
     dsn: process.env["SENTRY_DSN"],
     environment: process.env["NODE_ENV"] ?? "production",
-    tracesSampleRate: 0.1,
+    // Lower sample rate in dev/staging to reduce noise; full rate in prod
+    tracesSampleRate: isProd ? 0.15 : 0.01,
+    beforeSend(event, hint) {
+      // Drop 404s and bot-sourced errors — not actionable
+      const status = (hint?.originalException as { status?: number })?.status;
+      if (status === 404 || status === 401) return null;
+      const ua = (event.request?.headers as Record<string, string> | undefined)?.["user-agent"] ?? "";
+      if (/bot|crawler|spider|slurp|baiduspider/i.test(ua)) return null;
+      return event;
+    },
+    beforeSendTransaction(event) {
+      // Drop health-check and cron noise from performance data
+      const name = event.transaction ?? "";
+      if (/health|ping|favicon/i.test(name)) return null;
+      return event;
+    },
   });
 }
 import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";

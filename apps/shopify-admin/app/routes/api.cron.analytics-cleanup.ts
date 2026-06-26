@@ -21,7 +21,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   try {
-    const deleted = await cleanupOldAnalyticsEvents();
+    const retentionDays = Number(process.env["ANALYTICS_RETENTION_DAYS"] ?? 90);
+    const deleted = await cleanupOldAnalyticsEvents(Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays : 90);
     return Response.json({ ok: true, deleted });
   } catch (err) {
     Sentry.captureException(err, { tags: { cron: "analytics-cleanup" } });

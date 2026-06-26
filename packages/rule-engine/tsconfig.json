@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "outDir": "./dist",
+    "noEmit": true,
     "paths": {
       "@promo/shared-types": ["../shared-types/src/index.ts"],
       "@promo/shared-types/*": ["../shared-types/src/*"]

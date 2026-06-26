@@ -5,12 +5,16 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    include: ["packages/**/*.test.ts", "workers/**/*.test.ts"],
+    include: [
+      "packages/**/*.test.ts",
+      "workers/**/*.test.ts",
+      "apps/shopify-admin/app/lib/*.test.ts",
+    ],
     exclude: ["**/node_modules/**", "**/dist/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov", "html"],
-      include: ["packages/*/src/**", "workers/*/src/**"],
+      include: ["packages/*/src/**", "workers/*/src/**", "apps/shopify-admin/app/lib/*.server.ts"],
     },
   },
   resolve: {

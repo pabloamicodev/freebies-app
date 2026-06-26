@@ -19,9 +19,18 @@ import pg from "pg";
 
 const OriginalPool = pg.Pool;
 
+// Localhost connections (dev without a cloud DB) don't have SSL — skip it.
+// All cloud providers (Neon, Supabase, RDS, etc.) use certs signed by trusted CAs,
+// so rejectUnauthorized: true is safe and required.
+const dbUrl = process.env["DATABASE_URL"] ?? "";
+const isLocalhost = /localhost|127\.0\.0\.1/.test(dbUrl);
+
 class SSLPool extends OriginalPool {
   constructor(config?: ConstructorParameters<typeof OriginalPool>[0]) {
-    super({ ...config, ssl: { rejectUnauthorized: false } });
+    super({
+      ...config,
+      ssl: isLocalhost ? false : { rejectUnauthorized: true },
+    });
   }
 }
 

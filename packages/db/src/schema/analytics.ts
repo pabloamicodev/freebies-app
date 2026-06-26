@@ -28,6 +28,7 @@ export const analyticsEvents = pgTable(
     index("analytics_events_shop_session_idx").on(t.shopId, t.sessionId),
     index("analytics_events_shop_event_idx").on(t.shopId, t.eventName, t.occurredAt),
     index("analytics_events_order_idx").on(t.orderId),
+    index("analytics_events_shop_customer_idx").on(t.shopId, t.customerId),
   ],
 );
 
@@ -64,6 +65,7 @@ export const cartMutationLogs = pgTable(
   (t) => [
     index("cart_mutation_logs_shop_time_idx").on(t.shopId, t.createdAt),
     index("cart_mutation_logs_status_idx").on(t.shopId, t.status, t.createdAt),
+    index("cart_mutation_logs_shop_idx").on(t.shopId),
   ],
 );
 

@@ -83,12 +83,35 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         console.warn(`Unhandled webhook topic: ${topic}`);
     }
   } catch (err) {
-    console.error(`Webhook handler failed: topic=${topic} shop=${shop}`, err instanceof Error ? err.message : err);
     Sentry.captureException(err, { tags: { topic, shop } });
+    console.error(`Webhook handler failed: topic=${topic} shop=${shop}`, err instanceof Error ? err.message : err);
+    // Transient DB/network errors → 503 so Shopify retries delivery.
+    // Business logic errors (validation, missing shop) → 200 to ack and stop retries.
+    if (isTransientError(err)) {
+      return new Response("Temporary error", { status: 503 });
+    }
   }
 
   return new Response("OK", { status: 200 });
 };
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Postgres connection errors and Node.js network timeouts are transient — Shopify
+// should retry these. Business logic errors (shop not found, bad payload) should
+// be acked (200) so Shopify doesn't retry indefinitely.
+function isTransientError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as NodeJS.ErrnoException).code ?? "";
+  const msg = err.message.toLowerCase();
+  return (
+    ["ECONNREFUSED", "ENOTFOUND", "ETIMEDOUT", "ECONNRESET"].includes(code) ||
+    msg.includes("connection terminated") ||
+    msg.includes("connection refused") ||
+    msg.includes("timeout") ||
+    msg.includes("too many connections")
+  );
+}
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
