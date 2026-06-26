@@ -1,3 +1,6 @@
+// Runtime initialization (side-effect: registers DOMContentLoaded listener)
+import "./runtime.js";
+
 // Core runtime
 export { initCartDrawerIntegration } from "./cart-drawer-integration.js";
 export { AjaxCartAdapter } from "./cart-adapter.js";

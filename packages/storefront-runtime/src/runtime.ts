@@ -313,7 +313,7 @@ declare global {
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+function initRuntime() {
   const config = window.__promoEngineConfig;
   if (!config) {
     console.warn("[PromoEngine] No config found. Ensure the app embed is enabled in your theme.");
@@ -322,4 +322,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const runtime = new PromoEngineRuntime(config);
   window.PromoEngine = runtime.api;
   runtime.init();
-});
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initRuntime);
+} else {
+  initRuntime();
+}
