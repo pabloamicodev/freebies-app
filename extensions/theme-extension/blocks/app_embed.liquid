@@ -7,38 +7,35 @@
   Settings: public_key, debug_mode, cart_debounce_ms, position (bottom_right/bottom_left)
 {% endcomment %}
 
-{%- if settings.public_key != blank -%}
-  {%- liquid
-    assign pe_locale = request.locale.iso_code | default: 'en'
-    assign pe_currency = cart.currency.iso_code | default: shop.currency
-    assign pe_debug = false
-    if block.settings.debug_mode == true
-      assign pe_debug = true
-    endif
-    assign pe_debounce = block.settings.cart_debounce_ms | default: 300
-  -%}
+{%- liquid
+  assign pe_locale = request.locale.iso_code | default: 'en'
+  assign pe_currency = cart.currency.iso_code | default: shop.currency
+  assign pe_debug = false
+  if block.settings.debug_mode == true
+    assign pe_debug = true
+  endif
+  assign pe_debounce = block.settings.cart_debounce_ms | default: 300
+-%}
 
-  <script>
-    window.__promoEngineConfig = {
-      shopDomain: {{ shop.permanent_domain | json }},
-      publicKey:  {{ block.settings.public_key | json }},
-      locale:     {{ pe_locale | json }},
-      currency:   {{ pe_currency | json }},
-      debug:      {{ pe_debug | json }},
-      debouncMs:  {{ pe_debounce }},
-      evalEndpoint:      "/apps/promo-engine/evaluate",
-      analyticsEndpoint: "/apps/promo-engine/analytics",
-      prepareCheckoutEndpoint: "/apps/promo-engine/prepare-checkout"
-    };
-  </script>
+<script>
+  window.__promoEngineConfig = {
+    shopDomain: {{ shop.permanent_domain | json }},
+    publicKey:  {{ block.settings.public_key | default: '' | json }},
+    locale:     {{ pe_locale | json }},
+    currency:   {{ pe_currency | json }},
+    debug:      {{ pe_debug | json }},
+    debounceMs: {{ pe_debounce }},
+    evalEndpoint:      "/apps/promo-engine/evaluate",
+    analyticsEndpoint: "/apps/promo-engine/analytics",
+    prepareCheckoutEndpoint: "/apps/promo-engine/prepare-checkout"
+  };
+</script>
 
-  {{ 'promo-engine.js' | asset_url | script_tag }}
-{%- endif -%}
+<script src="{{ 'promo-engine.js' | asset_url }}" defer></script>
 
 {% schema %}
 {
   "name": "Promo Engine",
-  "target": "head",
   "settings": [
     {
       "type": "text",
