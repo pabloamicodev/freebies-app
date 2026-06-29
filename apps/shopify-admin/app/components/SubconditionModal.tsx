@@ -80,9 +80,11 @@ function SubconditionModalContent({
                 <button
                   key={sub.id}
                   type="button"
-                  onClick={() => toggle(sub.id)}
+                  onClick={() => !sub.plus && toggle(sub.id)}
                   aria-pressed={isSelected}
-                  className="rd-style-093" style={{ border: `1.5px solid ${isSelected ? "var(--blue)" : "var(--border)"}`, background: isSelected ? "var(--blue-light, #f0f4ff)" : "var(--bg-card)", boxShadow: isSelected ? "0 0 0 3px rgba(44,110,203,0.12)" : "none" }}
+                  disabled={sub.plus}
+                  title={sub.plus ? "This sub-condition requires a Plus plan. Upgrade to unlock it." : undefined}
+                  className="rd-style-093" style={{ border: `1.5px solid ${isSelected ? "var(--blue)" : "var(--border)"}`, background: isSelected ? "var(--blue-light, #f0f4ff)" : "var(--bg-card)", boxShadow: isSelected ? "0 0 0 3px rgba(44,110,203,0.12)" : "none", opacity: sub.plus ? 0.55 : 1, cursor: sub.plus ? "not-allowed" : "pointer" }}
                 >
                   {/* Plus badge */}
                   {sub.plus && (

@@ -6,7 +6,8 @@
  */
 
 import { Form, useActionData, useNavigate, useNavigation, redirect, useParams } from "react-router";
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
+import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -17,6 +18,7 @@ import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
+import { SelectedProductsList } from "../components/SelectedProductsList.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -68,10 +70,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const combinesShippingDiscounts = formData.get("combinesShippingDiscounts") === "on";
   const combinesProductDiscounts = formData.get("combinesProductDiscounts") === "on";
 
-  const upsellProductsResult = parseJsonStringArray(formData, "upsellProducts");
-  if (upsellProductsResult.error) return { error: upsellProductsResult.error };
-  const upsellProducts = upsellProductsResult.data!;
-  if (intent === "publish" && applyTo === "selected_products" && upsellProducts.length === 0) {
+  const discountProductsResult = parseJsonStringArray(formData, "discountProducts");
+  if (discountProductsResult.error) return { error: discountProductsResult.error };
+  const discountProducts = discountProductsResult.data!;
+  if (intent === "publish" && applyTo === "selected_products" && discountProducts.length === 0) {
     return { error: "Select at least one product before publishing." };
   }
 
@@ -148,7 +150,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     cartDiscountType,
     maxUsesEnabled,
     maxUsePerCustomerEnabled,
-    upsellProducts,
+    selectedProducts: discountProducts,
   };
 
   const tiersPayload =
@@ -303,6 +305,10 @@ export default function NewDiscountOfferPage() {
   const navigate = useNavigate();
   const { state } = useNavigation();
   const isSubmitting = state !== "idle";
+  const { markDirty, blocker } = useUnsavedGuard(isSubmitting);
+  useEffect(() => {
+    if (actionData?.error) window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [actionData?.error]);
   const { template: templateSlug = "volume" } = useParams<{ template: string }>();
 
   const templateId = SLUG_TO_TEMPLATE[templateSlug] ?? "volume";
@@ -479,10 +485,10 @@ export default function NewDiscountOfferPage() {
         </div>
       </div>
 
-      <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
+      <Form method="POST" onChange={markDirty} onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
         {/* Hidden fields */}
         <input type="hidden" name="discountTemplate" value={templateId} />
-        <input type="hidden" name="upsellProducts" value={JSON.stringify(selectedProducts)} />
+        <input type="hidden" name="discountProducts" value={JSON.stringify(selectedProducts)} />
 
         {/* Tier arrays — volume */}
         {templateId === "volume" && tiers.map((tier) => (
@@ -518,7 +524,7 @@ export default function NewDiscountOfferPage() {
           </span>
         ))}
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: 20, alignItems: "start" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
           {/* ── Left column ── */}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -560,7 +566,7 @@ export default function NewDiscountOfferPage() {
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div>
-                      <label className="b-label" htmlFor="startsAt">Start time</label>
+                      <label className="b-label" htmlFor="startsAt">Start time <span style={{ fontWeight: 400, color: "var(--text-sub)", fontSize: 11 }}>(your local timezone)</span></label>
                       <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                         value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                     </div>
@@ -606,7 +612,7 @@ export default function NewDiscountOfferPage() {
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div>
-                      <label className="b-label" htmlFor="startsAt">Start time</label>
+                      <label className="b-label" htmlFor="startsAt">Start time <span style={{ fontWeight: 400, color: "var(--text-sub)", fontSize: 11 }}>(your local timezone)</span></label>
                       <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                         value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                     </div>
@@ -652,7 +658,7 @@ export default function NewDiscountOfferPage() {
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div>
-                      <label className="b-label" htmlFor="startsAt">Start time</label>
+                      <label className="b-label" htmlFor="startsAt">Start time <span style={{ fontWeight: 400, color: "var(--text-sub)", fontSize: 11 }}>(your local timezone)</span></label>
                       <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                         value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                     </div>
@@ -724,10 +730,8 @@ export default function NewDiscountOfferPage() {
                           onClick={() => setProductPickerOpen(true)}>
                           Select products
                         </button>
-                        <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
-                          {selectedProducts.length} products selected
-                        </span>
                       </div>
+                      <SelectedProductsList gids={selectedProducts} onRemove={(gid) => setSelectedProducts(selectedProducts.filter((id) => id !== gid))} />
                     </div>
                   )}
                 </div>
@@ -756,10 +760,8 @@ export default function NewDiscountOfferPage() {
                           onClick={() => setProductPickerOpen(true)}>
                           Select products
                         </button>
-                        <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
-                          {selectedProducts.length} products selected
-                        </span>
                       </div>
+                      <SelectedProductsList gids={selectedProducts} onRemove={(gid) => setSelectedProducts(selectedProducts.filter((id) => id !== gid))} />
                     </div>
                   )}
                   <label className="b-checkbox-row" htmlFor="discount-count-unique" style={{ cursor: "pointer", gap: 8 }}>
@@ -788,14 +790,14 @@ export default function NewDiscountOfferPage() {
                     </select>
                   </div>
                   {applyTo === "selected_products" && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <button type="button" className="b-btn b-btn-secondary"
-                        onClick={() => setProductPickerOpen(true)}>
-                        Select products
-                      </button>
-                      <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
-                        {selectedProducts.length} products selected
-                      </span>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <button type="button" className="b-btn b-btn-secondary"
+                          onClick={() => setProductPickerOpen(true)}>
+                          Select products
+                        </button>
+                      </div>
+                      <SelectedProductsList gids={selectedProducts} onRemove={(gid) => setSelectedProducts(selectedProducts.filter((id) => id !== gid))} />
                     </div>
                   )}
                   <div>
@@ -1194,6 +1196,9 @@ export default function NewDiscountOfferPage() {
         </div>
 
         {/* ── Footer ── */}
+        <div style={{ fontSize: 12, color: "var(--text-sub)", textAlign: "right", paddingBottom: 6 }}>
+          <strong>Save draft</strong> — saves without activating. <strong>Publish</strong> — activates immediately (or at the scheduled start time).
+        </div>
         <div className="rd-style-031">
           <button type="button" className="b-btn b-btn-secondary"
             onClick={() => void navigate("/app/offers")}>
@@ -1220,6 +1225,19 @@ export default function NewDiscountOfferPage() {
 
       {(showToast || actionData?.error) && (
         <Toast message={actionData?.error ?? toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+      )}
+
+      {blocker.state === "blocked" && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "var(--surface)", borderRadius: 10, padding: 24, maxWidth: 380, width: "90%", boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>Discard unsaved changes?</div>
+            <div style={{ fontSize: 13, color: "var(--text-sub)", marginBottom: 20 }}>You have unsaved changes. If you leave, your changes will be lost.</div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button type="button" className="b-btn b-btn-secondary" onClick={() => blocker.reset()}>Keep editing</button>
+              <button type="button" className="b-btn" style={{ background: "var(--error, #e53e3e)", color: "#fff" }} onClick={() => blocker.proceed()}>Discard</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

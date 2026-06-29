@@ -8,8 +8,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const { session } = await authenticate.admin(request);
     const url = new URL(request.url);
     const q = url.searchParams.get("q") ?? "";
+    const idsParam = url.searchParams.get("ids");
+    const ids = idsParam ? idsParam.split(",").filter(Boolean) : null;
     const limitRaw = parseInt(url.searchParams.get("limit") ?? "20", 10);
-    const limit = Math.min(Number.isNaN(limitRaw) ? 20 : limitRaw, 50);
+    const limit = Math.min(Number.isNaN(limitRaw) ? 20 : limitRaw, 200);
     const includeVariants = url.searchParams.get("variants") === "true";
 
     const db = getDb();
@@ -32,41 +34,60 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       .limit(1);
     const cache = { lastSyncedAt: lastSynced[0]?.syncedAt?.toISOString() ?? null };
 
+    // When ids are variant GIDs, look up via variantCache first to get product GIDs
+    const areVariantIds = ids && ids.length > 0 && ids[0].includes("/ProductVariant/");
+
+    let resolvedProductGidsFromVariants: string[] = [];
+    let selectedVariantGids: Set<string> | null = null;
+    if (areVariantIds && ids) {
+      const variantRows = await db
+        .select({ productGid: variantCache.productGid, variantGid: variantCache.variantGid })
+        .from(variantCache)
+        .where(and(eq(variantCache.shopId, shopId), inArray(variantCache.variantGid, ids)));
+      resolvedProductGidsFromVariants = [...new Set(variantRows.map((v) => v.productGid))];
+      selectedVariantGids = new Set(variantRows.map((v) => v.variantGid));
+    }
+
     const searchPattern = `%${q}%`;
-    const products = await db
-      .select({
-        id: productCache.productGid,
-        title: productCache.title,
-        handle: productCache.handle,
-        vendor: productCache.vendor,
-        productType: productCache.productType,
-        imageUrl: productCache.imageUrl,
-        status: productCache.status,
-        tags: productCache.tags,
-      })
-      .from(productCache)
-      .where(
-        and(
-          eq(productCache.shopId, shopId),
-          ne(productCache.status, "ARCHIVED"),
-          q
-            ? or(
-                like(productCache.title, searchPattern),
-                like(productCache.handle, searchPattern),
-                like(productCache.vendor, searchPattern),
-              )
-            : undefined,
-        ),
-      )
-      .orderBy(productCache.title)
-      .limit(limit);
+    const productIds = areVariantIds ? resolvedProductGidsFromVariants : (ids ?? null);
+    const products = productIds !== null && productIds.length === 0
+      ? []
+      : await db
+          .select({
+            id: productCache.productGid,
+            title: productCache.title,
+            handle: productCache.handle,
+            vendor: productCache.vendor,
+            productType: productCache.productType,
+            imageUrl: productCache.imageUrl,
+            status: productCache.status,
+            tags: productCache.tags,
+          })
+          .from(productCache)
+          .where(
+            productIds
+              ? and(eq(productCache.shopId, shopId), inArray(productCache.productGid, productIds))
+              : and(
+                  eq(productCache.shopId, shopId),
+                  ne(productCache.status, "ARCHIVED"),
+                  q
+                    ? or(
+                        like(productCache.title, searchPattern),
+                        like(productCache.handle, searchPattern),
+                        like(productCache.vendor, searchPattern),
+                      )
+                    : undefined,
+                ),
+          )
+          .orderBy(productCache.title)
+          .limit(limit);
 
     if (!includeVariants) {
       return Response.json({ products, cache }, { status: 200 });
     }
 
     const productGids = products.map((p) => p.id);
-    const variants = productGids.length > 0
+    const allVariants = productGids.length > 0
       ? await db
           .select({
             productGid: variantCache.productGid,
@@ -87,6 +108,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           )
           .orderBy(variantCache.productGid, variantCache.title)
       : [];
+
+    // When filtering by variant GIDs, only return the selected variants
+    const variants = selectedVariantGids
+      ? allVariants.filter((v) => selectedVariantGids!.has(v.id))
+      : allVariants;
 
     const variantsByProduct = variants.reduce<Record<string, typeof variants>>(
       (acc, v) => {

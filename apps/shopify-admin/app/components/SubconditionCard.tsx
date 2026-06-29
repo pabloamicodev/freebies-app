@@ -23,10 +23,14 @@ interface SubconditionCardProps {
   def: SubconditionDef;
   onRemove: () => void;
   children: React.ReactNode;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
-export function SubconditionCard({ def, onRemove, children }: SubconditionCardProps) {
-  const [collapsed, setCollapsed] = useState(false);
+export function SubconditionCard({ def, onRemove, children, collapsed: collapsedProp, onToggleCollapse }: SubconditionCardProps) {
+  const [collapsedLocal, setCollapsedLocal] = useState(false);
+  const collapsed = collapsedProp !== undefined ? collapsedProp : collapsedLocal;
+  const toggle = onToggleCollapse ?? (() => setCollapsedLocal((v) => !v));
 
   return (
     <div className="b-card" style={{ marginBottom: 12 }}>
@@ -38,7 +42,7 @@ export function SubconditionCard({ def, onRemove, children }: SubconditionCardPr
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button
             type="button"
-            onClick={() => setCollapsed((v) => !v)}
+            onClick={toggle}
             style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-sub)", display: "flex" }}
           >
             {collapsed ? <IChevDown /> : <IChevUp />}

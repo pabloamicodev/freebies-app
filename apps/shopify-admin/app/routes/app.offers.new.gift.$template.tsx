@@ -4,7 +4,8 @@
  */
 
 import { Form, useActionData, useNavigate, useNavigation, redirect, useParams } from "react-router";
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
+import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -15,6 +16,7 @@ import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
+import { SelectedProductsList } from "../components/SelectedProductsList.js";
 import { SubconditionModal } from "../components/SubconditionModal.js";
 import { SubconditionCard } from "../components/SubconditionCard.js";
 import type { MainConditionType } from "../components/MainConditionModal.js";
@@ -136,6 +138,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (subconditionsResult.error) return { error: subconditionsResult.error };
   const subconditions = subconditionsResult.data!;
 
+  const stopLowerPriority          = formData.get("stopLower") === "true";
+  const giftValueCountsForOther    = formData.get("giftAppliesOther") === "true";
+
   const validSubconditions = Object.entries(subconditions).filter(([, subVal]) =>
     subVal && typeof subVal === "object" && !Array.isArray(subVal) && Object.keys(subVal).length > 0,
   );
@@ -158,7 +163,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           tx.insert(offerConditions).values({ shopId, offerId: offer.id, scope: "sub", conditionType: subId, operator: "eq", value: subVal as Record<string, unknown>, sortOrder: index + 1, isEnabled: true }),
         ),
         tx.insert(offerRewards).values({ shopId, offerId: offer.id, rewardType: "product_gift", discountType: discountType as "free" | "percentage" | "fixed_amount" | "fixed_price" | "cheapest_item_free" | "most_expensive_item_discount", value: { amount: rewardAmount, currencyCode: "USD" }, target: { scope: "cart", variantIds: rewardProducts }, quantity: giftCount, isAutoAdd, isCustomerSelectable: !isAutoAdd, trackMode: "product", sortOrder: 0 }),
-        tx.insert(offerCombinationPolicies).values({ shopId, offerId: offer.id, combinesWithOrderDiscounts: true, combinesWithProductDiscounts: true, combinesWithShippingDiscounts: true, combinesWithOtherAppOffers: true, stopLowerPriority: false, giftValueCountsForOtherOffers: false }),
+        tx.insert(offerCombinationPolicies).values({ shopId, offerId: offer.id, combinesWithOrderDiscounts: true, combinesWithProductDiscounts: true, combinesWithShippingDiscounts: true, combinesWithOtherAppOffers: true, stopLowerPriority, giftValueCountsForOtherOffers: giftValueCountsForOther }),
       ]);
 
       return offer;
@@ -184,6 +189,10 @@ export default function NewGiftOfferPage() {
   const navigate = useNavigate();
   const { state } = useNavigation();
   const isSubmitting = state !== "idle";
+  const { markDirty, blocker } = useUnsavedGuard(isSubmitting);
+  useEffect(() => {
+    if (actionData?.error) window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [actionData?.error]);
   const { template: slug = "scratch" } = useParams<{ template: string }>();
   const templateId = SLUG_TO_TEMPLATE[slug] ?? "scratch";
   const preset = TEMPLATE_PRESETS[templateId];
@@ -227,6 +236,7 @@ export default function NewGiftOfferPage() {
     addCartMessage: false,
     offerTodayTitle: "",
     addRedirectBtn: false,
+    collapsedSubs: {} as Record<string, boolean>,
   }));
   const {
     fieldErrors,
@@ -263,7 +273,9 @@ export default function NewGiftOfferPage() {
     addCartMessage,
     offerTodayTitle,
     addRedirectBtn,
+    collapsedSubs,
   } = formState;
+  const setCollapsedSubs = createFieldSetter(setFormField, "collapsedSubs");
   const setFieldErrors = createFieldSetter(setFormField, "fieldErrors");
   const setShowToast = createFieldSetter(setFormField, "showToast");
   const setToastMsg = createFieldSetter(setFormField, "toastMsg");
@@ -334,7 +346,7 @@ export default function NewGiftOfferPage() {
         </div>
       </div>
 
-      <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
+      <Form method="POST" onChange={markDirty} onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
         <input type="hidden" name="conditionType"      value={isScratch ? selectedMainCond : conditionType} />
         <input type="hidden" name="conditionProducts"  value={JSON.stringify(conditionProducts)} />
         <input type="hidden" name="rewardProducts"     value={JSON.stringify(rewardProducts)} />
@@ -344,10 +356,15 @@ export default function NewGiftOfferPage() {
         <input type="hidden" name="appliesTo"          value={appliesTo} />
         <input type="hidden" name="priority"           value={priority} />
         <input type="hidden" name="subconditions"      value={JSON.stringify(subValues)} />
+        <input type="hidden" name="stopLower"           value={String(stopLower)} />
+        <input type="hidden" name="giftAppliesOther"   value={String(giftAppliesOther)} />
+        <input type="hidden" name="addCartMessage"      value={String(addCartMessage)} />
+        <input type="hidden" name="offerTodayTitle"     value={offerTodayTitle} />
+        <input type="hidden" name="addRedirectBtn"      value={String(addRedirectBtn)} />
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 20, alignItems: "start" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
-          {/* ── Left column ── */}
+          {/* ── Form sections ── */}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
             {/* ── Block 1: Offer information ── */}
@@ -378,7 +395,7 @@ export default function NewGiftOfferPage() {
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <div>
-                    <label className="b-label" htmlFor="startsAt">Start time</label>
+                    <label className="b-label" htmlFor="startsAt">Start time <span style={{ fontWeight: 400, color: "var(--text-sub)", fontSize: 11 }}>(your local timezone)</span></label>
                     <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                       value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                   </div>
@@ -402,7 +419,7 @@ export default function NewGiftOfferPage() {
               <div className="b-card">
                 <div className="b-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>{CONDITION_TYPE_LABEL[conditionType]}</span>
-                  <button type="button" className="b-modal-close" aria-label="Clear main condition" style={{ width: 24, height: 24, flexShrink: 0 }}>
+                  <button type="button" className="b-modal-close" aria-label="Change main condition" onClick={() => setMainCondModalOpen(true)} style={{ width: 24, height: 24, flexShrink: 0 }}>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                   </button>
                 </div>
@@ -427,8 +444,7 @@ export default function NewGiftOfferPage() {
                             <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--text-sub)" }}>$</span>
                             <input id="gift-max-amount" aria-label="Maximum amount" className="b-input" type="number" name="maxAmount" value={maxAmount}
                               onChange={(e) => setMaxAmount(e.target.value)}
-                              min="0" step="0.01" style={{ paddingLeft: 22, paddingRight: 28 }} autoComplete="off" />
-                            <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: "var(--text-sub)" }}>%</span>
+                              min="0" step="0.01" style={{ paddingLeft: 22 }} autoComplete="off" />
                           </div>
                         </div>
                       </div>
@@ -546,7 +562,7 @@ export default function NewGiftOfferPage() {
                       </div>
                       <div>
                         <button type="button" className="b-btn b-btn-secondary" onClick={() => setCondPickerOpen(true)}>Select products</button>
-                        <span style={{ marginLeft: 10, fontSize: 13, color: "var(--text-sub)" }}>{conditionProducts.length} selected products</span>
+                        <SelectedProductsList gids={conditionProducts} onRemove={(gid) => setConditionProducts(conditionProducts.filter((id) => id !== gid))} />
                       </div>
                     </>
                   )}
@@ -565,16 +581,92 @@ export default function NewGiftOfferPage() {
                   <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Main condition</span>
                   <span className="rd-style-024">2</span>
                 </div>
-                <div className="b-card-body">
+                <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <button type="button" className="b-btn b-btn-primary b-btn-sm"
                       onClick={() => setMainCondModalOpen(true)}>
-                      + Add main condition
+                      {selectedMainCond ? `Change: ${CONDITION_TYPE_LABEL[selectedMainCond]}` : "+ Add main condition"}
                     </button>
-                    <span style={{ fontSize: 12, color: "var(--text-sub)" }}>
-                      Cart quantity and cart value conditions can be combined
-                    </span>
+                    {!selectedMainCond && (
+                      <span style={{ fontSize: 12, color: "var(--text-sub)" }}>
+                        Cart quantity and cart value conditions can be combined
+                      </span>
+                    )}
                   </div>
+
+                  {/* Config fields for the selected condition type */}
+                  {selectedMainCond === "cart_value" && (
+                    <>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                        <div>
+                          <label className="b-label" htmlFor="scratch-gift-min-amount">Min.</label>
+                          <div style={{ position: "relative" }}>
+                            <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--text-sub)" }}>$</span>
+                            <input id="scratch-gift-min-amount" aria-label="Minimum amount" className="b-input" type="number" name="minAmount" value={minAmount}
+                              onChange={(e) => setMinAmount(e.target.value)} min="0" step="0.01" style={{ paddingLeft: 22 }} autoComplete="off" />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="b-label" htmlFor="scratch-gift-max-amount">Max.</label>
+                          <div style={{ position: "relative" }}>
+                            <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--text-sub)" }}>$</span>
+                            <input id="scratch-gift-max-amount" aria-label="Maximum amount" className="b-input" type="number" name="maxAmount" value={maxAmount}
+                              onChange={(e) => setMaxAmount(e.target.value)} min="0" step="0.01" style={{ paddingLeft: 22 }} autoComplete="off" />
+                          </div>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="scratch-gift-applies-to-cv">Condition applies to:</label>
+                        <select id="scratch-gift-applies-to-cv" aria-label="Condition applies to" className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
+                          <option value="any_product">any product</option>
+                          <option value="exclude_variants_ids">all except selected products</option>
+                          <option value="specific_products">selected products</option>
+                        </select>
+                      </div>
+                    </>
+                  )}
+
+                  {selectedMainCond === "cart_quantity" && (
+                    <>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                        <div>
+                          <label className="b-label" htmlFor="scratch-gift-min-qty">Min. quantity</label>
+                          <input id="scratch-gift-min-qty" aria-label="Minimum quantity" className="b-input" type="number" name="minQty" value={minQty}
+                            onChange={(e) => setMinQty(parseInt(e.target.value) || 1)} min="1" autoComplete="off" />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="scratch-gift-applies-to-cq">Condition applies to:</label>
+                        <select id="scratch-gift-applies-to-cq" aria-label="Condition applies to" className="b-select" value={appliesTo} onChange={(e) => setAppliesTo(e.target.value)}>
+                          <option value="any_product">any product</option>
+                          <option value="exclude_variants_ids">all except selected products</option>
+                          <option value="specific_products">selected products</option>
+                        </select>
+                      </div>
+                    </>
+                  )}
+
+                  {selectedMainCond === "specific_product" && (
+                    <>
+                      <div>
+                        <label className="b-label" htmlFor="scratch-gift-min-qty-sp">Required product quantity</label>
+                        <input id="scratch-gift-min-qty-sp" aria-label="Required product quantity" className="b-input" type="number" name="minQty" value={minQty}
+                          onChange={(e) => setMinQty(parseInt(e.target.value) || 1)} min="1" style={{ maxWidth: 120 }} autoComplete="off" />
+                      </div>
+                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
+                        <input type="checkbox" name="multiplyGifts" checked={multiplyGifts} onChange={(e) => setMultiplyGifts(e.target.checked)} />
+                        <div className="b-checkbox-label">Multiply gifts by product quantity</div>
+                      </label>
+                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
+                        <input type="checkbox" name="giftsMatchProducts" checked={giftsMatchProducts} onChange={(e) => setGiftsMatchProducts(e.target.checked)} />
+                        <div className="b-checkbox-label">Gifts match the selected products (BOGO)</div>
+                      </label>
+                      <div>
+                        <button type="button" className="b-btn b-btn-secondary" onClick={() => setCondPickerOpen(true)}>Select qualifying products</button>
+                        <SelectedProductsList gids={conditionProducts} onRemove={(gid) => setConditionProducts(conditionProducts.filter((id) => id !== gid))} />
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -591,10 +683,13 @@ export default function NewGiftOfferPage() {
                     const SubForm = SUB_FORMS[id];
                     const def = GIFT_SUBCONDITIONS.find((s) => s.id === id)!;
                     return (
-                      <SubconditionCard key={id} def={def} onRemove={() => {
-                        setActiveSubs((prev) => prev.filter((x) => x !== id));
-                        setSubValues((prev) => { const n = { ...prev }; delete n[id]; return n; });
-                      }}>
+                      <SubconditionCard key={id} def={def}
+                        collapsed={!!collapsedSubs[id]}
+                        onToggleCollapse={() => setCollapsedSubs({ ...collapsedSubs, [id]: !collapsedSubs[id] })}
+                        onRemove={() => {
+                          setActiveSubs((prev) => prev.filter((x) => x !== id));
+                          setSubValues((prev) => { const n = { ...prev }; delete n[id]; return n; });
+                        }}>
                         <SubForm
                           value={subValues[id] as Record<string, unknown> | undefined}
                           onChange={(v) => setSubValues((prev) => ({ ...prev, [id]: v }))}
@@ -682,7 +777,7 @@ export default function NewGiftOfferPage() {
                     <button type="button" className="b-btn b-btn-secondary" onClick={() => setRewardPickerOpen(true)}>
                       Select gifts
                     </button>
-                    <span style={{ fontSize: 13, color: "var(--text-sub)" }}>{rewardProducts.length} selected products</span>
+                    <SelectedProductsList gids={rewardProducts} onRemove={(gid) => setRewardProducts(rewardProducts.filter((id) => id !== gid))} />
                   </div>
                 </div>
               </div>
@@ -713,6 +808,7 @@ export default function NewGiftOfferPage() {
                       <label className="b-label" htmlFor="priority">Priority</label>
                       <input id="priority" className="b-input" type="number" value={priority}
                         onChange={(e) => setPriority(e.target.value)} style={{ maxWidth: 120 }} autoComplete="off" />
+                      <div className="b-help">Lower number = higher priority. Priority 1 runs before priority 2.</div>
                     </div>
                     <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, alignItems: "flex-start" }}>
@@ -749,7 +845,9 @@ export default function NewGiftOfferPage() {
                       <span style={{ background: "#fef3c7", color: "#92400e", fontSize: 12, fontWeight: 600, padding: "2px 7px", borderRadius: 10, border: "1px solid #fbbf24" }}>legacy</span>
                     </div>
                     <div style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 10 }}>
-                      The latest version of the Today offer is now available in Boosters. If you&apos;re still using this version, you can configure the display text and redirect link here.
+                      The latest version of the Today offer is now available in{" "}
+                      <a href="/app/boosters" style={{ color: "var(--accent)", textDecoration: "underline" }}>Boosters</a>.
+                      {" "}Leave blank if using Boosters. If you&apos;re still on this version, configure the display text and redirect link below.
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                       <div>
@@ -774,6 +872,9 @@ export default function NewGiftOfferPage() {
         </div>
 
         {/* ── Footer ── */}
+        <div style={{ fontSize: 12, color: "var(--text-sub)", textAlign: "right", paddingBottom: 6 }}>
+          <strong>Save draft</strong> — saves without activating. <strong>Publish</strong> — activates immediately (or at the scheduled start time).
+        </div>
         <div className="rd-style-031">
           <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary" disabled={isSubmitting}>
             {isSubmitting ? "Saving…" : "Save draft"}
@@ -829,6 +930,19 @@ export default function NewGiftOfferPage() {
         selectedIds={rewardProducts}
         onSelect={(gids) => setRewardProducts(gids)}
       />
+
+      {blocker.state === "blocked" && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "var(--surface)", borderRadius: 10, padding: 24, maxWidth: 380, width: "90%", boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>Discard unsaved changes?</div>
+            <div style={{ fontSize: 13, color: "var(--text-sub)", marginBottom: 20 }}>You have unsaved changes. If you leave, your changes will be lost.</div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button type="button" className="b-btn b-btn-secondary" onClick={() => blocker.reset()}>Keep editing</button>
+              <button type="button" className="b-btn" style={{ background: "var(--error, #e53e3e)", color: "#fff" }} onClick={() => blocker.proceed()}>Discard</button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

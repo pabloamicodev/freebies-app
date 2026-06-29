@@ -6,6 +6,8 @@
  */
 
 import { Form, useActionData, useNavigate, useNavigation, redirect, useParams } from "react-router";
+import { useEffect } from "react";
+import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -16,6 +18,7 @@ import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
+import { SelectedProductsList } from "../components/SelectedProductsList.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -188,6 +191,10 @@ export default function NewUpsellOfferPage() {
   const navigate = useNavigate();
   const { state } = useNavigation();
   const isSubmitting = state !== "idle";
+  const { markDirty, blocker } = useUnsavedGuard(isSubmitting);
+  useEffect(() => {
+    if (actionData?.error) window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [actionData?.error]);
   const { template: templateSlug = "checkout" } = useParams<{ template: string }>();
 
   const templateId = SLUG_TO_TEMPLATE[templateSlug] ?? "checkout";
@@ -210,11 +217,13 @@ export default function NewUpsellOfferPage() {
     allowCustomerQty: false,
     checkoutTarget: "",
     upsellProducts: [] as string[],
+    triggerProducts: [] as string[],
+    triggerPickerOpen: false,
     productPickerOpen: false,
     combinesOrderDiscounts: true,
     combinesShippingDiscounts: true,
     advancedOpen: false,
-    infoBannerDismissed: false,
+    infoBannerDismissed: typeof window !== "undefined" && window.localStorage.getItem("upsell_banner_dismissed") === "1",
     fieldErrors: {} as { internalName?: string },
     showToast: false,
     toastMsg: "",
@@ -236,6 +245,8 @@ export default function NewUpsellOfferPage() {
     allowCustomerQty,
     checkoutTarget,
     upsellProducts,
+    triggerProducts,
+    triggerPickerOpen,
     productPickerOpen,
     combinesOrderDiscounts,
     combinesShippingDiscounts,
@@ -261,6 +272,8 @@ export default function NewUpsellOfferPage() {
   const setAllowCustomerQty = createFieldSetter(setFormField, "allowCustomerQty");
   const setCheckoutTarget = createFieldSetter(setFormField, "checkoutTarget");
   const setUpsellProducts = createFieldSetter(setFormField, "upsellProducts");
+  const setTriggerProducts = createFieldSetter(setFormField, "triggerProducts");
+  const setTriggerPickerOpen = createFieldSetter(setFormField, "triggerPickerOpen");
   const setProductPickerOpen = createFieldSetter(setFormField, "productPickerOpen");
   const setCombinesOrderDiscounts = createFieldSetter(setFormField, "combinesOrderDiscounts");
   const setCombinesShippingDiscounts = createFieldSetter(setFormField, "combinesShippingDiscounts");
@@ -333,7 +346,7 @@ export default function NewUpsellOfferPage() {
           </div>
           <button
             type="button"
-            onClick={() => setInfoBannerDismissed(true)}
+            onClick={() => { setInfoBannerDismissed(true); localStorage.setItem("upsell_banner_dismissed", "1"); }}
             className="rd-style-057"
             aria-label="Close"
           >
@@ -342,9 +355,10 @@ export default function NewUpsellOfferPage() {
         </div>
       )}
 
-      <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
+      <Form method="POST" onChange={markDirty} onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
         <input type="hidden" name="template" value={templateId} />
         <input type="hidden" name="triggerType" value={triggerType} />
+        <input type="hidden" name="triggerProducts" value={JSON.stringify(triggerProducts)} />
         <input type="hidden" name="upsellMethod" value={upsellMethod} />
         <input type="hidden" name="widgetType" value={widgetType} />
         <input type="hidden" name="allowCustomerQty" value={String(allowCustomerQty)} />
@@ -352,7 +366,7 @@ export default function NewUpsellOfferPage() {
         <input type="hidden" name="combinesOrderDiscounts" value={combinesOrderDiscounts ? "on" : "off"} />
         <input type="hidden" name="combinesShippingDiscounts" value={combinesShippingDiscounts ? "on" : "off"} />
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: 20, alignItems: "start" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
           {/* ── Left column ── */}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -375,34 +389,30 @@ export default function NewUpsellOfferPage() {
                   <div className="b-help">Internal use only, not shown to customers.</div>
                 </div>
 
-                {/* FBT-only: widget display fields */}
+                <div>
+                  <label className="b-label" htmlFor="publicTitle">Upsell title <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(shown to customers)</span></label>
+                  <input
+                    id="publicTitle" className="b-input" name="publicTitle"
+                    value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
+                    autoComplete="off" placeholder="e.g., Complete your order"
+                  />
+                </div>
+
+                {/* FBT-only: description field */}
                 {isFbt && (
-                  <div className="b-card" style={{ background: "var(--bg-hover, #f9f9f9)" }}>
-                    <div className="b-card-header" style={{ fontSize: 13 }}>Widget display</div>
-                    <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                      <div>
-                        <label className="b-label" htmlFor="publicTitle">Upsell title</label>
-                        <input
-                          id="publicTitle" className="b-input" name="publicTitle"
-                          value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
-                          autoComplete="off" placeholder="e.g., Frequently bought together"
-                        />
-                      </div>
-                      <div>
-                        <label className="b-label" htmlFor="description">Upsell description <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(optional)</span></label>
-                        <input
-                          id="description" className="b-input" name="description"
-                          value={description} onChange={(e) => setDescription(e.target.value)}
-                          autoComplete="off" placeholder=""
-                        />
-                      </div>
-                    </div>
+                  <div>
+                    <label className="b-label" htmlFor="description">Upsell description <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(optional)</span></label>
+                    <input
+                      id="description" className="b-input" name="description"
+                      value={description} onChange={(e) => setDescription(e.target.value)}
+                      autoComplete="off" placeholder=""
+                    />
                   </div>
                 )}
 
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <div>
-                    <label className="b-label" htmlFor="startsAt">Start time</label>
+                    <label className="b-label" htmlFor="startsAt">Start time <span style={{ fontWeight: 400, color: "var(--text-sub)", fontSize: 11 }}>(your local timezone)</span></label>
                     <input
                       id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                       value={startsAt} onChange={(e) => setStartsAt(e.target.value)}
@@ -446,9 +456,19 @@ export default function NewUpsellOfferPage() {
                         <span style={{ fontSize: 13, color: "var(--text)" }}>{label}</span>
                       </label>
                     ))}
-                    <div className="b-help" style={{ marginTop: 4 }}>
-                      The upsell always shows without any trigger.
-                    </div>
+                    {triggerType === "always" && (
+                      <div className="b-help" style={{ marginTop: 4 }}>
+                        This upsell shows on every qualifying visit with no product or cart condition.
+                      </div>
+                    )}
+                    {(triggerType === "product_selected" || triggerType === "product_except") && (
+                      <div style={{ marginTop: 4 }}>
+                        <button type="button" className="b-btn b-btn-secondary" onClick={() => setTriggerPickerOpen(true)}>
+                          Select trigger products
+                        </button>
+                        <SelectedProductsList gids={triggerProducts} onRemove={(gid) => setTriggerProducts(triggerProducts.filter((id) => id !== gid))} />
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>
@@ -468,9 +488,19 @@ export default function NewUpsellOfferPage() {
                         <span style={{ fontSize: 13, color: "var(--text)" }}>{label}</span>
                       </label>
                     ))}
-                    <div className="b-help" style={{ marginTop: 4 }}>
-                      The upsell always shows without any trigger.
-                    </div>
+                    {triggerType === "always" && (
+                      <div className="b-help" style={{ marginTop: 4 }}>
+                        This upsell shows on every qualifying visit with no product or cart condition.
+                      </div>
+                    )}
+                    {triggerType === "product" && (
+                      <div style={{ marginTop: 4 }}>
+                        <button type="button" className="b-btn b-btn-secondary" onClick={() => setTriggerPickerOpen(true)}>
+                          Select trigger products
+                        </button>
+                        <SelectedProductsList gids={triggerProducts} onRemove={(gid) => setTriggerProducts(triggerProducts.filter((id) => id !== gid))} />
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -549,28 +579,12 @@ export default function NewUpsellOfferPage() {
                     >
                       Select products
                     </button>
-                    <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
-                      {upsellProducts.length} products selected
-                    </span>
+                    <SelectedProductsList gids={upsellProducts} onRemove={(gid) => setUpsellProducts(upsellProducts.filter((id) => id !== gid))} />
                   </div>
-
-                  {/* Checkout: limited qty checkbox */}
-                  {isCheckout && (
-                    <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, marginTop: 10 }}>
-                      <input type="checkbox" />
-                      <div>
-                        <div className="b-checkbox-label">A limited number of upsell products can be added.</div>
-                      </div>
-                    </label>
-                  )}
 
                   {/* FBT: set qty for current item */}
                   {isFbt && (
                     <>
-                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, marginTop: 10 }}>
-                        <input type="checkbox" />
-                        <div className="b-checkbox-label">Set quantity for current item</div>
-                      </label>
                       <div style={{ marginTop: 10 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>
                           Upsell product quantity:
@@ -885,6 +899,9 @@ export default function NewUpsellOfferPage() {
         </div>
 
         {/* ── Footer ── */}
+        <div style={{ fontSize: 12, color: "var(--text-sub)", textAlign: "right", paddingBottom: 6 }}>
+          <strong>Save draft</strong> — saves without activating. <strong>Publish</strong> — activates immediately (or at the scheduled start time).
+        </div>
         <div className="rd-style-031">
           <button
             type="button" className="b-btn b-btn-secondary"
@@ -910,9 +927,30 @@ export default function NewUpsellOfferPage() {
         selectedIds={upsellProducts}
         onSelect={(gids) => setUpsellProducts(gids)}
       />
+      <ProductPicker
+        open={triggerPickerOpen}
+        onClose={() => setTriggerPickerOpen(false)}
+        title="Select trigger products"
+        allowMultiple
+        selectedIds={triggerProducts}
+        onSelect={(gids) => setTriggerProducts(gids)}
+      />
 
       {(showToast || actionData?.error) && (
         <Toast message={actionData?.error ?? toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+      )}
+
+      {blocker.state === "blocked" && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "var(--surface)", borderRadius: 10, padding: 24, maxWidth: 380, width: "90%", boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>Discard unsaved changes?</div>
+            <div style={{ fontSize: 13, color: "var(--text-sub)", marginBottom: 20 }}>You have unsaved changes. If you leave, your changes will be lost.</div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button type="button" className="b-btn b-btn-secondary" onClick={() => blocker.reset()}>Keep editing</button>
+              <button type="button" className="b-btn" style={{ background: "var(--error, #e53e3e)", color: "#fff" }} onClick={() => blocker.proceed()}>Discard</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

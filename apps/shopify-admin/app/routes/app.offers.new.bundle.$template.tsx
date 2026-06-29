@@ -5,7 +5,9 @@
  *         /app/offers/new/bundle/bundle-page    → Bundle Page wizard
  */
 
+import { useEffect } from "react";
 import { Form, useActionData, useNavigate, useNavigation, redirect, useParams } from "react-router";
+import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -19,6 +21,7 @@ import {
 } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
+import { SelectedProductsList } from "../components/SelectedProductsList.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -261,6 +264,10 @@ export default function NewBundleOfferPage() {
   const navigate = useNavigate();
   const { state } = useNavigation();
   const isSubmitting = state !== "idle";
+  const { markDirty, blocker } = useUnsavedGuard(isSubmitting);
+  useEffect(() => {
+    if (actionData?.error) window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [actionData?.error]);
   const { template: templateSlug = "classic-bundle" } = useParams<{ template: string }>();
 
   const bundleTypeFromSlug = (SLUG_TO_TEMPLATE[templateSlug] ?? "classic") as "classic" | "mix_match" | "bundle_page";
@@ -374,7 +381,7 @@ export default function NewBundleOfferPage() {
         </div>
       </div>
 
-      <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
+      <Form method="POST" onChange={markDirty} onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
         {/* Hidden fields */}
         <input type="hidden" name="bundleType" value={bundleTypeFromSlug} />
         <input type="hidden" name="classicProducts" value={JSON.stringify(conditionProductsForClassic)} />
@@ -390,7 +397,7 @@ export default function NewBundleOfferPage() {
           </>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: 20, alignItems: "start" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
           {/* ── Left column ── */}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -435,7 +442,7 @@ export default function NewBundleOfferPage() {
 
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <div>
-                        <label className="b-label" htmlFor="startsAt">Start time</label>
+                        <label className="b-label" htmlFor="startsAt">Start time <span style={{ fontWeight: 400, color: "var(--text-sub)", fontSize: 11 }}>(your local timezone)</span></label>
                         <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                           value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                       </div>
@@ -487,9 +494,7 @@ export default function NewBundleOfferPage() {
                         onClick={() => setClassicPickerOpen(true)}>
                         Select products
                       </button>
-                      <span style={{ marginLeft: 10, fontSize: 13, color: "var(--text-sub)" }}>
-                        {conditionProductsForClassic.length} products selected
-                      </span>
+                      <SelectedProductsList gids={conditionProductsForClassic} onRemove={(gid) => setConditionProductsForClassic(conditionProductsForClassic.filter((id) => id !== gid))} />
                     </div>
                   </div>
                 </div>
@@ -524,34 +529,6 @@ export default function NewBundleOfferPage() {
                         </div>
                       </div>
                     </div>
-                  </div>
-                </div>
-
-                {/* Producto para el paquete */}
-                <div className="b-card">
-                  <div className="b-card-header">Bundle product</div>
-                  <div className="b-card-body">
-                    <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-                      <input type="checkbox" name="createBundleProduct" />
-                      <div>
-                        <div className="b-checkbox-label">Create a product for this bundle</div>
-                        <div className="b-checkbox-help">This feature will create a product with its own product page.</div>
-                      </div>
-                    </label>
-                  </div>
-                </div>
-
-                {/* Discount code */}
-                <div className="b-card">
-                  <div className="b-card-header">Discount code</div>
-                  <div className="b-card-body">
-                    <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-                      <input type="checkbox" name="customDiscountCode" />
-                      <div>
-                        <div className="b-checkbox-label">Add a custom discount code</div>
-                        <div className="b-checkbox-help">If unchecked, Bogos will apply its default discount code automatically.</div>
-                      </div>
-                    </label>
                   </div>
                 </div>
 
@@ -609,7 +586,7 @@ export default function NewBundleOfferPage() {
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <div>
-                        <label className="b-label" htmlFor="startsAt">Start time</label>
+                        <label className="b-label" htmlFor="startsAt">Start time <span style={{ fontWeight: 400, color: "var(--text-sub)", fontSize: 11 }}>(your local timezone)</span></label>
                         <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                           value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                       </div>
@@ -626,19 +603,6 @@ export default function NewBundleOfferPage() {
                 <div className="b-card">
                   <div className="b-card-header">Mix items</div>
                   <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      <label className="b-checkbox-row" htmlFor="bundle-mix-one-list" style={{ cursor: "pointer", gap: 10 }}>
-                        <input id="bundle-mix-one-list" aria-label="Mix items from a product list" type="radio" name="mixMode" value="one_list"
-                          style={{ accentColor: "var(--bundle-color)", width: 15, height: 15 }} />
-                        <span className="b-checkbox-label">Mix items from a product list</span>
-                      </label>
-                      <label className="b-checkbox-row" htmlFor="bundle-mix-per-item" style={{ cursor: "pointer", gap: 10 }}>
-                        <input id="bundle-mix-per-item" aria-label="Each Mix item contains a different product list" type="radio" name="mixMode" value="per_item" defaultChecked
-                          style={{ accentColor: "var(--bundle-color)", width: 15, height: 15 }} />
-                        <span className="b-checkbox-label">Each Mix item contains a different product list.</span>
-                      </label>
-                    </div>
-
                     {mixItems.map((item, i) => (
                       <div key={item.id} className="b-card" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
                         <div className="b-card-header" style={{ fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -668,9 +632,14 @@ export default function NewBundleOfferPage() {
                               }}>
                               Select products
                             </button>
-                            <span style={{ marginLeft: 10, fontSize: 13, color: "var(--text-sub)" }}>
-                              {item.products.length} products selected
-                            </span>
+                            <SelectedProductsList
+                              gids={item.products}
+                              onRemove={(gid) => {
+                                const next = [...mixItems];
+                                next[i] = { ...next[i]!, products: item.products.filter((id) => id !== gid) };
+                                setMixItems(next);
+                              }}
+                            />
                           </div>
                           <label className="b-checkbox-row" htmlFor={`mix-item-${item.id}-use-min-qty`} style={{ cursor: "pointer", gap: 10 }}>
                             <input id={`mix-item-${item.id}-use-min-qty`} aria-label={`Mix item ${i + 1} set minimum quantity`} type="checkbox"
@@ -797,20 +766,6 @@ export default function NewBundleOfferPage() {
                   </div>
                 </div>
 
-                {/* Discount code */}
-                <div className="b-card">
-                  <div className="b-card-header">Discount code</div>
-                  <div className="b-card-body">
-                    <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
-                      <input type="checkbox" name="customDiscountCode" />
-                      <div>
-                        <div className="b-checkbox-label">Add a custom discount code</div>
-                        <div className="b-checkbox-help">If unchecked, Bogos will apply its default discount code automatically.</div>
-                      </div>
-                    </label>
-                  </div>
-                </div>
-
                 {/* Combinaciones */}
                 <div className="b-card">
                   <div className="b-card-header">This offer can be combined with</div>
@@ -868,7 +823,7 @@ export default function NewBundleOfferPage() {
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <div>
-                        <label className="b-label" htmlFor="startsAt">Start time</label>
+                        <label className="b-label" htmlFor="startsAt">Start time <span style={{ fontWeight: 400, color: "var(--text-sub)", fontSize: 11 }}>(your local timezone)</span></label>
                         <input id="startsAt" className="b-input" type="datetime-local" name="startsAt"
                           value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
                       </div>
@@ -1022,6 +977,9 @@ export default function NewBundleOfferPage() {
         </div>
 
         {/* ── Footer ── */}
+        <div style={{ fontSize: 12, color: "var(--text-sub)", textAlign: "right", paddingBottom: 6 }}>
+          <strong>Save draft</strong> — saves without activating. <strong>Publish</strong> — activates immediately (or at the scheduled start time).
+        </div>
         <div className="rd-style-031">
           <button type="button" className="b-btn b-btn-secondary"
             onClick={() => void navigate("/app/offers")}>
@@ -1069,6 +1027,19 @@ export default function NewBundleOfferPage() {
 
       {(showToast || actionData?.error) && (
         <Toast message={actionData?.error ?? toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+      )}
+
+      {blocker.state === "blocked" && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "var(--surface)", borderRadius: 10, padding: 24, maxWidth: 380, width: "90%", boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>Discard unsaved changes?</div>
+            <div style={{ fontSize: 13, color: "var(--text-sub)", marginBottom: 20 }}>You have unsaved changes. If you leave, your changes will be lost.</div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button type="button" className="b-btn b-btn-secondary" onClick={() => blocker.reset()}>Keep editing</button>
+              <button type="button" className="b-btn" style={{ background: "var(--error, #e53e3e)", color: "#fff" }} onClick={() => blocker.proceed()}>Discard</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

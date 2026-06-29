@@ -62,7 +62,6 @@ export function ProductPicker({
 
   return (
     <ProductPickerContent
-      key={`${props.mode ?? "variants"}:${selectedIds.join("|")}`}
       open={open}
       selectedIds={selectedIds}
       {...props}
@@ -92,6 +91,11 @@ function ProductPickerContent({
   const setQuery = createFieldSetter(setPickerField, "query");
   const setSelected = createFieldSetter(setPickerField, "selected");
   const setExpandedProducts = createFieldSetter(setPickerField, "expandedProducts");
+
+  // Sync selection from parent whenever the modal opens
+  useEffect(() => {
+    if (open) setSelected(new Set(selectedIds));
+  }, [open]);
 
   // Fetch products from search API. If the cache has never been synced, trigger sync first.
   const fetchProducts = useCallback(async (q: string) => {
