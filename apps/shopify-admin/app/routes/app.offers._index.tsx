@@ -248,6 +248,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return null;
 };
 
+/** A plain top-level `<a href>` navigation to an authenticated route can land
+ * on Shopify's bounce-page redirect instead of the file, since embedded-app
+ * auth expects the session token as a header, not just cookies. Fetching in
+ * JS (where App Bridge attaches that header) and saving the blob avoids it. */
+async function downloadOffersCsv() {
+  try {
+    const response = await fetch("/api/offers/export");
+    if (!response.ok) throw new Error(`Export failed: ${response.status}`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `all-offers-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error("[offers-export] download failed", err);
+  }
+}
+
 function formatDate(iso: string | null) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -482,9 +504,9 @@ export default function OffersPage() {
       <div className="b-page-header">
         <h1 className="b-page-title">All Offers</h1>
         <div className="b-page-actions">
-          <a href="/api/offers/export" className="b-btn b-btn-secondary">
+          <button type="button" className="b-btn b-btn-secondary" onClick={() => void downloadOffersCsv()}>
             Export CSV
-          </a>
+          </button>
           <button type="button" className="b-btn b-btn-primary" onClick={openModal}>
             Create offer
           </button>
@@ -504,8 +526,8 @@ export default function OffersPage() {
           <div className="b-banner-body">
             <div className="b-banner-title">Cart integration</div>
             <p className="b-banner-text">
-              If you&apos;re using a custom cart drawer/XHR, BOGOS may need a larger integration.{" "}
-              <a href="mailto:support@secomapp.com" className="b-btn b-btn-plain" style={{ color: "var(--blue)", textDecoration: "underline" }}>Send us a message</a> for support.
+              If your theme uses a custom cart drawer or a custom cart API, Promo Engine may need
+              additional integration work to detect cart changes correctly.
             </p>
           </div>
           <button type="button" className="b-banner-close" onClick={dismissBanner} aria-label="Dismiss">×</button>

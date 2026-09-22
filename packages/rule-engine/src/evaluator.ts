@@ -207,7 +207,6 @@ export async function evaluate(
                   _promo_engine_offer_id: offer.id,
                   _promo_engine_offer_version: String(offer.version),
                   _promo_engine_reward_id: reward.id,
-                  _promo_engine_hash: "", // populated by server before sending to client
                 },
               });
             } else if (existingQty > qty) {
@@ -291,6 +290,23 @@ export async function evaluate(
 
   // ── Step 3: Aggregate all cart actions ────────────────────────────────────
 
+  // Gift lines belonging to an offer that no longer exists in ctx.offers at
+  // all (paused, archived, deleted) — the offer-specific disqualified/blocked
+  // handling below only covers offers that ARE still being evaluated.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const activeOfferIds = new Set(ctx.offers.map((offer) => offer.id));
+  const orphanedGiftActions: CartAction[] = extractGiftLines(input.cart)
+    .filter((g) => !activeOfferIds.has(g.offerId))
+    .map((g) => ({
+      action: "remove_line" as const,
+      lineKey: g.lineKey,
+      // offerId comes from a cart line property — never trust it as a schema-
+      // valid uuid without checking, since the field is attacker-controllable.
+      offerId: UUID_RE.test(g.offerId) ? g.offerId : undefined,
+      variantId: g.variantId,
+      reason: "offer_no_longer_active",
+    }));
+
   const allCartActions: CartAction[] = [
     ...finalQualified.flatMap((o) => o.cartActions),
     // Include remove_line from disqualified offers to clean up stale gift lines
@@ -309,6 +325,7 @@ export async function evaluate(
           reason: "blocked_by_priority",
         }));
     }),
+    ...orphanedGiftActions,
   ];
 
   const codesToAdd = [...new Set(finalQualified.flatMap((o) => o.discountCodesToAdd))];
@@ -339,6 +356,9 @@ export async function evaluate(
     giftSlider,
     cartMessages,
     progressBars,
+    // Upsell offers need catalog pricing the pure evaluator doesn't have —
+    // the route layer enriches this from qualifiedOffers before responding.
+    upsells: [],
     warnings: [],
     evaluatedAt: now.toISOString(),
   };
@@ -385,6 +405,7 @@ function buildGiftSliderPayload(
         offerId: offer.id,
         title: selectableRewards[0]?.label ?? "Choose your gift",
         subtitle: null,
+        currencyCode: cart.currencyCode,
         selectableGifts,
         maxSelectableCount: Math.max(1, selectableRewards[0]?.quantity ?? 1),
         alreadySelectedCount: selectableGifts.filter((gift) => gift.isSelected).length,
@@ -392,6 +413,14 @@ function buildGiftSliderPayload(
     }
   }
   return null;
+}
+
+function formatMoney(cents: number, currencyCode: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: currencyCode }).format(cents / 100);
+  } catch {
+    return `${(cents / 100).toFixed(2)} ${currencyCode}`;
+  }
 }
 
 function buildProgressBars(
@@ -428,7 +457,7 @@ function buildProgressBars(
       progressPercent,
       messageBeforeGoal: targetQuantity
         ? `Add ${remaining} more item(s) to unlock this offer.`
-        : `Spend ${remaining} more cents to unlock this offer.`,
+        : `Spend ${formatMoney(remaining, cart.currencyCode)} more to unlock this offer.`,
       messageAfterGoal: "Offer unlocked.",
       isGoalReached,
     }];

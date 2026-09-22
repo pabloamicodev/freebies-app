@@ -21,6 +21,18 @@ export interface PublishValidationResult {
   error?: string;
 }
 
+const FUNCTION_CONDITION_TYPES = new Set([
+  "cart_value",
+  "cart_quantity",
+  "specific_product",
+  "pack_of_products",
+  "subscription_product_type",
+  "order_history_total_orders",
+  "order_history_total_spent",
+]);
+
+const FUNCTION_NUMERIC_OPERATORS = new Set(["eq", "gt", "gte", "lt", "lte"]);
+
 function firstIssueMessage(result: { success: boolean; error?: { issues?: Array<{ message: string }> } }): string {
   return result.error?.issues?.[0]?.message ?? "Invalid offer configuration.";
 }
@@ -56,6 +68,44 @@ export async function validateOffersPublishable(db: Db, shopId: string, offerIds
     }
     if (rewards.length === 0) {
       return { ok: false, error: `Cannot publish "${offer.internalName}": add at least one reward.` };
+    }
+
+    if (rewards.some((reward) => reward.rewardType === "shipping_discount")) {
+      const unsupportedShippingCondition = conditions.find(
+        (condition) =>
+          condition.isEnabled &&
+          condition.conditionType !== "cart_value" &&
+          condition.conditionType !== "subscription_product_type",
+      );
+      if (unsupportedShippingCondition) {
+        return {
+          ok: false,
+          error: `Cannot publish "${offer.internalName}": shipping discounts do not yet support the ${unsupportedShippingCondition.conditionType} condition in Shopify Functions.`,
+        };
+      }
+    }
+
+    const unsupportedFunctionCondition = conditions.find(
+      (condition) => condition.isEnabled && !FUNCTION_CONDITION_TYPES.has(condition.conditionType),
+    );
+    if (unsupportedFunctionCondition) {
+      return {
+        ok: false,
+        error: `Cannot publish "${offer.internalName}": ${unsupportedFunctionCondition.conditionType} is evaluated by the storefront but is not yet enforced by Shopify Functions.`,
+      };
+    }
+
+    const unsupportedCustomerOperator = conditions.find(
+      (condition) =>
+        condition.isEnabled &&
+        (condition.conditionType === "order_history_total_orders" || condition.conditionType === "order_history_total_spent") &&
+        !FUNCTION_NUMERIC_OPERATORS.has(condition.operator),
+    );
+    if (unsupportedCustomerOperator) {
+      return {
+        ok: false,
+        error: `Cannot publish "${offer.internalName}": ${unsupportedCustomerOperator.operator} is not a supported customer-history operator in Shopify Functions.`,
+      };
     }
 
     for (const condition of conditions.filter((item) => item.isEnabled)) {

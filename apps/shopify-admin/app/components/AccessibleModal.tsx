@@ -26,6 +26,16 @@ export function AccessibleModal({ ariaLabel, children, className = "", onClose, 
   useEffect(() => {
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
+    // This dialog doesn't call showModal() (it manages its own overlay/focus
+    // trap in JS/CSS instead), which means content behind it is never marked
+    // inert — a screen reader can still read and interact with the page
+    // underneath. Mark every other top-level element inert while open.
+    const root = modalRef.current?.closest(".b-modal-overlay")?.parentElement;
+    const siblings = root
+      ? Array.from(root.children).filter((el) => !el.contains(modalRef.current))
+      : [];
+    for (const el of siblings) el.setAttribute("inert", "");
+
     const focusable = modalRef.current?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
     focusable?.focus();
 
@@ -63,6 +73,7 @@ export function AccessibleModal({ ariaLabel, children, className = "", onClose, 
 
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
+      for (const el of siblings) el.removeAttribute("inert");
       previousFocusRef.current?.focus();
     };
   }, []);

@@ -1,4 +1,11 @@
 packages:
   - "apps/*"
   - "packages/*"
-  - "workers/*"
+  - "extensions/*"
+
+overrides:
+  ioredis: 5.6.1
+  bullmq: 5.78.1
+  esbuild: 0.28.1
+  "@vercel/static-config>ajv": 8.20.0
+  "@shopify/shopify-api": ^13.0.0

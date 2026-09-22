@@ -10,6 +10,10 @@ export const shops = pgTable("shops", {
   /** AES-256-GCM encrypted access token — never stored in plaintext. */
   accessTokenEncrypted: text("access_token_encrypted").notNull(),
   storefrontPublicToken: text("storefront_public_token"),
+  /** GID of the shop's automatic app discount (discountAutomaticAppCreate) — the
+   * discount node whose metafield holds the compiled offer config the Discount
+   * Function reads. Created once in afterAuth; null until that runs. */
+  discountId: text("discount_id"),
   planName: text("plan_name"),
   currencyCode: text("currency_code").notNull(),
   timezone: text("timezone").notNull(),

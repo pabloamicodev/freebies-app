@@ -1,0 +1,17 @@
+api_version = "2026-04"
+
+[[extensions]]
+name = "Promo Engine Cart Validation"
+handle = "promo-engine-cart-validation"
+type = "function"
+uid = "0bfc8576-81cd-48b3-b315-c1dc3ec25946"
+
+  [[extensions.targeting]]
+  target = "cart.validations.generate.run"
+  input_query = "input.graphql"
+  export = "run"
+
+  [extensions.build]
+  command = "cargo build --target=wasm32-wasip1 --release"
+  path = "target/wasm32-wasip1/release/promo-engine-cart-validation.wasm"
+  watch = ["src/**/*.rs"]

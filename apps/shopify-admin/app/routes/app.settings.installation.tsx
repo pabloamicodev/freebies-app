@@ -93,7 +93,7 @@ const APP_BLOCKS = [
 ];
 
 export default function InstallationPage() {
-  const { shopDomain, themeEditorUrl, appEmbedEnabled } = useLoaderData<typeof loader>();
+  const { themeEditorUrl, appEmbedEnabled } = useLoaderData<typeof loader>();
 
   return (
     <div className="b-page">
@@ -282,44 +282,10 @@ export default function InstallationPage() {
         <div className="b-card">
           <div className="b-card-header">Headless / Hydrogen Integration</div>
           <div className="b-card-body">
-            <p style={{ margin: "0 0 12px" }}>
-              For headless storefronts, install the{" "}
-              <code
-                style={{
-                  background: "var(--border-light)",
-                  padding: "2px 6px",
-                  borderRadius: "var(--r-sm)",
-                  fontSize: 12,
-                }}
-              >
-                @promo/headless-sdk
-              </code>{" "}
-              package and use the{" "}
-              <code
-                style={{
-                  background: "var(--border-light)",
-                  padding: "2px 6px",
-                  borderRadius: "var(--r-sm)",
-                  fontSize: 12,
-                }}
-              >
-                createPromoClient
-              </code>{" "}
-              function with your store domain and public key.
+            <p style={{ margin: 0 }}>
+              Headless and Hydrogen storefronts aren&apos;t supported yet — Promo Engine currently
+              requires an Online Store theme with the app embed enabled.
             </p>
-            <pre
-              className="rd-style-034"
-            >
-{`import { createPromoClient } from '@promo/headless-sdk';
-import { usePromoOffers } from '@promo/headless-sdk/react';
-
-export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
-
-const client = createPromoClient({
-  storeDomain: '${shopDomain}',
-  publicKey: 'YOUR_PUBLIC_KEY',
-});`}
-            </pre>
           </div>
         </div>
 
@@ -380,11 +346,8 @@ const client = createPromoClient({
                   Still having issues?
                 </p>
                 <p className="b-text-sub b-text-sm" style={{ margin: 0 }}>
-                  Contact our support team via the chat widget or email{" "}
-                  <a href="mailto:support@bogos.io" className="b-btn b-btn-plain" style={{ fontSize: 13 }}>
-                    support@bogos.io
-                  </a>
-                  . Include your shop domain and a brief description of the issue.
+                  Check the Error Logs page, or contact the development team with the shop domain and
+                  a brief description of the issue.
                 </p>
               </div>
 

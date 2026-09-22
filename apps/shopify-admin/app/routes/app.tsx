@@ -121,6 +121,7 @@ export default function AppLayout() {
           <a href="/app/settings">Settings</a>
           <a href="/app/translation">Translation</a>
           <a href="/app/integrations">Integrations</a>
+          <a href="/app/subscription-pricing">Subscription Pricing</a>
           <a href="/app/logs">Error Logs</a>
         </NavMenu>
         <Outlet />

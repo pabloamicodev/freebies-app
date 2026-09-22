@@ -14,11 +14,39 @@ import { AjaxCartAdapter, type CartData } from "./cart-adapter.js";
 import { debounce, AbortableRequest } from "./debounce.js";
 import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
 import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
+import { initGiftSlider } from "./widgets/gift-slider.js";
+import { initFbtWidget } from "./widgets/fbt.js";
 import type { EvaluationResult, CartAction } from "./types.js";
 
 const EVAL_DEBOUNCE_MS = 300;
 const EVAL_ENDPOINT = "/apps/promo-engine/evaluate";
 const SESSION_KEY = "promo_engine_session_id";
+
+/** crypto.randomUUID() requires a secure context and isn't present on older
+ * Safari — fall back to a manual UUID v4 rather than let init() throw. */
+function generateUuid(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+/** Shared by the runtime instance and by widgets (e.g. the gift slider) that
+ * mount independently of PromoEngineRuntime but need the same session. */
+function getOrCreateSessionId(): string {
+  try {
+    let id = sessionStorage.getItem(SESSION_KEY);
+    if (!id) {
+      id = generateUuid();
+      sessionStorage.setItem(SESSION_KEY, id);
+    }
+    return id;
+  } catch {
+    return generateUuid();
+  }
+}
 
 interface RuntimeConfig {
   shopDomain: string;
@@ -40,7 +68,7 @@ class PromoEngineRuntime {
 
   constructor(config: RuntimeConfig) {
     this.config = config;
-    this.sessionId = this.getOrCreateSessionId();
+    this.sessionId = getOrCreateSessionId();
     this.debouncedEvaluate = debounce(this.triggerEvaluation.bind(this), EVAL_DEBOUNCE_MS);
   }
 
@@ -55,25 +83,12 @@ class PromoEngineRuntime {
     type ShopifyGlobal = { theme?: { schema_name?: string; name?: string }; shop?: string };
     const sh = (window as unknown as { Shopify?: ShopifyGlobal }).Shopify;
     const name = sh?.theme?.schema_name ?? sh?.theme?.name ?? "unknown";
-    console.info(`[PromoEngine] Theme detected: ${name}`);
+    this.log(`[PromoEngine] Theme detected: ${name}`);
 
     // Dawn: exposes <cart-drawer> web component → section rendering works natively
     // Others: we rely on patchFetch to capture the theme's own section IDs at runtime
     const hasDawnDrawer = !!document.querySelector("cart-drawer");
-    if (hasDawnDrawer) console.info("[PromoEngine] Cart component: cart-drawer web component (Dawn-style)");
-  }
-
-  private getOrCreateSessionId(): string {
-    try {
-      let id = sessionStorage.getItem(SESSION_KEY);
-      if (!id) {
-        id = crypto.randomUUID();
-        sessionStorage.setItem(SESSION_KEY, id);
-      }
-      return id;
-    } catch {
-      return crypto.randomUUID();
-    }
+    if (hasDawnDrawer) this.log("[PromoEngine] Cart component: cart-drawer web component (Dawn-style)");
   }
 
   private listenForCartChanges(): void {
@@ -91,6 +106,10 @@ class PromoEngineRuntime {
 
   private patchFetch(): void {
     const CART_MUTATE_RE = /\/cart\/(add|change|update)(\.js)?(\?|$)/;
+    // Only /cart* requests are worth cloning+parsing — every other fetch on
+    // the page (product data, app pixels, third-party scripts) was being
+    // intercepted and JSON-parsed for nothing.
+    const CART_RELATED_RE = /\/cart(\.js|\/(add|change|update)(\.js)?)?(\?|$)/;
     this.savedFetch = window.fetch.bind(window);
     const originalFetch = this.savedFetch;
 
@@ -98,10 +117,11 @@ class PromoEngineRuntime {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const method = (init?.method ?? "GET").toUpperCase();
       const isCartMutation = method === "POST" && CART_MUTATE_RE.test(url);
+      const isCartRelated = CART_RELATED_RE.test(url);
 
       const response = await originalFetch(input, init);
 
-      if (response.ok) {
+      if (response.ok && isCartRelated) {
         // Spy on any response that carries rendered section HTML.
         // Themes include sections in add/update responses (or in separate GET /cart?sections=…).
         // We capture the section IDs so refreshCartUI can reuse them later.
@@ -125,7 +145,7 @@ class PromoEngineRuntime {
         }).catch(() => {});
 
         if (isCartMutation && !this.refreshGuard) {
-          console.info(`[PromoEngine] Cart mutation detected (${url}) — scheduling evaluation`);
+          this.log(`[PromoEngine] Cart mutation detected (${url}) — scheduling evaluation`);
           this.debouncedEvaluate.call();
         }
       }
@@ -223,7 +243,7 @@ class PromoEngineRuntime {
               updated++;
             }
             if (updated > 0) {
-              console.info(`[PromoEngine] Cart UI refreshed via section rendering (${updated} element(s))`);
+              this.log(`[PromoEngine] Cart UI refreshed via section rendering (${updated} element(s))`);
               return;
             }
           }
@@ -259,7 +279,7 @@ class PromoEngineRuntime {
       return;
     }
 
-    console.info("[PromoEngine] Evaluating cart —", cart.items.map(i => `${i.title} ×${i.quantity}`).join(", ") || "empty", `| subtotal: $${(cart.total_price / 100).toFixed(2)}`);
+    this.log("[PromoEngine] Evaluating cart —", cart.items.map(i => `${i.title} ×${i.quantity}`).join(", ") || "empty", `| subtotal: $${(cart.total_price / 100).toFixed(2)}`);
 
     const signal = this.evaluationAbort.start();
 
@@ -311,9 +331,9 @@ class PromoEngineRuntime {
 
       const actions = Array.isArray(result.cartActions) ? result.cartActions : [];
       if (actions.length > 0) {
-        console.info("[PromoEngine] Cart actions to apply:", actions.map(a => `${a.action}(${a.variantId ?? a.lineKey ?? ""}×${a.quantity ?? 0})`).join(", "));
+        this.log("[PromoEngine] Cart actions to apply:", actions.map(a => `${a.action}(${a.variantId ?? a.lineKey ?? ""}×${a.quantity ?? 0})`).join(", "));
       } else {
-        console.info("[PromoEngine] Evaluation complete — no cart actions");
+        this.log("[PromoEngine] Evaluation complete — no cart actions");
       }
 
       await this.applyCartActions(actions);
@@ -340,7 +360,7 @@ class PromoEngineRuntime {
           case "add_line": {
             if (!action.variantId) break;
             const legacyId = parseInt(action.variantId.split("/").pop() ?? action.variantId, 10);
-            console.info(`[PromoEngine] → add_line variantId=${action.variantId} qty=${action.quantity ?? 1}`);
+            this.log(`[PromoEngine] → add_line variantId=${action.variantId} qty=${action.quantity ?? 1}`);
             await AjaxCartAdapter.addLines([{
               variantId: String(legacyId),
               quantity: action.quantity ?? 1,
@@ -359,7 +379,7 @@ class PromoEngineRuntime {
           }
 
           case "update_line": {
-            console.info(`[PromoEngine] → update_line key=${action.lineKey ?? "?"} qty=${action.quantity ?? 1}`);
+            this.log(`[PromoEngine] → update_line key=${action.lineKey ?? "?"} qty=${action.quantity ?? 1}`);
             const freshCart = await fetchFreshCart();
             const currentLine = freshCart.items.find((item) => item.key === action.lineKey)
               ?? (action.offerId ? findGiftLineByOfferId(freshCart, action.offerId) : null);
@@ -386,7 +406,7 @@ class PromoEngineRuntime {
           }
 
           case "remove_line": {
-            console.info(`[PromoEngine] → remove_line key=${action.lineKey ?? "?"} reason=${action.reason ?? "offer_disqualified"}`);
+            this.log(`[PromoEngine] → remove_line key=${action.lineKey ?? "?"} reason=${action.reason ?? "offer_disqualified"}`);
             const freshCart = await fetchFreshCart();
             const currentLine = freshCart.items.find((item) => item.key === action.lineKey)
               ?? (action.offerId ? findGiftLineByOfferId(freshCart, action.offerId) : null);
@@ -480,6 +500,9 @@ declare global {
   interface Window {
     PromoEngine?: PromoEngineRuntime["api"];
     __promoEngineConfig?: RuntimeConfig;
+    // Called directly by theme blocks (fbt.liquid) that mount a widget into a
+    // specific container rather than reacting to a runtime-wide event.
+    initFbtWidget?: typeof initFbtWidget;
   }
 }
 
@@ -491,6 +514,10 @@ function initRuntime() {
   }
   const runtime = new PromoEngineRuntime(config);
   window.PromoEngine = runtime.api;
+  // Exposed as its own global (not nested under PromoEngine) because blocks
+  // like fbt.liquid poll for `window.initFbtWidget` directly.
+  window.initFbtWidget = initFbtWidget;
+  initGiftSlider(getOrCreateSessionId());
   runtime.init();
 }
 

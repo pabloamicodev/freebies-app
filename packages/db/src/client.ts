@@ -11,7 +11,10 @@ export function getDb() {
     if (!databaseUrl) throw new Error("DATABASE_URL environment variable is required");
 
     _sql = postgres(databaseUrl, {
-      max: 10,
+      // Kept low deliberately: each serverless function instance holds its
+      // own pool, and Neon's pooler has a hard ceiling shared across every
+      // concurrent instance — a high per-instance max exhausts it under load.
+      max: 3,
       idle_timeout: 20,
       connect_timeout: 10,
       ssl: "require",

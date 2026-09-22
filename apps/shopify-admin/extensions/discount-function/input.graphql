@@ -1,0 +1,53 @@
+query DiscountFunctionInput {
+  cart {
+    lines {
+      id
+      quantity
+      cost {
+        amountPerQuantity {
+          amount
+          currencyCode
+        }
+        subtotalAmount {
+          amount
+          currencyCode
+        }
+      }
+      merchandise {
+        ... on ProductVariant {
+          id
+          product {
+            id
+            tags
+            vendor
+            productType
+          }
+        }
+      }
+      attributes {
+        key
+        value
+      }
+    }
+    buyerIdentity {
+      customer {
+        tags
+      }
+      countryCode
+    }
+    discountCodes {
+      code
+    }
+    cost {
+      subtotalAmount {
+        amount
+        currencyCode
+      }
+    }
+  }
+  discountNode {
+    metafield(namespace: "promo_engine", key: "function_config") {
+      value
+    }
+  }
+}

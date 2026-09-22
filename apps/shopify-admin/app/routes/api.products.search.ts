@@ -35,7 +35,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const cache = { lastSyncedAt: lastSynced[0]?.syncedAt?.toISOString() ?? null };
 
     // When ids are variant GIDs, look up via variantCache first to get product GIDs
-    const areVariantIds = ids && ids.length > 0 && ids[0].includes("/ProductVariant/");
+    const areVariantIds = ids && ids.length > 0 && (ids[0]?.includes("/ProductVariant/") ?? false);
 
     let resolvedProductGidsFromVariants: string[] = [];
     let selectedVariantGids: Set<string> | null = null;

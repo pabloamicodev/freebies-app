@@ -1,0 +1,22 @@
+api_version = "2026-04"
+
+[[extensions]]
+name = "Promo Engine Discount"
+handle = "promo-engine-discount"
+type = "function"
+uid = "e1779323-ec7a-4f39-ba24-b562345ed2b3"
+
+  [[extensions.targeting]]
+  target = "cart.lines.discounts.generate.run"
+  input_query = "src/cart_lines_discounts_generate_run.graphql"
+  export = "cart_lines_discounts_generate_run"
+
+  [[extensions.targeting]]
+  target = "cart.delivery-options.discounts.generate.run"
+  input_query = "src/cart_delivery_options_discounts_generate_run.graphql"
+  export = "cart_delivery_options_discounts_generate_run"
+
+  [extensions.build]
+  command = "cargo build --target=wasm32-wasip1 --release"
+  path = "target/wasm32-wasip1/release/promo-engine-discount-function.wasm"
+  watch = ["src/**/*.rs"]

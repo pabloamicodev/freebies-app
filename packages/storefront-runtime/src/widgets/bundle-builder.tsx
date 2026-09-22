@@ -141,7 +141,6 @@ function BundleBuilderComponent({
               _promo_engine_bundle_id: config.bundleId,
               _promo_engine_bundle_step_id: stepId,
               _promo_engine_bundle_title: config.title,
-              _promo_engine_hash: "",
             },
           });
         }

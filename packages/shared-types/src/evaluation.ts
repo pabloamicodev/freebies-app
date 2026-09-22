@@ -42,6 +42,7 @@ export const GiftSliderPayloadSchema = z.object({
   offerId: z.string().uuid(),
   title: z.string(),
   subtitle: z.string().nullable(),
+  currencyCode: z.string().length(3),
   selectableGifts: z.array(z.object({
     variantId: z.string(),
     productId: z.string(),
@@ -103,6 +104,29 @@ export const EvaluatedOfferSchema = z.object({
 });
 export type EvaluatedOffer = z.infer<typeof EvaluatedOfferSchema>;
 
+export const UpsellProductSchema = z.object({
+  variantId: z.string(),
+  productId: z.string(),
+  title: z.string(),
+  variantTitle: z.string().nullable(),
+  imageUrl: z.string().nullable(),
+  originalPriceCents: z.number().int().nonnegative(),
+  discountedPriceCents: z.number().int().nonnegative(),
+  isAvailable: z.boolean(),
+});
+export type UpsellProduct = z.infer<typeof UpsellProductSchema>;
+
+/** A qualified upsell offer, enriched with catalog pricing. Built at the route
+ * layer (not the pure evaluator) since it needs product-catalog data. */
+export const UpsellPayloadSchema = z.object({
+  offerId: z.string().uuid(),
+  product: UpsellProductSchema.nullable(),
+  message: z.string(),
+  buttonText: z.string(),
+  discountPercent: z.number().min(0).max(100),
+});
+export type UpsellPayload = z.infer<typeof UpsellPayloadSchema>;
+
 /** Full evaluation result — returned by rule engine and storefront API. */
 export const EvaluationResultSchema = z.object({
   requestId: z.string(),
@@ -117,6 +141,7 @@ export const EvaluationResultSchema = z.object({
   giftSlider: GiftSliderPayloadSchema.nullable(),
   cartMessages: z.array(CartMessagePayloadSchema),
   progressBars: z.array(ProgressBarPayloadSchema),
+  upsells: z.array(UpsellPayloadSchema),
   warnings: z.array(z.object({ code: z.string(), message: z.string() })),
   evaluatedAt: z.string().datetime(),
 });

@@ -7,11 +7,13 @@ export interface GiftLineInfo {
   offerId: string;
   rewardId: string;
   offerVersion: string;
-  hash: string;
   quantity: number;
 }
 
-/** Parse all gift lines from a normalized cart. */
+/** Parse all gift lines from a normalized cart. Tamper protection lives at
+ * checkout: the Discount Function only discounts a gift line whose variant is
+ * actually in that offer's configured gift list, regardless of what a buyer
+ * edits into these line properties client-side. */
 export function extractGiftLines(cart: NormalizedCart): GiftLineInfo[] {
   const gifts: GiftLineInfo[] = [];
   for (const line of cart.lines) {
@@ -21,7 +23,6 @@ export function extractGiftLines(cart: NormalizedCart): GiftLineInfo[] {
     const offerId = line.properties["_promo_engine_offer_id"] ?? "";
     const rewardId = line.properties["_promo_engine_reward_id"] ?? "";
     const offerVersion = line.properties["_promo_engine_offer_version"] ?? "";
-    const hash = line.properties["_promo_engine_hash"] ?? "";
 
     if (!offerId || !rewardId) continue;
 
@@ -31,7 +32,6 @@ export function extractGiftLines(cart: NormalizedCart): GiftLineInfo[] {
       offerId,
       rewardId,
       offerVersion,
-      hash,
       quantity: line.quantity,
     });
   }

@@ -2,7 +2,13 @@ import { getDb, shops, offers, offerConditions, offerRewards, offerCombinationPo
 import { eq, and, inArray } from "drizzle-orm";
 import { decryptToken } from "../token-crypto.server.js";
 import { shopifyGraphQL } from "../shopify-fetch.server.js";
-import { compileOfferConfig, estimateConfigSize, type CompiledFunctionConfig } from "./compile-config.js";
+import { ensureDiscountNode } from "../discount-node.server.js";
+import {
+  compileOfferConfig,
+  compileShippingOfferConfigs,
+  estimateConfigSize,
+  type CompiledFunctionConfig,
+} from "./compile-config.js";
 
 const METAFIELD_NAMESPACE = "promo_engine";
 const METAFIELD_KEY = "function_config";
@@ -20,6 +26,9 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
   if (!shopRow) return;
 
   const accessToken = await decryptToken(shopRow.accessTokenEncrypted);
+  // Self-heals if afterAuth's registration failed or hasn't run yet (e.g. the
+  // function was deployed after this shop installed the app).
+  const discountId = await ensureDiscountNode(shopId, shopDomain, accessToken);
 
   const activeOffers: Offer[] = await db
     .select()
@@ -27,7 +36,12 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")));
 
   if (activeOffers.length === 0) {
-    await pushMetafield(shopDomain, accessToken, { offers: [], version: "1", compiledAt: new Date().toISOString() });
+    await pushMetafield(shopDomain, accessToken, discountId, {
+      offers: [],
+      shippingOffers: [],
+      version: "1",
+      compiledAt: new Date().toISOString(),
+    });
     return;
   }
 
@@ -38,17 +52,24 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), inArray(offerCombinationPolicies.offerId, activeOfferIds))),
   ]);
 
-  const compiledOffers = activeOffers
+  const compiledByOffer = activeOffers
     .sort((a, b) => a.priority - b.priority)
     .map((offer, idx) => {
       const conditions = conditionRows.filter((c) => c.offerId === offer.id);
       const rewards = rewardRows.filter((r) => r.offerId === offer.id);
       const policy = policyRows.find((p) => p.offerId === offer.id) ?? null;
-      return compileOfferConfig(offer, conditions, rewards, policy, idx + 1);
+      return {
+        offer: compileOfferConfig(offer, conditions, rewards, policy, idx + 1),
+        shippingOffers: compileShippingOfferConfigs(offer, conditions, rewards),
+      };
     });
+
+  const compiledOffers = compiledByOffer.map((entry) => entry.offer);
+  const shippingOffers = compiledByOffer.flatMap((entry) => entry.shippingOffers);
 
   const config: CompiledFunctionConfig = {
     offers: compiledOffers,
+    shippingOffers,
     version: "1",
     compiledAt: new Date().toISOString(),
   };
@@ -58,7 +79,7 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     throw new Error(`Function config is ${sizeBytes}B, exceeding the safe ${MAX_METAFIELD_BYTES}B limit. Pause or simplify active offers before publishing.`);
   }
 
-  await pushMetafield(shopDomain, accessToken, config);
+  await pushMetafield(shopDomain, accessToken, discountId, config);
 
   for (const compiledOffer of compiledOffers) {
     await db
@@ -71,15 +92,9 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
 async function pushMetafield(
   shopDomain: string,
   accessToken: string,
+  ownerId: string,
   config: CompiledFunctionConfig,
 ): Promise<void> {
-  const shopData = await shopifyGraphQL<{ shop: { id: string } }>({
-    shopDomain,
-    accessToken,
-    query: `query { shop { id } }`,
-  });
-  const ownerId = shopData.shop.id;
-
   const data = await shopifyGraphQL<{ metafieldsSet: { userErrors: Array<{ message: string }> } }>({
     shopDomain,
     accessToken,

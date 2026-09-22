@@ -20,6 +20,7 @@ export interface EvaluationResult {
   giftSlider: GiftSliderPayload | null;
   cartMessages: CartMessagePayload[];
   progressBars: ProgressBarPayload[];
+  upsells: UpsellPayload[];
   warnings: Array<{ code: string; message: string }>;
   evaluatedAt: string;
 }
@@ -39,9 +40,29 @@ export interface GiftSliderPayload {
   offerId: string;
   title: string;
   subtitle: string | null;
+  currencyCode: string;
   selectableGifts: SelectableGift[];
   maxSelectableCount: number;
   alreadySelectedCount: number;
+}
+
+export interface UpsellProduct {
+  variantId: string;
+  productId: string;
+  title: string;
+  variantTitle: string | null;
+  imageUrl: string | null;
+  originalPriceCents: number;
+  discountedPriceCents: number;
+  isAvailable: boolean;
+}
+
+export interface UpsellPayload {
+  offerId: string;
+  product: UpsellProduct | null;
+  message: string;
+  buttonText: string;
+  discountPercent: number;
 }
 
 export interface SelectableGift {

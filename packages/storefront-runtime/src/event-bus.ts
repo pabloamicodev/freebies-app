@@ -40,17 +40,11 @@ export function on<T = unknown>(
   return () => window.removeEventListener(event, listener);
 }
 
-/** Emit a custom analytics event — picked up by Web Pixel extension. */
+/** Emit a custom analytics event — picked up by the Web Pixel extension via
+ * `analytics.subscribe("custom", ...)`. Shopify exposes this as
+ * `Shopify.analytics.publish`, not a bare `window.analytics`. */
 export function publishAnalytics(eventName: string, payload: Record<string, unknown>): void {
-  if (typeof window.analytics?.publish === "function") {
-    window.analytics.publish(eventName, payload);
-  }
-}
-
-declare global {
-  interface Window {
-    analytics?: {
-      publish: (name: string, payload: Record<string, unknown>) => void;
-    };
+  if (typeof window.Shopify?.analytics?.publish === "function") {
+    window.Shopify.analytics.publish(eventName, payload);
   }
 }

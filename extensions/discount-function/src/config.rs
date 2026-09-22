@@ -1,0 +1,182 @@
+use serde::Deserialize;
+use std::collections::HashMap;
+
+/// Compiled config — parsed from the `promo_engine.function_config` metafield.
+/// This is our own JSON shape (written by the offer-publisher worker), unrelated
+/// to Shopify's GraphQL schema, so it stays hand-written serde like before.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledConfig {
+    pub offers: Vec<CompiledOffer>,
+    /// Absent in configs published before shipping discounts existed — default
+    /// to an empty list rather than failing to parse the whole config.
+    #[serde(default)]
+    pub shipping_offers: Vec<CompiledShippingOffer>,
+}
+
+/// A tiered shipping discount, keyed by cart subtotal and (optionally) whether
+/// the cart contains a subscription line. Ported from hpn-scripts-migration's
+/// sitewide_free_shipping / landing_free_shipping rules — ../hpn-scripts-migration/
+/// extensions/hpn-discount-function/src/index.js `tieredDeliveryDiscountValue`.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledShippingOffer {
+    pub id: String,
+    pub priority: i32,
+    pub tiers: Vec<ShippingTier>,
+    /// null/omitted = applies to every delivery group; otherwise restricts to
+    /// the listed CartDeliveryGroupType values ("ONE_TIME_PURCHASE" | "SUBSCRIPTION").
+    pub target_group_types: Option<Vec<String>>,
+    /// "sitewide" | "landing" | "quiz_bundle".
+    #[serde(default = "default_shipping_scope")]
+    pub scope_mode: String,
+    pub required_line_attribute_value: Option<String>,
+    #[serde(default)]
+    pub required_anchor_variant_ids: Vec<String>,
+    #[serde(default = "default_anchor_quantity")]
+    pub required_anchor_min_quantity: i64,
+    #[serde(default)]
+    pub requires_anchor_subscription: bool,
+}
+
+fn default_shipping_scope() -> String {
+    "sitewide".to_string()
+}
+
+fn default_anchor_quantity() -> i64 {
+    1
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ShippingTier {
+    pub minimum_subtotal_cents: i64,
+    pub discount_type: String,
+    pub discount_value: f64,
+    /// "has_subscription" | "one_time_only" | null (matches either).
+    pub applies_when: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledOffer {
+    pub id: String,
+    pub version: i32,
+    pub offer_type: String,
+    pub priority: i32,
+    pub stop_lower_priority: bool,
+    pub required_product_ids: Vec<String>,
+    pub required_variant_ids: Vec<String>,
+    pub excluded_product_ids: Vec<String>,
+    pub gift_variant_ids: Vec<String>,
+    pub gift_product_ids: Vec<String>,
+    pub cart_value_threshold_cents: Option<i64>,
+    pub cart_value_max_cents: Option<i64>,
+    pub cart_quantity_threshold: Option<i64>,
+    pub cart_quantity_max: Option<i64>,
+    pub subscription_mode: Option<String>,
+    pub customer_order_count_min: Option<i64>,
+    pub customer_order_count_max: Option<i64>,
+    pub customer_amount_spent_min_cents: Option<i64>,
+    pub customer_amount_spent_max_cents: Option<i64>,
+    pub max_gift_quantity: Option<i64>,
+    pub discount_type: String,
+    pub discount_value: f64,
+    pub currency_code: String,
+    pub currency_overrides: Option<HashMap<String, i64>>,
+    pub combines_with_order_discounts: bool,
+    pub combines_with_shipping_discounts: bool,
+    pub combines_with_product_discounts: bool,
+    #[serde(default)]
+    pub requirements: Vec<CompiledRequirement>,
+    #[serde(default)]
+    pub product_rewards: Vec<CompiledProductReward>,
+    #[serde(default)]
+    pub order_rewards: Vec<CompiledOrderReward>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledRequirement {
+    pub product_id: Option<String>,
+    pub variant_id: Option<String>,
+    pub track_mode: String,
+    pub min_quantity: i64,
+    pub max_quantity: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledProductReward {
+    pub id: String,
+    pub reward_type: String,
+    pub target_product_ids: Vec<String>,
+    pub target_variant_ids: Vec<String>,
+    pub discount_type: String,
+    pub discount_value: f64,
+    pub max_quantity: Option<i64>,
+    pub line_quantity_equals: Option<i64>,
+    pub max_units_total: Option<i64>,
+    pub subscription_mode: String,
+    #[serde(default = "default_shipping_scope")]
+    pub scope_mode: String,
+    pub required_line_attribute_value: Option<String>,
+    #[serde(default)]
+    pub required_anchor_variant_ids: Vec<String>,
+    #[serde(default = "default_anchor_quantity")]
+    pub required_anchor_min_quantity: i64,
+    #[serde(default)]
+    pub requires_anchor_subscription: bool,
+    #[serde(default)]
+    pub price_tiers: Vec<ProductPriceTier>,
+    #[serde(default = "default_gift_percentage")]
+    pub discount_percentage_on_gifts: f64,
+}
+
+fn default_gift_percentage() -> f64 {
+    100.0
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductPriceTier {
+    pub quantity: i64,
+    pub target_price_per_unit: f64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledOrderReward {
+    pub id: String,
+    pub discount_type: String,
+    pub discount_value: f64,
+}
+
+pub fn is_zero_decimal(currency_code: &str) -> bool {
+    matches!(
+        currency_code,
+        "JPY" | "KRW" | "VND" | "BIF" | "CLP" | "GNF" | "ISK" | "KMF"
+            | "MGA" | "PYG" | "RWF" | "UGX" | "VUV" | "XAF" | "XOF" | "XPF"
+    )
+}
+
+pub fn to_cents(amount: f64, currency_code: &str) -> i64 {
+    if is_zero_decimal(currency_code) {
+        amount.round() as i64
+    } else {
+        (amount * 100.0).round() as i64
+    }
+}
+
+pub fn resolve_threshold(
+    base_cents: i64,
+    overrides: &Option<HashMap<String, i64>>,
+    active_currency: &str,
+) -> i64 {
+    if let Some(map) = overrides {
+        if let Some(&override_cents) = map.get(active_currency) {
+            return override_cents;
+        }
+    }
+    base_cents
+}

@@ -43,8 +43,21 @@
         .then(function(r) { return r.json(); })
         .then(function(result) {
           var upsell = result.upsells && result.upsells.find(function(u) { return !offerId || u.offerId === offerId; });
-          if (upsell && window.initFbtWidget) {
-            window.initFbtWidget(container, upsell, currency, sessionId);
+          // The evaluate endpoint returns one recommended product per offer,
+          // not a full "frequently bought together" set — show it alongside
+          // the current product rather than a curated relatedProducts list.
+          if (upsell && upsell.product && window.initFbtWidget) {
+            var mainProduct = Object.assign({}, upsell.product, { priceCents: upsell.product.originalPriceCents });
+            window.initFbtWidget(container, {
+              offerId: upsell.offerId,
+              mainProduct: mainProduct,
+              relatedProducts: [upsell.product],
+              title: upsell.message || 'Frequently bought together',
+              buttonText: upsell.buttonText || 'Add to cart',
+              discountPercent: upsell.discountPercent || 0,
+              maxProducts: 1,
+              layout: 'amazon'
+            }, currency, sessionId);
           }
         })
         .catch(function() {});

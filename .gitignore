@@ -16,6 +16,9 @@ drizzle/meta/
 # Rust / Wasm
 target/
 *.wasm
+**/extensions/*/manifest.json
+**/extensions/*/Cargo.lock
+**/extensions/*/schema.graphql
 
 # Coverage
 coverage/

@@ -1,7 +1,7 @@
 /**
  * CSV export endpoint for a single offer or all offers.
  * GET /api/offers/:id/export → single offer CSV
- * GET /api/offers/export → all active offers CSV
+ * GET /api/offers/export → all offers CSV (every status, not just active)
  */
 
 import type { LoaderFunctionArgs } from "react-router";

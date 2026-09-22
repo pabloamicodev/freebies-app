@@ -1,0 +1,78 @@
+query Input {
+  discount {
+    discountClasses
+    metafield(namespace: "promo_engine", key: "function_config") {
+      value
+    }
+  }
+  cart {
+    buyerIdentity {
+      customer {
+        numberOfOrders
+        amountSpent {
+          amount
+          currencyCode
+        }
+      }
+    }
+    lines {
+      id
+      quantity
+      cost {
+        amountPerQuantity {
+          amount
+          currencyCode
+        }
+        subtotalAmount {
+          amount
+          currencyCode
+        }
+        totalAmount {
+          amount
+          currencyCode
+        }
+      }
+      sellingPlanAllocation {
+        sellingPlan {
+          id
+        }
+      }
+      merchandise {
+        __typename
+        ... on ProductVariant {
+          id
+          product {
+            id
+          }
+        }
+      }
+      lineType: attribute(key: "_promo_engine_line_type") {
+        value
+      }
+      offerId: attribute(key: "_promo_engine_offer_id") {
+        value
+      }
+      landingSource: attribute(key: "__landing_source") {
+        value
+      }
+      quizBundleId: attribute(key: "_quiz_bundle_id") {
+        value
+      }
+      quizTargetCents: attribute(key: "_quiz_target_cents") {
+        value
+      }
+      quizExpectedPaidCount: attribute(key: "_quiz_expected_paid_count") {
+        value
+      }
+      quizFreeGift: attribute(key: "_quiz_free_gift") {
+        value
+      }
+    }
+    cost {
+      subtotalAmount {
+        amount
+        currencyCode
+      }
+    }
+  }
+}

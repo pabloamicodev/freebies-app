@@ -37,28 +37,33 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       db.select({ count: count() }).from(offers)
         .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")))
         .catch(() => [{ count: 0 }]),
-      db.select({ properties: analyticsEvents.properties })
+      db.select({ orderId: analyticsEvents.orderId, properties: analyticsEvents.properties })
         .from(analyticsEvents)
         .where(and(
           eq(analyticsEvents.shopId, shopId),
-          eq(analyticsEvents.eventName, "promo_engine:order_paid"),
+          eq(analyticsEvents.eventName, "order_placed_attributed"),
           gte(analyticsEvents.occurredAt, since30d),
         ))
         .orderBy(desc(analyticsEvents.occurredAt))
-        .limit(500)
+        .limit(2000)
         .catch(() => []),
     ]);
 
     const warnings = await getDashboardWarnings(shopId, shopDomain).catch(() => []);
 
-    // Aggregate real order stats from events
+    // One row is written per attributed offer, so an order with two offers
+    // produces two rows — dedupe by orderId before summing, or a multi-offer
+    // order double-counts its own total.
+    const seenOrderIds = new Set<string>();
     let totalSalesCents = 0;
     for (const row of orderEventRows) {
+      if (!row.orderId || seenOrderIds.has(row.orderId)) continue;
+      seenOrderIds.add(row.orderId);
       const props = row.properties as Record<string, unknown> | null;
       const subtotal = typeof props?.subtotalCents === "number" ? props.subtotalCents : 0;
       totalSalesCents += subtotal;
     }
-    const orderCount = orderEventRows.length;
+    const orderCount = seenOrderIds.size;
     const avgOrderCents = orderCount > 0 ? Math.round(totalSalesCents / orderCount) : 0;
 
     return {
@@ -103,26 +108,28 @@ function IconChevron() {
 }
 
 const DASHBOARD_SUPPORT_LINKS = [
-  { icon: "💬", title: "Live chat support", desc: "Get help from our support team", href: "#" },
-  { icon: "❓", title: "View frequently asked questions", desc: "See FAQs and learn about Promo Engine", href: "/app/help" },
-  { icon: "✉️", title: "Contact via email", desc: "Contact us by email for help", href: "#" },
+  { icon: "📋", title: "Installation status", desc: "Check theme setup and extension status", href: "/app/settings/installation" },
+  { icon: "🪲", title: "Error logs", desc: "Review recent errors reported by the app", href: "/app/logs" },
+  { icon: "🩺", title: "Diagnostics", desc: "Inspect sync status and run manual checks", href: "/app/diagnostics" },
 ];
 
 
 export default function Dashboard() {
-  const { activeOffers, shopDisplayName, currencyCode, totalSalesCents, orderCount, avgOrderCents } = useLoaderData<typeof loader>();
+  const { activeOffers, shopDisplayName, currencyCode, totalSalesCents, orderCount, avgOrderCents, warnings } = useLoaderData<typeof loader>();
   const [showOnboarding, setShowOnboarding] = useState(true);
 
   const fmt = getDashboardCurrencyFormatter(currencyCode);
   const totalSalesFmt = fmt.format(totalSalesCents / 100);
   const avgOrderFmt = fmt.format(avgOrderCents / 100);
 
+  const embedVerified = !warnings.some((w) => w.code === "app_embed_not_verified");
+
   const onboardingSteps = useMemo(() => [
-    { label: "Enable Promo Engine in themes", done: true },
+    { label: "Enable Promo Engine in themes", done: embedVerified },
     { label: "Create your first offer", done: activeOffers > 0 },
     { label: "Check the offer in your Online Store", done: false },
     { label: "Customize the appearance", done: false },
-  ], [activeOffers]);
+  ], [activeOffers, embedVerified]);
   const completedSteps = onboardingSteps.filter((s) => s.done).length;
   const progressPct = Math.round((completedSteps / onboardingSteps.length) * 100);
   const statsRows = useMemo(() => [
@@ -137,7 +144,7 @@ export default function Dashboard() {
       {/* ── Page Header ─────────────────────────────────────── */}
       <div className="b-page-header">
         <div className="b-page-title-row">
-          <h1 className="b-page-title">Panel</h1>
+          <h1 className="b-page-title">Dashboard</h1>
           <span className="b-status-pill b-status-pill-green">
             <span className="b-status-dot" />
             {activeOffers} active offer{activeOffers !== 1 ? "s" : ""}
@@ -145,40 +152,44 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ── App Status + Plan row ─────────────────────────── */}
-      <div className="b-grid-2 b-mb-4">
+      {/* ── App Status row ─────────────────────────── */}
+      <div className="b-mb-4">
         <div className="b-card b-card-body">
           <div className="b-row b-gap-2 b-mb-4" style={{ marginBottom: 6 }}>
-            <span className="b-text-sm b-text-sub">App Status</span>
-            <span className="b-badge b-badge-green">Activated</span>
-          </div>
-          <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>Promo Engine is active in your theme.</p>
-        </div>
-        <div className="b-card b-card-body">
-          <div className="b-row b-gap-2 b-mb-4" style={{ marginBottom: 6 }}>
-            <span className="b-text-sm b-text-sub">Application plan</span>
-            <span className="b-badge b-badge-blue">Active</span>
+            <span className="b-text-sm b-text-sub">Theme app embed</span>
+            <span className={`b-badge ${embedVerified ? "b-badge-green" : "b-badge-orange"}`}>
+              {embedVerified ? "Enabled" : "Status unknown"}
+            </span>
           </div>
           <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
-            Billing is not configured for this app.
+            {embedVerified
+              ? "Promo Engine is enabled in your theme."
+              : "Enable the Promo Engine app embed in your theme editor to start showing offers."}
           </p>
         </div>
       </div>
 
-      {/* ── Expert Consultation Dark Banner ─────────────────── */}
-      <div className="b-dark-banner b-mb-4">
-        <div className="b-dark-banner-body">
-          <h3 className="b-dark-banner-title">FREE check with experts</h3>
-          <p className="b-dark-banner-sub">Don&apos;t miss it! A quick consultation with our team guarantees your personalized discounts will be active and ready to get you more sales. 🚀</p>
-          <a href="/app/offers" className="b-dark-banner-btn">View offers</a>
+      {/* ── Warnings ─────────────────────────────────────────── */}
+      {warnings.length > 0 && (
+        <div className="b-stack b-stack-2 b-mb-4">
+          {warnings.map((warning) => (
+            <div
+              key={warning.code}
+              className={`b-banner ${warning.severity === "error" ? "" : warning.severity === "warning" ? "b-banner-orange" : ""}`}
+            >
+              <div className="b-banner-body">
+                <div className="b-banner-title">{warning.title}</div>
+                <p className="b-banner-text">{warning.message}</p>
+              </div>
+              {warning.action && (
+                <Link to={warning.action.url} className="b-btn b-btn-secondary b-btn-sm">
+                  {warning.action.label}
+                </Link>
+              )}
+            </div>
+          ))}
         </div>
-        <div className="b-team-avatars">
-          <div className="b-avatar b-avatar-1">A</div>
-          <div className="b-avatar b-avatar-2">B</div>
-          <div className="b-avatar b-avatar-3">C</div>
-          <div className="b-avatar b-avatar-4">D</div>
-        </div>
-      </div>
+      )}
 
       {/* ── Welcome + Stats row ──────────────────────────────── */}
       <div className="b-mb-4" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>

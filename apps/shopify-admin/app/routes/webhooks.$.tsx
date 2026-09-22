@@ -1,8 +1,8 @@
 import type { ActionFunctionArgs } from "react-router";
 import { waitUntil } from "@vercel/functions";
-import { authenticate } from "../shopify.server.js";
+import { authenticate, sessionStorage } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs, giftCloneProducts, offers } from "@promo/db";
+import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs, giftCloneProducts, offers, webhookDeliveries } from "@promo/db";
 import { eq, and, inArray, or, sql } from "drizzle-orm";
 import { decryptToken } from "../lib/token-crypto.server.js";
 import { syncInventoryFromWebhook } from "../lib/sync/inventory-sync.server.js";
@@ -19,7 +19,31 @@ import * as Sentry from "@sentry/node";
  * Each webhook topic is routed to its handler below.
  */
 export const action = async ({ request }: ActionFunctionArgs) => {
+  const webhookId = request.headers.get("x-shopify-webhook-id");
   const { topic, shop, payload } = await authenticate.webhook(request);
+
+  // Shopify retries a delivery on any non-2xx response — including the 503s
+  // we intentionally return below for transient errors — so the same
+  // webhook_id can arrive more than once. Record it first (atomically) and
+  // skip processing entirely if it's already been handled.
+  if (webhookId) {
+    try {
+      const db = getDb();
+      const inserted = await db
+        .insert(webhookDeliveries)
+        .values({ webhookId, topic, shopDomain: shop })
+        .onConflictDoNothing()
+        .returning({ webhookId: webhookDeliveries.webhookId });
+      if (inserted.length === 0) {
+        console.info(`[webhooks] duplicate delivery ignored: topic=${topic} shop=${shop} webhookId=${webhookId}`);
+        return new Response("OK", { status: 200 });
+      }
+    } catch (dedupErr) {
+      // If the dedup check itself fails, fail open — processing twice is
+      // safer than never processing a legitimate webhook.
+      console.error("[webhooks] dedup check failed, processing anyway", dedupErr instanceof Error ? dedupErr.message : dedupErr);
+    }
+  }
 
   // Each handler is wrapped: a thrown error (e.g. transient DB failure) must NOT
   // surface as a 500, or Shopify retries the delivery indefinitely. We log and
@@ -151,6 +175,7 @@ interface OrderWebhookPayload {
   cart_token: string | null;
   total_price?: string;
   total_price_set?: { shop_money?: { amount?: string } };
+  customer?: { id: number } | null;
   line_items: Array<{
     id: number;
     variant_id: number;
@@ -327,15 +352,23 @@ async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
   const shopId = await getShopId(shop);
   if (!shopId) return;
   const db = getDb();
-  const offerIds = order.note_attributes
-    ?.filter((attr) => attr.name === "_promo_engine_offer_id" || attr.name === "promo_engine_offer_id")
-    .map((attr) => attr.value)
-    .filter(Boolean) ?? [];
+  // Offer attribution comes from LINE ITEM properties — the runtime tags each
+  // gift/bundle/upsell line with `_promo_engine_offer_id` when it adds it to
+  // the cart. note_attributes (cart-level) are never written by anything and
+  // were always empty.
+  const offerIds = [
+    ...new Set(
+      order.line_items.flatMap((item) =>
+        item.properties.filter((p) => p.name === "_promo_engine_offer_id").map((p) => p.value),
+      ),
+    ),
+  ];
   const sessionId = order.note_attributes
     ?.find((attr) => attr.name === "_promo_engine_session_id" || attr.name === "promo_engine_session_id")
     ?.value ?? null;
   const amount = Number.parseFloat(order.total_price_set?.shop_money?.amount ?? order.total_price ?? "0");
   const totalPriceCents = Number.isFinite(amount) ? Math.round(amount * 100) : 0;
+  const customerId = order.customer?.id != null ? String(order.customer.id) : null;
 
   waitUntil(
     Promise.allSettled([
@@ -344,6 +377,7 @@ async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
         orderId: String(order.id),
         orderGid: order.admin_graphql_api_id,
         cartToken: order.cart_token,
+        customerId,
         totalPriceCents,
         offerIds,
         sessionId,
@@ -437,29 +471,27 @@ async function cleanupAfterUninstall(
 
   // 2. Clear the compiled Discount Function config metafield (empty offers list)
   try {
-    const shopData = await shopifyGraphQL<{ shop: { id: string } }>({
-      shopDomain,
-      accessToken,
-      query: `query { shop { id } }`,
-    });
-    await shopifyGraphQL({
-      shopDomain,
-      accessToken,
-      query: `mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
-        metafieldsSet(metafields: $metafields) {
-          userErrors { message }
-        }
-      }`,
-      variables: {
-        metafields: [{
-          ownerId: shopData.shop.id,
-          namespace: "promo_engine",
-          key: "function_config",
-          type: "json",
-          value: JSON.stringify({ offers: [], version: "1", compiledAt: new Date().toISOString() }),
-        }],
-      },
-    });
+    const [shopRow] = await db.select({ discountId: shops.discountId }).from(shops).where(eq(shops.id, shopId)).limit(1);
+    if (shopRow?.discountId) {
+      await shopifyGraphQL({
+        shopDomain,
+        accessToken,
+        query: `mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $metafields) {
+            userErrors { message }
+          }
+        }`,
+        variables: {
+          metafields: [{
+            ownerId: shopRow.discountId,
+            namespace: "promo_engine",
+            key: "function_config",
+            type: "json",
+            value: JSON.stringify({ offers: [], version: "1", compiledAt: new Date().toISOString() }),
+          }],
+        },
+      });
+    }
   } catch (err) {
     console.error("uninstall-cleanup: failed to clear metafield", err instanceof Error ? err.message : err);
   }
@@ -469,6 +501,15 @@ async function cleanupAfterUninstall(
     .update(offers)
     .set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() })
     .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")));
+
+  // 4. Purge the shop's admin sessions — nothing should be able to act as
+  // this shop once the app is uninstalled.
+  try {
+    const sessions = await sessionStorage.findSessionsByShop(shopDomain);
+    if (sessions.length > 0) await sessionStorage.deleteSessions(sessions.map((s) => s.id));
+  } catch (err) {
+    console.error("uninstall-cleanup: failed to purge sessions", err instanceof Error ? err.message : err);
+  }
 }
 
 async function handleCustomersUpdate(_shop: string, _payload: CustomerGdprPayload) {
@@ -485,6 +526,16 @@ async function handleCustomersDataRequest(shop: string, payload: CustomerGdprPay
     hasCustomerId: Boolean(customerId),
     hasCustomerEmail: Boolean(customerEmail),
     ordersRequested: payload.orders_requested?.length ?? 0,
+  });
+
+  // GDPR data requests have a compliance deadline — this needs a human to act
+  // on it, not just a database row. Sentry is the only alerting channel wired
+  // up today, so route it there as a message (not an exception) so it isn't
+  // filtered by the error-only beforeSend rules.
+  Sentry.captureMessage("GDPR customer data request received", {
+    level: "warning",
+    tags: { gdpr: "customers_data_request", shop },
+    extra: { customerId, hasCustomerEmail: Boolean(customerEmail) },
   });
 
   if (!shopId || !customerId) return;
@@ -591,12 +642,18 @@ async function handleShopRedact(shop: string) {
 
   const db = getDb();
 
-  // All deletions inside a transaction — GDPR requires all-or-nothing.
-  await db.transaction(async (tx) => {
-    await tx.delete(analyticsEvents).where(eq(analyticsEvents.shopId, shopId));
-    await tx.delete(cartMutationLogs).where(eq(cartMutationLogs.shopId, shopId));
-    await tx.update(shops).set({ isActive: false, uninstalledAt: new Date() }).where(eq(shops.id, shopId));
-  });
+  try {
+    const sessions = await sessionStorage.findSessionsByShop(shop);
+    if (sessions.length > 0) await sessionStorage.deleteSessions(sessions.map((s) => s.id));
+  } catch (err) {
+    console.error("GDPR SHOP_REDACT: failed to purge sessions", err instanceof Error ? err.message : err);
+  }
+
+  // Deleting the shop row cascades to every table that references it
+  // (offers, product/variant cache, analytics, audit logs, gift clones, ...) —
+  // GDPR shop redaction means nothing about this shop should remain,
+  // including the encrypted access token itself.
+  await db.delete(shops).where(eq(shops.id, shopId));
 
   console.info(`GDPR SHOP_REDACT: completed for shop=${shop} shopId=${shopId}`);
 }

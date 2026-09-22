@@ -149,6 +149,9 @@ declare global {
       currency?: { active: string; rate: string };
       shop?: string;
       country?: string;
+      analytics?: {
+        publish: (name: string, payload: Record<string, unknown>) => void;
+      };
     };
   }
 }

@@ -48,12 +48,18 @@ export async function getSignedShop(request: Request) {
   const shopDomain = verifyAppProxySignature(request);
   const db = getDb();
   const rows = await db
-    .select({ id: shops.id, currencyCode: shops.currencyCode })
+    .select({ id: shops.id, currencyCode: shops.currencyCode, accessTokenEncrypted: shops.accessTokenEncrypted })
     .from(shops)
     .where(and(eq(shops.myshopifyDomain, shopDomain), eq(shops.isActive, true)))
     .limit(1);
 
   const shop = rows[0];
   if (!shop) throw new Response("Shop not found or app uninstalled", { status: 404 });
-  return { ...shop, shopDomain, db };
+
+  // Shopify signs this into the app proxy request itself when the storefront
+  // visitor is a logged-in customer — it cannot be spoofed by the client, unlike
+  // a customer id supplied in the request body.
+  const loggedInCustomerId = new URL(request.url).searchParams.get("logged_in_customer_id");
+
+  return { ...shop, shopDomain, db, loggedInCustomerId };
 }

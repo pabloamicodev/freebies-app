@@ -235,7 +235,9 @@ export const RewardValueSchema = z.object({
   amount: z.number().nonnegative(),
   currencyCode: z.string().length(3).optional(),
   tiers: z.array(z.record(z.string(), z.unknown())).optional(),
-});
+  currencyOverrides: z.record(z.string(), z.number().nonnegative()).optional(),
+  fixedAmountOverrides: z.record(z.string(), z.number().nonnegative()).optional(),
+}).strict();
 
 export const RewardTargetSchema = z.object({
   scope: z.string().optional(),
@@ -243,7 +245,156 @@ export const RewardTargetSchema = z.object({
   variantIds: z.array(z.string()).optional(),
   productId: z.string().optional(),
   productIds: z.array(z.string()).optional(),
+  lineQuantityEquals: z.number().int().positive().optional(),
+  maxUnitsTotal: z.number().int().positive().optional(),
+  subscriptionMode: z.enum(["any", "subscription_only", "one_time_only"]).optional(),
+  scopeMode: z.enum(["sitewide", "landing", "quiz_bundle"]).optional(),
+  requiredLineAttributeKey: z.literal("__landing_source").optional(),
+  requiredLineAttributeValue: z.string().min(1).optional(),
+  requiredAnchorVariantIds: z.array(z.string().min(1)).optional(),
+  requiredAnchorMinQuantity: z.number().int().positive().optional(),
+  requiresAnchorSubscription: z.boolean().optional(),
+  priceTiers: z.array(z.object({
+    quantity: z.number().int().positive(),
+    targetPricePerUnit: z.number().nonnegative(),
+  })).min(1).optional(),
+  discountPercentageOnGifts: z.number().min(0).max(100).optional(),
 });
+
+export const ProductGiftTargetSchema = z.object({
+  scope: z.literal("cart").optional(),
+  variantId: z.string().optional(),
+  variantIds: z.array(z.string()).optional(),
+  productId: z.string().optional(),
+  productIds: z.array(z.string()).optional(),
+}).strict().refine(
+  (target) => Boolean(target.variantId || target.variantIds?.length || target.productId || target.productIds?.length),
+  { message: "A gift product or variant target is required." },
+);
+
+export const OrderDiscountTargetSchema = z.object({
+  scope: z.literal("cart"),
+}).strict();
+
+const ProductTargetIdsSchema = z.object({
+  scope: z.enum(["cart", "all_products"]).optional(),
+  variantId: z.string().optional(),
+  variantIds: z.array(z.string()).optional(),
+  productId: z.string().optional(),
+  productIds: z.array(z.string()).optional(),
+  lineQuantityEquals: z.number().int().positive().optional(),
+  maxUnitsTotal: z.number().int().positive().optional(),
+  subscriptionMode: z.enum(["any", "subscription_only", "one_time_only"]).default("any"),
+});
+
+export const ProductDiscountTargetSchema = z.discriminatedUnion("scopeMode", [
+  ProductTargetIdsSchema.extend({
+    scopeMode: z.literal("sitewide"),
+  }).strict(),
+  ProductTargetIdsSchema.extend({
+    scopeMode: z.literal("landing"),
+    requiredLineAttributeKey: z.literal("__landing_source"),
+    requiredLineAttributeValue: z.string().min(1),
+    requiredAnchorVariantIds: z.array(z.string().min(1)).default([]),
+    requiredAnchorMinQuantity: z.number().int().positive().default(1),
+    requiresAnchorSubscription: z.boolean().default(false),
+    priceTiers: z.array(z.object({
+      quantity: z.number().int().positive(),
+      targetPricePerUnit: z.number().nonnegative(),
+    }).strict()).min(1).optional(),
+  }).strict(),
+  z.object({
+    scopeMode: z.literal("quiz_bundle"),
+    scope: z.literal("cart").default("cart"),
+    discountPercentageOnGifts: z.number().min(0).max(100).default(100),
+  }).strict(),
+]);
+
+export const ShippingTierAppliesWhenSchema = z.enum([
+  "has_subscription",
+  "one_time_only",
+]);
+export type ShippingTierAppliesWhen = z.infer<typeof ShippingTierAppliesWhenSchema>;
+
+export const DeliveryGroupTypeSchema = z.enum([
+  "ONE_TIME_PURCHASE",
+  "SUBSCRIPTION",
+]);
+export type DeliveryGroupType = z.infer<typeof DeliveryGroupTypeSchema>;
+
+export const ShippingDiscountTierSchema = z
+  .object({
+    minimumSubtotalCents: z.number().int().nonnegative(),
+    discountType: z.enum(["percentage", "fixed_amount"]),
+    discountValue: z.number().positive(),
+    appliesWhen: ShippingTierAppliesWhenSchema.optional(),
+  }).strict()
+  .superRefine((tier, ctx) => {
+    if (tier.discountType === "percentage" && tier.discountValue > 100) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["discountValue"],
+        message: "Shipping discount percentage cannot exceed 100%.",
+      });
+    }
+  });
+export type ShippingDiscountTier = z.infer<typeof ShippingDiscountTierSchema>;
+
+export const ShippingDiscountRewardValueSchema = z
+  .object({
+    amount: z.number().nonnegative().optional(),
+    currencyCode: z.string().length(3).default("USD"),
+    tiers: z.array(ShippingDiscountTierSchema).min(1).optional(),
+  }).strict()
+  .refine((value) => value.amount !== undefined || Boolean(value.tiers?.length), {
+    message: "Configure at least one shipping discount tier.",
+  });
+
+export const ShippingDiscountRewardTargetSchema = z.object({
+  deliveryGroupTypes: z.array(DeliveryGroupTypeSchema).min(1),
+  scopeMode: z.enum(["sitewide", "landing", "quiz_bundle"]).default("sitewide"),
+  requiredLineAttributeKey: z.literal("__landing_source").optional(),
+  requiredLineAttributeValue: z.string().min(1).optional(),
+  requiredAnchorVariantIds: z.array(z.string().min(1)).optional(),
+  requiredAnchorMinQuantity: z.number().int().positive().optional(),
+  requiresAnchorSubscription: z.boolean().optional(),
+}).strict().superRefine((target, ctx) => {
+  if (target.scopeMode !== "landing") return;
+  if (target.requiredLineAttributeKey !== "__landing_source") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["requiredLineAttributeKey"],
+      message: "Landing shipping rules must use the __landing_source line property.",
+    });
+  }
+  if (!target.requiredLineAttributeValue) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["requiredLineAttributeValue"],
+      message: "Landing source value is required.",
+    });
+  }
+});
+
+export const ShippingDiscountRewardPayloadSchema = z
+  .object({
+    discountType: z.enum(["percentage", "fixed_amount", "free"]),
+    value: ShippingDiscountRewardValueSchema,
+    target: ShippingDiscountRewardTargetSchema,
+  }).strict()
+  .superRefine((payload, ctx) => {
+    if (
+      payload.discountType === "percentage" &&
+      payload.value.amount !== undefined &&
+      payload.value.amount > 100
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["value", "amount"],
+        message: "Shipping discount percentage cannot exceed 100%.",
+      });
+    }
+  });
 
 export function validateRewardPayload(
   rewardType: string,
@@ -255,13 +406,52 @@ export function validateRewardPayload(
   if (!rewardTypeResult.success) return rewardTypeResult;
   const discountTypeResult = DiscountTypeSchema.safeParse(discountType);
   if (!discountTypeResult.success) return discountTypeResult;
+  if (rewardType === "shipping_discount") {
+    return ShippingDiscountRewardPayloadSchema.safeParse({
+      discountType,
+      value,
+      target,
+    });
+  }
+  if (
+    rewardType === "order_discount" &&
+    discountType !== "percentage" &&
+    discountType !== "fixed_amount" &&
+    discountType !== "free"
+  ) {
+    return z.never().safeParse(discountType);
+  }
   const valueResult = RewardValueSchema.safeParse(value);
   if (!valueResult.success) return valueResult;
-  const targetResult = RewardTargetSchema.safeParse(target);
+  if (discountType === "percentage" && valueResult.data.amount > 100) {
+    return z.number().max(100).safeParse(valueResult.data.amount);
+  }
+  const targetRecord = typeof target === "object" && target !== null
+    ? target as Record<string, unknown>
+    : {};
+  const isProductDiscountReward = rewardType === "product_discount" || rewardType === "bundle_discount" || rewardType === "upsell_discount";
+  const targetResult = isProductDiscountReward
+    ? ProductDiscountTargetSchema.safeParse({ scopeMode: "sitewide", ...targetRecord })
+    : rewardType === "product_gift"
+      ? ProductGiftTargetSchema.safeParse(target)
+      : rewardType === "order_discount"
+        ? OrderDiscountTargetSchema.safeParse(target)
+        : RewardTargetSchema.safeParse(target);
   if (!targetResult.success) return targetResult;
   if (rewardType === "product_gift") {
-    const parsedTarget = targetResult.data as z.infer<typeof RewardTargetSchema>;
-    if (!parsedTarget.variantId && !parsedTarget.variantIds?.length && !parsedTarget.productId && !parsedTarget.productIds?.length) {
+    return z.unknown().safeParse({ rewardType, discountType, value, target });
+  }
+  if (isProductDiscountReward) {
+    const parsedTarget = targetResult.data as z.infer<typeof ProductDiscountTargetSchema>;
+    const explicitlyTargetsCart = parsedTarget.scope === "cart" || parsedTarget.scope === "all_products";
+    if (
+      parsedTarget.scopeMode !== "quiz_bundle" &&
+      !explicitlyTargetsCart &&
+      !parsedTarget.variantId &&
+      !parsedTarget.variantIds?.length &&
+      !parsedTarget.productId &&
+      !parsedTarget.productIds?.length
+    ) {
       return z.never().safeParse(target);
     }
   }
@@ -321,7 +511,10 @@ export const CompiledOfferSchema = z.object({
   giftProductIds: z.array(z.string()),
   /** Threshold in store currency cents. */
   cartValueThresholdCents: z.number().int().nonnegative().optional(),
+  cartValueMaxCents: z.number().int().nonnegative().optional(),
   cartQuantityThreshold: z.number().int().nonnegative().optional(),
+  cartQuantityMax: z.number().int().nonnegative().optional(),
+  subscriptionMode: z.enum(["any", "subscription_only", "one_time_only"]).optional(),
   maxGiftQuantity: z.number().int().positive().optional(),
   discountType: DiscountTypeSchema,
   discountValue: z.number().nonnegative(),
@@ -329,5 +522,39 @@ export const CompiledOfferSchema = z.object({
   combinesWithOrderDiscounts: z.boolean(),
   combinesWithShippingDiscounts: z.boolean(),
   combinesWithProductDiscounts: z.boolean(),
+  requirements: z.array(z.object({
+    productId: z.string().optional(),
+    variantId: z.string().optional(),
+    trackMode: TrackModeSchema,
+    minQuantity: z.number().int().positive(),
+    maxQuantity: z.number().int().positive().optional(),
+  })).default([]),
+  productRewards: z.array(z.object({
+    id: z.string(),
+    rewardType: RewardTypeSchema,
+    targetProductIds: z.array(z.string()),
+    targetVariantIds: z.array(z.string()),
+    discountType: DiscountTypeSchema,
+    discountValue: z.number().nonnegative(),
+    maxQuantity: z.number().int().positive().optional(),
+    lineQuantityEquals: z.number().int().positive().optional(),
+    maxUnitsTotal: z.number().int().positive().optional(),
+    subscriptionMode: z.enum(["any", "subscription_only", "one_time_only"]),
+    scopeMode: z.enum(["sitewide", "landing", "quiz_bundle"]).default("sitewide"),
+    requiredLineAttributeValue: z.string().optional(),
+    requiredAnchorVariantIds: z.array(z.string()).default([]),
+    requiredAnchorMinQuantity: z.number().int().positive().default(1),
+    requiresAnchorSubscription: z.boolean().default(false),
+    priceTiers: z.array(z.object({
+      quantity: z.number().int().positive(),
+      targetPricePerUnit: z.number().nonnegative(),
+    })).default([]),
+    discountPercentageOnGifts: z.number().min(0).max(100).default(100),
+  })).default([]),
+  orderRewards: z.array(z.object({
+    id: z.string(),
+    discountType: z.enum(["percentage", "fixed_amount", "free"]),
+    discountValue: z.number().nonnegative(),
+  })).default([]),
 });
 export type CompiledOffer = z.infer<typeof CompiledOfferSchema>;

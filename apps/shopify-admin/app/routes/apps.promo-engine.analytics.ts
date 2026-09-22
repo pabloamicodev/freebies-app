@@ -1,6 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { getDb, analyticsEvents, offers, widgets } from "@promo/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getSignedShop } from "../lib/app-proxy-auth.server.js";
 import { checkRateLimit, getClientIp } from "../lib/rate-limit.server.js";
 
@@ -31,18 +31,14 @@ export async function action({ request }: ActionFunctionArgs) {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const eventName = typeof body["event"] === "string"
-    ? body["event"]
-    : typeof body["eventName"] === "string"
-      ? body["eventName"]
-      : null;
-
-  if (!eventName) {
-    return Response.json({ error: "Missing required field: event or eventName" }, { status: 400 });
+  // The web pixel sends a batch ({ events: [...] }); the storefront runtime
+  // sends a single event object directly — normalize to a list either way.
+  const rawEvents = Array.isArray(body["events"]) ? (body["events"] as Record<string, unknown>[]) : [body];
+  if (rawEvents.length === 0) {
+    return Response.json({ error: "No events provided" }, { status: 400 });
   }
-
-  if (eventName.length > 100) {
-    return Response.json({ error: "event name too long (max 100 chars)" }, { status: 400 });
+  if (rawEvents.length > 20) {
+    return Response.json({ error: "Too many events in one batch (max 20)" }, { status: 400 });
   }
 
   const propertiesJson = JSON.stringify(body);
@@ -53,31 +49,56 @@ export async function action({ request }: ActionFunctionArgs) {
   try {
     const db = getDb();
 
-    const rawOfferId = uuidOrNull(body["offer_id"] ?? body["offerId"]);
-    const rawWidgetId = uuidOrNull(body["widget_id"] ?? body["widgetId"]);
+    const offerIds = [...new Set(rawEvents.flatMap((event) => {
+      const id = uuidOrNull(event["offer_id"] ?? event["offerId"]);
+      return id ? [id] : [];
+    }))];
+    const widgetIds = [...new Set(rawEvents.flatMap((event) => {
+      const id = uuidOrNull(event["widget_id"] ?? event["widgetId"]);
+      return id ? [id] : [];
+    }))];
 
-    // Verify that referenced offer/widget actually belong to the authenticated shop.
-    const [offerCheck, widgetCheck] = await Promise.all([
-      rawOfferId
-        ? db.select({ id: offers.id }).from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, rawOfferId))).limit(1)
+    const [offerRows, widgetRows] = await Promise.all([
+      offerIds.length > 0
+        ? db.select({ id: offers.id }).from(offers).where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)))
         : Promise.resolve([]),
-      rawWidgetId
-        ? db.select({ id: widgets.id }).from(widgets).where(and(eq(widgets.shopId, shopId), eq(widgets.id, rawWidgetId))).limit(1)
+      widgetIds.length > 0
+        ? db.select({ id: widgets.id }).from(widgets).where(and(eq(widgets.shopId, shopId), inArray(widgets.id, widgetIds)))
         : Promise.resolve([]),
     ]);
+    const validOfferIds = new Set(offerRows.map((row) => row.id));
+    const validWidgetIds = new Set(widgetRows.map((row) => row.id));
 
-    await db.insert(analyticsEvents).values({
-      shopId,
-      eventName,
-      sessionId: typeof body["session_id"] === "string" ? body["session_id"] : typeof body["sessionId"] === "string" ? body["sessionId"] : null,
-      cartToken: typeof body["cart_token"] === "string" ? body["cart_token"] : typeof body["cartToken"] === "string" ? body["cartToken"] : null,
-      customerId: typeof body["customer_id"] === "string" ? body["customer_id"] : null,
-      offerId: offerCheck[0]?.id ?? null,
-      widgetId: widgetCheck[0]?.id ?? null,
-      properties: body,
+    const rowsToInsert = rawEvents.flatMap((event) => {
+      const eventName = typeof event["event"] === "string"
+        ? event["event"]
+        : typeof event["event_name"] === "string"
+          ? event["event_name"]
+          : typeof event["eventName"] === "string"
+            ? event["eventName"]
+            : null;
+      if (!eventName || eventName.length > 100) return [];
+
+      const rawOfferId = uuidOrNull(event["offer_id"] ?? event["offerId"]);
+      const rawWidgetId = uuidOrNull(event["widget_id"] ?? event["widgetId"]);
+
+      return [{
+        shopId,
+        eventName,
+        sessionId: typeof event["session_id"] === "string" ? event["session_id"] : typeof event["sessionId"] === "string" ? event["sessionId"] : null,
+        cartToken: typeof event["cart_token"] === "string" ? event["cart_token"] : typeof event["cartToken"] === "string" ? event["cartToken"] : null,
+        customerId: typeof event["customer_id"] === "string" ? event["customer_id"] : null,
+        offerId: rawOfferId && validOfferIds.has(rawOfferId) ? rawOfferId : null,
+        widgetId: rawWidgetId && validWidgetIds.has(rawWidgetId) ? rawWidgetId : null,
+        properties: event,
+      }];
     });
+
+    if (rowsToInsert.length > 0) {
+      await db.insert(analyticsEvents).values(rowsToInsert);
+    }
   } catch (err) {
-    console.error("[analytics] Failed to insert event", { shopId, eventName, err });
+    console.error("[analytics] Failed to insert event(s)", { shopId, err });
     return Response.json({ error: "Failed to record event" }, { status: 500 });
   }
 

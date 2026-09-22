@@ -15,6 +15,20 @@
       "when": 1749737400000,
       "tag": "0001_offer_performance_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788470400000,
+      "tag": "0002_shop_discount_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788470500000,
+      "tag": "0003_webhook_deliveries",
+      "breakpoints": true
     }
   ]
 }

@@ -45,7 +45,9 @@ import { getDb, shops } from "@promo/db";
 import { SHOPIFY_API_VERSION } from "./lib/shopify-api-version.js";
 import { encryptToken } from "./lib/token-crypto.server.js";
 import { shopifyGraphQL } from "./lib/shopify-fetch.server.js";
+import { waitUntil } from "@vercel/functions";
 import { syncAllProducts } from "./lib/sync/product-sync.server.js";
+import { ensureDiscountNode } from "./lib/discount-node.server.js";
 import { productCache } from "@promo/db";
 import { count, eq as drizzleEq } from "drizzle-orm";
 
@@ -155,20 +157,40 @@ const shopify = shopifyApp({
             .from(productCache)
             .where(drizzleEq(productCache.shopId, shopRow2.id));
           if ((countRow?.n ?? 0) === 0) {
-            syncAllProducts(
-              shopRow2.id,
-              session.shop,
-              session.accessToken ?? "",
-              shopRow2.currencyCode ?? "USD",
-            ).catch((e: unknown) => {
-              Sentry.captureException(e, { extra: { shop: session.shop, context: "afterAuth-product-sync" } });
-              console.error("[afterAuth] Initial product sync failed:", e instanceof Error ? e.message : e);
-            });
+            // waitUntil, not a bare un-awaited promise: Vercel can freeze/kill
+            // the function as soon as the auth response is sent, which would
+            // otherwise cut this sync off mid-run.
+            waitUntil(
+              syncAllProducts(
+                shopRow2.id,
+                session.shop,
+                session.accessToken ?? "",
+                shopRow2.currencyCode ?? "USD",
+              ).catch((e: unknown) => {
+                Sentry.captureException(e, { extra: { shop: session.shop, context: "afterAuth-product-sync" } });
+                console.error("[afterAuth] Initial product sync failed:", e instanceof Error ? e.message : e);
+              }),
+            );
           }
         }
       } catch (syncErr) {
         // Non-fatal — sync can be re-triggered from the UI
         console.error("[afterAuth] Could not check/trigger product sync:", syncErr instanceof Error ? syncErr.message : syncErr);
+      }
+
+      // Register the automatic app discount backed by the Discount Function.
+      // Non-fatal: if the function hasn't been deployed yet (fresh dev setup),
+      // this is retried lazily on the next offer publish.
+      try {
+        const db3 = getDb();
+        const shopRows3 = await db3.select({ id: shops.id }).from(shops).where(drizzleEq(shops.myshopifyDomain, session.shop)).limit(1);
+        const shopRow3 = shopRows3[0];
+        if (shopRow3 && session.accessToken) {
+          await ensureDiscountNode(shopRow3.id, session.shop, session.accessToken);
+        }
+      } catch (discountErr) {
+        Sentry.captureException(discountErr, { extra: { shop: session.shop, context: "afterAuth-ensure-discount-node" } });
+        console.error("[afterAuth] Could not register automatic app discount:", discountErr instanceof Error ? discountErr.message : discountErr);
       }
     },
   },
@@ -177,3 +199,6 @@ const shopify = shopifyApp({
 
 export const authenticate = shopify.authenticate;
 export const login = shopify.login;
+export const addDocumentResponseHeaders = shopify.addDocumentResponseHeaders;
+/** Exposed so webhook handlers can purge a shop's sessions on uninstall/redact. */
+export { sessionStorage };

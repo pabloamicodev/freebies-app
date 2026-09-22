@@ -1,0 +1,17 @@
+api_version = "2026-04"
+
+[[extensions]]
+name = "Promo Engine Cart Transform"
+handle = "promo-engine-cart-transform"
+type = "function"
+uid = "e62787b5-0d78-486a-917b-7d111cbc0d38"
+
+  [[extensions.targeting]]
+  target = "cart.transform.run"
+  input_query = "input.graphql"
+  export = "run"
+
+  [extensions.build]
+  command = "cargo build --target=wasm32-wasip1 --release"
+  path = "target/wasm32-wasip1/release/promo-engine-cart-transform.wasm"
+  watch = ["src/**/*.rs"]

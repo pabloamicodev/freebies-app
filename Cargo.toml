@@ -5,6 +5,11 @@ members = [
     "extensions/cart-validation",
 ]
 resolver = "2"
+exclude = [
+    "apps/shopify-admin/extensions/discount-function",
+    "apps/shopify-admin/extensions/cart-transform",
+    "apps/shopify-admin/extensions/cart-validation",
+]
 
 [profile.release]
 opt-level = "s"

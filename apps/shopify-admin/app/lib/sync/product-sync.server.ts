@@ -1,10 +1,9 @@
 /**
  * Inline product catalog sync — runs inside the Vercel serverless function.
- * Mirrors the BullMQ worker logic without requiring a separate process.
  */
 
 import { getDb, productCache, variantCache } from "@promo/db";
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 import { SHOPIFY_API_VERSION } from "../shopify-api-version.js";
 
 const PRODUCTS_PER_PAGE = 250;
@@ -77,13 +76,18 @@ async function fetchPage(shopDomain: string, accessToken: string, cursor: string
   return json.data!.products;
 }
 
-async function upsertProduct(shopId: string, product: ShopifyProduct, currencyCode: string) {
+/** Upserts a whole page (up to 250 products + their variants) in two batch
+ * statements instead of one round-trip per product/variant — at catalog
+ * scale (thousands of SKUs) the original per-row loop was the sync's
+ * dominant cost and its main risk of running past the serverless timeout. */
+async function upsertProductPage(shopId: string, products: ShopifyProduct[], currencyCode: string) {
+  if (products.length === 0) return;
   const db = getDb();
   const now = new Date();
 
   await db
     .insert(productCache)
-    .values({
+    .values(products.map((product) => ({
       shopId,
       productGid: product.id,
       handle: product.handle,
@@ -96,56 +100,57 @@ async function upsertProduct(shopId: string, product: ShopifyProduct, currencyCo
       collections: product.collections.nodes.map((c) => c.id),
       raw: product,
       syncedAt: now,
-    })
+    })))
     .onConflictDoUpdate({
       target: [productCache.shopId, productCache.productGid],
       set: {
-        handle: product.handle,
-        title: product.title,
-        vendor: product.vendor,
-        productType: product.productType,
-        tags: product.tags,
-        status: product.status,
-        imageUrl: product.featuredImage?.url ?? null,
-        collections: product.collections.nodes.map((c) => c.id),
-        raw: product,
-        syncedAt: now,
+        handle: sql`excluded.handle`,
+        title: sql`excluded.title`,
+        vendor: sql`excluded.vendor`,
+        productType: sql`excluded.product_type`,
+        tags: sql`excluded.tags`,
+        status: sql`excluded.status`,
+        imageUrl: sql`excluded.image_url`,
+        collections: sql`excluded.collections`,
+        raw: sql`excluded.raw`,
+        syncedAt: sql`excluded.synced_at`,
       },
     });
 
-  for (const v of product.variants.nodes) {
-    await db
-      .insert(variantCache)
-      .values({
-        shopId,
-        productGid: product.id,
-        variantGid: v.id,
-        sku: v.sku || null,
-        title: v.title,
-        price: v.price,
-        compareAtPrice: v.compareAtPrice ?? null,
-        currencyCode,
-        inventoryQuantity: v.inventoryQuantity,
-        inventoryPolicy: v.inventoryPolicy,
-        availableForSale: v.availableForSale,
-        raw: v,
-        syncedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [variantCache.shopId, variantCache.variantGid],
-        set: {
-          sku: v.sku || null,
-          title: v.title,
-          price: v.price,
-          compareAtPrice: v.compareAtPrice ?? null,
-          inventoryQuantity: v.inventoryQuantity,
-          inventoryPolicy: v.inventoryPolicy,
-          availableForSale: v.availableForSale,
-          raw: v,
-          syncedAt: now,
-        },
-      });
-  }
+  const variants = products.flatMap((product) => product.variants.nodes.map((v) => ({
+    shopId,
+    productGid: product.id,
+    variantGid: v.id,
+    sku: v.sku || null,
+    title: v.title,
+    price: v.price,
+    compareAtPrice: v.compareAtPrice ?? null,
+    currencyCode,
+    inventoryQuantity: v.inventoryQuantity,
+    inventoryPolicy: v.inventoryPolicy,
+    availableForSale: v.availableForSale,
+    raw: v,
+    syncedAt: now,
+  })));
+  if (variants.length === 0) return;
+
+  await db
+    .insert(variantCache)
+    .values(variants)
+    .onConflictDoUpdate({
+      target: [variantCache.shopId, variantCache.variantGid],
+      set: {
+        sku: sql`excluded.sku`,
+        title: sql`excluded.title`,
+        price: sql`excluded.price`,
+        compareAtPrice: sql`excluded.compare_at_price`,
+        inventoryQuantity: sql`excluded.inventory_quantity`,
+        inventoryPolicy: sql`excluded.inventory_policy`,
+        availableForSale: sql`excluded.available_for_sale`,
+        raw: sql`excluded.raw`,
+        syncedAt: sql`excluded.synced_at`,
+      },
+    });
 }
 
 export async function syncAllProducts(
@@ -161,10 +166,8 @@ export async function syncAllProducts(
 
   for (;;) {
     const page = await fetchPage(shopDomain, accessToken, cursor);
-    for (const product of page.nodes) {
-      await upsertProduct(shopId, product, currencyCode);
-      synced++;
-    }
+    await upsertProductPage(shopId, page.nodes, currencyCode);
+    synced += page.nodes.length;
     if (!page.pageInfo.hasNextPage) break;
     cursor = page.pageInfo.endCursor;
   }
@@ -175,6 +178,6 @@ export async function syncAllProducts(
     .set({ status: "ARCHIVED", syncedAt: new Date() })
     .where(and(eq(productCache.shopId, shopId), lt(productCache.syncedAt, syncStart)));
 
-  console.log(`[product-sync] ${shopDomain}: synced ${synced} products (started ${syncStart.toISOString()})`);
+  console.info(`[product-sync] ${shopDomain}: synced ${synced} products (started ${syncStart.toISOString()})`);
   return { synced };
 }

@@ -1,6 +1,10 @@
 {
   "framework": "react-router",
   "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
-  "buildCommand": "react-router build",
-  "outputDirectory": "build/client"
+  "buildCommand": "pnpm --filter @promo/db db:migrate && react-router build",
+  "outputDirectory": "build/client",
+  "crons": [
+    { "path": "/api/cron/offers", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/analytics-cleanup", "schedule": "0 3 * * *" }
+  ]
 }

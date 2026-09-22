@@ -27,9 +27,13 @@ const ICONS = {
 
 export function Toast({ message, type = "error", onDismiss, duration = 4000 }: ToastProps) {
   useEffect(() => {
+    // WCAG 2.2.1 (Timing Adjustable): an error is often the only feedback a
+    // merchant gets about why their action failed — it must stay until they
+    // dismiss it, not vanish on a timer before it's been read.
+    if (type === "error") return;
     const t = setTimeout(onDismiss, duration);
     return () => clearTimeout(t);
-  }, [onDismiss, duration]);
+  }, [onDismiss, duration, type]);
 
   return (
     <div className={`b-toast b-toast-${type}`} role="alert" aria-live="assertive">

@@ -33,7 +33,7 @@ const SLUG_TO_TEMPLATE: Record<string, string> = {
   "cart-value": "cart_value", tiered: "tiered", scratch: "scratch", custom: "scratch",
 };
 
-type ConditionType = "specific_product" | "cart_value" | "cart_quantity" | "cart_value_multiplier";
+type ConditionType = "specific_product" | "cart_value" | "cart_quantity" | "cart_value_multiplier" | "pack_of_products";
 
 interface TemplatePreset {
   internalName: string; publicTitle: string;
@@ -53,6 +53,7 @@ const CONDITION_TYPE_LABEL: Record<ConditionType, string> = {
   cart_value:             "Cart value condition",
   cart_quantity:          "Cart quantity condition",
   cart_value_multiplier:  "Tiered cart value condition",
+  pack_of_products:       "Pack of products condition",
 };
 
 // ─── Local icons (only used within this file) ─────────────────────────────────

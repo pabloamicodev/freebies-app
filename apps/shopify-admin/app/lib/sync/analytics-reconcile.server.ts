@@ -6,16 +6,16 @@ export interface ReconcileOrderData {
   orderId: string;
   orderGid: string;
   cartToken: string | null;
+  customerId: string | null;
   totalPriceCents: number;
   offerIds: string[];
   sessionId: string | null;
 }
 
 export async function reconcileOrderAttribution(data: ReconcileOrderData): Promise<void> {
-  const { shopId, orderId, orderGid, cartToken, totalPriceCents, offerIds, sessionId } = data;
+  const { shopId, orderId, orderGid, cartToken, customerId, totalPriceCents, offerIds, sessionId } = data;
 
-  const identifiers = [cartToken, sessionId].filter(Boolean);
-  if (identifiers.length === 0 || offerIds.length === 0) return;
+  if (offerIds.length === 0) return;
 
   const db = getDb();
 
@@ -25,12 +25,14 @@ export async function reconcileOrderAttribution(data: ReconcileOrderData): Promi
       eventName: "order_placed_attributed",
       sessionId: sessionId ?? cartToken,
       cartToken,
+      customerId,
       orderId: orderGid,
       offerId: offerId.length === 36 ? offerId : null,
       properties: {
         order_id: orderId,
         total_price_cents: totalPriceCents,
         offer_ids: offerIds,
+        subtotalCents: totalPriceCents,
       },
     }).onConflictDoNothing();
   }

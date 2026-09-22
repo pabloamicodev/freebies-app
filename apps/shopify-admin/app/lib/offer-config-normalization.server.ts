@@ -1,4 +1,11 @@
 export function normalizeConditionValue(conditionType: string, value: Record<string, unknown>): Record<string, unknown> {
+  if (conditionType === "cart_value" && value["maxCents"] === undefined && value["maxAmountCents"] !== undefined) {
+    return {
+      ...value,
+      maxCents: value["maxAmountCents"],
+    };
+  }
+
   if (conditionType === "specific_product" && !Array.isArray(value["requirements"]) && Array.isArray(value["variantIds"])) {
     const minQuantity = Number.isInteger(value["minQtyPerProduct"]) ? Number(value["minQtyPerProduct"]) : 1;
     return {

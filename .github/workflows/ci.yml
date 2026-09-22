@@ -21,8 +21,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Typecheck
         run: pnpm -r typecheck
-      - name: Unit tests
-        run: pnpm test
+      - name: Unit tests with coverage
+        run: pnpm test:coverage
+      - name: Build admin app
+        run: pnpm --filter shopify-admin build
+        env:
+          SHOPIFY_API_KEY: ci-placeholder
+          SHOPIFY_API_SECRET: ci-placeholder
+          SHOPIFY_APP_URL: https://ci-placeholder.example.com
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+          NODE_ENV: development
       - name: Upload coverage
         uses: codecov/codecov-action@v4
         with:

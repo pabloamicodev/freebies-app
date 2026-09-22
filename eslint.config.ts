@@ -10,7 +10,6 @@ const tsProjects = [
   "./packages/rule-engine/tsconfig.json",
   "./packages/shared-types/tsconfig.json",
   "./packages/storefront-runtime/tsconfig.json",
-  "./workers/product-sync/tsconfig.json",
 ];
 
 const config: Linter.Config[] = [
@@ -24,6 +23,10 @@ const config: Linter.Config[] = [
       "**/*.config.ts",
       "**/tests/**",
       "**/test/**",
+      // UI extensions are their own isolated dependency trees outside the
+      // pnpm workspace (each has its own @shopify/ui-extensions-react version
+      // constraints) — none of the workspace tsconfigs cover them.
+      "extensions/**",
     ],
     languageOptions: {
       parser: tsParser,
@@ -45,9 +48,9 @@ const config: Linter.Config[] = [
       "no-console": ["warn", { allow: ["warn", "error", "info"] }],
     },
   },
-  // Config files and test files — no type-aware rules (not in any tsconfig)
+  // Config files, test files, and UI extensions — no type-aware rules (not in any tsconfig)
   {
-    files: ["**/*.config.ts", "**/tests/**/*.ts", "**/test/**/*.ts"],
+    files: ["**/*.config.ts", "**/tests/**/*.ts", "**/test/**/*.ts", "extensions/**/*.ts", "extensions/**/*.tsx"],
     languageOptions: {
       parser: tsParser,
       parserOptions: {

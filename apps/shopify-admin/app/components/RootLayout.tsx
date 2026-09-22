@@ -41,6 +41,14 @@ export function RootLayout({ children }: { children: ReactNode }) {
           </div>
           <style>{`@keyframes b-dot{0%,80%,100%{transform:scale(0.6);opacity:0.4}40%{transform:scale(1);opacity:1}}`}</style>
         </div>
+        {/* Safety net: if React never mounts (a hydration crash, a script
+            blocked by an ad blocker/CSP), the loader above would otherwise
+            spin forever with no way out for the merchant. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `setTimeout(function(){var el=document.getElementById("app-initial-loader");if(el){el.innerHTML='<div style="text-align:center;font-family:system-ui,sans-serif;color:#1c1917"><p style="font-weight:600;margin:0 0 8px">This is taking longer than expected</p><button onclick="location.reload()" style="padding:8px 16px;border-radius:999px;border:1px solid rgba(28,25,23,0.15);background:#fff;cursor:pointer;font:inherit">Reload</button></div>';}},15000);`,
+          }}
+        />
         {children}
         <ScrollRestoration />
         <Scripts />

@@ -90,6 +90,14 @@ function injectStyles() {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
+function formatMoney(cents: number, currencyCode: string): string {
+  try {
+    return new Intl.NumberFormat(navigator.language || "en-US", { style: "currency", currency: currencyCode }).format(cents / 100);
+  } catch {
+    return `${(cents / 100).toFixed(2)} ${currencyCode}`;
+  }
+}
+
 interface GiftSliderProps {
   payload: GiftSliderPayload;
   sessionId: string;
@@ -195,8 +203,8 @@ function GiftSlider({ payload, sessionId, onClose, onConfirm }: GiftSliderProps)
                       <span class="pe-gift-free">Free</span>
                     ) : (
                       <>
-                        <s>${(gift.originalPriceCents / 100).toFixed(2)}</s>{" "}
-                        <span class="pe-gift-free">${(gift.discountedPriceCents / 100).toFixed(2)}</span>
+                        <s>{formatMoney(gift.originalPriceCents, payload.currencyCode)}</s>{" "}
+                        <span class="pe-gift-free">{formatMoney(gift.discountedPriceCents, payload.currencyCode)}</span>
                       </>
                     )}
                   </p>
@@ -282,7 +290,6 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string) {
             _promo_engine_offer_id: payload.offerId,
             _promo_engine_reward_id: giftInfo?.variantId ?? variantId,
             _promo_engine_offer_version: "1",
-            _promo_engine_hash: "", // server will verify
           },
         }]);
       }

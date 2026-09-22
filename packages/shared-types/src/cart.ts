@@ -33,8 +33,6 @@ export const PromoLinePropertiesSchema = z.object({
   _promo_engine_offer_id: z.string().uuid(),
   _promo_engine_offer_version: z.string(),
   _promo_engine_reward_id: z.string().uuid(),
-  /** HMAC of (offerId + variantId + sessionId) — verified server-side. */
-  _promo_engine_hash: z.string(),
 });
 export type PromoLineProperties = z.infer<typeof PromoLinePropertiesSchema>;
 

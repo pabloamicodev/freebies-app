@@ -57,6 +57,7 @@ export async function shopifyGraphQL<T>({
           "X-Shopify-Access-Token": accessToken,
         },
         body: JSON.stringify({ query, variables }),
+        signal: AbortSignal.timeout(10_000),
       });
     } catch (networkErr) {
       lastError = networkErr instanceof Error ? networkErr : new Error(String(networkErr));

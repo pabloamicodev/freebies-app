@@ -8,7 +8,7 @@ export default defineConfig({
     include: [
       "packages/**/*.test.ts",
       "workers/**/*.test.ts",
-      "apps/shopify-admin/app/lib/*.test.ts",
+      "apps/shopify-admin/app/lib/**/*.test.ts",
     ],
     exclude: ["**/node_modules/**", "**/dist/**"],
     coverage: {
