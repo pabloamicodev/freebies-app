@@ -29,8 +29,9 @@ export function resolveLineKey(
   // Match by variant ID + all matching properties
   for (const item of freshCart.items) {
     if (item.variant_id !== variantId) continue;
+    const itemProperties = item.properties ?? {};
     const propsMatch = Object.entries(properties).every(
-      ([k, v]) => item.properties[k] === v,
+      ([k, v]) => itemProperties[k] === v,
     );
     if (propsMatch) return item.key;
   }
@@ -48,8 +49,8 @@ export function findGiftLineByOfferId(
   return (
     cart.items.find(
       (item) =>
-        item.properties["_promo_engine_line_type"] === "gift" &&
-        item.properties["_promo_engine_offer_id"] === offerId,
+        item.properties?.["_promo_engine_line_type"] === "gift" &&
+        item.properties?.["_promo_engine_offer_id"] === offerId,
     ) ?? null
   );
 }

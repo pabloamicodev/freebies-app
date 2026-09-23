@@ -27,15 +27,7 @@ type SettingKey =
   | "gift.include_tags"
   | "inventory.method"
   | "inventory.when_out"
-  | "fraud.notify_email"
-  | "fraud.email_address"
   | "fraud.cart_payment_rule"
-  | "fraud.condition_type"
-  | "fraud.min_cart_value"
-  | "fraud.min_cart_qty"
-  | "fraud.max_gifts"
-  | "fraud.per_offer_config"
-  | "fraud.order_protection"
   | "advanced.draft_order_api";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -75,19 +67,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     "gift.include_tags": false,
     "inventory.method": "sync_auto",
     "inventory.when_out": "stop",
-    "fraud.notify_email": true,
-    "fraud.email_address": "",
     "fraud.cart_payment_rule": true,
-    "fraud.condition_type": "all",
-    "fraud.min_cart_value": false,
-    "fraud.min_cart_qty": false,
-    "fraud.max_gifts": false,
-    "fraud.per_offer_config": false,
-    "fraud.order_protection": false,
     "advanced.draft_order_api": false,
   };
 
-  return { shop, settings: { ...defaults, ...settings } };
+  return {
+    shop,
+    settings: {
+      ...defaults,
+      ...settings,
+      // Checkout validation is a security invariant, not an optional UI preference.
+      "fraud.cart_payment_rule": true,
+    },
+  };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -98,19 +90,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const boolField = (name: string) => formData.get(name) === "on" || formData.get(name) === "true";
   const strField = (name: string) => (formData.get(name) as string | null) ?? "";
-
-  // Validate: email is required when fraud notifications are enabled
-  const fraudNotifyEnabled = boolField("fraud_notify_email");
-  const fraudEmailValue = strField("fraud_email_address").trim();
-  if (fraudNotifyEnabled) {
-    if (!fraudEmailValue) {
-      return { error: "Email address is required when fraud notifications are enabled." };
-    }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(fraudEmailValue)) {
-      return { error: "Please enter a valid email address for fraud notifications." };
-    }
-  }
 
   const requestedGiftLogicMode = strField("gift_logic_mode");
   const giftLogicMode = requestedGiftLogicMode === "function" ? requestedGiftLogicMode : "function";
@@ -132,15 +111,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     "gift.include_tags": boolField("gift_include_tags"),
     "inventory.method": strField("inventory_method"),
     "inventory.when_out": strField("inventory_when_out"),
-    "fraud.notify_email": boolField("fraud_notify_email"),
-    "fraud.email_address": strField("fraud_email_address"),
-    "fraud.cart_payment_rule": boolField("fraud_cart_payment_rule"),
-    "fraud.condition_type": strField("fraud_condition_type"),
-    "fraud.min_cart_value": boolField("fraud_min_cart_value"),
-    "fraud.min_cart_qty": boolField("fraud_min_cart_qty"),
-    "fraud.max_gifts": boolField("fraud_max_gifts"),
-    "fraud.per_offer_config": boolField("fraud_per_offer_config"),
-    "fraud.order_protection": boolField("fraud_order_protection"),
+    "fraud.cart_payment_rule": true,
     "advanced.draft_order_api": boolField("advanced_draft_order_api"),
     "app.timezone": strField("timezone"),
     "app.language": strField("language"),
@@ -252,15 +223,6 @@ export default function SettingsPage() {
     includeTags: Boolean(s["gift.include_tags"]),
     invMethod: String(s["inventory.method"] ?? "sync_auto"),
     whenOut: String(s["inventory.when_out"] ?? "stop"),
-    fraudNotify: Boolean(s["fraud.notify_email"]),
-    fraudEmail: String(s["fraud.email_address"] ?? ""),
-    cartPayRule: Boolean(s["fraud.cart_payment_rule"]),
-    condType: String(s["fraud.condition_type"] ?? "all"),
-    minCartVal: Boolean(s["fraud.min_cart_value"]),
-    minCartQty: Boolean(s["fraud.min_cart_qty"]),
-    maxGifts: Boolean(s["fraud.max_gifts"]),
-    perOfferConfig: Boolean(s["fraud.per_offer_config"]),
-    orderProtection: Boolean(s["fraud.order_protection"]),
     draftOrderApi: Boolean(s["advanced.draft_order_api"]),
   }));
   const {
@@ -280,15 +242,6 @@ export default function SettingsPage() {
     includeTags,
     invMethod,
     whenOut,
-    fraudNotify,
-    fraudEmail,
-    cartPayRule,
-    condType,
-    minCartVal,
-    minCartQty,
-    maxGifts,
-    perOfferConfig,
-    orderProtection,
     draftOrderApi,
   } = settingsState;
   const setAppEnabled = createFieldSetter(setSettingsField, "appEnabled");
@@ -306,15 +259,6 @@ export default function SettingsPage() {
   const setIncludeTags = createFieldSetter(setSettingsField, "includeTags");
   const setInvMethod = createFieldSetter(setSettingsField, "invMethod");
   const setWhenOut = createFieldSetter(setSettingsField, "whenOut");
-  const setFraudNotify = createFieldSetter(setSettingsField, "fraudNotify");
-  const setFraudEmail = createFieldSetter(setSettingsField, "fraudEmail");
-  const setCartPayRule = createFieldSetter(setSettingsField, "cartPayRule");
-  const setCondType = createFieldSetter(setSettingsField, "condType");
-  const setMinCartVal = createFieldSetter(setSettingsField, "minCartVal");
-  const setMinCartQty = createFieldSetter(setSettingsField, "minCartQty");
-  const setMaxGifts = createFieldSetter(setSettingsField, "maxGifts");
-  const setPerOfferConfig = createFieldSetter(setSettingsField, "perOfferConfig");
-  const setOrderProtection = createFieldSetter(setSettingsField, "orderProtection");
   const setDraftOrderApi = createFieldSetter(setSettingsField, "draftOrderApi");
 
   return (
@@ -541,85 +485,19 @@ export default function SettingsPage() {
           </Section>
 
           {/* ── Fraud protection ─────────────────────────────── */}
-          <Section title="Fraud protection" desc="Level up your store's security.">
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <CheckRow
-                name="fraud_notify_email"
-                label="Notify via email"
-                checked={fraudNotify}
-                onChange={setFraudNotify}
-              />
-              {fraudNotify && (
-                <div style={{ paddingLeft: 26 }}>
-                  <label className="b-label" htmlFor="settings-fraud-email">
-                    Email address <span style={{ color: "var(--red)" }}>*</span>
-                  </label>
-                  <input
-                    id="settings-fraud-email"
-                    aria-label="Email address"
-                    className="b-input"
-                    type="email"
-                    name="fraud_email_address"
-                    value={fraudEmail}
-                    onChange={(e) => setFraudEmail(e.target.value)}
-                    placeholder="you@example.com"
-                    required
-                    style={fraudNotify && !fraudEmail ? { borderColor: "var(--red)" } : undefined}
-                  />
-                  {fraudNotify && !fraudEmail && (
-                    <div className="b-help" style={{ color: "var(--red)" }}>
-                      Required when fraud notifications are enabled.
-                    </div>
-                  )}
+          <Section title="Freebie protection" desc="Server-side safeguards for every active gift offer.">
+            <input type="hidden" name="fraud_cart_payment_rule" value="true" />
+            <div className="b-banner b-banner-green" role="status" style={{ marginBottom: 0 }}>
+              <span className="b-banner-icon" aria-hidden="true">✓</span>
+              <div className="b-banner-body">
+                <div className="b-banner-title">
+                  Checkout protection is always on{" "}
+                  <span className="b-badge b-badge-green" style={{ verticalAlign: "middle", fontSize: 12 }}>Active</span>
                 </div>
-              )}
-
-              <div className="b-checkbox-row">
-                <input
-                  type="checkbox"
-                  id="fraud_cart_payment_rule"
-                  name="fraud_cart_payment_rule"
-                  checked={cartPayRule}
-                  onChange={(e) => setCartPayRule(e.target.checked)}
-                />
-                <div>
-                  <label htmlFor="fraud_cart_payment_rule" className="b-checkbox-label">
-                    Cart and payment protection rule{" "}
-                    <span className="b-badge b-badge-blue" style={{ verticalAlign: "middle", fontSize: 12 }}>Recommended</span>
-                  </label>
-                  <div className="b-checkbox-help">
-                    Once you activate the cart and payment protection rule, BOGOS will add a custom checkout validation rule to Configuration &gt; Payment &gt; Checkout rules. This rule will prevent customers from paying only with gifts.
-                  </div>
+                <div className="b-banner-text">
+                  Every gift is bound to its active offer, reward, version, exact eligible variants, and quantity limits. Tampered or stale gift lines are blocked at checkout.
                 </div>
               </div>
-
-              {cartPayRule && (
-                <div style={{ paddingLeft: 26 }}>
-                  <p className="b-text-sm b-text-bold" style={{ marginBottom: 8 }}>Additional condition</p>
-                  <div style={{ display: "flex", gap: 16 }}>
-                    <RadioRow name="fraud_condition_type" value="all" label="All conditions" checked={condType === "all"} onChange={setCondType} />
-                    <RadioRow name="fraud_condition_type" value="any" label="Any condition" checked={condType === "any"} onChange={setCondType} />
-                  </div>
-                  <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-                    <CheckRow name="fraud_min_cart_value" label="Minimum cart value" checked={minCartVal} onChange={setMinCartVal} />
-                    <CheckRow name="fraud_min_cart_qty" label="Minimum cart quantity" checked={minCartQty} onChange={setMinCartQty} />
-                    <CheckRow name="fraud_max_gifts" label="Maximum number of gifts per order" checked={maxGifts} onChange={setMaxGifts} />
-                  </div>
-                </div>
-              )}
-
-              <CheckRow
-                name="fraud_per_offer_config"
-                label="Apply the cart and payment protection configuration for each offer separately"
-                checked={perOfferConfig}
-                onChange={setPerOfferConfig}
-              />
-              <CheckRow
-                name="fraud_order_protection"
-                label="Order protection"
-                checked={orderProtection}
-                onChange={setOrderProtection}
-              />
             </div>
           </Section>
 

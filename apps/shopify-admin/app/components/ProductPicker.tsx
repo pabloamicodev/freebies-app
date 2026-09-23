@@ -5,7 +5,7 @@
  * Devuelve los GIDs de las variantes seleccionadas.
  */
 
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import {
   Modal, TextField, ResourceList, ResourceItem, Thumbnail,
   Text, Badge, InlineStack, BlockStack, Spinner, Button,
@@ -24,6 +24,7 @@ interface ProductVariant {
   availableForSale: boolean;
   inventoryQuantity: number | null;
   requiresSellingPlan: boolean;
+  inventoryPolicy: string | null;
 }
 
 interface Product {
@@ -91,6 +92,7 @@ function ProductPickerContent({
   const setQuery = createFieldSetter(setPickerField, "query");
   const setSelected = createFieldSetter(setPickerField, "selected");
   const setExpandedProducts = createFieldSetter(setPickerField, "expandedProducts");
+  const fetchRequestId = useRef(0);
 
   // Sync selection from parent whenever the modal opens
   useEffect(() => {
@@ -99,17 +101,20 @@ function ProductPickerContent({
 
   // Fetch products from search API. If the cache has never been synced, trigger sync first.
   const fetchProducts = useCallback(async (q: string) => {
+    const requestId = ++fetchRequestId.current;
     setPickerField("loading", true);
     setPickerField("error", null);
     try {
       const params = new URLSearchParams({ q, limit: "20", variants: "true" });
       const res = await fetch(`/api/products/search?${params}`);
       if (!res.ok) {
+        if (requestId !== fetchRequestId.current) return;
         setPickerField("error", `Search failed (${res.status}). Please try again.`);
         setPickerField("products", []);
         return;
       }
       const data = await res.json() as { products: Product[]; cache: { lastSyncedAt: string | null } };
+      if (requestId !== fetchRequestId.current) return;
 
       // Cache is empty and has never been synced — trigger initial sync then reload.
       if (data.products.length === 0 && data.cache.lastSyncedAt === null) {
@@ -123,7 +128,7 @@ function ProductPickerContent({
         setPickerField("syncing", false);
         // Re-fetch after sync
         const res2 = await fetch(`/api/products/search?${params}`);
-        if (res2.ok) {
+        if (res2.ok && requestId === fetchRequestId.current) {
           const data2 = await res2.json() as { products: Product[] };
           setPickerField("products", data2.products);
         }
@@ -132,23 +137,33 @@ function ProductPickerContent({
 
       setPickerField("products", data.products);
     } catch {
+      if (requestId !== fetchRequestId.current) return;
       setPickerField("error", "Search unavailable. Check your connection and try again.");
       setPickerField("products", []);
     } finally {
-      setPickerField("loading", false);
-      setPickerField("syncing", false);
+      if (requestId === fetchRequestId.current) {
+        setPickerField("loading", false);
+        setPickerField("syncing", false);
+      }
     }
   }, [setPickerField]);
 
   const debouncedFetch = useDebouncedCallback(fetchProducts, 300);
 
   useEffect(() => {
-    void fetchProducts("");
-  }, [fetchProducts]);
+    if (query) {
+      void debouncedFetch(query);
+    } else {
+      debouncedFetch.cancel();
+      void fetchProducts("");
+    }
+    return () => debouncedFetch.cancel();
+  }, [debouncedFetch, fetchProducts, query]);
 
-  useEffect(() => {
-    void debouncedFetch(query);
-  }, [debouncedFetch, query]);
+  useEffect(() => () => {
+    fetchRequestId.current += 1;
+    debouncedFetch.cancel();
+  }, [debouncedFetch]);
 
   const toggleVariant = useCallback((variantGid: string) => {
     setSelected((prev) => {
@@ -231,7 +246,13 @@ function ProductPickerContent({
             items={products}
             renderItem={(product) => {
               const isExpanded = expandedProducts.has(product.id);
-              const variantGids = product.variants?.map((v) => v.id) ?? [];
+              const selectableVariants = product.variants?.filter((variant) =>
+                variant.availableForSale &&
+                !variant.requiresSellingPlan &&
+                (variant.inventoryPolicy === "CONTINUE" || (variant.inventoryQuantity ?? 0) > 0),
+              ) ?? [];
+              const variantGids = selectableVariants.map((variant) => variant.id);
+              const productSelectable = product.status === "ACTIVE" && variantGids.length > 0;
               const productSelected =
                 mode === "products"
                   ? selected.has(product.id)
@@ -240,6 +261,7 @@ function ProductPickerContent({
                 <ResourceItem
                   id={product.id}
                   onClick={() => {
+                    if (!productSelectable) return;
                     if (mode === "products" || !product.variants?.length || product.variants.length === 1) {
                       if (product.variants?.length === 1 && mode === "variants") {
                         toggleVariant(product.variants[0]!.id);
@@ -268,7 +290,9 @@ function ProductPickerContent({
                           label={`Select ${product.title}`}
                           labelHidden
                           checked={productSelected}
+                          disabled={!productSelectable}
                           onChange={() => {
+                            if (!productSelectable) return;
                             if (product.variants?.length === 1 && mode === "variants") {
                               toggleVariant(product.variants[0]!.id);
                             } else {
@@ -279,7 +303,10 @@ function ProductPickerContent({
                         <Text as="p" fontWeight="semibold">{product.title}</Text>
                       </InlineStack>
                       <InlineStack gap="200">
-                        {product.status === "ARCHIVED" && <Badge tone="critical">Archived</Badge>}
+                        {product.status !== "ACTIVE" && <Badge tone="critical">Not active</Badge>}
+                        {!productSelectable && product.status === "ACTIVE" && (
+                          <Badge tone="critical">No eligible variants</Badge>
+                        )}
                         {product.vendor && <Text as="span" tone="subdued">{product.vendor}</Text>}
                       </InlineStack>
                     </InlineStack>
@@ -293,6 +320,7 @@ function ProductPickerContent({
                               label={`Select ${product.title} - ${variant.title}`}
                               labelHidden
                               checked={selected.has(variant.id)}
+                              disabled={!selectableVariants.some((candidate) => candidate.id === variant.id)}
                               onChange={() => toggleVariant(variant.id)}
                             />
                             <Text as="span" variant="bodySm">{variant.title}</Text>

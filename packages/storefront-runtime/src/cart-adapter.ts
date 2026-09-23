@@ -31,6 +31,8 @@ export interface CartData {
   id: string | null;
   items: CartItem[];
   total_price: number;
+  /** Shopify Ajax cart subtotal before order-level discounts. */
+  items_subtotal_price?: number;
   currency: string;
   item_count: number;
   discount_codes?: Array<{ code: string }>;
@@ -42,7 +44,10 @@ export interface CartItem {
   product_id: number;
   quantity: number;
   price: number;
-  properties: Record<string, string>;
+  final_price?: number;
+  line_price?: number;
+  final_line_price?: number;
+  properties: Record<string, string> | null;
   handle: string;
   title: string;
   variant_title: string | null;
@@ -60,11 +65,17 @@ export interface CartItem {
 
 let mutationQueue = Promise.resolve();
 
+function toLegacyVariantId(variantId: string): number {
+  const candidate = variantId.split("/").pop() ?? variantId;
+  if (!/^\d+$/.test(candidate)) throw new Error("Invalid Shopify variant ID.");
+  const parsed = Number(candidate);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error("Invalid Shopify variant ID.");
+  return parsed;
+}
+
 function enqueue<T>(fn: () => Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    mutationQueue = mutationQueue
-      .then(fn)
-      .then(resolve, reject);
+    mutationQueue = mutationQueue.then(fn).then(resolve, reject);
   });
 }
 
@@ -86,13 +97,15 @@ export const AjaxCartAdapter = {
   },
 
   async addLines(lines: CartLineAdd[]): Promise<CartData> {
+    if (lines.length === 0) return this.getCart();
+    if (lines.length > 250) throw new Error("Cannot add more than 250 cart lines at once.");
     return enqueue(() =>
       fetchJson<CartData>(`${window.Shopify?.routes?.root ?? "/"}cart/add.js`, {
         method: "POST",
         body: JSON.stringify({
           items: lines.map((l) => ({
-            id: parseInt(l.variantId.split("/").pop() ?? l.variantId, 10),
-            quantity: l.quantity,
+            id: toLegacyVariantId(l.variantId),
+            quantity: Number.isSafeInteger(l.quantity) && l.quantity > 0 ? l.quantity : 1,
             properties: l.properties,
           })),
         }),
@@ -118,6 +131,17 @@ export const AjaxCartAdapter = {
       fetchJson<CartData>(`${window.Shopify?.routes?.root ?? "/"}cart/change.js`, {
         method: "POST",
         body: JSON.stringify({ id: line.key, quantity: 0 }),
+      }),
+    );
+  },
+
+  async removeLines(lines: CartLineRemove[]): Promise<CartData> {
+    const keys = [...new Set(lines.flatMap((line) => line.key ? [line.key] : []))];
+    if (keys.length === 0) return this.getCart();
+    return enqueue(() =>
+      fetchJson<CartData>(`${window.Shopify?.routes?.root ?? "/"}cart/update.js`, {
+        method: "POST",
+        body: JSON.stringify({ updates: Object.fromEntries(keys.map((key) => [key, 0])) }),
       }),
     );
   },

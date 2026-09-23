@@ -50,9 +50,12 @@ export function extractQualifyingLines(
   });
 }
 
-/** Sum of (price × quantity) across qualifying lines, in cents. */
+/** Sum of final line subtotals across qualifying lines, in cents. */
 export function sumQualifyingValue(lines: NormalizedCartLine[]): number {
-  return lines.reduce((acc, line) => acc + line.priceCents * line.quantity, 0);
+  return lines.reduce(
+    (acc, line) => acc + (line.lineSubtotalCents ?? line.priceCents * line.quantity),
+    0,
+  );
 }
 
 /** Total qualifying item count across lines. */
@@ -60,13 +63,28 @@ export function sumQualifyingQuantity(lines: NormalizedCartLine[]): number {
   return lines.reduce((acc, line) => acc + line.quantity, 0);
 }
 
-/** Build a SHA-256 deterministic cart hash from variant IDs + quantities + discount codes. */
+/** Build a SHA-256 deterministic cart hash from all eligibility-relevant cart data. */
 export async function buildCartHash(cart: NormalizedCart): Promise<string> {
   const parts = [
     ...cart.lines
-      .map((l) => `${l.variantId}:${l.quantity}`)
+      .map((line) => {
+        const properties = Object.entries(line.properties)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, value]) => `${key}=${value}`)
+          .join(",");
+        return [
+          line.key,
+          line.variantId,
+          line.quantity,
+          line.priceCents,
+          line.lineSubtotalCents ?? line.priceCents * line.quantity,
+          line.sellingPlanId ?? "",
+          properties,
+        ].join(":");
+      })
       .sort(),
     ...cart.discountCodes.slice().sort(),
+    String(cart.subtotalCents),
     cart.currencyCode,
   ];
   const input = parts.join("|");

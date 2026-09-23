@@ -7,13 +7,15 @@
 {%- if block.settings.style == 'button' -%}
   <button
     class="pe-gift-slider-trigger"
+    type="button"
+    data-promo-gift-slider-trigger
+    data-offer-id="{{ block.settings.offer_id | escape }}"
     style="
       background: {{ block.settings.button_color | default: '#111111' }};
       color: {{ block.settings.text_color | default: '#ffffff' }};
       border: none; border-radius: 6px; padding: 10px 20px;
       font-size: 14px; font-weight: 700; cursor: pointer;
     "
-    onclick="window.PromoEngine?.evaluate()"
     {{ block.shopify_attributes }}
   >
     🎁 {{ block.settings.button_label | default: 'Choose Your Gift' }}

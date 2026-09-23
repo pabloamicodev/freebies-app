@@ -261,16 +261,32 @@ export const RewardTargetSchema = z.object({
   discountPercentageOnGifts: z.number().min(0).max(100).optional(),
 });
 
+const ShopifyProductGidSchema = z.string().regex(
+  /^gid:\/\/shopify\/Product\/\d+$/,
+  "Expected a Shopify Product GID.",
+);
+const ShopifyVariantGidSchema = z.string().regex(
+  /^gid:\/\/shopify\/ProductVariant\/\d+$/,
+  "Expected a Shopify ProductVariant GID.",
+);
+
 export const ProductGiftTargetSchema = z.object({
   scope: z.literal("cart").optional(),
-  variantId: z.string().optional(),
-  variantIds: z.array(z.string()).optional(),
-  productId: z.string().optional(),
-  productIds: z.array(z.string()).optional(),
-}).strict().refine(
-  (target) => Boolean(target.variantId || target.variantIds?.length || target.productId || target.productIds?.length),
-  { message: "A gift product or variant target is required." },
-);
+  variantId: ShopifyVariantGidSchema.optional(),
+  variantIds: z.array(ShopifyVariantGidSchema).min(1).optional(),
+  productId: ShopifyProductGidSchema.optional(),
+  productIds: z.array(ShopifyProductGidSchema).min(1).max(1).optional(),
+}).strict().superRefine((target, ctx) => {
+  if (!target.variantId && !target.variantIds?.length && !target.productId && !target.productIds?.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "A gift product or variant target is required." });
+  }
+  if (target.variantId && target.variantIds) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["variantIds"], message: "Use variantId or variantIds, not both." });
+  }
+  if (target.productId && target.productIds) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["productIds"], message: "Use productId or productIds, not both." });
+  }
+});
 
 export const OrderDiscountTargetSchema = z.object({
   scope: z.literal("cart"),
@@ -421,6 +437,14 @@ export function validateRewardPayload(
   ) {
     return z.never().safeParse(discountType);
   }
+  if (
+    rewardType === "product_gift" &&
+    discountType !== "percentage" &&
+    discountType !== "fixed_amount" &&
+    discountType !== "free"
+  ) {
+    return z.never().safeParse(discountType);
+  }
   const valueResult = RewardValueSchema.safeParse(value);
   if (!valueResult.success) return valueResult;
   if (discountType === "percentage" && valueResult.data.amount > 100) {
@@ -528,6 +552,14 @@ export const CompiledOfferSchema = z.object({
     trackMode: TrackModeSchema,
     minQuantity: z.number().int().positive(),
     maxQuantity: z.number().int().positive().optional(),
+  })).default([]),
+  giftRewards: z.array(z.object({
+    id: z.string().uuid(),
+    targetProductIds: z.array(z.string()),
+    targetVariantIds: z.array(z.string()),
+    discountType: DiscountTypeSchema,
+    discountValue: z.number().nonnegative(),
+    maxQuantity: z.number().int().positive(),
   })).default([]),
   productRewards: z.array(z.object({
     id: z.string(),

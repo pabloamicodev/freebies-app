@@ -128,6 +128,57 @@ describe("compileShippingOfferConfigs", () => {
 });
 
 describe("compileOfferConfig", () => {
+  it("compiles gift rules per reward instead of flattening their limits and discounts", () => {
+    const result = compileOfferConfig(
+      offer({ type: "gift" }),
+      [condition("cart_value", { thresholdCents: 5000 })],
+      [
+        shippingReward({
+          rewardType: "product_gift",
+          discountType: "free",
+          value: { amount: 100, currencyCode: "USD" },
+          target: {
+            productId: "gid://shopify/Product/10",
+            variantIds: ["gid://shopify/ProductVariant/11"],
+          },
+          quantity: 1,
+        }),
+        shippingReward({
+          id: "55555555-5555-4555-8555-555555555555",
+          rewardType: "product_gift",
+          discountType: "percentage",
+          value: { amount: 50, currencyCode: "USD" },
+          target: {
+            productId: "gid://shopify/Product/20",
+            variantIds: ["gid://shopify/ProductVariant/21", "gid://shopify/ProductVariant/22"],
+          },
+          quantity: 2,
+        }),
+      ],
+      null,
+      3,
+    );
+
+    expect(result.giftRewards).toEqual([
+      {
+        id: REWARD_ID,
+        targetProductIds: ["gid://shopify/Product/10"],
+        targetVariantIds: ["gid://shopify/ProductVariant/11"],
+        discountType: "free",
+        discountValue: 100,
+        maxQuantity: 1,
+      },
+      {
+        id: "55555555-5555-4555-8555-555555555555",
+        targetProductIds: ["gid://shopify/Product/20"],
+        targetVariantIds: ["gid://shopify/ProductVariant/21", "gid://shopify/ProductVariant/22"],
+        discountType: "percentage",
+        discountValue: 50,
+        maxQuantity: 2,
+      },
+    ]);
+  });
+
   it("preserves exact requirements and compiles product and order rewards", () => {
     const result = compileOfferConfig(
       offer(),
@@ -266,5 +317,16 @@ describe("product reward scope validation", () => {
       variantIds: ["gid://shopify/ProductVariant/upsell"],
       discountPercentageOnGifts: 100,
     }).success).toBe(false);
+  });
+
+  it("requires valid Shopify gift GIDs and only one gift product", () => {
+    expect(validateRewardPayload("product_gift", "free", value, {
+      productIds: ["gid://shopify/Product/10", "gid://shopify/Product/20"],
+      variantIds: ["gid://shopify/ProductVariant/11"],
+    }).success).toBe(false);
+    expect(validateRewardPayload("product_gift", "free", value, {
+      productId: "gid://shopify/Product/10",
+      variantIds: ["gid://shopify/ProductVariant/11", "gid://shopify/ProductVariant/12"],
+    }).success).toBe(true);
   });
 });

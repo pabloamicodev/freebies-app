@@ -66,6 +66,9 @@ export interface UpsellPayload {
 }
 
 export interface SelectableGift {
+  rewardId: string;
+  offerVersion: number;
+  rewardMaxQuantity: number;
   variantId: string;
   productId: string;
   title: string;

@@ -7,9 +7,21 @@ use schema::cart_lines_discounts_generate_run::Input;
 use schema::cart_lines_discounts_generate_run::input::cart::Lines;
 use schema::cart_lines_discounts_generate_run::input::cart::lines::Merchandise;
 use shopify_function::Result;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 const LINE_TYPE_GIFT: &str = "gift";
+
+#[derive(Debug, serde::Deserialize, Clone)]
+struct VolumeDiscountTier {
+    qty: i64,
+    percent: f64,
+}
+
+struct VolumeDiscountGroup {
+    quantity: i64,
+    subtotal_cents: i64,
+    tiers: Vec<VolumeDiscountTier>,
+}
 
 pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> {
     let has_product_discount = input
@@ -92,7 +104,7 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
 }
 
 fn evaluate_offer(offer: &CompiledOffer, input: &Input) -> Vec<schema::ProductDiscountCandidate> {
-    if offer.offer_type == "gift" {
+    if !offer.gift_rewards.is_empty() || offer.offer_type == "gift" {
         return evaluate_gift_offer(offer, input);
     }
     if !offer.product_rewards.is_empty() {
@@ -397,6 +409,54 @@ fn evaluate_gift_offer(offer: &CompiledOffer, input: &Input) -> Vec<schema::Prod
         return vec![];
     }
 
+    if !offer.gift_rewards.is_empty() {
+        let offer_version = offer.version.to_string();
+        let mut applied_by_reward: HashMap<String, i64> = HashMap::new();
+        let mut candidates = Vec::new();
+
+        for line in input.cart().lines().iter() {
+            let line_quantity = i64::from(*line.quantity());
+            if line_quantity <= 0
+                || line_type(line).as_deref() != Some(LINE_TYPE_GIFT)
+                || line_offer_id(line).as_deref() != Some(offer.id.as_str())
+                || line_offer_version(line).as_deref() != Some(offer_version.as_str())
+            {
+                continue;
+            }
+
+            let Some(reward_id) = line_reward_id(line) else { continue };
+            let Some(reward) = offer.gift_rewards.iter().find(|candidate| candidate.id == reward_id) else {
+                continue;
+            };
+            let Some((variant_id, product_id)) = variant_and_product_id(line) else { continue };
+            let target_matches = if !reward.target_variant_ids.is_empty() {
+                reward.target_variant_ids.iter().any(|id| id == &variant_id)
+            } else {
+                reward.target_product_ids.iter().any(|id| id == &product_id)
+            };
+            if !target_matches {
+                continue;
+            }
+
+            let applied = applied_by_reward.entry(reward.id.clone()).or_insert(0);
+            let quantity = line_quantity.min((reward.max_quantity - *applied).max(0));
+            if quantity <= 0 {
+                continue;
+            }
+            *applied += quantity;
+            candidates.push(make_candidate(
+                line.id().clone(),
+                quantity,
+                &reward.discount_type,
+                reward.discount_value,
+                &format!("Gift reward {}", &reward.id[..reward.id.len().min(8)]),
+            ));
+        }
+        return candidates;
+    }
+
+    // Backward-compatible fallback for already-published configs that predate
+    // per-reward gift validation. New publishes always populate giftRewards.
     let gift_variant_set: HashSet<&str> = offer.gift_variant_ids.iter().map(String::as_str).collect();
     let gift_product_set: HashSet<&str> = offer.gift_product_ids.iter().map(String::as_str).collect();
     let max_gift_qty = offer.max_gift_quantity.unwrap_or(i64::MAX);
@@ -417,7 +477,12 @@ fn evaluate_gift_offer(offer: &CompiledOffer, input: &Input) -> Vec<schema::Prod
             None => continue,
         };
 
-        if !gift_variant_set.contains(variant_id.as_str()) && !gift_product_set.contains(product_id.as_str()) {
+        let target_matches = if !gift_variant_set.is_empty() {
+            gift_variant_set.contains(variant_id.as_str())
+        } else {
+            gift_product_set.contains(product_id.as_str())
+        };
+        if !target_matches {
             // Tampered: claims to be this offer's gift but isn't an allowed variant/product.
             continue;
         }
@@ -510,21 +575,38 @@ fn is_eligible_line(line: &Lines, required_set: &HashSet<&str>, excluded_set: &H
 /// current cart at checkout time — the merchant may have edited the offer, or
 /// the cart may have changed, since the storefront runtime's own evaluation.
 fn check_main_condition(offer: &CompiledOffer, input: &Input) -> bool {
+    let excluded_products: HashSet<&str> = offer
+        .excluded_product_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
     let non_gift_lines: Vec<_> = input
         .cart()
         .lines()
         .iter()
         .filter(|line| *line.quantity() > 0 && line_type(line).as_deref() != Some(LINE_TYPE_GIFT))
+        .filter(|line| {
+            variant_and_product_id(line)
+                .map(|(_, product_id)| !excluded_products.contains(product_id.as_str()))
+                .unwrap_or(false)
+        })
         .collect();
 
     if let Some(threshold_cents) = offer.cart_value_threshold_cents {
-        let cart_value_cents: i64 = non_gift_lines
+        let raw_cart_value_cents: i64 = non_gift_lines
             .iter()
             .map(|line| {
                 let amount = line.cost().subtotal_amount().amount().as_f64();
                 to_cents(amount, &line.cost().subtotal_amount().currency_code().to_string())
             })
             .sum();
+        // Discount Functions execute concurrently, so the input does not
+        // contain discounts emitted by the store's separate volume-discount
+        // Function. Mirror only its qualification math here; this Function
+        // still emits no volume-discount candidate of its own.
+        let cart_value_cents = (raw_cart_value_cents
+            - projected_volume_discount_cents(&non_gift_lines))
+            .max(0);
 
         let active_currency = input.cart().cost().subtotal_amount().currency_code().to_string();
         let effective_threshold = resolve_threshold(threshold_cents, &offer.currency_overrides, &active_currency);
@@ -710,6 +792,82 @@ fn line_offer_id(line: &Lines) -> Option<String> {
     line.offer_id().as_ref().map(|attribute| attribute.value()).flatten().cloned()
 }
 
+fn line_reward_id(line: &Lines) -> Option<String> {
+    line.reward_id().as_ref().and_then(|attribute| attribute.value()).cloned()
+}
+
+fn line_offer_version(line: &Lines) -> Option<String> {
+    line.offer_version().as_ref().and_then(|attribute| attribute.value()).cloned()
+}
+
+fn projected_volume_discount_cents(lines: &[&Lines]) -> i64 {
+    let mut groups: BTreeMap<String, VolumeDiscountGroup> = BTreeMap::new();
+    for line in lines {
+        if line
+            .volume_discount_bundle_item()
+            .as_ref()
+            .and_then(|attribute| attribute.value())
+            .is_some_and(|value| value == "true")
+            || line
+                .volume_discount_nektar_glp_1()
+                .as_ref()
+                .and_then(|attribute| attribute.value())
+                .is_some()
+        {
+            continue;
+        }
+        let Merchandise::ProductVariant(variant) = line.merchandise() else { continue };
+        let Some(metafield) = variant.product().volume_discount_tiers() else { continue };
+        let Ok(tiers) = serde_json::from_str::<Vec<VolumeDiscountTier>>(metafield.value()) else {
+            continue;
+        };
+        let tiers: Vec<_> = tiers
+            .into_iter()
+            .filter(|tier| tier.qty > 0 && tier.percent.is_finite() && tier.percent >= 0.0)
+            .collect();
+        if tiers.is_empty() {
+            continue;
+        }
+        let subtotal_cents = to_cents(
+            line.cost().total_amount().amount().as_f64(),
+            &line.cost().subtotal_amount().currency_code().to_string(),
+        );
+        if subtotal_cents <= 0 {
+            continue;
+        }
+        let group = groups
+            .entry(variant.product().id().to_string())
+            .or_insert_with(|| VolumeDiscountGroup {
+                quantity: 0,
+                subtotal_cents: 0,
+                tiers: vec![],
+            });
+        group.quantity += i64::from(*line.quantity());
+        group.subtotal_cents += subtotal_cents;
+        group.tiers.extend(tiers);
+    }
+
+    groups
+        .values()
+        .filter_map(|group| {
+            group
+                .tiers
+                .iter()
+                .filter(|tier| tier.percent > 0.0 && group.quantity >= tier.qty)
+                .max_by(|left, right| {
+                    left.qty.cmp(&right.qty).then_with(|| {
+                        left.percent
+                            .partial_cmp(&right.percent)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                })
+                .map(|tier| {
+                    ((group.subtotal_cents as f64 * tier.percent) / 100.0).round() as i64
+                })
+        })
+        .sum()
+}
+
 fn landing_source(line: &Lines) -> Option<String> {
     line.landing_source().as_ref().and_then(|attribute| attribute.value()).cloned()
 }
@@ -805,10 +963,14 @@ mod tests {
                     "amountPerQuantity": {{ "amount": "{price}", "currencyCode": "USD" }},
                     "subtotalAmount": {{ "amount": "{price}", "currencyCode": "USD" }}
                 }},
-                "merchandise": {{ "__typename": "ProductVariant", "id": "{variant_id}", "product": {{ "id": "{product_id}" }} }},
+                "merchandise": {{ "__typename": "ProductVariant", "id": "{variant_id}", "product": {{ "id": "{product_id}", "volumeDiscountTiers": null }} }},
                 "sellingPlanAllocation": null,
                 "lineType": null,
-                "offerId": null
+                "offerId": null,
+                "rewardId": null,
+                "offerVersion": null,
+                "volumeDiscountBundleItem": null,
+                "volumeDiscountNektarGlp1": null
             }}"#
         )
     }
@@ -821,10 +983,71 @@ mod tests {
                     "amountPerQuantity": {{ "amount": "{price}", "currencyCode": "USD" }},
                     "subtotalAmount": {{ "amount": "{price}", "currencyCode": "USD" }}
                 }},
-                "merchandise": {{ "__typename": "ProductVariant", "id": "{variant_id}", "product": {{ "id": "{product_id}" }} }},
+                "merchandise": {{ "__typename": "ProductVariant", "id": "{variant_id}", "product": {{ "id": "{product_id}", "volumeDiscountTiers": null }} }},
                 "sellingPlanAllocation": null,
                 "lineType": {{ "value": "gift" }},
-                "offerId": {{ "value": "{offer_id}" }}
+                "offerId": {{ "value": "{offer_id}" }},
+                "rewardId": {{ "value": "reward-1" }},
+                "offerVersion": {{ "value": "1" }},
+                "volumeDiscountBundleItem": null,
+                "volumeDiscountNektarGlp1": null
+            }}"#
+        )
+    }
+
+    fn gift_line_with_metadata(
+        id: &str,
+        variant_id: &str,
+        product_id: &str,
+        offer_id: &str,
+        reward_id: &str,
+        offer_version: &str,
+        price: &str,
+        qty: i64,
+    ) -> String {
+        format!(
+            r#"{{
+                "id": "{id}", "quantity": {qty},
+                "cost": {{
+                    "amountPerQuantity": {{ "amount": "{price}", "currencyCode": "USD" }},
+                    "subtotalAmount": {{ "amount": "{price}", "currencyCode": "USD" }}
+                }},
+                "merchandise": {{ "__typename": "ProductVariant", "id": "{variant_id}", "product": {{ "id": "{product_id}", "volumeDiscountTiers": null }} }},
+                "sellingPlanAllocation": null,
+                "lineType": {{ "value": "gift" }},
+                "offerId": {{ "value": "{offer_id}" }},
+                "rewardId": {{ "value": "{reward_id}" }},
+                "offerVersion": {{ "value": "{offer_version}" }},
+                "volumeDiscountBundleItem": null,
+                "volumeDiscountNektarGlp1": null
+            }}"#
+        )
+    }
+
+    fn volume_discount_line(
+        id: &str,
+        variant_id: &str,
+        product_id: &str,
+        unit_price: &str,
+        subtotal: &str,
+        qty: i64,
+        tiers_json: &str,
+    ) -> String {
+        let encoded_tiers = serde_json::to_string(tiers_json).unwrap();
+        format!(
+            r#"{{
+                "id": "{id}", "quantity": {qty},
+                "cost": {{
+                    "amountPerQuantity": {{ "amount": "{unit_price}", "currencyCode": "USD" }},
+                    "subtotalAmount": {{ "amount": "{subtotal}", "currencyCode": "USD" }},
+                    "totalAmount": {{ "amount": "{subtotal}", "currencyCode": "USD" }}
+                }},
+                "merchandise": {{ "__typename": "ProductVariant", "id": "{variant_id}", "product": {{
+                    "id": "{product_id}", "volumeDiscountTiers": {{ "value": {encoded_tiers} }}
+                }} }},
+                "sellingPlanAllocation": null,
+                "lineType": null, "offerId": null, "rewardId": null, "offerVersion": null,
+                "volumeDiscountBundleItem": null, "volumeDiscountNektarGlp1": null
             }}"#
         )
     }
@@ -856,9 +1079,10 @@ mod tests {
                     "subtotalAmount": {{ "amount": "{subtotal:.2}", "currencyCode": "USD" }},
                     "totalAmount": {{ "amount": "{subtotal:.2}", "currencyCode": "USD" }}
                 }},
-                "merchandise": {{ "__typename": "ProductVariant", "id": "{variant_id}", "product": {{ "id": "{product_id}" }} }},
+                "merchandise": {{ "__typename": "ProductVariant", "id": "{variant_id}", "product": {{ "id": "{product_id}", "volumeDiscountTiers": null }} }},
                 "sellingPlanAllocation": null,
-                "lineType": null, "offerId": null,
+                "lineType": null, "offerId": null, "rewardId": null, "offerVersion": null,
+                "volumeDiscountBundleItem": null, "volumeDiscountNektarGlp1": null,
                 "landingSource": {landing_json},
                 "quizBundleId": {quiz_id}, "quizTargetCents": {target},
                 "quizExpectedPaidCount": {expected}, "quizFreeGift": {gift}
@@ -877,6 +1101,21 @@ mod tests {
                 "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true
             }}]}}"#
         )
+    }
+
+    fn strict_gift_offer_config() -> &'static str {
+        r#"{"offers":[{
+            "id":"offer-1","version":3,"offerType":"gift","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":["gid://shopify/ProductVariant/gift-v1","gid://shopify/ProductVariant/gift-v2"],
+            "giftProductIds":[],"cartValueThresholdCents":5000,"maxGiftQuantity":3,
+            "discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "giftRewards":[
+                {"id":"reward-1","targetProductIds":["gid://shopify/Product/gift-p1"],"targetVariantIds":["gid://shopify/ProductVariant/gift-v1"],"discountType":"free","discountValue":100,"maxQuantity":1},
+                {"id":"reward-2","targetProductIds":["gid://shopify/Product/gift-p2"],"targetVariantIds":["gid://shopify/ProductVariant/gift-v2"],"discountType":"percentage","discountValue":50,"maxQuantity":2}
+            ]
+        }]}"#
     }
 
     #[test]
@@ -913,6 +1152,29 @@ mod tests {
     }
 
     #[test]
+    fn projected_volume_discount_cannot_unlock_a_gift_threshold() {
+        let lines = format!(
+            "[{},{}]",
+            volume_discount_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "29.69",
+                "89.07",
+                3,
+                r#"[{"qty":3,"percent":20}]"#,
+            ),
+            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+        );
+        let result = run_function_with_input(
+            run,
+            &cart_json(&lines, "109.07", &gift_offer_config(8500, 1)),
+        ).expect("should not error");
+
+        assert!(result.operations.is_empty(), "$89.07 less 20% is $71.26 and must not unlock $85");
+    }
+
+    #[test]
     fn tampered_gift_line_not_discounted() {
         let lines = format!(
             "[{},{}]",
@@ -941,6 +1203,140 @@ mod tests {
                 let target = &op.candidates[0].targets[0];
                 match target {
                     schema::ProductDiscountCandidateTarget::CartLine(t) => assert_eq!(t.quantity, Some(1)),
+                }
+            }
+            other => panic!("expected ProductDiscountsAdd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strict_gift_rejects_cross_reward_variant_tampering() {
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            gift_line_with_metadata(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v2",
+                "gid://shopify/Product/gift-p2",
+                "offer-1",
+                "reward-1",
+                "3",
+                "20.00",
+                1,
+            ),
+        );
+        let result = run_function_with_input(run, &cart_json(&lines, "80.00", strict_gift_offer_config())).expect("should not error");
+        assert!(result.operations.is_empty(), "a reward cannot claim another reward's variant");
+    }
+
+    #[test]
+    fn strict_gift_rejects_unlisted_variant_from_allowed_product() {
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            gift_line_with_metadata(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/unlisted",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "reward-1",
+                "3",
+                "100.00",
+                1,
+            ),
+        );
+        let result = run_function_with_input(run, &cart_json(&lines, "160.00", strict_gift_offer_config())).expect("should not error");
+        assert!(result.operations.is_empty(), "an explicit variant allowlist must take precedence over its product id");
+    }
+
+    #[test]
+    fn gift_rewards_are_enforced_even_when_offer_type_is_misconfigured() {
+        let config = strict_gift_offer_config().replace("\"offerType\":\"gift\"", "\"offerType\":\"discount\"");
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            gift_line_with_metadata(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "reward-1",
+                "3",
+                "20.00",
+                1,
+            ),
+        );
+        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &config)).expect("should not error");
+        assert_eq!(result.operations.len(), 1, "gift reward data must select the strict gift path");
+    }
+
+    #[test]
+    fn excluded_products_cannot_unlock_a_gift_threshold() {
+        let config = gift_offer_config(5000, 1).replace(
+            "\"excludedProductIds\":[]",
+            "\"excludedProductIds\":[\"gid://shopify/Product/excluded\"]",
+        );
+        let lines = format!(
+            "[{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/excluded",
+                "gid://shopify/Product/excluded",
+                "60.00",
+                1,
+            ),
+            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+        );
+        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &config)).expect("should not error");
+        assert!(result.operations.is_empty(), "excluded products must not count toward gift qualification");
+    }
+
+    #[test]
+    fn strict_gift_rejects_stale_offer_version() {
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            gift_line_with_metadata(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "reward-1",
+                "2",
+                "20.00",
+                1,
+            ),
+        );
+        let result = run_function_with_input(run, &cart_json(&lines, "80.00", strict_gift_offer_config())).expect("should not error");
+        assert!(result.operations.is_empty(), "a stale offer version must not receive a discount");
+    }
+
+    #[test]
+    fn strict_gift_applies_each_reward_discount_and_quantity_limit() {
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            gift_line_with_metadata(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v2",
+                "gid://shopify/Product/gift-p2",
+                "offer-1",
+                "reward-2",
+                "3",
+                "20.00",
+                3,
+            ),
+        );
+        let result = run_function_with_input(run, &cart_json(&lines, "120.00", strict_gift_offer_config())).expect("should not error");
+        match &result.operations[0] {
+            schema::CartOperation::ProductDiscountsAdd(operation) => {
+                assert_eq!(operation.candidates[0].targets.len(), 1);
+                match &operation.candidates[0].targets[0] {
+                    schema::ProductDiscountCandidateTarget::CartLine(target) => assert_eq!(target.quantity, Some(2)),
+                }
+                match &operation.candidates[0].value {
+                    schema::ProductDiscountCandidateValue::Percentage(value) => assert_eq!(value.value.0, 50.0),
+                    other => panic!("expected percentage, got {other:?}"),
                 }
             }
             other => panic!("expected ProductDiscountsAdd, got {other:?}"),

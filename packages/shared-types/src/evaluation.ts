@@ -44,6 +44,9 @@ export const GiftSliderPayloadSchema = z.object({
   subtitle: z.string().nullable(),
   currencyCode: z.string().length(3),
   selectableGifts: z.array(z.object({
+    rewardId: z.string().uuid(),
+    offerVersion: z.number().int().positive(),
+    rewardMaxQuantity: z.number().int().positive(),
     variantId: z.string(),
     productId: z.string(),
     title: z.string(),

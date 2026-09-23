@@ -184,6 +184,32 @@ export async function evaluate(
     const discountCodesToRemove: string[] = [];
 
     if (passed) {
+      const existingOfferGifts = extractGiftLines(input.cart).filter((gift) => gift.offerId === offer.id);
+      const giftRewards = offer.rewards.filter((reward) => reward.rewardType === "product_gift");
+      const giftRewardById = new Map(giftRewards.map((reward) => [reward.id, reward]));
+
+      // Remove stale/tampered lines even while the offer still qualifies. A
+      // gift remains valid only for the current offer version, reward id and
+      // that reward's exact variant allow-list.
+      for (const gift of existingOfferGifts) {
+        const reward = giftRewardById.get(gift.rewardId);
+        const target = reward?.target as { variantId?: string; variantIds?: string[] } | undefined;
+        const allowedVariantIds = target?.variantIds ?? (target?.variantId ? [target.variantId] : []);
+        if (
+          !reward ||
+          gift.offerVersion !== String(offer.version) ||
+          !allowedVariantIds.includes(gift.variantId)
+        ) {
+          cartActions.push({
+            action: "remove_line",
+            lineKey: gift.lineKey,
+            offerId: offer.id,
+            variantId: gift.variantId,
+            reason: "stale_or_invalid_gift",
+          });
+        }
+      }
+
       // Generate cart actions for rewards
       for (const reward of offer.rewards.sort((a, b) => a.sortOrder - b.sortOrder)) {
         if (reward.rewardType === "product_gift" && reward.isAutoAdd) {
@@ -191,35 +217,46 @@ export async function evaluate(
           const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
           const qty = reward.quantity ?? 1;
 
-          for (const variantId of variantIds) {
-            const existingGifts = extractGiftLines(input.cart).filter(
-              (g) => g.offerId === offer.id && g.variantId === variantId,
-            );
-            const existingQty = existingGifts.reduce((acc, g) => acc + g.quantity, 0);
+          // Multi-variant gift products require a customer choice. Never add
+          // every variant just because an old/hand-edited config set auto-add.
+          if (variantIds.length !== 1) continue;
+          const variantId = variantIds[0]!;
+          const existingGifts = existingOfferGifts.filter(
+            (gift) =>
+              gift.rewardId === reward.id &&
+              gift.offerVersion === String(offer.version) &&
+              gift.variantId === variantId,
+          );
+          const existingQty = existingGifts.reduce((acc, gift) => acc + gift.quantity, 0);
 
-            if (existingQty < qty) {
+          if (existingQty < qty) {
+            cartActions.push({
+              action: "add_line",
+              variantId,
+              quantity: qty - existingQty,
+              properties: {
+                _promo_engine_line_type: "gift",
+                _promo_engine_offer_id: offer.id,
+                _promo_engine_offer_version: String(offer.version),
+                _promo_engine_reward_id: reward.id,
+              },
+            });
+          } else if (existingQty > qty && existingGifts[0]) {
+            cartActions.push({
+              action: "update_line",
+              lineKey: existingGifts[0].lineKey,
+              quantity: qty,
+              offerId: offer.id,
+              variantId,
+            });
+            for (const duplicate of existingGifts.slice(1)) {
               cartActions.push({
-                action: "add_line",
+                action: "remove_line",
+                lineKey: duplicate.lineKey,
+                offerId: offer.id,
                 variantId,
-                quantity: qty - existingQty,
-                properties: {
-                  _promo_engine_line_type: "gift",
-                  _promo_engine_offer_id: offer.id,
-                  _promo_engine_offer_version: String(offer.version),
-                  _promo_engine_reward_id: reward.id,
-                },
+                reason: "duplicate_gift_line",
               });
-            } else if (existingQty > qty) {
-              const toUpdate = existingGifts[0];
-              if (toUpdate) {
-                cartActions.push({
-                  action: "update_line",
-                  lineKey: toUpdate.lineKey,
-                  quantity: qty,
-                  offerId: offer.id,
-                  variantId,
-                });
-              }
             }
           }
         }
@@ -371,9 +408,12 @@ function buildGiftSliderPayload(
 ): EvaluationResult["giftSlider"] {
   for (const evaluated of qualifiedOffers) {
     const offer = offers.find((item) => item.id === evaluated.offerId);
-    const selectableRewards = offer?.rewards.filter((reward) =>
-      reward.rewardType === "product_gift" && reward.isCustomerSelectable && !reward.isAutoAdd
-    ) ?? [];
+    const selectableRewards = offer?.rewards.filter((reward) => {
+      if (reward.rewardType !== "product_gift") return false;
+      const target = reward.target as { variantId?: string; variantIds?: string[] };
+      const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
+      return reward.isCustomerSelectable || variantIds.length > 1;
+    }) ?? [];
     if (!offer || selectableRewards.length === 0) continue;
 
     const selectableGifts = selectableRewards.flatMap((reward) => {
@@ -383,6 +423,9 @@ function buildGiftSliderPayload(
       return variantIds.map((variantId, index) => {
         const cartLine = cart.lines.find((line) => line.variantId === variantId);
         return {
+          rewardId: reward.id,
+          offerVersion: offer.version,
+          rewardMaxQuantity: Math.max(1, reward.quantity ?? 1),
           variantId,
           productId: cartLine?.productId ?? productIds[index] ?? "",
           title: reward.label ?? cartLine?.productTitle ?? "Gift",
@@ -394,6 +437,8 @@ function buildGiftSliderPayload(
           isSelected: cart.lines.some((line) =>
             line.variantId === variantId &&
             line.properties["_promo_engine_offer_id"] === offer.id &&
+            line.properties["_promo_engine_offer_version"] === String(offer.version) &&
+            line.properties["_promo_engine_reward_id"] === reward.id &&
             line.properties["_promo_engine_line_type"] === "gift"
           ),
         };
@@ -407,7 +452,10 @@ function buildGiftSliderPayload(
         subtitle: null,
         currencyCode: cart.currencyCode,
         selectableGifts,
-        maxSelectableCount: Math.max(1, selectableRewards[0]?.quantity ?? 1),
+        maxSelectableCount: selectableRewards.reduce(
+          (total, reward) => total + Math.max(1, reward.quantity ?? 1),
+          0,
+        ),
         alreadySelectedCount: selectableGifts.filter((gift) => gift.isSelected).length,
       };
     }

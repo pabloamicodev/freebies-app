@@ -8,8 +8,11 @@ import { checkRateLimit, getClientIp } from "../lib/rate-limit.server.js";
 import { getOfferDefinitions } from "../lib/offer-definitions.server.js";
 import { resolveCustomer } from "../lib/resolve-customer.server.js";
 import { buildUpsells } from "../lib/upsell-enrichment.server.js";
+import { enrichGiftSlider } from "../lib/gift-enrichment.server.js";
 import { isShadowModeEnabled } from "../lib/shadow-mode.server.js";
 import * as Sentry from "@sentry/node";
+
+const MAX_EVALUATION_BODY_BYTES = 256 * 1024;
 
 export function loader(_args: LoaderFunctionArgs) {
   throw new Response("Method not allowed", { status: 405 });
@@ -28,9 +31,23 @@ export async function action({ request }: ActionFunctionArgs) {
     );
   }
 
-  const body = await request.json().catch(() => null);
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_EVALUATION_BODY_BYTES) {
+    return Response.json({ error: "Evaluation payload is too large" }, { status: 413 });
+  }
+
+  const rawBody = await request.text().catch(() => "");
+  if (new TextEncoder().encode(rawBody).byteLength > MAX_EVALUATION_BODY_BYTES) {
+    return Response.json({ error: "Evaluation payload is too large" }, { status: 413 });
+  }
+  let body: unknown = null;
+  try {
+    body = JSON.parse(rawBody) as unknown;
+  } catch {
+    return Response.json({ error: "Invalid evaluation payload" }, { status: 400 });
+  }
   const parsed = EvaluationInputSchema.safeParse({
-    ...(body ?? {}),
+    ...(typeof body === "object" && body !== null ? body : {}),
     shopDomain: signedShopDomain,
   });
 
@@ -57,13 +74,17 @@ export async function action({ request }: ActionFunctionArgs) {
     shopCurrencyCode: signedShop.currencyCode ?? undefined,
   });
 
-  result.upsells = await buildUpsells(signedShop.id, result.qualifiedOffers, offerDefinitions);
+  [result.upsells, result.giftSlider] = await Promise.all([
+    buildUpsells(signedShop.id, result.qualifiedOffers, offerDefinitions),
+    enrichGiftSlider(signedShop.id, result.giftSlider, offerDefinitions),
+  ]);
 
   // Shadow mode: log what WOULD have happened during the BOGOS migration
   // window, but never actually mutate the customer's cart.
   if (await isShadowModeEnabled(signedShop.id)) {
     result.cartActions = [];
     result.discountCodes = { add: [], remove: [] };
+    result.giftSlider = null;
   }
 
   const parsedResult = EvaluationResultSchema.safeParse(result);

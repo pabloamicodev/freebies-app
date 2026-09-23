@@ -65,11 +65,12 @@ class PromoEngineRuntime {
   private savedFetch: typeof window.fetch = window.fetch.bind(window);
   private refreshGuard = false;
   private capturedThemeSectionIds: string[] = [];
+  private lastEvaluationResult: EvaluationResult | null = null;
 
   constructor(config: RuntimeConfig) {
     this.config = config;
     this.sessionId = getOrCreateSessionId();
-    this.debouncedEvaluate = debounce(this.triggerEvaluation.bind(this), EVAL_DEBOUNCE_MS);
+    this.debouncedEvaluate = debounce(() => this.triggerEvaluation(), EVAL_DEBOUNCE_MS);
   }
 
   init(): void {
@@ -262,24 +263,27 @@ class PromoEngineRuntime {
     document.dispatchEvent(new CustomEvent("theme:cart:add", { bubbles: true }));
   }
 
-  private async triggerEvaluation(): Promise<void> {
-    emit(PromoEvents.EvaluationRequested);
+  private async triggerEvaluation(
+    options: { force?: boolean; emitResult?: boolean } = {},
+  ): Promise<EvaluationResult | null> {
+    if (options.emitResult !== false) emit(PromoEvents.EvaluationRequested);
 
     let cart: CartData;
     try {
       cart = await AjaxCartAdapter.getCart();
     } catch (e) {
       this.log("Failed to fetch cart", e);
-      return;
+      return null;
     }
 
     const cartHash = this.buildCartHash(cart);
-    if (cartHash === this.lastCartHash) {
+    if (!options.force && cartHash === this.lastCartHash) {
       this.log("Cart unchanged, skipping evaluation");
-      return;
+      return this.lastEvaluationResult;
     }
 
-    this.log("[PromoEngine] Evaluating cart —", cart.items.map(i => `${i.title} ×${i.quantity}`).join(", ") || "empty", `| subtotal: $${(cart.total_price / 100).toFixed(2)}`);
+    const qualifyingSubtotal = cart.items_subtotal_price ?? cart.total_price;
+    this.log("[PromoEngine] Evaluating cart —", cart.items.map(i => `${i.title} ×${i.quantity}`).join(", ") || "empty", `| subtotal: $${(qualifyingSubtotal / 100).toFixed(2)}`);
 
     const signal = this.evaluationAbort.start();
 
@@ -328,6 +332,7 @@ class PromoEngineRuntime {
 
       const result: EvaluationResult = await response.json();
       this.lastCartHash = cartHash;
+      this.lastEvaluationResult = result;
 
       const actions = Array.isArray(result.cartActions) ? result.cartActions : [];
       if (actions.length > 0) {
@@ -340,15 +345,17 @@ class PromoEngineRuntime {
       if (actions.length > 0) {
         await this.refreshCartUI();
       }
-      emit(PromoEvents.EvaluationCompleted, result);
+      if (options.emitResult !== false) emit(PromoEvents.EvaluationCompleted, result);
+      return result;
 
     } catch (e: unknown) {
       if ((e as Error).name === "AbortError") {
         this.log("Evaluation aborted (superseded by newer request)");
-        return;
+        return null;
       }
       this.log("Evaluation error", e);
       emit(PromoEvents.CartMutationError, { error: (e as Error).message });
+      return null;
     }
   }
 
@@ -359,10 +366,9 @@ class PromoEngineRuntime {
         switch (action.action) {
           case "add_line": {
             if (!action.variantId) break;
-            const legacyId = parseInt(action.variantId.split("/").pop() ?? action.variantId, 10);
             this.log(`[PromoEngine] → add_line variantId=${action.variantId} qty=${action.quantity ?? 1}`);
             await AjaxCartAdapter.addLines([{
-              variantId: String(legacyId),
+              variantId: action.variantId,
               quantity: action.quantity ?? 1,
               properties: action.properties ?? {},
             }]);
@@ -437,7 +443,22 @@ class PromoEngineRuntime {
 
   private buildCartHash(cart: CartData): string {
     const parts = [
-      ...cart.items.map((i) => `${i.variant_id}:${i.quantity}`).sort(),
+      ...cart.items.map((item) => {
+        const properties = Object.entries(item.properties ?? {})
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, value]) => `${key}=${String(value)}`)
+          .join(",");
+        return [
+          item.key,
+          item.variant_id,
+          item.quantity,
+          item.final_price ?? item.price,
+          item.final_line_price ?? item.line_price ?? item.price * item.quantity,
+          properties,
+        ].join(":");
+      }).sort(),
+      String(cart.items_subtotal_price ?? cart.total_price),
+      ...(cart.discount_codes?.map((discount) => discount.code).sort() ?? []),
       cart.currency,
     ];
     return parts.join("|");
@@ -452,9 +473,10 @@ class PromoEngineRuntime {
         variantId: `gid://shopify/ProductVariant/${item.variant_id}`,
         productId: `gid://shopify/Product/${item.product_id}`,
         quantity: item.quantity,
-        priceCents: item.price,
+        priceCents: item.final_price ?? item.price,
+        lineSubtotalCents: item.final_line_price ?? item.line_price ?? item.price * item.quantity,
         compareAtPriceCents: null,
-        properties: item.properties,
+        properties: item.properties ?? {},
         requiresSellingPlan: item.requires_selling_plan ?? false,
         sellingPlanId: item.selling_plan_allocation ? "has-plan" : null,
         productHandle: item.handle,
@@ -468,7 +490,7 @@ class PromoEngineRuntime {
         inventoryPolicy: item.inventory_policy?.toUpperCase() === "CONTINUE" ? "CONTINUE" : "DENY",
         inventoryQuantity: item.inventory_quantity ?? 0,
       })),
-      subtotalCents: cart.total_price,
+      subtotalCents: cart.items_subtotal_price ?? cart.total_price,
       discountCodes: cart.discount_codes?.map((d) => d.code) ?? [],
       currencyCode: cart.currency,
       totalQuantity: cart.item_count,
@@ -485,6 +507,10 @@ class PromoEngineRuntime {
   public readonly api = {
     refreshCart: () => this.debouncedEvaluate.flush(),
     evaluate: () => this.triggerEvaluation(),
+    validateGiftOffer: async (offerId: string) => {
+      const result = await this.triggerEvaluation({ force: true, emitResult: false });
+      return result?.giftSlider?.offerId === offerId ? result.giftSlider : null;
+    },
     prepareCheckout: async () => {
       this.debouncedEvaluate.cancel();
       emit(PromoEvents.CheckoutPrepare);

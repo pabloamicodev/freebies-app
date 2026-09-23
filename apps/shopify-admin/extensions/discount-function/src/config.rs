@@ -90,9 +90,22 @@ pub struct CompiledOffer {
     #[serde(default)]
     pub requirements: Vec<CompiledRequirement>,
     #[serde(default)]
+    pub gift_rewards: Vec<CompiledGiftReward>,
+    #[serde(default)]
     pub product_rewards: Vec<CompiledProductReward>,
     #[serde(default)]
     pub order_rewards: Vec<CompiledOrderReward>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledGiftReward {
+    pub id: String,
+    pub target_product_ids: Vec<String>,
+    pub target_variant_ids: Vec<String>,
+    pub discount_type: String,
+    pub discount_value: f64,
+    pub max_quantity: i64,
 }
 
 #[derive(Debug, Deserialize, Clone)]

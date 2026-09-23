@@ -61,6 +61,21 @@ describe("evaluateCartValue", () => {
     }
   });
 
+  it("uses final discounted line subtotals instead of original unit prices", () => {
+    const cart = makeCart([{ variantId: "v1", productId: "p1", priceCents: 5000, quantity: 2 }]);
+    cart.lines[0]!.lineSubtotalCents = 8000;
+    cart.subtotalCents = 8000;
+
+    const result = evaluateCartValue(cart, {
+      thresholdCents: 9000,
+      currencyCode: "USD",
+      includeGiftValues: false,
+    }, currency);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.actual).toBe(8000);
+  });
+
   it("excludes gift lines from qualifying value by default", () => {
     const cart: NormalizedCart = {
       ...makeCart([{ variantId: "v1", productId: "p1", priceCents: 5000, quantity: 2 }]),

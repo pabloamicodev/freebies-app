@@ -21,7 +21,6 @@ query Input {
       cost {
         amountPerQuantity {
           amount
-          currencyCode
         }
         subtotalAmount {
           amount
@@ -29,7 +28,6 @@ query Input {
         }
         totalAmount {
           amount
-          currencyCode
         }
       }
       sellingPlanAllocation {
@@ -43,6 +41,9 @@ query Input {
           id
           product {
             id
+            volumeDiscountTiers: metafield(namespace: "custom", key: "volume_discount_tiers") {
+              value
+            }
           }
         }
       }
@@ -50,6 +51,18 @@ query Input {
         value
       }
       offerId: attribute(key: "_promo_engine_offer_id") {
+        value
+      }
+      rewardId: attribute(key: "_promo_engine_reward_id") {
+        value
+      }
+      offerVersion: attribute(key: "_promo_engine_offer_version") {
+        value
+      }
+      volumeDiscountBundleItem: attribute(key: "_bundle_item") {
+        value
+      }
+      volumeDiscountNektarGlp1: attribute(key: "_nektar_glp1") {
         value
       }
       landingSource: attribute(key: "__landing_source") {

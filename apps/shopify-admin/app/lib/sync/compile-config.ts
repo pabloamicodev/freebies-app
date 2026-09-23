@@ -66,6 +66,7 @@ export interface CompiledOffer {
   combinesWithShippingDiscounts: boolean;
   combinesWithProductDiscounts: boolean;
   requirements: CompiledRequirement[];
+  giftRewards: CompiledGiftReward[];
   productRewards: CompiledProductReward[];
   orderRewards: CompiledOrderReward[];
 }
@@ -76,6 +77,15 @@ export interface CompiledRequirement {
   trackMode: "product" | "variant";
   minQuantity: number;
   maxQuantity?: number;
+}
+
+export interface CompiledGiftReward {
+  id: string;
+  targetProductIds: string[];
+  targetVariantIds: string[];
+  discountType: string;
+  discountValue: number;
+  maxQuantity: number;
 }
 
 export interface CompiledProductReward {
@@ -134,6 +144,7 @@ export function compileOfferConfig(
     combinesWithShippingDiscounts: policy?.combinesWithShippingDiscounts ?? true,
     combinesWithProductDiscounts: policy?.combinesWithProductDiscounts ?? true,
     requirements: [],
+    giftRewards: [],
     productRewards: [],
     orderRewards: [],
   };
@@ -228,7 +239,19 @@ export function compileOfferConfig(
       config.giftProductIds.push(...productIds);
       if (reward.quantity) config.maxGiftQuantity = (config.maxGiftQuantity ?? 0) + reward.quantity;
       config.discountType = reward.discountType;
-      config.discountValue = Number(value["amount"] ?? value["percentage"] ?? 100);
+      config.discountValue = functionDiscountValue(
+        reward.discountType,
+        Number(value["amount"] ?? value["percentage"] ?? 100),
+        String(value["currencyCode"] ?? "USD"),
+      );
+      config.giftRewards.push({
+        id: reward.id,
+        targetProductIds: productIds,
+        targetVariantIds: variantIds,
+        discountType: reward.discountType,
+        discountValue: config.discountValue,
+        maxQuantity: Math.max(1, reward.quantity ?? 1),
+      });
     }
     if (
       reward.rewardType === "product_discount" ||

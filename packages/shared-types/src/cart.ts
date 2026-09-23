@@ -3,24 +3,30 @@ import { z } from "zod";
 /** Normalized cart line — abstraction over Ajax Cart API and Storefront API. */
 export const NormalizedCartLineSchema = z.object({
   /** Line key from Ajax Cart API, or Storefront API cart line ID. */
-  key: z.string(),
-  variantId: z.string(),
-  productId: z.string(),
-  quantity: z.number().int().positive(),
+  key: z.string().min(1).max(512),
+  variantId: z.string().min(1).max(128),
+  productId: z.string().min(1).max(128),
+  quantity: z.number().int().positive().max(2_000),
   /** Price in store currency cents. */
   priceCents: z.number().int().nonnegative(),
+  /** Final line subtotal after line-level discounts, in store currency cents. */
+  lineSubtotalCents: z.number().int().nonnegative().optional(),
   compareAtPriceCents: z.number().int().nonnegative().nullable(),
   /** All line item properties / attributes. */
-  properties: z.record(z.string(), z.string()),
+  properties: z.record(z.string().max(128), z.string().max(2_048)).superRefine((properties, ctx) => {
+    if (Object.keys(properties).length > 100) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Cart lines cannot contain more than 100 properties." });
+    }
+  }),
   requiresSellingPlan: z.boolean(),
   sellingPlanId: z.string().nullable(),
-  productHandle: z.string(),
-  productTitle: z.string(),
-  variantTitle: z.string().nullable(),
-  vendor: z.string(),
-  productType: z.string(),
-  tags: z.array(z.string()),
-  collections: z.array(z.string()),
+  productHandle: z.string().max(255),
+  productTitle: z.string().max(1_000),
+  variantTitle: z.string().max(1_000).nullable(),
+  vendor: z.string().max(255),
+  productType: z.string().max(255),
+  tags: z.array(z.string().max(255)).max(250),
+  collections: z.array(z.string().max(128)).max(250),
   availableForSale: z.boolean(),
   inventoryPolicy: z.enum(["CONTINUE", "DENY"]),
   inventoryQuantity: z.number().int().nullable(),
@@ -38,14 +44,14 @@ export type PromoLineProperties = z.infer<typeof PromoLinePropertiesSchema>;
 
 /** Normalized cart. */
 export const NormalizedCartSchema = z.object({
-  token: z.string().nullable(),
-  id: z.string().nullable(),
-  lines: z.array(NormalizedCartLineSchema),
+  token: z.string().max(512).nullable(),
+  id: z.string().max(512).nullable(),
+  lines: z.array(NormalizedCartLineSchema).max(250),
   /** Subtotal in store currency cents (before discounts). */
   subtotalCents: z.number().int().nonnegative(),
-  discountCodes: z.array(z.string()),
-  currencyCode: z.string().length(3),
-  totalQuantity: z.number().int().nonnegative(),
+  discountCodes: z.array(z.string().min(1).max(255)).max(100),
+  currencyCode: z.string().length(3).regex(/^[A-Z]{3}$/),
+  totalQuantity: z.number().int().nonnegative().max(500_000),
 });
 export type NormalizedCart = z.infer<typeof NormalizedCartSchema>;
 
@@ -78,13 +84,13 @@ export type SalesChannel = z.infer<typeof SalesChannelSchema>;
 
 /** Full evaluation input contract. */
 export const EvaluationInputSchema = z.object({
-  shopDomain: z.string(),
+  shopDomain: z.string().min(1).max(255),
   cart: NormalizedCartSchema,
   customer: NormalizedCustomerSchema.nullable(),
   market: MarketContextSchema.nullable(),
-  locale: z.string().nullable(),
+  locale: z.string().max(35).nullable(),
   salesChannel: SalesChannelSchema,
   requestedUrl: z.string().url().nullable(),
-  sessionId: z.string(),
+  sessionId: z.string().min(1).max(128),
 });
 export type EvaluationInput = z.infer<typeof EvaluationInputSchema>;

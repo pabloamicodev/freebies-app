@@ -1,8 +1,10 @@
-import { getDb, shops, offers, offerConditions, offerRewards, offerCombinationPolicies, type Offer, type OfferCondition, type OfferReward, type OfferCombinationPolicy } from "@promo/db";
+import { getDb, shops, offers, offerConditions, offerRewards, offerCombinationPolicies, variantCache, type Offer, type OfferCondition, type OfferReward, type OfferCombinationPolicy } from "@promo/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { decryptToken } from "../token-crypto.server.js";
 import { shopifyGraphQL } from "../shopify-fetch.server.js";
 import { ensureDiscountNode } from "../discount-node.server.js";
+import { buildCartValidationConfig, syncCartValidation } from "../cart-validation.server.js";
+import { computeOfferVersion } from "../offer-version.server.js";
 import {
   compileOfferConfig,
   compileShippingOfferConfigs,
@@ -36,12 +38,16 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")));
 
   if (activeOffers.length === 0) {
-    await pushMetafield(shopDomain, accessToken, discountId, {
+    const emptyConfig: CompiledFunctionConfig = {
       offers: [],
       shippingOffers: [],
       version: "1",
       compiledAt: new Date().toISOString(),
-    });
+    };
+    await Promise.all([
+      pushMetafield(shopDomain, accessToken, discountId, emptyConfig),
+      syncCartValidation(shopDomain, accessToken, buildCartValidationConfig([])),
+    ]);
     return;
   }
 
@@ -54,17 +60,26 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
 
   const compiledByOffer = activeOffers
     .sort((a, b) => a.priority - b.priority)
-    .map((offer, idx) => {
+    .map((offer) => {
       const conditions = conditionRows.filter((c) => c.offerId === offer.id);
       const rewards = rewardRows.filter((r) => r.offerId === offer.id);
       const policy = policyRows.find((p) => p.offerId === offer.id) ?? null;
       return {
-        offer: compileOfferConfig(offer, conditions, rewards, policy, idx + 1),
+        offer: compileOfferConfig(
+          offer,
+          conditions,
+          rewards,
+          policy,
+          computeOfferVersion(offer, conditions, rewards, policy),
+        ),
         shippingOffers: compileShippingOfferConfigs(offer, conditions, rewards),
       };
     });
 
-  const compiledOffers = compiledByOffer.map((entry) => entry.offer);
+  const compiledOffers = await resolveLegacyGiftVariants(
+    shopId,
+    compiledByOffer.map((entry) => entry.offer),
+  );
   const shippingOffers = compiledByOffer.flatMap((entry) => entry.shippingOffers);
 
   const config: CompiledFunctionConfig = {
@@ -79,14 +94,77 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     throw new Error(`Function config is ${sizeBytes}B, exceeding the safe ${MAX_METAFIELD_BYTES}B limit. Pause or simplify active offers before publishing.`);
   }
 
-  await pushMetafield(shopDomain, accessToken, discountId, config);
+  await Promise.all([
+    pushMetafield(shopDomain, accessToken, discountId, config),
+    syncCartValidation(shopDomain, accessToken, buildCartValidationConfig(compiledOffers)),
+  ]);
 
   for (const compiledOffer of compiledOffers) {
     await db
       .update(offers)
-      .set({ compiledConfig: compiledOffer, updatedAt: new Date() })
+      .set({ compiledConfig: compiledOffer })
       .where(eq(offers.id, compiledOffer.id));
   }
+}
+
+/**
+ * Older offers could store only a product GID. Resolve those targets to the
+ * current eligible variants before publishing so checkout never has to trust
+ * a broad product-level allowance.
+ */
+async function resolveLegacyGiftVariants(
+  shopId: string,
+  compiledOffers: CompiledFunctionConfig["offers"],
+): Promise<CompiledFunctionConfig["offers"]> {
+  const unresolvedProductIds = [...new Set(compiledOffers.flatMap((offer) =>
+    offer.giftRewards
+      .filter((reward) => reward.targetVariantIds.length === 0)
+      .flatMap((reward) => reward.targetProductIds),
+  ))];
+  if (unresolvedProductIds.length === 0) return compiledOffers;
+
+  const variants = await getDb()
+    .select({
+      productGid: variantCache.productGid,
+      variantGid: variantCache.variantGid,
+      availableForSale: variantCache.availableForSale,
+      inventoryQuantity: variantCache.inventoryQuantity,
+      inventoryPolicy: variantCache.inventoryPolicy,
+      requiresSellingPlan: variantCache.requiresSellingPlan,
+    })
+    .from(variantCache)
+    .where(and(eq(variantCache.shopId, shopId), inArray(variantCache.productGid, unresolvedProductIds)));
+  const eligibleByProduct = new Map<string, string[]>();
+  for (const variant of variants) {
+    if (
+      !variant.availableForSale ||
+      variant.requiresSellingPlan ||
+      (variant.inventoryPolicy !== "CONTINUE" && (variant.inventoryQuantity ?? 0) <= 0)
+    ) continue;
+    const ids = eligibleByProduct.get(variant.productGid) ?? [];
+    ids.push(variant.variantGid);
+    eligibleByProduct.set(variant.productGid, ids);
+  }
+
+  return compiledOffers.map((offer) => {
+    const giftRewards = offer.giftRewards.map((reward) => {
+      if (reward.targetVariantIds.length > 0) return reward;
+      const targetVariantIds = [...new Set(reward.targetProductIds.flatMap(
+        (productId) => eligibleByProduct.get(productId) ?? [],
+      ))].sort();
+      if (targetVariantIds.length === 0) {
+        throw new Error(
+          `Gift reward ${reward.id} in offer ${offer.id} has no eligible one-time-purchase variants. Refresh the product catalog or update the reward before publishing.`,
+        );
+      }
+      return { ...reward, targetVariantIds };
+    });
+    return {
+      ...offer,
+      giftRewards,
+      giftVariantIds: [...new Set(giftRewards.flatMap((reward) => reward.targetVariantIds))],
+    };
+  });
 }
 
 async function pushMetafield(

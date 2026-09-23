@@ -34,8 +34,12 @@ pub struct CartLine {
     pub id: String,
     pub quantity: i64,
     pub merchandise: Merchandise,
-    pub attributes: Vec<Attribute>,
+    pub line_type: Option<Attribute>,
+    pub offer_id: Option<Attribute>,
+    pub reward_id: Option<Attribute>,
+    pub offer_version: Option<Attribute>,
     pub cost: LineCost,
+    pub discount_allocations: Vec<DiscountAllocation>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,13 +53,11 @@ pub struct Merchandise {
 #[serde(rename_all = "camelCase")]
 pub struct Product {
     pub id: String,
-    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Attribute {
-    pub key: String,
     pub value: Option<String>,
 }
 
@@ -73,6 +75,19 @@ pub struct Money {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DiscountAllocation {
+    pub discounted_amount: Money,
+    pub discount_application: DiscountApplication,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscountApplication {
+    pub metafield: Option<Metafield>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ValidationNode {
     pub metafield: Option<Metafield>,
 }
@@ -86,14 +101,35 @@ pub struct Metafield {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ValidationConfig {
+    /// Strict per-offer and per-reward rules used by current publishes.
+    #[serde(default)]
+    pub offer_rules: HashMap<String, GiftOfferRule>,
     /// Map of offerId → max gift quantity allowed
+    #[serde(default)]
     pub offer_max_quantities: HashMap<String, i64>,
     /// Set of all allowed gift variant GIDs (for all active offers)
+    #[serde(default)]
     pub allowed_gift_variant_ids: Vec<String>,
     /// Set of clone product GIDs that should NOT be directly purchasable
+    #[serde(default)]
     pub clone_product_ids: Vec<String>,
     /// Min price in cents — clone products at $0 (or very low) outside of offer context are suspicious
     pub clone_min_price_cents: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GiftOfferRule {
+    pub version: i64,
+    pub max_quantity: i64,
+    pub rewards: HashMap<String, GiftRewardRule>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GiftRewardRule {
+    pub max_quantity: i64,
+    pub variant_ids: Vec<String>,
 }
 
 // ─── Output ───────────────────────────────────────────────────────────────────
@@ -101,6 +137,18 @@ pub struct ValidationConfig {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FunctionOutput {
+    pub operations: Vec<Operation>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Operation {
+    pub validation_add: ValidationAdd,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidationAdd {
     pub errors: Vec<ValidationError>,
 }
 
@@ -108,13 +156,7 @@ pub struct FunctionOutput {
 #[serde(rename_all = "camelCase")]
 pub struct ValidationError {
     pub message: String,
-    pub target: ValidationTarget,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ValidationTarget {
-    pub cart_line_id: Option<String>,
+    pub target: String,
 }
 
 // ─── Main function ────────────────────────────────────────────────────────────
@@ -122,7 +164,7 @@ pub struct ValidationTarget {
 pub fn function(input: FunctionInput) -> FunctionOutput {
     let config = match parse_config(&input.validation_node) {
         Some(c) => c,
-        None => return FunctionOutput { errors: vec![] }, // No config = no validation (fail open)
+        None => return FunctionOutput { operations: vec![] }, // No config = no validation (fail open)
     };
 
     let allowed_variants: HashSet<&str> =
@@ -132,27 +174,73 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
 
     let mut errors: Vec<ValidationError> = Vec::new();
 
-    // ── Track gift quantity per offer ─────────────────────────────────────────
     let mut gift_qty_by_offer: HashMap<String, i64> = HashMap::new();
+    let mut gift_qty_by_reward: HashMap<(String, String), i64> = HashMap::new();
+    let strict_rules_enabled = !config.offer_rules.is_empty();
 
     for line in &input.cart.lines {
-        let line_type = get_attr(&line.attributes, "_promo_engine_line_type");
-        let offer_id = get_attr(&line.attributes, "_promo_engine_offer_id");
+        let line_type = attribute_value(&line.line_type);
+        let offer_id = attribute_value(&line.offer_id);
 
         if line_type == "gift" {
-            // ── Validate gift variant is in allowed set ───────────────────────
-            if !offer_id.is_empty() && !allowed_variants.contains(line.merchandise.id.as_str()) {
+            let reward_id = attribute_value(&line.reward_id);
+            let offer_version = attribute_value(&line.offer_version);
+            if line.quantity <= 0 || offer_id.is_empty() || reward_id.is_empty() || offer_version.is_empty() {
                 errors.push(ValidationError {
                     message: "Your cart contains an invalid free gift. Please contact support.".to_string(),
-                    target: ValidationTarget { cart_line_id: Some(line.id.clone()) },
+                    target: "$.cart".to_string(),
                 });
                 continue;
             }
 
-            // ── Accumulate quantity per offer ─────────────────────────────────
-            if !offer_id.is_empty() {
-                *gift_qty_by_offer.entry(offer_id.to_string()).or_insert(0) += line.quantity;
+            if strict_rules_enabled {
+                let Some(offer_rule) = config.offer_rules.get(offer_id) else {
+                    errors.push(ValidationError {
+                        message: "This free gift offer is no longer active. Please update your cart.".to_string(),
+                        target: "$.cart".to_string(),
+                    });
+                    continue;
+                };
+                let Some(reward_rule) = offer_rule.rewards.get(reward_id) else {
+                    errors.push(ValidationError {
+                        message: "Your cart contains an invalid free gift. Please update your cart.".to_string(),
+                        target: "$.cart".to_string(),
+                    });
+                    continue;
+                };
+                if offer_version != offer_rule.version.to_string()
+                    || !reward_rule.variant_ids.iter().any(|id| id == &line.merchandise.id)
+                {
+                    errors.push(ValidationError {
+                        message: "This free gift selection is outdated or invalid. Please choose it again.".to_string(),
+                        target: "$.cart".to_string(),
+                    });
+                    continue;
+                }
+                *gift_qty_by_reward
+                    .entry((offer_id.to_string(), reward_id.to_string()))
+                    .or_insert(0) += line.quantity;
+            } else if !allowed_variants.contains(line.merchandise.id.as_str()) {
+                errors.push(ValidationError {
+                    message: "Your cart contains an invalid free gift. Please contact support.".to_string(),
+                    target: "$.cart".to_string(),
+                });
+                continue;
             }
+
+            // Cart validation runs after discounts. Requiring an allocation
+            // from our own discount node proves the server-side offer
+            // conditions qualified; browser-controlled line attributes alone
+            // can never authorize a freebie.
+            if !has_promo_engine_discount(line) {
+                errors.push(ValidationError {
+                    message: "This free gift is not eligible for the current cart. Please update your cart.".to_string(),
+                    target: "$.cart".to_string(),
+                });
+                continue;
+            }
+
+            *gift_qty_by_offer.entry(offer_id.to_string()).or_insert(0) += line.quantity;
         }
 
         // ── Block direct purchase of clone products ───────────────────────────
@@ -162,7 +250,7 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
             if price_cents < min_price {
                 errors.push(ValidationError {
                     message: "This product is only available as part of a promotion. Please add it through the offer.".to_string(),
-                    target: ValidationTarget { cart_line_id: Some(line.id.clone()) },
+                    target: "$.cart".to_string(),
                 });
             }
         }
@@ -173,10 +261,9 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
     // to prevent unlimited gifts from newly-created offers whose config wasn't published yet.
     const DEFAULT_MAX_GIFT_QTY: i64 = 1;
     for (offer_id, qty) in &gift_qty_by_offer {
-        let max_qty = config
-            .offer_max_quantities
-            .get(offer_id)
-            .copied()
+        let max_qty = config.offer_rules.get(offer_id)
+            .map(|rule| rule.max_quantity)
+            .or_else(|| config.offer_max_quantities.get(offer_id).copied())
             .unwrap_or(DEFAULT_MAX_GIFT_QTY);
         if *qty > max_qty {
             errors.push(ValidationError {
@@ -184,12 +271,32 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
                     "You can only add {} free gift(s) with this offer. Please update your cart.",
                     max_qty
                 ),
-                target: ValidationTarget { cart_line_id: None },
+                target: "$.cart".to_string(),
             });
         }
     }
 
-    FunctionOutput { errors }
+    for ((offer_id, reward_id), qty) in &gift_qty_by_reward {
+        let max_qty = config.offer_rules
+            .get(offer_id)
+            .and_then(|offer| offer.rewards.get(reward_id))
+            .map(|reward| reward.max_quantity)
+            .unwrap_or(0);
+        if *qty > max_qty {
+            errors.push(ValidationError {
+                message: format!("You can only add {} gift(s) for this reward. Please update your cart.", max_qty),
+                target: "$.cart".to_string(),
+            });
+        }
+    }
+
+    if errors.is_empty() {
+        FunctionOutput { operations: vec![] }
+    } else {
+        FunctionOutput {
+            operations: vec![Operation { validation_add: ValidationAdd { errors } }],
+        }
+    }
 }
 
 fn parse_config(node: &ValidationNode) -> Option<ValidationConfig> {
@@ -197,17 +304,20 @@ fn parse_config(node: &ValidationNode) -> Option<ValidationConfig> {
     serde_json::from_str(value).ok()
 }
 
-fn get_attr<'a>(attrs: &'a [Attribute], key: &str) -> &'a str {
-    attrs
-        .iter()
-        .find(|a| a.key == key)
-        .and_then(|a| a.value.as_deref())
-        .unwrap_or("")
+fn attribute_value(attribute: &Option<Attribute>) -> &str {
+    attribute.as_ref().and_then(|value| value.value.as_deref()).unwrap_or("")
 }
 
 fn parse_amount(amount_str: &str) -> i64 {
     let amount: f64 = amount_str.parse().unwrap_or(0.0);
     (amount * 100.0).round() as i64
+}
+
+fn has_promo_engine_discount(line: &CartLine) -> bool {
+    line.discount_allocations.iter().any(|allocation| {
+        allocation.discount_application.metafield.is_some()
+            && parse_amount(&allocation.discounted_amount.amount) > 0
+    })
 }
 
 // ─── WASM entry point ─────────────────────────────────────────────────────────
@@ -234,6 +344,7 @@ mod tests {
 
     fn make_config(max_qty: i64, allowed_variants: Vec<&str>, clone_products: Vec<&str>) -> ValidationConfig {
         ValidationConfig {
+            offer_rules: HashMap::new(),
             offer_max_quantities: {
                 let mut m = HashMap::new();
                 m.insert("offer-1".to_string(), max_qty);
@@ -251,14 +362,27 @@ mod tests {
             quantity: qty,
             merchandise: Merchandise {
                 id: variant_id.to_string(),
-                product: Product { id: product_id.to_string(), tags: vec![] },
+                product: Product { id: product_id.to_string() },
             },
-            attributes: vec![
-                Attribute { key: "_promo_engine_line_type".to_string(), value: Some("gift".to_string()) },
-                Attribute { key: "_promo_engine_offer_id".to_string(), value: Some(offer_id.to_string()) },
-            ],
+            line_type: Some(Attribute { value: Some("gift".to_string()) }),
+            offer_id: Some(Attribute { value: Some(offer_id.to_string()) }),
+            reward_id: Some(Attribute { value: Some("reward-1".to_string()) }),
+            offer_version: Some(Attribute { value: Some("1".to_string()) }),
             cost: LineCost { amount_per_quantity: Money { amount: "0.00".to_string() } },
+            discount_allocations: vec![DiscountAllocation {
+                discounted_amount: Money { amount: "10.00".to_string() },
+                discount_application: DiscountApplication {
+                    metafield: Some(Metafield { value: "promo-config".to_string() }),
+                },
+            }],
         }
+    }
+
+    fn validation_errors(output: &FunctionOutput) -> &[ValidationError] {
+        output.operations
+            .first()
+            .map(|operation| operation.validation_add.errors.as_slice())
+            .unwrap_or(&[])
     }
 
     #[test]
@@ -271,7 +395,7 @@ mod tests {
             validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
         };
         let output = function(input);
-        assert!(output.errors.is_empty());
+        assert!(validation_errors(&output).is_empty());
     }
 
     #[test]
@@ -285,8 +409,8 @@ mod tests {
             validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
         };
         let output = function(input);
-        assert_eq!(output.errors.len(), 1);
-        assert!(output.errors[0].message.contains("1 free gift"));
+        assert_eq!(validation_errors(&output).len(), 1);
+        assert!(validation_errors(&output)[0].message.contains("1 free gift"));
     }
 
     #[test]
@@ -300,14 +424,15 @@ mod tests {
             validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
         };
         let output = function(input);
-        assert_eq!(output.errors.len(), 1);
-        assert!(output.errors[0].message.contains("invalid"));
+        assert_eq!(validation_errors(&output).len(), 1);
+        assert!(validation_errors(&output)[0].message.contains("invalid"));
     }
 
     #[test]
     fn test_offer_not_in_max_quantities_uses_default() {
         // Config that knows about offer-1 but NOT offer-2
         let config = ValidationConfig {
+            offer_rules: HashMap::new(),
             offer_max_quantities: {
                 let mut m = HashMap::new();
                 m.insert("offer-1".to_string(), 5_i64);
@@ -325,7 +450,7 @@ mod tests {
             validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
         };
         let output = function(input);
-        assert_eq!(output.errors.len(), 1, "Unknown offer should fall back to DEFAULT_MAX_GIFT_QTY=1");
+        assert_eq!(validation_errors(&output).len(), 1, "Unknown offer should fall back to DEFAULT_MAX_GIFT_QTY=1");
     }
 
     #[test]
@@ -335,6 +460,133 @@ mod tests {
             validation_node: ValidationNode { metafield: None },
         };
         let output = function(input);
-        assert!(output.errors.is_empty(), "No config should fail open — never block checkout");
+        assert!(output.operations.is_empty(), "No config should fail open — never block checkout");
+    }
+
+    fn strict_config() -> ValidationConfig {
+        ValidationConfig {
+            offer_rules: {
+                let mut offers = HashMap::new();
+                offers.insert("offer-1".to_string(), GiftOfferRule {
+                    version: 3,
+                    max_quantity: 2,
+                    rewards: {
+                        let mut rewards = HashMap::new();
+                        rewards.insert("reward-1".to_string(), GiftRewardRule {
+                            max_quantity: 1,
+                            variant_ids: vec!["gid://shopify/ProductVariant/gift-v1".to_string()],
+                        });
+                        rewards.insert("reward-2".to_string(), GiftRewardRule {
+                            max_quantity: 1,
+                            variant_ids: vec!["gid://shopify/ProductVariant/gift-v2".to_string()],
+                        });
+                        rewards
+                    },
+                });
+                offers
+            },
+            offer_max_quantities: HashMap::new(),
+            allowed_gift_variant_ids: vec![],
+            clone_product_ids: vec![],
+            clone_min_price_cents: Some(100),
+        }
+    }
+
+    fn set_gift_metadata(line: &mut CartLine, reward_id: &str, version: &str) {
+        line.reward_id = Some(Attribute { value: Some(reward_id.to_string()) });
+        line.offer_version = Some(Attribute { value: Some(version.to_string()) });
+    }
+
+    fn run_with_config(config: ValidationConfig, lines: Vec<CartLine>) -> FunctionOutput {
+        function(FunctionInput {
+            cart: Cart { lines },
+            validation_node: ValidationNode {
+                metafield: Some(Metafield { value: serde_json::to_string(&config).unwrap() }),
+            },
+        })
+    }
+
+    #[test]
+    fn strict_rules_bind_variant_to_offer_reward_and_version() {
+        let mut cross_reward = make_gift_line(
+            "l1",
+            "gid://shopify/ProductVariant/gift-v2",
+            "p2",
+            "offer-1",
+            1,
+        );
+        set_gift_metadata(&mut cross_reward, "reward-1", "3");
+        let output = run_with_config(strict_config(), vec![cross_reward]);
+        assert_eq!(validation_errors(&output).len(), 1);
+
+        let mut stale = make_gift_line(
+            "l2",
+            "gid://shopify/ProductVariant/gift-v1",
+            "p1",
+            "offer-1",
+            1,
+        );
+        set_gift_metadata(&mut stale, "reward-1", "2");
+        let output = run_with_config(strict_config(), vec![stale]);
+        assert_eq!(validation_errors(&output).len(), 1);
+    }
+
+    #[test]
+    fn strict_rules_reject_unknown_offers_and_reward_quantity_abuse() {
+        let mut unknown = make_gift_line(
+            "l1",
+            "gid://shopify/ProductVariant/gift-v1",
+            "p1",
+            "offer-unknown",
+            1,
+        );
+        set_gift_metadata(&mut unknown, "reward-1", "3");
+        let output = run_with_config(strict_config(), vec![unknown]);
+        assert_eq!(validation_errors(&output).len(), 1);
+
+        let mut excessive = make_gift_line(
+            "l2",
+            "gid://shopify/ProductVariant/gift-v1",
+            "p1",
+            "offer-1",
+            2,
+        );
+        set_gift_metadata(&mut excessive, "reward-1", "3");
+        let output = run_with_config(strict_config(), vec![excessive]);
+        assert!(validation_errors(&output).iter().any(|error| error.message.contains("this reward")));
+    }
+
+    #[test]
+    fn rejects_spoofed_gift_metadata_without_our_applied_discount() {
+        let mut line = make_gift_line(
+            "l1",
+            "gid://shopify/ProductVariant/gift-v1",
+            "p1",
+            "offer-1",
+            1,
+        );
+        set_gift_metadata(&mut line, "reward-1", "3");
+        line.discount_allocations.clear();
+
+        let output = run_with_config(strict_config(), vec![line]);
+        assert!(validation_errors(&output)
+            .iter()
+            .any(|error| error.message.contains("not eligible")));
+    }
+
+    #[test]
+    fn serializes_current_validation_add_contract() {
+        let mut line = make_gift_line(
+            "l1",
+            "gid://shopify/ProductVariant/gift-v1",
+            "p1",
+            "offer-1",
+            2,
+        );
+        set_gift_metadata(&mut line, "reward-1", "3");
+        let output = run_with_config(strict_config(), vec![line]);
+        let json = serde_json::to_value(output).unwrap();
+        assert!(json["operations"][0]["validationAdd"]["errors"].is_array());
+        assert_eq!(json["operations"][0]["validationAdd"]["errors"][0]["target"], "$.cart");
     }
 }

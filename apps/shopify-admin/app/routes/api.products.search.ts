@@ -1,17 +1,29 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb, shops, productCache, variantCache } from "@promo/db";
-import { and, desc, eq, inArray, like, ne, or } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, ne, or } from "drizzle-orm";
+
+const SHOPIFY_PRODUCT_GID = /^gid:\/\/shopify\/Product\/\d+$/;
+const SHOPIFY_VARIANT_GID = /^gid:\/\/shopify\/ProductVariant\/\d+$/;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   try {
     const { session } = await authenticate.admin(request);
     const url = new URL(request.url);
-    const q = url.searchParams.get("q") ?? "";
+    const q = (url.searchParams.get("q") ?? "").trim();
+    if (q.length > 100) {
+      return Response.json({ error: "Search query is too long" }, { status: 400 });
+    }
     const idsParam = url.searchParams.get("ids");
-    const ids = idsParam ? idsParam.split(",").filter(Boolean) : null;
+    const ids = idsParam ? [...new Set(idsParam.split(",").filter(Boolean))] : null;
+    if (ids && (ids.length > 200 || ids.some((id) => !SHOPIFY_PRODUCT_GID.test(id) && !SHOPIFY_VARIANT_GID.test(id)))) {
+      return Response.json({ error: "Product identifiers are invalid" }, { status: 400 });
+    }
+    if (ids && ids.some((id) => SHOPIFY_PRODUCT_GID.test(id)) && ids.some((id) => SHOPIFY_VARIANT_GID.test(id))) {
+      return Response.json({ error: "Product and variant identifiers cannot be mixed" }, { status: 400 });
+    }
     const limitRaw = parseInt(url.searchParams.get("limit") ?? "20", 10);
-    const limit = Math.min(Number.isNaN(limitRaw) ? 20 : limitRaw, 200);
+    const limit = Math.max(1, Math.min(Number.isNaN(limitRaw) ? 20 : limitRaw, 200));
     const includeVariants = url.searchParams.get("variants") === "true";
 
     const db = getDb();
@@ -55,6 +67,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       : await db
           .select({
             id: productCache.productGid,
+            legacyId: productCache.legacyProductId,
             title: productCache.title,
             handle: productCache.handle,
             vendor: productCache.vendor,
@@ -72,9 +85,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
                   ne(productCache.status, "ARCHIVED"),
                   q
                     ? or(
-                        like(productCache.title, searchPattern),
-                        like(productCache.handle, searchPattern),
-                        like(productCache.vendor, searchPattern),
+                        ilike(productCache.title, searchPattern),
+                        ilike(productCache.handle, searchPattern),
+                        ilike(productCache.vendor, searchPattern),
                       )
                     : undefined,
                 ),
@@ -92,12 +105,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           .select({
             productGid: variantCache.productGid,
             id: variantCache.variantGid,
+            legacyId: variantCache.legacyVariantId,
             sku: variantCache.sku,
             title: variantCache.title,
             price: variantCache.price,
             availableForSale: variantCache.availableForSale,
             inventoryQuantity: variantCache.inventoryQuantity,
             inventoryPolicy: variantCache.inventoryPolicy,
+            requiresSellingPlan: variantCache.requiresSellingPlan,
           })
           .from(variantCache)
           .where(

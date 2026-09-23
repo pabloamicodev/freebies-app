@@ -47,7 +47,7 @@ import { encryptToken } from "./lib/token-crypto.server.js";
 import { shopifyGraphQL } from "./lib/shopify-fetch.server.js";
 import { waitUntil } from "@vercel/functions";
 import { syncAllProducts } from "./lib/sync/product-sync.server.js";
-import { ensureDiscountNode } from "./lib/discount-node.server.js";
+import { publishOffersForShop } from "./lib/sync/offer-publisher.server.js";
 import { productCache } from "@promo/db";
 import { count, eq as drizzleEq } from "drizzle-orm";
 
@@ -178,19 +178,18 @@ const shopify = shopifyApp({
         console.error("[afterAuth] Could not check/trigger product sync:", syncErr instanceof Error ? syncErr.message : syncErr);
       }
 
-      // Register the automatic app discount backed by the Discount Function.
-      // Non-fatal: if the function hasn't been deployed yet (fresh dev setup),
-      // this is retried lazily on the next offer publish.
+      // Register both promotion Functions and republish the shop's exact active
+      // offer rules. Non-fatal for fresh dev setups where Functions are not yet deployed.
       try {
         const db3 = getDb();
         const shopRows3 = await db3.select({ id: shops.id }).from(shops).where(drizzleEq(shops.myshopifyDomain, session.shop)).limit(1);
         const shopRow3 = shopRows3[0];
         if (shopRow3 && session.accessToken) {
-          await ensureDiscountNode(shopRow3.id, session.shop, session.accessToken);
+          await publishOffersForShop(shopRow3.id, session.shop);
         }
       } catch (discountErr) {
-        Sentry.captureException(discountErr, { extra: { shop: session.shop, context: "afterAuth-ensure-discount-node" } });
-        console.error("[afterAuth] Could not register automatic app discount:", discountErr instanceof Error ? discountErr.message : discountErr);
+        Sentry.captureException(discountErr, { extra: { shop: session.shop, context: "afterAuth-ensure-promotion-functions" } });
+        console.error("[afterAuth] Could not register promotion functions:", discountErr instanceof Error ? discountErr.message : discountErr);
       }
     },
   },

@@ -152,6 +152,63 @@ describe("evaluate — cart value condition", () => {
     }
   });
 
+  it("uses the slider for multi-variant gifts even if a legacy config says auto-add", async () => {
+    const offer = makeGiftOffer("offer-1", 5000);
+    offer.rewards[0] = {
+      ...offer.rewards[0]!,
+      target: {
+        variantIds: [
+          "gid://shopify/ProductVariant/201",
+          "gid://shopify/ProductVariant/202",
+        ],
+      },
+      isAutoAdd: true,
+      isCustomerSelectable: false,
+      quantity: 1,
+    };
+    const result = await evaluate(makeInput(makeCart(6000)), {
+      offers: [offer],
+      oneUseStates: [],
+      now: NOW,
+    });
+
+    expect(result.cartActions.filter((action) => action.action === "add_line")).toHaveLength(0);
+    expect(result.giftSlider?.selectableGifts).toHaveLength(2);
+    expect(result.giftSlider?.selectableGifts[0]).toMatchObject({
+      rewardId: "reward-offer-1",
+      offerVersion: 1,
+      rewardMaxQuantity: 1,
+    });
+  });
+
+  it("removes a stale-version gift and recreates the current reward line", async () => {
+    const cart = makeCart(6000);
+    cart.lines.push({
+      ...cart.lines[0]!,
+      key: "stale-gift",
+      variantId: "gid://shopify/ProductVariant/gift-offer-1",
+      productId: "gid://shopify/Product/999",
+      priceCents: 2000,
+      lineSubtotalCents: 2000,
+      properties: {
+        _promo_engine_line_type: "gift",
+        _promo_engine_offer_id: "offer-1",
+        _promo_engine_reward_id: "reward-offer-1",
+        _promo_engine_offer_version: "0",
+      },
+    });
+    const result = await evaluate(makeInput(cart), {
+      offers: [makeGiftOffer("offer-1", 5000)],
+      oneUseStates: [],
+      now: NOW,
+    });
+
+    expect(result.cartActions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "remove_line", lineKey: "stale-gift", reason: "stale_or_invalid_gift" }),
+      expect.objectContaining({ action: "add_line", variantId: "gid://shopify/ProductVariant/gift-offer-1" }),
+    ]));
+  });
+
   it("generates remove_line when qualifying item is removed and gift is in cart", async () => {
     const giftLine = {
       key: "gift-key",

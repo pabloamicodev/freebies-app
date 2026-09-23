@@ -12,7 +12,7 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
-import { offerRewards } from "@promo/db";
+import { offerRewards, productCache, variantCache } from "@promo/db";
 import {
   DeliveryGroupTypeSchema,
   DiscountTypeSchema,
@@ -84,17 +84,27 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     if (!rewardTypeResult.success) return { error: "Reward type is invalid." };
     const discountTypeResult = DiscountTypeSchema.safeParse(discountType);
     if (!discountTypeResult.success) return { error: "Discount type is invalid." };
-    const discountValue = parseFloat(formData.get("discountValue") as string) || 0;
-    const quantityRaw = formData.get("quantity");
-    const quantity = quantityRaw ? parseInt(quantityRaw as string, 10) : null;
-    if (quantity !== null && (!Number.isFinite(quantity) || quantity < 1)) {
-      return { error: "Quantity must be at least 1." };
+    const rawDiscountValue = formData.get("discountValue");
+    const discountValue = typeof rawDiscountValue === "string" && rawDiscountValue.trim() !== ""
+      ? Number(rawDiscountValue)
+      : 0;
+    if (!Number.isFinite(discountValue) || discountValue < 0) {
+      return { error: "Discount value must be a valid non-negative number." };
     }
-    const isAutoAdd = formData.get("isAutoAdd") === "on";
-    const isCustomerSelectable = formData.get("isCustomerSelectable") === "on";
-    const trackMode = (formData.get("trackMode") as "product" | "variant") ?? "product";
-    const label = (formData.get("label") as string) || null;
-    const currencyCode = (formData.get("currencyCode") as string) || "USD";
+    const quantityRaw = formData.get("quantity");
+    const quantity = typeof quantityRaw === "string" && quantityRaw.trim() !== "" ? Number(quantityRaw) : null;
+    if (quantity !== null && (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 250)) {
+      return { error: "Quantity must be a whole number between 1 and 250." };
+    }
+    let isAutoAdd = formData.get("isAutoAdd") === "on";
+    let isCustomerSelectable = formData.get("isCustomerSelectable") === "on";
+    const requestedTrackMode = formData.get("trackMode");
+    let trackMode: "product" | "variant" = requestedTrackMode === "variant" ? "variant" : "product";
+    const rawLabel = formData.get("label");
+    const label = typeof rawLabel === "string" && rawLabel.trim() ? rawLabel.trim() : null;
+    if (label && label.length > 120) return { error: "Reward label cannot exceed 120 characters." };
+    const currencyCode = String(formData.get("currencyCode") || "USD").trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(currencyCode)) return { error: "Currency code must contain exactly 3 letters." };
 
     if (!rewardType) return { error: "Reward type is required." };
 
@@ -106,7 +116,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       return { error: "Percentage discount cannot exceed 100%." };
     }
 
-    // Build target from variant GIDs — merge picker selection with manual textarea input.
+    // Product discounts retain the advanced variant/manual controls. Gifts are
+    // product-based and resolved server-side so auto-add vs. customer choice
+    // can never be saved in a contradictory state.
     const pickerGids = splitTextareaList(formData.get("variantGids") as string | null);
     const manualGids = splitTextareaList(formData.get("variantGidsManual") as string | null);
     const variantGids = [...new Set([...pickerGids, ...manualGids])];
@@ -144,9 +156,52 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         tiers: shippingTiers,
       };
     } else {
-      target = variantGids.length > 0
-        ? { variantIds: variantGids }
-        : { scope: "cart" };
+      if (rewardType === "product_gift") {
+        const productGids = [...new Set(pickerGids)];
+        if (productGids.length !== 1 || !/^gid:\/\/shopify\/Product\/\d+$/.test(productGids[0]!)) {
+          return { error: "Choose exactly one Shopify product for this gift reward." };
+        }
+        const productGid = productGids[0]!;
+        const [productRows, candidateVariants] = await Promise.all([
+          db.select({ status: productCache.status })
+            .from(productCache)
+            .where(and(eq(productCache.shopId, shopId), eq(productCache.productGid, productGid)))
+            .limit(1),
+          db.select({
+            variantGid: variantCache.variantGid,
+            availableForSale: variantCache.availableForSale,
+            inventoryQuantity: variantCache.inventoryQuantity,
+            inventoryPolicy: variantCache.inventoryPolicy,
+            requiresSellingPlan: variantCache.requiresSellingPlan,
+          })
+            .from(variantCache)
+            .where(and(eq(variantCache.shopId, shopId), eq(variantCache.productGid, productGid))),
+        ]);
+        if (!productRows[0] || productRows[0].status !== "ACTIVE") {
+          return { error: "The selected gift product must be active in Shopify." };
+        }
+        const eligibleVariantIds = candidateVariants
+          .filter((variant) =>
+            variant.availableForSale &&
+            !variant.requiresSellingPlan &&
+            (variant.inventoryPolicy === "CONTINUE" || (variant.inventoryQuantity ?? 0) > 0),
+          )
+          .map((variant) => variant.variantGid);
+        if (eligibleVariantIds.length === 0) {
+          return { error: "The selected product has no available one-time-purchase variants." };
+        }
+        if (eligibleVariantIds.length > 1 && (quantity ?? 1) > eligibleVariantIds.length) {
+          return { error: `Gift quantity cannot exceed the ${eligibleVariantIds.length} available variants.` };
+        }
+        target = { productId: productGid, variantIds: eligibleVariantIds };
+        isAutoAdd = eligibleVariantIds.length === 1;
+        isCustomerSelectable = eligibleVariantIds.length > 1;
+        trackMode = eligibleVariantIds.length === 1 ? "variant" : "product";
+      } else {
+        target = variantGids.length > 0
+          ? { variantIds: variantGids }
+          : { scope: "cart" };
+      }
       if (rewardType === "product_discount") {
         const lineQuantityEqualsRaw = Number(formData.get("lineQuantityEquals") ?? 0);
         const maxUnitsTotalRaw = Number(formData.get("maxUnitsTotal") ?? 0);
@@ -270,6 +325,14 @@ const DISCOUNT_TYPES = [
   { label: "Cheapest item free", value: "cheapest_item_free" },
   { label: "Most expensive item discount", value: "most_expensive_item_discount" },
 ];
+
+const GIFT_DISCOUNT_TYPES = DISCOUNT_TYPES.filter((type) =>
+  type.value === "free" || type.value === "percentage" || type.value === "fixed_amount",
+);
+
+const ORDER_DISCOUNT_TYPES = DISCOUNT_TYPES.filter((type) =>
+  type.value === "free" || type.value === "percentage" || type.value === "fixed_amount",
+);
 
 const REWARD_TYPE_LABELS: Record<string, string> = {
   product_gift: "Gift",
@@ -411,8 +474,8 @@ export default function OfferRewardsPage() {
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
         title={rewardType === "product_discount" ? "Select Discounted Variants" : "Select Gift Products"}
-        mode="variants"
-        allowMultiple
+        mode={rewardType === "product_gift" ? "products" : "variants"}
+        allowMultiple={rewardType !== "product_gift"}
         selectedIds={selectedGiftGids}
         onSelect={setSelectedGiftGids}
       />
@@ -546,7 +609,13 @@ export default function OfferRewardsPage() {
                       name="rewardType"
                       className="b-select"
                       value={rewardType}
-                      onChange={(e) => setRewardType(e.target.value)}
+                      onChange={(e) => {
+                        const nextRewardType = e.target.value;
+                        setRewardType(nextRewardType);
+                        setSelectedGiftGids([]);
+                        if (nextRewardType === "product_gift") setDiscountType("free");
+                        if (nextRewardType === "order_discount" || nextRewardType === "shipping_discount") setDiscountType("percentage");
+                      }}
                     >
                       {REWARD_TYPES.map((o) => (
                         <option key={o.value} value={o.value}>
@@ -575,7 +644,12 @@ export default function OfferRewardsPage() {
                         value={discountType}
                         onChange={(e) => setDiscountType(e.target.value)}
                       >
-                        {DISCOUNT_TYPES.map((o) => (
+                        {(rewardType === "product_gift"
+                          ? GIFT_DISCOUNT_TYPES
+                          : rewardType === "order_discount"
+                            ? ORDER_DISCOUNT_TYPES
+                            : DISCOUNT_TYPES
+                        ).map((o) => (
                           <option key={o.value} value={o.value}>
                             {o.label}
                           </option>
@@ -615,7 +689,10 @@ export default function OfferRewardsPage() {
                           type="text"
                           className="b-input"
                           value={currencyCode}
-                          onChange={(e) => setCurrencyCode(e.target.value)}
+                          onChange={(e) => setCurrencyCode(e.target.value.toUpperCase())}
+                          minLength={3}
+                          maxLength={3}
+                          pattern="[A-Za-z]{3}"
                           autoComplete="off"
                         />
                       </div>
@@ -881,7 +958,7 @@ export default function OfferRewardsPage() {
                       {/* Product picker */}
                       <div>
                         <p className="b-label" style={{ marginBottom: 8 }}>
-                          {rewardType === "product_discount" ? "Discounted Variants" : "Gift Products"}
+                          {rewardType === "product_discount" ? "Discounted Variants" : "Gift Product"}
                         </p>
 
                         {/* Selected GID tags */}
@@ -927,7 +1004,7 @@ export default function OfferRewardsPage() {
                           className="b-btn b-btn-secondary b-btn-sm"
                           onClick={() => setPickerOpen(true)}
                         >
-                          {rewardType === "product_discount" ? "Select Discounted Variants" : "🎁 Select Gift Products"}
+                          {rewardType === "product_discount" ? "Select Discounted Variants" : "🎁 Select Gift Product"}
                         </button>
                         <input
                           type="hidden"
@@ -936,8 +1013,10 @@ export default function OfferRewardsPage() {
                         />
                       </div>
 
-                      {/* Manual GID fallback */}
-                      <div>
+                      {/* Manual GID fallback is intentionally restricted to
+                          advanced product-discount targeting. Gift products
+                          must be resolved from the synced Shopify catalog. */}
+                      {rewardType === "product_discount" && <div>
                         <label className="b-label" htmlFor="variantGidsManual">
                           Or paste GIDs manually (one per line)
                         </label>
@@ -953,7 +1032,7 @@ export default function OfferRewardsPage() {
                         <p className="b-help">
                           Optional: paste GIDs directly if you know them.
                         </p>
-                      </div>
+                      </div>}
 
                       {rewardType === "product_gift" && (
                         <div>
@@ -974,54 +1053,16 @@ export default function OfferRewardsPage() {
                         </div>
                       )}
 
-                      {rewardType === "product_gift" && <div>
-                        <label className="b-label" htmlFor="trackMode">
-                          Track Mode
-                        </label>
-                        <select
-                          id="trackMode"
-                          name="trackMode"
-                          className="b-select"
-                          defaultValue="product"
-                        >
-                          <option value="product">
-                            Track by Product (any variant counts)
-                          </option>
-                          <option value="variant">
-                            Track by Variant (exact variant only)
-                          </option>
-                        </select>
-                      </div>}
-
-                      {rewardType === "product_gift" && <label className="b-checkbox-row">
-                        <input
-                          type="checkbox"
-                          name="isAutoAdd"
-                        />
-                        <div>
-                          <span className="b-checkbox-label">
-                            Auto-add gift to cart
-                          </span>
-                          <p className="b-checkbox-help">
-                            Gift is automatically added when offer qualifies. Uncheck to show gift slider.
-                          </p>
+                      {rewardType === "product_gift" && (
+                        <div className="b-banner b-banner-green" role="status">
+                          <span className="b-banner-icon">✓</span>
+                          <div className="b-banner-body">
+                            <p className="b-banner-text" style={{ margin: 0 }}>
+                              Gift behavior is automatic: a product with one available variant is added directly; a product with multiple available variants opens the customer gift selector.
+                            </p>
+                          </div>
                         </div>
-                      </label>}
-
-                      {rewardType === "product_gift" && <label className="b-checkbox-row">
-                        <input
-                          type="checkbox"
-                          name="isCustomerSelectable"
-                        />
-                        <div>
-                          <span className="b-checkbox-label">
-                            Customer selectable
-                          </span>
-                          <p className="b-checkbox-help">
-                            Customer can choose this gift from the gift slider.
-                          </p>
-                        </div>
-                      </label>}
+                      )}
 
                       {rewardType === "product_discount" && (
                         <div className="b-stack b-gap-4">

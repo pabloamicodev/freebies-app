@@ -7,6 +7,7 @@ import {
   type Db,
 } from "@promo/db";
 import type { OfferDefinition } from "@promo/rule-engine";
+import { computeOfferVersion } from "./offer-version.server.js";
 
 // Previously an in-memory cache (didn't survive across Vercel serverless instances).
 // Now we query directly — the DB indexes on (shopId, status) and (shopId, priority)
@@ -41,9 +42,11 @@ export async function getOfferDefinitions(shopId: string, db: Db): Promise<Offer
   const policyByOffer = new Map(policies.map((policy) => [policy.offerId, policy]));
   const offerDefinitions: OfferDefinition[] = activeOffers.map((offer) => {
     const policy = policyByOffer.get(offer.id);
+    const offerConditionsForVersion = conditions.filter((condition) => condition.offerId === offer.id);
+    const offerRewardsForVersion = rewards.filter((reward) => reward.offerId === offer.id);
     return {
       id: offer.id,
-      version: 1,
+      version: computeOfferVersion(offer, offerConditionsForVersion, offerRewardsForVersion, policy ?? null),
       type: offer.type,
       priority: offer.priority,
       stopLowerPriority: policy?.stopLowerPriority ?? false,
