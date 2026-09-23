@@ -6,3 +6,5 @@ customer_privacy = { analytics = true, marketing = false, preferences = false, s
 
 [settings]
 type = "object"
+
+[settings.fields]
