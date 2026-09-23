@@ -3,3 +3,6 @@ name = "Promo Engine Analytics Pixel"
 uid = "adc49c43-3ec9-4808-b20a-61cb0d0add18"
 runtime_context = "strict"
 customer_privacy = { analytics = true, marketing = false, preferences = false, sale_of_data = "disabled" }
+
+[settings]
+type = "object"
