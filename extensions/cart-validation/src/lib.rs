@@ -13,23 +13,27 @@
  */
 
 use serde::{Deserialize, Serialize};
+use shopify_function::wasm_api::{self, Context, Serialize as ShopifySerialize};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, shopify_function::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[shopify_function(rename_all = "camelCase")]
 pub struct FunctionInput {
     pub cart: Cart,
     pub validation_node: ValidationNode,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, shopify_function::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[shopify_function(rename_all = "camelCase")]
 pub struct Cart {
     pub lines: Vec<CartLine>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, shopify_function::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[shopify_function(rename_all = "camelCase")]
 pub struct CartLine {
     pub id: String,
     pub quantity: i64,
@@ -42,58 +46,67 @@ pub struct CartLine {
     pub discount_allocations: Vec<DiscountAllocation>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, shopify_function::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[shopify_function(rename_all = "camelCase")]
 pub struct Merchandise {
     pub id: String,
     pub product: Product,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, shopify_function::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[shopify_function(rename_all = "camelCase")]
 pub struct Product {
     pub id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, shopify_function::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[shopify_function(rename_all = "camelCase")]
 pub struct Attribute {
     pub value: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, shopify_function::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[shopify_function(rename_all = "camelCase")]
 pub struct LineCost {
     pub amount_per_quantity: Money,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, shopify_function::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[shopify_function(rename_all = "camelCase")]
 pub struct Money {
     pub amount: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, shopify_function::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[shopify_function(rename_all = "camelCase")]
 pub struct DiscountAllocation {
     pub discounted_amount: Money,
     pub discount_application: DiscountApplication,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, shopify_function::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[shopify_function(rename_all = "camelCase")]
 pub struct DiscountApplication {
     pub metafield: Option<Metafield>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, shopify_function::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[shopify_function(rename_all = "camelCase")]
 pub struct ValidationNode {
     pub metafield: Option<Metafield>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, shopify_function::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[shopify_function(rename_all = "camelCase")]
 pub struct Metafield {
     pub value: String,
 }
@@ -157,6 +170,56 @@ pub struct ValidationAdd {
 pub struct ValidationError {
     pub message: String,
     pub target: String,
+}
+
+impl ShopifySerialize for FunctionOutput {
+    fn serialize(&self, context: &mut Context) -> Result<(), wasm_api::write::Error> {
+        context.write_object(
+            |context| {
+                context.write_utf8_str("operations")?;
+                ShopifySerialize::serialize(&self.operations, context)
+            },
+            1,
+        )
+    }
+}
+
+impl ShopifySerialize for Operation {
+    fn serialize(&self, context: &mut Context) -> Result<(), wasm_api::write::Error> {
+        context.write_object(
+            |context| {
+                context.write_utf8_str("validationAdd")?;
+                ShopifySerialize::serialize(&self.validation_add, context)
+            },
+            1,
+        )
+    }
+}
+
+impl ShopifySerialize for ValidationAdd {
+    fn serialize(&self, context: &mut Context) -> Result<(), wasm_api::write::Error> {
+        context.write_object(
+            |context| {
+                context.write_utf8_str("errors")?;
+                ShopifySerialize::serialize(&self.errors, context)
+            },
+            1,
+        )
+    }
+}
+
+impl ShopifySerialize for ValidationError {
+    fn serialize(&self, context: &mut Context) -> Result<(), wasm_api::write::Error> {
+        context.write_object(
+            |context| {
+                context.write_utf8_str("message")?;
+                ShopifySerialize::serialize(&self.message, context)?;
+                context.write_utf8_str("target")?;
+                ShopifySerialize::serialize(&self.target, context)
+            },
+            2,
+        )
+    }
 }
 
 // ─── Main function ────────────────────────────────────────────────────────────
@@ -299,6 +362,11 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
     }
 }
 
+#[shopify_function::shopify_function]
+fn run(input: FunctionInput) -> shopify_function::Result<FunctionOutput> {
+    Ok(function(input))
+}
+
 fn parse_config(node: &ValidationNode) -> Option<ValidationConfig> {
     let value = node.metafield.as_ref()?.value.as_str();
     serde_json::from_str(value).ok()
@@ -318,24 +386,6 @@ fn has_promo_engine_discount(line: &CartLine) -> bool {
         allocation.discount_application.metafield.is_some()
             && parse_amount(&allocation.discounted_amount.amount) > 0
     })
-}
-
-// ─── WASM entry point ─────────────────────────────────────────────────────────
-
-#[cfg(target_arch = "wasm32")]
-mod shopify_function {
-    use super::*;
-    use std::io::{self, Read, Write};
-
-    #[no_mangle]
-    pub extern "C" fn _start() {
-        let mut input_str = String::new();
-        io::stdin().read_to_string(&mut input_str).expect("Failed to read stdin");
-        let input: FunctionInput = serde_json::from_str(&input_str).expect("Failed to parse input");
-        let output = function(input);
-        let output_str = serde_json::to_string(&output).expect("Failed to serialize output");
-        io::stdout().write_all(output_str.as_bytes()).expect("Failed to write stdout");
-    }
 }
 
 #[cfg(test)]

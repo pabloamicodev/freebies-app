@@ -575,6 +575,7 @@ fn is_eligible_line(line: &Lines, required_set: &HashSet<&str>, excluded_set: &H
 /// current cart at checkout time — the merchant may have edited the offer, or
 /// the cart may have changed, since the storefront runtime's own evaluation.
 fn check_main_condition(offer: &CompiledOffer, input: &Input) -> bool {
+    let active_currency = input.cart().cost().subtotal_amount().currency_code().to_string();
     let excluded_products: HashSet<&str> = offer
         .excluded_product_ids
         .iter()
@@ -597,7 +598,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input) -> bool {
             .iter()
             .map(|line| {
                 let amount = line.cost().subtotal_amount().amount().as_f64();
-                to_cents(amount, &line.cost().subtotal_amount().currency_code().to_string())
+                to_cents(amount, &active_currency)
             })
             .sum();
         // Discount Functions execute concurrently, so the input does not
@@ -605,10 +606,9 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input) -> bool {
         // Function. Mirror only its qualification math here; this Function
         // still emits no volume-discount candidate of its own.
         let cart_value_cents = (raw_cart_value_cents
-            - projected_volume_discount_cents(&non_gift_lines))
+            - projected_volume_discount_cents(&non_gift_lines, &active_currency))
             .max(0);
 
-        let active_currency = input.cart().cost().subtotal_amount().currency_code().to_string();
         let effective_threshold = resolve_threshold(threshold_cents, &offer.currency_overrides, &active_currency);
         if cart_value_cents < effective_threshold {
             return false;
@@ -666,7 +666,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input) -> bool {
         let amount_spent = customer.amount_spent();
         let amount_spent_cents = to_cents(
             amount_spent.amount().as_f64(),
-            &amount_spent.currency_code().to_string(),
+            &offer.currency_code,
         );
         if offer.customer_amount_spent_min_cents.is_some_and(|minimum| amount_spent_cents < minimum)
             || offer.customer_amount_spent_max_cents.is_some_and(|maximum| amount_spent_cents > maximum)
@@ -800,7 +800,7 @@ fn line_offer_version(line: &Lines) -> Option<String> {
     line.offer_version().as_ref().and_then(|attribute| attribute.value()).cloned()
 }
 
-fn projected_volume_discount_cents(lines: &[&Lines]) -> i64 {
+fn projected_volume_discount_cents(lines: &[&Lines], currency_code: &str) -> i64 {
     let mut groups: BTreeMap<String, VolumeDiscountGroup> = BTreeMap::new();
     for line in lines {
         if line
@@ -830,7 +830,7 @@ fn projected_volume_discount_cents(lines: &[&Lines]) -> i64 {
         }
         let subtotal_cents = to_cents(
             line.cost().total_amount().amount().as_f64(),
-            &line.cost().subtotal_amount().currency_code().to_string(),
+            currency_code,
         );
         if subtotal_cents <= 0 {
             continue;

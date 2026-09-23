@@ -3,26 +3,10 @@ query CartTransformInput {
     lines {
       id
       quantity
-      merchandise {
-        ... on ProductVariant {
-          id
-          product {
-            id
-            title
-            tags
-          }
-        }
-      }
-      attributes {
-        key
-        value
-      }
-      cost {
-        amountPerQuantity {
-          amount
-          currencyCode
-        }
-      }
+      lineType: attribute(key: "_promo_engine_line_type") { value }
+      bundleComponents: attribute(key: "_promo_engine_bundle_components") { value }
+      bundleTitle: attribute(key: "_promo_engine_bundle_title") { value }
+      bundleImageUrl: attribute(key: "_promo_engine_bundle_image_url") { value }
       sellingPlanAllocation {
         sellingPlan {
           id
