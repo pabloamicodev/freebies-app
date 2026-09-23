@@ -13,5 +13,5 @@ uid = "0bfc8576-81cd-48b3-b315-c1dc3ec25946"
 
   [extensions.build]
   command = "cargo build --target=wasm32-wasip1 --release"
-  path = "target/wasm32-wasip1/release/promo-engine-cart-validation.wasm"
+  path = "target/wasm32-wasip1/release/promo_engine_cart_validation.wasm"
   watch = ["src/**/*.rs"]
