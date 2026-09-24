@@ -12,10 +12,6 @@ target = "purchase.checkout.block.render"
 
 [[extensions.targeting]]
 module = "./src/checkout-upsell.tsx"
-target = "purchase.thank-you.block.render"
-
-[[extensions.targeting]]
-module = "./src/checkout-upsell.tsx"
 target = "purchase.checkout.actions.render-before"
 
 [extensions.capabilities]

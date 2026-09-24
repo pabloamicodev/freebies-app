@@ -1,35 +1,17 @@
 /**
- * Checkout Upsell Extension — Shopify Plus (all checkout surfaces).
- *
- * Shows a product recommendation at checkout.
- * Targets: order summary, actions area (above Pay Now), thank-you page.
- *
- * Edge cases handled:
- * - Upsell product already in cart → don't show
- * - Upsell product out of stock → don't show
- * - Network failure → don't show (graceful degradation, never block checkout)
- * - Buyer dismissed → store dismissal, don't re-show same session
- * - Cart changes after upsell rendered → re-fetch and revalidate
+ * Checkout Upsell Extension — Shopify API 2026-07.
  */
 
+import "@shopify/ui-extensions/preact";
+import { h, render } from "preact";
+import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import {
-  useEffect, useState, useCallback,
-} from "react";
-import {
-  reactExtension,
   useApi,
   useApplyCartLinesChange,
   useCartLines,
-  useTotalAmount,
   useSettings,
-  BlockStack,
-  InlineStack,
-  Image,
-  Text,
-  Button,
-  Divider,
-  View,
-} from "@shopify/ui-extensions-react/checkout";
+  useTotalAmount,
+} from "@shopify/ui-extensions/checkout/preact";
 
 interface UpsellProduct {
   variantId: string;
@@ -54,10 +36,12 @@ interface EvaluateResponse {
   upsells?: UpsellConfig[];
 }
 
-export default reactExtension("purchase.checkout.block.render", () => <CheckoutUpsell />);
+export default function extension() {
+  render(<CheckoutUpsell />, document.body);
+}
 
 function CheckoutUpsell() {
-  const api = useApi<"purchase.checkout.block.render">();
+  const api = useApi();
   const applyCartLinesChange = useApplyCartLinesChange();
   const cartLines = useCartLines();
   const totalAmount = useTotalAmount();
@@ -68,60 +52,61 @@ function CheckoutUpsell() {
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
   const [dismissed, setDismissed] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  const offerId = settings.offer_id ?? "";
+  const offerId = typeof settings.offer_id === "string" ? settings.offer_id : "";
   const shopDomain = api.shop.myshopifyDomain;
+  const cartFingerprint = useMemo(
+    () => cartLines.map((line) => `${line.id}:${line.quantity}`).join("|"),
+    [cartLines],
+  );
 
-  // Fetch upsell config from app backend
   useEffect(() => {
-    if (!offerId || !shopDomain) { setLoading(false); return; }
+    setConfig(null);
+    setLoading(true);
+    if (!offerId || !shopDomain) {
+      setLoading(false);
+      return;
+    }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000); // 5s timeout
-
-    const evalEndpoint = `https://${shopDomain}/apps/promo-engine/evaluate`;
-
+    const timeout = setTimeout(() => controller.abort(), 5_000);
     const cartNormalized = {
       token: null,
       id: null,
       lines: cartLines.map((line) => ({
         key: line.id,
         variantId: line.merchandise.id,
-        productId: "unknown",
+        productId: line.merchandise.product.id,
         quantity: line.quantity,
-        priceCents: Math.round((line.cost.totalAmount.amount / line.quantity) * 100),
+        priceCents: Math.round((line.cost.totalAmount.amount / Math.max(line.quantity, 1)) * 100),
         compareAtPriceCents: null,
-        properties: line.attributes.reduce((acc: Record<string, string>, a) => {
-          if (a.value) acc[a.key] = a.value;
-          return acc;
-        }, {}),
-        requiresSellingPlan: false,
-        sellingPlanId: null,
+        properties: Object.fromEntries(
+          line.attributes.flatMap((attribute) =>
+            attribute.value ? [[attribute.key, attribute.value]] : [],
+          ),
+        ),
+        requiresSellingPlan: Boolean(line.merchandise.sellingPlan),
+        sellingPlanId: line.merchandise.sellingPlan?.id ?? null,
         productHandle: "",
-        productTitle: "",
-        variantTitle: null,
-        vendor: "",
-        productType: "",
-        tags: [],
-        collections: [],
+        productTitle: line.merchandise.title,
+        variantTitle: line.merchandise.title,
+        vendor: line.merchandise.product.vendor,
+        productType: line.merchandise.product.productType,
+        tags: [] as string[],
+        collections: [] as string[],
         availableForSale: true,
         inventoryPolicy: "DENY",
         inventoryQuantity: null,
       })),
       subtotalCents: Math.round(totalAmount.amount * 100),
-      discountCodes: [],
+      discountCodes: [] as string[],
       currencyCode: totalAmount.currencyCode,
-      totalQuantity: cartLines.reduce((acc, l) => acc + l.quantity, 0),
+      totalQuantity: cartLines.reduce((sum, line) => sum + line.quantity, 0),
     };
 
-    fetch(evalEndpoint, {
+    fetch(`https://${shopDomain}/apps/promo-engine/evaluate`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Promo-Shop": shopDomain,
-        "X-Promo-Session": "checkout",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         shopDomain,
         cart: cartNormalized,
@@ -134,116 +119,110 @@ function CheckoutUpsell() {
       }),
       signal: controller.signal,
     })
-      .then((r) => r.json())
-      .then((result: EvaluateResponse) => {
-        const upsell = result.upsells?.find((u) => u.offerId === offerId);
-        const upsellProduct = upsell?.product;
-        if (upsellProduct) {
-          // Check if product is already in cart
-          const alreadyInCart = cartLines.some(
-            (line) => line.merchandise.id === upsellProduct.variantId,
-          );
-          if (!alreadyInCart) {
-            setConfig(upsell);
-          }
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Evaluation failed: ${response.status}`);
+        return response.json() as Promise<EvaluateResponse>;
+      })
+      .then((result) => {
+        const upsell = result.upsells?.find((candidate) => candidate.offerId === offerId);
+        if (
+          upsell?.product?.isAvailable &&
+          !cartLines.some((line) => line.merchandise.id === upsell.product?.variantId)
+        ) {
+          setConfig(upsell);
         }
       })
-      .catch((e: Error) => {
-        if (e.name !== "AbortError") setError("Failed to load offer");
+      .catch(() => {
+        setConfig(null);
       })
       .finally(() => {
         clearTimeout(timeout);
         setLoading(false);
       });
 
-    return () => { controller.abort(); clearTimeout(timeout); };
-  }, [offerId, shopDomain]);
+    return () => {
+      controller.abort();
+      clearTimeout(timeout);
+    };
+  }, [offerId, shopDomain, cartFingerprint, totalAmount.amount, totalAmount.currencyCode]);
 
   const handleAdd = useCallback(async () => {
     if (!config?.product) return;
     setAdding(true);
+    const metadata = JSON.stringify({
+      _promo_engine_line_type: "upsell",
+      _promo_engine_offer_id: offerId,
+    });
     try {
       const result = await applyCartLinesChange({
         type: "addCartLine",
         merchandiseId: config.product.variantId,
         quantity: 1,
         attributes: [
+          { key: "_promo_engine_metadata", value: metadata },
           { key: "_promo_engine_line_type", value: "upsell" },
           { key: "_promo_engine_offer_id", value: offerId },
         ],
       });
-
-      if (result.type === "success") {
-        setAdded(true);
-      } else {
-        setError("Could not add product. Please try again.");
-      }
-    } catch {
-      setError("Could not add product. Please try again.");
+      if (result.type === "success") setAdded(true);
     } finally {
       setAdding(false);
     }
-  }, [config, applyCartLinesChange, offerId]);
+  }, [applyCartLinesChange, config, offerId]);
 
-  // Don't render: loading, no config, dismissed, already added
   if (loading || !config?.product || dismissed || added) return null;
-  if (error) return null; // Fail silently — never block checkout
 
   const product = config.product;
   const originalPrice = product.originalPriceCents / 100;
   const discountedPrice = product.discountedPriceCents / 100;
-  const currency = totalAmount.currencyCode;
-
-  const fmt = (amount: number) =>
-    new Intl.NumberFormat("en", { style: "currency", currency }).format(amount);
+  const formatMoney = (amount: number) =>
+    new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: totalAmount.currencyCode,
+    }).format(amount);
 
   return (
-    <BlockStack spacing="base">
-      <Divider />
-      <BlockStack spacing="tight">
-        <Text size="base" emphasis="bold">{config.message || "You might also like"}</Text>
-        <InlineStack spacing="base" alignment="center">
-          {product.imageUrl && (
-            <View maxInlineSize={80}>
-              <Image source={product.imageUrl} accessibilityDescription={product.title} />
-            </View>
-          )}
-          <BlockStack spacing="extraTight" inlineAlignment="start">
-            <Text size="base" emphasis="bold">{product.title}</Text>
-            {product.variantTitle && (
-              <Text size="small" appearance="subdued">{product.variantTitle}</Text>
-            )}
-            <InlineStack spacing="tight">
+    <s-section heading={config.message || "You might also like"}>
+      <s-stack direction="block" gap="base">
+        <s-divider />
+        <s-stack direction="inline" gap="base" alignItems="center">
+          {product.imageUrl ? (
+            <s-product-thumbnail
+              src={product.imageUrl}
+              alt={product.title}
+              size="small"
+            />
+          ) : null}
+          <s-stack direction="block" gap="small">
+            <s-text type="strong">{product.title}</s-text>
+            {product.variantTitle ? <s-text type="small">{product.variantTitle}</s-text> : null}
+            <s-stack direction="inline" gap="small">
+              <s-text type="strong" tone={discountedPrice < originalPrice ? "success" : "auto"}>
+                {formatMoney(discountedPrice < originalPrice ? discountedPrice : originalPrice)}
+              </s-text>
               {discountedPrice < originalPrice ? (
-                <>
-                  <Text size="base" emphasis="bold" appearance="accent">{fmt(discountedPrice)}</Text>
-                  <Text size="small" appearance="subdued">
-                    <del>{fmt(originalPrice)}</del>
-                  </Text>
-                </>
-              ) : (
-                <Text size="base">{fmt(originalPrice)}</Text>
-              )}
-            </InlineStack>
-          </BlockStack>
-          <View>
-            <Button
-              kind="primary"
-              onPress={handleAdd}
-              loading={adding}
-              disabled={!product.isAvailable}
-              accessibilityLabel={`Add ${product.title} to cart`}
-            >
-              {product.isAvailable ? (config.buttonText || "Add") : "Sold Out"}
-            </Button>
-          </View>
-        </InlineStack>
-        <View>
-          <Button kind="plain" onPress={() => setDismissed(true)} accessibilityLabel="Dismiss offer">
-            <Text size="small" appearance="subdued">No thanks</Text>
-          </Button>
-        </View>
-      </BlockStack>
-    </BlockStack>
+                <s-text type="redundant">{formatMoney(originalPrice)}</s-text>
+              ) : null}
+            </s-stack>
+          </s-stack>
+          <s-button
+            variant="primary"
+            onClick={handleAdd}
+            loading={adding}
+            disabled={!product.isAvailable}
+            accessibilityLabel={`Add ${product.title} to cart`}
+          >
+            {product.isAvailable ? config.buttonText || "Add" : "Sold out"}
+          </s-button>
+        </s-stack>
+        <s-button
+          variant="secondary"
+          onClick={() => setDismissed(true)}
+          accessibilityLabel="Dismiss offer"
+        >
+          No thanks
+        </s-button>
+      </s-stack>
+    </s-section>
   );
 }

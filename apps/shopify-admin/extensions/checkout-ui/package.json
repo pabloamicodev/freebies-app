@@ -3,14 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
-    "@shopify/ui-extensions": "2025.7.3",
-    "@shopify/ui-extensions-react": "2025.7.3",
-    "react": "^18.3.1",
-    "react-reconciler": "0.29.0"
+    "@shopify/ui-extensions": "2026.7.0",
+    "preact": "^10.29.8"
   },
   "devDependencies": {
-    "@types/react": "^18.3.12",
     "typescript": "^5.7.0"
   }
 }

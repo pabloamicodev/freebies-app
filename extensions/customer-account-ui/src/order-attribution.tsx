@@ -1,27 +1,14 @@
 /**
- * Customer Account UI Extension — Order Attribution Display
- * Shows which promotions were applied on each order.
- *
- * Available on ALL plans as of 2026-01 (not Plus-only).
- * Renders on: order detail page, order status page.
- *
- * Edge cases handled:
- * - No attribution data → renders nothing (graceful degradation)
- * - Network timeout → renders nothing
- * - Guest order (no customer GID) → renders nothing
+ * Customer Account UI Extension — Order Attribution Display.
  */
 
+import "@shopify/ui-extensions/preact";
+import { h, render } from "preact";
+import { useEffect, useState } from "preact/hooks";
 import {
-  reactExtension,
   useApi,
   useOrder,
-  BlockStack,
-  InlineStack,
-  Text,
-  Badge,
-  Divider,
-} from "@shopify/ui-extensions-react/customer-account";
-import { useState, useEffect } from "react";
+} from "@shopify/ui-extensions/customer-account/preact";
 
 interface OfferAttribution {
   offerId: string;
@@ -36,24 +23,18 @@ interface AttributionResponse {
   attributions: OfferAttribution[];
 }
 
-/** Minimal shape this component reads off the extension API — kept explicit
- * because @shopify/ui-extensions-react's generic overloads aren't resolvable
- * in this workspace (the package isn't installed at the repo root). */
-interface CustomerAccountShopApi {
-  shop: { myshopifyDomain: string } | null | undefined;
+export default function extension() {
+  render(<OrderAttribution />, document.body);
 }
 
-export default reactExtension("customer-account.order-status.block.render", () => <OrderAttribution />);
-
 function OrderAttribution() {
-  const api = useApi() as CustomerAccountShopApi;
+  const api = useApi<"customer-account.order-status.block.render">();
   const order = useOrder();
-  const shop = api.shop;
   const [attributions, setAttributions] = useState<OfferAttribution[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState(true);
 
-  const orderId: string | undefined = order?.id;
-  const shopDomain: string = shop?.myshopifyDomain ?? "";
+  const orderId = order?.id;
+  const shopDomain = api.shop.myshopifyDomain;
 
   useEffect(() => {
     if (!orderId || !shopDomain) {
@@ -62,22 +43,18 @@ function OrderAttribution() {
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), 5_000);
 
     fetch(
       `https://${shopDomain}/apps/promo-engine/customer/order-attribution?order_gid=${encodeURIComponent(orderId)}`,
-      {
-        headers: { "X-Promo-Shop": shopDomain },
-        signal: controller.signal,
-      },
+      { signal: controller.signal },
     )
-      .then((r) => r.json() as Promise<AttributionResponse>)
-      .then((data) => {
-        setAttributions(data.attributions ?? []);
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Attribution failed: ${response.status}`);
+        return response.json() as Promise<AttributionResponse>;
       })
-      .catch(() => {
-        // Fail silently — never block order status page
-      })
+      .then((data) => setAttributions(data.attributions ?? []))
+      .catch(() => setAttributions([]))
       .finally(() => {
         clearTimeout(timeout);
         setLoading(false);
@@ -89,42 +66,37 @@ function OrderAttribution() {
     };
   }, [orderId, shopDomain]);
 
-  // Don't render while loading or if no attributions
   if (loading || attributions.length === 0) return null;
 
-  const totalSavedCents: number = attributions.reduce(
-    (acc: number, attribution: OfferAttribution): number => acc + attribution.savedCents,
+  const totalSavedCents = attributions.reduce(
+    (sum, attribution) => sum + attribution.savedCents,
     0,
   );
-  const currencyCode: string = attributions[0]?.currencyCode ?? "USD";
-  const formatMoney = (cents: number): string =>
-    new Intl.NumberFormat("en", { style: "currency", currency: currencyCode }).format(cents / 100);
+  const currencyCode = attributions[0]?.currencyCode ?? "USD";
+  const formatMoney = (cents: number) =>
+    new Intl.NumberFormat(undefined, { style: "currency", currency: currencyCode }).format(cents / 100);
 
   return (
-    <BlockStack spacing="base">
-      <Divider />
-      <Text size="base" emphasis="bold">
-        🎁 Promotions Applied
-      </Text>
-      <Text size="small" appearance="success">
-        You saved {formatMoney(totalSavedCents)} with promotions on this order!
-      </Text>
-      {attributions.map((attr) => (
-        <InlineStack key={attr.offerId} spacing="base" alignment="center">
-          <Badge tone="success">{attr.offerType}</Badge>
-          <Text size="small">{attr.offerName}</Text>
-          {attr.savedCents > 0 && (
-            <Text size="small" appearance="success">
-              -{formatMoney(attr.savedCents)}
-            </Text>
-          )}
-          {attr.giftProductTitle && (
-            <Text size="small" appearance="subdued">
-              + {attr.giftProductTitle} (free gift)
-            </Text>
-          )}
-        </InlineStack>
-      ))}
-    </BlockStack>
+    <s-section heading="Promotions applied">
+      <s-stack direction="block" gap="base">
+        {totalSavedCents > 0 ? (
+          <s-text tone="success">
+            You saved {formatMoney(totalSavedCents)} with promotions on this order.
+          </s-text>
+        ) : null}
+        {attributions.map((attribution) => (
+          <s-stack key={attribution.offerId} direction="inline" gap="base" alignItems="center">
+            <s-badge tone="neutral">{attribution.offerType}</s-badge>
+            <s-text>{attribution.offerName}</s-text>
+            {attribution.savedCents > 0 ? (
+              <s-text tone="success">-{formatMoney(attribution.savedCents)}</s-text>
+            ) : null}
+            {attribution.giftProductTitle ? (
+              <s-text type="small">+ {attribution.giftProductTitle} (free gift)</s-text>
+            ) : null}
+          </s-stack>
+        ))}
+      </s-stack>
+    </s-section>
   );
 }
