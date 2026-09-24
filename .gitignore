@@ -20,9 +20,12 @@ target/
 **/extensions/*/manifest.json
 **/extensions/*/Cargo.lock
 **/extensions/*/schema.graphql
+**/extensions/*/shopify.d.ts
 
 # Coverage
 coverage/
+**/playwright-report/
+**/test-results/
 
 # Editor
 .vscode/

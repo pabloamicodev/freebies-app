@@ -7,6 +7,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@preact/signals": "2.11.2",
     "@shopify/ui-extensions": "2026.7.0",
     "preact": "^10.29.8"
   },

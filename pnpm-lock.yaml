@@ -138,9 +138,12 @@ importers:
 
   extensions/checkout-ui:
     dependencies:
+      '@preact/signals':
+        specifier: 2.11.2
+        version: 2.11.2(preact@10.29.8)
       '@shopify/ui-extensions':
         specifier: 2026.7.0
-        version: 2026.7.0(preact@10.29.8)
+        version: 2026.7.0(@preact/signals@2.11.2(preact@10.29.8))(preact@10.29.8)
       preact:
         specifier: ^10.29.8
         version: 10.29.8
@@ -151,9 +154,12 @@ importers:
 
   extensions/customer-account-ui:
     dependencies:
+      '@preact/signals':
+        specifier: 2.11.2
+        version: 2.11.2(preact@10.29.8)
       '@shopify/ui-extensions':
         specifier: 2026.7.0
-        version: 2026.7.0(preact@10.29.8)
+        version: 2026.7.0(@preact/signals@2.11.2(preact@10.29.8))(preact@10.29.8)
       preact:
         specifier: ^10.29.8
         version: 10.29.8
@@ -1138,6 +1144,14 @@ packages:
     resolution: {integrity: sha512-cKA5B6lpFEMyMGjxF54QihfYpB4FkEGH+qZhtArDEG+wezQAJY8Pq6C7T1SjWz+FFzt3TbyoXBQYk/0292TdJA==}
     engines: {node: '>=18'}
     hasBin: true
+
+  '@preact/signals-core@1.14.4':
+    resolution: {integrity: sha512-HNB6HYeYKhQbJ1aKl+YRjrS4+QWHLKX6qKoUsfS/m0vqzsVaEBiZiaKbG/e+NKk2ch5ALQr/ihWaMHxiCuuWHA==}
+
+  '@preact/signals@2.11.2':
+    resolution: {integrity: sha512-rVTRTt/T0HIRgbugwS5FigbfF/kfdEFYFtiqxa+lbpqTajepqnR0firuAS2iNdHyejWB7Yc9p9QePkVNBtTAwg==}
+    peerDependencies:
+      preact: '>= 10.25.0 || >=11.0.0-0'
 
   '@react-router/dev@7.18.4':
     resolution: {integrity: sha512-4sxQa18Znjz1zw1MGK7f97zXjK4NVcNgESvWPPEYScRFAHJWq6Q3/oejDPfYjKWLygsX1yF9jboxbGLw+V9f+g==}
@@ -3702,6 +3716,13 @@ snapshots:
     dependencies:
       playwright: 1.61.0
 
+  '@preact/signals-core@1.14.4': {}
+
+  '@preact/signals@2.11.2(preact@10.29.8)':
+    dependencies:
+      '@preact/signals-core': 1.14.4
+      preact: 10.29.8
+
   '@react-router/dev@7.18.4(@types/node@22.19.19)(jiti@2.7.0)(react-router@7.18.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(tsx@4.22.4)(typescript@5.9.3)(vite@6.4.3(@types/node@22.19.19)(jiti@2.7.0)(tsx@4.22.4))':
     dependencies:
       '@babel/core': 7.29.7
@@ -4040,10 +4061,11 @@ snapshots:
     dependencies:
       '@shopify/graphql-client': 2.0.0
 
-  '@shopify/ui-extensions@2026.7.0(preact@10.29.8)':
+  '@shopify/ui-extensions@2026.7.0(@preact/signals@2.11.2(preact@10.29.8))(preact@10.29.8)':
     dependencies:
       ts-morph: 25.0.1
     optionalDependencies:
+      '@preact/signals': 2.11.2(preact@10.29.8)
       preact: 10.29.8
 
   '@standard-schema/spec@1.1.0': {}
