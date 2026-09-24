@@ -20,6 +20,7 @@ target/
 **/extensions/*/manifest.json
 **/extensions/*/Cargo.lock
 **/extensions/*/schema.graphql
+!apps/shopify-admin/extensions/discount-function/schema.graphql
 **/extensions/*/shopify.d.ts
 
 # Coverage

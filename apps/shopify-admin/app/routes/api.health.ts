@@ -2,7 +2,12 @@ import type { LoaderFunctionArgs } from "react-router";
 import { getDb } from "@promo/db";
 import { sql } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
-import { getSharedRedis, isRedisConfigured, resetSharedRedis } from "../lib/redis.server.js";
+import {
+  getLastRedisConnectionError,
+  getSharedRedis,
+  isRedisConfigured,
+  resetSharedRedis,
+} from "../lib/redis.server.js";
 import { apiJson, getRequestId } from "../lib/api-response.server.js";
 import {
   summarizeHealthChecks,
@@ -27,7 +32,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const redisStartedAt = performance.now();
     try {
       const redis = await getSharedRedis();
-      if (!redis) throw new Error("Redis unavailable");
+      if (!redis) {
+        throw getLastRedisConnectionError() ?? new Error("Redis unavailable");
+      }
       await redis.ping();
       checks["redis"] = { status: "ok", critical: false, latencyMs: elapsedMs(redisStartedAt) };
     } catch (error) {
