@@ -11,28 +11,70 @@ export interface ShopifyMarket {
   primaryLocale: string;
 }
 
-interface MarketNode {
+export interface MarketNode {
   id: string;
   name: string;
   handle: string;
   status: string;
   currencySettings?: { baseCurrency?: { currencyCode?: string } | null } | null;
-  conditions?: { allMarkets?: boolean; countries?: Array<{ code?: string | null }> } | null;
+  conditions?: {
+    regionsCondition?: {
+      regions?: {
+        nodes?: Array<{
+          __typename?: string;
+          code?: string | null;
+          country?: { code?: string | null } | null;
+        }>;
+      } | null;
+    } | null;
+  } | null;
   webPresences?: { nodes?: Array<{ defaultLocale?: { locale?: string } | null }> } | null;
 }
 
-const MARKETS_QUERY = `
+export const MARKETS_QUERY = `
   query GetMarkets {
     markets(first: 50) {
       nodes {
         id name handle status
         currencySettings { baseCurrency { currencyCode } }
-        conditions { allMarkets countries { code } }
+        conditions {
+          regionsCondition {
+            regions(first: 250) {
+              nodes {
+                __typename
+                ... on MarketRegionCountry { code }
+              }
+            }
+          }
+        }
         webPresences(first: 5) { nodes { defaultLocale { locale } } }
       }
     }
   }
 `;
+
+export function mapMarketNode(market: MarketNode): ShopifyMarket {
+  const countryCodes = market.conditions?.regionsCondition?.regions?.nodes?.flatMap((region) => {
+    const code = region.__typename === "MarketRegionSubdivision"
+      ? region.country?.code
+      : region.code;
+    return code ? [code] : [];
+  }) ?? [];
+
+  return {
+    id: market.id,
+    name: market.name,
+    handle: market.handle,
+    enabled: market.status === "ACTIVE",
+    // Shopify deprecated Market.primary in favor of the shop-level backupRegion
+    // query, which does not map back to a Market GID. Keep this presentation-only
+    // flag false rather than querying a deprecated field.
+    primary: false,
+    currencyCode: market.currencySettings?.baseCurrency?.currencyCode ?? "USD",
+    countryCodes: [...new Set(countryCodes)],
+    primaryLocale: market.webPresences?.nodes?.[0]?.defaultLocale?.locale ?? "en",
+  };
+}
 
 // Module-level cache — shared across warm function invocations within the same instance
 const marketCache = new Map<string, { data: ShopifyMarket[]; expiresAt: number }>();
@@ -72,16 +114,7 @@ export async function syncMarketsForShop(
 
   if (data.errors?.length) throw new Error(`GraphQL error: ${JSON.stringify(data.errors[0])}`);
 
-  const markets = (data.data?.markets?.nodes ?? []).map((m) => ({
-    id: m.id,
-    name: m.name,
-    handle: m.handle,
-    enabled: m.status === "ACTIVE",
-    primary: m.conditions?.allMarkets ?? false,
-    currencyCode: m.currencySettings?.baseCurrency?.currencyCode ?? "USD",
-    countryCodes: (m.conditions?.countries ?? []).flatMap((c) => (c.code ? [c.code] : [])),
-    primaryLocale: m.webPresences?.nodes?.[0]?.defaultLocale?.locale ?? "en",
-  }));
+  const markets = (data.data?.markets?.nodes ?? []).map(mapMarketNode);
 
   marketCache.set(shopId, { data: markets, expiresAt: Date.now() + CACHE_TTL_MS });
   return markets;

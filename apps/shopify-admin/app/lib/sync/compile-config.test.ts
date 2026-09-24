@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validateRewardPayload } from "@promo/shared-types";
 import {
   compileOfferConfig,
+  compileDiscountCombinationPolicy,
   compileShippingOfferConfigs,
   type CompiledShippingOffer,
 } from "./compile-config.js";
@@ -263,6 +264,37 @@ describe("compileOfferConfig", () => {
     })]);
     expect(result.customerOrderCountMin).toBe(3);
     expect(result.customerAmountSpentMaxCents).toBe(9_999);
+  });
+});
+
+describe("compileDiscountCombinationPolicy", () => {
+  it("uses the most restrictive active-offer policy for Shopify's shared discount node", () => {
+    const permissive = compileOfferConfig(offer(), [], [], null, 1);
+    const restrictive = compileOfferConfig(
+      offer({ id: "33333333-3333-4333-8333-333333333333" }),
+      [],
+      [],
+      {
+        combinesWithOrderDiscounts: false,
+        combinesWithProductDiscounts: true,
+        combinesWithShippingDiscounts: false,
+      } as Parameters<typeof compileOfferConfig>[3],
+      1,
+    );
+
+    expect(compileDiscountCombinationPolicy([permissive, restrictive])).toEqual({
+      orderDiscounts: false,
+      productDiscounts: true,
+      shippingDiscounts: false,
+    });
+  });
+
+  it("resets an empty discount node to Shopify's permissive defaults", () => {
+    expect(compileDiscountCombinationPolicy([])).toEqual({
+      orderDiscounts: true,
+      productDiscounts: true,
+      shippingDiscounts: true,
+    });
   });
 });
 

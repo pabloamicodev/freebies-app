@@ -12,9 +12,16 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offerConditions } from "@promo/db";
-import { ConditionTypeSchema, validateConditionValue } from "@promo/shared-types";
+import {
+  CART_ATTRIBUTE_KEYS,
+  ConditionTypeSchema,
+  LINE_ATTRIBUTE_KEYS,
+  validateConditionValue,
+  type ConditionOperator,
+} from "@promo/shared-types";
 import { and, eq } from "drizzle-orm";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { getMarketsForShop } from "../lib/markets.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -40,10 +47,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const conditionRows = await db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
+  const markets = await getMarketsForShop(shopId).catch(() => []);
 
   return {
     offer,
     conditions: conditionRows.sort((a, b) => a.sortOrder - b.sortOrder),
+    markets,
   };
 };
 
@@ -63,6 +72,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     // Build value object based on condition type
     let value: Record<string, unknown> = {};
+    let conditionOperator: ConditionOperator = "gte";
     switch (conditionType) {
       case "cart_value": {
         const thresh = parseFloat(formData.get("threshold") as string);
@@ -106,13 +116,24 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           treatGuestAsNoTags: formData.get("treatGuestAsNoTags") === "on",
         };
         break;
-      case "order_history_total_spent": {
+      case "order_history_total_spent":
+      case "order_history_last_order_spent":
+      case "order_history_total_orders": {
         const orderVal = parseFloat(formData.get("orderValue") as string);
         if (!Number.isFinite(orderVal) || orderVal < 0) return { error: "Order value must be a valid positive number." };
+        const operatorValue = String(formData.get("operator") ?? "gte");
+        conditionOperator = ["eq", "gt", "gte", "lt", "lte"].includes(operatorValue)
+          ? operatorValue as ConditionOperator
+          : "gte";
+        const historyType = conditionType === "order_history_total_orders"
+          ? "total_orders"
+          : conditionType === "order_history_last_order_spent"
+            ? "last_order_spent"
+            : "total_spent";
         value = {
-          type: "total_spent",
-          operator: formData.get("operator") as string,
-          valueCents: Math.round(orderVal * 100),
+          type: historyType,
+          operator: conditionOperator,
+          ...(historyType === "total_orders" ? { value: Math.floor(orderVal) } : { valueCents: Math.round(orderVal * 100) }),
         };
         break;
       }
@@ -120,10 +141,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         value = {};
         break;
       case "markets":
-        value = {
-          includeMarketIds: splitCsvList(formData.get("includeMarkets") as string | null),
-          excludeMarketIds: splitCsvList(formData.get("excludeMarkets") as string | null),
-        };
+        {
+          const includeMarketIds = splitCsvList(formData.get("includeMarkets") as string | null);
+          const excludeMarketIds = splitCsvList(formData.get("excludeMarkets") as string | null);
+          if (includeMarketIds.length === 0 && excludeMarketIds.length === 0) return { error: "Select at least one Shopify Market." };
+          value = { includeMarketIds, excludeMarketIds };
+        }
         break;
       case "customer_location":
         value = {
@@ -134,6 +157,20 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       case "sales_channels":
         value = { channels: formData.getAll("channels[]") as string[] };
         break;
+      case "subscription_product_type":
+        value = { mode: formData.get("subscriptionMode") ?? "subscription_only" };
+        break;
+      case "specific_link": {
+        const requiredUrl = String(formData.get("requiredUrl") ?? "").trim();
+        const paramName = String(formData.get("paramName") ?? "").trim();
+        const paramValue = String(formData.get("paramValue") ?? "");
+        value = {
+          requiredUrl,
+          ...(paramName ? { paramName } : {}),
+          ...(paramValue ? { paramValue } : {}),
+        };
+        break;
+      }
       case "page_url": {
         const patternsRaw = formData.get("urlPatterns") as string | null;
         const patterns = splitCsvList(patternsRaw).filter((p) => p.length > 0);
@@ -197,7 +234,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       shopId, offerId,
       scope,
       conditionType,
-      operator: "gte",
+      operator: conditionOperator,
       value,
       sortOrder: existingCount.length,
       isEnabled: true,
@@ -244,6 +281,7 @@ const MAIN_CONDITION_TYPES = [
 const SUB_CONDITION_TYPES = [
   { label: "Customer Tags", value: "customer_tags" },
   { label: "Order History — total spent", value: "order_history_total_spent" },
+  { label: "Order History — last order spent", value: "order_history_last_order_spent" },
   { label: "Order History — total orders", value: "order_history_total_orders" },
   { label: "One Use Per Customer", value: "one_use_per_customer" },
   { label: "Shopify Markets", value: "markets" },
@@ -254,7 +292,7 @@ const SUB_CONDITION_TYPES = [
 ];
 
 export default function OfferConditionsPage() {
-  const { offer, conditions } = useLoaderData<typeof loader>();
+  const { offer, conditions, markets } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
@@ -267,6 +305,8 @@ export default function OfferConditionsPage() {
     excludeVariantGids: [] as string[],
     currencyCode: "USD",
     minQtyPerProduct: "1",
+    includeMarketIds: [] as string[],
+    excludeMarketIds: [] as string[],
   });
   const {
     addingScope,
@@ -277,6 +317,8 @@ export default function OfferConditionsPage() {
     excludeVariantGids,
     currencyCode,
     minQtyPerProduct,
+    includeMarketIds,
+    excludeMarketIds,
   } = conditionState;
   const setAddingScope = createFieldSetter(setConditionField, "addingScope");
   const setSelectedType = createFieldSetter(setConditionField, "selectedType");
@@ -286,6 +328,17 @@ export default function OfferConditionsPage() {
   const setExcludeVariantGids = createFieldSetter(setConditionField, "excludeVariantGids");
   const setCurrencyCode = createFieldSetter(setConditionField, "currencyCode");
   const setMinQtyPerProduct = createFieldSetter(setConditionField, "minQtyPerProduct");
+  const setIncludeMarketIds = createFieldSetter(setConditionField, "includeMarketIds");
+  const setExcludeMarketIds = createFieldSetter(setConditionField, "excludeMarketIds");
+
+  function setMarketDisposition(marketId: string, disposition: "" | "include" | "exclude") {
+    setIncludeMarketIds((current) => disposition === "include"
+      ? [...new Set([...current, marketId])]
+      : current.filter((id) => id !== marketId));
+    setExcludeMarketIds((current) => disposition === "exclude"
+      ? [...new Set([...current, marketId])]
+      : current.filter((id) => id !== marketId));
+  }
 
   if (!offer) return <NotFound message="Offer not found." />;
 
@@ -518,18 +571,14 @@ export default function OfferConditionsPage() {
                   {(selectedType === "line_attribute" || selectedType === "cart_attribute") && (
                     <div className="b-stack b-stack-3">
                       <div>
-                        <label className="b-label" htmlFor="attributeKey">Approved attribute</label>
-                        <select id="attributeKey" name="attributeKey" className="b-select" required>
-                          {selectedType === "cart_attribute" ? <option value="source">source</option> : <>
-                            <option value="__landing_source">__landing_source</option>
-                            <option value="__bundle_type">__bundle_type</option>
-                            <option value="_bundle_item">_bundle_item</option>
-                            <option value="_nektar_glp1">_nektar_glp1</option>
-                            <option value="_quiz_bundle_id">_quiz_bundle_id</option>
-                            <option value="_quiz_free_gift">_quiz_free_gift</option>
-                          </>}
-                        </select>
-                        <p className="b-help">Shopify Functions require each readable key to be declared ahead of time, so only this audited registry is available.</p>
+                        <label className="b-label" htmlFor="attributeKey">Attribute key</label>
+                        <input id="attributeKey" name="attributeKey" className="b-input" list="attribute-key-suggestions" required autoComplete="off" placeholder={selectedType === "cart_attribute" ? "affiliate_campaign" : "engraving_message"} />
+                        <datalist id="attribute-key-suggestions">
+                          {(selectedType === "cart_attribute" ? CART_ATTRIBUTE_KEYS : LINE_ATTRIBUTE_KEYS).map((key) => (
+                            <option key={key} value={key} />
+                          ))}
+                        </datalist>
+                        <p className="b-help">Enter this store's own Shopify attribute key. Existing HPN keys remain available only as migration suggestions.</p>
                       </div>
                       <div><label className="b-label" htmlFor="attributeValue">Required value</label><input id="attributeValue" name="attributeValue" className="b-input" required autoComplete="off" /></div>
                       <div><label className="b-label" htmlFor="attributeMatchMode">Match</label><select id="attributeMatchMode" name="attributeMatchMode" className="b-select"><option value="equals">Equals</option><option value="not_equals">Does not equal</option></select></div>
@@ -665,6 +714,10 @@ export default function OfferConditionsPage() {
                           autoComplete="off"
                         />
                       </div>
+                      <label className="b-checkbox-row">
+                        <input type="checkbox" name="treatGuestAsNoTags" defaultChecked />
+                        <span>Treat guest customers as having no tags</span>
+                      </label>
                     </>
                   )}
 
@@ -698,26 +751,36 @@ export default function OfferConditionsPage() {
                   {/* markets fields */}
                   {selectedType === "markets" && (
                     <>
-                      <div>
-                        <label className="b-label" htmlFor="includeMarkets">Include Market IDs (comma-separated)</label>
-                        <input
-                          id="includeMarkets"
-                          type="text"
-                          name="includeMarkets"
-                          className="b-input"
-                          autoComplete="off"
-                        />
-                      </div>
-                      <div>
-                        <label className="b-label" htmlFor="excludeMarkets">Exclude Market IDs (comma-separated)</label>
-                        <input
-                          id="excludeMarkets"
-                          type="text"
-                          name="excludeMarkets"
-                          className="b-input"
-                          autoComplete="off"
-                        />
-                      </div>
+                      <input type="hidden" name="includeMarkets" value={includeMarketIds.join(",")} />
+                      <input type="hidden" name="excludeMarkets" value={excludeMarketIds.join(",")} />
+                      {markets.length > 0 ? (
+                        <div className="b-stack b-stack-2">
+                          {markets.map((market) => {
+                            const disposition = includeMarketIds.includes(market.id)
+                              ? "include"
+                              : excludeMarketIds.includes(market.id)
+                                ? "exclude"
+                                : "";
+                            return (
+                              <div key={market.id} className="b-row-between" style={{ border: "1px solid var(--border)", borderRadius: "var(--r)", padding: "10px 12px" }}>
+                                <span className="b-text-sm"><strong>{market.name}</strong> · {market.currencyCode}{market.primary ? " · Primary" : ""}</span>
+                                <select className="b-select" aria-label={`Market rule for ${market.name}`} value={disposition} onChange={(event) => setMarketDisposition(market.id, event.target.value as "" | "include" | "exclude")} style={{ width: 130 }}>
+                                  <option value="">Ignore</option>
+                                  <option value="include">Include</option>
+                                  <option value="exclude">Exclude</option>
+                                </select>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="b-banner b-banner-orange">
+                          <div className="b-banner-body">
+                            <p className="b-banner-title">No Markets available</p>
+                            <p className="b-banner-text">Refresh Shopify permissions or configure Markets before adding this condition.</p>
+                          </div>
+                        </div>
+                      )}
                     </>
                   )}
 
@@ -749,17 +812,74 @@ export default function OfferConditionsPage() {
                     </>
                   )}
 
-                  {/* order_history_total_spent field */}
-                  {selectedType === "order_history_total_spent" && (
+                  {(selectedType === "order_history_total_spent" || selectedType === "order_history_last_order_spent" || selectedType === "order_history_total_orders") && (
+                    <>
                     <div>
-                      <label className="b-label" htmlFor="orderValue">Minimum total spent ($)</label>
+                      <label className="b-label" htmlFor="orderValue">
+                        {selectedType === "order_history_total_orders" ? "Order count" : "Order amount ($)"}
+                      </label>
                       <input
                         id="orderValue"
                         type="number"
                         name="orderValue"
                         className="b-input"
                         autoComplete="off"
+                        min="0"
+                        step={selectedType === "order_history_total_orders" ? "1" : "0.01"}
+                        required
                       />
+                    </div>
+                    <div>
+                      <label className="b-label" htmlFor="operator">Comparison</label>
+                      <select id="operator" name="operator" className="b-select" defaultValue="gte">
+                        <option value="gte">At least</option>
+                        <option value="gt">Greater than</option>
+                        <option value="eq">Exactly</option>
+                        <option value="lte">At most</option>
+                        <option value="lt">Less than</option>
+                      </select>
+                    </div>
+                    </>
+                  )}
+
+                  {selectedType === "subscription_product_type" && (
+                    <div>
+                      <label className="b-label" htmlFor="subscriptionMode">Purchase type</label>
+                      <select id="subscriptionMode" name="subscriptionMode" className="b-select" defaultValue="subscription_only">
+                        <option value="subscription_only">Subscription products</option>
+                        <option value="one_time_only">One-time purchase products</option>
+                        <option value="any">Any purchase type</option>
+                      </select>
+                    </div>
+                  )}
+
+                  {selectedType === "sales_channels" && (
+                    <fieldset className="b-stack b-stack-2" style={{ border: 0, padding: 0, margin: 0 }}>
+                      <legend className="b-label">Allowed sales channels</legend>
+                      {[["online_store", "Online store"], ["mobile_app", "Mobile app"], ["pos", "Point of sale"]].map(([value, label]) => (
+                        <label key={value} className="b-checkbox-row">
+                          <input type="checkbox" name="channels[]" value={value} defaultChecked={value === "online_store"} />
+                          <span>{label}</span>
+                        </label>
+                      ))}
+                    </fieldset>
+                  )}
+
+                  {selectedType === "specific_link" && (
+                    <div className="b-stack b-stack-3">
+                      <div>
+                        <label className="b-label" htmlFor="requiredUrl">Required storefront URL or path</label>
+                        <input id="requiredUrl" name="requiredUrl" className="b-input" placeholder="/pages/vip" autoComplete="off" />
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="paramName">Query parameter (optional)</label>
+                        <input id="paramName" name="paramName" className="b-input" placeholder="code" autoComplete="off" />
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="paramValue">Expected parameter value (optional)</label>
+                        <input id="paramValue" name="paramValue" className="b-input" placeholder="summer" autoComplete="off" />
+                      </div>
+                      <p className="b-help">The storefront runtime evaluates the current browser URL. Shopify Functions cannot read a browser URL directly.</p>
                     </div>
                   )}
 

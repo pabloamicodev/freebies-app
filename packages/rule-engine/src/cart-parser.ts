@@ -45,7 +45,11 @@ export function extractQualifyingLines(
 ): NormalizedCartLine[] {
   return cart.lines.filter((line) => {
     const lineType = line.properties["_promo_engine_line_type"];
-    if (!options.includeGiftValues && lineType === "gift") return false;
+    const isGift =
+      lineType === "gift"
+      || line.properties["__cart_gift_tier"] !== undefined
+      || line.properties["_quiz_free_gift"] === "true";
+    if (!options.includeGiftValues && isGift) return false;
     return true;
   });
 }

@@ -50,6 +50,38 @@ function parseShippingTiers(value: FormDataEntryValue | null):
   }
 }
 
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function LandingIntegrationContract({ source }: { source: string }) {
+  const normalizedSource = source.trim() || "protein-complete-lp";
+  const productFormSnippet = `<input type="hidden" name="properties[__landing_source]" value="${escapeHtmlAttribute(normalizedSource)}">`;
+  const ajaxSnippet = `properties: { "__landing_source": ${JSON.stringify(normalizedSource)} }`;
+
+  return (
+    <div className="b-banner b-banner-blue" style={{ marginTop: 14 }}>
+      <div className="b-banner-body" style={{ width: "100%" }}>
+        <p className="b-banner-title">Landing page integration contract</p>
+        <p className="b-banner-text">Add this line property to every landing-page cart line. The storefront runtime and Rust Function both verify the same value.</p>
+        {[{ label: "Product form", value: productFormSnippet }, { label: "Ajax cart payload", value: ajaxSnippet }].map((snippet) => (
+          <div key={snippet.label} style={{ marginTop: 10 }}>
+            <div className="b-row-between" style={{ marginBottom: 4 }}>
+              <span className="b-text-sm b-text-bold">{snippet.label}</span>
+              <button type="button" className="b-btn-plain b-text-sm" onClick={() => void navigator.clipboard.writeText(snippet.value)}>Copy code</button>
+            </div>
+            <pre style={{ margin: 0, padding: 10, borderRadius: 6, overflowX: "auto", background: "var(--bg)", border: "1px solid var(--border)", fontSize: 12 }}><code>{snippet.value}</code></pre>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
@@ -803,6 +835,7 @@ export default function OfferRewardsPage() {
                             />
                             <span className="b-checkbox-label">Require the anchor line to be a subscription</span>
                           </label>
+                          <LandingIntegrationContract source={requiredLineAttributeValue} />
                         </div>
                       )}
 
@@ -1125,6 +1158,7 @@ export default function OfferRewardsPage() {
                                   </label>
                                 </div>
                               </div>
+                              <LandingIntegrationContract source={requiredLineAttributeValue} />
                             </fieldset>
                           )}
 

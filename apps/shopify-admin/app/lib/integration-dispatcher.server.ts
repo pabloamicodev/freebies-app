@@ -4,7 +4,7 @@
  * Failures are logged but never throw — they must not block the webhook response.
  */
 
-import { eq, like } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { appSettings, type Db } from "@promo/db";
 
 interface PromoEvent {
@@ -15,11 +15,6 @@ interface PromoEvent {
   totalPriceCents?: number;
   sessionId?: string | null;
   timestamp: string;
-}
-
-interface IntegrationConfig {
-  id: string;
-  apiKey: string;
 }
 
 export async function dispatchIntegrationEvents(

@@ -135,6 +135,31 @@ describe("evaluateCartValue", () => {
     if (result.ok) expect(result.value.actual).toBe(10000); // 5000 × 2 only
   });
 
+  it.each([
+    ["legacy cart gift tier", { __cart_gift_tier: "tier-1" }],
+    ["quiz free gift", { _quiz_free_gift: "true" }],
+  ])("excludes %s lines from qualifying value", (_label, properties) => {
+    const cart = makeCart([
+      { variantId: "paid-v1", productId: "paid-p1", priceCents: 4000, quantity: 1 },
+      { variantId: "gift-v1", productId: "gift-p1", priceCents: 2000, quantity: 1 },
+    ]);
+    cart.lines[1]!.properties = properties;
+
+    const excluded = evaluateCartValue(cart, {
+      thresholdCents: 5000,
+      currencyCode: "USD",
+      includeGiftValues: false,
+    }, currency);
+    const explicitlyIncluded = evaluateCartValue(cart, {
+      thresholdCents: 5000,
+      currencyCode: "USD",
+      includeGiftValues: true,
+    }, currency);
+
+    expect(excluded.ok).toBe(false);
+    expect(explicitlyIncluded.ok).toBe(true);
+  });
+
   it("applies currency override when active currency differs from store currency", () => {
     const cart = makeCart([{ variantId: "v1", productId: "p1", priceCents: 5000, quantity: 2 }]);
     // Override for EUR is 8000 cents — cart is 10000 → passes

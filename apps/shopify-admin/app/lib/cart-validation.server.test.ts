@@ -79,7 +79,6 @@ describe("buildCartValidationConfig", () => {
     const config = buildCartValidationConfig([
       compiledOffer({ offerType: "discount", productRewards: [{
         id: "product-reward",
-        rewardType: "product_discount",
         targetProductIds: [],
         targetVariantIds: ["gid://shopify/ProductVariant/99"],
         discountType: "percentage",

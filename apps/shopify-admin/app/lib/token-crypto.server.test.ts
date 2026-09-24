@@ -2,7 +2,7 @@
  * Integration tests for token-crypto.server.ts
  * No DB required — tests AES-256-GCM encrypt/decrypt in isolation.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { encryptToken, decryptToken } from "./token-crypto.server.js";
 
 const TEST_KEY = "a".repeat(64); // 32 bytes as hex
@@ -74,7 +74,8 @@ describe("decryptToken", () => {
 
   it("throws in production when ciphertext is tampered", withKey(TEST_KEY, async () => {
     const encrypted = await encryptToken("shpat_real_token");
-    const tampered = encrypted.replace(/.$/, "0"); // flip last hex char
+    const lastHexCharacter = encrypted.at(-1);
+    const tampered = `${encrypted.slice(0, -1)}${lastHexCharacter === "0" ? "1" : "0"}`;
     const orig = process.env["NODE_ENV"];
     process.env["NODE_ENV"] = "production";
     try {

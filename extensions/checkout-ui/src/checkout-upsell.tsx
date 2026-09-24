@@ -90,7 +90,7 @@ function CheckoutUpsell() {
         variantId: line.merchandise.id,
         productId: "unknown",
         quantity: line.quantity,
-        priceCents: Math.round(parseFloat(line.cost.amountPerQuantity.amount) * 100),
+        priceCents: Math.round((line.cost.totalAmount.amount / line.quantity) * 100),
         compareAtPriceCents: null,
         properties: line.attributes.reduce((acc: Record<string, string>, a) => {
           if (a.value) acc[a.key] = a.value;
@@ -109,7 +109,7 @@ function CheckoutUpsell() {
         inventoryPolicy: "DENY",
         inventoryQuantity: null,
       })),
-      subtotalCents: Math.round(parseFloat(totalAmount.amount) * 100),
+      subtotalCents: Math.round(totalAmount.amount * 100),
       discountCodes: [],
       currencyCode: totalAmount.currencyCode,
       totalQuantity: cartLines.reduce((acc, l) => acc + l.quantity, 0),
@@ -137,10 +137,11 @@ function CheckoutUpsell() {
       .then((r) => r.json())
       .then((result: EvaluateResponse) => {
         const upsell = result.upsells?.find((u) => u.offerId === offerId);
-        if (upsell?.product) {
+        const upsellProduct = upsell?.product;
+        if (upsellProduct) {
           // Check if product is already in cart
           const alreadyInCart = cartLines.some(
-            (line) => line.merchandise.id === upsell.product.variantId,
+            (line) => line.merchandise.id === upsellProduct.variantId,
           );
           if (!alreadyInCart) {
             setConfig(upsell);

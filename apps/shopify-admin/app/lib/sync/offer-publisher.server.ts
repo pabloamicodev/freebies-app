@@ -2,15 +2,17 @@ import { getDb, shops, offers, offerConditions, offerRewards, offerCombinationPo
 import { eq, and, inArray } from "drizzle-orm";
 import { decryptToken } from "../token-crypto.server.js";
 import { shopifyGraphQL } from "../shopify-fetch.server.js";
-import { ensureDiscountNode } from "../discount-node.server.js";
+import { ensureDiscountNode, syncDiscountCombinationPolicy } from "../discount-node.server.js";
 import { buildCartValidationConfig, syncCartValidation } from "../cart-validation.server.js";
 import { computeOfferVersion } from "../offer-version.server.js";
 import {
   compileOfferConfig,
+  compileDiscountCombinationPolicy,
   compileShippingOfferConfigs,
   estimateConfigSize,
   type CompiledFunctionConfig,
 } from "./compile-config.js";
+import { buildAttributeQueryVariables } from "./attribute-query-variables.js";
 
 const METAFIELD_NAMESPACE = "promo_engine";
 const METAFIELD_KEY = "function_config";
@@ -47,6 +49,12 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     await Promise.all([
       pushMetafield(shopDomain, accessToken, discountId, emptyConfig),
       syncCartValidation(shopDomain, accessToken, buildCartValidationConfig([])),
+      syncDiscountCombinationPolicy(
+        shopDomain,
+        accessToken,
+        discountId,
+        compileDiscountCombinationPolicy([]),
+      ),
     ]);
     return;
   }
@@ -87,6 +95,7 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     shippingOffers,
     version: "1",
     compiledAt: new Date().toISOString(),
+    ...buildAttributeQueryVariables(conditionRows),
   };
 
   const sizeBytes = estimateConfigSize(config);
@@ -97,6 +106,12 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
   await Promise.all([
     pushMetafield(shopDomain, accessToken, discountId, config),
     syncCartValidation(shopDomain, accessToken, buildCartValidationConfig(compiledOffers)),
+    syncDiscountCombinationPolicy(
+      shopDomain,
+      accessToken,
+      discountId,
+      compileDiscountCombinationPolicy(compiledOffers),
+    ),
   ]);
 
   for (const compiledOffer of compiledOffers) {

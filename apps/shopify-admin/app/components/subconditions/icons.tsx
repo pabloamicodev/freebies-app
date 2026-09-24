@@ -88,5 +88,6 @@ export const SUB_ICONS: Record<SubconditionId, () => JSX.Element> = {
   subscription:   ISub,
   sales_channel:  IChannel,
   markets:        IGlobe,
+  custom_attribute: IQty,
   quantity_limit: IQty,
 };

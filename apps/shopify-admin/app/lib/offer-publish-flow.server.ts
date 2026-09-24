@@ -29,12 +29,18 @@ const FUNCTION_CONDITION_TYPES = new Set([
   "subscription_product_type",
   "order_history_total_orders",
   "order_history_total_spent",
+  "line_attribute",
+  "cart_attribute",
 ]);
 
 const FUNCTION_NUMERIC_OPERATORS = new Set(["eq", "gt", "gte", "lt", "lte"]);
 
 function firstIssueMessage(result: { success: boolean; error?: { issues?: Array<{ message: string }> } }): string {
   return result.error?.issues?.[0]?.message ?? "Invalid offer configuration.";
+}
+
+export function canUseRuntimeOnlyConditions(rewardTypes: string[]): boolean {
+  return rewardTypes.length > 0 && rewardTypes.every((rewardType) => rewardType === "product_gift");
 }
 
 export async function validateOffersPublishable(db: Db, shopId: string, offerIds: string[]): Promise<PublishValidationResult> {
@@ -88,10 +94,10 @@ export async function validateOffersPublishable(db: Db, shopId: string, offerIds
     const unsupportedFunctionCondition = conditions.find(
       (condition) => condition.isEnabled && !FUNCTION_CONDITION_TYPES.has(condition.conditionType),
     );
-    if (unsupportedFunctionCondition) {
+    if (unsupportedFunctionCondition && !canUseRuntimeOnlyConditions(rewards.map((reward) => reward.rewardType))) {
       return {
         ok: false,
-        error: `Cannot publish "${offer.internalName}": ${unsupportedFunctionCondition.conditionType} is evaluated by the storefront but is not yet enforced by Shopify Functions.`,
+        error: `Cannot publish "${offer.internalName}": ${unsupportedFunctionCondition.conditionType} is evaluated by the storefront/server and can only gate gift-only offers; this offer also contains a reward that Shopify Functions must evaluate automatically.`,
       };
     }
 

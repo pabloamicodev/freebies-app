@@ -16,6 +16,15 @@ export interface CompiledFunctionConfig {
   shippingOffers: CompiledShippingOffer[];
   version: string;
   compiledAt: string;
+  l1?: string;
+  l2?: string;
+  l3?: string;
+  l4?: string;
+  l5?: string;
+  l6?: string;
+  c1?: string;
+  c2?: string;
+  c3?: string;
 }
 
 export interface CompiledShippingTier {
@@ -100,7 +109,6 @@ export interface CompiledGiftReward {
 
 export interface CompiledProductReward {
   id: string;
-  rewardType: string;
   targetProductIds: string[];
   targetVariantIds: string[];
   discountType: string;
@@ -122,6 +130,27 @@ export interface CompiledOrderReward {
   id: string;
   discountType: "percentage" | "fixed_amount" | "free";
   discountValue: number;
+}
+
+export interface CompiledDiscountCombinationPolicy {
+  orderDiscounts: boolean;
+  productDiscounts: boolean;
+  shippingDiscounts: boolean;
+}
+
+/**
+ * Shopify applies combination rules to the automatic discount node, not to
+ * individual candidates emitted by its Function. A single node hosts every
+ * active offer, so the only safe aggregate is the most restrictive policy.
+ */
+export function compileDiscountCombinationPolicy(
+  compiledOffers: CompiledOffer[],
+): CompiledDiscountCombinationPolicy {
+  return {
+    orderDiscounts: compiledOffers.every((offer) => offer.combinesWithOrderDiscounts),
+    productDiscounts: compiledOffers.every((offer) => offer.combinesWithProductDiscounts),
+    shippingDiscounts: compiledOffers.every((offer) => offer.combinesWithShippingDiscounts),
+  };
 }
 
 type OfferRow = typeof OffersTable.$inferSelect;
@@ -292,7 +321,6 @@ export function compileOfferConfig(
       const currencyCode = String(value["currencyCode"] ?? "USD");
       config.productRewards.push({
         id: reward.id,
-        rewardType: reward.rewardType,
         targetProductIds,
         targetVariantIds,
         discountType: reward.discountType,

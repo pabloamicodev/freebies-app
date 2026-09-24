@@ -3,11 +3,15 @@ import { ok, err, type Result } from "@promo/shared-types";
 
 export interface UrlParamConditionValue {
   /** The full URL the buyer must have visited (magic link). */
-  requiredUrl: string;
+  requiredUrl?: string;
   /** Query parameter name that must be present. */
   paramName?: string;
   /** Expected value of the parameter. If omitted, just presence is checked. */
   paramValue?: string;
+  /** Legacy aliases kept read-compatible for offers created before normalization. */
+  param?: string;
+  key?: string;
+  value?: string;
 }
 
 /**
@@ -39,7 +43,10 @@ export function evaluateUrlParam(
   }
 
   // Check if the path matches the required URL (partial match or full)
-  const requiredBase = condition.requiredUrl.split("?")[0] ?? condition.requiredUrl;
+  const requiredUrl = condition.requiredUrl ?? "";
+  const paramName = condition.paramName ?? condition.param ?? condition.key;
+  const paramValue = condition.paramValue ?? condition.value;
+  const requiredBase = requiredUrl.split("?")[0] ?? requiredUrl;
   const currentBase = url.origin + url.pathname;
   if (requiredBase && !currentBase.includes(requiredBase)) {
     return err({
@@ -52,24 +59,24 @@ export function evaluateUrlParam(
   }
 
   // Check query param
-  if (condition.paramName) {
-    const paramVal = url.searchParams.get(condition.paramName);
+  if (paramName) {
+    const paramVal = url.searchParams.get(paramName);
     if (paramVal === null) {
       return err({
         conditionType: "specific_link",
         passed: false,
-        message: `URL missing required param: ${condition.paramName}`,
+        message: `URL missing required param: ${paramName}`,
         actual: null,
-        required: condition.paramName,
+        required: paramName,
       });
     }
-    if (condition.paramValue && paramVal !== condition.paramValue) {
+    if (paramValue !== undefined && paramVal !== paramValue) {
       return err({
         conditionType: "specific_link",
         passed: false,
-        message: `Param ${condition.paramName}=${paramVal}, expected ${condition.paramValue}`,
+        message: `Param ${paramName}=${paramVal}, expected ${paramValue}`,
         actual: paramVal,
-        required: condition.paramValue,
+        required: paramValue,
       });
     }
   }

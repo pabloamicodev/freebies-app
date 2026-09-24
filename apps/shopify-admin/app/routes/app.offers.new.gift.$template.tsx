@@ -24,6 +24,7 @@ import { MainConditionModal } from "../components/MainConditionModal.js";
 import { SUB_FORMS } from "../components/subconditions/registry.js";
 import { GIFT_SUBCONDITIONS } from "../components/subconditions/types.js";
 import type { SubconditionId } from "../components/subconditions/types.js";
+import { normalizeGiftSubconditions } from "../lib/gift-subconditions.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -142,9 +143,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const stopLowerPriority          = formData.get("stopLower") === "true";
   const giftValueCountsForOther    = formData.get("giftAppliesOther") === "true";
 
-  const validSubconditions = Object.entries(subconditions).filter(([, subVal]) =>
-    subVal && typeof subVal === "object" && !Array.isArray(subVal) && Object.keys(subVal).length > 0,
-  );
+  const normalizedSubconditions = normalizeGiftSubconditions(subconditions);
+  if (!normalizedSubconditions.success) return { error: normalizedSubconditions.error };
+  const normalizedSubconditionRows = normalizedSubconditions.data;
 
   // Offer + conditions + reward + policy created atomically (no orphan offers
   // on partial failure). Unique-name retry wraps the whole tx.
@@ -160,8 +161,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       await Promise.all([
         tx.insert(offerConditions).values({ shopId, offerId: offer.id, scope: "main", conditionType, operator: "gte", value: conditionValue, sortOrder: 0, isEnabled: true }),
-        ...validSubconditions.map(([subId, subVal], index) =>
-          tx.insert(offerConditions).values({ shopId, offerId: offer.id, scope: "sub", conditionType: subId, operator: "eq", value: subVal as Record<string, unknown>, sortOrder: index + 1, isEnabled: true }),
+        ...normalizedSubconditionRows.map((subcondition, index) =>
+          tx.insert(offerConditions).values({
+            shopId,
+            offerId: offer.id,
+            scope: "sub",
+            conditionType: subcondition.conditionType,
+            operator: subcondition.operator,
+            value: subcondition.value,
+            sortOrder: index + 1,
+            isEnabled: true,
+          }),
         ),
         tx.insert(offerRewards).values({ shopId, offerId: offer.id, rewardType: "product_gift", discountType: discountType as "free" | "percentage" | "fixed_amount" | "fixed_price" | "cheapest_item_free" | "most_expensive_item_discount", value: { amount: rewardAmount, currencyCode: "USD" }, target: { scope: "cart", variantIds: rewardProducts }, quantity: giftCount, isAutoAdd, isCustomerSelectable: !isAutoAdd, trackMode: "product", sortOrder: 0 }),
         tx.insert(offerCombinationPolicies).values({ shopId, offerId: offer.id, combinesWithOrderDiscounts: true, combinesWithProductDiscounts: true, combinesWithShippingDiscounts: true, combinesWithOtherAppOffers: true, stopLowerPriority, giftValueCountsForOtherOffers: giftValueCountsForOther }),

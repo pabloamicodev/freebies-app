@@ -12,7 +12,7 @@ import {
 import { eq, and, like, desc, count, inArray } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
-  IconCopy, IconTrash, IconArchive, IconEye, IconSearch, IconFilter,
+  IconCopy, IconTrash, IconArchive, IconEye, IconSearch,
   SortIcon,
 } from "../components/Icons.js";
 import { AccessibleModal } from "../components/AccessibleModal.js";

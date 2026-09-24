@@ -178,6 +178,11 @@ const GETTRU_PRESET: LegacyStorePreset = {
       description: "Imported from hpn-scripts-migration. Created as a draft for review.", type: "discount", priority: 130, conditions: [],
       rewards: [{ rewardType: "product_discount", discountType: "fixed_price", value: { amount: 0, currencyCode: "USD" }, target: { scopeMode: "quiz_bundle", scope: "cart", discountPercentageOnGifts: 100 }, label: "Quiz bundle price match" }],
     },
+    {
+      key: "quiz-bundle-free-shipping", internalName: "[HPN preset] Quiz bundle free shipping", publicTitle: "Product Quiz Bundle",
+      description: "Imported from hpn-scripts-migration. Created as a draft for review.", type: "discount", priority: 131, conditions: [],
+      rewards: [{ rewardType: "shipping_discount", discountType: "free", value: { amount: 100, currencyCode: "USD" }, target: { deliveryGroupTypes: ["ONE_TIME_PURCHASE", "SUBSCRIPTION"], scopeMode: "quiz_bundle" }, label: "Quiz bundle free shipping" }],
+    },
   ],
 };
 

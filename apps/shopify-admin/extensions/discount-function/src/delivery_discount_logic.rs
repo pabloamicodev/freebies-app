@@ -31,14 +31,18 @@ pub fn run(input: Input) -> Result<schema::CartDeliveryOptionsDiscountsGenerateR
 
     let has_subscription_line = delivery_groups.iter().any(delivery_group_has_subscription_line);
 
-    let subtotal_amount = input.cart().cost().subtotal_amount().amount().as_f64();
     let subtotal_currency = input.cart().cost().subtotal_amount().currency_code().to_string();
-    let subtotal_cents = to_cents(subtotal_amount, &subtotal_currency);
+    let subtotal_cents = qualifying_subtotal_cents(
+        input.cart().lines(),
+        input.cart().cost().subtotal_amount().amount().as_f64(),
+        &subtotal_currency,
+    );
 
     let mut offers = config.shipping_offers.clone();
-    offers.sort_by_key(|offer| {
-        let scope_rank = if offer.scope_mode == "sitewide" { 1 } else { 0 };
-        (scope_rank, offer.priority)
+    offers.sort_by(|left, right| {
+        let left_scope_rank = if left.scope_mode == "sitewide" { 1 } else { 0 };
+        let right_scope_rank = if right.scope_mode == "sitewide" { 1 } else { 0 };
+        (left_scope_rank, left.priority, &left.id).cmp(&(right_scope_rank, right.priority, &right.id))
     });
 
     for offer in &offers {
@@ -85,6 +89,35 @@ fn shipping_offer_qualifies(offer: &CompiledShippingOffer, lines: &[Lines]) -> b
         "quiz_bundle" => has_complete_quiz_bundle(lines),
         _ => true,
     }
+}
+
+fn qualifying_subtotal_cents(lines: &[Lines], fallback_subtotal: f64, currency: &str) -> i64 {
+    if lines.is_empty() {
+        return to_cents(fallback_subtotal, currency);
+    }
+
+    lines
+        .iter()
+        .filter(|line| {
+            let promo_gift = line
+                .line_type_attribute()
+                .and_then(|attribute| attribute.value())
+                .map(|value| value == "gift")
+                .unwrap_or(false);
+            let cart_gift_tier = line.cart_gift_tier_attribute().is_some();
+            let quiz_gift = line
+                .quiz_free_gift_attribute()
+                .and_then(|attribute| attribute.value())
+                .map(|value| value == "true")
+                .unwrap_or(false);
+            !promo_gift && !cart_gift_tier && !quiz_gift
+        })
+        .map(|line| {
+            let amount = line.cost().subtotal_amount().amount().as_f64();
+            let line_currency = line.cost().subtotal_amount().currency_code().to_string();
+            to_cents(amount, &line_currency)
+        })
+        .sum()
 }
 
 fn landing_anchor_quantity(offer: &CompiledShippingOffer, lines: &[Lines]) -> i64 {
@@ -529,6 +562,8 @@ mod tests {
         let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "SUBSCRIPTION", true));
         let incomplete_line = r#"[{
             "quantity":1,
+            "cost":{"subtotalAmount":{"amount":"10.00","currencyCode":"USD"}},
+            "lineTypeAttribute":null,"cartGiftTierAttribute":null,
             "landingSourceAttribute":{"value":"tru-landing"},
             "quizBundleIdAttribute":null,"quizFreeGiftAttribute":null,"quizExpectedPaidCountAttribute":null,
             "sellingPlanAllocation":{"sellingPlan":{"id":"gid://shopify/SellingPlan/1"}},
@@ -556,9 +591,9 @@ mod tests {
         let config = shipping_config(&format!("[{sitewide},{quiz}]"));
         let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
         let complete_bundle = r#"[
-          {"quantity":1,"landingSourceAttribute":null,"quizBundleIdAttribute":{"value":"quiz-1"},"quizFreeGiftAttribute":{"value":"false"},"quizExpectedPaidCountAttribute":{"value":"2"},"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/1"}},
-          {"quantity":1,"landingSourceAttribute":null,"quizBundleIdAttribute":{"value":"quiz-1"},"quizFreeGiftAttribute":{"value":"false"},"quizExpectedPaidCountAttribute":{"value":"2"},"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/2"}},
-          {"quantity":1,"landingSourceAttribute":null,"quizBundleIdAttribute":{"value":"quiz-1"},"quizFreeGiftAttribute":{"value":"true"},"quizExpectedPaidCountAttribute":{"value":"2"},"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/3"}}
+          {"quantity":1,"cost":{"subtotalAmount":{"amount":"4.00","currencyCode":"USD"}},"lineTypeAttribute":null,"cartGiftTierAttribute":null,"landingSourceAttribute":null,"quizBundleIdAttribute":{"value":"quiz-1"},"quizFreeGiftAttribute":{"value":"false"},"quizExpectedPaidCountAttribute":{"value":"2"},"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/1"}},
+          {"quantity":1,"cost":{"subtotalAmount":{"amount":"4.00","currencyCode":"USD"}},"lineTypeAttribute":null,"cartGiftTierAttribute":null,"landingSourceAttribute":null,"quizBundleIdAttribute":{"value":"quiz-1"},"quizFreeGiftAttribute":{"value":"false"},"quizExpectedPaidCountAttribute":{"value":"2"},"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/2"}},
+          {"quantity":1,"cost":{"subtotalAmount":{"amount":"2.00","currencyCode":"USD"}},"lineTypeAttribute":null,"cartGiftTierAttribute":null,"landingSourceAttribute":null,"quizBundleIdAttribute":{"value":"quiz-1"},"quizFreeGiftAttribute":{"value":"true"},"quizExpectedPaidCountAttribute":{"value":"2"},"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/3"}}
         ]"#;
         let result = run_with_lines(r#"["SHIPPING"]"#, "10.00", &config, &groups, complete_bundle);
 
@@ -569,5 +604,18 @@ mod tests {
             },
             other => panic!("expected DeliveryDiscountsAdd, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn cart_gift_tier_value_does_not_unlock_a_shipping_threshold() {
+        let offer = one_tier_offer(5000, "percentage", 100.0, "");
+        let config = shipping_config(&format!("[{offer}]"));
+        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let lines = r#"[
+          {"quantity":1,"cost":{"subtotalAmount":{"amount":"40.00","currencyCode":"USD"}},"lineTypeAttribute":null,"cartGiftTierAttribute":null,"landingSourceAttribute":null,"quizBundleIdAttribute":null,"quizFreeGiftAttribute":null,"quizExpectedPaidCountAttribute":null,"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/paid"}},
+          {"quantity":1,"cost":{"subtotalAmount":{"amount":"20.00","currencyCode":"USD"}},"lineTypeAttribute":null,"cartGiftTierAttribute":{"value":"tier-1"},"landingSourceAttribute":null,"quizBundleIdAttribute":null,"quizFreeGiftAttribute":null,"quizExpectedPaidCountAttribute":null,"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/gift"}}
+        ]"#;
+        let result = run_with_lines(r#"["SHIPPING"]"#, "60.00", &config, &groups, lines);
+        assert!(result.operations.is_empty());
     }
 }

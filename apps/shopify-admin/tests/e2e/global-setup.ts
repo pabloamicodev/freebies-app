@@ -28,7 +28,7 @@ export const AUTH_FILE = path.join(__dirname, ".auth", "shopify.json");
 
 export default async function globalSetup() {
   if (!APP_URL || !DEV_STORE_URL || !EMAIL || !PASSWORD) {
-    console.log("[global-setup] Skipping auth — required env vars not set.");
+    console.info("[global-setup] Skipping auth — required env vars not set.");
     return;
   }
 
@@ -39,7 +39,7 @@ export default async function globalSetup() {
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  console.log("[global-setup] Starting Shopify OAuth flow...");
+  console.info("[global-setup] Starting Shopify OAuth flow...");
 
   try {
     // Navigate to the app — this triggers the OAuth redirect
@@ -47,7 +47,7 @@ export default async function globalSetup() {
 
     // If redirected to Shopify login, fill credentials
     if (page.url().includes("accounts.shopify.com") || page.url().includes("/admin/login")) {
-      console.log("[global-setup] Logging in to Shopify...");
+      console.info("[global-setup] Logging in to Shopify...");
 
       const emailInput = page.locator('input[type="email"], input[name="account[email]"]').first();
       if (await emailInput.isVisible({ timeout: 10_000 })) {
@@ -64,7 +64,7 @@ export default async function globalSetup() {
 
       // Wait for OAuth redirect back to the app
       await page.waitForURL((url) => url.href.startsWith(APP_URL), { timeout: 30_000 });
-      console.log("[global-setup] OAuth complete, landed at:", page.url());
+      console.info("[global-setup] OAuth complete, landed at:", page.url());
     }
 
     // Wait for the app to finish loading
@@ -72,7 +72,7 @@ export default async function globalSetup() {
 
     // Save auth state (cookies + localStorage)
     await context.storageState({ path: AUTH_FILE });
-    console.log("[global-setup] Auth state saved to", AUTH_FILE);
+    console.info("[global-setup] Auth state saved to", AUTH_FILE);
   } catch (err) {
     console.error("[global-setup] Auth failed:", err instanceof Error ? err.message : err);
     // Don't throw — tests will run without auth and likely skip/fail gracefully

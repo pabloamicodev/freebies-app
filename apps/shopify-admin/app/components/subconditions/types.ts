@@ -9,6 +9,7 @@ export type SubconditionId =
   | "subscription"
   | "sales_channel"
   | "markets"
+  | "custom_attribute"
   | "quantity_limit";
 
 export interface SubconditionDef {
@@ -62,6 +63,12 @@ const ALL_SUBCONDITIONS: SubconditionDef[] = [
     id: "markets",
     name: "Mercados",
     desc: "Condición por mercados de Shopify para segmentar por región.",
+    plus: true,
+  },
+  {
+    id: "custom_attribute",
+    name: "Campo personalizado de la tienda",
+    desc: "Condición por una propiedad de línea o atributo del carrito definido por esta tienda.",
     plus: true,
   },
   {

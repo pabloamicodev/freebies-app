@@ -16,6 +16,7 @@ import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
 import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
 import { initGiftSlider } from "./widgets/gift-slider.js";
 import { initFbtWidget } from "./widgets/fbt.js";
+import { buildMarketContext } from "./market-context.js";
 import type { EvaluationResult, CartAction } from "./types.js";
 
 const EVAL_DEBOUNCE_MS = 300;
@@ -53,6 +54,9 @@ interface RuntimeConfig {
   publicKey: string;
   locale: string;
   currency: string;
+  marketId?: string | null;
+  marketHandle?: string | null;
+  countryCode?: string | null;
   debug: boolean;
 }
 
@@ -287,22 +291,9 @@ class PromoEngineRuntime {
 
     const signal = this.evaluationAbort.start();
 
-    // Build market context from Shopify global if a non-base currency is active
+    // Liquid provides the real Market GID. Currency alone is not a Market id.
     const shopifyGlobal = window.Shopify;
-    const activeCurrency = shopifyGlobal?.currency?.active ?? this.config.currency;
-    const exchangeRateRaw = shopifyGlobal?.currency?.rate;
-    const exchangeRate = exchangeRateRaw ? parseFloat(exchangeRateRaw) : null;
-    const market =
-      activeCurrency && activeCurrency !== this.config.currency
-        ? {
-            id: activeCurrency,
-            handle: activeCurrency.toLowerCase(),
-            currencyCode: activeCurrency,
-            countryCode: shopifyGlobal?.country ?? null,
-            primaryLocale: shopifyGlobal?.locale ?? this.config.locale,
-            exchangeRate: exchangeRate && !isNaN(exchangeRate) ? exchangeRate : null,
-          }
-        : null;
+    const market = buildMarketContext(this.config, shopifyGlobal);
 
     try {
       const response = await fetch(EVAL_ENDPOINT, {

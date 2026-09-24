@@ -1,4 +1,14 @@
-query Input {
+query Input(
+  $l1: String! = "_promo_engine_unused"
+  $l2: String! = "_promo_engine_unused"
+  $l3: String! = "_promo_engine_unused"
+  $l4: String! = "_promo_engine_unused"
+  $l5: String! = "_promo_engine_unused"
+  $l6: String! = "_promo_engine_unused"
+  $c1: String! = "_promo_engine_unused"
+  $c2: String! = "_promo_engine_unused"
+  $c3: String! = "_promo_engine_unused"
+) {
   discount {
     discountClasses
     metafield(namespace: "promo_engine", key: "function_config") {
@@ -6,6 +16,9 @@ query Input {
     }
   }
   cart {
+    customCart1: attribute(key: $c1) { value }
+    customCart2: attribute(key: $c2) { value }
+    customCart3: attribute(key: $c3) { value }
     sourceAttribute: attribute(key: "source") {
       value
     }
@@ -18,6 +31,12 @@ query Input {
       }
     }
     lines {
+      customLine1: attribute(key: $l1) { value }
+      customLine2: attribute(key: $l2) { value }
+      customLine3: attribute(key: $l3) { value }
+      customLine4: attribute(key: $l4) { value }
+      customLine5: attribute(key: $l5) { value }
+      customLine6: attribute(key: $l6) { value }
       id
       quantity
       cost {
@@ -70,6 +89,9 @@ query Input {
         value
       }
       bundleType: attribute(key: "__bundle_type") {
+        value
+      }
+      cartGiftTier: attribute(key: "__cart_gift_tier") {
         value
       }
       quizBundleId: attribute(key: "_quiz_bundle_id") {

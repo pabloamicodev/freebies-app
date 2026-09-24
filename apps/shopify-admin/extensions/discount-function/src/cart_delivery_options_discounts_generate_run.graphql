@@ -14,6 +14,11 @@ query Input {
     }
     lines {
       quantity
+      cost {
+        subtotalAmount { amount currencyCode }
+      }
+      lineTypeAttribute: attribute(key: "_promo_engine_line_type") { value }
+      cartGiftTierAttribute: attribute(key: "__cart_gift_tier") { value }
       landingSourceAttribute: attribute(key: "__landing_source") {
         value
       }

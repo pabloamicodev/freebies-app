@@ -2,6 +2,8 @@ import tseslint from "@typescript-eslint/eslint-plugin";
 import tsParser from "@typescript-eslint/parser";
 import type { Linter } from "eslint";
 
+type FlatConfigPlugin = NonNullable<Linter.Config["plugins"]>[string];
+
 // All tsconfig.json files in the monorepo (excluding node_modules)
 const tsProjects = [
   "./tsconfig.json",
@@ -37,7 +39,7 @@ const config: Linter.Config[] = [
       },
     },
     plugins: {
-      "@typescript-eslint": tseslint as unknown as Linter.Plugin,
+      "@typescript-eslint": tseslint as unknown as FlatConfigPlugin,
     },
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",
@@ -59,7 +61,7 @@ const config: Linter.Config[] = [
       },
     },
     plugins: {
-      "@typescript-eslint": tseslint as unknown as Linter.Plugin,
+      "@typescript-eslint": tseslint as unknown as FlatConfigPlugin,
     },
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",

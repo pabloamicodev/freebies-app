@@ -2,7 +2,8 @@
 // Each form receives `value` (external state) and `onChange` (persist callback).
 // The parent serializes their values via hidden inputs on form submit.
 
-import { useState, useId } from "react";
+import { useState, useId, useEffect } from "react";
+import { CART_ATTRIBUTE_KEYS, LINE_ATTRIBUTE_KEYS } from "@promo/shared-types";
 import { ProductPicker } from "../ProductPicker.js";
 
 // ─── Shared props ─────────────────────────────────────────────────────────────
@@ -55,42 +56,37 @@ function serializeQuantityRules(rules: QuantityRule[]): Array<Omit<QuantityRule,
   return rules.map(({ id: _id, ...rule }) => rule);
 }
 
-const ORDER_HISTORY_LABELS = [
-  "Total gastado en el historial de pedidos",
-  "Total gastado en el último pedido",
-  "Número total de pedidos realizados",
-  "Limitar un número de usos por cliente",
-];
-
 // ─── Link ─────────────────────────────────────────────────────────────────────
 export function LinkForm({ value, onChange }: SubFormProps) {
   const idPrefix = useId();
-  const dest = getv(value, "dest", "home") as string;
-  const word = getv(value, "word", "") as string;
+  const requiredUrl = getv(value, "requiredUrl", "") as string;
+  const paramName = getv(value, "paramName", "freegifts_code") as string;
+  const paramValue = getv(value, "paramValue", "") as string;
 
-  function emit(d: string, w: string) {
-    onChange?.({ dest: d, word: w });
+  function emit(patch: Partial<Record<string, string>>) {
+    onChange?.({ requiredUrl, paramName, paramValue, ...patch });
   }
 
-  const generated = `https://giftswapp.com/?freegifts_code=${word || "<freegifts_code>"}`;
-  const param = "?freegifts_code=";
+  const generated = `${requiredUrl || "/"}${paramName ? `?${encodeURIComponent(paramName)}=${encodeURIComponent(paramValue || "<value>")}` : ""}`;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <label className="b-label" htmlFor={`${idPrefix}-dest`}>Destino del enlace</label>
-        <select id={`${idPrefix}-dest`} aria-label="Destino del enlace" className="b-select" value={dest} onChange={(e) => emit(e.target.value, word)}>
-          <option value="home">Home page</option>
-          <option value="product">Product page</option>
-          <option value="collection">Collection page</option>
-          <option value="custom">Custom page</option>
-        </select>
+        <label className="b-label" htmlFor={`${idPrefix}-url`}>URL o ruta de destino</label>
+        <input id={`${idPrefix}-url`} aria-label="URL o ruta de destino" className="b-input" value={requiredUrl}
+          onChange={(e) => emit({ requiredUrl: e.target.value })} placeholder="/pages/vip" autoComplete="off" />
       </div>
 
       <div>
-        <label className="b-label" htmlFor={`${idPrefix}-word`}>Entrar a palabras para personalizar</label>
-        <input id={`${idPrefix}-word`} aria-label="Entrar a palabras para personalizar" className="b-input" value={word} onChange={(e) => emit(dest, e.target.value)}
-          placeholder="E.g. summers2024" autoComplete="off" />
+        <label className="b-label" htmlFor={`${idPrefix}-param-name`}>Parámetro (opcional)</label>
+        <input id={`${idPrefix}-param-name`} aria-label="Parámetro" className="b-input" value={paramName}
+          onChange={(e) => emit({ paramName: e.target.value })} placeholder="freegifts_code" autoComplete="off" />
+      </div>
+
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-param-value`}>Valor esperado (opcional)</label>
+        <input id={`${idPrefix}-param-value`} aria-label="Valor esperado" className="b-input" value={paramValue}
+          onChange={(e) => emit({ paramValue: e.target.value })} placeholder="summer2024" autoComplete="off" />
       </div>
 
       <div>
@@ -105,17 +101,7 @@ export function LinkForm({ value, onChange }: SubFormProps) {
           style={{ background: "var(--bg)", color: "var(--text-sub)" }} />
       </div>
 
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-          <label className="b-label" htmlFor={`${idPrefix}-param`} style={{ margin: 0 }}>Parámetro</label>
-          <button type="button" onClick={() => void navigator.clipboard.writeText(param)}
-            style={{ fontSize: 12, color: "var(--blue)", background: "none", border: "none", cursor: "pointer" }}>
-            Copiar parámetro
-          </button>
-        </div>
-        <input id={`${idPrefix}-param`} aria-label="Parámetro" className="b-input" readOnly value={param}
-          style={{ background: "var(--bg)", color: "var(--text-sub)" }} />
-      </div>
+      <div className="b-help">Se evalúa la URL real del navegador. No se inserta ni ejecuta código remoto.</div>
     </div>
   );
 }
@@ -123,28 +109,42 @@ export function LinkForm({ value, onChange }: SubFormProps) {
 // ─── Order history ────────────────────────────────────────────────────────────
 export function OrderHistoryForm({ value, onChange }: SubFormProps) {
   const idPrefix = useId();
-  const dateFrom = getv(value, "dateFrom", "") as string;
-  const checkboxes = getv(value, "checkboxes", []) as number[];
+  const metric = getv(value, "metric", "total_spent") as string;
+  const operator = getv(value, "operator", "gte") as string;
+  const threshold = getv(value, "threshold", 0) as number;
 
-  function toggle(idx: number) {
-    const next = checkboxes.includes(idx) ? checkboxes.filter((x) => x !== idx) : [...checkboxes, idx];
-    onChange?.({ dateFrom, checkboxes: next });
+  function emit(patch: Partial<Record<string, unknown>>) {
+    onChange?.({ metric, operator, threshold, ...patch });
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <label className="b-label" htmlFor={`${idPrefix}-date-from`}>Orden creada a partir de</label>
-        <input id={`${idPrefix}-date-from`} aria-label="Orden creada a partir de" className="b-input" type="date" style={{ maxWidth: 200 }} value={dateFrom}
-          onChange={(e) => onChange?.({ dateFrom: e.target.value, checkboxes })} />
+        <label className="b-label" htmlFor={`${idPrefix}-metric`}>Métrica</label>
+        <select id={`${idPrefix}-metric`} className="b-select" value={metric} onChange={(e) => emit({ metric: e.target.value })}>
+          <option value="total_spent">Total gastado</option>
+          <option value="last_order_spent">Total gastado en el último pedido</option>
+          <option value="total_orders">Número total de pedidos</option>
+          <option value="one_use_per_customer">Un uso por cliente</option>
+        </select>
       </div>
-      {ORDER_HISTORY_LABELS.map((label, i) => (
-        <label key={label} className="b-checkbox-row" htmlFor={`${idPrefix}-history-${i}`} style={{ cursor: "pointer", gap: 10 }}>
-          <input id={`${idPrefix}-history-${i}`} aria-label={label} type="checkbox" checked={checkboxes.includes(i)} onChange={() => toggle(i)}
-            style={{ accentColor: "var(--blue)", width: 14, height: 14, flexShrink: 0 }} />
-          <span style={{ fontSize: 13, color: "var(--text)" }}>{label}</span>
-        </label>
-      ))}
+      {metric !== "one_use_per_customer" && <>
+        <div>
+          <label className="b-label" htmlFor={`${idPrefix}-operator`}>Comparación</label>
+          <select id={`${idPrefix}-operator`} className="b-select" value={operator} onChange={(e) => emit({ operator: e.target.value })}>
+            <option value="gte">Al menos</option>
+            <option value="gt">Mayor que</option>
+            <option value="eq">Exactamente</option>
+            <option value="lte">Como máximo</option>
+            <option value="lt">Menor que</option>
+          </select>
+        </div>
+        <div>
+          <label className="b-label" htmlFor={`${idPrefix}-threshold`}>{metric === "total_orders" ? "Cantidad" : "Monto"}</label>
+          <input id={`${idPrefix}-threshold`} className="b-input" type="number" min="0" step={metric === "total_orders" ? "1" : "0.01"}
+            value={threshold} onChange={(e) => emit({ threshold: Number(e.target.value) })} />
+        </div>
+      </>}
     </div>
   );
 }
@@ -186,12 +186,18 @@ export function CustomerTagsForm({ value, onChange }: SubFormProps) {
 export function LocationForm({ value, onChange }: SubFormProps) {
   const idPrefix = useId();
   const countries = getv(value, "countries", "") as string;
+  const exclude = getv(value, "exclude", false) as boolean;
 
   return (
-    <div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <label className="b-label" htmlFor={`${idPrefix}-countries`}>Select countries</label>
       <input id={`${idPrefix}-countries`} aria-label="Select countries" className="b-input" placeholder="Select countries..." autoComplete="off" value={countries}
-        onChange={(e) => onChange?.({ countries: e.target.value })} />
+        onChange={(e) => onChange?.({ countries: e.target.value, exclude })} />
+      <label className="b-checkbox-row" htmlFor={`${idPrefix}-exclude-countries`} style={{ cursor: "pointer", gap: 10 }}>
+        <input id={`${idPrefix}-exclude-countries`} type="checkbox" checked={exclude}
+          onChange={(e) => onChange?.({ countries, exclude: e.target.checked })} />
+        <span style={{ fontSize: 13, color: "var(--text)" }}>Excluir estos países</span>
+      </label>
     </div>
   );
 }
@@ -263,22 +269,49 @@ export function MarketsForm({ value, onChange }: SubFormProps) {
   const idPrefix = useId();
   const marketIds = getv(value, "marketIds", "") as string;
   const exclude = getv(value, "exclude", false) as boolean;
+  const [markets, setMarkets] = useState<Array<{ id: string; name: string; currencyCode: string; enabled: boolean }>>([]);
+  const [marketError, setMarketError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch("/api/markets", { signal: controller.signal })
+      .then(async (response) => {
+        const body = await response.json() as { markets?: Array<{ id: string; name: string; currencyCode: string; enabled: boolean }>; error?: string };
+        if (!response.ok) throw new Error(body.error ?? `Markets request failed (${response.status})`);
+        setMarkets(body.markets ?? []);
+      })
+      .catch((error: unknown) => {
+        if ((error as Error).name !== "AbortError") setMarketError((error as Error).message);
+      });
+    return () => controller.abort();
+  }, []);
+
+  const selected = new Set(marketIds.split(",").map((id) => id.trim()).filter(Boolean));
+
+  function toggleMarket(id: string) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onChange?.({ marketIds: [...next].join(", "), exclude });
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ background: "#fff8e1", border: "1px solid #fbbf24", borderRadius: 6, padding: "10px 12px", fontSize: 12, color: "#78350f", lineHeight: 1.5 }}>
-        This condition requires additional access to fetch existing markets.
-        <div style={{ marginTop: 6 }}>
-          <button type="button"
-            style={{ fontSize: 12, color: "var(--blue)", background: "none", border: "none", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
-            Update permissions
-          </button>
+      {markets.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {markets.map((market) => (
+            <label key={market.id} className="b-checkbox-row" htmlFor={`${idPrefix}-${market.id.split("/").pop()}`} style={{ cursor: "pointer", gap: 10 }}>
+              <input id={`${idPrefix}-${market.id.split("/").pop()}`} type="checkbox" checked={selected.has(market.id)} onChange={() => toggleMarket(market.id)} />
+              <span style={{ fontSize: 13, color: "var(--text)" }}>{market.name} · {market.currencyCode}{market.enabled ? "" : " · inactive"}</span>
+            </label>
+          ))}
         </div>
-      </div>
+      )}
       <div>
-        <label className="b-label" htmlFor={`${idPrefix}-markets`}>Select markets</label>
-        <input id={`${idPrefix}-markets`} aria-label="Select markets" className="b-input" placeholder="Select..." autoComplete="off" value={marketIds}
+        <label className="b-label" htmlFor={`${idPrefix}-markets`}>{markets.length > 0 ? "Selected Market IDs" : "Market IDs"}</label>
+        <input id={`${idPrefix}-markets`} aria-label="Select markets" className="b-input" placeholder="gid://shopify/Market/..." autoComplete="off" value={marketIds}
           onChange={(e) => onChange?.({ marketIds: e.target.value, exclude })} />
+        {marketError && <div className="b-help">Live Markets could not be loaded: {marketError}. You can still enter Market GIDs manually.</div>}
       </div>
       <label className="b-checkbox-row" htmlFor={`${idPrefix}-exclude-markets`} style={{ cursor: "pointer", gap: 10 }}>
         <input id={`${idPrefix}-exclude-markets`} aria-label="Exclude selected markets" type="checkbox" checked={exclude}
@@ -286,6 +319,58 @@ export function MarketsForm({ value, onChange }: SubFormProps) {
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
         <span style={{ fontSize: 13, color: "var(--text)" }}>Exclude selected markets</span>
       </label>
+    </div>
+  );
+}
+
+// ─── Store-specific line/cart attribute ──────────────────────────────────────
+export function CustomAttributeForm({ value, onChange }: SubFormProps) {
+  const idPrefix = useId();
+  const scope = getv(value, "scope", "line") as "line" | "cart";
+  const key = getv(value, "key", "") as string;
+  const expectedValue = getv(value, "value", "") as string;
+  const matchMode = getv(value, "matchMode", "equals") as "equals" | "not_equals";
+  const minMatchingQuantity = getv(value, "minMatchingQuantity", 1) as number;
+  const suggestions = scope === "cart" ? CART_ATTRIBUTE_KEYS : LINE_ATTRIBUTE_KEYS;
+
+  function emit(patch: Partial<Record<string, unknown>>) {
+    onChange?.({ scope, key, value: expectedValue, matchMode, minMatchingQuantity, ...patch });
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-scope`}>Attribute location</label>
+        <select id={`${idPrefix}-scope`} className="b-select" value={scope} onChange={(event) => emit({ scope: event.target.value })}>
+          <option value="line">Cart line property</option>
+          <option value="cart">Cart attribute</option>
+        </select>
+      </div>
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-key`}>Store attribute key</label>
+        <input id={`${idPrefix}-key`} className="b-input" list={`${idPrefix}-suggestions`} value={key} onChange={(event) => emit({ key: event.target.value })} placeholder={scope === "cart" ? "affiliate_campaign" : "engraving_message"} autoComplete="off" />
+        <datalist id={`${idPrefix}-suggestions`}>
+          {suggestions.map((suggestion) => <option key={suggestion} value={suggestion} />)}
+        </datalist>
+        <div className="b-help">Keys are registered for this store when the offer is published. HPN names are optional migration presets.</div>
+      </div>
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-value`}>Expected value</label>
+        <input id={`${idPrefix}-value`} className="b-input" value={expectedValue} onChange={(event) => emit({ value: event.target.value })} autoComplete="off" />
+      </div>
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-match`}>Match</label>
+        <select id={`${idPrefix}-match`} className="b-select" value={matchMode} onChange={(event) => emit({ matchMode: event.target.value })}>
+          <option value="equals">Equals</option>
+          <option value="not_equals">Does not equal</option>
+        </select>
+      </div>
+      {scope === "line" && (
+        <div>
+          <label className="b-label" htmlFor={`${idPrefix}-quantity`}>Minimum matching quantity</label>
+          <input id={`${idPrefix}-quantity`} className="b-input" type="number" min="1" step="1" value={minMatchingQuantity} onChange={(event) => emit({ minMatchingQuantity: Math.max(1, Number(event.target.value) || 1) })} />
+        </div>
+      )}
     </div>
   );
 }

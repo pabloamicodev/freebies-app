@@ -12,6 +12,24 @@ pub struct CompiledConfig {
     /// to an empty list rather than failing to parse the whole config.
     #[serde(default)]
     pub shipping_offers: Vec<CompiledShippingOffer>,
+    #[serde(default)]
+    pub l1: Option<String>,
+    #[serde(default)]
+    pub l2: Option<String>,
+    #[serde(default)]
+    pub l3: Option<String>,
+    #[serde(default)]
+    pub l4: Option<String>,
+    #[serde(default)]
+    pub l5: Option<String>,
+    #[serde(default)]
+    pub l6: Option<String>,
+    #[serde(default)]
+    pub c1: Option<String>,
+    #[serde(default)]
+    pub c2: Option<String>,
+    #[serde(default)]
+    pub c3: Option<String>,
 }
 
 /// A tiered shipping discount, keyed by cart subtotal and (optionally) whether
@@ -85,9 +103,6 @@ pub struct CompiledOffer {
     pub currency_code: String,
     pub currency_overrides: Option<HashMap<String, i64>>,
     pub max_currency_overrides: Option<HashMap<String, i64>>,
-    pub combines_with_order_discounts: bool,
-    pub combines_with_shipping_discounts: bool,
-    pub combines_with_product_discounts: bool,
     #[serde(default)]
     pub requirements: Vec<CompiledRequirement>,
     #[serde(default)]
@@ -136,7 +151,6 @@ pub struct CompiledRequirement {
 #[serde(rename_all = "camelCase")]
 pub struct CompiledProductReward {
     pub id: String,
-    pub reward_type: String,
     pub target_product_ids: Vec<String>,
     pub target_variant_ids: Vec<String>,
     pub discount_type: String,

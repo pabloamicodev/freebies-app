@@ -178,14 +178,24 @@ export const SalesChannelsConditionValueSchema = z.object({
   channels: z.array(z.string()).min(1),
 });
 
-export const UrlParamConditionValueSchema = z.object({
-  param: z.string().min(1).optional(),
-  key: z.string().min(1).optional(),
-  value: z.string().optional(),
-  operator: z.string().optional(),
-}).refine((value) => value.param || value.key, {
-  message: "URL parameter name is required.",
+const CanonicalUrlParamConditionValueSchema = z.object({
+  requiredUrl: z.string().default(""),
+  paramName: z.string().min(1).optional(),
+  paramValue: z.string().optional(),
+}).refine((value) => value.requiredUrl.trim().length > 0 || Boolean(value.paramName), {
+  message: "A required URL or URL parameter name is required.",
 });
+
+export const UrlParamConditionValueSchema = z.preprocess((input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const value = input as Record<string, unknown>;
+  if ("requiredUrl" in value || "paramName" in value) return value;
+  return {
+    requiredUrl: "",
+    paramName: value["param"] ?? value["key"],
+    paramValue: value["value"],
+  };
+}, CanonicalUrlParamConditionValueSchema);
 
 export const SubscriptionConditionValueSchema = z.object({
   mode: z.enum(["any", "subscription_only", "one_time_only"]),
@@ -198,15 +208,25 @@ export const PageUrlConditionValueSchema = z.object({
 });
 export type PageUrlConditionValue = z.infer<typeof PageUrlConditionValueSchema>;
 
-export const LineAttributeKeySchema = z.enum([
+export const LINE_ATTRIBUTE_KEYS = [
   "__landing_source",
   "__bundle_type",
+  "__cart_gift_tier",
   "_bundle_item",
   "_nektar_glp1",
   "_quiz_bundle_id",
+  "_quiz_target_cents",
+  "_quiz_expected_paid_count",
   "_quiz_free_gift",
-]);
-export const CartAttributeKeySchema = z.enum(["source"]);
+] as const;
+export const AttributeKeySchema = z.string()
+  .trim()
+  .min(1, "Attribute key is required.")
+  .max(100, "Attribute key must be 100 characters or fewer.")
+  .refine((key) => !/[\u0000-\u001f\u007f]/u.test(key), "Attribute key cannot contain control characters.");
+export const LineAttributeKeySchema = AttributeKeySchema;
+export const CART_ATTRIBUTE_KEYS = ["source"] as const;
+export const CartAttributeKeySchema = AttributeKeySchema;
 export const LineAttributeConditionValueSchema = z.object({
   key: LineAttributeKeySchema,
   value: z.string().min(1).max(255),

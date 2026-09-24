@@ -168,7 +168,7 @@ export default function IntegrationsPage() {
   const handleConnect = (e: React.FormEvent) => {
     e.preventDefault();
     if (!modal || !apiKeyInput.trim()) return;
-    fetcher.submit(
+    void fetcher.submit(
       { intent: "connect", integrationId: modal, apiKey: apiKeyInput.trim() },
       { method: "post" },
     );

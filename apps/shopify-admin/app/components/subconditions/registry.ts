@@ -3,6 +3,7 @@ import type { SubconditionId } from "./types.js";
 import type { SubFormProps } from "./forms.js";
 import {
   CustomerTagsForm,
+  CustomAttributeForm,
   LinkForm,
   LocationForm,
   MarketsForm,
@@ -20,5 +21,6 @@ export const SUB_FORMS: Record<SubconditionId, ComponentType<SubFormProps>> = {
   subscription: SubscriptionForm,
   sales_channel: SalesChannelForm,
   markets: MarketsForm,
+  custom_attribute: CustomAttributeForm,
   quantity_limit: QuantityLimitForm,
 };

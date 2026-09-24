@@ -20,3 +20,7 @@ uid = "e1779323-ec7a-4f39-ba24-b562345ed2b3"
   command = "cargo build --target=wasm32-wasip1 --release"
   path = "target/wasm32-wasip1/release/promo-engine-discount-function.wasm"
   watch = ["src/**/*.rs"]
+
+  [extensions.input.variables]
+  namespace = "promo_engine"
+  key = "function_config"

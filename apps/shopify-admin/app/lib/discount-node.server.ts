@@ -13,6 +13,12 @@ import { shopifyGraphQL } from "./shopify-fetch.server.js";
 
 const DISCOUNT_TITLE = "Promo Engine";
 
+export interface DiscountCombinationPolicyInput {
+  orderDiscounts: boolean;
+  productDiscounts: boolean;
+  shippingDiscounts: boolean;
+}
+
 export async function ensureDiscountNode(
   shopId: string,
   shopDomain: string,
@@ -33,6 +39,39 @@ export async function ensureDiscountNode(
   await db.update(shops).set({ discountId, updatedAt: new Date() }).where(eq(shops.id, shopId));
 
   return discountId;
+}
+
+export async function syncDiscountCombinationPolicy(
+  shopDomain: string,
+  accessToken: string,
+  discountId: string,
+  combinesWith: DiscountCombinationPolicyInput,
+): Promise<void> {
+  const data = await shopifyGraphQL<{
+    discountAutomaticAppUpdate: {
+      automaticAppDiscount: { discountId: string } | null;
+      userErrors: Array<{ field: string[] | null; message: string; code?: string }>;
+    };
+  }>({
+    shopDomain,
+    accessToken,
+    query: `mutation UpdatePromoEngineDiscountCombination($id: ID!, $discount: DiscountAutomaticAppInput!) {
+      discountAutomaticAppUpdate(id: $id, automaticAppDiscount: $discount) {
+        automaticAppDiscount { discountId }
+        userErrors { field message code }
+      }
+    }`,
+    variables: {
+      id: discountId,
+      discount: { combinesWith },
+    },
+  });
+
+  const result = data.discountAutomaticAppUpdate;
+  if (result.userErrors.length > 0 || !result.automaticAppDiscount) {
+    const messages = result.userErrors.map((error) => error.message).join(", ");
+    throw new Error(`discountAutomaticAppUpdate failed: ${messages || "Shopify returned no updated discount"}`);
+  }
 }
 
 async function findDiscountFunctionId(shopDomain: string, accessToken: string): Promise<string | null> {
