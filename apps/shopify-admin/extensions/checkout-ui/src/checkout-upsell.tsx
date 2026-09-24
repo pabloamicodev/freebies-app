@@ -3,6 +3,7 @@
  */
 
 import "@shopify/ui-extensions/preact";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- Required by the classic Preact JSX transform.
 import { h, render } from "preact";
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import {
