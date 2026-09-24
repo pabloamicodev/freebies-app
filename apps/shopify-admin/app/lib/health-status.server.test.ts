@@ -24,8 +24,27 @@ describe("summarizeHealthChecks", () => {
   });
 
   it("exposes only allowlisted machine-readable error codes", () => {
-    expect(healthErrorDetails({ code: "ECONNREFUSED" })).toEqual({ errorCode: "ECONNREFUSED" });
-    expect(healthErrorDetails({ code: "secret=https://user:password@example.test" })).toEqual({});
-    expect(healthErrorDetails(new Error("credential-bearing message"))).toEqual({});
+    expect(healthErrorDetails({ code: "ECONNREFUSED" })).toEqual({
+      errorCode: "ECONNREFUSED",
+      failureClass: "connection_refused",
+    });
+    expect(healthErrorDetails({ code: "secret=https://user:password@example.test" })).toEqual({
+      failureClass: "unknown",
+    });
+    expect(healthErrorDetails(new Error("credential-bearing message"))).toEqual({
+      failureClass: "unknown",
+    });
+  });
+
+  it("classifies common dependency failures without exposing their messages", () => {
+    expect(healthErrorDetails(new Error("getaddrinfo ENOTFOUND private.redis.example"))).toEqual({
+      failureClass: "dns_failed",
+    });
+    expect(healthErrorDetails(new Error("WRONGPASS invalid username-password pair"))).toEqual({
+      failureClass: "authentication_failed",
+    });
+    expect(healthErrorDetails(new Error("Connection is closed."))).toEqual({
+      failureClass: "connection_closed",
+    });
   });
 });
