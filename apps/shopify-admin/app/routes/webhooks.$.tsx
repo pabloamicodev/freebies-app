@@ -179,6 +179,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 // be acked (200) so Shopify doesn't retry indefinitely.
 function isTransientError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
+  if ("transient" in err && err.transient === true) return true;
   const code = (err as NodeJS.ErrnoException).code ?? "";
   const msg = err.message.toLowerCase();
   return (
@@ -228,7 +229,10 @@ interface OrderWebhookPayload {
   cart_token: string | null;
   total_price?: string;
   total_price_set?: { shop_money?: { amount?: string } };
-  customer?: { id: number } | null;
+  email?: string | null;
+  contact_email?: string | null;
+  phone?: string | null;
+  customer?: { id: number; email?: string | null; phone?: string | null } | null;
   line_items: Array<{
     id: number;
     variant_id: number;
@@ -432,6 +436,9 @@ async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
         offerIds,
         totalPriceCents,
         sessionId,
+        customerId,
+        customerEmail: order.customer?.email ?? order.contact_email ?? order.email ?? null,
+        customerPhone: order.customer?.phone ?? order.phone ?? null,
         timestamp: new Date().toISOString(),
     }),
   ]);

@@ -1,11 +1,13 @@
 /**
  * Dispatches promo engine events to connected third-party integrations.
- * Reads integration configs from appSettings and fires async webhook/API calls.
- * Failures are logged but never throw — they must not block the webhook response.
+ * Reads encrypted integration configs and delivers webhook/API calls. Transient
+ * failures propagate so Shopify retries the source webhook; destinations receive
+ * a stable delivery id so those retries can be deduplicated.
  */
 
-import { eq } from "drizzle-orm";
-import { appSettings, type Db } from "@promo/db";
+import type { Db } from "@promo/db";
+import { getIntegrationCredentials } from "./integration-credentials.server.js";
+import { assertSafeWebhookUrl } from "./safe-webhook-url.server.js";
 
 interface PromoEvent {
   event: "order_paid" | "gift_added" | "offer_redeemed";
@@ -14,7 +16,14 @@ interface PromoEvent {
   offerIds?: string[];
   totalPriceCents?: number;
   sessionId?: string | null;
+  customerId?: string | null;
+  customerEmail?: string | null;
+  customerPhone?: string | null;
   timestamp: string;
+}
+
+export class TransientIntegrationError extends Error {
+  readonly transient = true;
 }
 
 export async function dispatchIntegrationEvents(
@@ -22,36 +31,38 @@ export async function dispatchIntegrationEvents(
   db: Db,
   event: PromoEvent,
 ): Promise<void> {
-  const rows = await db
-    .select({ key: appSettings.key, value: appSettings.value })
-    .from(appSettings)
-    .where(eq(appSettings.shopId, shopId));
-
-  const configs = new Map<string, string>();
-  for (const row of rows) {
-    if (row.key.startsWith("integration.") && row.key.endsWith(".api_key")) {
-      const id = row.key.split(".")[1];
-      if (id) configs.set(id, row.value);
-    }
-  }
+  const configs = await getIntegrationCredentials(db, shopId);
 
   if (configs.size === 0) return;
 
-  await Promise.allSettled([
+  await Promise.all([
     configs.has("klaviyo") ? dispatchKlaviyo(configs.get("klaviyo")!, event) : null,
     configs.has("omnisend") ? dispatchWebhook("omnisend", configs.get("omnisend")!, event) : null,
     configs.has("attentive") ? dispatchWebhook("attentive", configs.get("attentive")!, event) : null,
     configs.has("rebuy") ? dispatchWebhook("rebuy", configs.get("rebuy")!, event) : null,
     configs.has("gorgias") ? dispatchWebhook("gorgias", configs.get("gorgias")!, event) : null,
     configs.has("postscript") ? dispatchWebhook("postscript", configs.get("postscript")!, event) : null,
-  ].filter(Boolean).map((p) =>
-    Promise.resolve(p).catch((err) =>
-      console.error("[integration-dispatcher] dispatch failed", err instanceof Error ? err.message : err),
-    ),
-  ));
+  ].filter((request): request is Promise<void> => request !== null));
 }
 
 async function dispatchKlaviyo(apiKey: string, event: PromoEvent): Promise<void> {
+  const profile = event.customerEmail
+    ? { email: event.customerEmail }
+    : event.customerPhone
+      ? { phone_number: event.customerPhone }
+      : event.customerId
+        ? { external_id: event.customerId }
+        : null;
+
+  if (!profile) {
+    console.warn("[integration-dispatcher] skipped Klaviyo event without a customer identifier", {
+      event: event.event,
+      shop: event.shopDomain,
+      orderId: event.orderId,
+    });
+    return;
+  }
+
   const body = {
     data: {
       type: "event",
@@ -62,6 +73,12 @@ async function dispatchKlaviyo(apiKey: string, event: PromoEvent): Promise<void>
             attributes: { name: `Promo Engine: ${humanize(event.event)}` },
           },
         },
+        profile: {
+          data: {
+            type: "profile",
+            attributes: profile,
+          },
+        },
         properties: {
           offer_ids: event.offerIds ?? [],
           total_price_cents: event.totalPriceCents ?? 0,
@@ -69,6 +86,7 @@ async function dispatchKlaviyo(apiKey: string, event: PromoEvent): Promise<void>
           order_id: event.orderId ?? null,
         },
         time: event.timestamp,
+        unique_id: deliveryId(event),
         value: event.totalPriceCents ? event.totalPriceCents / 100 : undefined,
       },
     },
@@ -79,14 +97,17 @@ async function dispatchKlaviyo(apiKey: string, event: PromoEvent): Promise<void>
     headers: {
       "Authorization": `Klaviyo-API-Key ${apiKey}`,
       "Content-Type": "application/json",
-      "revision": "2024-02-15",
+      "revision": "2026-07-15",
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(5000),
   });
 
   if (!res.ok) {
-    throw new Error(`Klaviyo API error ${res.status}`);
+    if (res.status === 429 || res.status >= 500) {
+      throw new TransientIntegrationError(`Klaviyo API temporarily returned ${res.status}`);
+    }
+    throw new Error(`Klaviyo API rejected the event with ${res.status}`);
   }
 }
 
@@ -95,24 +116,35 @@ async function dispatchWebhook(
   webhookUrl: string,
   event: PromoEvent,
 ): Promise<void> {
-  // Generic webhook dispatch for integrations that accept a webhook URL
-  if (!webhookUrl.startsWith("https://")) {
-    throw new Error(`[${id}] invalid webhook URL`);
-  }
+  const url = await assertSafeWebhookUrl(webhookUrl);
 
-  const res = await fetch(webhookUrl, {
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Promo-Engine-Event": event.event,
+      "X-Promo-Engine-Delivery-Id": deliveryId(event),
     },
     body: JSON.stringify(event),
     signal: AbortSignal.timeout(5000),
+    redirect: "error",
   });
 
   if (!res.ok) {
-    throw new Error(`[${id}] webhook returned ${res.status}`);
+    if (res.status === 408 || res.status === 429 || res.status >= 500) {
+      throw new TransientIntegrationError(`[${id}] webhook temporarily returned ${res.status}`);
+    }
+    throw new Error(`[${id}] webhook rejected the event with ${res.status}`);
   }
+}
+
+function deliveryId(event: PromoEvent): string {
+  return [
+    "promo-engine",
+    event.shopDomain,
+    event.event,
+    event.orderId ?? event.sessionId ?? event.timestamp,
+  ].join(":").slice(0, 255);
 }
 
 function humanize(event: string): string {
@@ -124,11 +156,12 @@ export async function validateKlaviyoApiKey(apiKey: string): Promise<{ ok: boole
     const res = await fetch("https://a.klaviyo.com/api/accounts/", {
       headers: {
         "Authorization": `Klaviyo-API-Key ${apiKey}`,
-        "revision": "2024-02-15",
+        "revision": "2026-07-15",
       },
       signal: AbortSignal.timeout(5000),
     });
-    if (res.ok || res.status === 403) return { ok: true }; // 403 = valid key, insufficient scope
+    if (res.ok) return { ok: true };
+    if (res.status === 403) return { ok: false, error: "API key needs permission to read accounts" };
     if (res.status === 401) return { ok: false, error: "Invalid API key" };
     return { ok: false, error: `Klaviyo returned ${res.status}` };
   } catch {

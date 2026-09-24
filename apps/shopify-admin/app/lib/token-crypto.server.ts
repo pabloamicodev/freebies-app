@@ -12,6 +12,11 @@
  */
 
 const ALGORITHM = "AES-GCM";
+const ENCRYPTED_VALUE_PATTERN = /^[0-9a-f]{24}:[0-9a-f]{32,}$/i;
+
+export function isEncryptedToken(stored: string): boolean {
+  return ENCRYPTED_VALUE_PATTERN.test(stored);
+}
 
 async function getKey(): Promise<CryptoKey | null> {
   const raw = process.env["TOKEN_ENCRYPTION_KEY"];
@@ -50,9 +55,11 @@ export async function encryptToken(plaintext: string): Promise<string> {
  * Falls back to returning the raw value for legacy plaintext tokens or when encryption key is absent.
  */
 export async function decryptToken(stored: string): Promise<string> {
-  // Plaintext legacy token (no ":" separator in our format, but real tokens start with "shpat_" etc.)
+  // Legacy plaintext values include URLs, which contain a colon. Only attempt
+  // AES-GCM decryption when the value exactly matches our encoded format.
+  if (!isEncryptedToken(stored)) return stored;
+
   const separatorIndex = stored.indexOf(":");
-  if (separatorIndex === -1) return stored; // Legacy plaintext
 
   const key = await getKey();
   if (!key) return stored; // No key configured — return as stored (handles dev/migration)

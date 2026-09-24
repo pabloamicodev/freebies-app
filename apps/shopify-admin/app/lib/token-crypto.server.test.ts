@@ -3,7 +3,7 @@
  * No DB required — tests AES-256-GCM encrypt/decrypt in isolation.
  */
 import { describe, it, expect } from "vitest";
-import { encryptToken, decryptToken } from "./token-crypto.server.js";
+import { encryptToken, decryptToken, isEncryptedToken } from "./token-crypto.server.js";
 
 const TEST_KEY = "a".repeat(64); // 32 bytes as hex
 
@@ -72,6 +72,11 @@ describe("decryptToken", () => {
     expect(result).toBe(legacy);
   }));
 
+  it("returns legacy plaintext webhook URLs unchanged", withKey(TEST_KEY, async () => {
+    const legacy = "https://hooks.example.com/promo";
+    await expect(decryptToken(legacy)).resolves.toBe(legacy);
+  }));
+
   it("throws in production when ciphertext is tampered", withKey(TEST_KEY, async () => {
     const encrypted = await encryptToken("shpat_real_token");
     const lastHexCharacter = encrypted.at(-1);
@@ -115,4 +120,12 @@ describe("decryptToken", () => {
       process.env["NODE_ENV"] = orig;
     }
   }));
+});
+
+describe("isEncryptedToken", () => {
+  it("recognizes only the AES-GCM storage envelope", () => {
+    expect(isEncryptedToken(`${"a".repeat(24)}:${"b".repeat(32)}`)).toBe(true);
+    expect(isEncryptedToken("https://hooks.example.com/promo")).toBe(false);
+    expect(isEncryptedToken("ab12:cd34ef")).toBe(false);
+  });
 });

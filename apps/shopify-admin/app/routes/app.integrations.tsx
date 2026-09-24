@@ -1,9 +1,14 @@
 import { useLoaderData, useFetcher } from "react-router";
 import { useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
-import { appSettings } from "@promo/db";
-import { and, eq } from "drizzle-orm";
 import { validateKlaviyoApiKey } from "../lib/integration-dispatcher.server.js";
+import {
+  deleteIntegrationCredential,
+  isIntegrationId,
+  listConnectedIntegrations,
+  saveIntegrationCredential,
+} from "../lib/integration-credentials.server.js";
+import { assertSafeWebhookUrl } from "../lib/safe-webhook-url.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -79,18 +84,9 @@ const INTEGRATIONS = [
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-  const settingRows = await db
-    .select({ key: appSettings.key, value: appSettings.value })
-    .from(appSettings)
-    .where(eq(appSettings.shopId, shopId));
-
-  const connected: Record<string, string> = {};
-  for (const row of settingRows) {
-    if (row.key.startsWith("integration.") && row.key.endsWith(".api_key")) {
-      const id = row.key.split(".")[1];
-      if (id) connected[id] = row.value;
-    }
-  }
+  const connected = Object.fromEntries(
+    (await listConnectedIntegrations(db, shopId)).map((id) => [id, true]),
+  );
   return { connected };
 };
 
@@ -100,23 +96,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent") as string;
 
   if (intent === "disconnect") {
-    const integrationId = formData.get("integrationId") as string;
-    if (!integrationId) return { error: "Missing integrationId" };
-    await db
-      .delete(appSettings)
-      .where(
-        and(
-          eq(appSettings.shopId, shopId),
-          eq(appSettings.key, `integration.${integrationId}.api_key`),
-        ),
-      );
+    const integrationId = String(formData.get("integrationId") ?? "");
+    if (!isIntegrationId(integrationId)) return { error: "Unknown integration" };
+    await deleteIntegrationCredential(db, shopId, integrationId);
     return { ok: true, integrationId };
   }
 
   if (intent === "connect") {
-    const integrationId = formData.get("integrationId") as string;
-    const apiKey = (formData.get("apiKey") as string)?.trim();
+    const integrationId = String(formData.get("integrationId") ?? "");
+    const apiKey = String(formData.get("apiKey") ?? "").trim();
     if (!integrationId || !apiKey) return { error: "API key / webhook URL is required" };
+    if (!isIntegrationId(integrationId)) return { error: "Unknown integration" };
 
     const integration = INTEGRATIONS.find((i) => i.id === integrationId);
     if (!integration) return { error: "Unknown integration" };
@@ -126,17 +116,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (!validation.ok) return { error: validation.error ?? "Invalid API key" };
     }
 
-    if (!integration.validates && !apiKey.startsWith("https://")) {
-      return { error: "Webhook URL must start with https://" };
+    if (!integration.validates) {
+      try {
+        await assertSafeWebhookUrl(apiKey);
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : "Webhook URL is invalid" };
+      }
     }
 
-    await db
-      .insert(appSettings)
-      .values({ shopId, key: `integration.${integrationId}.api_key`, value: apiKey })
-      .onConflictDoUpdate({
-        target: [appSettings.shopId, appSettings.key],
-        set: { value: apiKey, updatedAt: new Date() },
-      });
+    await saveIntegrationCredential(db, shopId, integrationId, apiKey);
     return { ok: true, integrationId };
   }
 
@@ -152,9 +140,7 @@ export default function IntegrationsPage() {
   const isBusy = fetcher.state !== "idle";
   const actionResult = fetcher.data;
 
-  const connectedMap: Record<string, boolean> = Object.fromEntries(
-    Object.keys(connected).map((id) => [id, true]),
-  );
+  const connectedMap: Record<string, boolean> = { ...connected };
   if (actionResult && "ok" in actionResult && actionResult.integrationId) {
     const intId = actionResult.integrationId;
     const lastIntent = fetcher.formData?.get("intent");
