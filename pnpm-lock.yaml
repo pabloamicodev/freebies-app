@@ -214,6 +214,9 @@ importers:
 
   packages/storefront-runtime:
     dependencies:
+      '@promo/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
       preact:
         specifier: ^10.25.0
         version: 10.29.2

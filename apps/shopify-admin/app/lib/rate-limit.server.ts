@@ -72,23 +72,6 @@ async function redisCheckRateLimit(
   }
 }
 
-// ─── In-memory first-tier: eliminates DB/Redis round-trip for well-behaved traffic ──
-
-interface MemBucket { count: number; windowStart: number; }
-const memCounters = new Map<string, MemBucket>();
-const MEM_BYPASS_RATIO = 0.7; // skip enforcement tier when count < 70% of limit
-
-function getMemCount(key: string, windowMs: number): number {
-  const now = Date.now();
-  const bucket = memCounters.get(key);
-  if (!bucket || now - bucket.windowStart >= windowMs) {
-    memCounters.set(key, { count: 1, windowStart: now });
-    return 1;
-  }
-  bucket.count += 1;
-  return bucket.count;
-}
-
 // ─── DB-backed sliding window (fallback when Redis is absent or unhealthy) ────
 
 async function dbCheckRateLimit(
@@ -131,9 +114,8 @@ export async function checkRateLimit(
   key: string,
   options: RateLimitOptions,
 ): Promise<{ ok: true } | { ok: false; retryAfterSeconds: number }> {
-  const memCount = getMemCount(key, options.windowMs);
-  if (memCount <= Math.floor(options.limit * MEM_BYPASS_RATIO)) return { ok: true };
-
+  // Every request must hit a shared enforcement tier. Per-instance counters can
+  // be bypassed by spreading traffic across serverless instances.
   const redisResult = await redisCheckRateLimit(key, options);
   if (redisResult !== null) return redisResult;
 

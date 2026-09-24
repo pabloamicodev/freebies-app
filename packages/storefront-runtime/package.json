@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@promo/shared-types": "workspace:*",
     "preact": "^10.25.0"
   },
   "devDependencies": {

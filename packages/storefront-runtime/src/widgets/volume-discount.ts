@@ -7,6 +7,7 @@
  */
 
 import { on, PromoEvents } from "../event-bus.js";
+import { escapeHtml } from "../html.js";
 
 interface VolumeTier {
   minQuantity: number;
@@ -107,24 +108,30 @@ class PromoVolumeDiscount extends HTMLElement {
       }).format(cents / 100);
 
     const tiersHtml = payload.tiers
-      .map(
-        (tier, i) => `
+      .map((tier, i) => {
+        const quantity = Number.isSafeInteger(tier.minQuantity) && tier.minQuantity > 0
+          ? tier.minQuantity
+          : 1;
+        const discountedPrice = fmt(tier.discountedPriceCents);
+        const originalPrice = fmt(tier.originalPriceCents);
+        const label = tier.label || (tier.discountType === "percentage" ? `-${Math.round(tier.discountValue)}%` : "Deal");
+        return `
         <div class="pe-vd-tier ${i === 0 ? "pe-active" : ""}"
-             data-qty="${tier.minQuantity}"
+             data-qty="${quantity}"
              role="button"
              tabindex="0"
-             aria-label="Buy ${tier.minQuantity}+ for ${fmt(tier.discountedPriceCents)} each">
+             aria-label="${escapeHtml(`Buy ${quantity}+ for ${discountedPrice} each`)}">
           <div>
-            <p class="pe-vd-qty">${tier.minQuantity === 1 ? "1 item" : `${tier.minQuantity}+ items`}</p>
+            <p class="pe-vd-qty">${quantity === 1 ? "1 item" : `${quantity}+ items`}</p>
           </div>
-          <span class="pe-vd-label">${tier.label || (tier.discountType === "percentage" ? `-${Math.round(tier.discountValue)}%` : "Deal")}</span>
+          <span class="pe-vd-label">${escapeHtml(label)}</span>
           <div class="pe-vd-price">
             ${tier.originalPriceCents !== tier.discountedPriceCents
-              ? `<p class="pe-vd-price-original">${fmt(tier.originalPriceCents)}</p>` : ""}
-            <p class="pe-vd-price-discounted">${fmt(tier.discountedPriceCents)} each</p>
+              ? `<p class="pe-vd-price-original">${escapeHtml(originalPrice)}</p>` : ""}
+            <p class="pe-vd-price-discounted">${escapeHtml(discountedPrice)} each</p>
           </div>
-        </div>`,
-      )
+        </div>`;
+      })
       .join("");
 
     this.shadowRoot.innerHTML = `

@@ -112,10 +112,42 @@ function isCartAddRequest(input: RequestInfo | URL, init?: RequestInit): boolean
   if ((init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase() !== "POST") return false;
   const rawUrl = input instanceof Request ? input.url : input.toString();
   try {
-    return /\/cart\/add(?:\.js)?\/?$/.test(new URL(rawUrl, window.location.origin).pathname);
+    const baseUrl = typeof window === "undefined" ? "https://localhost" : window.location.origin;
+    return /\/cart\/add(?:\.js)?\/?$/.test(new URL(rawUrl, baseUrl).pathname);
   } catch {
     return false;
   }
+}
+
+export async function packCartAddRequest(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<[RequestInfo | URL, RequestInit | undefined]> {
+  if (!isCartAddRequest(input, init)) return [input, init];
+
+  if (init?.body !== undefined && init.body !== null) {
+    return [input, { ...init, body: packedBody(init.body) }];
+  }
+
+  if (!(input instanceof Request)) return [input, init];
+
+  const request = new Request(input, init);
+  if (!request.body) return [request, undefined];
+
+  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+  let body: BodyInit;
+  if (contentType.includes("multipart/form-data")) {
+    body = packedFormData(await request.clone().formData());
+  } else if (contentType.includes("application/x-www-form-urlencoded")) {
+    body = packedSearchParams(new URLSearchParams(await request.clone().text()));
+  } else {
+    body = packedBody(await request.clone().text()) ?? "";
+  }
+
+  const headers = new Headers(request.headers);
+  // The browser must generate a fresh multipart boundary for the cloned body.
+  if (body instanceof FormData) headers.delete("content-type");
+  return [new Request(request, { body, headers }), undefined];
 }
 
 function installPromoMetadataBridge(): void {
@@ -124,9 +156,9 @@ function installPromoMetadataBridge(): void {
   state.__promoEngineMetadataBridgeInstalled = true;
 
   const nativeFetch = window.fetch.bind(window);
-  window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    if (!isCartAddRequest(input, init) || !init) return nativeFetch(input, init);
-    return nativeFetch(input, { ...init, body: packedBody(init.body) });
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const [packedInput, packedInit] = await packCartAddRequest(input, init);
+    return nativeFetch(packedInput, packedInit);
   }) as typeof window.fetch;
 
   document.addEventListener("submit", (event) => {

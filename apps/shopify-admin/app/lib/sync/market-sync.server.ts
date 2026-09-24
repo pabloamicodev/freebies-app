@@ -1,4 +1,4 @@
-import { SHOPIFY_API_VERSION } from "@promo/shared-types";
+import { shopifyGraphQL } from "../shopify-fetch.server.js";
 
 export interface ShopifyMarket {
   id: string;
@@ -20,20 +20,28 @@ export interface MarketNode {
   conditions?: {
     regionsCondition?: {
       regions?: {
-        nodes?: Array<{
-          __typename?: string;
-          code?: string | null;
-          country?: { code?: string | null } | null;
-        }>;
+        nodes?: MarketRegionNode[];
+        pageInfo?: PageInfo;
       } | null;
     } | null;
   } | null;
   webPresences?: { nodes?: Array<{ defaultLocale?: { locale?: string } | null }> } | null;
 }
 
+interface MarketRegionNode {
+  __typename?: string;
+  code?: string | null;
+  country?: { code?: string | null } | null;
+}
+
+interface PageInfo {
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
 export const MARKETS_QUERY = `
-  query GetMarkets {
-    markets(first: 50) {
+  query GetMarkets($after: String) {
+    markets(first: 50, after: $after, type: REGION) {
       nodes {
         id name handle status
         currencySettings { baseCurrency { currencyCode } }
@@ -43,11 +51,35 @@ export const MARKETS_QUERY = `
               nodes {
                 __typename
                 ... on MarketRegionCountry { code }
+                ... on MarketRegionSubdivision { code country { code } }
               }
+              pageInfo { hasNextPage endCursor }
             }
           }
         }
         webPresences(first: 5) { nodes { defaultLocale { locale } } }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+export const MARKET_REGIONS_QUERY = `
+  query GetMarketRegions($marketId: ID!, $after: String!) {
+    node(id: $marketId) {
+      ... on Market {
+        conditions {
+          regionsCondition {
+            regions(first: 250, after: $after) {
+              nodes {
+                __typename
+                ... on MarketRegionCountry { code }
+                ... on MarketRegionSubdivision { code country { code } }
+              }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
       }
     }
   }
@@ -95,26 +127,58 @@ export async function syncMarketsForShop(
   shopDomain: string,
   accessToken: string,
 ): Promise<ShopifyMarket[]> {
-  const response = await fetch(
-    `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": accessToken },
-      body: JSON.stringify({ query: MARKETS_QUERY }),
-      signal: AbortSignal.timeout(10_000),
-    },
-  );
+  const marketNodes: MarketNode[] = [];
+  let cursor: string | null = null;
 
-  if (!response.ok) throw new Error(`Markets API error: ${response.status}`);
+  do {
+    const data: { markets: { nodes: MarketNode[]; pageInfo: PageInfo } } = await shopifyGraphQL({
+      shopDomain,
+      accessToken,
+      query: MARKETS_QUERY,
+      variables: { after: cursor },
+    });
+    marketNodes.push(...data.markets.nodes);
+    cursor = data.markets.pageInfo.hasNextPage ? data.markets.pageInfo.endCursor : null;
+    if (data.markets.pageInfo.hasNextPage && !cursor) {
+      throw new Error("Shopify Markets pagination omitted endCursor");
+    }
+  } while (cursor);
 
-  const data = (await response.json()) as {
-    data?: { markets: { nodes: MarketNode[] } };
-    errors?: unknown[];
-  };
+  const hydratedNodes = await Promise.all(marketNodes.map(async (market) => {
+    const connection = market.conditions?.regionsCondition?.regions;
+    if (!connection?.pageInfo?.hasNextPage) return market;
 
-  if (data.errors?.length) throw new Error(`GraphQL error: ${JSON.stringify(data.errors[0])}`);
+    const nodes = [...(connection.nodes ?? [])];
+    let regionCursor = connection.pageInfo.endCursor;
+    while (regionCursor) {
+      const page: { node: Pick<MarketNode, "conditions"> | null } = await shopifyGraphQL({
+        shopDomain,
+        accessToken,
+        query: MARKET_REGIONS_QUERY,
+        variables: { marketId: market.id, after: regionCursor },
+      });
+      const regions = page.node?.conditions?.regionsCondition?.regions;
+      if (!regions) throw new Error(`Shopify returned no regions for market ${market.id}`);
+      nodes.push(...(regions.nodes ?? []));
+      regionCursor = regions.pageInfo?.hasNextPage ? regions.pageInfo.endCursor : null;
+      if (regions.pageInfo?.hasNextPage && !regionCursor) {
+        throw new Error(`Shopify region pagination omitted endCursor for market ${market.id}`);
+      }
+    }
 
-  const markets = (data.data?.markets?.nodes ?? []).map(mapMarketNode);
+    return {
+      ...market,
+      conditions: {
+        ...market.conditions,
+        regionsCondition: {
+          ...market.conditions?.regionsCondition,
+          regions: { nodes, pageInfo: { hasNextPage: false, endCursor: null } },
+        },
+      },
+    };
+  }));
+
+  const markets = hydratedNodes.map(mapMarketNode);
 
   marketCache.set(shopId, { data: markets, expiresAt: Date.now() + CACHE_TTL_MS });
   return markets;

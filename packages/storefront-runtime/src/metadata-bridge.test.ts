@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withPromoMetadata } from "./metadata-bridge.js";
+import { packCartAddRequest, withPromoMetadata } from "./metadata-bridge.js";
 
 describe("withPromoMetadata", () => {
   it("packs legacy and current promotion properties into one Function field", () => {
@@ -32,5 +32,37 @@ describe("withPromoMetadata", () => {
 
   it("does not add metadata when no promotion property exists", () => {
     expect(withPromoMetadata({ engraving: "Ada" })).toEqual({ engraving: "Ada" });
+  });
+});
+
+describe("packCartAddRequest", () => {
+  it("packs metadata from a Request body when fetch has no init argument", async () => {
+    const request = new Request("https://store.example/cart/add.js", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [{
+          id: 123,
+          quantity: 1,
+          properties: { _promo_engine_offer_id: "offer-request" },
+        }],
+      }),
+    });
+
+    const [packed] = await packCartAddRequest(request);
+    expect(packed).toBeInstanceOf(Request);
+    const payload = await (packed as Request).json() as {
+      items: Array<{ properties: Record<string, string> }>;
+    };
+    expect(JSON.parse(payload.items[0]!.properties._promo_engine_metadata!)).toEqual({
+      _promo_engine_offer_id: "offer-request",
+    });
+  });
+
+  it("leaves non-cart requests untouched", async () => {
+    const request = new Request("https://store.example/products.json");
+    const [packed, init] = await packCartAddRequest(request);
+    expect(packed).toBe(request);
+    expect(init).toBeUndefined();
   });
 });

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { MARKETS_QUERY, mapMarketNode } from "./market-sync.server.js";
+import { MARKETS_QUERY, MARKET_REGIONS_QUERY, mapMarketNode } from "./market-sync.server.js";
 
 describe("Shopify Markets sync", () => {
   it("uses the current regionsCondition query shape", () => {
     expect(MARKETS_QUERY).toContain("regionsCondition");
     expect(MARKETS_QUERY).toContain("... on MarketRegionCountry");
+    expect(MARKETS_QUERY).toContain("... on MarketRegionSubdivision");
+    expect(MARKETS_QUERY).toContain("pageInfo { hasNextPage endCursor }");
+    expect(MARKET_REGIONS_QUERY).toContain("after: $after");
     expect(MARKETS_QUERY).not.toContain("allMarkets");
     expect(MARKETS_QUERY).not.toContain("countries {");
     expect(MARKETS_QUERY).not.toContain(" primary");

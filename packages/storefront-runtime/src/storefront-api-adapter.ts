@@ -6,6 +6,14 @@
  * or Shopify will silently drop attributes not included in the mutation.
  */
 
+import { SHOPIFY_API_VERSION } from "@promo/shared-types";
+import { withPromoMetadata } from "./metadata-bridge.js";
+
+interface PageInfo {
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
 export interface StorefrontCartLine {
   id: string;
   quantity: number;
@@ -20,7 +28,7 @@ export interface StorefrontCartLine {
 export interface StorefrontCart {
   id: string;
   checkoutUrl: string;
-  lines: { nodes: StorefrontCartLine[] };
+  lines: { nodes: StorefrontCartLine[]; pageInfo: PageInfo };
   cost: {
     subtotalAmount: { amount: string; currencyCode: string };
     totalAmount: { amount: string; currencyCode: string };
@@ -32,6 +40,56 @@ export interface StorefrontCart {
   };
 }
 
+interface CartUserError {
+  field?: string[] | null;
+  message: string;
+  code?: string | null;
+}
+
+interface CartMutationPayload {
+  cart: StorefrontCart | null;
+  userErrors: CartUserError[];
+}
+
+const CART_FIELDS = `
+  id checkoutUrl
+  lines(first: 250) {
+    nodes {
+      id quantity merchandise { ... on ProductVariant { id } }
+      attributes { key value }
+      cost {
+        amountPerQuantity { amount currencyCode }
+        subtotalAmount { amount currencyCode }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+  cost {
+    subtotalAmount { amount currencyCode }
+    totalAmount { amount currencyCode }
+  }
+  discountCodes { code applicable }
+  buyerIdentity { countryCode customer { id } }
+`;
+
+const CART_LINES_PAGE_QUERY = `
+  query PromoCartLinesPage($cartId: ID!, $after: String!) {
+    cart(id: $cartId) {
+      lines(first: 250, after: $after) {
+        nodes {
+          id quantity merchandise { ... on ProductVariant { id } }
+          attributes { key value }
+          cost {
+            amountPerQuantity { amount currencyCode }
+            subtotalAmount { amount currencyCode }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+`;
+
 export class StorefrontApiAdapter {
   private endpoint: string;
   private token: string;
@@ -39,7 +97,12 @@ export class StorefrontApiAdapter {
   private readonly CART_ID_KEY = "promo_engine_cart_id";
 
   constructor(storeDomain: string, storefrontToken: string) {
-    this.endpoint = `https://${storeDomain}/api/2026-01/graphql.json`;
+    const domain = storeDomain.trim().toLowerCase();
+    const parsed = new URL(`https://${domain}`);
+    if (parsed.hostname !== domain || parsed.port || parsed.username || parsed.password) {
+      throw new Error("Invalid Shopify store domain");
+    }
+    this.endpoint = `https://${domain}/api/${SHOPIFY_API_VERSION}/graphql.json`;
     this.token = storefrontToken;
   }
 
@@ -53,9 +116,35 @@ export class StorefrontApiAdapter {
       body: JSON.stringify({ query, variables }),
     });
     if (!response.ok) throw new Error(`Storefront API error: ${response.status}`);
-    const data = (await response.json()) as { data: T; errors?: Array<{ message: string }> };
+    const data = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
     if (data.errors?.length) throw new Error(data.errors[0]!.message);
+    if (!data.data) throw new Error("Storefront API returned no data");
     return data.data;
+  }
+
+  private async hydrateCartLines(cart: StorefrontCart): Promise<StorefrontCart> {
+    const nodes = [...cart.lines.nodes];
+    let pageInfo = cart.lines.pageInfo;
+
+    while (pageInfo.hasNextPage) {
+      if (!pageInfo.endCursor) throw new Error("Storefront API omitted the cart line cursor");
+      const data = await this.gql<{
+        cart: { lines: { nodes: StorefrontCartLine[]; pageInfo: PageInfo } } | null;
+      }>(CART_LINES_PAGE_QUERY, { cartId: cart.id, after: pageInfo.endCursor });
+      if (!data.cart) throw new Error("Cart expired while loading its lines");
+      nodes.push(...data.cart.lines.nodes);
+      pageInfo = data.cart.lines.pageInfo;
+    }
+
+    return { ...cart, lines: { nodes, pageInfo } };
+  }
+
+  private async cartFromMutation(operation: string, payload: CartMutationPayload): Promise<StorefrontCart> {
+    if (payload.userErrors.length > 0) {
+      throw new Error(`${operation}: ${payload.userErrors.map((error) => error.message).join("; ")}`);
+    }
+    if (!payload.cart) throw new Error(`${operation} returned no cart`);
+    return this.hydrateCartLines(payload.cart);
   }
 
   private getStoredCartId(): string | null {
@@ -88,36 +177,26 @@ export class StorefrontApiAdapter {
       `query GetCart($cartId: ID!) {
         cart(id: $cartId) {
           id checkoutUrl
-          lines(first: 100) { nodes { id quantity merchandise { id } attributes { key value }
-            cost { amountPerQuantity { amount currencyCode } subtotalAmount { amount currencyCode } }
-          }}
-          cost { subtotalAmount { amount currencyCode } totalAmount { amount currencyCode } }
-          discountCodes { code applicable }
-          buyerIdentity { countryCode customer { id } }
+          ${CART_FIELDS}
         }
       }`,
       { cartId },
     );
-    return data.cart;
+    return data.cart ? this.hydrateCartLines(data.cart) : null;
   }
 
   async createCart(): Promise<StorefrontCart> {
-    const data = await this.gql<{ cartCreate: { cart: StorefrontCart } }>(
+    const data = await this.gql<{ cartCreate: CartMutationPayload }>(
       `mutation CartCreate {
         cartCreate {
           cart {
-            id checkoutUrl
-            lines(first: 100) { nodes { id quantity merchandise { id } attributes { key value }
-              cost { amountPerQuantity { amount currencyCode } subtotalAmount { amount currencyCode } }
-            }}
-            cost { subtotalAmount { amount currencyCode } totalAmount { amount currencyCode } }
-            discountCodes { code applicable }
-            buyerIdentity { countryCode customer { id } }
+            ${CART_FIELDS}
           }
+          userErrors { field message code }
         }
       }`,
     );
-    const cart = data.cartCreate.cart;
+    const cart = await this.cartFromMutation("cartCreate", data.cartCreate);
     this.cartId = cart.id;
     this.storeCartId(cart.id);
     return cart;
@@ -126,19 +205,16 @@ export class StorefrontApiAdapter {
   async addLines(
     lines: Array<{ merchandiseId: string; quantity: number; attributes?: Record<string, string> }>,
   ): Promise<StorefrontCart> {
+    if (lines.length === 0) return this.getOrCreateCart();
+    if (lines.length > 250) throw new Error("Cannot add more than 250 cart lines per mutation");
     const cartId = this.cartId ?? (await this.getOrCreateCart()).id;
-    const data = await this.gql<{ cartLinesAdd: { cart: StorefrontCart } }>(
+    const data = await this.gql<{ cartLinesAdd: CartMutationPayload }>(
       `mutation CartLinesAdd($cartId: ID!, $lines: [CartLineInput!]!) {
         cartLinesAdd(cartId: $cartId, lines: $lines) {
           cart {
-            id checkoutUrl
-            lines(first: 100) { nodes { id quantity merchandise { id } attributes { key value }
-              cost { amountPerQuantity { amount currencyCode } subtotalAmount { amount currencyCode } }
-            }}
-            cost { subtotalAmount { amount currencyCode } totalAmount { amount currencyCode } }
-            discountCodes { code applicable }
-            buyerIdentity { countryCode customer { id } }
+            ${CART_FIELDS}
           }
+          userErrors { field message code }
         }
       }`,
       {
@@ -146,11 +222,11 @@ export class StorefrontApiAdapter {
         lines: lines.map((l) => ({
           merchandiseId: l.merchandiseId,
           quantity: l.quantity,
-          attributes: Object.entries(l.attributes ?? {}).map(([key, value]) => ({ key, value })),
+          attributes: Object.entries(withPromoMetadata(l.attributes ?? {})).map(([key, value]) => ({ key, value })),
         })),
       },
     );
-    return data.cartLinesAdd.cart;
+    return this.cartFromMutation("cartLinesAdd", data.cartLinesAdd);
   }
 
   async updateLines(
@@ -162,18 +238,15 @@ export class StorefrontApiAdapter {
     }>,
   ): Promise<StorefrontCart> {
     if (!this.cartId) throw new Error("No active cart");
-    const data = await this.gql<{ cartLinesUpdate: { cart: StorefrontCart } }>(
+    if (updates.length === 0) return this.getOrCreateCart();
+    if (updates.length > 250) throw new Error("Cannot update more than 250 cart lines per mutation");
+    const data = await this.gql<{ cartLinesUpdate: CartMutationPayload }>(
       `mutation CartLinesUpdate($cartId: ID!, $lines: [CartLineUpdateInput!]!) {
         cartLinesUpdate(cartId: $cartId, lines: $lines) {
           cart {
-            id checkoutUrl
-            lines(first: 100) { nodes { id quantity merchandise { id } attributes { key value }
-              cost { amountPerQuantity { amount currencyCode } subtotalAmount { amount currencyCode } }
-            }}
-            cost { subtotalAmount { amount currencyCode } totalAmount { amount currencyCode } }
-            discountCodes { code applicable }
-            buyerIdentity { countryCode customer { id } }
+            ${CART_FIELDS}
           }
+          userErrors { field message code }
         }
       }`,
       {
@@ -181,53 +254,52 @@ export class StorefrontApiAdapter {
         lines: updates.map((u) => ({
           id: u.id,
           quantity: u.quantity,
-          attributes: Object.entries(u.attributes).map(([key, value]) => ({ key, value })),
+          attributes: Object.entries(withPromoMetadata(u.attributes)).map(([key, value]) => ({ key, value })),
         })),
       },
     );
-    return data.cartLinesUpdate.cart;
+    return this.cartFromMutation("cartLinesUpdate", data.cartLinesUpdate);
   }
 
   async removeLines(lineIds: string[]): Promise<StorefrontCart> {
     if (!this.cartId) throw new Error("No active cart");
-    const data = await this.gql<{ cartLinesRemove: { cart: StorefrontCart } }>(
+    if (lineIds.length === 0) return this.getOrCreateCart();
+    if (lineIds.length > 250) throw new Error("Cannot remove more than 250 cart lines per mutation");
+    const data = await this.gql<{ cartLinesRemove: CartMutationPayload }>(
       `mutation CartLinesRemove($cartId: ID!, $lineIds: [ID!]!) {
         cartLinesRemove(cartId: $cartId, lineIds: $lineIds) {
           cart {
-            id checkoutUrl
-            lines(first: 100) { nodes { id quantity merchandise { id } attributes { key value }
-              cost { amountPerQuantity { amount currencyCode } subtotalAmount { amount currencyCode } }
-            }}
-            cost { subtotalAmount { amount currencyCode } totalAmount { amount currencyCode } }
-            discountCodes { code applicable }
-            buyerIdentity { countryCode customer { id } }
+            ${CART_FIELDS}
           }
+          userErrors { field message code }
         }
       }`,
       { cartId: this.cartId, lineIds },
     );
-    return data.cartLinesRemove.cart;
+    return this.cartFromMutation("cartLinesRemove", data.cartLinesRemove);
   }
 
   async applyDiscountCodes(codes: string[]): Promise<StorefrontCart> {
     if (!this.cartId) throw new Error("No active cart");
-    const data = await this.gql<{ cartDiscountCodesUpdate: { cart: StorefrontCart } }>(
+    const data = await this.gql<{ cartDiscountCodesUpdate: CartMutationPayload }>(
       `mutation CartDiscountCodesUpdate($cartId: ID!, $discountCodes: [String!]!) {
         cartDiscountCodesUpdate(cartId: $cartId, discountCodes: $discountCodes) {
-          cart { id discountCodes { code applicable } }
+          cart { ${CART_FIELDS} }
+          userErrors { field message code }
         }
       }`,
       { cartId: this.cartId, discountCodes: codes },
     );
-    return data.cartDiscountCodesUpdate.cart;
+    return this.cartFromMutation("cartDiscountCodesUpdate", data.cartDiscountCodesUpdate);
   }
 
   async updateBuyerIdentity(countryCode: string, customerAccessToken?: string): Promise<StorefrontCart> {
     if (!this.cartId) throw new Error("No active cart");
-    const data = await this.gql<{ cartBuyerIdentityUpdate: { cart: StorefrontCart } }>(
+    const data = await this.gql<{ cartBuyerIdentityUpdate: CartMutationPayload }>(
       `mutation CartBuyerIdentityUpdate($cartId: ID!, $buyerIdentity: CartBuyerIdentityInput!) {
         cartBuyerIdentityUpdate(cartId: $cartId, buyerIdentity: $buyerIdentity) {
-          cart { id buyerIdentity { countryCode customer { id } } }
+          cart { ${CART_FIELDS} }
+          userErrors { field message code }
         }
       }`,
       {
@@ -238,6 +310,6 @@ export class StorefrontApiAdapter {
         },
       },
     );
-    return data.cartBuyerIdentityUpdate.cart;
+    return this.cartFromMutation("cartBuyerIdentityUpdate", data.cartBuyerIdentityUpdate);
   }
 }
