@@ -1,6 +1,10 @@
 import { CART_ATTRIBUTE_KEYS, LINE_ATTRIBUTE_KEYS } from "@promo/shared-types";
 
-export const MAX_CUSTOM_LINE_ATTRIBUTE_KEYS = 6;
+// The metadata bridge packs every line property into one Function input field.
+// Keep two direct slots as a compatibility fallback for carts created by code
+// that bypasses the storefront runtime, while staying under Shopify's query
+// complexity limit.
+export const MAX_CUSTOM_LINE_ATTRIBUTE_KEYS = 2;
 export const MAX_CUSTOM_CART_ATTRIBUTE_KEYS = 3;
 
 interface AttributeCondition {
@@ -32,15 +36,12 @@ export function buildAttributeQueryVariables(conditions: AttributeCondition[]): 
   const lineKeys = customKeys(conditions, "line_attribute", LINE_ATTRIBUTE_KEYS);
   const cartKeys = customKeys(conditions, "cart_attribute", CART_ATTRIBUTE_KEYS);
 
-  if (lineKeys.length > MAX_CUSTOM_LINE_ATTRIBUTE_KEYS) {
-    throw new Error(`Active offers use ${lineKeys.length} custom line attribute keys; this app currently supports up to ${MAX_CUSTOM_LINE_ATTRIBUTE_KEYS} active keys per store within Shopify's Function query-size limit.`);
-  }
   if (cartKeys.length > MAX_CUSTOM_CART_ATTRIBUTE_KEYS) {
     throw new Error(`Active offers use ${cartKeys.length} custom cart attribute keys; this app currently supports up to ${MAX_CUSTOM_CART_ATTRIBUTE_KEYS} active keys per store within Shopify's Function query-size limit.`);
   }
 
   return {
-    ...Object.fromEntries(lineKeys.map((key, index) => [`l${index + 1}`, key])),
+    ...Object.fromEntries(lineKeys.slice(0, MAX_CUSTOM_LINE_ATTRIBUTE_KEYS).map((key, index) => [`l${index + 1}`, key])),
     ...Object.fromEntries(cartKeys.map((key, index) => [`c${index + 1}`, key])),
   };
 }

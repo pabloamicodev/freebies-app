@@ -954,10 +954,6 @@ fn line_attribute_value(line: &Lines, key: &str, config: &CompiledConfig) -> Opt
     }
     if config.l1.as_deref() == Some(key) { return line.custom_line_1().as_ref().and_then(|attribute| attribute.value()).cloned(); }
     if config.l2.as_deref() == Some(key) { return line.custom_line_2().as_ref().and_then(|attribute| attribute.value()).cloned(); }
-    if config.l3.as_deref() == Some(key) { return line.custom_line_3().as_ref().and_then(|attribute| attribute.value()).cloned(); }
-    if config.l4.as_deref() == Some(key) { return line.custom_line_4().as_ref().and_then(|attribute| attribute.value()).cloned(); }
-    if config.l5.as_deref() == Some(key) { return line.custom_line_5().as_ref().and_then(|attribute| attribute.value()).cloned(); }
-    if config.l6.as_deref() == Some(key) { return line.custom_line_6().as_ref().and_then(|attribute| attribute.value()).cloned(); }
     None
 }
 
@@ -1335,6 +1331,22 @@ mod tests {
                 "\"lineAttributeConditions\":[{\"key\":\"engraving_message\",\"value\":\"VIP\",\"matchMode\":\"equals\",\"minMatchingQuantity\":1}],\"combinesWithOrderDiscounts\":true",
             );
         let result = run_function_with_input(run, &cart_json(&lines, "80.00", &config)).expect("should not error");
+        assert_eq!(result.operations.len(), 1);
+    }
+
+    #[test]
+    fn additional_store_specific_line_attributes_are_loaded_from_packed_metadata() {
+        let paid = regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1);
+        let lines = format!("[{},{}]", paid, gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1));
+        let config = gift_offer_config(5000, 1).replace(
+            "\"combinesWithOrderDiscounts\":true",
+            "\"lineAttributeConditions\":[{\"key\":\"third_custom_key\",\"value\":\"VIP\",\"matchMode\":\"equals\",\"minMatchingQuantity\":1}],\"combinesWithOrderDiscounts\":true",
+        );
+        let mut payload: serde_json::Value = serde_json::from_str(&cart_json(&lines, "80.00", &config)).unwrap();
+        payload["cart"]["lines"][0]["promoMetadata"] = serde_json::json!({
+            "value": serde_json::to_string(&serde_json::json!({ "third_custom_key": "VIP" })).unwrap(),
+        });
+        let result = run_function_with_input(run, &serde_json::to_string(&payload).unwrap()).expect("should not error");
         assert_eq!(result.operations.len(), 1);
     }
 

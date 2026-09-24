@@ -2,7 +2,7 @@ import { getDb, shops, offers, offerConditions, offerRewards, offerCombinationPo
 import { eq, and, inArray } from "drizzle-orm";
 import { decryptToken } from "../token-crypto.server.js";
 import { shopifyGraphQL } from "../shopify-fetch.server.js";
-import { ensureDiscountNode, syncDiscountCombinationPolicy } from "../discount-node.server.js";
+import { ensureDiscountNodes, syncDiscountCombinationPolicy } from "../discount-node.server.js";
 import { buildCartValidationConfig, syncCartValidation } from "../cart-validation.server.js";
 import { computeOfferVersion } from "../offer-version.server.js";
 import {
@@ -38,7 +38,8 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
   const accessToken = await decryptToken(shopRow.accessTokenEncrypted);
   // Self-heals if afterAuth's registration failed or hasn't run yet (e.g. the
   // function was deployed after this shop installed the app).
-  const discountId = await ensureDiscountNode(shopId, shopDomain, accessToken);
+  const discountNodes = await ensureDiscountNodes(shopId, shopDomain, accessToken);
+  const discountIds = [discountNodes.cartLinesDiscountId, discountNodes.deliveryDiscountId];
 
   const activeOffers: Offer[] = await db
     .select()
@@ -55,14 +56,11 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     // Stop discount generation first. The remaining writes only loosen/remove
     // validation and combination state, so a later failure cannot grant an
     // offer that was meant to be disabled.
-    await pushMetafield(shopDomain, accessToken, discountId, emptyConfig);
+    await pushMetafields(shopDomain, accessToken, discountIds, emptyConfig);
     await syncCartValidation(shopDomain, accessToken, buildCartValidationConfig([]));
-    await syncDiscountCombinationPolicy(
-      shopDomain,
-      accessToken,
-      discountId,
-      compileDiscountCombinationPolicy([]),
-    );
+    await Promise.all(discountIds.map((discountId) => syncDiscountCombinationPolicy(
+      shopDomain, accessToken, discountId, compileDiscountCombinationPolicy([]),
+    )));
     return;
   }
 
@@ -122,13 +120,10 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
   // fails, the previous Function config stays active and the new offer cannot
   // be granted with incomplete validation or combination rules.
   await syncCartValidation(shopDomain, accessToken, buildCartValidationConfig(compiledOffers));
-  await syncDiscountCombinationPolicy(
-    shopDomain,
-    accessToken,
-    discountId,
-    compileDiscountCombinationPolicy(compiledOffers),
-  );
-  await pushMetafield(shopDomain, accessToken, discountId, config);
+  await Promise.all(discountIds.map((discountId) => syncDiscountCombinationPolicy(
+    shopDomain, accessToken, discountId, compileDiscountCombinationPolicy(compiledOffers),
+  )));
+  await pushMetafields(shopDomain, accessToken, discountIds, config);
 
   for (const compiledOffer of compiledOffers) {
     await db
@@ -198,10 +193,10 @@ async function resolveLegacyGiftVariants(
   });
 }
 
-async function pushMetafield(
+async function pushMetafields(
   shopDomain: string,
   accessToken: string,
-  ownerId: string,
+  ownerIds: string[],
   config: CompiledFunctionConfig,
 ): Promise<void> {
   const data = await shopifyGraphQL<{ metafieldsSet: { userErrors: Array<{ message: string }> } }>({
@@ -214,13 +209,13 @@ async function pushMetafield(
       }
     }`,
     variables: {
-      metafields: [{
+      metafields: [...new Set(ownerIds)].map((ownerId) => ({
         ownerId,
         namespace: METAFIELD_NAMESPACE,
         key: METAFIELD_KEY,
         type: "json",
         value: JSON.stringify(config),
-      }],
+      })),
     },
   });
 

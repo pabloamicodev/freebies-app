@@ -14,6 +14,8 @@ export const shops = pgTable("shops", {
    * discount node whose metafield holds the compiled offer config the Discount
    * Function reads. Created once in afterAuth; null until that runs. */
   discountId: text("discount_id"),
+  /** GID of the automatic discount backed by the dedicated delivery Function. */
+  deliveryDiscountId: text("delivery_discount_id"),
   planName: text("plan_name"),
   currencyCode: text("currency_code").notNull(),
   timezone: text("timezone").notNull(),

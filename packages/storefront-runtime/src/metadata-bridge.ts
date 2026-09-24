@@ -1,21 +1,5 @@
 const METADATA_PROPERTY = "_promo_engine_metadata";
 
-const PACKED_PROPERTY_KEYS = [
-  "_promo_engine_line_type",
-  "_promo_engine_offer_id",
-  "_promo_engine_reward_id",
-  "_promo_engine_offer_version",
-  "_bundle_item",
-  "_nektar_glp1",
-  "__landing_source",
-  "__bundle_type",
-  "__cart_gift_tier",
-  "_quiz_bundle_id",
-  "_quiz_target_cents",
-  "_quiz_expected_paid_count",
-  "_quiz_free_gift",
-] as const;
-
 type LineProperties = Record<string, string>;
 
 function existingMetadata(value: string | undefined): LineProperties {
@@ -33,9 +17,8 @@ function existingMetadata(value: string | undefined): LineProperties {
 
 export function withPromoMetadata(properties: LineProperties): LineProperties {
   const metadata = existingMetadata(properties[METADATA_PROPERTY]);
-  for (const key of PACKED_PROPERTY_KEYS) {
-    const value = properties[key];
-    if (typeof value === "string") metadata[key] = value;
+  for (const [key, value] of Object.entries(properties)) {
+    if (key !== METADATA_PROPERTY) metadata[key] = value;
   }
   if (Object.keys(metadata).length === 0) return properties;
   return { ...properties, [METADATA_PROPERTY]: JSON.stringify(metadata) };
@@ -50,10 +33,9 @@ export function needsPromoMetadataPacking(
       ? properties[METADATA_PROPERTY]
       : undefined,
   );
-  return PACKED_PROPERTY_KEYS.some((key) => {
-    const legacyValue = properties[key];
-    return typeof legacyValue === "string" && packed[key] !== legacyValue;
-  });
+  return Object.entries(properties).some(([key, value]) =>
+    key !== METADATA_PROPERTY && typeof value === "string" && packed[key] !== value,
+  );
 }
 
 function packJsonPayload(payload: unknown): unknown {

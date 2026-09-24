@@ -20,7 +20,7 @@ describe("buildAttributeQueryVariables", () => {
     expect(secondStore).toEqual({ l1: "custom_bundle" });
   });
 
-  it("fails visibly instead of dropping keys beyond Shopify's query capacity", () => {
+  it("uses metadata for additional line keys and fails visibly for unsupported cart keys", () => {
     const lineConditions = Array.from({ length: MAX_CUSTOM_LINE_ATTRIBUTE_KEYS + 1 }, (_, index) => ({
       conditionType: "line_attribute",
       value: { key: `line_${index}` },
@@ -30,7 +30,7 @@ describe("buildAttributeQueryVariables", () => {
       value: { key: `cart_${index}` },
     }));
 
-    expect(() => buildAttributeQueryVariables(lineConditions)).toThrow("custom line attribute keys");
+    expect(buildAttributeQueryVariables(lineConditions)).toEqual({ l1: "line_0", l2: "line_1" });
     expect(() => buildAttributeQueryVariables(cartConditions)).toThrow("custom cart attribute keys");
   });
 });

@@ -4,6 +4,7 @@ import { runOfferScheduler } from "../lib/offer-scheduling.server.js";
 import * as Sentry from "@sentry/node";
 import { isCronRequestAuthorized } from "../lib/cron-auth.server.js";
 import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
+import { reconcileActiveShopDiscountNodes } from "../lib/discount-reconciliation.server.js";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   if (!isCronRequestAuthorized(request)) {
@@ -11,6 +12,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   try {
+    const reconciliation = await reconcileActiveShopDiscountNodes();
+    for (const failure of reconciliation.failures) {
+      Sentry.captureMessage("Discount node reconciliation failed", {
+        level: "error",
+        tags: { cron: "offers", stage: "discount-node-reconciliation", shopId: failure.shopId },
+        extra: failure,
+      });
+    }
     const result = await runOfferScheduler(getDb());
     for (const failure of result.failures) {
       Sentry.captureMessage("Offer scheduler transition failed", {
@@ -19,7 +28,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
         extra: failure,
       });
     }
-    return apiJson(request, { ok: true, ...result });
+    const hasFailures = reconciliation.failures.length > 0 || result.failures.length > 0;
+    return apiJson(request, { ok: !hasFailures, reconciliation, ...result }, {
+      status: hasFailures ? 207 : 200,
+    });
   } catch (err) {
     return handleApiError(request, err, "cron.offers");
   }

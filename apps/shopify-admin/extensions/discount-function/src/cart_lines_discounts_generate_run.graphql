@@ -1,10 +1,6 @@
 query Input(
   $l1: String! = "_promo_engine_unused"
   $l2: String! = "_promo_engine_unused"
-  $l3: String! = "_promo_engine_unused"
-  $l4: String! = "_promo_engine_unused"
-  $l5: String! = "_promo_engine_unused"
-  $l6: String! = "_promo_engine_unused"
   $c1: String! = "_promo_engine_unused"
   $c2: String! = "_promo_engine_unused"
   $c3: String! = "_promo_engine_unused"
@@ -38,10 +34,6 @@ query Input(
     lines {
       customLine1: attribute(key: $l1) { value }
       customLine2: attribute(key: $l2) { value }
-      customLine3: attribute(key: $l3) { value }
-      customLine4: attribute(key: $l4) { value }
-      customLine5: attribute(key: $l5) { value }
-      customLine6: attribute(key: $l6) { value }
       id
       quantity
       cost {

@@ -1,0 +1,17 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Promo Engine Delivery Discount"
+handle = "promo-engine-delivery-discount"
+type = "function"
+uid = "92e64971-0c54-4540-bcb5-cab7a32b2eaa"
+
+  [[extensions.targeting]]
+  target = "cart.delivery-options.discounts.generate.run"
+  input_query = "src/input.graphql"
+  export = "cart_delivery_options_discounts_generate_run"
+
+  [extensions.build]
+  command = "node ../../../../scripts/build-shopify-function.mjs target/wasm32-wasip1/release/promo-engine-delivery-discount-function.wasm 262143"
+  path = "target/wasm32-wasip1/release/promo-engine-delivery-discount-function.wasm"
+  watch = ["src/**/*.rs", "../discount-function/src/delivery_discount_logic.rs", "../discount-function/src/cart_delivery_options_discounts_generate_run.rs"]

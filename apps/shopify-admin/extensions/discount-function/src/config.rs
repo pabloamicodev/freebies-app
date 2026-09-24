@@ -8,22 +8,10 @@ use std::collections::HashMap;
 #[serde(rename_all = "camelCase")]
 pub struct CompiledConfig {
     pub offers: Vec<CompiledOffer>,
-    /// Absent in configs published before shipping discounts existed — default
-    /// to an empty list rather than failing to parse the whole config.
-    #[serde(default)]
-    pub shipping_offers: Vec<CompiledShippingOffer>,
     #[serde(default)]
     pub l1: Option<String>,
     #[serde(default)]
     pub l2: Option<String>,
-    #[serde(default)]
-    pub l3: Option<String>,
-    #[serde(default)]
-    pub l4: Option<String>,
-    #[serde(default)]
-    pub l5: Option<String>,
-    #[serde(default)]
-    pub l6: Option<String>,
     #[serde(default)]
     pub c1: Option<String>,
     #[serde(default)]
@@ -32,47 +20,12 @@ pub struct CompiledConfig {
     pub c3: Option<String>,
 }
 
-/// A tiered shipping discount, keyed by cart subtotal and (optionally) whether
-/// the cart contains a subscription line. Ported from hpn-scripts-migration's
-/// sitewide_free_shipping / landing_free_shipping rules — ../hpn-scripts-migration/
-/// extensions/hpn-discount-function/src/index.js `tieredDeliveryDiscountValue`.
-#[derive(Debug, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct CompiledShippingOffer {
-    pub id: String,
-    pub priority: i32,
-    pub tiers: Vec<ShippingTier>,
-    /// null/omitted = applies to every delivery group; otherwise restricts to
-    /// the listed CartDeliveryGroupType values ("ONE_TIME_PURCHASE" | "SUBSCRIPTION").
-    pub target_group_types: Option<Vec<String>>,
-    /// "sitewide" | "landing" | "quiz_bundle".
-    #[serde(default = "default_shipping_scope")]
-    pub scope_mode: String,
-    pub required_line_attribute_value: Option<String>,
-    #[serde(default)]
-    pub required_anchor_variant_ids: Vec<String>,
-    #[serde(default = "default_anchor_quantity")]
-    pub required_anchor_min_quantity: i64,
-    #[serde(default)]
-    pub requires_anchor_subscription: bool,
-}
-
 fn default_shipping_scope() -> String {
     "sitewide".to_string()
 }
 
 fn default_anchor_quantity() -> i64 {
     1
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ShippingTier {
-    pub minimum_subtotal_cents: i64,
-    pub discount_type: String,
-    pub discount_value: f64,
-    /// "has_subscription" | "one_time_only" | null (matches either).
-    pub applies_when: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

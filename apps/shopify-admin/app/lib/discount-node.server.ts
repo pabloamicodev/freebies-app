@@ -11,7 +11,21 @@ import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
 import { shopifyGraphQL } from "./shopify-fetch.server.js";
 
-const DISCOUNT_TITLE = "Promo Engine";
+const CART_DISCOUNT_TITLE = "Promo Engine";
+const DELIVERY_DISCOUNT_TITLE = "Promo Engine Shipping";
+export const CART_FUNCTION_TITLE = "Promo Engine Discount";
+export const DELIVERY_FUNCTION_TITLE = "Promo Engine Delivery Discount";
+
+interface ShopifyFunctionSummary {
+  id: string;
+  apiType: string;
+  title: string;
+}
+
+export interface DiscountNodeIds {
+  cartLinesDiscountId: string;
+  deliveryDiscountId: string;
+}
 
 export interface DiscountCombinationPolicyInput {
   orderDiscounts: boolean;
@@ -19,26 +33,57 @@ export interface DiscountCombinationPolicyInput {
   shippingDiscounts: boolean;
 }
 
-export async function ensureDiscountNode(
+export async function ensureDiscountNodes(
   shopId: string,
   shopDomain: string,
   accessToken: string,
-): Promise<string> {
+): Promise<DiscountNodeIds> {
   const db = getDb();
 
-  const [existing] = await db.select({ discountId: shops.discountId }).from(shops).where(eq(shops.id, shopId)).limit(1);
-  if (existing?.discountId) return existing.discountId;
-
-  const functionId = await findDiscountFunctionId(shopDomain, accessToken);
-  if (!functionId) {
-    throw new Error("Could not find the Promo Engine Discount Function. Has it been deployed with `shopify app deploy`?");
+  const [existing] = await db
+    .select({
+      discountId: shops.discountId,
+      deliveryDiscountId: shops.deliveryDiscountId,
+    })
+    .from(shops)
+    .where(eq(shops.id, shopId))
+    .limit(1);
+  if (existing?.discountId && existing.deliveryDiscountId) {
+    return {
+      cartLinesDiscountId: existing.discountId,
+      deliveryDiscountId: existing.deliveryDiscountId,
+    };
   }
 
-  const discountId = await createOrFindAutomaticDiscount(shopDomain, accessToken, functionId);
+  const functions = await findDiscountFunctions(shopDomain, accessToken);
+  const cartFunctionId = selectFunctionId(functions, CART_FUNCTION_TITLE);
+  const deliveryFunctionId = selectFunctionId(functions, DELIVERY_FUNCTION_TITLE);
+  if (!cartFunctionId || !deliveryFunctionId) {
+    throw new Error(
+      "Could not find both Promo Engine Discount Functions. Deploy the current Shopify app version before publishing offers.",
+    );
+  }
 
-  await db.update(shops).set({ discountId, updatedAt: new Date() }).where(eq(shops.id, shopId));
+  const cartLinesDiscountId = existing?.discountId
+    ?? await createOrFindAutomaticDiscount(shopDomain, accessToken, cartFunctionId, CART_DISCOUNT_TITLE);
+  const deliveryDiscountId = existing?.deliveryDiscountId
+    ?? await createOrFindAutomaticDiscount(
+      shopDomain,
+      accessToken,
+      deliveryFunctionId,
+      DELIVERY_DISCOUNT_TITLE,
+    );
 
-  return discountId;
+  await db
+    .update(shops)
+    .set({
+      discountId: cartLinesDiscountId,
+      deliveryDiscountId,
+      updatedAt: new Date(),
+    })
+    .where(eq(shops.id, shopId));
+
+  return { cartLinesDiscountId, deliveryDiscountId };
 }
 
 export async function syncDiscountCombinationPolicy(
@@ -74,9 +119,9 @@ export async function syncDiscountCombinationPolicy(
   }
 }
 
-async function findDiscountFunctionId(shopDomain: string, accessToken: string): Promise<string | null> {
+async function findDiscountFunctions(shopDomain: string, accessToken: string): Promise<ShopifyFunctionSummary[]> {
   const data = await shopifyGraphQL<{
-    shopifyFunctions: { nodes: Array<{ id: string; apiType: string; title: string }> };
+    shopifyFunctions: { nodes: ShopifyFunctionSummary[] };
   }>({
     shopDomain,
     accessToken,
@@ -87,14 +132,32 @@ async function findDiscountFunctionId(shopDomain: string, accessToken: string): 
     }`,
   });
 
-  const match = data.shopifyFunctions.nodes.find((fn) => fn.apiType === "product_discounts" || fn.apiType === "discount");
+  return data.shopifyFunctions.nodes;
+}
+
+export function selectFunctionId(
+  functions: ShopifyFunctionSummary[],
+  expectedTitle: string,
+): string | null {
+  const normalizedTitle = expectedTitle.trim().toLocaleLowerCase();
+  const match = functions.find((fn) =>
+    fn.title.trim().toLocaleLowerCase() === normalizedTitle,
+  );
   return match?.id ?? null;
 }
 
 /** Reuses an existing "Promo Engine" automatic discount if one is already
  * registered (e.g. a previous afterAuth run failed after creating it but
  * before we could persist the id) — avoids creating duplicates on retry. */
-async function createOrFindAutomaticDiscount(shopDomain: string, accessToken: string, functionId: string): Promise<string> {
+async function createOrFindAutomaticDiscount(
+  shopDomain: string,
+  accessToken: string,
+  functionId: string,
+  title: string,
+): Promise<string> {
+  const existingId = await findExistingAutomaticDiscount(shopDomain, accessToken, functionId);
+  if (existingId) return existingId;
+
   const created = await shopifyGraphQL<{
     discountAutomaticAppCreate: {
       automaticAppDiscount: { discountId: string } | null;
@@ -111,7 +174,7 @@ async function createOrFindAutomaticDiscount(shopDomain: string, accessToken: st
     }`,
     variables: {
       discount: {
-        title: DISCOUNT_TITLE,
+        title,
         functionId,
         startsAt: new Date().toISOString(),
         combinesWith: {
@@ -131,11 +194,11 @@ async function createOrFindAutomaticDiscount(shopDomain: string, accessToken: st
     throw new Error(`discountAutomaticAppCreate failed: ${result.userErrors.map((e) => e.message).join(", ")}`);
   }
 
-  const existingId = await findExistingAutomaticDiscount(shopDomain, accessToken, functionId);
-  if (!existingId) {
+  const recoveredId = await findExistingAutomaticDiscount(shopDomain, accessToken, functionId);
+  if (!recoveredId) {
     throw new Error(`discountAutomaticAppCreate reported a duplicate but no matching discount was found: ${result.userErrors.map((e) => e.message).join(", ")}`);
   }
-  return existingId;
+  return recoveredId;
 }
 
 async function findExistingAutomaticDiscount(shopDomain: string, accessToken: string, functionId: string): Promise<string | null> {

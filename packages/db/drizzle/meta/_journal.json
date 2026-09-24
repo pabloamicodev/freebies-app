@@ -64,6 +64,13 @@
       "when": 1790286000000,
       "tag": "0008_shopify_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790288400000,
+      "tag": "0009_delivery_discount_id",
+      "breakpoints": true
     }
   ]
 }

@@ -229,6 +229,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "promo-engine-delivery-discount-function"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "shopify_function",
+]
+
+[[package]]
 name = "promo-engine-discount-function"
 version = "0.1.0"
 dependencies = [

@@ -18,10 +18,6 @@ export interface CompiledFunctionConfig {
   compiledAt: string;
   l1?: string;
   l2?: string;
-  l3?: string;
-  l4?: string;
-  l5?: string;
-  l6?: string;
   c1?: string;
   c2?: string;
   c3?: string;

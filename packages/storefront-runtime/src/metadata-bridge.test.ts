@@ -18,6 +18,7 @@ describe("withPromoMetadata", () => {
       _promo_engine_line_type: "gift",
       _promo_engine_offer_id: "offer-1",
       __landing_source: "protein-lp",
+      unrelated: "preserved",
     });
     expect(properties.unrelated).toBe("preserved");
   });
@@ -34,8 +35,9 @@ describe("withPromoMetadata", () => {
     });
   });
 
-  it("does not add metadata when no promotion property exists", () => {
-    expect(withPromoMetadata({ engraving: "Ada" })).toEqual({ engraving: "Ada" });
+  it("packs custom properties so Function conditions are not limited by query slots", () => {
+    const properties = withPromoMetadata({ engraving: "Ada" });
+    expect(JSON.parse(properties._promo_engine_metadata!)).toEqual({ engraving: "Ada" });
   });
 
   it("detects legacy promotional properties that still need packing", () => {
@@ -46,7 +48,7 @@ describe("withPromoMetadata", () => {
     expect(needsPromoMetadataPacking(withPromoMetadata({
       _promo_engine_offer_id: "offer-current",
     }))).toBe(false);
-    expect(needsPromoMetadataPacking({ engraving: "Ada" })).toBe(false);
+    expect(needsPromoMetadataPacking({ engraving: "Ada" })).toBe(true);
   });
 });
 

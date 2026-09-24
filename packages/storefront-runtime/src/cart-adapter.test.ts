@@ -49,6 +49,7 @@ describe("AjaxCartAdapter legacy metadata migration", () => {
     expect(mutation.properties.custom).toBe("keep");
     expect(JSON.parse(mutation.properties._promo_engine_metadata)).toEqual({
       _promo_engine_offer_id: "offer-1",
+      custom: "keep",
     });
     expect(result.items[0]!.properties!._promo_engine_metadata).toBeDefined();
   });
