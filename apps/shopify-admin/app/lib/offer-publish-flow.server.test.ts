@@ -13,6 +13,8 @@ describe("isConditionEnforcedByFunction", () => {
     "line_attribute",
     "cart_attribute",
     "exclude_products",
+    "customer_tags",
+    "customer_location",
   ])("allows Function-enforced condition %s", (conditionType) => {
     expect(isConditionEnforcedByFunction(conditionType)).toBe(true);
   });
@@ -21,7 +23,6 @@ describe("isConditionEnforcedByFunction", () => {
     "specific_link",
     "page_url",
     "markets",
-    "customer_tags",
     "one_use_per_customer",
     "sales_channels",
     "exclude_collections",

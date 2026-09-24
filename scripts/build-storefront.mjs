@@ -10,7 +10,7 @@ import { join } from "path";
 
 const ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1");
 const DIST = join(ROOT, "packages/storefront-runtime/dist");
-const THEME_ASSETS = join(ROOT, "extensions/theme-extension/assets");
+const THEME_ASSETS = join(ROOT, "apps/shopify-admin/extensions/theme-extension/assets");
 
 console.log("→ Building storefront runtime...");
 
@@ -36,7 +36,7 @@ if (!existsSync(src)) {
 
 mkdirSync(THEME_ASSETS, { recursive: true });
 copyFileSync(src, dst);
-console.log(`✅ Copied → extensions/theme-extension/assets/promo-engine.js`);
+console.log(`✅ Copied → apps/shopify-admin/extensions/theme-extension/assets/promo-engine.js`);
 
 // Also check size
 const { statSync } = await import("fs");

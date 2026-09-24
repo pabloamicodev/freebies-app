@@ -121,9 +121,25 @@ function ProductPickerContent({
         setPickerField("loading", false);
         setPickerField("syncing", true);
         try {
-          await fetch("/api/products/sync", { method: "POST" });
-        } catch {
-          // Sync failure is non-fatal — will show empty state below
+          const queued = await fetch("/api/products/sync", { method: "POST" });
+          if (!queued.ok) throw new Error(`Sync request failed (${queued.status})`);
+          // Poll progress while also nudging queued work. The persisted job and
+          // lease keep these calls idempotent; cron continues if the modal closes.
+          for (let attempt = 0; attempt < 30; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 1_500));
+            const statusResponse = await fetch("/api/products/sync");
+            if (!statusResponse.ok) throw new Error(`Sync status failed (${statusResponse.status})`);
+            const statusBody = await statusResponse.json() as { job: { status: string; syncedProducts: number; error: string | null } | null };
+            if (statusBody.job?.status === "completed") break;
+            if (statusBody.job?.status === "failed") throw new Error(statusBody.job.error ?? "Catalog sync failed");
+            if (statusBody.job?.status === "queued") {
+              await fetch("/api/products/sync", { method: "POST" });
+            }
+          }
+        } catch (syncError) {
+          if (requestId === fetchRequestId.current) {
+            setPickerField("error", syncError instanceof Error ? syncError.message : "Catalog sync failed.");
+          }
         }
         setPickerField("syncing", false);
         // Re-fetch after sync

@@ -14,7 +14,8 @@
 import { test, expect, type Page } from "@playwright/test";
 
 const DEV_STORE = process.env["DEV_STORE_URL"] ?? "https://your-dev-store.myshopify.com";
-const PRODUCT_URL = `${DEV_STORE}/products/test-product`; // Must exist in dev store
+const PRODUCT_HANDLE = process.env["E2E_PRODUCT_HANDLE"] ?? "test-product";
+const PRODUCT_URL = `${DEV_STORE}/products/${PRODUCT_HANDLE}`;
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function clearCart(page: Page) {
@@ -80,7 +81,7 @@ test.describe("Gift offer — auto-add", () => {
     // Verify gift is in cart
     let cart = await getCartJson(page);
     const hasGift = cart.items.some((i) => i.properties["_promo_engine_line_type"] === "gift");
-    test.skip(!hasGift, "Gift was not auto-added — skipping removal test");
+    expect(hasGift, "Seeded gift offer must auto-add before removal is tested").toBe(true);
 
     // Remove the qualifying product
     const qualifyingItem = cart.items.find((i) => !i.properties["_promo_engine_line_type"]);
@@ -112,7 +113,9 @@ test.describe("Gift slider", () => {
     const slider = page.locator(".pe-slider-overlay");
     const sliderVisible = await slider.isVisible().catch(() => false);
 
-    // Either gift was auto-added OR slider appeared
+    const cartBeforeSelection = await getCartJson(page);
+    const autoAdded = cartBeforeSelection.items.some((item) => item.properties["_promo_engine_line_type"] === "gift");
+    expect(sliderVisible || autoAdded, "Seeded gift offer must render a slider or auto-add a gift").toBe(true);
     if (sliderVisible) {
       // Can select a gift
       const firstGiftCard = page.locator(".pe-gift-card").first();
@@ -156,11 +159,9 @@ test.describe("Checkout validation", () => {
     await page.goto(`${DEV_STORE}/cart`);
 
     const progressBar = page.locator("promo-progress-bar");
-    if (await progressBar.isVisible()) {
-      // Initially empty cart — progress bar should show 0%
-      const shadowRoot = await progressBar.evaluateHandle((el) => el.shadowRoot);
-      expect(shadowRoot).toBeTruthy();
-    }
+    await expect(progressBar).toBeVisible();
+    const shadowRoot = await progressBar.evaluateHandle((el) => el.shadowRoot);
+    expect(shadowRoot).toBeTruthy();
   });
 });
 
@@ -170,7 +171,6 @@ test.describe("Cart message", () => {
     const cartMessage = page.locator("promo-cart-message");
     // Just verify the Web Component is mounted — content depends on cart state
     await page.waitForTimeout(1000);
-    await cartMessage.count();
-    // Not asserting visible since cart may be empty in this test
+    await expect(cartMessage).toHaveCount(1);
   });
 });

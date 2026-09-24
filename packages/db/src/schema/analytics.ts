@@ -1,5 +1,5 @@
 import {
-  pgTable, uuid, text, timestamp, jsonb, index, bigint,
+  pgTable, uuid, text, timestamp, jsonb, index, uniqueIndex, bigint,
 } from "drizzle-orm/pg-core";
 import { shops } from "./shops";
 
@@ -18,6 +18,8 @@ export const analyticsEvents = pgTable(
     offerVersion: text("offer_version"),
     widgetId: uuid("widget_id"),
     orderId: text("order_id"),
+    /** Stable key for idempotent server-side events. Browser events leave it null. */
+    deduplicationKey: text("deduplication_key"),
     abVariant: text("ab_variant"),
     properties: jsonb("properties").notNull().default({}),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
@@ -29,6 +31,7 @@ export const analyticsEvents = pgTable(
     index("analytics_events_shop_event_idx").on(t.shopId, t.eventName, t.occurredAt),
     index("analytics_events_order_idx").on(t.orderId),
     index("analytics_events_shop_customer_idx").on(t.shopId, t.customerId),
+    uniqueIndex("analytics_events_deduplication_key_idx").on(t.deduplicationKey),
   ],
 );
 

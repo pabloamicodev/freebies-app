@@ -6,7 +6,7 @@
  * Usage: <promo-today-offer-block offer-ids="offer-1,offer-2"></promo-today-offer-block>
  */
 
-import { on, PromoEvents, publishAnalytics } from "../event-bus.js";
+import { on, PromoEvents } from "../event-bus.js";
 import type { EvaluationResult } from "../types.js";
 
 function escapeHtml(raw: unknown): string {
@@ -32,11 +32,10 @@ const BLOCK_STYLES = `
 .pe-tob-items { }
 .pe-tob-item {
   display: flex; align-items: center; gap: 12px; padding: 12px 14px;
-  border-bottom: 1px solid #f3f4f6; cursor: pointer; transition: background .12s;
+  border-bottom: 1px solid #f3f4f6;
   text-decoration: none; color: inherit;
 }
 .pe-tob-item:last-child { border-bottom: none; }
-.pe-tob-item:hover { background: #f9fafb; }
 .pe-tob-img { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; background: #f3f4f6; flex-shrink: 0; }
 .pe-tob-info { flex: 1; min-width: 0; }
 .pe-tob-title { font-size: 13px; font-weight: 600; margin: 0; }
@@ -92,7 +91,7 @@ class PromoTodayOfferBlock extends HTMLElement {
       const imageUrl = safeImageUrl(item.imageUrl);
 
       return `
-      <div class="pe-tob-item" data-offer="${offerId}" role="button" tabindex="0">
+      <div class="pe-tob-item" data-offer="${offerId}">
         ${imageUrl
           ? `<img class="pe-tob-img" src="${imageUrl}" alt="${itemTitle}" loading="lazy">`
           : `<div class="pe-tob-img" aria-hidden="true">🎁</div>`
@@ -114,15 +113,6 @@ class PromoTodayOfferBlock extends HTMLElement {
       </div>
     `;
 
-    this.shadowRoot.querySelectorAll(".pe-tob-item").forEach((el) => {
-      const offerId = (el as HTMLElement).dataset["offer"] ?? "";
-      el.addEventListener("click", () => {
-        publishAnalytics("promo_engine:widget_clicked", {
-          offer_id: offerId,
-          widget_type: "today_offer_block",
-        });
-      });
-    });
   }
 }
 

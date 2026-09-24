@@ -7,7 +7,10 @@
  */
 
 import { SHOPIFY_API_VERSION } from "@promo/shared-types";
-import { withPromoMetadata } from "./metadata-bridge.js";
+import {
+  needsPromoMetadataPacking,
+  withPromoMetadata,
+} from "./metadata-bridge.js";
 
 interface PageInfo {
   hasNextPage: boolean;
@@ -166,10 +169,30 @@ export class StorefrontApiAdapter {
     if (storedId) {
       try {
         const cart = await this.fetchCart(storedId);
-        if (cart) { this.cartId = storedId; return cart; }
+        if (cart) {
+          this.cartId = storedId;
+          return this.migrateLegacyMetadata(cart);
+        }
       } catch {}
     }
     return this.createCart();
+  }
+
+  async migrateLegacyMetadata(cart: StorefrontCart): Promise<StorefrontCart> {
+    const updates = cart.lines.nodes.flatMap((line) => {
+      const attributes = Object.fromEntries(
+        line.attributes.map(({ key, value }) => [key, value]),
+      );
+      return needsPromoMetadataPacking(attributes)
+        ? [{ id: line.id, quantity: line.quantity, attributes }]
+        : [];
+    });
+
+    let current = cart;
+    for (let offset = 0; offset < updates.length; offset += 250) {
+      current = await this.updateLines(updates.slice(offset, offset + 250));
+    }
+    return current;
   }
 
   private async fetchCart(cartId: string): Promise<StorefrontCart | null> {

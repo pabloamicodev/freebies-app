@@ -2,39 +2,25 @@ import type { LoaderFunctionArgs } from "react-router";
 import { getDb } from "@promo/db";
 import { runOfferScheduler } from "../lib/offer-scheduling.server.js";
 import * as Sentry from "@sentry/node";
-
-function getCronSecret(): string | null {
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret) {
-    // Misconfigured — reject rather than fall through to a forgeable header.
-    console.error("[cron] CRON_SECRET env var is not set. All cron requests will be rejected until it is configured.");
-    return null;
-  }
-  return cronSecret;
-}
-
-function isAuthorized(request: Request): boolean {
-  const cronSecret = getCronSecret();
-  if (!cronSecret) return false;
-
-  return (
-    request.headers.get("authorization") === `Bearer ${cronSecret}` ||
-    request.headers.get("x-vercel-cron-secret") === cronSecret
-  );
-}
+import { isCronRequestAuthorized } from "../lib/cron-auth.server.js";
+import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  if (!isAuthorized(request)) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isCronRequestAuthorized(request)) {
+    return apiError(request, { status: 401, code: "UNAUTHORIZED", message: "Unauthorized." });
   }
 
   try {
     const result = await runOfferScheduler(getDb());
-    return Response.json({ ok: true, ...result });
+    for (const failure of result.failures) {
+      Sentry.captureMessage("Offer scheduler transition failed", {
+        level: "error",
+        tags: { cron: "offers", stage: failure.stage, shop: failure.shopDomain },
+        extra: failure,
+      });
+    }
+    return apiJson(request, { ok: true, ...result });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    Sentry.captureException(err, { tags: { cron: "offers" } });
-    console.error("[cron:offers]", message);
-    return Response.json({ ok: false, error: message }, { status: 500 });
+    return handleApiError(request, err, "cron.offers");
   }
 }

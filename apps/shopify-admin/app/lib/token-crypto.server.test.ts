@@ -110,6 +110,19 @@ describe("decryptToken", () => {
     expect(result).toBe(stored);
   }));
 
+  it("fails closed in production when encrypted data exists but the key is missing", withKey(undefined, async () => {
+    const orig = process.env["NODE_ENV"];
+    process.env["NODE_ENV"] = "production";
+    try {
+      const stored = `${"a".repeat(24)}:${"b".repeat(32)}`;
+      await expect(decryptToken(stored)).rejects.toThrow(
+        "TOKEN_ENCRYPTION_KEY must be set in production",
+      );
+    } finally {
+      process.env["NODE_ENV"] = orig;
+    }
+  }));
+
   it("rejects a 16-byte (short) key", withKey("a".repeat(32) /* 16 bytes hex */, async () => {
     const orig = process.env["NODE_ENV"];
     process.env["NODE_ENV"] = "development";

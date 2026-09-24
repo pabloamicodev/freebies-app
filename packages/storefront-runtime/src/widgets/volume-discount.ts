@@ -32,7 +32,8 @@ const STYLES = `
 .pe-vd-tier {
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 14px; border-bottom: 1px solid #f3f4f6; cursor: pointer;
-  transition: background .1s;
+  transition: background .1s; width: 100%; background: transparent;
+  color: inherit; font: inherit; text-align: left;
 }
 .pe-vd-tier:last-child { border-bottom: none; }
 .pe-vd-tier:hover { background: #f9fafb; }
@@ -79,10 +80,9 @@ class PromoVolumeDiscount extends HTMLElement {
 
     // Fetch tier config from runtime endpoint
     try {
-      const shopDomain = window.Shopify?.shop ?? location.hostname;
       const response = await fetch(
         `/apps/promo-engine/product-customizations?offer_id=${encodeURIComponent(this.offerId)}&variant_id=${encodeURIComponent(this.variantId)}`,
-        { headers: { "X-Promo-Shop": shopDomain } },
+        { headers: { Accept: "application/json" } },
       );
 
       if (!response.ok) { this.renderEmpty(); return; }
@@ -116,10 +116,8 @@ class PromoVolumeDiscount extends HTMLElement {
         const originalPrice = fmt(tier.originalPriceCents);
         const label = tier.label || (tier.discountType === "percentage" ? `-${Math.round(tier.discountValue)}%` : "Deal");
         return `
-        <div class="pe-vd-tier ${i === 0 ? "pe-active" : ""}"
+        <button type="button" class="pe-vd-tier ${i === 0 ? "pe-active" : ""}"
              data-qty="${quantity}"
-             role="button"
-             tabindex="0"
              aria-label="${escapeHtml(`Buy ${quantity}+ for ${discountedPrice} each`)}">
           <div>
             <p class="pe-vd-qty">${quantity === 1 ? "1 item" : `${quantity}+ items`}</p>
@@ -130,7 +128,7 @@ class PromoVolumeDiscount extends HTMLElement {
               ? `<p class="pe-vd-price-original">${escapeHtml(originalPrice)}</p>` : ""}
             <p class="pe-vd-price-discounted">${escapeHtml(discountedPrice)} each</p>
           </div>
-        </div>`;
+        </button>`;
       })
       .join("");
 

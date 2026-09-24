@@ -62,7 +62,14 @@ export async function decryptToken(stored: string): Promise<string> {
   const separatorIndex = stored.indexOf(":");
 
   const key = await getKey();
-  if (!key) return stored; // No key configured — return as stored (handles dev/migration)
+  if (!key) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "[token-crypto] TOKEN_ENCRYPTION_KEY must be set in production to decrypt stored credentials",
+      );
+    }
+    return stored; // No key configured — return as stored (handles dev/migration)
+  }
 
   try {
     const iv = Buffer.from(stored.slice(0, separatorIndex), "hex");

@@ -2,6 +2,10 @@ import type { LoaderFunctionArgs } from "react-router";
 import { and, eq } from "drizzle-orm";
 import { offerRewards, offers, variantCache } from "@promo/db";
 import { getSignedShop } from "../lib/app-proxy-auth.server.js";
+import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const VARIANT_GID = /^gid:\/\/shopify\/ProductVariant\/\d+$/;
 
 interface DiscountTier {
   qty?: number;
@@ -24,18 +28,34 @@ function discountedCents(originalCents: number, discountType: string, discountVa
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { id: shopId, currencyCode, db } = await getSignedShop(request);
-  const url = new URL(request.url);
-  const offerId = url.searchParams.get("offer_id");
-  const variantId = url.searchParams.get("variant_id");
-  if (!offerId || !variantId) return Response.json({});
+  try {
+    const { id: shopId, currencyCode, db } = await getSignedShop(request);
+    const url = new URL(request.url);
+    const offerId = url.searchParams.get("offer_id");
+    const variantId = url.searchParams.get("variant_id");
+    if (!offerId || !variantId) {
+      return apiError(request, {
+        status: 400,
+        code: "MISSING_IDENTIFIERS",
+        message: "offer_id and variant_id are required.",
+      });
+    }
+    if (!UUID.test(offerId) || !VARIANT_GID.test(variantId)) {
+      return apiError(request, {
+        status: 400,
+        code: "INVALID_IDENTIFIERS",
+        message: "offer_id or variant_id is invalid.",
+      });
+    }
 
   const [offer] = await db
     .select({ id: offers.id, type: offers.type })
     .from(offers)
     .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId), eq(offers.status, "active")))
     .limit(1);
-  if (!offer || offer.type !== "discount") return Response.json({});
+    if (!offer || offer.type !== "discount") {
+      return apiJson(request, {});
+    }
 
   const [reward] = await db
     .select()
@@ -66,14 +86,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
     })
     .filter((tier) => tier.minQuantity > 0);
 
-  if (tiers.length === 0) return Response.json({});
+    if (tiers.length === 0) return apiJson(request, {});
 
-  return Response.json({
-    volumeDiscount: {
-      offerId,
-      variantId,
-      tiers,
-      currency: currencyCode ?? "USD",
-    },
-  });
+    return apiJson(request, {
+      volumeDiscount: {
+        offerId,
+        variantId,
+        tiers,
+        currency: currencyCode ?? "USD",
+      },
+    });
+  } catch (error) {
+    return handleApiError(request, error, "apps.promo-engine.product-customizations");
+  }
 }

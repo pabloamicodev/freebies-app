@@ -1,4 +1,4 @@
-import { getDb, productCache } from "@promo/db";
+import { getDb, productCache, type Db } from "@promo/db";
 import { eq, and, inArray, notInArray, sql } from "drizzle-orm";
 import { shopifyGraphQL } from "../shopify-fetch.server.js";
 
@@ -85,4 +85,23 @@ export async function syncCollectionFromWebhook(
       syncedAt: new Date(),
     })
     .where(removalFilter);
+}
+
+export async function removeCollectionFromCache(
+  shopId: string,
+  collectionGid: string,
+  db: Db = getDb(),
+): Promise<void> {
+  await db
+    .update(productCache)
+    .set({
+      collections: sql`array_remove(${productCache.collections}, ${collectionGid}::text)`,
+      syncedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(productCache.shopId, shopId),
+        sql`${collectionGid}::text = ANY(${productCache.collections})`,
+      ),
+    );
 }

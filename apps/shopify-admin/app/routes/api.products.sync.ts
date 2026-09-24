@@ -1,56 +1,76 @@
 /**
  * POST /api/products/sync
  *
- * Triggers a full product catalog sync from Shopify Admin API → local productCache.
- * Called automatically by the product picker when cache is empty, and by afterAuth
- * on new shop installs.
+ * Queues a resumable catalog sync and exposes its progress.
  */
 
-import type { ActionFunctionArgs } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { waitUntil } from "@vercel/functions";
+import * as Sentry from "@sentry/node";
 import { authenticate } from "../shopify.server.js";
 import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
-import { decryptToken } from "../lib/token-crypto.server.js";
-import { syncAllProducts } from "../lib/sync/product-sync.server.js";
-import * as Sentry from "@sentry/node";
+import { drainProductSyncQueue, getProductSyncJob, queueProductSync } from "../lib/sync/product-sync.server.js";
+import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
+
+async function findShopId(domain: string) {
+  const [shop] = await getDb().select({ id: shops.id }).from(shops)
+    .where(eq(shops.myshopifyDomain, domain)).limit(1);
+  return shop?.id ?? null;
+}
+
+function publicJob(job: Awaited<ReturnType<typeof getProductSyncJob>>) {
+  if (!job) return null;
+  return {
+    id: job.id,
+    status: job.status,
+    syncedProducts: job.syncedProducts,
+    startedAt: job.syncStartedAt,
+    updatedAt: job.updatedAt,
+    completedAt: job.completedAt,
+    error: job.status === "failed" ? "Catalog sync failed after multiple retries." : null,
+  };
+}
+
+export async function loader({ request }: LoaderFunctionArgs) {
+  try {
+    const { session } = await authenticate.admin(request);
+    const shopId = await findShopId(session.shop);
+    if (!shopId) return apiError(request, { status: 404, code: "SHOP_NOT_FOUND", message: "Shop not found. Reinstall the app and retry." });
+    return apiJson(request, { ok: true, job: publicJob(await getProductSyncJob(shopId)) });
+  } catch (error) {
+    return handleApiError(request, error, "api.products.sync.status");
+  }
+}
 
 export async function action({ request }: ActionFunctionArgs) {
   if (request.method !== "POST") {
-    return Response.json({ error: "Method not allowed" }, { status: 405 });
+    return apiError(request, {
+      status: 405,
+      code: "METHOD_NOT_ALLOWED",
+      message: "Method not allowed.",
+      headers: { Allow: "POST" },
+    });
   }
-
-  const { session } = await authenticate.admin(request);
-  const db = getDb();
-
-  const shopRows = await db
-    .select({
-      id: shops.id,
-      currencyCode: shops.currencyCode,
-      accessTokenEncrypted: shops.accessTokenEncrypted,
-    })
-    .from(shops)
-    .where(eq(shops.myshopifyDomain, session.shop))
-    .limit(1);
-
-  const shop = shopRows[0];
-  if (!shop) {
-    return Response.json({ error: "Shop not found" }, { status: 404 });
-  }
-
-  const accessToken = await decryptToken(shop.accessTokenEncrypted);
 
   try {
-    const result = await syncAllProducts(
-      shop.id,
-      session.shop,
-      accessToken,
-      shop.currencyCode ?? "USD",
-    );
-    return Response.json({ ok: true, synced: result.synced });
+    const { session } = await authenticate.admin(request);
+    const shopId = await findShopId(session.shop);
+    if (!shopId) {
+      return apiError(request, {
+        status: 404,
+        code: "SHOP_NOT_FOUND",
+        message: "Shop not found. Reinstall the app and retry.",
+      });
+    }
+
+    const job = await queueProductSync(shopId);
+    waitUntil(drainProductSyncQueue({ shopId, maxSteps: 3, maxRuntimeMs: 25_000 }).catch((error) => {
+      Sentry.captureException(error, { tags: { sync: "products", shop: session.shop } });
+      console.error("product sync worker failed", error instanceof Error ? error.message : error);
+    }));
+    return apiJson(request, { ok: true, queued: true, job: publicJob(job) }, { status: 202 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    Sentry.captureException(err, { tags: { route: "api.products.sync" } });
-    console.error("[api.products.sync] Sync failed:", message);
-    return Response.json({ ok: false, error: message }, { status: 500 });
+    return handleApiError(request, err, "api.products.sync");
   }
 }

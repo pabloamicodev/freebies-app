@@ -265,6 +265,34 @@ describe("compileOfferConfig", () => {
     expect(result.customerOrderCountMin).toBe(3);
     expect(result.customerAmountSpentMaxCents).toBe(9_999);
   });
+
+  it("compiles customer tags and country guards for checkout enforcement", () => {
+    const result = compileOfferConfig(
+      offer(),
+      [
+        condition("customer_tags", {
+          includeTags: ["vip", "wholesale"],
+          excludeTags: ["blocked"],
+          treatGuestAsNoTags: false,
+        }),
+        condition("customer_location", {
+          includeCountryCodes: ["us", "ca"],
+          excludeCountryCodes: ["mx"],
+        }),
+      ],
+      [],
+      null,
+      1,
+    );
+
+    expect(result).toMatchObject({
+      requiredCustomerTags: ["vip", "wholesale"],
+      excludedCustomerTags: ["blocked"],
+      treatGuestAsNoTags: false,
+      includeCountryCodes: ["US", "CA"],
+      excludeCountryCodes: ["MX"],
+    });
+  });
 });
 
 describe("compileDiscountCombinationPolicy", () => {

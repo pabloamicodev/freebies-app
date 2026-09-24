@@ -25,6 +25,7 @@ export interface CompiledFunctionConfig {
   c1?: string;
   c2?: string;
   c3?: string;
+  customerTags?: string[];
 }
 
 export interface CompiledShippingTier {
@@ -66,6 +67,11 @@ export interface CompiledOffer {
   customerOrderCountMax?: number;
   customerAmountSpentMinCents?: number;
   customerAmountSpentMaxCents?: number;
+  requiredCustomerTags?: string[];
+  excludedCustomerTags?: string[];
+  treatGuestAsNoTags?: boolean;
+  includeCountryCodes?: string[];
+  excludeCountryCodes?: string[];
   maxGiftQuantity?: number;
   discountType: string;
   discountValue: number;
@@ -283,6 +289,23 @@ export function compileOfferConfig(
           matchMode: value["matchMode"] === "not_equals" ? "not_equals" : "equals",
           minMatchingQuantity: 1,
         });
+        break;
+      case "customer_tags":
+        config.requiredCustomerTags = Array.isArray(value["includeTags"])
+          ? value["includeTags"].filter((tag): tag is string => typeof tag === "string")
+          : [];
+        config.excludedCustomerTags = Array.isArray(value["excludeTags"])
+          ? value["excludeTags"].filter((tag): tag is string => typeof tag === "string")
+          : [];
+        config.treatGuestAsNoTags = value["treatGuestAsNoTags"] !== false;
+        break;
+      case "customer_location":
+        config.includeCountryCodes = Array.isArray(value["includeCountryCodes"])
+          ? value["includeCountryCodes"].filter((code): code is string => typeof code === "string").map((code) => code.toUpperCase())
+          : [];
+        config.excludeCountryCodes = Array.isArray(value["excludeCountryCodes"])
+          ? value["excludeCountryCodes"].filter((code): code is string => typeof code === "string").map((code) => code.toUpperCase())
+          : [];
         break;
     }
   }

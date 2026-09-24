@@ -5,13 +5,17 @@ import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, a
 import { eq, and, inArray, lt, or, sql } from "drizzle-orm";
 import { decryptToken } from "../lib/token-crypto.server.js";
 import { syncInventoryFromWebhook } from "../lib/sync/inventory-sync.server.js";
-import { syncCollectionFromWebhook } from "../lib/sync/collection-sync.server.js";
+import {
+  removeCollectionFromCache,
+  syncCollectionFromWebhook,
+} from "../lib/sync/collection-sync.server.js";
 import { syncMarketsForShop } from "../lib/sync/market-sync.server.js";
 import { reconcileOrderAttribution } from "../lib/sync/analytics-reconcile.server.js";
-import { dispatchIntegrationEvents } from "../lib/integration-dispatcher.server.js";
+import { dispatchIntegrationEvents, PermanentIntegrationError } from "../lib/integration-dispatcher.server.js";
 import { shopifyGraphQL } from "../lib/shopify-fetch.server.js";
 import * as Sentry from "@sentry/node";
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * Central webhook handler for all Shopify webhooks.
@@ -76,9 +80,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
-  // Each handler is wrapped: a thrown error (e.g. transient DB failure) must NOT
-  // surface as a 500, or Shopify retries the delivery indefinitely. We log and
-  // ack with 200 — the next webhook or scheduled sync reconciles any drift.
+  // Every thrown handler error is retryable. Known permanent cases are handled
+  // explicitly inside handlers without throwing. Acknowledging an unknown
+  // failure would permanently lose the webhook and is never safe.
   try {
     switch (topic) {
       case "PRODUCTS_UPDATE":
@@ -98,6 +102,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       case "COLLECTIONS_UPDATE":
       case "COLLECTIONS_CREATE":
         await handleCollectionChange(shop, (payload as { id: number }).id);
+        break;
+
+      case "COLLECTIONS_DELETE":
+        await handleCollectionDelete(shop, (payload as { id: number }).id);
         break;
 
       case "MARKETS_CREATE":
@@ -140,26 +148,35 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   } catch (err) {
     Sentry.captureException(err, { tags: { topic, shop } });
     console.error(`Webhook handler failed: topic=${topic} shop=${shop}`, err instanceof Error ? err.message : err);
-    // Transient DB/network errors → mark retryable and return 503 so Shopify
-    // retries this delivery. A retry atomically reclaims the failed row.
-    // Business logic errors (validation, missing shop) → 200 to ack and stop retries.
-    if (isTransientError(err)) {
+    if (err instanceof PermanentIntegrationError) {
       if (webhookId && deliveryClaimed) {
-        try {
-          await getDb()
-            .update(webhookDeliveries)
-            .set({
-              status: "failed",
-              lastError: err instanceof Error ? err.message.slice(0, 1_000) : "Transient webhook error",
-              lastAttemptAt: new Date(),
-            })
-            .where(eq(webhookDeliveries.webhookId, webhookId));
-        } catch (stateErr) {
-          Sentry.captureException(stateErr, { tags: { topic, shop, context: "webhook-state" } });
-        }
+        await getDb()
+          .update(webhookDeliveries)
+          .set({
+            status: "processed",
+            lastError: err.message.slice(0, 1_000),
+            processedAt: new Date(),
+            lastAttemptAt: new Date(),
+          })
+          .where(eq(webhookDeliveries.webhookId, webhookId));
       }
-      return new Response("Temporary error", { status: 503 });
+      return new Response("Processed with permanent integration failure", { status: 200 });
     }
+    if (webhookId && deliveryClaimed) {
+      try {
+        await getDb()
+          .update(webhookDeliveries)
+          .set({
+            status: "failed",
+            lastError: err instanceof Error ? err.message.slice(0, 1_000) : "Webhook processing error",
+            lastAttemptAt: new Date(),
+          })
+          .where(eq(webhookDeliveries.webhookId, webhookId));
+      } catch (stateErr) {
+        Sentry.captureException(stateErr, { tags: { topic, shop, context: "webhook-state" } });
+      }
+    }
+    return new Response("Temporary error", { status: 503, headers: { "Retry-After": "30" } });
   }
 
   if (webhookId && deliveryClaimed) {
@@ -173,23 +190,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-// Postgres connection errors and Node.js network timeouts are transient — Shopify
-// should retry these. Business logic errors (shop not found, bad payload) should
-// be acked (200) so Shopify doesn't retry indefinitely.
-function isTransientError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  if ("transient" in err && err.transient === true) return true;
-  const code = (err as NodeJS.ErrnoException).code ?? "";
-  const msg = err.message.toLowerCase();
-  return (
-    ["ECONNREFUSED", "ENOTFOUND", "ETIMEDOUT", "ECONNRESET"].includes(code) ||
-    msg.includes("connection terminated") ||
-    msg.includes("connection refused") ||
-    msg.includes("timeout") ||
-    msg.includes("too many connections")
-  );
-}
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
@@ -396,6 +396,15 @@ async function handleCollectionChange(shop: string, legacyCollectionId: number) 
   await syncCollectionFromWebhook(shopRecord.id, shop, accessToken, collectionGid);
 }
 
+async function handleCollectionDelete(shop: string, legacyCollectionId: number) {
+  const shopId = await getShopId(shop);
+  if (!shopId || !legacyCollectionId) return;
+  await removeCollectionFromCache(
+    shopId,
+    `gid://shopify/Collection/${legacyCollectionId}`,
+  );
+}
+
 async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
   const shopId = await getShopId(shop);
   if (!shopId) return;
@@ -404,19 +413,31 @@ async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
   // gift/bundle/upsell line with `_promo_engine_offer_id` when it adds it to
   // the cart. note_attributes (cart-level) are never written by anything and
   // were always empty.
-  const offerIds = [
+  const claimedOfferIds = [
     ...new Set(
       order.line_items.flatMap((item) =>
         item.properties.filter((p) => p.name === "_promo_engine_offer_id").map((p) => p.value),
       ),
     ),
-  ];
+  ].filter((id) => UUID_PATTERN.test(id));
+  // Line item properties are buyer-controlled input. Only attribute offers
+  // that actually belong to this shop; invalid UUIDs must never reach a UUID
+  // database column or poison an otherwise valid webhook delivery.
+  const validOfferRows = claimedOfferIds.length > 0
+    ? await db
+        .select({ id: offers.id })
+        .from(offers)
+        .where(and(eq(offers.shopId, shopId), inArray(offers.id, claimedOfferIds)))
+    : [];
+  const offerIds = validOfferRows.map((offer) => offer.id);
   const sessionId = order.note_attributes
     ?.find((attr) => attr.name === "_promo_engine_session_id" || attr.name === "promo_engine_session_id")
     ?.value ?? null;
   const amount = Number.parseFloat(order.total_price_set?.shop_money?.amount ?? order.total_price ?? "0");
   const totalPriceCents = Number.isFinite(amount) ? Math.round(amount * 100) : 0;
-  const customerId = order.customer?.id != null ? String(order.customer.id) : null;
+  const customerId = order.customer?.id != null
+    ? `gid://shopify/Customer/${order.customer.id}`
+    : null;
 
   await Promise.all([
     reconcileOrderAttribution({
@@ -454,10 +475,11 @@ async function handleOrderCancelled(shop: string, order: OrderWebhookPayload) {
     sessionId: order.cart_token,
     cartToken: order.cart_token,
     orderId: order.admin_graphql_api_id,
+    deduplicationKey: `shopify:${shopId}:order-cancelled:${order.admin_graphql_api_id}`,
     properties: {
       order_id: order.id,
     },
-  });
+  }).onConflictDoNothing({ target: analyticsEvents.deduplicationKey });
 }
 
 async function handleAppUninstalled(shop: string) {
@@ -561,7 +583,11 @@ async function handleCustomersUpdate(_shop: string, _payload: CustomerGdprPayloa
 }
 
 async function handleCustomersDataRequest(shop: string, payload: CustomerGdprPayload) {
-  const customerId = String(payload.customer?.id ?? "");
+  const rawCustomerId = String(payload.customer?.id ?? "");
+  const customerId = rawCustomerId && /^\d+$/.test(rawCustomerId)
+    ? `gid://shopify/Customer/${rawCustomerId}`
+    : rawCustomerId;
+  const customerIds = [...new Set([customerId, rawCustomerId].filter(Boolean))];
   const customerEmail = payload.customer?.email ?? "";
   const shopId = await getShopId(shop);
 
@@ -588,7 +614,7 @@ async function handleCustomersDataRequest(shop: string, payload: CustomerGdprPay
   const events = await db
     .select()
     .from(analyticsEvents)
-    .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.customerId, customerId)));
+    .where(and(eq(analyticsEvents.shopId, shopId), inArray(analyticsEvents.customerId, customerIds)));
 
   const cartTokens = Array.from(new Set(events.flatMap((event) => event.cartToken ? [event.cartToken] : [])));
   const mutationLogs = cartTokens.length > 0
@@ -598,16 +624,14 @@ async function handleCustomersDataRequest(shop: string, payload: CustomerGdprPay
         .where(and(eq(cartMutationLogs.shopId, shopId), inArray(cartMutationLogs.cartToken, cartTokens)))
     : [];
 
-  const exportPayload = {
+  // Keep the audit trail PII-minimal. The underlying rows remain available for
+  // the compliance export until Shopify sends CUSTOMERS_REDACT; duplicating the
+  // full customer payload here would create an easy-to-miss second PII store.
+  const exportSummary = {
     requestedAt: new Date().toISOString(),
-    customer: {
-      id: customerId,
-      email: customerEmail,
-      phone: payload.customer?.phone ?? null,
-    },
-    ordersRequested: payload.orders_requested ?? [],
-    analyticsEvents: events,
-    cartMutationLogs: mutationLogs,
+    orderCount: payload.orders_requested?.length ?? 0,
+    analyticsEventCount: events.length,
+    cartMutationLogCount: mutationLogs.length,
   };
 
   await db.insert(auditLogs).values({
@@ -616,7 +640,7 @@ async function handleCustomersDataRequest(shop: string, payload: CustomerGdprPay
     entityId: customerId,
     action: "export",
     before: null,
-    after: exportPayload,
+    after: exportSummary,
     performedBy: "shopify_webhook",
   });
 
@@ -628,7 +652,11 @@ async function handleCustomersDataRequest(shop: string, payload: CustomerGdprPay
 }
 
 async function handleCustomersRedact(shop: string, payload: CustomerGdprPayload) {
-  const customerId = String(payload.customer?.id ?? "");
+  const rawCustomerId = String(payload.customer?.id ?? "");
+  const customerId = rawCustomerId && /^\d+$/.test(rawCustomerId)
+    ? `gid://shopify/Customer/${rawCustomerId}`
+    : rawCustomerId;
+  const customerIds = [...new Set([customerId, rawCustomerId].filter(Boolean))];
   const shopId = await getShopId(shop);
 
   if (!shopId || !customerId) {
@@ -646,7 +674,7 @@ async function handleCustomersRedact(shop: string, payload: CustomerGdprPayload)
   const customerEvents = await db
     .select({ sessionId: analyticsEvents.sessionId, cartToken: analyticsEvents.cartToken })
     .from(analyticsEvents)
-    .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.customerId, customerId)));
+    .where(and(eq(analyticsEvents.shopId, shopId), inArray(analyticsEvents.customerId, customerIds)));
 
   const sessionIds = [...new Set(customerEvents.map((e) => e.sessionId).filter(Boolean) as string[])];
   const cartTokens = [...new Set(customerEvents.map((e) => e.cartToken).filter(Boolean) as string[])];
@@ -654,8 +682,16 @@ async function handleCustomersRedact(shop: string, payload: CustomerGdprPayload)
   await db.transaction(async (tx) => {
     const deleted = await tx
       .delete(analyticsEvents)
-      .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.customerId, customerId)))
+      .where(and(eq(analyticsEvents.shopId, shopId), inArray(analyticsEvents.customerId, customerIds)))
       .returning({ id: analyticsEvents.id });
+
+    await tx
+      .delete(auditLogs)
+      .where(and(
+        eq(auditLogs.shopId, shopId),
+        eq(auditLogs.entityType, "gdpr_customer_data_request"),
+        inArray(auditLogs.entityId, customerIds),
+      ));
 
     if (cartTokens.length > 0 || sessionIds.length > 0) {
       const conditions = [

@@ -140,15 +140,15 @@ async function createOrFindAutomaticDiscount(shopDomain: string, accessToken: st
 
 async function findExistingAutomaticDiscount(shopDomain: string, accessToken: string, functionId: string): Promise<string | null> {
   const data = await shopifyGraphQL<{
-    automaticDiscountNodes: { nodes: Array<{ id: string; automaticDiscount: { __typename: string; appDiscountType?: { functionId: string } } }> };
+    discountNodes: { nodes: Array<{ id: string; discount: { __typename: string; appDiscountType?: { functionId: string } } }> };
   }>({
     shopDomain,
     accessToken,
     query: `query FindExistingAutomaticDiscount {
-      automaticDiscountNodes(first: 50) {
+      discountNodes(first: 50) {
         nodes {
           id
-          automaticDiscount {
+          discount {
             __typename
             ... on DiscountAutomaticApp { appDiscountType { functionId } }
           }
@@ -157,8 +157,8 @@ async function findExistingAutomaticDiscount(shopDomain: string, accessToken: st
     }`,
   });
 
-  const match = data.automaticDiscountNodes.nodes.find(
-    (node) => node.automaticDiscount.__typename === "DiscountAutomaticApp" && node.automaticDiscount.appDiscountType?.functionId === functionId,
+  const match = data.discountNodes.nodes.find(
+    (node) => node.discount.__typename === "DiscountAutomaticApp" && node.discount.appDiscountType?.functionId === functionId,
   );
   return match?.id ?? null;
 }

@@ -50,6 +50,14 @@ jobs:
         run: cargo test --workspace --release
       - name: Build WASM binaries
         run: cargo build --workspace --release --target wasm32-wasip1
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate complete Shopify app bundle
+        run: pnpm shopify:build
       - name: Check binary sizes
         run: |
           for wasm in target/wasm32-wasip1/release/*.wasm; do
@@ -96,8 +104,7 @@ jobs:
       - run: pnpm lint
 
   # ── E2E Tests ────────────────────────────────────────────────────────────────
-  # Only runs when the "e2e" environment has secrets configured.
-  # If DEV_STORE_URL is empty the job is skipped entirely — no silent pass.
+  # Required production gate: missing credentials or fixtures fail the job.
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
@@ -108,12 +115,16 @@ jobs:
       APP_URL: ${{ secrets.APP_URL }}
       SHOPIFY_ADMIN_EMAIL: ${{ secrets.SHOPIFY_ADMIN_EMAIL }}
       SHOPIFY_ADMIN_PASSWORD: ${{ secrets.SHOPIFY_ADMIN_PASSWORD }}
+      E2E_PRODUCT_HANDLE: ${{ secrets.E2E_PRODUCT_HANDLE }}
+      E2E_BUNDLE_PRODUCT_HANDLE: ${{ secrets.E2E_BUNDLE_PRODUCT_HANDLE }}
+      E2E_VOLUME_PRODUCT_HANDLE: ${{ secrets.E2E_VOLUME_PRODUCT_HANDLE }}
+      E2E_QUALIFYING_VARIANT_ID: ${{ secrets.E2E_QUALIFYING_VARIANT_ID }}
     steps:
       - name: Check secrets
         run: |
-          if [ -z "$DEV_STORE_URL" ] || [ -z "$APP_URL" ]; then
-            echo "E2E secrets not configured — skipping job."
-            exit 0
+          if [ -z "$DEV_STORE_URL" ] || [ -z "$APP_URL" ] || [ -z "$SHOPIFY_ADMIN_EMAIL" ] || [ -z "$SHOPIFY_ADMIN_PASSWORD" ] || [ -z "$E2E_PRODUCT_HANDLE" ] || [ -z "$E2E_BUNDLE_PRODUCT_HANDLE" ] || [ -z "$E2E_VOLUME_PRODUCT_HANDLE" ] || [ -z "$E2E_QUALIFYING_VARIANT_ID" ]; then
+            echo "::error::E2E secrets are required; refusing to report a green build without browser tests."
+            exit 1
           fi
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

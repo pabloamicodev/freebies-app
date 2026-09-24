@@ -8,6 +8,7 @@ query Input(
   $c1: String! = "_promo_engine_unused"
   $c2: String! = "_promo_engine_unused"
   $c3: String! = "_promo_engine_unused"
+  $customerTags: [String!]! = []
 ) {
   discount {
     discountClasses
@@ -25,6 +26,10 @@ query Input(
     buyerIdentity {
       customer {
         numberOfOrders
+        hasTags(tags: $customerTags) {
+          tag
+          hasTag
+        }
         amountSpent {
           amount
         }
@@ -78,6 +83,11 @@ query Input(
       subtotalAmount {
         currencyCode
       }
+    }
+  }
+  localization {
+    country {
+      isoCode
     }
   }
 }

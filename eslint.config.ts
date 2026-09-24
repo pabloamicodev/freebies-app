@@ -16,7 +16,17 @@ const tsProjects = [
 
 const config: Linter.Config[] = [
   {
-    ignores: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/target/**", "**/.shopify/**", "**/.react-router/**"],
+    ignores: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/target/**",
+      "**/coverage/**",
+      "**/playwright-report/**",
+      "**/test-results/**",
+      "**/.shopify/**",
+      "**/.react-router/**",
+    ],
   },
   // Type-aware rules for source files included in tsconfigs
   {
@@ -25,10 +35,9 @@ const config: Linter.Config[] = [
       "**/*.config.ts",
       "**/tests/**",
       "**/test/**",
-      // UI extensions are their own isolated dependency trees outside the
-      // pnpm workspace (each has its own @shopify/ui-extensions-react version
-      // constraints) — none of the workspace tsconfigs cover them.
-      "extensions/**",
+      // UI extensions have dedicated tsconfigs with Shopify surface-specific
+      // JSX types and are linted by the non-type-aware block below.
+      "apps/shopify-admin/extensions/**",
     ],
     languageOptions: {
       parser: tsParser,
@@ -52,7 +61,13 @@ const config: Linter.Config[] = [
   },
   // Config files, test files, and UI extensions — no type-aware rules (not in any tsconfig)
   {
-    files: ["**/*.config.ts", "**/tests/**/*.ts", "**/test/**/*.ts", "extensions/**/*.ts", "extensions/**/*.tsx"],
+    files: [
+      "**/*.config.ts",
+      "**/tests/**/*.ts",
+      "**/test/**/*.ts",
+      "apps/shopify-admin/extensions/**/*.ts",
+      "apps/shopify-admin/extensions/**/*.tsx",
+    ],
     languageOptions: {
       parser: tsParser,
       parserOptions: {

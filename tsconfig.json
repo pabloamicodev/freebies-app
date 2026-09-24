@@ -24,5 +24,12 @@
       "postgres": ["./apps/shopify-admin/node_modules/postgres"]
     }
   },
-  "exclude": ["node_modules", "dist", "build", "target"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "build",
+    "target",
+    "extensions",
+    "apps/shopify-admin/extensions"
+  ]
 }

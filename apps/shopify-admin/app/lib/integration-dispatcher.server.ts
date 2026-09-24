@@ -7,7 +7,7 @@
 
 import type { Db } from "@promo/db";
 import { getIntegrationCredentials } from "./integration-credentials.server.js";
-import { assertSafeWebhookUrl } from "./safe-webhook-url.server.js";
+import { postJsonToSafeWebhook } from "./safe-webhook-url.server.js";
 
 interface PromoEvent {
   event: "order_paid" | "gift_added" | "offer_redeemed";
@@ -26,6 +26,8 @@ export class TransientIntegrationError extends Error {
   readonly transient = true;
 }
 
+export class PermanentIntegrationError extends Error {}
+
 export async function dispatchIntegrationEvents(
   shopId: string,
   db: Db,
@@ -35,14 +37,28 @@ export async function dispatchIntegrationEvents(
 
   if (configs.size === 0) return;
 
-  await Promise.all([
+  const requests = [
     configs.has("klaviyo") ? dispatchKlaviyo(configs.get("klaviyo")!, event) : null,
     configs.has("omnisend") ? dispatchWebhook("omnisend", configs.get("omnisend")!, event) : null,
     configs.has("attentive") ? dispatchWebhook("attentive", configs.get("attentive")!, event) : null,
     configs.has("rebuy") ? dispatchWebhook("rebuy", configs.get("rebuy")!, event) : null,
     configs.has("gorgias") ? dispatchWebhook("gorgias", configs.get("gorgias")!, event) : null,
     configs.has("postscript") ? dispatchWebhook("postscript", configs.get("postscript")!, event) : null,
-  ].filter((request): request is Promise<void> => request !== null));
+  ].filter((request): request is Promise<void> => request !== null);
+  const results = await Promise.allSettled(requests);
+  const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason as unknown] : []);
+  const failure = classifyIntegrationFailures(failures);
+  if (failure) throw failure;
+}
+
+export function classifyIntegrationFailures(failures: unknown[]): Error | null {
+  if (failures.length === 0) return null;
+  const transient = failures.find((error) => error instanceof TransientIntegrationError);
+  if (transient instanceof Error) return transient;
+  const first = failures[0];
+  return first instanceof PermanentIntegrationError
+    ? first
+    : new TransientIntegrationError(first instanceof Error ? first.message : "Integration dispatch failed");
 }
 
 async function dispatchKlaviyo(apiKey: string, event: PromoEvent): Promise<void> {
@@ -107,7 +123,7 @@ async function dispatchKlaviyo(apiKey: string, event: PromoEvent): Promise<void>
     if (res.status === 429 || res.status >= 500) {
       throw new TransientIntegrationError(`Klaviyo API temporarily returned ${res.status}`);
     }
-    throw new Error(`Klaviyo API rejected the event with ${res.status}`);
+    throw new PermanentIntegrationError(`Klaviyo API rejected the event with ${res.status}`);
   }
 }
 
@@ -116,25 +132,20 @@ async function dispatchWebhook(
   webhookUrl: string,
   event: PromoEvent,
 ): Promise<void> {
-  const url = await assertSafeWebhookUrl(webhookUrl);
-
-  const res = await fetch(url, {
-    method: "POST",
+  const res = await postJsonToSafeWebhook(webhookUrl, {
     headers: {
-      "Content-Type": "application/json",
       "X-Promo-Engine-Event": event.event,
       "X-Promo-Engine-Delivery-Id": deliveryId(event),
     },
     body: JSON.stringify(event),
-    signal: AbortSignal.timeout(5000),
-    redirect: "error",
+    timeoutMs: 5000,
   });
 
-  if (!res.ok) {
+  if (res.status < 200 || res.status >= 300) {
     if (res.status === 408 || res.status === 429 || res.status >= 500) {
       throw new TransientIntegrationError(`[${id}] webhook temporarily returned ${res.status}`);
     }
-    throw new Error(`[${id}] webhook rejected the event with ${res.status}`);
+    throw new PermanentIntegrationError(`[${id}] webhook rejected the event with ${res.status}`);
   }
 }
 

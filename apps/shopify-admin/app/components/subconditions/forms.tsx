@@ -19,6 +19,12 @@ function getv(v: Record<string, unknown> | undefined, key: string, fallback: unk
   return v && key in v ? v[key] : fallback;
 }
 
+function readStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
+  if (typeof value !== "string") return [];
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
 interface QuantityRule {
   id: string;
   qty: number;
@@ -152,13 +158,24 @@ export function OrderHistoryForm({ value, onChange }: SubFormProps) {
 // ─── Customer tags ────────────────────────────────────────────────────────────
 export function CustomerTagsForm({ value, onChange }: SubFormProps) {
   const idPrefix = useId();
-  const tags = getv(value, "tags", "") as string;
-  const exclude = getv(value, "exclude", false) as boolean;
-  const guest = getv(value, "guest", false) as boolean;
+  const legacyTags = readStringList(getv(value, "tags", []));
+  const includeTags = readStringList(getv(value, "includeTags", []));
+  const excludeTags = readStringList(getv(value, "excludeTags", []));
+  const exclude = excludeTags.length > 0 || (includeTags.length === 0 && getv(value, "exclude", false) === true);
+  const tags = (exclude ? excludeTags : includeTags).length > 0
+    ? (exclude ? excludeTags : includeTags).join(", ")
+    : legacyTags.join(", ");
+  const guest = getv(value, "treatGuestAsNoTags", getv(value, "guest", true)) as boolean;
 
   function emit(patch: Partial<Record<string, unknown>>) {
-    const next = { tags, exclude, guest, ...patch };
-    onChange?.(next);
+    const nextTags = readStringList(patch["tags"] ?? tags);
+    const nextExclude = (patch["exclude"] ?? exclude) === true;
+    const nextGuest = (patch["guest"] ?? guest) === true;
+    onChange?.({
+      includeTags: nextExclude ? [] : nextTags,
+      excludeTags: nextExclude ? nextTags : [],
+      treatGuestAsNoTags: nextGuest,
+    });
   }
 
   return (
@@ -185,17 +202,30 @@ export function CustomerTagsForm({ value, onChange }: SubFormProps) {
 // ─── Location ─────────────────────────────────────────────────────────────────
 export function LocationForm({ value, onChange }: SubFormProps) {
   const idPrefix = useId();
-  const countries = getv(value, "countries", "") as string;
-  const exclude = getv(value, "exclude", false) as boolean;
+  const legacyCountries = readStringList(getv(value, "countries", []));
+  const includeCountries = readStringList(getv(value, "includeCountryCodes", []));
+  const excludeCountries = readStringList(getv(value, "excludeCountryCodes", []));
+  const exclude = excludeCountries.length > 0 || (includeCountries.length === 0 && getv(value, "exclude", false) === true);
+  const countries = (exclude ? excludeCountries : includeCountries).length > 0
+    ? (exclude ? excludeCountries : includeCountries).join(", ")
+    : legacyCountries.join(", ");
+
+  function emit(nextCountries: string, nextExclude: boolean) {
+    const countryCodes = readStringList(nextCountries).map((country) => country.toUpperCase());
+    onChange?.({
+      includeCountryCodes: nextExclude ? [] : countryCodes,
+      excludeCountryCodes: nextExclude ? countryCodes : [],
+    });
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <label className="b-label" htmlFor={`${idPrefix}-countries`}>Select countries</label>
       <input id={`${idPrefix}-countries`} aria-label="Select countries" className="b-input" placeholder="Select countries..." autoComplete="off" value={countries}
-        onChange={(e) => onChange?.({ countries: e.target.value, exclude })} />
+        onChange={(e) => emit(e.target.value, exclude)} />
       <label className="b-checkbox-row" htmlFor={`${idPrefix}-exclude-countries`} style={{ cursor: "pointer", gap: 10 }}>
         <input id={`${idPrefix}-exclude-countries`} type="checkbox" checked={exclude}
-          onChange={(e) => onChange?.({ countries, exclude: e.target.checked })} />
+          onChange={(e) => emit(countries, e.target.checked)} />
         <span style={{ fontSize: 13, color: "var(--text)" }}>Excluir estos países</span>
       </label>
     </div>
@@ -205,14 +235,15 @@ export function LocationForm({ value, onChange }: SubFormProps) {
 // ─── Subscription ─────────────────────────────────────────────────────────────
 export function SubscriptionForm({ value, onChange }: SubFormProps) {
   const idPrefix = useId();
-  const mode = getv(value, "mode", "subscription") as string;
+  const storedMode = getv(value, "mode", "subscription_only") as string;
+  const mode = storedMode === "subscription" ? "subscription_only" : storedMode === "one_time" ? "one_time_only" : storedMode;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ fontSize: 13, color: "var(--text)", fontWeight: 500 }}>Apply offer to:</div>
       {[
-        { value: "subscription", label: "Subscription products only" },
-        { value: "one_time",     label: "One-time purchase products" },
+        { value: "subscription_only", label: "Subscription products only" },
+        { value: "one_time_only",     label: "One-time purchase products" },
       ].map((opt) => (
         <label key={opt.value} className="b-checkbox-row" htmlFor={`${idPrefix}-${opt.value}`} style={{ cursor: "pointer", gap: 10 }}>
           <input id={`${idPrefix}-${opt.value}`} aria-label={opt.label} type="radio" name="sub_subscription_mode" value={opt.value}
@@ -229,13 +260,21 @@ export function SubscriptionForm({ value, onChange }: SubFormProps) {
 // ─── Sales channel ────────────────────────────────────────────────────────────
 export function SalesChannelForm({ value, onChange }: SubFormProps) {
   const idPrefix = useId();
-  const online = getv(value, "online", true) as boolean;
-  const mobile = getv(value, "mobile", false) as boolean;
-  const pos = getv(value, "pos", false) as boolean;
+  const channels = readStringList(getv(value, "channels", []));
+  const hasCanonicalChannels = Array.isArray(value?.["channels"]);
+  const online = hasCanonicalChannels ? channels.includes("online_store") : getv(value, "online", true) as boolean;
+  const mobile = hasCanonicalChannels ? channels.includes("mobile_app") : getv(value, "mobile", false) as boolean;
+  const pos = hasCanonicalChannels ? channels.includes("pos") : getv(value, "pos", false) as boolean;
 
   function emit(patch: Partial<Record<string, unknown>>) {
-    const next = { online, mobile, pos, ...patch };
-    onChange?.(next);
+    const nextOnline = (patch["online"] ?? online) === true;
+    const nextMobile = (patch["mobile"] ?? mobile) === true;
+    const nextPos = (patch["pos"] ?? pos) === true;
+    onChange?.({ channels: [
+      ...(nextOnline ? ["online_store"] : []),
+      ...(nextMobile ? ["mobile_app"] : []),
+      ...(nextPos ? ["pos"] : []),
+    ] });
   }
 
   return (
@@ -267,8 +306,13 @@ export function SalesChannelForm({ value, onChange }: SubFormProps) {
 // ─── Markets ──────────────────────────────────────────────────────────────────
 export function MarketsForm({ value, onChange }: SubFormProps) {
   const idPrefix = useId();
-  const marketIds = getv(value, "marketIds", "") as string;
-  const exclude = getv(value, "exclude", false) as boolean;
+  const legacyMarketIds = readStringList(getv(value, "marketIds", []));
+  const includeMarketIds = readStringList(getv(value, "includeMarketIds", []));
+  const excludeMarketIds = readStringList(getv(value, "excludeMarketIds", []));
+  const exclude = excludeMarketIds.length > 0 || (includeMarketIds.length === 0 && getv(value, "exclude", false) === true);
+  const marketIds = (exclude ? excludeMarketIds : includeMarketIds).length > 0
+    ? (exclude ? excludeMarketIds : includeMarketIds).join(", ")
+    : legacyMarketIds.join(", ");
   const [markets, setMarkets] = useState<Array<{ id: string; name: string; currencyCode: string; enabled: boolean }>>([]);
   const [marketError, setMarketError] = useState<string | null>(null);
 
@@ -292,7 +336,15 @@ export function MarketsForm({ value, onChange }: SubFormProps) {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    onChange?.({ marketIds: [...next].join(", "), exclude });
+    emit([...next].join(", "), exclude);
+  }
+
+  function emit(nextMarketIds: string, nextExclude: boolean) {
+    const ids = readStringList(nextMarketIds);
+    onChange?.({
+      includeMarketIds: nextExclude ? [] : ids,
+      excludeMarketIds: nextExclude ? ids : [],
+    });
   }
 
   return (
@@ -310,12 +362,12 @@ export function MarketsForm({ value, onChange }: SubFormProps) {
       <div>
         <label className="b-label" htmlFor={`${idPrefix}-markets`}>{markets.length > 0 ? "Selected Market IDs" : "Market IDs"}</label>
         <input id={`${idPrefix}-markets`} aria-label="Select markets" className="b-input" placeholder="gid://shopify/Market/..." autoComplete="off" value={marketIds}
-          onChange={(e) => onChange?.({ marketIds: e.target.value, exclude })} />
+          onChange={(e) => emit(e.target.value, exclude)} />
         {marketError && <div className="b-help">Live Markets could not be loaded: {marketError}. You can still enter Market GIDs manually.</div>}
       </div>
       <label className="b-checkbox-row" htmlFor={`${idPrefix}-exclude-markets`} style={{ cursor: "pointer", gap: 10 }}>
         <input id={`${idPrefix}-exclude-markets`} aria-label="Exclude selected markets" type="checkbox" checked={exclude}
-          onChange={(e) => onChange?.({ marketIds, exclude: e.target.checked })}
+          onChange={(e) => emit(marketIds, e.target.checked)}
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
         <span style={{ fontSize: 13, color: "var(--text)" }}>Exclude selected markets</span>
       </label>

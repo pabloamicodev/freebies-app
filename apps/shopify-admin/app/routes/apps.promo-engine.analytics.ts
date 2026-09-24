@@ -3,6 +3,17 @@ import { getDb, analyticsEvents, offers, widgets } from "@promo/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { getSignedShop } from "../lib/app-proxy-auth.server.js";
 import { checkRateLimit, getClientIp } from "../lib/rate-limit.server.js";
+import { apiError, apiJson, handleApiError, readJsonBody } from "../lib/api-response.server.js";
+
+const MAX_ANALYTICS_BODY_BYTES = 64 * 1024;
+const PUBLIC_ANALYTICS_EVENTS = new Set([
+  "page_viewed",
+  "product_viewed",
+  "cart_viewed",
+  "checkout_started",
+  "order_placed",
+]);
+const PROMO_ANALYTICS_EVENT = /^promo_engine:[a-z0-9][a-z0-9_:-]{0,79}$/;
 
 function uuidOrNull(value: unknown): string | null {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
@@ -10,50 +21,79 @@ function uuidOrNull(value: unknown): string | null {
     : null;
 }
 
-export function loader(_args: LoaderFunctionArgs) {
-  throw new Response("Method not allowed", { status: 405 });
+export function loader({ request }: LoaderFunctionArgs) {
+  return apiError(request, {
+    status: 405,
+    code: "METHOD_NOT_ALLOWED",
+    message: "Method not allowed.",
+    headers: { Allow: "POST" },
+  });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { id: shopId } = await getSignedShop(request);
-  const rateLimit = await checkRateLimit(`analytics:${shopId}:${getClientIp(request)}`, { limit: 300, windowMs: 60_000 });
-  if (!rateLimit.ok) {
-    return Response.json(
-      { error: "Too many analytics events" },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } },
-    );
+  if (request.method !== "POST") {
+    return apiError(request, { status: 405, code: "METHOD_NOT_ALLOWED", message: "Method not allowed.", headers: { Allow: "POST" } });
   }
-
-  let body: Record<string, unknown>;
   try {
-    body = (await request.json()) as Record<string, unknown>;
-  } catch {
-    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
-  }
+    const { id: shopId, loggedInCustomerId } = await getSignedShop(request);
+    const rateLimit = await checkRateLimit(`analytics:${shopId}:${getClientIp(request)}`, { limit: 300, windowMs: 60_000 });
+    if (!rateLimit.ok) {
+      return apiError(request, {
+        status: 429,
+        code: "RATE_LIMITED",
+        message: "Too many analytics events.",
+        retryable: true,
+        retryAfterSeconds: rateLimit.retryAfterSeconds,
+      });
+    }
 
-  // The web pixel sends a batch ({ events: [...] }); the storefront runtime
-  // sends a single event object directly — normalize to a list either way.
-  const rawEvents = Array.isArray(body["events"]) ? (body["events"] as Record<string, unknown>[]) : [body];
-  if (rawEvents.length === 0) {
-    return Response.json({ error: "No events provided" }, { status: 400 });
-  }
-  if (rawEvents.length > 20) {
-    return Response.json({ error: "Too many events in one batch (max 20)" }, { status: 400 });
-  }
+    const body = await readJsonBody<Record<string, unknown>>(request, {
+      maxBytes: MAX_ANALYTICS_BODY_BYTES,
+      tooLargeMessage: "Analytics payload is too large (max 64 KB).",
+      invalidMessage: "Analytics payload must be valid JSON.",
+    });
 
-  const propertiesJson = JSON.stringify(body);
-  if (propertiesJson.length > 65_536) {
-    return Response.json({ error: "payload too large (max 64 KB)" }, { status: 413 });
-  }
+    // The web pixel sends a batch ({ events: [...] }); the storefront runtime
+    // sends a single event object directly — normalize to a list either way.
+    const rawEvents = Array.isArray(body["events"])
+      ? (body["events"] as unknown[])
+      : [body];
+    if (rawEvents.length === 0) {
+      return apiError(request, { status: 400, code: "EMPTY_EVENT_BATCH", message: "No events provided." });
+    }
+    if (rawEvents.length > 20) {
+      return apiError(request, {
+        status: 400,
+        code: "EVENT_BATCH_TOO_LARGE",
+        message: "Too many events in one batch (max 20).",
+      });
+    }
+    if (rawEvents.some((event) => typeof event !== "object" || event === null || Array.isArray(event))) {
+      return apiError(request, { status: 400, code: "INVALID_EVENT", message: "Every event must be a JSON object." });
+    }
+    const events = rawEvents as Record<string, unknown>[];
+    const eventNames = events.map(readEventName);
+    const invalidEventIndexes = eventNames.flatMap((name, index) => isPublicEventName(name) ? [] : [index]);
+    if (invalidEventIndexes.length > 0) {
+      return apiError(request, {
+        status: 400,
+        code: "INVALID_EVENT_NAME",
+        message: "One or more analytics event names are not accepted.",
+        details: { invalidEventIndexes },
+      });
+    }
 
-  try {
+    const trustedCustomerId = loggedInCustomerId && /^\d+$/.test(loggedInCustomerId)
+      ? `gid://shopify/Customer/${loggedInCustomerId}`
+      : null;
+
     const db = getDb();
 
-    const offerIds = [...new Set(rawEvents.flatMap((event) => {
+    const offerIds = [...new Set(events.flatMap((event) => {
       const id = uuidOrNull(event["offer_id"] ?? event["offerId"]);
       return id ? [id] : [];
     }))];
-    const widgetIds = [...new Set(rawEvents.flatMap((event) => {
+    const widgetIds = [...new Set(events.flatMap((event) => {
       const id = uuidOrNull(event["widget_id"] ?? event["widgetId"]);
       return id ? [id] : [];
     }))];
@@ -69,38 +109,40 @@ export async function action({ request }: ActionFunctionArgs) {
     const validOfferIds = new Set(offerRows.map((row) => row.id));
     const validWidgetIds = new Set(widgetRows.map((row) => row.id));
 
-    const rowsToInsert = rawEvents.flatMap((event) => {
-      const eventName = typeof event["event"] === "string"
-        ? event["event"]
-        : typeof event["event_name"] === "string"
-          ? event["event_name"]
-          : typeof event["eventName"] === "string"
-            ? event["eventName"]
-            : null;
-      if (!eventName || eventName.length > 100) return [];
-
+    const rowsToInsert = events.map((event, index) => {
+      const eventName = eventNames[index]!;
       const rawOfferId = uuidOrNull(event["offer_id"] ?? event["offerId"]);
       const rawWidgetId = uuidOrNull(event["widget_id"] ?? event["widgetId"]);
+      const { customer_id: _customerId, customerId: _customerIdCamel, ...safeProperties } = event;
 
-      return [{
+      return {
         shopId,
         eventName,
-        sessionId: typeof event["session_id"] === "string" ? event["session_id"] : typeof event["sessionId"] === "string" ? event["sessionId"] : null,
-        cartToken: typeof event["cart_token"] === "string" ? event["cart_token"] : typeof event["cartToken"] === "string" ? event["cartToken"] : null,
-        customerId: typeof event["customer_id"] === "string" ? event["customer_id"] : null,
+        sessionId: boundedString(event["session_id"] ?? event["sessionId"], 200),
+        cartToken: boundedString(event["cart_token"] ?? event["cartToken"], 256),
+        customerId: trustedCustomerId,
         offerId: rawOfferId && validOfferIds.has(rawOfferId) ? rawOfferId : null,
         widgetId: rawWidgetId && validWidgetIds.has(rawWidgetId) ? rawWidgetId : null,
-        properties: event,
-      }];
+        properties: safeProperties,
+      };
     });
 
-    if (rowsToInsert.length > 0) {
-      await db.insert(analyticsEvents).values(rowsToInsert);
-    }
+    await db.insert(analyticsEvents).values(rowsToInsert);
+    return apiJson(request, { ok: true, accepted: rowsToInsert.length }, { status: 202 });
   } catch (err) {
-    console.error("[analytics] Failed to insert event(s)", { shopId, err });
-    return Response.json({ error: "Failed to record event" }, { status: 500 });
+    return handleApiError(request, err, "apps.promo-engine.analytics");
   }
+}
 
-  return Response.json({ ok: true });
+function readEventName(event: Record<string, unknown>): string | null {
+  const value = event["event"] ?? event["event_name"] ?? event["eventName"];
+  return typeof value === "string" ? value : null;
+}
+
+function isPublicEventName(value: string | null): value is string {
+  return value !== null && (PUBLIC_ANALYTICS_EVENTS.has(value) || PROMO_ANALYTICS_EVENT.test(value));
+}
+
+function boundedString(value: unknown, maxLength: number): string | null {
+  return typeof value === "string" && value.length > 0 ? value.slice(0, maxLength) : null;
 }

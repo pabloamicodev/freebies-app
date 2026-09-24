@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "shopify app dev",
-    "build": "shopify app build",
+    "build": "react-router build",
+    "build:shopify": "node ../../scripts/shopify-build.mjs",
     "start": "shopify app start",
-    "test:e2e": "playwright test --pass-with-no-tests",
+    "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "lint": "eslint app --ext .ts,.tsx"
   },
@@ -42,6 +43,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@shopify/cli": "4.8.2",
     "@vercel/react-router": "^1.0.0",
     "dotenv": "^17.2.3",
     "typescript": "^5.7.0",
@@ -49,6 +51,6 @@
     "vite-tsconfig-paths": "^5.1.0"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": "22.x"
   }
 }

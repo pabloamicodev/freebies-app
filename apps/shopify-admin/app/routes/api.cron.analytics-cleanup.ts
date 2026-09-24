@@ -1,33 +1,22 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { cleanupOldAnalyticsEvents } from "../lib/sync/analytics-reconcile.server.js";
-import * as Sentry from "@sentry/node";
-
-function isAuthorized(request: Request): boolean {
-  const cronSecret = process.env["CRON_SECRET"];
-  if (!cronSecret) {
-    console.error("[cron] CRON_SECRET env var is not set. All cron requests will be rejected until it is configured.");
-    return false;
-  }
-
-  return (
-    request.headers.get("authorization") === `Bearer ${cronSecret}` ||
-    request.headers.get("x-vercel-cron-secret") === cronSecret
-  );
-}
+import { cleanupOperationalState } from "../lib/operational-retention.server.js";
+import { isCronRequestAuthorized } from "../lib/cron-auth.server.js";
+import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  if (!isAuthorized(request)) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isCronRequestAuthorized(request)) {
+    return apiError(request, { status: 401, code: "UNAUTHORIZED", message: "Unauthorized." });
   }
 
   try {
     const retentionDays = Number(process.env["ANALYTICS_RETENTION_DAYS"] ?? 90);
-    const deleted = await cleanupOldAnalyticsEvents(Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays : 90);
-    return Response.json({ ok: true, deleted });
+    const [analyticsDeleted, operational] = await Promise.all([
+      cleanupOldAnalyticsEvents(Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays : 90),
+      cleanupOperationalState(),
+    ]);
+    return apiJson(request, { ok: true, analyticsDeleted, operational });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    Sentry.captureException(err, { tags: { cron: "analytics-cleanup" } });
-    console.error("[cron:analytics-cleanup]", message);
-    return Response.json({ ok: false, error: message }, { status: 500 });
+    return handleApiError(request, err, "cron.analytics-cleanup");
   }
 }

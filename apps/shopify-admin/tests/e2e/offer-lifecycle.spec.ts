@@ -470,10 +470,9 @@ test.describe("UPDATE — multi-currency", () => {
     // so first delete it to test the guard
     await go(page, `/app/offers/${offerId}/conditions`);
     const removeBtn = page.locator("button").filter({ hasText: /remove/i }).first();
-    if (await removeBtn.isVisible({ timeout: 2000 })) {
-      await removeBtn.click();
-      await page.waitForLoadState("networkidle");
-    }
+    await expect(removeBtn).toBeVisible({ timeout: 5000 });
+    await removeBtn.click();
+    await page.waitForLoadState("networkidle");
 
     await go(page, `/app/offers/${offerId}/multicurrency`);
     await page.locator('button[type="submit"]').filter({ hasText: /save overrides/i }).click();
@@ -520,45 +519,35 @@ test.describe("PUBLISH", () => {
 
     await go(page, `/app/offers/${offerId}`);
     const publishBtn = page.locator("button").filter({ hasText: /publish|set active/i }).first();
-    if (await publishBtn.isVisible({ timeout: 3000 })) {
-      await publishBtn.click();
-      await page.waitForLoadState("networkidle");
-      await expect(page.locator(".b-banner-red, [role='alert']")).toBeVisible({ timeout: 3000 });
-      await expect(page.locator(".b-banner-red, [role='alert']")).toContainText(/condition/i);
-    } else {
-      test.skip(true, "No publish button — offer may not be in publishable state");
-    }
+    await expect(publishBtn).toBeVisible({ timeout: 5000 });
+    await publishBtn.click();
+    await page.waitForLoadState("networkidle");
+    await expect(page.locator(".b-banner-red, [role='alert']")).toBeVisible({ timeout: 3000 });
+    await expect(page.locator(".b-banner-red, [role='alert']")).toContainText(/condition/i);
   });
 
   test("publish is blocked without rewards", async ({ page }) => {
     // Remove existing reward from template offer
     await go(page, `/app/offers/${offerId}/rewards`);
     const removeBtn = page.locator("button").filter({ hasText: /remove|delete/i }).first();
-    if (await removeBtn.isVisible({ timeout: 2000 })) {
-      await removeBtn.click();
-      await page.waitForLoadState("networkidle");
-    }
+    await expect(removeBtn).toBeVisible({ timeout: 5000 });
+    await removeBtn.click();
+    await page.waitForLoadState("networkidle");
 
     await go(page, `/app/offers/${offerId}`);
     const publishBtn = page.locator("button").filter({ hasText: /publish|set active/i }).first();
-    if (await publishBtn.isVisible({ timeout: 3000 })) {
-      await publishBtn.click();
-      await page.waitForLoadState("networkidle");
-      await expect(page.locator(".b-banner-red, [role='alert']")).toBeVisible({ timeout: 3000 });
-      await expect(page.locator(".b-banner-red, [role='alert']")).toContainText(/reward/i);
-    } else {
-      test.skip(true, "No publish button");
-    }
+    await expect(publishBtn).toBeVisible({ timeout: 5000 });
+    await publishBtn.click();
+    await page.waitForLoadState("networkidle");
+    await expect(page.locator(".b-banner-red, [role='alert']")).toBeVisible({ timeout: 3000 });
+    await expect(page.locator(".b-banner-red, [role='alert']")).toContainText(/reward/i);
   });
 
   test("publishes successfully and status badge turns active", async ({ page }) => {
     // Template offer already has condition + reward — just publish
     await go(page, `/app/offers/${offerId}`);
     const publishBtn = page.locator("button").filter({ hasText: /publish|set active/i }).first();
-    if (!(await publishBtn.isVisible({ timeout: 3000 }))) {
-      test.skip(true, "No publish button");
-      return;
-    }
+    await expect(publishBtn).toBeVisible({ timeout: 5000 });
     await publishBtn.click();
     await page.waitForLoadState("networkidle");
     await expect(page.locator(".b-badge-green, .b-badge")).toContainText(/active/i, { timeout: 5000 });
@@ -567,42 +556,32 @@ test.describe("PUBLISH", () => {
   test("published offer appears in active filter", async ({ page }) => {
     await go(page, `/app/offers/${offerId}`);
     const publishBtn = page.locator("button").filter({ hasText: /publish|set active/i }).first();
-    if (!(await publishBtn.isVisible({ timeout: 3000 }))) {
-      test.skip(true, "No publish button");
-      return;
-    }
+    await expect(publishBtn).toBeVisible({ timeout: 5000 });
     await publishBtn.click();
     await page.waitForLoadState("networkidle");
 
     await go(page, "/app/offers?status=active");
-    await page
+    const activeRow = page
       .locator(`[data-offer-id="${offerId}"], table tr`)
       .filter({ has: page.locator(`[href*="${offerId}"]`) })
-      .first()
-      .isVisible()
-      .catch(() => false);
-    // Just check the page loaded without error — exact row assertion depends on offer name
-    await expect(page.locator("h1, .b-page-title")).toBeVisible({ timeout: 3000 });
+      .first();
+    await expect(activeRow).toBeVisible({ timeout: 5000 });
   });
 
   test("pause after publish sets status to paused", async ({ page }) => {
     // Publish first
     await go(page, `/app/offers/${offerId}`);
     const publishBtn = page.locator("button").filter({ hasText: /publish|set active/i }).first();
-    if (!(await publishBtn.isVisible({ timeout: 3000 }))) {
-      test.skip(true, "No publish button");
-      return;
-    }
+    await expect(publishBtn).toBeVisible({ timeout: 5000 });
     await publishBtn.click();
     await page.waitForLoadState("networkidle");
 
     // Then pause
     const pauseBtn = page.locator("button").filter({ hasText: /pause/i }).first();
-    if (await pauseBtn.isVisible({ timeout: 3000 })) {
-      await pauseBtn.click();
-      await page.waitForLoadState("networkidle");
-      await expect(page.locator(".b-badge")).toContainText(/paused/i, { timeout: 5000 });
-    }
+    await expect(pauseBtn).toBeVisible({ timeout: 5000 });
+    await pauseBtn.click();
+    await page.waitForLoadState("networkidle");
+    await expect(page.locator(".b-badge")).toContainText(/paused/i, { timeout: 5000 });
   });
 });
 
@@ -630,8 +609,7 @@ test.describe("DELETE / ARCHIVE", () => {
     await go(page, "/app/offers");
     // Default list hides archived offers
     const row = page.locator("table tr, .b-offer-row").filter({ hasText: name });
-    await expect(row).not.toBeVisible({ timeout: 3000 }).catch(() => {});
-    // Non-failure: if it IS visible it means archived offers are intentionally shown
+    await expect(row).not.toBeVisible({ timeout: 3000 });
   });
 
   test("bulk archive from list page", async ({ page }) => {
@@ -663,10 +641,7 @@ test.describe("DUPLICATE", () => {
     await go(page, `/app/offers/${origId}`);
 
     const dupBtn = page.locator("button").filter({ hasText: /duplicate|copy/i }).first();
-    if (!(await dupBtn.isVisible({ timeout: 3000 }))) {
-      test.skip(true, "No duplicate button found");
-      return;
-    }
+    await expect(dupBtn).toBeVisible({ timeout: 5000 });
 
     await Promise.all([
       page.waitForURL(/\/app\/offers\/[^/]+$/, { timeout: 10000 }),
@@ -695,7 +670,7 @@ test.describe("EDGE CASES", () => {
     const res = await page.goto(`${BASE}/app/offers/not-a-real-uuid`);
     const status = res?.status() ?? 0;
     const body = await page.locator("body").innerText().catch(() => "");
-    expect(status === 404 || /not found|404|error/i.test(body) || status === 200).toBe(true);
+    expect(status === 404 || /not found|404|error/i.test(body)).toBe(true);
   });
 
   test("new offer page with invalid ?type= query param defaults to gift", async ({ page }) => {
@@ -710,14 +685,14 @@ test.describe("EDGE CASES", () => {
     const res = await page.goto(`${BASE}/app/offers/00000000-0000-0000-0000-000000000001/conditions`);
     const status = res?.status() ?? 0;
     const body = await page.locator("body").innerText().catch(() => "");
-    expect(status === 404 || /not found|404/i.test(body) || status === 200).toBe(true);
+    expect(status === 404 || /not found|404/i.test(body)).toBe(true);
   });
 
   test("accessing rewards page of unknown offer returns 404", async ({ page }) => {
     const res = await page.goto(`${BASE}/app/offers/00000000-0000-0000-0000-000000000002/rewards`);
     const status = res?.status() ?? 0;
     const body = await page.locator("body").innerText().catch(() => "");
-    expect(status === 404 || /not found|404/i.test(body) || status === 200).toBe(true);
+    expect(status === 404 || /not found|404/i.test(body)).toBe(true);
   });
 
   test("add condition form resets after successful submit", async ({ page }) => {

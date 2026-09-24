@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { packCartAddRequest, withPromoMetadata } from "./metadata-bridge.js";
+import {
+  needsPromoMetadataPacking,
+  packCartAddRequest,
+  withPromoMetadata,
+} from "./metadata-bridge.js";
 
 describe("withPromoMetadata", () => {
   it("packs legacy and current promotion properties into one Function field", () => {
@@ -32,6 +36,17 @@ describe("withPromoMetadata", () => {
 
   it("does not add metadata when no promotion property exists", () => {
     expect(withPromoMetadata({ engraving: "Ada" })).toEqual({ engraving: "Ada" });
+  });
+
+  it("detects legacy promotional properties that still need packing", () => {
+    expect(needsPromoMetadataPacking({
+      _promo_engine_offer_id: "offer-legacy",
+      _promo_engine_reward_id: "reward-legacy",
+    })).toBe(true);
+    expect(needsPromoMetadataPacking(withPromoMetadata({
+      _promo_engine_offer_id: "offer-current",
+    }))).toBe(false);
+    expect(needsPromoMetadataPacking({ engraving: "Ada" })).toBe(false);
   });
 });
 

@@ -1,8 +1,15 @@
 import { lookup } from "node:dns/promises";
+import { request as httpsRequest, type RequestOptions } from "node:https";
 import { BlockList, isIP } from "node:net";
 
 type ResolvedAddress = { address: string; family: number };
 type Resolver = (hostname: string) => Promise<ResolvedAddress[]>;
+
+export type SafeWebhookDestination = {
+  url: URL;
+  address: string;
+  family: 4 | 6;
+};
 
 const blockedIpv4 = new BlockList();
 const blockedIpv6 = new BlockList();
@@ -59,10 +66,10 @@ async function resolveAll(hostname: string): Promise<ResolvedAddress[]> {
  * HTTPS-only, no credentials/custom ports, and every resolved address must be
  * publicly routable. Redirects are separately disabled by the caller.
  */
-export async function assertSafeWebhookUrl(
+export async function resolveSafeWebhookDestination(
   rawUrl: string,
   resolver: Resolver = resolveAll,
-): Promise<URL> {
+): Promise<SafeWebhookDestination> {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -88,5 +95,64 @@ export async function assertSafeWebhookUrl(
     throw new Error("Webhook URL resolves to a private or reserved address");
   }
 
-  return url;
+  const destination = addresses[0];
+  if (!destination || (destination.family !== 4 && destination.family !== 6)) {
+    throw new Error("Webhook destination did not resolve to a supported IP address");
+  }
+
+  return { url, address: destination.address, family: destination.family };
+}
+
+export async function assertSafeWebhookUrl(
+  rawUrl: string,
+  resolver: Resolver = resolveAll,
+): Promise<URL> {
+  return (await resolveSafeWebhookDestination(rawUrl, resolver)).url;
+}
+
+export function buildPinnedHttpsRequestOptions(
+  destination: SafeWebhookDestination,
+  request: { method?: string; headers?: Record<string, string> } = {},
+): RequestOptions {
+  return {
+    protocol: "https:",
+    hostname: destination.address,
+    family: destination.family,
+    port: destination.url.port ? Number(destination.url.port) : 443,
+    servername: destination.url.hostname,
+    path: `${destination.url.pathname}${destination.url.search}`,
+    method: request.method ?? "POST",
+    headers: { Host: destination.url.host, ...request.headers },
+  };
+}
+
+export async function postJsonToSafeWebhook(
+  rawUrl: string,
+  request: {
+    body: string;
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+  },
+): Promise<{ status: number }> {
+  const destination = await resolveSafeWebhookDestination(rawUrl);
+  const options = buildPinnedHttpsRequestOptions(destination, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(request.body).toString(),
+      ...request.headers,
+    },
+  });
+
+  return new Promise((resolve, reject) => {
+    const outbound = httpsRequest(options, (response) => {
+      response.resume();
+      resolve({ status: response.statusCode ?? 0 });
+    });
+    outbound.setTimeout(request.timeoutMs ?? 10_000, () => {
+      outbound.destroy(new Error("Webhook request timed out"));
+    });
+    outbound.once("error", reject);
+    outbound.end(request.body);
+  });
 }

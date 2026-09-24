@@ -19,5 +19,5 @@ cargo install wasm-opt --locked 2>/dev/null || echo "  wasm-opt skipped (optiona
 
 echo ""
 echo "✅ Rust toolchain ready."
-echo "   Build a function: cd extensions/discount-function && cargo build --release --target wasm32-wasip1"
-echo "   Run tests:        cd extensions/discount-function && cargo test"
+echo "   Build a function: cd apps/shopify-admin/extensions/discount-function && cargo build --release --target wasm32-wasip1"
+echo "   Run tests:        cd apps/shopify-admin/extensions/discount-function && cargo test"

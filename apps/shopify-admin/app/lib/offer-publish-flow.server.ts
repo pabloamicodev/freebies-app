@@ -32,6 +32,8 @@ const FUNCTION_CONDITION_TYPES = new Set([
   "line_attribute",
   "cart_attribute",
   "exclude_products",
+  "customer_tags",
+  "customer_location",
 ]);
 
 const FUNCTION_NUMERIC_OPERATORS = new Set(["eq", "gt", "gte", "lt", "lte"]);
@@ -121,7 +123,7 @@ export async function validateOffersPublishable(db: Db, shopId: string, offerIds
       }
       const valueResult = validateConditionValue(
         condition.conditionType,
-        normalizeConditionValue(condition.conditionType, condition.value as Record<string, unknown>),
+        normalizeConditionValue(condition.conditionType, condition.value),
       );
       if (!valueResult.success) {
         return { ok: false, error: `Cannot publish "${offer.internalName}": ${condition.conditionType} is invalid. ${firstIssueMessage(valueResult)}` };

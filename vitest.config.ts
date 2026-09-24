@@ -15,6 +15,12 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "lcov", "html"],
       include: ["packages/*/src/**", "workers/*/src/**", "apps/shopify-admin/app/lib/*.server.ts"],
+      thresholds: {
+        statements: 47,
+        branches: 71,
+        functions: 59,
+        lines: 47,
+      },
     },
   },
   resolve: {

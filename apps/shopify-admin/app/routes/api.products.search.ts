@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb, shops, productCache, variantCache } from "@promo/db";
 import { and, desc, eq, ilike, inArray, ne, or } from "drizzle-orm";
+import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
 
 const SHOPIFY_PRODUCT_GID = /^gid:\/\/shopify\/Product\/\d+$/;
 const SHOPIFY_VARIANT_GID = /^gid:\/\/shopify\/ProductVariant\/\d+$/;
@@ -12,15 +13,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const url = new URL(request.url);
     const q = (url.searchParams.get("q") ?? "").trim();
     if (q.length > 100) {
-      return Response.json({ error: "Search query is too long" }, { status: 400 });
+      return apiError(request, { status: 400, code: "QUERY_TOO_LONG", message: "Search query is too long." });
     }
     const idsParam = url.searchParams.get("ids");
     const ids = idsParam ? [...new Set(idsParam.split(",").filter(Boolean))] : null;
     if (ids && (ids.length > 200 || ids.some((id) => !SHOPIFY_PRODUCT_GID.test(id) && !SHOPIFY_VARIANT_GID.test(id)))) {
-      return Response.json({ error: "Product identifiers are invalid" }, { status: 400 });
+      return apiError(request, { status: 400, code: "INVALID_PRODUCT_IDS", message: "Product identifiers are invalid." });
     }
     if (ids && ids.some((id) => SHOPIFY_PRODUCT_GID.test(id)) && ids.some((id) => SHOPIFY_VARIANT_GID.test(id))) {
-      return Response.json({ error: "Product and variant identifiers cannot be mixed" }, { status: 400 });
+      return apiError(request, {
+        status: 400,
+        code: "MIXED_PRODUCT_ID_TYPES",
+        message: "Product and variant identifiers cannot be mixed.",
+      });
     }
     const limitRaw = parseInt(url.searchParams.get("limit") ?? "20", 10);
     const limit = Math.max(1, Math.min(Number.isNaN(limitRaw) ? 20 : limitRaw, 200));
@@ -35,7 +40,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     const shopId = shopRows[0]?.id;
     if (!shopId) {
-      return Response.json({ products: [] }, { status: 200 });
+      return apiError(request, {
+        status: 404,
+        code: "SHOP_NOT_FOUND",
+        message: "Shop not found. Reinstall the app and retry.",
+      });
     }
 
     const lastSynced = await db
@@ -96,7 +105,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           .limit(limit);
 
     if (!includeVariants) {
-      return Response.json({ products, cache }, { status: 200 });
+      return apiJson(request, { products, cache }, { status: 200 });
     }
 
     const productGids = products.map((p) => p.id);
@@ -142,10 +151,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       variants: variantsByProduct[p.id] ?? [],
     }));
 
-    return Response.json({ products: enriched, cache }, { status: 200 });
+    return apiJson(request, { products: enriched, cache }, { status: 200 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[api.products.search]", message);
-    return Response.json({ error: message }, { status: 500 });
+    return handleApiError(request, err, "api.products.search");
   }
 };

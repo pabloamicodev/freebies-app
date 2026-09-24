@@ -24,10 +24,16 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
   const [shopRow] = await db
     .select({ accessTokenEncrypted: shops.accessTokenEncrypted })
     .from(shops)
-    .where(and(eq(shops.myshopifyDomain, shopDomain), eq(shops.isActive, true)))
+    .where(and(
+      eq(shops.id, shopId),
+      eq(shops.myshopifyDomain, shopDomain),
+      eq(shops.isActive, true),
+    ))
     .limit(1);
 
-  if (!shopRow) return;
+  if (!shopRow) {
+    throw new Error("Cannot publish offers: active shop identity does not match the requested shop.");
+  }
 
   const accessToken = await decryptToken(shopRow.accessTokenEncrypted);
   // Self-heals if afterAuth's registration failed or hasn't run yet (e.g. the
@@ -90,12 +96,20 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     compiledByOffer.map((entry) => entry.offer),
   );
   const shippingOffers = compiledByOffer.flatMap((entry) => entry.shippingOffers);
+  const customerTags = [...new Set(compiledOffers.flatMap((offer) => [
+    ...(offer.requiredCustomerTags ?? []),
+    ...(offer.excludedCustomerTags ?? []),
+  ]))].sort();
+  if (customerTags.length > 100) {
+    throw new Error("Active offers reference more than 100 unique customer tags. Reduce the tag set before publishing.");
+  }
 
   const config: CompiledFunctionConfig = {
     offers: compiledOffers,
     shippingOffers,
     version: "1",
     compiledAt: new Date().toISOString(),
+    ...(customerTags.length > 0 ? { customerTags } : {}),
     ...buildAttributeQueryVariables(conditionRows),
   };
 
@@ -120,7 +134,7 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     await db
       .update(offers)
       .set({ compiledConfig: compiledOffer })
-      .where(eq(offers.id, compiledOffer.id));
+      .where(and(eq(offers.shopId, shopId), eq(offers.id, compiledOffer.id)));
   }
 }
 

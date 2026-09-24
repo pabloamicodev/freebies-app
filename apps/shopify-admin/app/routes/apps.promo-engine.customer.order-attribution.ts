@@ -2,14 +2,17 @@ import type { LoaderFunctionArgs } from "react-router";
 import { analyticsEvents, offers } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import { getSignedShop } from "../lib/app-proxy-auth.server.js";
+import { apiJson, handleApiError } from "../lib/api-response.server.js";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { id: shopId, currencyCode, db, loggedInCustomerId } = await getSignedShop(request);
-  const url = new URL(request.url);
-  const orderGid = url.searchParams.get("order_gid");
-  if (!orderGid || !/^gid:\/\/shopify\/Order\/\d+$/.test(orderGid) || !loggedInCustomerId) {
-    return Response.json({ attributions: [] });
-  }
+  try {
+    const { id: shopId, currencyCode, db, loggedInCustomerId } = await getSignedShop(request);
+    const url = new URL(request.url);
+    const orderGid = url.searchParams.get("order_gid");
+    if (!orderGid || !/^gid:\/\/shopify\/Order\/\d+$/.test(orderGid) || !loggedInCustomerId || !/^\d+$/.test(loggedInCustomerId)) {
+      return apiJson(request, { attributions: [] });
+    }
+    const customerGid = `gid://shopify/Customer/${loggedInCustomerId}`;
 
   const events = await db
     .select({
@@ -23,7 +26,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     .where(and(
       eq(analyticsEvents.shopId, shopId),
       eq(analyticsEvents.orderId, orderGid),
-      eq(analyticsEvents.customerId, loggedInCustomerId),
+      eq(analyticsEvents.customerId, customerGid),
       eq(analyticsEvents.eventName, "order_placed_attributed"),
     ));
 
@@ -54,5 +57,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
   }
 
-  return Response.json({ attributions: [...unique.values()] });
+    return apiJson(request, { attributions: [...unique.values()] });
+  } catch (error) {
+    return handleApiError(request, error, "apps.promo-engine.customer.order-attribution");
+  }
 }

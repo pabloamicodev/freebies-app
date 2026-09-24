@@ -4,7 +4,7 @@
   Auto-injected on every page when enabled in the theme editor under "App embeds".
   Injects the runtime config and loads the compiled promo-engine.js bundle.
 
-  Settings: public_key, debug_mode, cart_debounce_ms, position (bottom_right/bottom_left)
+  Settings: debug_mode and cart_debounce_ms.
 {% endcomment %}
 
 {%- liquid
@@ -20,7 +20,6 @@
 <script>
   window.__promoEngineConfig = {
     shopDomain: {{ shop.permanent_domain | json }},
-    publicKey:  {{ block.settings.public_key | default: '' | json }},
     locale:     {{ pe_locale | json }},
     currency:   {{ pe_currency | json }},
     marketId:   {{ localization.market.id | json }},
@@ -28,9 +27,7 @@
     countryCode: {{ localization.country.iso_code | json }},
     debug:      {{ pe_debug | json }},
     debounceMs: {{ pe_debounce }},
-    evalEndpoint:      "/apps/promo-engine/evaluate",
-    analyticsEndpoint: "/apps/promo-engine/analytics",
-    prepareCheckoutEndpoint: "/apps/promo-engine/prepare-checkout"
+    evalEndpoint: "/apps/promo-engine/evaluate"
   };
 </script>
 
@@ -41,12 +38,6 @@
   "name": "Promo Engine",
   "target": "body",
   "settings": [
-    {
-      "type": "text",
-      "id": "public_key",
-      "label": "Public Key",
-      "info": "Found in Promo Engine admin → Settings → Installation"
-    },
     {
       "type": "checkbox",
       "id": "debug_mode",

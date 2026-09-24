@@ -40,7 +40,12 @@
             salesChannel: 'online_store', requestedUrl: window.location.href, sessionId
           })
         })
-        .then(function(r) { return r.json(); })
+        .then(function(r) {
+          if (!r.ok) {
+            throw new Error('Promo Engine evaluation failed with HTTP ' + r.status);
+          }
+          return r.json();
+        })
         .then(function(result) {
           var upsell = result.upsells && result.upsells.find(function(u) { return !offerId || u.offerId === offerId; });
           // The evaluate endpoint returns one recommended product per offer,
@@ -60,7 +65,10 @@
             }, currency, sessionId);
           }
         })
-        .catch(function() {});
+        .catch(function(error) {
+          container.setAttribute('data-promo-engine-error', 'true');
+          console.warn('[Promo Engine] FBT block could not load:', error);
+        });
       } else {
         setTimeout(tryInit, 200);
       }

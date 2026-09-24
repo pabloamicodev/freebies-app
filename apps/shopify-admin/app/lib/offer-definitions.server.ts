@@ -8,6 +8,7 @@ import {
 } from "@promo/db";
 import type { OfferDefinition } from "@promo/rule-engine";
 import { computeOfferVersion } from "./offer-version.server.js";
+import { normalizeConditionValue } from "./offer-config-normalization.server.js";
 
 // Previously an in-memory cache (didn't survive across Vercel serverless instances).
 // Now we query directly — the DB indexes on (shopId, status) and (shopId, priority)
@@ -60,7 +61,7 @@ export async function getOfferDefinitions(shopId: string, db: Db): Promise<Offer
           scope: condition.scope,
           conditionType: condition.conditionType,
           operator: condition.operator,
-          value: condition.value,
+          value: normalizeConditionValue(condition.conditionType, condition.value),
           isEnabled: condition.isEnabled,
           sortOrder: condition.sortOrder,
         })),

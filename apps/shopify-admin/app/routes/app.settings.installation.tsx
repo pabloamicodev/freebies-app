@@ -6,6 +6,7 @@
 
 import { useLoaderData } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
+import { detectPromoEngineEmbedStatus } from "../lib/theme-app-embed.server.js";
 import { authenticate } from "../shopify.server.js";
 import type { LoaderFunctionArgs } from "react-router";
 import "../styles/bogos.css";
@@ -14,8 +15,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
   const shopDomain = session.shop;
 
-  let appEmbedEnabled = false;
+  let appEmbedStatus: "enabled" | "disabled" | "unknown" = "unknown";
   let activeThemeId = "";
+  let statusDetail = "Shopify did not return a verifiable app embed status.";
 
   try {
     // Query the active theme's settings_data.json to check if the app embed is enabled
@@ -48,39 +50,52 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
     interface ThemeQueryResult {
       data?: { themes?: { nodes?: ThemeNode[] } };
+      errors?: Array<{ message?: string }>;
     }
 
     const data = await res.json() as ThemeQueryResult;
+    if (data.errors?.length) {
+      throw new Error(data.errors.map((error) => error.message ?? "Theme query failed").join("; "));
+    }
     const mainTheme = data.data?.themes?.nodes?.[0];
     activeThemeId = mainTheme?.id ?? "";
 
     const settingsContent = mainTheme?.files?.nodes?.[0]?.body?.content;
     if (settingsContent) {
-      const settings = JSON.parse(settingsContent) as { current?: { enabled_apps?: string[] } };
-      const enabledApps = settings.current?.enabled_apps ?? [];
-      appEmbedEnabled = enabledApps.some(
-        (entry) => typeof entry === "string" && entry.toLowerCase().includes("promo-engine"),
-      );
+      appEmbedStatus = detectPromoEngineEmbedStatus(settingsContent);
+      statusDetail = appEmbedStatus === "enabled"
+        ? "The published theme settings were read successfully."
+        : "The published theme settings confirm that the Promo Engine app embed is not active.";
+    } else {
+      statusDetail = "The published theme settings file was unavailable.";
     }
-  } catch {
-    // API unavailable or theme files not yet accessible — appEmbedEnabled stays false
+  } catch (error) {
+    console.warn("[installation] Unable to verify app embed status", {
+      shop: shopDomain,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
   }
 
+  const shopHandle = shopDomain.replace(".myshopify.com", "");
+  const themeId = activeThemeId.split("/").pop();
   return {
     shopDomain,
     activeThemeId,
-    appEmbedEnabled,
-    themeEditorUrl: `https://admin.shopify.com/store/${shopDomain.replace(".myshopify.com", "")}/themes/${activeThemeId.split("/").pop()}/editor`,
+    appEmbedStatus,
+    statusDetail,
+    themeEditorUrl: themeId
+      ? `https://admin.shopify.com/store/${shopHandle}/themes/${themeId}/editor`
+      : `https://admin.shopify.com/store/${shopHandle}/themes`,
   };
 };
 
 const EXTENSION_STATUS = [
-  { label: "Web Pixel Extension (Analytics)", status: "Installed" },
-  { label: "Checkout UI Extension (Upsell — Plus)", status: "Installed" },
-  { label: "Customer Account UI Extension", status: "Installed" },
-  { label: "Discount Function (Rust)", status: "Deployed" },
-  { label: "Cart Transform Function (Rust — Plus)", status: "Deployed" },
-  { label: "Validation Function (Rust)", status: "Deployed" },
+  { label: "Web Pixel Extension (Analytics)", status: "Included in app build" },
+  { label: "Checkout UI Extension (Upsell — Plus)", status: "Included in app build" },
+  { label: "Customer Account UI Extension", status: "Included in app build" },
+  { label: "Discount Function (Rust)", status: "Included in app build" },
+  { label: "Cart Transform Function (Rust — Plus)", status: "Included in app build" },
+  { label: "Validation Function (Rust)", status: "Included in app build" },
 ];
 
 const APP_BLOCKS = [
@@ -93,7 +108,8 @@ const APP_BLOCKS = [
 ];
 
 export default function InstallationPage() {
-  const { themeEditorUrl, appEmbedEnabled } = useLoaderData<typeof loader>();
+  const { themeEditorUrl, appEmbedStatus, statusDetail } = useLoaderData<typeof loader>();
+  const appEmbedEnabled = appEmbedStatus === "enabled";
 
   return (
     <div className="b-page">
@@ -101,7 +117,7 @@ export default function InstallationPage() {
       <PageHeader title="Theme Installation" backTo="/app/settings" />
 
       {/* Warning banner when embed status is unknown / disabled */}
-      {!appEmbedEnabled && (
+      {appEmbedStatus !== "enabled" && (
         <div className="b-banner b-banner-orange" style={{ marginBottom: 16 }}>
           <div className="b-banner-icon">
             <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
@@ -109,10 +125,12 @@ export default function InstallationPage() {
             </svg>
           </div>
           <div className="b-banner-body">
-            <p className="b-banner-title">App embed may not be enabled</p>
+            <p className="b-banner-title">
+              {appEmbedStatus === "disabled" ? "App embed is disabled" : "App embed status is unknown"}
+            </p>
             <p className="b-banner-text">
-              The promo engine requires the app embed to be active in your theme editor.
-              Open the theme editor below and enable it under <strong>App embeds</strong>.
+              {statusDetail} The promo engine requires the app embed to be active in your theme
+              editor. Open the theme editor below and enable it under <strong>App embeds</strong>.
             </p>
           </div>
         </div>
@@ -125,7 +143,7 @@ export default function InstallationPage() {
           <div className="b-card-header b-row-between">
             <span>Installation Status</span>
             <span className={`b-badge ${appEmbedEnabled ? "b-badge-green" : "b-badge-orange"}`}>
-              {appEmbedEnabled ? "Enabled" : "Disabled"}
+              {appEmbedEnabled ? "Enabled" : appEmbedStatus === "disabled" ? "Disabled" : "Unknown"}
             </span>
           </div>
           <div className="b-card-body">
@@ -150,7 +168,11 @@ export default function InstallationPage() {
                   <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#c2410c", display: "inline-block" }} />
                 )}
                 {appEmbedEnabled && <span className="b-status-dot" />}
-                {appEmbedEnabled ? "Embed active" : "Status unknown"}
+                {appEmbedEnabled
+                  ? "Embed active"
+                  : appEmbedStatus === "disabled"
+                    ? "Embed disabled"
+                    : "Status unknown"}
               </span>
             </div>
           </div>
@@ -268,7 +290,7 @@ export default function InstallationPage() {
                   style={{ padding: "12px 20px" }}
                 >
                   <span className="b-text-sm">{ext.label}</span>
-                  <span className="b-badge b-badge-green">{ext.status}</span>
+                  <span className="b-badge b-badge-gray">{ext.status}</span>
                 </div>
                 {i < EXTENSION_STATUS.length - 1 && (
                   <hr className="b-divider b-divider-full" style={{ margin: 0 }} />
@@ -324,18 +346,8 @@ export default function InstallationPage() {
                   Using a headless or custom storefront?
                 </p>
                 <p className="b-text-sub b-text-sm" style={{ margin: 0 }}>
-                  Theme embeds and app blocks are not applicable. Use the{" "}
-                  <code
-                    style={{
-                      background: "var(--border-light)",
-                      padding: "1px 5px",
-                      borderRadius: 3,
-                      fontSize: 12,
-                    }}
-                  >
-                    @promo/headless-sdk
-                  </code>{" "}
-                  instead — see the Headless integration section above.
+                  Theme embeds and app blocks are not applicable. Headless storefront integration
+                  is not currently supported by this app.
                 </p>
               </div>
 

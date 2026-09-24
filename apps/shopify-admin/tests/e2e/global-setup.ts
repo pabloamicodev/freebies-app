@@ -28,8 +28,7 @@ export const AUTH_FILE = path.join(__dirname, ".auth", "shopify.json");
 
 export default async function globalSetup() {
   if (!APP_URL || !DEV_STORE_URL || !EMAIL || !PASSWORD) {
-    console.info("[global-setup] Skipping auth — required env vars not set.");
-    return;
+    throw new Error("E2E auth requires APP_URL, DEV_STORE_URL, SHOPIFY_ADMIN_EMAIL, and SHOPIFY_ADMIN_PASSWORD.");
   }
 
   const authDir = path.dirname(AUTH_FILE);
@@ -75,7 +74,7 @@ export default async function globalSetup() {
     console.info("[global-setup] Auth state saved to", AUTH_FILE);
   } catch (err) {
     console.error("[global-setup] Auth failed:", err instanceof Error ? err.message : err);
-    // Don't throw — tests will run without auth and likely skip/fail gracefully
+    throw err;
   } finally {
     await browser.close();
   }

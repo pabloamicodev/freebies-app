@@ -41,6 +41,21 @@ export function withPromoMetadata(properties: LineProperties): LineProperties {
   return { ...properties, [METADATA_PROPERTY]: JSON.stringify(metadata) };
 }
 
+export function needsPromoMetadataPacking(
+  properties: Record<string, unknown> | undefined,
+): boolean {
+  if (!properties) return false;
+  const packed = existingMetadata(
+    typeof properties[METADATA_PROPERTY] === "string"
+      ? properties[METADATA_PROPERTY]
+      : undefined,
+  );
+  return PACKED_PROPERTY_KEYS.some((key) => {
+    const legacyValue = properties[key];
+    return typeof legacyValue === "string" && packed[key] !== legacyValue;
+  });
+}
+
 function packJsonPayload(payload: unknown): unknown {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
   const object = payload as Record<string, unknown>;

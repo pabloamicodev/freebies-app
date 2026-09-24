@@ -97,6 +97,16 @@ pub struct CompiledOffer {
     pub customer_order_count_max: Option<i64>,
     pub customer_amount_spent_min_cents: Option<i64>,
     pub customer_amount_spent_max_cents: Option<i64>,
+    #[serde(default)]
+    pub required_customer_tags: Vec<String>,
+    #[serde(default)]
+    pub excluded_customer_tags: Vec<String>,
+    #[serde(default = "default_treat_guest_as_no_tags")]
+    pub treat_guest_as_no_tags: bool,
+    #[serde(default)]
+    pub include_country_codes: Vec<String>,
+    #[serde(default)]
+    pub exclude_country_codes: Vec<String>,
     pub max_gift_quantity: Option<i64>,
     pub discount_type: String,
     pub discount_value: f64,
@@ -115,6 +125,10 @@ pub struct CompiledOffer {
     pub line_attribute_conditions: Vec<CompiledAttributeCondition>,
     #[serde(default)]
     pub cart_attribute_conditions: Vec<CompiledAttributeCondition>,
+}
+
+fn default_treat_guest_as_no_tags() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, Clone)]

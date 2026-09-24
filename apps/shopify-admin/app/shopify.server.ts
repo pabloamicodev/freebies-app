@@ -46,7 +46,7 @@ import { SHOPIFY_API_VERSION } from "./lib/shopify-api-version.js";
 import { encryptToken } from "./lib/token-crypto.server.js";
 import { shopifyGraphQL } from "./lib/shopify-fetch.server.js";
 import { waitUntil } from "@vercel/functions";
-import { syncAllProducts } from "./lib/sync/product-sync.server.js";
+import { drainProductSyncQueue, queueProductSync } from "./lib/sync/product-sync.server.js";
 import { publishOffersForShop } from "./lib/sync/offer-publisher.server.js";
 import { productCache } from "@promo/db";
 import { count, eq as drizzleEq } from "drizzle-orm";
@@ -73,11 +73,14 @@ const shopify = shopifyApp({
   hooks: {
     afterAuth: async ({ session }) => {
       try {
-        await shopify.registerWebhooks({ session });
+        await retryWebhookRegistration(() => shopify.registerWebhooks({ session }));
       } catch (e) {
         Sentry.captureException(e, { extra: { shop: session.shop, context: "webhook-registration" } });
         console.error("Webhook registration failed:", e);
-        // Do not throw — install should succeed even if webhook reg fails (Shopify retries)
+        // Compliance and lifecycle webhooks are part of a valid installation.
+        // Failing authentication is safer than silently installing an app that
+        // cannot redact customer data or process uninstall notifications.
+        throw e;
       }
 
       // Mirror shop record to PostgreSQL for offer management
@@ -161,12 +164,9 @@ const shopify = shopifyApp({
             // the function as soon as the auth response is sent, which would
             // otherwise cut this sync off mid-run.
             waitUntil(
-              syncAllProducts(
-                shopRow2.id,
-                session.shop,
-                session.accessToken ?? "",
-                shopRow2.currencyCode ?? "USD",
-              ).catch((e: unknown) => {
+              queueProductSync(shopRow2.id)
+                .then(() => drainProductSyncQueue({ shopId: shopRow2.id, maxSteps: 3, maxRuntimeMs: 25_000 }))
+                .catch((e: unknown) => {
                 Sentry.captureException(e, { extra: { shop: session.shop, context: "afterAuth-product-sync" } });
                 console.error("[afterAuth] Initial product sync failed:", e instanceof Error ? e.message : e);
               }),
@@ -194,6 +194,20 @@ const shopify = shopifyApp({
     },
   },
 });
+
+async function retryWebhookRegistration(register: () => Promise<unknown>): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await register();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 250));
+    }
+  }
+  throw lastError;
+}
 
 export const authenticate = shopify.authenticate;
 export const login = shopify.login;

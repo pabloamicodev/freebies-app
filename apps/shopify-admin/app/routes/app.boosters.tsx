@@ -4,7 +4,7 @@
  * via floating widgets, progress bars, and cart messages.
  */
 
-import { useLoaderData, useNavigate, Link, Form } from "react-router";
+import { useLoaderData, Link, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
@@ -84,7 +84,6 @@ const WIDGET_TYPE_LABEL: Record<string, string> = {
 
 export default function BoostersPage() {
   const { boosters, widgets: boosterWidgets } = useLoaderData<typeof loader>();
-  const navigate = useNavigate();
 
   return (
     <div className="b-page">
@@ -187,13 +186,9 @@ export default function BoostersPage() {
                     {boosters.map((booster) => {
                       const badge = STATUS_BADGE[booster.status] ?? STATUS_BADGE["draft"]!;
                       return (
-                        <tr
-                          key={booster.id}
-                          onClick={() => navigate(`/app/offers/${booster.id}`)}
-                          style={{ cursor: "pointer" }}
-                        >
+                        <tr key={booster.id}>
                           <td>
-                            <div className="b-offer-name">{booster.internalName}</div>
+                            <Link className="b-offer-name" to={`/app/offers/${booster.id}`}>{booster.internalName}</Link>
                             {booster.publicTitle && (
                               <div className="b-offer-subtitle">{booster.publicTitle}</div>
                             )}

@@ -4,7 +4,7 @@
  * Fails with exit code 1 if any budget is exceeded.
  */
 
-import { statSync, existsSync } from "fs";
+import { existsSync } from "fs";
 import { join } from "path";
 import { gzipSync } from "zlib";
 import { readFileSync } from "fs";
@@ -13,15 +13,8 @@ const DIST = join(process.cwd(), "packages/storefront-runtime/dist");
 
 /** Budget table (gzipped KB) */
 const BUDGETS = {
-  "promo-engine.js": 30,          // core runtime
-  "gift-slider.js": 15,           // gift slider Preact
-  "bundle-builder.js": 50,        // bundle builder (lazy)
-  "today-offer.js": 8,            // today offer Preact
-  "progress-bar.js": 5,           // Web Component
-  "cart-message.js": 5,           // Web Component
-  "fbt.js": 12,                   // FBT widget
-  "gift-icon.js": 4,              // Web Component
-  "volume-discount.js": 5,        // Web Component
+  // Widgets are bundled into the single theme runtime by package.json.
+  "promo-engine.js": 30,
 };
 
 let failed = false;
@@ -33,7 +26,8 @@ console.log("─".repeat(62));
 for (const [filename, budgetKb] of Object.entries(BUDGETS)) {
   const filePath = join(DIST, filename);
   if (!existsSync(filePath)) {
-    console.log(filename.padEnd(30), "N/A".padStart(10), `${budgetKb}KB`.padStart(10), "⏭ SKIP".padStart(8));
+    failed = true;
+    console.log(filename.padEnd(30), "N/A".padStart(10), `${budgetKb}KB`.padStart(10), "❌ MISSING".padStart(8));
     continue;
   }
 

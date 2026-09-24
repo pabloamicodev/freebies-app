@@ -3,11 +3,11 @@
 # Validates they stay within Shopify's instruction budgets.
 set -e
 
-FIXTURE_DIR="$(dirname "$0")/../extensions/fixtures"
+FIXTURE_DIR="$(dirname "$0")/../apps/shopify-admin/extensions/fixtures"
 mkdir -p "$FIXTURE_DIR"
 
 echo "── Discount Function benchmark ──────────────────────"
-cd "$(dirname "$0")/../extensions/discount-function"
+cd "$(dirname "$0")/../apps/shopify-admin/extensions/discount-function"
 
 # Run Rust unit tests (includes worst-case logic tests)
 cargo test --release 2>&1 | tail -5
@@ -30,12 +30,12 @@ fi
 
 echo ""
 echo "── Cart Validation Function benchmark ───────────────"
-cd "$(dirname "$0")/../extensions/cart-validation"
+cd "$(dirname "$0")/../apps/shopify-admin/extensions/cart-validation"
 cargo test --release 2>&1 | tail -5
 
 echo ""
 echo "── Cart Transform Function benchmark ────────────────"
-cd "$(dirname "$0")/../extensions/cart-transform"
+cd "$(dirname "$0")/../apps/shopify-admin/extensions/cart-transform"
 cargo test --release 2>&1 | tail -5
 
 echo ""

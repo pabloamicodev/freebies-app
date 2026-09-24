@@ -6,6 +6,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 const DEV_STORE = process.env["DEV_STORE_URL"] ?? "https://your-dev-store.myshopify.com";
+const PRODUCT_HANDLE = process.env["E2E_PRODUCT_HANDLE"] ?? "test-product";
 
 interface EvaluationResponse {
   cartActions: unknown[];
@@ -32,9 +33,7 @@ test.describe("Multi-currency (requires international market configured)", () =>
     await page.waitForTimeout(2000);
 
     const progressBar = page.locator("promo-progress-bar");
-    if (!(await progressBar.isVisible().catch(() => false))) {
-      test.skip(true, "No progress bar on this page for CA market");
-    }
+    await expect(progressBar).toBeVisible();
 
     const message = await progressBar.evaluate((el) => {
       return el.shadowRoot?.querySelector(".pe-pb-msg")?.textContent ?? "";
@@ -55,22 +54,18 @@ test.describe("Multi-currency (requires international market configured)", () =>
 
     await page.waitForTimeout(3000);
 
-    try {
-      const response = await evalIntercepted;
-      const body = await response.json() as EvaluationResponse;
-      // Verify the response has cart actions and is valid
-      expect(body).toHaveProperty("cartActions");
-      expect(body).toHaveProperty("qualifiedOffers");
-    } catch {
-      test.skip(true, "Evaluation endpoint not called or not interceptable");
-    }
+    const response = await evalIntercepted;
+    expect(response.ok()).toBe(true);
+    const body = await response.json() as EvaluationResponse;
+    expect(body).toHaveProperty("cartActions");
+    expect(body).toHaveProperty("qualifiedOffers");
   });
 });
 
 test.describe("Customer targeting", () => {
   test("logged-out customer falls back gracefully for customer tag conditions", async ({ page }) => {
     await clearCart(page);
-    await page.goto(`${DEV_STORE}/products/test-product`);
+    await page.goto(`${DEV_STORE}/products/${PRODUCT_HANDLE}`);
     await page.waitForTimeout(2000);
 
     // Promo engine should still initialize even without a customer
@@ -80,19 +75,17 @@ test.describe("Customer targeting", () => {
 
   test("guest customer sees gift offers without login requirement", async ({ page }) => {
     await clearCart(page);
-    await page.goto(`${DEV_STORE}/products/test-product`);
+    await page.goto(`${DEV_STORE}/products/${PRODUCT_HANDLE}`);
 
     // Add a product to trigger evaluation
     const addBtn = page.locator('[data-testid="add-to-cart"], [name="add"]').first();
-    if (await addBtn.isVisible().catch(() => false)) {
-      await addBtn.click();
-      await page.waitForTimeout(2000);
+    await expect(addBtn).toBeVisible();
+    await addBtn.click();
+    await page.waitForTimeout(2000);
 
-      // Cart should have standard lines (guest cart works fine)
-      const cart = await page.goto(`${DEV_STORE}/cart.js`);
-      const cartData = await cart?.json() as CartResponse | undefined;
-      expect(cartData).toHaveProperty("items");
-    }
+    const cart = await page.goto(`${DEV_STORE}/cart.js`);
+    const cartData = await cart?.json() as CartResponse | undefined;
+    expect(cartData).toHaveProperty("items");
   });
 });
 
@@ -103,14 +96,10 @@ test.describe("Accessibility", () => {
 
     // If gift slider is open, check keyboard navigation
     const slider = page.locator(".pe-slider-overlay");
-    if (await slider.isVisible().catch(() => false)) {
-      // Tab through gift cards
-      await page.keyboard.press("Tab");
-      await page.keyboard.press("Tab");
-
-      // Should be able to select with Enter
-      const focusedElement = await page.evaluate(() => document.activeElement?.className);
-      expect(focusedElement).toBeTruthy();
-    }
+    await expect(slider).toBeVisible();
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    const focusedElement = await page.evaluate(() => document.activeElement?.className);
+    expect(focusedElement).toBeTruthy();
   });
 });

@@ -7,26 +7,21 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { getMarketsForShop } from "../lib/markets.server.js";
+import { apiJson, handleApiError } from "../lib/api-response.server.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   try {
     const { shopId } = await getShopContext(request);
 
-    if (!shopId) {
-      return Response.json({ error: "Shop not found" }, { status: 404 });
-    }
-
     const markets = await getMarketsForShop(shopId);
 
-    return Response.json({ markets }, {
+    return apiJson(request, { markets }, {
       status: 200,
       headers: {
         "Cache-Control": "private, max-age=300",
       },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[api.markets]", message);
-    return Response.json({ error: message }, { status: 500 });
+    return handleApiError(request, err, "api.markets");
   }
 };

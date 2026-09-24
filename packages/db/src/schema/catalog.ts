@@ -1,6 +1,6 @@
 import {
   pgTable, uuid, text, boolean, timestamp, jsonb, bigint,
-  numeric, index, unique,
+  numeric, integer, index, unique,
 } from "drizzle-orm/pg-core";
 import { shops } from "./shops";
 import { offers } from "./offers";
@@ -77,6 +77,34 @@ export const variantCache = pgTable(
 
 export type VariantCache = typeof variantCache.$inferSelect;
 export type NewVariantCache = typeof variantCache.$inferInsert;
+
+/** Resumable Shopify catalog imports. A single row per shop is reused so
+ * repeated UI/auth triggers cannot create an unbounded queue. */
+export const catalogSyncJobs = pgTable(
+  "catalog_sync_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    shopId: uuid("shop_id")
+      .notNull()
+      .references(() => shops.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("queued"),
+    cursor: text("cursor"),
+    syncedProducts: integer("synced_products").notNull().default(0),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    syncStartedAt: timestamp("sync_started_at", { withTimezone: true }).notNull().defaultNow(),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    unique("catalog_sync_jobs_shop_id_unique").on(t.shopId),
+    index("catalog_sync_jobs_status_lease_idx").on(t.status, t.leaseUntil),
+  ],
+);
+
+export type CatalogSyncJob = typeof catalogSyncJobs.$inferSelect;
 
 /** Gift clone products created by the app in clone_product mode. */
 export const giftCloneProducts = pgTable("gift_clone_products", {

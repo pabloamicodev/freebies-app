@@ -19,8 +19,8 @@ import { initFbtWidget } from "./widgets/fbt.js";
 import { buildMarketContext } from "./market-context.js";
 import type { EvaluationResult, CartAction } from "./types.js";
 
-const EVAL_DEBOUNCE_MS = 300;
-const EVAL_ENDPOINT = "/apps/promo-engine/evaluate";
+const DEFAULT_EVAL_DEBOUNCE_MS = 300;
+const DEFAULT_EVAL_ENDPOINT = "/apps/promo-engine/evaluate";
 const SESSION_KEY = "promo_engine_session_id";
 
 /** crypto.randomUUID() requires a secure context and isn't present on older
@@ -51,13 +51,14 @@ function getOrCreateSessionId(): string {
 
 interface RuntimeConfig {
   shopDomain: string;
-  publicKey: string;
   locale: string;
   currency: string;
   marketId?: string | null;
   marketHandle?: string | null;
   countryCode?: string | null;
   debug: boolean;
+  debounceMs?: number;
+  evalEndpoint?: string;
 }
 
 class PromoEngineRuntime {
@@ -70,11 +71,20 @@ class PromoEngineRuntime {
   private refreshGuard = false;
   private capturedThemeSectionIds: string[] = [];
   private lastEvaluationResult: EvaluationResult | null = null;
+  private readonly evalEndpoint: string;
 
   constructor(config: RuntimeConfig) {
     this.config = config;
     this.sessionId = getOrCreateSessionId();
-    this.debouncedEvaluate = debounce(() => this.triggerEvaluation(), EVAL_DEBOUNCE_MS);
+    const debounceMs = Number.isFinite(config.debounceMs)
+      ? Math.max(100, Math.min(1_000, Math.round(config.debounceMs!)))
+      : DEFAULT_EVAL_DEBOUNCE_MS;
+    // App-proxy requests must stay same-origin. Reject absolute or arbitrary
+    // paths so theme settings can never turn the runtime into a data exfiltrator.
+    this.evalEndpoint = config.evalEndpoint?.startsWith("/apps/promo-engine/")
+      ? config.evalEndpoint
+      : DEFAULT_EVAL_ENDPOINT;
+    this.debouncedEvaluate = debounce(() => this.triggerEvaluation(), debounceMs);
   }
 
   init(): void {
@@ -296,13 +306,10 @@ class PromoEngineRuntime {
     const market = buildMarketContext(this.config, shopifyGlobal);
 
     try {
-      const response = await fetch(EVAL_ENDPOINT, {
+      const response = await fetch(this.evalEndpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Promo-Shop": this.config.shopDomain,
-          "X-Promo-Key": this.config.publicKey,
-          "X-Promo-Session": this.sessionId,
         },
         body: JSON.stringify({
           cart: this.normalizeCart(cart),

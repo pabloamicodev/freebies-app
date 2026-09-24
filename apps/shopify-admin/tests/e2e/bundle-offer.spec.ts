@@ -6,6 +6,9 @@
 import { test, expect, type Page } from "@playwright/test";
 
 const DEV_STORE = process.env["DEV_STORE_URL"] ?? "https://your-dev-store.myshopify.com";
+const BUNDLE_PRODUCT_HANDLE = process.env["E2E_BUNDLE_PRODUCT_HANDLE"] ?? "test-bundle-product";
+const VOLUME_PRODUCT_HANDLE = process.env["E2E_VOLUME_PRODUCT_HANDLE"] ?? "test-volume-product";
+const QUALIFYING_VARIANT_ID = process.env["E2E_QUALIFYING_VARIANT_ID"] ?? "YOUR_VARIANT_ID";
 
 async function clearCart(page: Page) {
   await page.goto(`${DEV_STORE}/cart/clear`);
@@ -28,19 +31,15 @@ test.describe("Classic Bundle", () => {
 
   test("bundle add-to-cart creates all component lines", async ({ page }) => {
     // Navigate to a product page with a classic bundle widget
-    await page.goto(`${DEV_STORE}/products/test-bundle-product`);
+    await page.goto(`${DEV_STORE}/products/${BUNDLE_PRODUCT_HANDLE}`);
 
     // Check if bundle widget is present
     const bundleWidget = page.locator("promo-classic-bundle, .pe-bundle, [data-promo-widget='classic_bundle']");
-    if (!(await bundleWidget.isVisible().catch(() => false))) {
-      test.skip(true, "No bundle widget found on this product page");
-    }
+    await expect(bundleWidget).toBeVisible();
 
     // Find and click the bundle add-to-cart button
     const addBtn = page.locator("[data-promo-action='add-bundle']").first();
-    if (!(await addBtn.isVisible().catch(() => false))) {
-      test.skip(true, "Bundle add button not found");
-    }
+    await expect(addBtn).toBeVisible();
 
     await addBtn.click();
     await page.waitForTimeout(2000);
@@ -56,12 +55,10 @@ test.describe("Classic Bundle", () => {
 
 test.describe("Volume Discount", () => {
   test("volume discount widget shows correct tiers", async ({ page }) => {
-    await page.goto(`${DEV_STORE}/products/test-volume-product`);
+    await page.goto(`${DEV_STORE}/products/${VOLUME_PRODUCT_HANDLE}`);
 
     const volumeWidget = page.locator("promo-volume-discount");
-    if (!(await volumeWidget.isVisible().catch(() => false))) {
-      test.skip(true, "No volume discount widget found");
-    }
+    await expect(volumeWidget).toBeVisible();
 
     // Verify tiers are rendered in shadow DOM
     const shadowContent = await volumeWidget.evaluate((el) => {
@@ -79,11 +76,7 @@ test.describe("Today Offer Widget", () => {
     await page.waitForTimeout(3000); // Wait for promo engine to evaluate
 
     const todayWidget = page.locator("#pe-today-offer-root");
-    await todayWidget.isVisible().catch(() => false);
-    // May or may not be visible depending on active offers
-    // Just verify the container was mounted
-    const container = await page.$(`#pe-today-offer-root`);
-    expect(container).not.toBeNull();
+    await expect(todayWidget).toHaveCount(1);
   });
 });
 
@@ -93,9 +86,7 @@ test.describe("Progress Bar", () => {
     await page.goto(`${DEV_STORE}/cart`);
 
     const progressBar = page.locator("promo-progress-bar");
-    if (!(await progressBar.isVisible().catch(() => false))) {
-      test.skip(true, "No progress bar found in cart");
-    }
+    await expect(progressBar).toBeVisible();
 
     // Verify shadow DOM has progress track
     const hasProgressTrack = await progressBar.evaluate((el) => {
@@ -108,7 +99,7 @@ test.describe("Progress Bar", () => {
 test.describe("Checkout Upsell (Plus)", () => {
   test("checkout contains upsell extension", async ({ page }) => {
     // Add a product to cart first
-    await page.goto(`${DEV_STORE}/cart/add?id=YOUR_VARIANT_ID&quantity=1`);
+    await page.goto(`${DEV_STORE}/cart/add?id=${encodeURIComponent(QUALIFYING_VARIANT_ID)}&quantity=1`);
     await page.waitForTimeout(500);
 
     await page.goto(`${DEV_STORE}/cart`);

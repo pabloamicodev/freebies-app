@@ -11,20 +11,6 @@ const __dirname = path.dirname(__filename);
 
 const DEV_STORE_URL = process.env["DEV_STORE_URL"];
 const APP_URL = process.env["APP_URL"];
-
-// Skip all tests when required env vars are not configured.
-// This prevents CI failures when the "e2e" environment secrets aren't set.
-const isConfigured =
-  DEV_STORE_URL &&
-  DEV_STORE_URL !== "https://YOUR-DEV-STORE.myshopify.com" &&
-  APP_URL;
-
-if (!isConfigured) {
-  console.info(
-    "[playwright] Skipping E2E tests — DEV_STORE_URL and APP_URL must be set in .env.test or CI secrets.",
-  );
-}
-
 const AUTH_FILE = path.join(__dirname, "tests/e2e/.auth/shopify.json");
 const hasAuthFile = (() => {
   try {
@@ -35,10 +21,36 @@ const hasAuthFile = (() => {
   }
 })();
 
+const isConfigured =
+  DEV_STORE_URL &&
+  DEV_STORE_URL !== "https://YOUR-DEV-STORE.myshopify.com" &&
+  APP_URL;
+
+if (!isConfigured) {
+  throw new Error(
+    "E2E configuration is required: set DEV_STORE_URL and APP_URL in .env.test or CI secrets.",
+  );
+}
+if (isConfigured && !hasAuthFile && (!process.env["SHOPIFY_ADMIN_EMAIL"] || !process.env["SHOPIFY_ADMIN_PASSWORD"])) {
+  throw new Error("E2E authentication requires SHOPIFY_ADMIN_EMAIL and SHOPIFY_ADMIN_PASSWORD when no saved auth state exists.");
+}
+
+if (process.env["CI"] === "true") {
+  const fixtureVars = [
+    "E2E_PRODUCT_HANDLE",
+    "E2E_BUNDLE_PRODUCT_HANDLE",
+    "E2E_VOLUME_PRODUCT_HANDLE",
+    "E2E_QUALIFYING_VARIANT_ID",
+  ];
+  const missingFixtures = fixtureVars.filter((name) => !process.env[name]);
+  if (missingFixtures.length > 0) {
+    throw new Error(`E2E storefront fixtures are required in CI: ${missingFixtures.join(", ")}`);
+  }
+}
+
 export default defineConfig({
   testDir: "./tests/e2e",
-  testIgnore: isConfigured ? [] : ["**/*.spec.ts"],
-  globalSetup: isConfigured ? "./tests/e2e/global-setup.ts" : undefined,
+  globalSetup: "./tests/e2e/global-setup.ts",
   fullyParallel: false,
   retries: 1,
   workers: 1,

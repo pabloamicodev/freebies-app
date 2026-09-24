@@ -6,7 +6,10 @@
  * All mutations are queued to prevent race conditions.
  */
 
-import { withPromoMetadata } from "./metadata-bridge.js";
+import {
+  needsPromoMetadataPacking,
+  withPromoMetadata,
+} from "./metadata-bridge.js";
 
 export interface CartLineAdd {
   variantId: string;
@@ -96,7 +99,21 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const AjaxCartAdapter = {
   async getCart(): Promise<CartData> {
-    return fetchJson<CartData>(`${window.Shopify?.routes?.root ?? "/"}cart.js`);
+    const cart = await fetchJson<CartData>(`${window.Shopify?.routes?.root ?? "/"}cart.js`);
+    return this.migrateLegacyMetadata(cart);
+  },
+
+  async migrateLegacyMetadata(cart: CartData): Promise<CartData> {
+    let current = cart;
+    for (const item of cart.items) {
+      if (!needsPromoMetadataPacking(item.properties ?? undefined)) continue;
+      current = await this.updateLine({
+        key: item.key,
+        quantity: item.quantity,
+        properties: item.properties ?? {},
+      });
+    }
+    return current;
   },
 
   async addLines(lines: CartLineAdd[]): Promise<CartData> {

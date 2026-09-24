@@ -1,6 +1,63 @@
-import { getDb, variantCache } from "@promo/db";
-import { eq, and } from "drizzle-orm";
-import { SHOPIFY_API_VERSION } from "@promo/shared-types";
+import { getDb, variantCache, type Db } from "@promo/db";
+import { and, eq } from "drizzle-orm";
+import { shopifyGraphQL } from "../shopify-fetch.server.js";
+
+interface InventoryVariant {
+  id: string;
+  inventoryQuantity: number | null;
+  inventoryPolicy: string;
+  availableForSale: boolean;
+}
+
+interface InventoryVariantPage {
+  inventoryItem: {
+    variants: {
+      nodes: InventoryVariant[];
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    };
+  } | null;
+}
+
+export const INVENTORY_VARIANTS_QUERY = `
+  query GetInventory($id: ID!, $after: String) {
+    inventoryItem(id: $id) {
+      variants(first: 250, after: $after) {
+        nodes { id inventoryQuantity inventoryPolicy availableForSale }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+`;
+
+type InventoryGraphQL = typeof shopifyGraphQL<InventoryVariantPage>;
+
+export async function loadInventoryVariants(
+  shopDomain: string,
+  accessToken: string,
+  inventoryItemGid: string,
+  graphQL: InventoryGraphQL = shopifyGraphQL,
+): Promise<InventoryVariant[]> {
+  const variants: InventoryVariant[] = [];
+  let cursor: string | null = null;
+
+  do {
+    const data: InventoryVariantPage = await graphQL({
+      shopDomain,
+      accessToken,
+      query: INVENTORY_VARIANTS_QUERY,
+      variables: { id: inventoryItemGid, after: cursor },
+    });
+    if (!data.inventoryItem) return variants;
+    variants.push(...data.inventoryItem.variants.nodes);
+    const { hasNextPage, endCursor } = data.inventoryItem.variants.pageInfo;
+    if (hasNextPage && !endCursor) {
+      throw new Error(`Inventory variants pagination omitted endCursor for ${inventoryItemGid}`);
+    }
+    cursor = hasNextPage ? endCursor : null;
+  } while (cursor);
+
+  return variants;
+}
 
 export async function syncInventoryFromWebhook(
   shopId: string,
@@ -8,41 +65,28 @@ export async function syncInventoryFromWebhook(
   accessToken: string,
   inventoryItemId: number,
   availableQuantity: number,
+  db: Db = getDb(),
 ): Promise<void> {
   const gid = `gid://shopify/InventoryItem/${inventoryItemId}`;
+  const variants = await loadInventoryVariants(shopDomain, accessToken, gid);
+  if (variants.length === 0) return;
 
-  const response = await fetch(
-    `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": accessToken },
-      body: JSON.stringify({
-        query: `query GetInventory($id: ID!) { inventoryItem(id: $id) { variant { id inventoryQuantity inventoryPolicy availableForSale } } }`,
-        variables: { id: gid },
-      }),
-      signal: AbortSignal.timeout(10_000),
-    },
-  );
-
-  if (!response.ok) throw new Error(`Inventory API error: ${response.status}`);
-
-  const data = (await response.json()) as {
-    data?: { inventoryItem: { variant: { id: string; inventoryQuantity: number; inventoryPolicy: string; availableForSale: boolean } | null } | null };
-    errors?: unknown[];
-  };
-
-  if (data.errors?.length) throw new Error(`GraphQL error: ${JSON.stringify(data.errors[0])}`);
-  const variant = data.data?.inventoryItem?.variant;
-  if (!variant) return;
-
-  const db = getDb();
-  await db
-    .update(variantCache)
-    .set({
-      inventoryQuantity: availableQuantity,
-      inventoryPolicy: variant.inventoryPolicy,
-      availableForSale: variant.availableForSale,
-      syncedAt: new Date(),
-    })
-    .where(and(eq(variantCache.shopId, shopId), eq(variantCache.variantGid, variant.id)));
+  await db.transaction(async (tx) => {
+    for (const variant of variants) {
+      await tx
+        .update(variantCache)
+        .set({
+          inventoryQuantity: availableQuantity,
+          inventoryPolicy: variant.inventoryPolicy,
+          availableForSale: variant.availableForSale,
+          syncedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(variantCache.shopId, shopId),
+            eq(variantCache.variantGid, variant.id),
+          ),
+        );
+    }
+  });
 }

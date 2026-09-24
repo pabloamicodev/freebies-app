@@ -677,6 +677,44 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         }
     }
 
+    let has_customer_tag_condition = !offer.required_customer_tags.is_empty()
+        || !offer.excluded_customer_tags.is_empty();
+    if has_customer_tag_condition {
+        let customer = input
+            .cart()
+            .buyer_identity()
+            .as_ref()
+            .and_then(|identity| identity.customer());
+        if customer.is_none() && !offer.treat_guest_as_no_tags {
+            return false;
+        }
+        let matching_tags: HashSet<&str> = customer
+            .map(|value| {
+                value
+                    .has_tags()
+                    .iter()
+                    .filter(|tag| *tag.has_tag())
+                    .map(|tag| tag.tag().as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !offer.required_customer_tags.iter().all(|tag| matching_tags.contains(tag.as_str()))
+            || offer.excluded_customer_tags.iter().any(|tag| matching_tags.contains(tag.as_str()))
+        {
+            return false;
+        }
+    }
+
+    if !offer.include_country_codes.is_empty() || !offer.exclude_country_codes.is_empty() {
+        let country_code = input.localization().country().iso_code().to_string();
+        if (!offer.include_country_codes.is_empty()
+            && !offer.include_country_codes.iter().any(|code| code.eq_ignore_ascii_case(&country_code)))
+            || offer.exclude_country_codes.iter().any(|code| code.eq_ignore_ascii_case(&country_code))
+        {
+            return false;
+        }
+    }
+
     let has_customer_history_condition = offer.customer_order_count_min.is_some()
         || offer.customer_order_count_max.is_some()
         || offer.customer_amount_spent_min_cents.is_some()
@@ -997,7 +1035,8 @@ mod tests {
                 "cart": {{
                     "lines": {lines},
                     "cost": {{ "subtotalAmount": {{ "amount": "{subtotal}", "currencyCode": "USD" }} }}
-                }}
+                }},
+                "localization": {{ "country": {{ "isoCode": "US" }} }}
             }}"#,
             config = serde_json::to_string(config_json).unwrap(),
             lines = packed_lines,
@@ -1023,12 +1062,14 @@ mod tests {
                     "buyerIdentity": {{
                         "customer": {{
                             "numberOfOrders": {number_of_orders},
+                            "hasTags": [],
                             "amountSpent": {{ "amount": "{amount_spent}", "currencyCode": "USD" }}
                         }}
                     }},
                     "lines": {lines},
                     "cost": {{ "subtotalAmount": {{ "amount": "{subtotal}", "currencyCode": "USD" }} }}
-                }}
+                }},
+                "localization": {{ "country": {{ "isoCode": "US" }} }}
             }}"#,
             config = serde_json::to_string(config_json).unwrap(),
             lines = packed_lines,
@@ -1072,6 +1113,27 @@ mod tests {
         }
 
         serde_json::to_string(&lines).unwrap()
+    }
+
+    fn with_customer_tags(payload: &str, tags: &[(&str, bool)]) -> String {
+        let mut value: serde_json::Value = serde_json::from_str(payload).unwrap();
+        value["cart"]["buyerIdentity"] = serde_json::json!({
+            "customer": {
+                "numberOfOrders": 0,
+                "hasTags": tags.iter().map(|(tag, has_tag)| serde_json::json!({
+                    "tag": tag,
+                    "hasTag": has_tag,
+                })).collect::<Vec<_>>(),
+                "amountSpent": { "amount": "0.00" }
+            }
+        });
+        serde_json::to_string(&value).unwrap()
+    }
+
+    fn with_country(payload: &str, country_code: &str) -> String {
+        let mut value: serde_json::Value = serde_json::from_str(payload).unwrap();
+        value["localization"]["country"]["isoCode"] = serde_json::json!(country_code);
+        serde_json::to_string(&value).unwrap()
     }
 
     fn regular_line(id: &str, variant_id: &str, product_id: &str, price: &str, qty: i64) -> String {
@@ -1723,5 +1785,61 @@ mod tests {
 
         let qualified = run_function_with_input(run, &cart_json_with_customer(&lines, "50.00", config, 3, "100.00")).expect("customer input");
         assert_eq!(qualified.operations.len(), 1);
+    }
+
+    #[test]
+    fn customer_tags_are_verified_at_checkout() {
+        let config = gift_offer_config(5000, 1).replace(
+            "\"combinesWithOrderDiscounts\":true",
+            "\"requiredCustomerTags\":[\"vip\"],\"excludedCustomerTags\":[\"blocked\"],\"treatGuestAsNoTags\":true,\"combinesWithOrderDiscounts\":true",
+        );
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+        );
+        let base = cart_json(&lines, "80.00", &config);
+        let qualified = run_function_with_input(run, &with_customer_tags(&base, &[("vip", true), ("blocked", false)])).expect("tagged customer");
+        assert_eq!(qualified.operations.len(), 1);
+
+        let missing = run_function_with_input(run, &with_customer_tags(&base, &[("vip", false), ("blocked", false)])).expect("untagged customer");
+        assert!(missing.operations.is_empty());
+        let excluded = run_function_with_input(run, &with_customer_tags(&base, &[("vip", true), ("blocked", true)])).expect("excluded customer");
+        assert!(excluded.operations.is_empty());
+    }
+
+    #[test]
+    fn customer_tag_guest_policy_fails_closed_when_requested() {
+        let config = gift_offer_config(5000, 1).replace(
+            "\"combinesWithOrderDiscounts\":true",
+            "\"excludedCustomerTags\":[\"blocked\"],\"treatGuestAsNoTags\":false,\"combinesWithOrderDiscounts\":true",
+        );
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+        );
+        let guest = run_function_with_input(run, &cart_json(&lines, "80.00", &config)).expect("guest input");
+        assert!(guest.operations.is_empty());
+    }
+
+    #[test]
+    fn customer_country_is_verified_at_checkout() {
+        let config = gift_offer_config(5000, 1).replace(
+            "\"combinesWithOrderDiscounts\":true",
+            "\"includeCountryCodes\":[\"US\",\"CA\"],\"excludeCountryCodes\":[\"CA\"],\"combinesWithOrderDiscounts\":true",
+        );
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+        );
+        let base = cart_json(&lines, "80.00", &config);
+        let allowed = run_function_with_input(run, &with_country(&base, "US")).expect("US input");
+        assert_eq!(allowed.operations.len(), 1);
+        let excluded = run_function_with_input(run, &with_country(&base, "CA")).expect("CA input");
+        assert!(excluded.operations.is_empty());
+        let outside = run_function_with_input(run, &with_country(&base, "MX")).expect("MX input");
+        assert!(outside.operations.is_empty());
     }
 }

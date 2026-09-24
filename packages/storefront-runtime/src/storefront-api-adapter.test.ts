@@ -25,6 +25,51 @@ function jsonResponse(data: unknown): Response {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("StorefrontApiAdapter", () => {
+  it("migrates legacy attributes on a stored cart before returning it", async () => {
+    const existing = cart();
+    existing.lines.nodes = [{
+      id: "gid://shopify/CartLine/1",
+      quantity: 1,
+      merchandise: { id: "gid://shopify/ProductVariant/1" },
+      attributes: [
+        { key: "_promo_engine_offer_id", value: "offer-1" },
+        { key: "custom", value: "keep" },
+      ],
+      cost: {
+        amountPerQuantity: { amount: "10.0", currencyCode: "USD" },
+        subtotalAmount: { amount: "10.0", currencyCode: "USD" },
+      },
+    }];
+    const migrated = structuredClone(existing);
+    migrated.lines.nodes[0]!.attributes.push({
+      key: "_promo_engine_metadata",
+      value: JSON.stringify({ _promo_engine_offer_id: "offer-1" }),
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ cart: existing }))
+      .mockResolvedValueOnce(jsonResponse({
+        cartLinesUpdate: { cart: migrated, userErrors: [] },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("localStorage", {
+      getItem: vi.fn(() => existing.id),
+      setItem: vi.fn(),
+    });
+
+    const adapter = new StorefrontApiAdapter("store.myshopify.com", "public-token");
+    const result = await adapter.getOrCreateCart();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const mutation = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
+      variables: { lines: Array<{ attributes: Array<{ key: string; value: string }> }> };
+    };
+    expect(mutation.variables.lines[0]!.attributes).toEqual(expect.arrayContaining([
+      { key: "custom", value: "keep" },
+      expect.objectContaining({ key: "_promo_engine_metadata" }),
+    ]));
+    expect(result.lines.nodes[0]!.attributes.some(({ key }) => key === "_promo_engine_metadata")).toBe(true);
+  });
+
   it("uses 2026-07 and packs promo metadata into Storefront attributes", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ cartCreate: { cart: cart(), userErrors: [] } }))

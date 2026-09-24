@@ -27,6 +27,7 @@ export async function reconcileOrderAttribution(data: ReconcileOrderData): Promi
       cartToken,
       customerId,
       orderId: orderGid,
+      deduplicationKey: `shopify:${shopId}:order-paid:${orderGid}:${offerId}`,
       offerId: offerId.length === 36 ? offerId : null,
       properties: {
         order_id: orderId,
@@ -34,7 +35,7 @@ export async function reconcileOrderAttribution(data: ReconcileOrderData): Promi
         offer_ids: offerIds,
         subtotalCents: totalPriceCents,
       },
-    }).onConflictDoNothing();
+    }).onConflictDoNothing({ target: analyticsEvents.deduplicationKey });
   }
 }
 

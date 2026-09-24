@@ -10,6 +10,7 @@ import { getDb, type Offer } from "@promo/db";
 import { offers, offerConditions, offerRewards, shops } from "@promo/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { rowToCSV } from "../lib/csv.js";
+import { apiError, getRequestId, handleApiError } from "../lib/api-response.server.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   try {
@@ -24,7 +25,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     .limit(1);
 
   if (!shopRows[0]) {
-    throw new Response("Shop not found", { status: 404 });
+    return apiError(request, {
+      status: 404,
+      code: "SHOP_NOT_FOUND",
+      message: "Shop not found. Reinstall the app and retry.",
+    });
   }
   const shopId = shopRows[0].id;
 
@@ -33,7 +38,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     : await db.select().from(offers).where(eq(offers.shopId, shopId));
 
   if (offerId && offerRows.length === 0) {
-    throw new Response("Offer not found", { status: 404 });
+    return apiError(request, { status: 404, code: "OFFER_NOT_FOUND", message: "Offer not found." });
   }
 
   const offerIds = offerRows.map((offer) => offer.id);
@@ -118,12 +123,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
       "Content-Disposition": `attachment; filename="${filename}"`,
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "X-Request-Id": getRequestId(request),
     },
   });
   } catch (err) {
-    if (err instanceof Response) return err;
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[api.offers.export]", message);
-    return Response.json({ error: message }, { status: 500 });
+    return handleApiError(request, err, "api.offers.export");
   }
 };

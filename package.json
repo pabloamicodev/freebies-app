@@ -8,6 +8,8 @@
     "build": "pnpm -r build",
     "build:storefront": "node scripts/build-storefront.mjs",
     "build:admin": "pnpm --filter shopify-admin build",
+    "shopify:build": "pnpm --filter shopify-admin build:shopify",
+    "shopify:deploy": "pnpm --filter shopify-admin exec shopify app deploy --path .",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -37,7 +39,7 @@
     "vitest": "^3.2.6"
   },
   "engines": {
-    "node": ">=22.0.0",
+    "node": "22.x",
     "pnpm": ">=9.0.0"
   },
   "packageManager": "pnpm@9.15.0"
