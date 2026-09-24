@@ -30,6 +30,7 @@ export interface CartData {
   token: string | null;
   id: string | null;
   items: CartItem[];
+  attributes?: Record<string, string>;
   total_price: number;
   /** Shopify Ajax cart subtotal before order-level discounts. */
   items_subtotal_price?: number;

@@ -490,6 +490,7 @@ class PromoEngineRuntime {
         inventoryPolicy: item.inventory_policy?.toUpperCase() === "CONTINUE" ? "CONTINUE" : "DENY",
         inventoryQuantity: item.inventory_quantity ?? 0,
       })),
+      attributes: cart.attributes ?? {},
       subtotalCents: cart.items_subtotal_price ?? cart.total_price,
       discountCodes: cart.discount_codes?.map((d) => d.code) ?? [],
       currencyCode: cart.currency,

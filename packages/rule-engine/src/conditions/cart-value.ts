@@ -4,9 +4,13 @@ import { extractQualifyingLines, sumQualifyingValue } from "../cart-parser.js";
 
 export interface CartValueConditionValue {
   thresholdCents: number;
+  /** Optional inclusive upper bound used by mutually exclusive gift tiers. */
+  maxCents?: number;
   currencyCode: string;
   /** Per-currency custom thresholds — overrides thresholdCents for that currency. */
   currencyOverrides?: Record<string, number>;
+  /** Per-currency custom inclusive upper bounds. */
+  maxCurrencyOverrides?: Record<string, number>;
   includeGiftValues: boolean;
   /** Product/variant/collection/vendor/type filter applied to qualifying lines. */
   scopeFilter?: {
@@ -48,6 +52,7 @@ export function evaluateCartValue(
 
   // Resolve threshold — prefer currency override, fallback to auto-conversion
   let thresholdCents = condition.thresholdCents;
+  let maxCents = condition.maxCents;
   const activeCurrency = currency.activeCurrencyCode.toUpperCase();
   if (condition.currencyOverrides?.[activeCurrency] !== undefined) {
     thresholdCents = condition.currencyOverrides[activeCurrency]!;
@@ -57,15 +62,28 @@ export function evaluateCartValue(
   ) {
     thresholdCents = Math.ceil(condition.thresholdCents * currency.exchangeRate);
   }
+  if (condition.maxCurrencyOverrides?.[activeCurrency] !== undefined) {
+    maxCents = condition.maxCurrencyOverrides[activeCurrency]!;
+  } else if (
+    maxCents !== undefined &&
+    activeCurrency !== condition.currencyCode.toUpperCase() &&
+    currency.exchangeRate
+  ) {
+    maxCents = Math.ceil(maxCents * currency.exchangeRate);
+  }
 
-  const passed = cartValueCents >= thresholdCents;
+  const meetsMinimum = cartValueCents >= thresholdCents;
+  const meetsMaximum = maxCents === undefined || cartValueCents <= maxCents;
+  const passed = meetsMinimum && meetsMaximum;
 
   const reason: EligibilityReason = {
     conditionType: "cart_value",
     passed,
     message: passed
-      ? `Cart value ${cartValueCents} cents ≥ threshold ${thresholdCents} cents`
-      : `Cart value ${cartValueCents} cents < threshold ${thresholdCents} cents`,
+      ? `Cart value ${cartValueCents} cents is within ${thresholdCents}–${maxCents ?? "unbounded"} cents`
+      : !meetsMinimum
+        ? `Cart value ${cartValueCents} cents < threshold ${thresholdCents} cents`
+        : `Cart value ${cartValueCents} cents > maximum ${maxCents} cents`,
     actual: cartValueCents,
     required: thresholdCents,
   };

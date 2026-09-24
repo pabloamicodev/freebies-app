@@ -8,18 +8,20 @@
  * 5. Post-cutover cleanup — remove BOGOS scripts/classes
  */
 
-import { useLoaderData, Form } from "react-router";
+import { useActionData, useLoaderData, Form } from "react-router";
 import { useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { offers } from "@promo/db";
 import { and, count, eq } from "drizzle-orm";
 import { isShadowModeEnabled, setShadowMode } from "../lib/shadow-mode.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { getLegacyStorePreset, importLegacyPreset, inspectLegacyPreset } from "../lib/legacy-store-presets.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { shopId, shopDomain, db } = await getShopContext(request);
+  const legacyPreset = getLegacyStorePreset(shopDomain);
 
   const [shadowMode, activeOffers, draftOffers] = await Promise.all([
     isShadowModeEnabled(shopId),
@@ -32,12 +34,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     shadowMode,
     activeOffers: activeOffers[0]?.count ?? 0,
     draftOffers: draftOffers[0]?.count ?? 0,
+    legacyPreset: legacyPreset ? {
+      sourceName: legacyPreset.sourceName,
+      notes: legacyPreset.notes,
+      offers: (await inspectLegacyPreset(db, shopId, legacyPreset)).map((offer) => ({
+        key: offer.key,
+        internalName: offer.internalName,
+        publicTitle: offer.publicTitle,
+        alreadyImported: offer.alreadyImported,
+      })),
+    } : null,
   };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
-  const { shopId } = context;
+  const { shopId, shopDomain, db } = context;
   const intent = formData.get("intent") as string;
 
   switch (intent) {
@@ -47,9 +59,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     case "disable_shadow":
       await setShadowMode(shopId, false);
       break;
+    case "import_legacy_preset": {
+      const preset = getLegacyStorePreset(shopDomain);
+      if (!preset) return { error: "No legacy store preset is registered for this shop." };
+      const result = await importLegacyPreset(db, shopId, preset);
+      return { success: `Imported ${result.created} draft offer(s); ${result.skipped} already existed.` };
+    }
   }
 
-  return null;
+  return { success: null };
 };
 
 const MIGRATION_STEPS = [
@@ -82,7 +100,8 @@ function StatusBadge({ status }: { status: StepStatus }) {
 }
 
 export default function MigrationPage() {
-  const { shadowMode, activeOffers, draftOffers } = useLoaderData<typeof loader>();
+  const { shadowMode, activeOffers, draftOffers, legacyPreset } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
   const [stepStatuses, setStepStatuses] = useState<Record<string, StepStatus>>(
     () => Object.fromEntries(MIGRATION_STEPS.map((s) => [s.id, "pending" as StepStatus]))
   );
@@ -145,6 +164,34 @@ export default function MigrationPage() {
           </p>
         </div>
       </div>
+
+      {actionData && "success" in actionData && actionData.success && <div className="b-banner b-banner-green" role="status">{actionData.success}</div>}
+      {actionData && "error" in actionData && <div className="b-banner b-banner-red" role="alert">{actionData.error}</div>}
+
+      {legacyPreset && (
+        <div className="b-card b-mb-4">
+          <div className="b-card-header b-row-between">
+            <span>{legacyPreset.sourceName} migration preset</span>
+            <Form method="post">
+              <button className="b-btn b-btn-primary b-btn-sm" type="submit" name="intent" value="import_legacy_preset" disabled={legacyPreset.offers.every((offer) => offer.alreadyImported)}>
+                Import missing offers as drafts
+              </button>
+            </Form>
+          </div>
+          <div className="b-card-body">
+            <p className="b-text-sm b-text-sub">This import is idempotent and never publishes or overwrites an existing offer. Review every generated draft before activating it.</p>
+            {legacyPreset.notes.map((note) => <div className="b-banner b-banner-orange" key={note}>{note}</div>)}
+            <div className="b-stack b-stack-2 b-mt-4">
+              {legacyPreset.offers.map((offer) => (
+                <div className="b-row-between" key={offer.key}>
+                  <div><div className="b-text-sm b-text-bold">{offer.publicTitle}</div><div className="b-text-xs b-text-muted">{offer.internalName}</div></div>
+                  <span className={`b-badge ${offer.alreadyImported ? "b-badge-green" : "b-badge-gray"}`}>{offer.alreadyImported ? "Imported" : "Ready"}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Progress + status row */}
       <div className="b-grid-2" style={{ marginBottom: 16 }}>

@@ -557,7 +557,7 @@ export default function OfferRewardsPage() {
 
                   {/* Right: delete button */}
                   <Form method="POST" style={{ flexShrink: 0, marginLeft: 16 }}
-                    onSubmit={(e) => { if (!window.confirm("Remove this reward?")) e.preventDefault(); }}>
+                    onSubmit={(e: React.FormEvent<HTMLFormElement>) => { if (!window.confirm("Remove this reward?")) e.preventDefault(); }}>
                     <input type="hidden" name="intent" value="delete_reward" />
                     <input type="hidden" name="rewardId" value={r.id} />
                     <button

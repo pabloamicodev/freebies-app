@@ -23,6 +23,14 @@ function splitCsvList(value: string | null): string[] {
   });
 }
 
+function parseStringRecord(value: string | null, label: string): Record<string, string> {
+  const parsed: unknown = JSON.parse(value?.trim() || "{}");
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error(`${label} must be a JSON object.`);
+  const entries = Object.entries(parsed as Record<string, unknown>);
+  if (entries.some(([, entryValue]) => typeof entryValue !== "string")) throw new Error(`${label} values must all be strings.`);
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"];
@@ -49,6 +57,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const salesChannel = (formData.get("salesChannel") as string) || "online_store";
   const marketId = (formData.get("marketId") as string) || null;
   const currencyCode = (formData.get("currencyCode") as string) || "USD";
+  const variantId = String(formData.get("variantId") || "gid://shopify/ProductVariant/10000000000000");
+  const productId = String(formData.get("productId") || "gid://shopify/Product/10000000000000");
+  const hasSellingPlan = formData.get("hasSellingPlan") === "on";
+  let lineProperties: Record<string, string>;
+  let cartAttributes: Record<string, string>;
+  try {
+    lineProperties = parseStringRecord(formData.get("lineProperties") as string | null, "Line properties");
+    cartAttributes = parseStringRecord(formData.get("cartAttributes") as string | null, "Cart attributes");
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Simulator attributes are invalid." };
+  }
 
   // Load offer definitions
   const [conditionRows, rewardRows, policyRows, offerRows] = await Promise.all([
@@ -110,14 +129,15 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       lines: [
         {
           key: "preview-line-1",
-          variantId: "gid://shopify/ProductVariant/preview",
-          productId: "gid://shopify/Product/preview",
+          variantId,
+          productId,
           quantity: cartQty,
-          priceCents: Math.round(cartValueUsd * 100),
+          priceCents: Math.round((cartValueUsd * 100) / Math.max(1, cartQty)),
+          lineSubtotalCents: Math.round(cartValueUsd * 100),
           compareAtPriceCents: null,
-          properties: {},
-          requiresSellingPlan: false,
-          sellingPlanId: null,
+          properties: lineProperties,
+          requiresSellingPlan: hasSellingPlan,
+          sellingPlanId: hasSellingPlan ? "gid://shopify/SellingPlan/preview" : null,
           productHandle: "preview-product",
           productTitle: "Simulated Product",
           variantTitle: null,
@@ -130,6 +150,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           inventoryQuantity: 100,
         },
       ],
+      attributes: cartAttributes,
       subtotalCents: Math.round(cartValueUsd * 100),
       discountCodes: [],
       currencyCode,
@@ -201,6 +222,8 @@ export default function OfferPreviewPage() {
           <p style={{ margin: 0, fontSize: 13, color: "var(--text-sub)" }}>{offer.internalName}</p>
         </div>
       </div>
+
+      {actionData && "error" in actionData && <div className="b-banner b-banner-red" role="alert">{actionData.error}</div>}
 
       {/* Main layout */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16, alignItems: "start" }}>
@@ -311,6 +334,16 @@ export default function OfferPreviewPage() {
                       min="1"
                     />
                   </div>
+
+                  {/* Customer tags */}
+                  <div className="b-grid-2">
+                    <div><label className="b-label" htmlFor="variantId">Variant GID</label><input id="variantId" className="b-input b-text-mono" name="variantId" defaultValue="gid://shopify/ProductVariant/10000000000000" /></div>
+                    <div><label className="b-label" htmlFor="productId">Product GID</label><input id="productId" className="b-input b-text-mono" name="productId" defaultValue="gid://shopify/Product/10000000000000" /></div>
+                  </div>
+
+                  <div><label className="b-label" htmlFor="lineProperties">Line properties (JSON)</label><textarea id="lineProperties" className="b-textarea b-text-mono" name="lineProperties" rows={4} defaultValue={'{"__landing_source":"example"}'} /><p className="b-help">Use this to test landing, bundle, quiz, and approved legacy line attributes.</p></div>
+                  <div><label className="b-label" htmlFor="cartAttributes">Cart attributes (JSON)</label><textarea id="cartAttributes" className="b-textarea b-text-mono" name="cartAttributes" rows={3} defaultValue={'{"source":"example"}'} /></div>
+                  <label className="b-checkbox"><input type="checkbox" name="hasSellingPlan" /><span>Simulate a subscription line</span></label>
 
                   {/* Customer tags */}
                   <div>

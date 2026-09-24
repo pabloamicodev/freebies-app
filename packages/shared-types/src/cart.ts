@@ -47,6 +47,8 @@ export const NormalizedCartSchema = z.object({
   token: z.string().max(512).nullable(),
   id: z.string().max(512).nullable(),
   lines: z.array(NormalizedCartLineSchema).max(250),
+  /** Cart-level attributes exposed by Shopify's Ajax Cart and Functions APIs. */
+  attributes: z.record(z.string().max(128), z.string().max(2_048)).optional(),
   /** Subtotal in store currency cents (before discounts). */
   subtotalCents: z.number().int().nonnegative(),
   discountCodes: z.array(z.string().min(1).max(255)).max(100),

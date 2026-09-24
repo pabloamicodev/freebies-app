@@ -146,4 +146,51 @@ describe("evaluateCartValue", () => {
     }, { activeCurrencyCode: "EUR", shopCurrencyCode: "USD" });
     expect(result.ok).toBe(true);
   });
+
+  it("treats maxCents as an inclusive upper bound", () => {
+    const atMaximum = makeCart([{ variantId: "v1", productId: "p1", priceCents: 9999, quantity: 1 }]);
+    const aboveMaximum = makeCart([{ variantId: "v1", productId: "p1", priceCents: 10000, quantity: 1 }]);
+    const condition = {
+      thresholdCents: 5000,
+      maxCents: 9999,
+      currencyCode: "USD",
+      includeGiftValues: false,
+    };
+
+    expect(evaluateCartValue(atMaximum, condition, currency).ok).toBe(true);
+    expect(evaluateCartValue(aboveMaximum, condition, currency).ok).toBe(false);
+  });
+
+  it("converts maxCents with the same exchange rate as the minimum", () => {
+    const cart = makeCart([{ variantId: "v1", productId: "p1", priceCents: 7500, quantity: 1 }]);
+    const condition = {
+      thresholdCents: 5000,
+      maxCents: 6000,
+      currencyCode: "USD",
+      includeGiftValues: false,
+    };
+
+    expect(evaluateCartValue(cart, condition, {
+      activeCurrencyCode: "EUR",
+      shopCurrencyCode: "USD",
+      exchangeRate: 1.2,
+    }).ok).toBe(false);
+  });
+
+  it("prefers a configured max override for the active currency", () => {
+    const cart = makeCart([{ variantId: "v1", productId: "p1", priceCents: 8500, quantity: 1 }]);
+    const condition = {
+      thresholdCents: 5000,
+      maxCents: 9999,
+      currencyCode: "USD",
+      currencyOverrides: { EUR: 7000 },
+      maxCurrencyOverrides: { EUR: 8000 },
+      includeGiftValues: false,
+    };
+
+    expect(evaluateCartValue(cart, condition, {
+      activeCurrencyCode: "EUR",
+      shopCurrencyCode: "USD",
+    }).ok).toBe(false);
+  });
 });

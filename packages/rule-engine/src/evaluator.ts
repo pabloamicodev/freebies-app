@@ -27,6 +27,7 @@ import { evaluateUrlParam, type UrlParamConditionValue } from "./conditions/url-
 import { evaluatePageUrl, type PageUrlConditionValue } from "./conditions/page-url.js";
 import { evaluateCountry, type CountryConditionValue } from "./conditions/country.js";
 import { applyPriority } from "./priority-resolver.js";
+import { evaluateCartAttribute, evaluateLineAttribute, type CartAttributeConditionValue, type LineAttributeConditionValue } from "./conditions/attributes.js";
 
 /**
  * Offer definition passed into the evaluator — loaded from DB + compiled config.
@@ -569,6 +570,12 @@ function evaluateCondition(
         input.customer?.countryCode ?? input.market?.countryCode ?? null,
         cond.value as CountryConditionValue,
       );
+
+    case "line_attribute":
+      return evaluateLineAttribute(input.cart, cond.value as LineAttributeConditionValue);
+
+    case "cart_attribute":
+      return evaluateCartAttribute(input.cart, cond.value as CartAttributeConditionValue);
 
     default:
       return err({

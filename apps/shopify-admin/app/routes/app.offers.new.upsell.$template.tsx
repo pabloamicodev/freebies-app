@@ -355,7 +355,7 @@ export default function NewUpsellOfferPage() {
         </div>
       )}
 
-      <Form method="POST" onChange={markDirty} onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
+      <Form method="POST" onChange={markDirty} onSubmit={(e: React.FormEvent<HTMLFormElement>) => { if (!validate()) e.preventDefault(); }}>
         <input type="hidden" name="template" value={templateId} />
         <input type="hidden" name="triggerType" value={triggerType} />
         <input type="hidden" name="triggerProducts" value={JSON.stringify(triggerProducts)} />

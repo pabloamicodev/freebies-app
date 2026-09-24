@@ -29,11 +29,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     shopDomain: session.shop,
     apiKey: process.env["SHOPIFY_API_KEY"] ?? "",
+    graphqlConsoleEnabled: process.env["ENABLE_GRAPHQL_CONSOLE"] === "true",
   };
 };
 
 export default function AppLayout() {
-  const { apiKey } = useLoaderData<typeof loader>();
+  const { apiKey, graphqlConsoleEnabled } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const location = useLocation();
   const fetchers = useFetchers();
@@ -97,7 +98,7 @@ export default function AppLayout() {
   }, [isBusy]);
 
   return (
-    <AppProvider embedded apiKey={apiKey}>
+    <AppProvider apiKey={apiKey}>
       <PolarisAppProvider i18n={{}}>
         {showNavigationIndicator && (
           <output className="b-route-loader" aria-live="polite" aria-label={loadingLabel}>
@@ -122,6 +123,9 @@ export default function AppLayout() {
           <a href="/app/translation">Translation</a>
           <a href="/app/integrations">Integrations</a>
           <a href="/app/subscription-pricing">Subscription Pricing</a>
+          <a href="/app/skio-shipping">Skio Shipping</a>
+          <a href="/app/gift-tiers">Gift Tiers</a>
+          {graphqlConsoleEnabled && <a href="/app/graphql">GraphQL</a>}
           <a href="/app/logs">Error Logs</a>
         </NavMenu>
         <Outlet />

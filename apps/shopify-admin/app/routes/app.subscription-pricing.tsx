@@ -54,7 +54,7 @@ export default function SubscriptionPricingPage() {
                   <td>
                     <div className="b-row b-gap-2">
                       <a className="b-btn b-btn-secondary b-btn-sm" href={`/app/subscription-pricing/${encodeURIComponent(plan.id)}`}>Edit</a>
-                      <Form method="post" onSubmit={(event) => { if (!window.confirm(`Delete ${plan.name}? Existing contracts remain, but new customers cannot select it.`)) event.preventDefault(); }}>
+                      <Form method="post" onSubmit={(event: React.FormEvent<HTMLFormElement>) => { if (!window.confirm(`Delete ${plan.name}? Existing contracts remain, but new customers cannot select it.`)) event.preventDefault(); }}>
                         <input type="hidden" name="intent" value="delete" />
                         <input type="hidden" name="planId" value={plan.id} />
                         <button type="submit" className="b-btn b-btn-secondary b-btn-sm" disabled={navigation.state !== "idle"}>Delete</button>

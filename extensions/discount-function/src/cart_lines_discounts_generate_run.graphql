@@ -6,6 +6,9 @@ query Input {
     }
   }
   cart {
+    sourceAttribute: attribute(key: "source") {
+      value
+    }
     buyerIdentity {
       customer {
         numberOfOrders
@@ -64,6 +67,9 @@ query Input {
         value
       }
       landingSource: attribute(key: "__landing_source") {
+        value
+      }
+      bundleType: attribute(key: "__bundle_type") {
         value
       }
       quizBundleId: attribute(key: "_quiz_bundle_id") {

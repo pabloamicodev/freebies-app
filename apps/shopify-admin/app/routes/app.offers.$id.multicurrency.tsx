@@ -53,13 +53,16 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const condition = conditionRows[0];
   const existingValue = (condition?.value ?? {}) as Record<string, unknown>;
   const currencyOverrides = (existingValue["currencyOverrides"] ?? {}) as Record<string, number>;
+  const maxCurrencyOverrides = (existingValue["maxCurrencyOverrides"] ?? {}) as Record<string, number>;
 
   return {
     offer,
     offerId,
     markets,
     currencyOverrides,
+    maxCurrencyOverrides,
     baseThresholdCents: (existingValue["thresholdCents"] as number) ?? 0,
+    baseMaxCents: (existingValue["maxCents"] as number | undefined) ?? null,
     baseCurrency: (existingValue["currencyCode"] as string) ?? "USD",
   };
 };
@@ -74,6 +77,7 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<A
   const overrides: Record<string, number> = {};
   const currencies = formData.getAll("currency[]") as string[];
   const thresholds = formData.getAll("threshold_cents[]") as string[];
+  const maxThresholds = formData.getAll("max_threshold_cents[]") as string[];
   const fixedAmounts = formData.getAll("fixed_amount[]") as string[];
 
   for (let i = 0; i < currencies.length; i++) {
@@ -82,6 +86,20 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<A
     const cents = Number.isFinite(raw) && raw > 0 ? Math.round(raw * 100) : 0;
     if (currency && cents > 0) {
       overrides[currency] = cents;
+    }
+  }
+
+  const maxOverrides: Record<string, number> = {};
+  for (let i = 0; i < currencies.length; i++) {
+    const currency = currencies[i]?.toUpperCase();
+    const raw = parseFloat(maxThresholds[i] ?? "0");
+    const cents = Number.isFinite(raw) && raw > 0 ? Math.round(raw * 100) : 0;
+    if (currency && cents > 0) {
+      const minimum = overrides[currency];
+      if (minimum !== undefined && cents < minimum) {
+        return { error: `${currency} maximum must be greater than or equal to its threshold.` };
+      }
+      maxOverrides[currency] = cents;
     }
   }
 
@@ -111,7 +129,7 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<A
 
     const currentValue = existing[0].value as Record<string, unknown>;
     await tx.update(offerConditions)
-      .set({ value: { ...currentValue, currencyOverrides: overrides, fixedAmountOverrides: fixedOverrides }, updatedAt: new Date() })
+      .set({ value: { ...currentValue, currencyOverrides: overrides, maxCurrencyOverrides: maxOverrides, fixedAmountOverrides: fixedOverrides }, updatedAt: new Date() })
       .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, existing[0].id)));
   });
 
@@ -124,7 +142,7 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<A
 };
 
 export default function MultiCurrencyPage() {
-  const { offer, markets, currencyOverrides, baseThresholdCents, baseCurrency } = useLoaderData<typeof loader>();
+  const { offer, markets, currencyOverrides, maxCurrencyOverrides, baseThresholdCents, baseMaxCents, baseCurrency } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
@@ -170,7 +188,7 @@ export default function MultiCurrencyPage() {
         </div>
         <div className="b-banner-body">
           <p className="b-banner-text">
-            Set per-currency thresholds to match local purchasing power. Leave a field empty to fall back to the auto-converted base threshold ({baseCurrency} {baseThreshold.toFixed(2)}).
+            Set per-currency thresholds to match local purchasing power. Leave a field empty to use the configured base amount ({baseCurrency} {baseThreshold.toFixed(2)}).
           </p>
         </div>
       </div>
@@ -189,13 +207,14 @@ export default function MultiCurrencyPage() {
                       <tr>
                         <th style={{ width: "auto", paddingLeft: 16 }}>Currency</th>
                         <th>Threshold Override</th>
+                        {baseMaxCents !== null && <th>Maximum Override</th>}
                         <th>Fixed Amount Override</th>
                       </tr>
                     </thead>
                     <tbody>
                       {markets.length === 0 ? (
                         <tr>
-                          <td colSpan={3} style={{ textAlign: "center", padding: "24px 16px" }}>
+                          <td colSpan={baseMaxCents !== null ? 4 : 3} style={{ textAlign: "center", padding: "24px 16px" }}>
                             <span className="b-text-sub b-text-sm">
                               No markets configured. Add Shopify Markets in your store settings.
                             </span>
@@ -205,6 +224,9 @@ export default function MultiCurrencyPage() {
                         markets.map((market) => {
                           const existingThreshold = currencyOverrides[market.currencyCode]
                             ? (currencyOverrides[market.currencyCode]! / 100).toFixed(2)
+                            : "";
+                          const existingMaximum = maxCurrencyOverrides[market.currencyCode]
+                            ? (maxCurrencyOverrides[market.currencyCode]! / 100).toFixed(2)
                             : "";
                           return (
                             <tr key={market.id}>
@@ -232,7 +254,7 @@ export default function MultiCurrencyPage() {
                                     type="number"
                                     name="threshold_cents[]"
                                     defaultValue={existingThreshold}
-                                    placeholder={`Auto (${baseCurrency} ${baseThreshold.toFixed(2)})`}
+                                    placeholder={`Base (${baseCurrency} ${baseThreshold.toFixed(2)})`}
                                     min="0"
                                     step="0.01"
                                     autoComplete="off"
@@ -240,6 +262,28 @@ export default function MultiCurrencyPage() {
                                   />
                                 </div>
                               </td>
+                              {baseMaxCents !== null && (
+                                <td>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                    <label className="b-label" htmlFor={`max-threshold-${market.currencyCode}`}>
+                                      Maximum {market.currencyCode}
+                                    </label>
+                                    <input
+                                      id={`max-threshold-${market.currencyCode}`}
+                                      aria-label={`Maximum ${market.currencyCode}`}
+                                      className="b-input"
+                                      type="number"
+                                      name="max_threshold_cents[]"
+                                      defaultValue={existingMaximum}
+                                      placeholder={`${baseCurrency} ${(baseMaxCents / 100).toFixed(2)}`}
+                                      min="0"
+                                      step="0.01"
+                                      autoComplete="off"
+                                      style={{ maxWidth: 200 }}
+                                    />
+                                  </div>
+                                </td>
+                              )}
                               <td>
                                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                                   <label
@@ -308,8 +352,8 @@ export default function MultiCurrencyPage() {
                 <div>
                   <p className="b-label">Fallback behaviour</p>
                   <p className="b-text-sm b-text-sub">
-                    Any currency without an override inherits the base threshold of{" "}
-                    <strong>{baseCurrency} {baseThreshold.toFixed(2)}</strong>, converted by Shopify's exchange rate at the time of checkout.
+                    Any currency without an override uses the base threshold of{" "}
+                    <strong>{baseCurrency} {baseThreshold.toFixed(2)}</strong>. Configure explicit values for markets whose checkout currency differs.
                   </p>
                 </div>
                 <hr className="b-divider" style={{ margin: "4px 0" }} />

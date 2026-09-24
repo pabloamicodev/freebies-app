@@ -5,6 +5,7 @@
   "outputDirectory": "build/client",
   "crons": [
     { "path": "/api/cron/offers", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/skio-shipping", "schedule": "*/15 * * * *" },
     { "path": "/api/cron/analytics-cleanup", "schedule": "0 3 * * *" }
   ]
 }

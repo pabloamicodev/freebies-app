@@ -593,6 +593,35 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input) -> bool {
         })
         .collect();
 
+    for condition in &offer.line_attribute_conditions {
+        let matching_quantity: i64 = non_gift_lines
+            .iter()
+            .filter(|line| line_attribute_value(line, &condition.key).as_deref() == Some(condition.value.as_str()))
+            .map(|line| i64::from(*line.quantity()))
+            .sum();
+        let passes = if condition.match_mode == "not_equals" {
+            matching_quantity == 0
+        } else {
+            matching_quantity >= condition.min_matching_quantity
+        };
+        if !passes {
+            return false;
+        }
+    }
+
+    for condition in &offer.cart_attribute_conditions {
+        let actual = match condition.key.as_str() {
+            "source" => input.cart().source_attribute().as_ref().and_then(|attribute| attribute.value()).cloned(),
+            _ => None,
+        };
+        let equals = actual.as_deref() == Some(condition.value.as_str());
+        if (condition.match_mode == "not_equals" && equals)
+            || (condition.match_mode != "not_equals" && !equals)
+        {
+            return false;
+        }
+    }
+
     if let Some(threshold_cents) = offer.cart_value_threshold_cents {
         let raw_cart_value_cents: i64 = non_gift_lines
             .iter()
@@ -613,11 +642,15 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input) -> bool {
         if cart_value_cents < effective_threshold {
             return false;
         }
-        if offer
-            .cart_value_max_cents
-            .is_some_and(|maximum| cart_value_cents > maximum)
-        {
-            return false;
+        if let Some(maximum) = offer.cart_value_max_cents {
+            let effective_maximum = resolve_threshold(
+                maximum,
+                &offer.max_currency_overrides,
+                &active_currency,
+            );
+            if cart_value_cents > effective_maximum {
+                return false;
+            }
         }
     }
 
@@ -872,6 +905,18 @@ fn landing_source(line: &Lines) -> Option<String> {
     line.landing_source().as_ref().and_then(|attribute| attribute.value()).cloned()
 }
 
+fn line_attribute_value(line: &Lines, key: &str) -> Option<String> {
+    match key {
+        "__landing_source" => landing_source(line),
+        "__bundle_type" => line.bundle_type().as_ref().and_then(|attribute| attribute.value()).cloned(),
+        "_bundle_item" => line.volume_discount_bundle_item().as_ref().and_then(|attribute| attribute.value()).cloned(),
+        "_nektar_glp1" => line.volume_discount_nektar_glp_1().as_ref().and_then(|attribute| attribute.value()).cloned(),
+        "_quiz_bundle_id" => quiz_bundle_id(line),
+        "_quiz_free_gift" => quiz_free_gift(line),
+        _ => None,
+    }
+}
+
 fn quiz_bundle_id(line: &Lines) -> Option<String> {
     line.quiz_bundle_id().as_ref().and_then(|attribute| attribute.value()).cloned()
 }
@@ -1116,6 +1161,47 @@ mod tests {
                 {"id":"reward-2","targetProductIds":["gid://shopify/Product/gift-p2"],"targetVariantIds":["gid://shopify/ProductVariant/gift-v2"],"discountType":"percentage","discountValue":50,"maxQuantity":2}
             ]
         }]}"#
+    }
+
+    #[test]
+    fn registered_line_attribute_guards_gift_offer() {
+        let paid = regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1)
+            .replace("\"volumeDiscountNektarGlp1\": null", "\"volumeDiscountNektarGlp1\": null, \"bundleType\": { \"value\": \"starter\" }");
+        let lines = format!("[{},{}]", paid, gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1));
+        let config = gift_offer_config(5000, 1).replace(
+            "\"combinesWithOrderDiscounts\":true",
+            "\"lineAttributeConditions\":[{\"key\":\"__bundle_type\",\"value\":\"starter\",\"matchMode\":\"equals\",\"minMatchingQuantity\":1}],\"combinesWithOrderDiscounts\":true",
+        );
+        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &config)).expect("should not error");
+        assert_eq!(result.operations.len(), 1);
+    }
+
+    #[test]
+    fn registered_cart_attribute_guards_gift_offer() {
+        let lines = format!("[{},{}]", regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1), gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1));
+        let config = gift_offer_config(5000, 1).replace(
+            "\"combinesWithOrderDiscounts\":true",
+            "\"cartAttributeConditions\":[{\"key\":\"source\",\"value\":\"vip-landing\",\"matchMode\":\"equals\",\"minMatchingQuantity\":1}],\"combinesWithOrderDiscounts\":true",
+        );
+        let payload = cart_json(&lines, "80.00", &config).replace("\"cart\": {", "\"cart\": { \"sourceAttribute\": { \"value\": \"vip-landing\" },");
+        let result = run_function_with_input(run, &payload).expect("should not error");
+        assert_eq!(result.operations.len(), 1);
+    }
+
+    #[test]
+    fn cart_value_maximum_uses_the_active_currency_override() {
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "85.00", 1),
+            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+        );
+        let config = gift_offer_config(5000, 1).replace(
+            "\"cartValueThresholdCents\":5000",
+            "\"cartValueThresholdCents\":5000,\"cartValueMaxCents\":9999,\"currencyOverrides\":{\"EUR\":4000},\"maxCurrencyOverrides\":{\"EUR\":7999}",
+        );
+        let payload = cart_json(&lines, "105.00", &config).replace("\"currencyCode\": \"USD\"", "\"currencyCode\": \"EUR\"");
+        let result = run_function_with_input(run, &payload).expect("should not error");
+        assert!(result.operations.is_empty());
     }
 
     #[test]

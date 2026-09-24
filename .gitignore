@@ -6,6 +6,7 @@ node_modules/
 *.log
 dist/
 build/
+*.tsbuildinfo
 .shopify/
 shopify.app.*.toml
 !shopify.app.toml
@@ -37,3 +38,12 @@ bun.lockb
 .vercel
 .env*.local
 apps/shopify-admin/.env.production
+# Local AI agent tooling (do not commit)
+.codegraph/
+graphify-out/
+AGENTS.md
+CLAUDE.md
+.claude/settings.json
+.claude/settings.json.graphify-bak
+.codex/hooks.json
+.cursor/rules/graphify.mdc

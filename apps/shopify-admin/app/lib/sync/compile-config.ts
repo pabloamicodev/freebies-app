@@ -62,6 +62,7 @@ export interface CompiledOffer {
   discountValue: number;
   currencyCode: string;
   currencyOverrides?: Record<string, number>;
+  maxCurrencyOverrides?: Record<string, number>;
   combinesWithOrderDiscounts: boolean;
   combinesWithShippingDiscounts: boolean;
   combinesWithProductDiscounts: boolean;
@@ -69,6 +70,15 @@ export interface CompiledOffer {
   giftRewards: CompiledGiftReward[];
   productRewards: CompiledProductReward[];
   orderRewards: CompiledOrderReward[];
+  lineAttributeConditions?: CompiledAttributeCondition[];
+  cartAttributeConditions?: CompiledAttributeCondition[];
+}
+
+export interface CompiledAttributeCondition {
+  key: string;
+  value: string;
+  matchMode: "equals" | "not_equals";
+  minMatchingQuantity: number;
 }
 
 export interface CompiledRequirement {
@@ -147,6 +157,8 @@ export function compileOfferConfig(
     giftRewards: [],
     productRewards: [],
     orderRewards: [],
+    lineAttributeConditions: [],
+    cartAttributeConditions: [],
   };
 
   for (const cond of conditions.filter((c) => c.isEnabled)) {
@@ -156,6 +168,7 @@ export function compileOfferConfig(
         config.cartValueThresholdCents = Number(value["thresholdCents"] ?? 0);
         if (Number(value["maxCents"] ?? 0) > 0) config.cartValueMaxCents = Number(value["maxCents"]);
         if (value["currencyOverrides"]) config.currencyOverrides = value["currencyOverrides"] as Record<string, number>;
+        if (value["maxCurrencyOverrides"]) config.maxCurrencyOverrides = value["maxCurrencyOverrides"] as Record<string, number>;
         const filter = value["scopeFilter"] as Record<string, string[]> | undefined;
         if (filter?.excludeProductIds) config.excludedProductIds.push(...filter.excludeProductIds);
         break;
@@ -225,6 +238,22 @@ export function compileOfferConfig(
       }
       case "exclude_products":
         config.excludedProductIds.push(...((value["productIds"] as string[]) ?? []));
+        break;
+      case "line_attribute":
+        config.lineAttributeConditions!.push({
+          key: String(value["key"] ?? ""),
+          value: String(value["value"] ?? ""),
+          matchMode: value["matchMode"] === "not_equals" ? "not_equals" : "equals",
+          minMatchingQuantity: Math.max(1, Number(value["minMatchingQuantity"] ?? 1)),
+        });
+        break;
+      case "cart_attribute":
+        config.cartAttributeConditions!.push({
+          key: String(value["key"] ?? ""),
+          value: String(value["value"] ?? ""),
+          matchMode: value["matchMode"] === "not_equals" ? "not_equals" : "equals",
+          minMatchingQuantity: 1,
+        });
         break;
     }
   }

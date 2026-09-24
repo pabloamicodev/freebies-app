@@ -66,14 +66,14 @@ importers:
         specifier: ^9.0.0
         version: 9.3.1(react@18.3.1)
       '@shopify/shopify-api':
-        specifier: ^13.0.0
-        version: 13.0.0
+        specifier: ^14.0.1
+        version: 14.0.1
       '@shopify/shopify-app-react-router':
-        specifier: ^1.2.0
-        version: 1.2.0(react-dom@18.3.1(react@18.3.1))(react-router@7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)
+        specifier: ^2.1.0
+        version: 2.1.0(react-dom@18.3.1(react@18.3.1))(react-router@7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)
       '@shopify/shopify-app-session-storage-postgresql':
-        specifier: ^6.0.0
-        version: 6.0.0(@shopify/shopify-api@13.0.0)(@shopify/shopify-app-session-storage@5.0.0(@shopify/shopify-api@13.0.0))
+        specifier: ^7.0.1
+        version: 7.0.1(@shopify/shopify-api@14.0.1)(@shopify/shopify-app-session-storage@6.0.1(@shopify/shopify-api@14.0.1))
       '@types/pg':
         specifier: ^8.20.0
         version: 8.20.0
@@ -189,7 +189,7 @@ importers:
         version: link:../shared-types
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(gel@2.2.0)(pg@8.21.0)(postgres@3.4.9)
+        version: 0.45.2(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(gel@2.2.0)(pg@8.23.0)(postgres@3.4.9)
       postgres:
         specifier: ^3.4.0
         version: 3.4.9
@@ -394,11 +394,11 @@ packages:
 
   '@esbuild-kit/core-utils@3.3.2':
     resolution: {integrity: sha512-sPRAnw9CdSsRmEtnsl2WXWdyquogVpB3yZ3dgwJfe8zrOzTsV7cJvmwrKVa+0ma5BoiGJ+BoqkMvawbayKUsqQ==}
-    deprecated: 'Merged into tsx: https://tsx.is'
+    deprecated: 'Merged into tsx: https://tsx.hirok.io'
 
   '@esbuild-kit/esm-loader@2.6.5':
     resolution: {integrity: sha512-FxEMIkJKnodyA1OaCUoEvbYRkoZlLZ4d/eXFu9Fh8CbBBgP5EmZxrfTRyN0qpXZ4vOvqnE5YdRdcrmUUXuU+dA==}
-    deprecated: 'Merged into tsx: https://tsx.is'
+    deprecated: 'Merged into tsx: https://tsx.hirok.io'
 
   '@esbuild/aix-ppc64@0.25.12':
     resolution: {integrity: sha512-Hhmwd6CInZ3dwpuGTF8fJG6yoWmsToE+vYgD4nytZVxcu1ulHpUQRAB1UJ8+N1Am3Mz4+xOByoQoSZf4D+CpkA==}
@@ -1676,8 +1676,8 @@ packages:
       '@opentelemetry/sdk-trace-base': ^1.30.1
       '@opentelemetry/semantic-conventions': ^1.28.0
 
-  '@shopify/admin-api-client@1.1.2':
-    resolution: {integrity: sha512-sV5gS8x4kj0KLULlOJkoBzm+tu6tn+1PCK9a6inySv5qtzmf/JxDWtLgaW9vRXeXHo/Sl/p3mBWhY3//fKA8iw==}
+  '@shopify/admin-api-client@2.0.0':
+    resolution: {integrity: sha512-ivvOKq08S4xdETu3R7ZxIGTX2Q//dKef7jLY7Ne9HSlg+UJzk7PqdY+h61pqQzvZ3AeNN8AJG2eV20ycuJowfg==}
 
   '@shopify/app-bridge-react@4.2.10':
     resolution: {integrity: sha512-/VhfsxIvWcK7w5rBY97WdSTApLEg+Z2dT9Zc+idAUiAi48R64nYalXDUG8ar5xRoINHFC/w+9WxYViAazpgfew==}
@@ -1688,8 +1688,8 @@ packages:
   '@shopify/app-bridge-types@0.7.0':
     resolution: {integrity: sha512-A/DiGIjCBdd45ijMDKLgXrrGG68so3d25Yaeo0lv8ruWeljHGn3sA+UU1o/5BptSPkikDkgPPl8EQDxe4/KShw==}
 
-  '@shopify/graphql-client@1.4.2':
-    resolution: {integrity: sha512-C/fEyx6BZmTGeJv0HSsduhfn5ZbkXk0nePkyo0+xXxorP1I+uvx9pobdFxTfiPnOrh+P6QiKzBgIviksnSo4YA==}
+  '@shopify/graphql-client@2.0.0':
+    resolution: {integrity: sha512-SfIZa6J9Px4ZSMIVdPLNupeSyqznovV6pDVxwC1rmbi0JTVj2q/CCsOf9hLQvsMdBiyJDHVnoVHGpBzlhpwO2Q==}
 
   '@shopify/polaris-icons@9.3.1':
     resolution: {integrity: sha512-16BIFAT93LJ8X4YRXz5cR9ZPHeErMg3DYS0gyTPNPkd0E5IBPoTxPINjn2b4Mr9Sc1x4RfI4AqPcV8ut0D1J5w==}
@@ -1704,35 +1704,36 @@ packages:
   '@shopify/polaris@13.9.5':
     resolution: {integrity: sha512-UN+rT2q1r/uF0Xia8MaCl2nDxatuzbjunS5WYcv4qw8VBvThTxDVURgpwOuvutSrvu138pwScOAah933vqlYkg==}
     engines: {node: '>=20.10.0'}
+    deprecated: 'Polaris React is deprecated and no longer maintained. For building Shopify admin experiences, use Polaris web components: https://shopify.dev/docs/api/polaris — archived docs for this package: https://shopify.github.io/polaris-react-archive/'
     peerDependencies:
       react: ^18.0.0
       react-dom: ^18.0.0
 
-  '@shopify/shopify-api@13.0.0':
-    resolution: {integrity: sha512-tf55PjnIoDY6wjv9gJB1FMYoRmalUCdB8ayPLlPwmDUzCRCKfbQdKrBEX1jnKRmSm7EvtjkUSqbI60v0/jAk9Q==}
-    engines: {node: '>=20.0.0'}
+  '@shopify/shopify-api@14.0.1':
+    resolution: {integrity: sha512-wWSd6rSaNlUUmj0ECz2s2wQ+B6gTuzcPrbeOhwGlw1I35gHt2q88muCMZn5gS1Hq6pG/1ybOKiDf5bvhao+ypw==}
+    engines: {node: '>=22.0.0'}
 
-  '@shopify/shopify-app-react-router@1.2.0':
-    resolution: {integrity: sha512-8yZzVw5a1LwIwN2HZQzUXKAs3c+39aSWDLT10gxTu+FJY3r5d0ndL7AhbRpwnS+TB8c0tp5JPVlVFXlVM4e+Bg==}
-    engines: {node: '>=20.0.0'}
+  '@shopify/shopify-app-react-router@2.1.0':
+    resolution: {integrity: sha512-ICkiqZ4A4IpRTatAS0klpDGdxwsxlj9JiXe48KMl9lFbaE5wKIF1lZPUgEz5OXDqq7RR2f4uu4ti/U8sFoaTiQ==}
+    engines: {node: '>=22.0.0'}
     peerDependencies:
       react: '>=18'
       react-dom: '>=18'
       react-router: ^7.6.2
 
-  '@shopify/shopify-app-session-storage-postgresql@6.0.0':
-    resolution: {integrity: sha512-Ml1dqF0KgJB1/feFk0DOqLggr6NOejjljWERXcTQROkw7O5y+x/WRnwFZxYVlPJVhdJoSIA2gd0mmrDCpi32cQ==}
+  '@shopify/shopify-app-session-storage-postgresql@7.0.1':
+    resolution: {integrity: sha512-ejgqZFQtYz0ppysm2uvpUcSeGxJCe5AfBdUaVef3uWnnX8yyIx0DBZgoI6jFYYXOfUCN7+9Y9Wq6xGd/coGBng==}
     peerDependencies:
-      '@shopify/shopify-api': ^13.0.0
-      '@shopify/shopify-app-session-storage': ^5.0.0
+      '@shopify/shopify-api': ^14.0.0
+      '@shopify/shopify-app-session-storage': ^6.0.0
 
-  '@shopify/shopify-app-session-storage@5.0.0':
-    resolution: {integrity: sha512-hFUeDGmA4NJmnsq0peYxYIhCzPtXzP9dKjoz04VwWq0XTFzmjy+6yLWY9LFNI4gSiK3Mws3FSLKaatd8TqIj2g==}
+  '@shopify/shopify-app-session-storage@6.0.1':
+    resolution: {integrity: sha512-sNRZ49K/96J+S332OURIh04ZTWLsW8riCk4HISdalOaSL2gBp2DBV7gxR2rNnOzVsoQKASY4KV3bbtscShPtEA==}
     peerDependencies:
-      '@shopify/shopify-api': ^13.0.0
+      '@shopify/shopify-api': ^14.0.0
 
-  '@shopify/storefront-api-client@1.0.10':
-    resolution: {integrity: sha512-A0ItFW58L5+y/jnnJDEsmt2YcQSt2BG+pNoQOYRpPBJaOLpTj7A13q1QVrE5XYVGZCA6ZQ6FqAtgosHHrkut0Q==}
+  '@shopify/storefront-api-client@2.0.0':
+    resolution: {integrity: sha512-rWmPqZ+ZqsxdePpH/4sPdd+jUWHiSUeEWolJNQpqb+1KLlx79khdfJO1M9z9HfG2H0aHkmS+fnx2jr46q7NCGQ==}
 
   '@shopify/ui-extensions-react@2025.7.3':
     resolution: {integrity: sha512-XNi91jm5oMhJG4ktoUeIQyvajDMse+MkOwc6x39NHDrjDbOEEoqBKqY+AB7ef+T9I0FDw9vkN9PdzDnXQJqEow==}
@@ -2290,6 +2291,7 @@ packages:
   eslint@9.39.4:
     resolution: {integrity: sha512-XoMjdBOwe/esVgEvLmNsD3IRHkm7fbKIUGvrleloJXUZgDHig2IPWNniv+GwjyJXzuNqVjlr5+4yVUZjycJwfQ==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'
@@ -2483,6 +2485,10 @@ packages:
 
   isbot@5.1.40:
     resolution: {integrity: sha512-yNeeynhhtIVRBk12tBV4eHNxwB42HzR4Q3Ea7vCOiJhImGaAIdIMrbJtacQlBizGLjUPw+akkFI5Dn9T70XoVQ==}
+    engines: {node: '>=18'}
+
+  isbot@5.2.2:
+    resolution: {integrity: sha512-iQcBXcd+Rv/pkubRyGh2utW2j1oPG5hZY6TUhVPpqK4G+o3IbxpJNx04hgksjc/N7GK5pEorUxDeg31cFgEk/w==}
     engines: {node: '>=18'}
 
   isexe@2.0.0:
@@ -2712,6 +2718,9 @@ packages:
   pg-connection-string@2.13.0:
     resolution: {integrity: sha512-EMnU9E2fSULdsbErBbMaXJvFeD9B4+nPcM3f+4lsiCR0BHLPrLVjv3DbyM2hgQQviKJaTWIRRTjKjWlHg3p2ig==}
 
+  pg-connection-string@2.14.0:
+    resolution: {integrity: sha512-XwWDGcLRGCXAR8F/AM5bG7Q+A3Wm2s6QeEjlOKZLlH3UYcguiqCWKyWXVag5TLTIjR7oOJUY8kcADaZgWPyLeg==}
+
   pg-int8@1.0.1:
     resolution: {integrity: sha512-WCtabS6t3c8SkpDBUlb1kjOs7l66xsGdKpIPZsg4wR+B3+u9UAum2odSsF9tnvxg80h4ZxLWMy4pRjOsFIqQpw==}
     engines: {node: '>=4.0.0'}
@@ -2724,12 +2733,24 @@ packages:
   pg-protocol@1.14.0:
     resolution: {integrity: sha512-n5taZ1kO3s9ngDTVxsEznOqCyToTgz0FLuPq0B33COy5pPpuWJpY3/2oRBVETuOgzdqRXfWpM9HIhp2LBBT1BA==}
 
+  pg-protocol@1.16.0:
+    resolution: {integrity: sha512-sILXutLVjCLjcDuOmvhX5e2Z4cS5qG/6Bu3VkpFwdf/633ElGLpEh9bgmuI5I4sqKqkifQiGyiCcx1HdtrK7tg==}
+
   pg-types@2.2.0:
     resolution: {integrity: sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA==}
     engines: {node: '>=4'}
 
   pg@8.21.0:
     resolution: {integrity: sha512-AUP1EYJuHraQGsVoCQVIcM7TEJVGtDzxWtGFZd8rds9d+CCXlU5Js1rYgfLNvxy9iJrpHjGrRjoi/3BT9fRyiA==}
+    engines: {node: '>= 16.0.0'}
+    peerDependencies:
+      pg-native: '>=3.0.1'
+    peerDependenciesMeta:
+      pg-native:
+        optional: true
+
+  pg@8.23.0:
+    resolution: {integrity: sha512-Ip2EQCngowJLGOfCwkFhPXU7/ljlhn6Rxlmy4XYfL2Y+vyRM59+8uR2xqRWKdYmbXmxCFOAmKxBuSUCdF34qLg==}
     engines: {node: '>= 16.0.0'}
     peerDependencies:
       pg-native: '>=3.0.1'
@@ -3042,6 +3063,7 @@ packages:
   tsconfck@3.1.6:
     resolution: {integrity: sha512-ks6Vjr/jEw0P1gmOVwutM3B7fWxoWBL2KRDb1JfqGVawBmO5UsvmWOQFGHBPl5yxYz4eERr19E6L7NMv+Fej4w==}
     engines: {node: ^18 || >=20}
+    deprecated: unmaintained
     hasBin: true
     peerDependencies:
       typescript: ^5.0.0
@@ -4473,9 +4495,9 @@ snapshots:
       '@opentelemetry/semantic-conventions': 1.41.1
       '@sentry/core': 8.55.2
 
-  '@shopify/admin-api-client@1.1.2':
+  '@shopify/admin-api-client@2.0.0':
     dependencies:
-      '@shopify/graphql-client': 1.4.2
+      '@shopify/graphql-client': 2.0.0
 
   '@shopify/app-bridge-react@4.2.10(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
@@ -4487,7 +4509,7 @@ snapshots:
     dependencies:
       '@standard-schema/spec': 1.1.0
 
-  '@shopify/graphql-client@1.4.2': {}
+  '@shopify/graphql-client@2.0.0': {}
 
   '@shopify/polaris-icons@9.3.1(react@18.3.1)':
     dependencies:
@@ -4509,45 +4531,45 @@ snapshots:
       react-fast-compare: 3.2.2
       react-transition-group: 4.4.5(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
 
-  '@shopify/shopify-api@13.0.0':
+  '@shopify/shopify-api@14.0.1':
     dependencies:
-      '@shopify/admin-api-client': 1.1.2
-      '@shopify/graphql-client': 1.4.2
-      '@shopify/storefront-api-client': 1.0.10
+      '@shopify/admin-api-client': 2.0.0
+      '@shopify/graphql-client': 2.0.0
+      '@shopify/storefront-api-client': 2.0.0
       compare-versions: 6.1.1
-      isbot: 5.1.40
+      isbot: 5.2.2
       jose: 5.10.0
       lossless-json: 4.3.0
       tslib: 2.8.1
 
-  '@shopify/shopify-app-react-router@1.2.0(react-dom@18.3.1(react@18.3.1))(react-router@7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)':
+  '@shopify/shopify-app-react-router@2.1.0(react-dom@18.3.1(react@18.3.1))(react-router@7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)':
     dependencies:
-      '@shopify/admin-api-client': 1.1.2
-      '@shopify/shopify-api': 13.0.0
-      '@shopify/shopify-app-session-storage': 5.0.0(@shopify/shopify-api@13.0.0)
-      '@shopify/storefront-api-client': 1.0.10
+      '@shopify/admin-api-client': 2.0.0
+      '@shopify/shopify-api': 14.0.1
+      '@shopify/shopify-app-session-storage': 6.0.1(@shopify/shopify-api@14.0.1)
+      '@shopify/storefront-api-client': 2.0.0
       compare-versions: 6.1.1
-      isbot: 5.1.40
+      isbot: 5.2.2
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
       react-router: 7.16.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
 
-  '@shopify/shopify-app-session-storage-postgresql@6.0.0(@shopify/shopify-api@13.0.0)(@shopify/shopify-app-session-storage@5.0.0(@shopify/shopify-api@13.0.0))':
+  '@shopify/shopify-app-session-storage-postgresql@7.0.1(@shopify/shopify-api@14.0.1)(@shopify/shopify-app-session-storage@6.0.1(@shopify/shopify-api@14.0.1))':
     dependencies:
-      '@shopify/shopify-api': 13.0.0
-      '@shopify/shopify-app-session-storage': 5.0.0(@shopify/shopify-api@13.0.0)
-      pg: 8.21.0
-      pg-connection-string: 2.13.0
+      '@shopify/shopify-api': 14.0.1
+      '@shopify/shopify-app-session-storage': 6.0.1(@shopify/shopify-api@14.0.1)
+      pg: 8.23.0
+      pg-connection-string: 2.14.0
     transitivePeerDependencies:
       - pg-native
 
-  '@shopify/shopify-app-session-storage@5.0.0(@shopify/shopify-api@13.0.0)':
+  '@shopify/shopify-app-session-storage@6.0.1(@shopify/shopify-api@14.0.1)':
     dependencies:
-      '@shopify/shopify-api': 13.0.0
+      '@shopify/shopify-api': 14.0.1
 
-  '@shopify/storefront-api-client@1.0.10':
+  '@shopify/storefront-api-client@2.0.0':
     dependencies:
-      '@shopify/graphql-client': 1.4.2
+      '@shopify/graphql-client': 2.0.0
 
   '@shopify/ui-extensions-react@2025.7.3(@shopify/ui-extensions@2025.7.3)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)':
     dependencies:
@@ -4995,6 +5017,14 @@ snapshots:
       pg: 8.21.0
       postgres: 3.4.9
 
+  drizzle-orm@0.45.2(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(gel@2.2.0)(pg@8.23.0)(postgres@3.4.9):
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.1
+      '@types/pg': 8.20.0
+      gel: 2.2.0
+      pg: 8.23.0
+      postgres: 3.4.9
+
   eastasianwidth@0.2.0: {}
 
   electron-to-chromium@1.5.365: {}
@@ -5358,6 +5388,8 @@ snapshots:
 
   isbot@5.1.40: {}
 
+  isbot@5.2.2: {}
+
   isexe@2.0.0: {}
 
   isexe@3.1.5:
@@ -5554,13 +5586,21 @@ snapshots:
 
   pg-connection-string@2.13.0: {}
 
+  pg-connection-string@2.14.0: {}
+
   pg-int8@1.0.1: {}
 
   pg-pool@3.14.0(pg@8.21.0):
     dependencies:
       pg: 8.21.0
 
+  pg-pool@3.14.0(pg@8.23.0):
+    dependencies:
+      pg: 8.23.0
+
   pg-protocol@1.14.0: {}
+
+  pg-protocol@1.16.0: {}
 
   pg-types@2.2.0:
     dependencies:
@@ -5575,6 +5615,16 @@ snapshots:
       pg-connection-string: 2.13.0
       pg-pool: 3.14.0(pg@8.21.0)
       pg-protocol: 1.14.0
+      pg-types: 2.2.0
+      pgpass: 1.0.5
+    optionalDependencies:
+      pg-cloudflare: 1.4.0
+
+  pg@8.23.0:
+    dependencies:
+      pg-connection-string: 2.14.0
+      pg-pool: 3.14.0(pg@8.23.0)
+      pg-protocol: 1.16.0
       pg-types: 2.2.0
       pgpass: 1.0.5
     optionalDependencies:

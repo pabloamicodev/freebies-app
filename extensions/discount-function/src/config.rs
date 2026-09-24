@@ -84,6 +84,7 @@ pub struct CompiledOffer {
     pub discount_value: f64,
     pub currency_code: String,
     pub currency_overrides: Option<HashMap<String, i64>>,
+    pub max_currency_overrides: Option<HashMap<String, i64>>,
     pub combines_with_order_discounts: bool,
     pub combines_with_shipping_discounts: bool,
     pub combines_with_product_discounts: bool,
@@ -95,6 +96,19 @@ pub struct CompiledOffer {
     pub product_rewards: Vec<CompiledProductReward>,
     #[serde(default)]
     pub order_rewards: Vec<CompiledOrderReward>,
+    #[serde(default)]
+    pub line_attribute_conditions: Vec<CompiledAttributeCondition>,
+    #[serde(default)]
+    pub cart_attribute_conditions: Vec<CompiledAttributeCondition>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledAttributeCondition {
+    pub key: String,
+    pub value: String,
+    pub match_mode: String,
+    pub min_matching_quantity: i64,
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -367,7 +367,7 @@ export default function NewOfferPage() {
         </p>
       </div>
 
-      <Form method="POST" onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
+      <Form method="POST" onSubmit={(e: React.FormEvent<HTMLFormElement>) => { if (!validate()) e.preventDefault(); }}>
         <input type="hidden" name="offerType" value={offerType} />
 
         {/* ── Offer type selector ── */}

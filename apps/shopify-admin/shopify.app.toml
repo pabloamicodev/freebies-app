@@ -15,7 +15,7 @@ redirect_urls = [
 ]
 
 [webhooks]
-api_version = "2026-04"
+api_version = "2026-07"
 
   [[webhooks.subscriptions]]
   uri = "/webhooks/products"
@@ -63,3 +63,9 @@ runtime_context = "strict"
 url = "https://freebies-app-shopify-admin.vercel.app/apps/promo-engine"
 prefix = "apps"
 subpath = "promo-engine"
+
+[shop.metafields.app.skio_shipping_tiers]
+type = "json"
+name = "Skio shipping tiers"
+description = "Per-cycle Skio shipping override configuration managed by Promo Engine."
+access.admin = "merchant_read_write"

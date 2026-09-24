@@ -56,6 +56,8 @@ export const ConditionTypeSchema = z.enum([
   "exclude_vendors",
   "exclude_types",
   "page_url",
+  "line_attribute",
+  "cart_attribute",
 ]);
 export type ConditionType = z.infer<typeof ConditionTypeSchema>;
 
@@ -116,6 +118,7 @@ export const CartValueConditionValueSchema = z.object({
   maxCents: z.number().int().nonnegative().optional(),
   currencyCode: z.string().length(3).default("USD"),
   currencyOverrides: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  maxCurrencyOverrides: z.record(z.string(), z.number().int().nonnegative()).optional(),
   includeGiftValues: z.boolean().default(false),
   appliesTo: z.string().optional(),
   scopeFilter: z.record(z.string(), z.array(z.string())).optional(),
@@ -195,6 +198,27 @@ export const PageUrlConditionValueSchema = z.object({
 });
 export type PageUrlConditionValue = z.infer<typeof PageUrlConditionValueSchema>;
 
+export const LineAttributeKeySchema = z.enum([
+  "__landing_source",
+  "__bundle_type",
+  "_bundle_item",
+  "_nektar_glp1",
+  "_quiz_bundle_id",
+  "_quiz_free_gift",
+]);
+export const CartAttributeKeySchema = z.enum(["source"]);
+export const LineAttributeConditionValueSchema = z.object({
+  key: LineAttributeKeySchema,
+  value: z.string().min(1).max(255),
+  matchMode: z.enum(["equals", "not_equals"]).default("equals"),
+  minMatchingQuantity: z.number().int().positive().default(1),
+});
+export const CartAttributeConditionValueSchema = z.object({
+  key: CartAttributeKeySchema,
+  value: z.string().min(1).max(255),
+  matchMode: z.enum(["equals", "not_equals"]).default("equals"),
+});
+
 export function validateConditionValue(conditionType: string, value: unknown): z.SafeParseReturnType<unknown, unknown> {
   switch (conditionType) {
     case "cart_value":
@@ -224,6 +248,10 @@ export function validateConditionValue(conditionType: string, value: unknown): z
       return SubscriptionConditionValueSchema.safeParse(value);
     case "page_url":
       return PageUrlConditionValueSchema.safeParse(value);
+    case "line_attribute":
+      return LineAttributeConditionValueSchema.safeParse(value);
+    case "cart_attribute":
+      return CartAttributeConditionValueSchema.safeParse(value);
     case "one_use_per_customer":
       return z.record(z.string(), z.unknown()).safeParse(value);
     default:
@@ -536,6 +564,8 @@ export const CompiledOfferSchema = z.object({
   /** Threshold in store currency cents. */
   cartValueThresholdCents: z.number().int().nonnegative().optional(),
   cartValueMaxCents: z.number().int().nonnegative().optional(),
+  currencyOverrides: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  maxCurrencyOverrides: z.record(z.string(), z.number().int().nonnegative()).optional(),
   cartQuantityThreshold: z.number().int().nonnegative().optional(),
   cartQuantityMax: z.number().int().nonnegative().optional(),
   subscriptionMode: z.enum(["any", "subscription_only", "one_time_only"]).optional(),
@@ -587,6 +617,18 @@ export const CompiledOfferSchema = z.object({
     id: z.string(),
     discountType: z.enum(["percentage", "fixed_amount", "free"]),
     discountValue: z.number().nonnegative(),
+  })).default([]),
+  lineAttributeConditions: z.array(z.object({
+    key: LineAttributeKeySchema,
+    value: z.string().min(1),
+    matchMode: z.enum(["equals", "not_equals"]),
+    minMatchingQuantity: z.number().int().positive(),
+  })).default([]),
+  cartAttributeConditions: z.array(z.object({
+    key: CartAttributeKeySchema,
+    value: z.string().min(1),
+    matchMode: z.enum(["equals", "not_equals"]),
+    minMatchingQuantity: z.number().int().positive(),
   })).default([]),
 });
 export type CompiledOffer = z.infer<typeof CompiledOfferSchema>;

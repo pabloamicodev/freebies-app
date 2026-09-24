@@ -381,7 +381,7 @@ export default function NewBundleOfferPage() {
         </div>
       </div>
 
-      <Form method="POST" onChange={markDirty} onSubmit={(e) => { if (!validate()) e.preventDefault(); }}>
+      <Form method="POST" onChange={markDirty} onSubmit={(e: React.FormEvent<HTMLFormElement>) => { if (!validate()) e.preventDefault(); }}>
         {/* Hidden fields */}
         <input type="hidden" name="bundleType" value={bundleTypeFromSlug} />
         <input type="hidden" name="classicProducts" value={JSON.stringify(conditionProductsForClassic)} />

@@ -128,6 +128,28 @@ describe("compileShippingOfferConfigs", () => {
 });
 
 describe("compileOfferConfig", () => {
+  it("compiles per-currency minimum and maximum cart-value bounds", () => {
+    const result = compileOfferConfig(
+      offer({ type: "gift" }),
+      [condition("cart_value", {
+        thresholdCents: 5000,
+        maxCents: 9999,
+        currencyOverrides: { EUR: 4500 },
+        maxCurrencyOverrides: { EUR: 8999 },
+      })],
+      [],
+      null,
+      1,
+    );
+
+    expect(result).toMatchObject({
+      cartValueThresholdCents: 5000,
+      cartValueMaxCents: 9999,
+      currencyOverrides: { EUR: 4500 },
+      maxCurrencyOverrides: { EUR: 8999 },
+    });
+  });
+
   it("compiles gift rules per reward instead of flattening their limits and discounts", () => {
     const result = compileOfferConfig(
       offer({ type: "gift" }),

@@ -245,7 +245,7 @@ export default function OfferWidgetPage() {
                             </Form>
                             {/* Remove */}
                             <Form method="POST" style={{ display: "inline-flex" }}
-                              onSubmit={(e) => { if (!window.confirm("Remove this widget?")) e.preventDefault(); }}>
+                              onSubmit={(e: React.FormEvent<HTMLFormElement>) => { if (!window.confirm("Remove this widget?")) e.preventDefault(); }}>
                               <input type="hidden" name="intent" value="delete_widget" />
                               <input type="hidden" name="widgetId" value={w.id} />
                               <button

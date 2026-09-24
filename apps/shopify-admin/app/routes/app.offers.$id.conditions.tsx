@@ -170,6 +170,21 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
             };
         break;
       }
+      case "line_attribute":
+        value = {
+          key: String(formData.get("attributeKey") ?? ""),
+          value: String(formData.get("attributeValue") ?? "").trim(),
+          matchMode: formData.get("attributeMatchMode") === "not_equals" ? "not_equals" : "equals",
+          minMatchingQuantity: Math.max(1, parseInt(String(formData.get("attributeMinQuantity") ?? "1"), 10) || 1),
+        };
+        break;
+      case "cart_attribute":
+        value = {
+          key: String(formData.get("attributeKey") ?? ""),
+          value: String(formData.get("attributeValue") ?? "").trim(),
+          matchMode: formData.get("attributeMatchMode") === "not_equals" ? "not_equals" : "equals",
+        };
+        break;
     }
 
     const valueResult = validateConditionValue(conditionType, value);
@@ -222,6 +237,8 @@ const MAIN_CONDITION_TYPES = [
   { label: "Specific Product — must contain selected products", value: "specific_product" },
   { label: "Pack of Products — all products must be present", value: "pack_of_products" },
   { label: "Page URL — restrict to specific storefront pages", value: "page_url" },
+  { label: "Line attribute — approved legacy property", value: "line_attribute" },
+  { label: "Cart attribute — approved legacy property", value: "cart_attribute" },
 ];
 
 const SUB_CONDITION_TYPES = [
@@ -357,7 +374,7 @@ export default function OfferConditionsPage() {
                     </span>
                   </div>
                   <Form method="POST"
-                    onSubmit={(e) => { if (!window.confirm("Remove this condition?")) e.preventDefault(); }}>
+                    onSubmit={(e: React.FormEvent<HTMLFormElement>) => { if (!window.confirm("Remove this condition?")) e.preventDefault(); }}>
                     <input type="hidden" name="intent" value="delete_condition" />
                     <input type="hidden" name="conditionId" value={c.id} />
                     <button
@@ -496,6 +513,28 @@ export default function OfferConditionsPage() {
                         />
                       </div>
                     </>
+                  )}
+
+                  {(selectedType === "line_attribute" || selectedType === "cart_attribute") && (
+                    <div className="b-stack b-stack-3">
+                      <div>
+                        <label className="b-label" htmlFor="attributeKey">Approved attribute</label>
+                        <select id="attributeKey" name="attributeKey" className="b-select" required>
+                          {selectedType === "cart_attribute" ? <option value="source">source</option> : <>
+                            <option value="__landing_source">__landing_source</option>
+                            <option value="__bundle_type">__bundle_type</option>
+                            <option value="_bundle_item">_bundle_item</option>
+                            <option value="_nektar_glp1">_nektar_glp1</option>
+                            <option value="_quiz_bundle_id">_quiz_bundle_id</option>
+                            <option value="_quiz_free_gift">_quiz_free_gift</option>
+                          </>}
+                        </select>
+                        <p className="b-help">Shopify Functions require each readable key to be declared ahead of time, so only this audited registry is available.</p>
+                      </div>
+                      <div><label className="b-label" htmlFor="attributeValue">Required value</label><input id="attributeValue" name="attributeValue" className="b-input" required autoComplete="off" /></div>
+                      <div><label className="b-label" htmlFor="attributeMatchMode">Match</label><select id="attributeMatchMode" name="attributeMatchMode" className="b-select"><option value="equals">Equals</option><option value="not_equals">Does not equal</option></select></div>
+                      {selectedType === "line_attribute" && <div><label className="b-label" htmlFor="attributeMinQuantity">Minimum matching quantity</label><input id="attributeMinQuantity" name="attributeMinQuantity" className="b-input" type="number" min="1" step="1" defaultValue="1" /></div>}
+                    </div>
                   )}
 
                   {/* specific_product / pack_of_products — product picker */}
