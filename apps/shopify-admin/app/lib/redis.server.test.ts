@@ -8,6 +8,8 @@ import {
 
 const redisEnvNames = [
   "REDIS_URL",
+  "UPSTASH_KV_REST_API_URL",
+  "UPSTASH_KV_REST_API_TOKEN",
   "REDIS_KV_REST_API_URL",
   "REDIS_KV_REST_API_TOKEN",
   "UPSTASH_REDIS_REST_URL",
@@ -47,10 +49,12 @@ describe("sanitizeRedisConnectionError", () => {
 });
 
 describe.sequential("REST Redis client", () => {
-  it("prefers the connectionless REST transport and preserves atomic EVAL semantics", async () => {
+  it("prefers the current prefixed REST transport over stale legacy credentials", async () => {
     process.env["REDIS_URL"] = "rediss://tcp.example.test:6379";
-    process.env["REDIS_KV_REST_API_URL"] = "https://redis.example.test";
-    process.env["REDIS_KV_REST_API_TOKEN"] = "test-token";
+    process.env["REDIS_KV_REST_API_URL"] = "https://stale.example.test";
+    process.env["REDIS_KV_REST_API_TOKEN"] = "stale-token";
+    process.env["UPSTASH_KV_REST_API_URL"] = "https://redis.example.test";
+    process.env["UPSTASH_KV_REST_API_TOKEN"] = "test-token";
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ result: 2 }), {
         status: 200,
