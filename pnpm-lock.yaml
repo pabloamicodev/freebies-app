@@ -71,27 +71,18 @@ importers:
       '@shopify/shopify-app-react-router':
         specifier: ^2.1.0
         version: 2.1.0(react-dom@18.3.1(react@18.3.1))(react-router@7.18.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)
-      '@shopify/shopify-app-session-storage-postgresql':
-        specifier: ^7.0.1
-        version: 7.0.1(@shopify/shopify-api@14.0.1)(@shopify/shopify-app-session-storage@6.0.1(@shopify/shopify-api@14.0.1))
-      '@types/pg':
-        specifier: ^8.20.0
-        version: 8.20.0
       '@vercel/functions':
         specifier: ^2.0.0
         version: 2.2.13
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(gel@2.2.0)(pg@8.21.0)(postgres@3.4.9)
+        version: 0.45.2(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(gel@2.2.0)(pg@8.23.0)(postgres@3.4.9)
       ioredis:
         specifier: 5.6.1
         version: 5.6.1
       isbot:
         specifier: ^5
         version: 5.1.40
-      pg:
-        specifier: ^8.21.0
-        version: 8.21.0
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -1607,12 +1598,6 @@ packages:
       react-dom: '>=18'
       react-router: ^7.6.2
 
-  '@shopify/shopify-app-session-storage-postgresql@7.0.1':
-    resolution: {integrity: sha512-ejgqZFQtYz0ppysm2uvpUcSeGxJCe5AfBdUaVef3uWnnX8yyIx0DBZgoI6jFYYXOfUCN7+9Y9Wq6xGd/coGBng==}
-    peerDependencies:
-      '@shopify/shopify-api': ^14.0.0
-      '@shopify/shopify-app-session-storage': ^6.0.0
-
   '@shopify/shopify-app-session-storage@6.0.1':
     resolution: {integrity: sha512-sNRZ49K/96J+S332OURIh04ZTWLsW8riCk4HISdalOaSL2gBp2DBV7gxR2rNnOzVsoQKASY4KV3bbtscShPtEA==}
     peerDependencies:
@@ -2673,9 +2658,6 @@ packages:
   pg-cloudflare@1.4.0:
     resolution: {integrity: sha512-Vo7z/6rrQYxpNRylp4Tlob2elzbh+N/MOQbxFVWCxS7oEx6jF53GTJFxK2WWpKuBRkmiin4Mt+xofFDjx09R0A==}
 
-  pg-connection-string@2.13.0:
-    resolution: {integrity: sha512-EMnU9E2fSULdsbErBbMaXJvFeD9B4+nPcM3f+4lsiCR0BHLPrLVjv3DbyM2hgQQviKJaTWIRRTjKjWlHg3p2ig==}
-
   pg-connection-string@2.14.0:
     resolution: {integrity: sha512-XwWDGcLRGCXAR8F/AM5bG7Q+A3Wm2s6QeEjlOKZLlH3UYcguiqCWKyWXVag5TLTIjR7oOJUY8kcADaZgWPyLeg==}
 
@@ -2697,15 +2679,6 @@ packages:
   pg-types@2.2.0:
     resolution: {integrity: sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA==}
     engines: {node: '>=4'}
-
-  pg@8.21.0:
-    resolution: {integrity: sha512-AUP1EYJuHraQGsVoCQVIcM7TEJVGtDzxWtGFZd8rds9d+CCXlU5Js1rYgfLNvxy9iJrpHjGrRjoi/3BT9fRyiA==}
-    engines: {node: '>= 16.0.0'}
-    peerDependencies:
-      pg-native: '>=3.0.1'
-    peerDependenciesMeta:
-      pg-native:
-        optional: true
 
   pg@8.23.0:
     resolution: {integrity: sha512-Ip2EQCngowJLGOfCwkFhPXU7/ljlhn6Rxlmy4XYfL2Y+vyRM59+8uR2xqRWKdYmbXmxCFOAmKxBuSUCdF34qLg==}
@@ -4292,15 +4265,6 @@ snapshots:
       react-dom: 18.3.1(react@18.3.1)
       react-router: 7.18.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
 
-  '@shopify/shopify-app-session-storage-postgresql@7.0.1(@shopify/shopify-api@14.0.1)(@shopify/shopify-app-session-storage@6.0.1(@shopify/shopify-api@14.0.1))':
-    dependencies:
-      '@shopify/shopify-api': 14.0.1
-      '@shopify/shopify-app-session-storage': 6.0.1(@shopify/shopify-api@14.0.1)
-      pg: 8.23.0
-      pg-connection-string: 2.14.0
-    transitivePeerDependencies:
-      - pg-native
-
   '@shopify/shopify-app-session-storage@6.0.1(@shopify/shopify-api@14.0.1)':
     dependencies:
       '@shopify/shopify-api': 14.0.1
@@ -4353,6 +4317,7 @@ snapshots:
       '@types/node': 22.19.19
       pg-protocol: 1.14.0
       pg-types: 2.2.0
+    optional: true
 
   '@types/prop-types@15.7.15': {}
 
@@ -4736,14 +4701,6 @@ snapshots:
       '@esbuild-kit/esm-loader': 2.6.5
       esbuild: 0.25.12
       tsx: 4.22.4
-
-  drizzle-orm@0.45.2(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(gel@2.2.0)(pg@8.21.0)(postgres@3.4.9):
-    optionalDependencies:
-      '@opentelemetry/api': 1.9.1
-      '@types/pg': 8.20.0
-      gel: 2.2.0
-      pg: 8.21.0
-      postgres: 3.4.9
 
   drizzle-orm@0.45.2(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(gel@2.2.0)(pg@8.23.0)(postgres@3.4.9):
     optionalDependencies:
@@ -5377,23 +5334,22 @@ snapshots:
   pg-cloudflare@1.4.0:
     optional: true
 
-  pg-connection-string@2.13.0: {}
+  pg-connection-string@2.14.0:
+    optional: true
 
-  pg-connection-string@2.14.0: {}
-
-  pg-int8@1.0.1: {}
-
-  pg-pool@3.14.0(pg@8.21.0):
-    dependencies:
-      pg: 8.21.0
+  pg-int8@1.0.1:
+    optional: true
 
   pg-pool@3.14.0(pg@8.23.0):
     dependencies:
       pg: 8.23.0
+    optional: true
 
-  pg-protocol@1.14.0: {}
+  pg-protocol@1.14.0:
+    optional: true
 
-  pg-protocol@1.16.0: {}
+  pg-protocol@1.16.0:
+    optional: true
 
   pg-types@2.2.0:
     dependencies:
@@ -5402,16 +5358,7 @@ snapshots:
       postgres-bytea: 1.0.1
       postgres-date: 1.0.7
       postgres-interval: 1.2.0
-
-  pg@8.21.0:
-    dependencies:
-      pg-connection-string: 2.13.0
-      pg-pool: 3.14.0(pg@8.21.0)
-      pg-protocol: 1.14.0
-      pg-types: 2.2.0
-      pgpass: 1.0.5
-    optionalDependencies:
-      pg-cloudflare: 1.4.0
+    optional: true
 
   pg@8.23.0:
     dependencies:
@@ -5422,10 +5369,12 @@ snapshots:
       pgpass: 1.0.5
     optionalDependencies:
       pg-cloudflare: 1.4.0
+    optional: true
 
   pgpass@1.0.5:
     dependencies:
       split2: 4.2.0
+    optional: true
 
   picocolors@1.1.1: {}
 
@@ -5453,15 +5402,19 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
-  postgres-array@2.0.0: {}
+  postgres-array@2.0.0:
+    optional: true
 
-  postgres-bytea@1.0.1: {}
+  postgres-bytea@1.0.1:
+    optional: true
 
-  postgres-date@1.0.7: {}
+  postgres-date@1.0.7:
+    optional: true
 
   postgres-interval@1.2.0:
     dependencies:
       xtend: 4.0.2
+    optional: true
 
   postgres@3.4.9: {}
 
@@ -5652,7 +5605,8 @@ snapshots:
 
   source-map@0.6.1: {}
 
-  split2@4.2.0: {}
+  split2@4.2.0:
+    optional: true
 
   sprintf-js@1.1.3: {}
 
@@ -5906,7 +5860,8 @@ snapshots:
       string-width: 5.1.2
       strip-ansi: 7.2.0
 
-  xtend@4.0.2: {}
+  xtend@4.0.2:
+    optional: true
 
   yallist@3.1.1: {}
 

@@ -1,4 +1,3 @@
-import "./lib/pg-ssl-patch.js";
 import "@shopify/shopify-app-react-router/adapters/node";
 import * as Sentry from "@sentry/node";
 
@@ -40,8 +39,8 @@ if (process.env["SENTRY_DSN"]) {
     },
   });
 }
-import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";
 import { getDb, shops } from "@promo/db";
+import { PostgresSessionStorage } from "./lib/postgres-session-storage.server.js";
 import { SHOPIFY_API_VERSION } from "./lib/shopify-api-version.js";
 import { encryptToken } from "./lib/token-crypto.server.js";
 import { shopifyGraphQL } from "./lib/shopify-fetch.server.js";
@@ -51,13 +50,7 @@ import { publishOffersForShop } from "./lib/sync/offer-publisher.server.js";
 import { productCache } from "@promo/db";
 import { count, eq as drizzleEq } from "drizzle-orm";
 
-// Strip channel_binding param — Node.js pg library doesn't support it
-const rawDbUrl = new URL(
-  process.env["DATABASE_URL"] ?? "postgresql://localhost/neondb"
-);
-rawDbUrl.searchParams.delete("channel_binding");
-
-const sessionStorage = new PostgreSQLSessionStorage(rawDbUrl);
+const sessionStorage = new PostgresSessionStorage();
 
 const shopify = shopifyApp({
   apiKey: process.env["SHOPIFY_API_KEY"] ?? "",
