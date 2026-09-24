@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { summarizeHealthChecks } from "./health-status.server.js";
+import { healthErrorDetails, summarizeHealthChecks } from "./health-status.server.js";
 
 describe("summarizeHealthChecks", () => {
   it("is healthy when critical checks pass and optional services are absent", () => {
@@ -21,5 +21,11 @@ describe("summarizeHealthChecks", () => {
       database: { status: "fail", critical: true },
       redis: { status: "ok", critical: false },
     })).toEqual({ status: "unhealthy", statusCode: 503 });
+  });
+
+  it("exposes only allowlisted machine-readable error codes", () => {
+    expect(healthErrorDetails({ code: "ECONNREFUSED" })).toEqual({ errorCode: "ECONNREFUSED" });
+    expect(healthErrorDetails({ code: "secret=https://user:password@example.test" })).toEqual({});
+    expect(healthErrorDetails(new Error("credential-bearing message"))).toEqual({});
   });
 });

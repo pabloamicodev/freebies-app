@@ -10,6 +10,7 @@ import {
 } from "../lib/redis.server.js";
 import { apiJson, getRequestId } from "../lib/api-response.server.js";
 import {
+  healthErrorDetails,
   summarizeHealthChecks,
   type DependencyHealth,
 } from "../lib/health-status.server.js";
@@ -24,7 +25,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
     await db.execute(sql`SELECT 1`);
     checks["database"] = { status: "ok", critical: true, latencyMs: elapsedMs(dbStartedAt) };
   } catch (error) {
-    checks["database"] = { status: "fail", critical: true, latencyMs: elapsedMs(dbStartedAt) };
+    checks["database"] = {
+      status: "fail",
+      critical: true,
+      latencyMs: elapsedMs(dbStartedAt),
+      reason: "query_failed",
+      ...healthErrorDetails(error),
+    };
     reportHealthFailure("database", requestId, error);
   }
 
@@ -43,6 +50,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
         status: "degraded",
         critical: false,
         latencyMs: elapsedMs(redisStartedAt),
+        reason: "connection_failed",
+        ...healthErrorDetails(error),
       };
       reportHealthFailure("redis", requestId, error);
     }
@@ -67,6 +76,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   checks["configuration"] = {
     status: missingEnv.length === 0 ? "ok" : "fail",
     critical: true,
+    ...(missingEnv.length > 0 ? { reason: "missing_required_environment" as const } : {}),
   };
   if (missingEnv.length > 0) {
     const error = new Error(`Missing required environment variables: ${missingEnv.join(", ")}`);
