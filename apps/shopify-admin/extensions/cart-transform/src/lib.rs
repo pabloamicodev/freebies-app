@@ -1,4 +1,4 @@
-/**
+/*!
  * Cart Transform Function — Shopify Plus only.
  * Handles bundle line expansion (lineExpand) and presentation (lineUpdate).
  *

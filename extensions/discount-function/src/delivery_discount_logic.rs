@@ -246,9 +246,9 @@ fn targeted_delivery_groups<'a>(
     delivery_groups
         .iter()
         .filter(|group| {
-            if matches!(group.group_type(), schema::CartDeliveryGroupType::Subscription) {
-                include_subscription
-            } else if delivery_group_has_subscription_line(group) {
+            if matches!(group.group_type(), schema::CartDeliveryGroupType::Subscription)
+                || delivery_group_has_subscription_line(group)
+            {
                 include_subscription
             } else {
                 include_one_time
@@ -259,7 +259,7 @@ fn targeted_delivery_groups<'a>(
 
 fn parse_config(input: &Input) -> Option<CompiledConfig> {
     let value = input.discount().metafield()?.value();
-    serde_json::from_str(&value).ok()
+    serde_json::from_str(value).ok()
 }
 
 #[cfg(test)]
@@ -395,16 +395,15 @@ mod tests {
 
     #[test]
     fn highest_qualifying_tier_wins() {
-        let offer = format!(
-            r#"{{
+        let offer =
+            r#"{
                 "id":"ship-1","priority":100,"targetGroupTypes":null,
                 "tiers":[
-                    {{"minimumSubtotalCents":0,"discountType":"percentage","discountValue":10.0,"appliesWhen":null}},
-                    {{"minimumSubtotalCents":5000,"discountType":"percentage","discountValue":50.0,"appliesWhen":null}},
-                    {{"minimumSubtotalCents":10000,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}}
+                    {"minimumSubtotalCents":0,"discountType":"percentage","discountValue":10.0,"appliesWhen":null},
+                    {"minimumSubtotalCents":5000,"discountType":"percentage","discountValue":50.0,"appliesWhen":null},
+                    {"minimumSubtotalCents":10000,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}
                 ]
-            }}"#
-        );
+            }"#.to_string();
         let config = shipping_config(&format!("[{offer}]"));
         let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
         let result = run_with(r#"["SHIPPING"]"#, "80.00", &config, &groups);

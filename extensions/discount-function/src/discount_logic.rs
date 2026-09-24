@@ -969,7 +969,7 @@ fn metadata_value(line: &Lines, key: &str) -> Option<String> {
 
 fn parse_config(input: &Input) -> Option<CompiledConfig> {
     let value = input.discount().metafield()?.value();
-    serde_json::from_str(&value).ok()
+    serde_json::from_str(value).ok()
 }
 
 #[cfg(test)]
@@ -1118,12 +1118,11 @@ mod tests {
         id: &str,
         variant_id: &str,
         product_id: &str,
-        offer_id: &str,
-        reward_id: &str,
-        offer_version: &str,
+        metadata: (&str, &str, &str),
         price: &str,
         qty: i64,
     ) -> String {
+        let (offer_id, reward_id, offer_version) = metadata;
         format!(
             r#"{{
                 "id": "{id}", "quantity": {qty},
@@ -1433,9 +1432,7 @@ mod tests {
                 "gid://shopify/CartLine/2",
                 "gid://shopify/ProductVariant/gift-v2",
                 "gid://shopify/Product/gift-p2",
-                "offer-1",
-                "reward-1",
-                "3",
+                ("offer-1", "reward-1", "3"),
                 "20.00",
                 1,
             ),
@@ -1453,9 +1450,7 @@ mod tests {
                 "gid://shopify/CartLine/2",
                 "gid://shopify/ProductVariant/unlisted",
                 "gid://shopify/Product/gift-p1",
-                "offer-1",
-                "reward-1",
-                "3",
+                ("offer-1", "reward-1", "3"),
                 "100.00",
                 1,
             ),
@@ -1474,9 +1469,7 @@ mod tests {
                 "gid://shopify/CartLine/2",
                 "gid://shopify/ProductVariant/gift-v1",
                 "gid://shopify/Product/gift-p1",
-                "offer-1",
-                "reward-1",
-                "3",
+                ("offer-1", "reward-1", "3"),
                 "20.00",
                 1,
             ),
@@ -1515,9 +1508,7 @@ mod tests {
                 "gid://shopify/CartLine/2",
                 "gid://shopify/ProductVariant/gift-v1",
                 "gid://shopify/Product/gift-p1",
-                "offer-1",
-                "reward-1",
-                "2",
+                ("offer-1", "reward-1", "2"),
                 "20.00",
                 1,
             ),
@@ -1535,9 +1526,7 @@ mod tests {
                 "gid://shopify/CartLine/2",
                 "gid://shopify/ProductVariant/gift-v2",
                 "gid://shopify/Product/gift-p2",
-                "offer-1",
-                "reward-2",
-                "3",
+                ("offer-1", "reward-2", "3"),
                 "20.00",
                 3,
             ),

@@ -1,4 +1,4 @@
-/**
+/*!
  * Cart and Checkout Validation Function — Rust.
  * Execution budget: 5ms HARD LIMIT. This MUST be Rust.
  *
