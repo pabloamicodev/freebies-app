@@ -1,6 +1,6 @@
 import { getDb, productCache } from "@promo/db";
-import { eq, and, inArray, sql } from "drizzle-orm";
-import { SHOPIFY_API_VERSION } from "@promo/shared-types";
+import { eq, and, inArray, notInArray, sql } from "drizzle-orm";
+import { shopifyGraphQL } from "../shopify-fetch.server.js";
 
 const COLLECTION_PRODUCTS_QUERY = `
   query GetCollectionProducts($collectionId: ID!, $after: String) {
@@ -13,6 +13,15 @@ const COLLECTION_PRODUCTS_QUERY = `
   }
 `;
 
+interface CollectionProductsData {
+  collection: {
+    products: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: Array<{ id: string }>;
+    };
+  } | null;
+}
+
 export async function syncCollectionFromWebhook(
   shopId: string,
   shopDomain: string,
@@ -21,38 +30,21 @@ export async function syncCollectionFromWebhook(
 ): Promise<void> {
   const db = getDb();
   let cursor: string | null = null;
+  const collectionProductGids = new Set<string>();
 
   do {
-    const res = await fetch(
-      `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": accessToken },
-        body: JSON.stringify({
-          query: COLLECTION_PRODUCTS_QUERY,
-          variables: { collectionId: collectionGid, after: cursor },
-        }),
-        signal: AbortSignal.timeout(10_000),
-      },
-    );
+    const data: CollectionProductsData = await shopifyGraphQL<CollectionProductsData>({
+      shopDomain,
+      accessToken,
+      query: COLLECTION_PRODUCTS_QUERY,
+      variables: { collectionId: collectionGid, after: cursor },
+    });
 
-    const data = (await res.json()) as {
-      data?: {
-        collection: {
-          products: {
-            pageInfo: { hasNextPage: boolean; endCursor: string | null };
-            nodes: Array<{ id: string }>;
-          };
-        } | null;
-      };
-      errors?: unknown[];
-    };
-
-    if (data.errors?.length) throw new Error(`GraphQL error: ${JSON.stringify(data.errors[0])}`);
-    const collection = data.data?.collection ?? null;
+    const collection: CollectionProductsData["collection"] = data.collection;
     if (!collection) break;
 
     const productGids = collection.products.nodes.map((p) => p.id);
+    productGids.forEach((id) => collectionProductGids.add(id));
     if (productGids.length > 0) {
       await db
         .update(productCache)
@@ -70,5 +62,27 @@ export async function syncCollectionFromWebhook(
     }
 
     cursor = collection.products.pageInfo.hasNextPage ? collection.products.pageInfo.endCursor : null;
+    if (collection.products.pageInfo.hasNextPage && !cursor) {
+      throw new Error(`Collection pagination omitted endCursor for ${collectionGid}`);
+    }
   } while (cursor);
+
+  const removalFilter = collectionProductGids.size > 0
+    ? and(
+        eq(productCache.shopId, shopId),
+        notInArray(productCache.productGid, [...collectionProductGids]),
+        sql`${collectionGid}::text = ANY(${productCache.collections})`,
+      )
+    : and(
+        eq(productCache.shopId, shopId),
+        sql`${collectionGid}::text = ANY(${productCache.collections})`,
+      );
+
+  await db
+    .update(productCache)
+    .set({
+      collections: sql`array_remove(${productCache.collections}, ${collectionGid}::text)`,
+      syncedAt: new Date(),
+    })
+    .where(removalFilter);
 }

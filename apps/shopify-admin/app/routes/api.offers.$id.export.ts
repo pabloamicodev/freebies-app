@@ -9,18 +9,7 @@ import { authenticate } from "../shopify.server.js";
 import { getDb, type Offer } from "@promo/db";
 import { offers, offerConditions, offerRewards, shops } from "@promo/db";
 import { eq, and, inArray } from "drizzle-orm";
-
-function escapeCSV(value: unknown): string {
-  const str = value === null || value === undefined ? "" : String(value);
-  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
-}
-
-function rowToCSV(row: unknown[]): string {
-  return row.map(escapeCSV).join(",");
-}
+import { rowToCSV } from "../lib/csv.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   try {
@@ -132,6 +121,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     },
   });
   } catch (err) {
+    if (err instanceof Response) return err;
     const message = err instanceof Error ? err.message : String(err);
     console.error("[api.offers.export]", message);
     return Response.json({ error: message }, { status: 500 });

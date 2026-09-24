@@ -1,7 +1,7 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { getDb } from "@promo/db";
 import { sql } from "drizzle-orm";
-import Redis from "ioredis";
+import { getSharedRedis, isRedisConfigured, resetSharedRedis } from "../lib/redis.server.js";
 
 export async function loader(_: LoaderFunctionArgs) {
   const checks: Record<string, "ok" | "fail" | "not_configured"> = {};
@@ -14,15 +14,14 @@ export async function loader(_: LoaderFunctionArgs) {
     checks["db"] = "fail";
   }
 
-  const redisUrl = process.env["REDIS_URL"];
-  if (redisUrl) {
+  if (isRedisConfigured()) {
     try {
-      const redis = new Redis(redisUrl, { maxRetriesPerRequest: 1, lazyConnect: true, connectTimeout: 3000 });
-      await redis.connect();
+      const redis = await getSharedRedis();
+      if (!redis) throw new Error("Redis unavailable");
       await redis.ping();
-      redis.disconnect();
       checks["redis"] = "ok";
     } catch {
+      resetSharedRedis();
       checks["redis"] = "fail";
     }
   } else {
@@ -38,13 +37,10 @@ export async function loader(_: LoaderFunctionArgs) {
   const allOk = Object.values(checks).every((v) => v === "ok" || v === "not_configured");
 
   return Response.json(
+    { status: allOk ? "ok" : "degraded" },
     {
-      status: allOk ? "ok" : "degraded",
-      checks,
-      missingEnv: missingEnv.length > 0 ? missingEnv : undefined,
-      version: process.env["VERCEL_GIT_COMMIT_SHA"] ?? null,
-      deployedAt: process.env["VERCEL_DEPLOYMENT_ID"] ? new Date().toISOString() : null,
+      status: allOk ? 200 : 503,
+      headers: { "Cache-Control": "no-store" },
     },
-    { status: allOk ? 200 : 503 },
   );
 }

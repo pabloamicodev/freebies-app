@@ -11,6 +11,7 @@ import { getDb } from "@promo/db";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
 import { ConditionTypeSchema, DiscountTypeSchema, RewardTypeSchema, validateConditionValue, validateRewardPayload, type ConditionType, type DiscountType, type RewardType } from "@promo/shared-types";
+import { MAX_CSV_BYTES, MAX_CSV_COLUMNS, MAX_CSV_ROWS, parseCSV } from "../lib/csv.js";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -23,76 +24,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {};
 };
 
-/**
- * RFC 4180-compliant CSV parser.
- * Handles quoted fields with embedded commas, double-quote escapes, and CRLF/LF line endings.
- */
-function parseCSV(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let inQuotes = false;
-  let i = 0;
-
-  // Normalize line endings
-  const src = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-
-  while (i < src.length) {
-    const ch = src[i]!;
-
-    if (inQuotes) {
-      if (ch === '"') {
-        // Peek next char
-        if (src[i + 1] === '"') {
-          // Escaped quote
-          field += '"';
-          i += 2;
-        } else {
-          // End of quoted field
-          inQuotes = false;
-          i++;
-        }
-      } else {
-        field += ch;
-        i++;
-      }
-    } else {
-      if (ch === '"') {
-        inQuotes = true;
-        i++;
-      } else if (ch === ",") {
-        row.push(field);
-        field = "";
-        i++;
-      } else if (ch === "\n") {
-        row.push(field);
-        field = "";
-        if (row.some((f) => f.trim())) rows.push(row);
-        row = [];
-        i++;
-      } else {
-        field += ch;
-        i++;
-      }
-    }
-  }
-
-  // Flush last field/row
-  if (field || row.length > 0) {
-    row.push(field);
-    if (row.some((f) => f.trim())) rows.push(row);
-  }
-
-  return rows;
-}
-
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const db = getDb();
+  const contentLength = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(contentLength) && contentLength > MAX_CSV_BYTES * 1.1) {
+    return { error: `CSV must be smaller than ${MAX_CSV_BYTES.toLocaleString()} bytes`, created: [], errors: [] };
+  }
   const formData = await request.formData();
-  const csvContent = formData.get("csvContent") as string;
+  const csvValue = formData.get("csvContent");
+  const csvContent = typeof csvValue === "string" ? csvValue : "";
 
   if (!csvContent) return { error: "No CSV content provided", created: [], errors: [] };
+  if (new TextEncoder().encode(csvContent).byteLength > MAX_CSV_BYTES) {
+    return { error: `CSV must be smaller than ${MAX_CSV_BYTES.toLocaleString()} bytes`, created: [], errors: [] };
+  }
 
   const shopRows = await db
     .select({ id: shops.id })
@@ -102,12 +48,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const shopId = shopRows[0]?.id;
   if (!shopId) return { error: "Shop not found", created: [], errors: [] };
 
-  const parsedRows = parseCSV(csvContent);
+  let parsedRows: string[][];
+  try {
+    parsedRows = parseCSV(csvContent, true);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Invalid CSV", created: [], errors: [] };
+  }
   if (parsedRows.length < 2) return { error: "CSV must have a header row and at least one data row", created: [], errors: [] };
+  if (parsedRows.length - 1 > MAX_CSV_ROWS) {
+    return { error: `CSV cannot contain more than ${MAX_CSV_ROWS.toLocaleString()} data rows`, created: [], errors: [] };
+  }
 
   const headerRow = parsedRows[0]!.map((h) => h.trim());
+  if (headerRow.length > MAX_CSV_COLUMNS) {
+    return { error: `CSV cannot contain more than ${MAX_CSV_COLUMNS} columns`, created: [], errors: [] };
+  }
+  if (headerRow.some((header) => !header)) {
+    return { error: "CSV headers cannot be blank", created: [], errors: [] };
+  }
+  if (new Set(headerRow).size !== headerRow.length) {
+    return { error: "CSV headers must be unique", created: [], errors: [] };
+  }
   const dataRows = parsedRows.slice(1);
-  const rowResults = await Promise.all(dataRows.map(async (values, i) => {
+  const processRow = async (values: string[], i: number) => {
+    if (values.length > headerRow.length) {
+      return { error: { row: i + 2, message: "Row has more columns than the header" } };
+    }
     const row: Record<string, string> = {};
     headerRow.forEach((h, idx) => { row[h] = (values[idx] ?? "").trim(); });
 
@@ -182,63 +148,76 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     try {
-      const [newOffer] = await db.insert(offers).values({
-        shopId,
-        internalName,
-        publicTitle,
-        type: offerType,
-        status: "draft",
-        priority,
-        discountTags: row["discount_tags"] ? row["discount_tags"].split("|") : [],
-      }).returning({ id: offers.id });
+      const createdId = await db.transaction(async (tx) => {
+        const [newOffer] = await tx.insert(offers).values({
+          shopId,
+          internalName,
+          publicTitle,
+          type: offerType,
+          status: "draft",
+          priority,
+          discountTags: row["discount_tags"] ? row["discount_tags"].split("|") : [],
+        }).returning({ id: offers.id });
 
-      if (!newOffer) return { error: { row: rowNumber, message: "Failed to create offer" } };
+        if (!newOffer) throw new Error("Failed to create offer");
 
-      const setupTasks: Array<PromiseLike<unknown>> = [
-        db.insert(offerCombinationPolicies).values({
+        await tx.insert(offerCombinationPolicies).values({
           shopId, offerId: newOffer.id,
           combinesWithOrderDiscounts: true, combinesWithProductDiscounts: true,
           combinesWithShippingDiscounts: true, combinesWithOtherAppOffers: true,
           stopLowerPriority: false, giftValueCountsForOtherOffers: false,
-        }),
-      ];
+        });
 
-      if (validatedCondition) {
-        setupTasks.push(db.insert(offerConditions).values({
-          shopId,
-          offerId: newOffer.id,
-          scope: "main",
-          conditionType: validatedCondition.conditionType,
-          operator: "gte",
-          value: validatedCondition.value,
-          sortOrder: 0,
-          isEnabled: true,
-        }));
-      }
+        if (validatedCondition) {
+          await tx.insert(offerConditions).values({
+            shopId,
+            offerId: newOffer.id,
+            scope: "main",
+            conditionType: validatedCondition.conditionType,
+            operator: "gte",
+            value: validatedCondition.value,
+            sortOrder: 0,
+            isEnabled: true,
+          });
+        }
 
-      if (validatedReward) {
-        setupTasks.push(db.insert(offerRewards).values({
-          shopId,
-          offerId: newOffer.id,
-          rewardType: validatedReward.rewardType,
-          discountType: validatedReward.discountType,
-          value: validatedReward.value,
-          target: validatedReward.target,
-          quantity: parseInt(row["gift_quantity"] ?? "1", 10) || 1,
-          isAutoAdd: row["is_auto_add"] === "true",
-          isCustomerSelectable: false,
-          trackMode: (row["track_mode"] as "product" | "variant") ?? "product",
-          sortOrder: 0,
-          label: null,
-        }));
-      }
+        if (validatedReward) {
+          const quantity = parseInt(row["gift_quantity"] ?? "1", 10);
+          if (!Number.isInteger(quantity) || quantity < 1) throw new Error("gift_quantity must be a positive integer");
+          const trackMode = row["track_mode"] || "product";
+          if (trackMode !== "product" && trackMode !== "variant") throw new Error("track_mode must be product or variant");
+          if (row["is_auto_add"] && row["is_auto_add"] !== "true" && row["is_auto_add"] !== "false") {
+            throw new Error("is_auto_add must be true or false");
+          }
 
-      await Promise.all(setupTasks);
-      return { created: newOffer.id };
+          await tx.insert(offerRewards).values({
+            shopId,
+            offerId: newOffer.id,
+            rewardType: validatedReward.rewardType,
+            discountType: validatedReward.discountType,
+            value: validatedReward.value,
+            target: validatedReward.target,
+            quantity,
+            isAutoAdd: row["is_auto_add"] === "true",
+            isCustomerSelectable: false,
+            trackMode,
+            sortOrder: 0,
+            label: null,
+          });
+        }
+
+        return newOffer.id;
+      });
+      return { created: createdId };
     } catch (e) {
       return { error: { row: rowNumber, message: (e as Error).message } };
     }
-  }));
+  };
+
+  const rowResults: Awaited<ReturnType<typeof processRow>>[] = [];
+  for (const [index, values] of dataRows.entries()) {
+    rowResults.push(await processRow(values, index));
+  }
 
   const created = rowResults.flatMap((result) => result.created ? [result.created] : []);
   const errors = rowResults.flatMap((result) => result.error ? [result.error] : []);

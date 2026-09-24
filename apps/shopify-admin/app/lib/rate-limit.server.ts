@@ -1,6 +1,6 @@
 import { getDb } from "@promo/db";
 import { sql } from "drizzle-orm";
-import Redis from "ioredis";
+import { getSharedRedis, resetSharedRedis } from "./redis.server.js";
 
 interface RateLimitOptions {
   limit: number;
@@ -12,33 +12,13 @@ interface RateLimitRow extends Record<string, unknown> {
   retry_after: number;
 }
 
-// ─── Redis client (optional — falls back to DB when REDIS_URL not set) ────────
-
-let _redis: Redis | null = null;
-let _redisConnected = false;
-
-function getRedis(): Redis | null {
-  if (!process.env["REDIS_URL"]) return null;
-  if (!_redis) {
-    _redis = new Redis(process.env["REDIS_URL"], {
-      maxRetriesPerRequest: 1,
-      enableOfflineQueue: false,
-      lazyConnect: false,
-    });
-    _redis.on("ready", () => { _redisConnected = true; });
-    _redis.on("error", () => { _redisConnected = false; });
-    _redis.on("close", () => { _redisConnected = false; });
-  }
-  return _redisConnected ? _redis : null;
-}
-
 // Sliding window via a sorted set. Atomically counts requests in the window.
 // Returns null on any Redis error — caller falls through to DB.
 async function redisCheckRateLimit(
   key: string,
   options: RateLimitOptions,
 ): Promise<{ ok: true } | { ok: false; retryAfterSeconds: number } | null> {
-  const redis = getRedis();
+  const redis = await getSharedRedis();
   if (!redis) return null;
 
   const windowSeconds = Math.ceil(options.windowMs / 1000);
@@ -67,7 +47,7 @@ async function redisCheckRateLimit(
     if (count <= options.limit) return { ok: true };
     return { ok: false, retryAfterSeconds: windowSeconds };
   } catch {
-    _redisConnected = false;
+    resetSharedRedis();
     return null;
   }
 }
