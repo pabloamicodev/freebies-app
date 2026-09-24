@@ -193,7 +193,6 @@ const shopify = shopifyApp({
       }
     },
   },
-  isEmbeddedApp: true,
 });
 
 export const authenticate = shopify.authenticate;
