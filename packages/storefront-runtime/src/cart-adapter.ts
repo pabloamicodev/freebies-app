@@ -6,6 +6,8 @@
  * All mutations are queued to prevent race conditions.
  */
 
+import { withPromoMetadata } from "./metadata-bridge.js";
+
 export interface CartLineAdd {
   variantId: string;
   quantity: number;
@@ -107,7 +109,7 @@ export const AjaxCartAdapter = {
           items: lines.map((l) => ({
             id: toLegacyVariantId(l.variantId),
             quantity: Number.isSafeInteger(l.quantity) && l.quantity > 0 ? l.quantity : 1,
-            properties: l.properties,
+            properties: withPromoMetadata(l.properties),
           })),
         }),
       }),
@@ -121,7 +123,7 @@ export const AjaxCartAdapter = {
         body: JSON.stringify({
           id: line.key,
           quantity: line.quantity,
-          ...(line.properties ? { properties: line.properties } : {}),
+          ...(line.properties ? { properties: withPromoMetadata(line.properties) } : {}),
         }),
       }),
     );

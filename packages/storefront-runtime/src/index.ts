@@ -1,4 +1,5 @@
 // Runtime initialization (side-effect: registers DOMContentLoaded listener)
+import "./metadata-bridge.js";
 import "./runtime.js";
 
 // Core runtime

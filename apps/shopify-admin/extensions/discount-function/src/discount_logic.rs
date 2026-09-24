@@ -331,7 +331,7 @@ fn evaluate_quiz_bundle_reward(
         let current_total: f64 = group
             .paid
             .iter()
-            .map(|line| line.cost().total_amount().amount().as_f64())
+            .map(|line| line.cost().subtotal_amount().amount().as_f64())
             .sum();
         let discount_needed = current_total - target_cents as f64 / 100.0;
         if discount_needed <= 0.0 {
@@ -817,40 +817,36 @@ fn variant_and_product_id(line: &Lines) -> Option<(String, String)> {
 }
 
 fn line_type(line: &Lines) -> Option<String> {
-    line.line_type().as_ref().map(|attribute| attribute.value()).flatten().cloned()
+    line.line_type()
+        .as_ref()
+        .and_then(|attribute| attribute.value())
+        .cloned()
+        .or_else(|| metadata_value(line, "_promo_engine_line_type"))
 }
 
 fn is_gift_line(line: &Lines) -> bool {
     line_type(line).as_deref() == Some(LINE_TYPE_GIFT)
-        || line.cart_gift_tier().is_some()
+        || cart_gift_tier(line).is_some()
         || quiz_free_gift(line).as_deref() == Some("true")
 }
 
 fn line_offer_id(line: &Lines) -> Option<String> {
-    line.offer_id().as_ref().map(|attribute| attribute.value()).flatten().cloned()
+    metadata_value(line, "_promo_engine_offer_id")
 }
 
 fn line_reward_id(line: &Lines) -> Option<String> {
-    line.reward_id().as_ref().and_then(|attribute| attribute.value()).cloned()
+    metadata_value(line, "_promo_engine_reward_id")
 }
 
 fn line_offer_version(line: &Lines) -> Option<String> {
-    line.offer_version().as_ref().and_then(|attribute| attribute.value()).cloned()
+    metadata_value(line, "_promo_engine_offer_version")
 }
 
 fn projected_volume_discount_cents(lines: &[&Lines], currency_code: &str) -> i64 {
     let mut groups: BTreeMap<String, VolumeDiscountGroup> = BTreeMap::new();
     for line in lines {
-        if line
-            .volume_discount_bundle_item()
-            .as_ref()
-            .and_then(|attribute| attribute.value())
-            .is_some_and(|value| value == "true")
-            || line
-                .volume_discount_nektar_glp_1()
-                .as_ref()
-                .and_then(|attribute| attribute.value())
-                .is_some()
+        if metadata_value(line, "_bundle_item").as_deref() == Some("true")
+            || metadata_value(line, "_nektar_glp1").is_some()
         {
             continue;
         }
@@ -867,7 +863,7 @@ fn projected_volume_discount_cents(lines: &[&Lines], currency_code: &str) -> i64
             continue;
         }
         let subtotal_cents = to_cents(
-            line.cost().total_amount().amount().as_f64(),
+            line.cost().subtotal_amount().amount().as_f64(),
             currency_code,
         );
         if subtotal_cents <= 0 {
@@ -907,24 +903,16 @@ fn projected_volume_discount_cents(lines: &[&Lines], currency_code: &str) -> i64
 }
 
 fn landing_source(line: &Lines) -> Option<String> {
-    line.landing_source().as_ref().and_then(|attribute| attribute.value()).cloned()
+    metadata_value(line, "__landing_source")
 }
 
 fn line_attribute_value(line: &Lines, key: &str, config: &CompiledConfig) -> Option<String> {
-    let built_in = match key {
-        "__landing_source" => landing_source(line),
-        "__bundle_type" => line.bundle_type().as_ref().and_then(|attribute| attribute.value()).cloned(),
-        "__cart_gift_tier" => line.cart_gift_tier().as_ref().and_then(|attribute| attribute.value()).cloned(),
-        "_bundle_item" => line.volume_discount_bundle_item().as_ref().and_then(|attribute| attribute.value()).cloned(),
-        "_nektar_glp1" => line.volume_discount_nektar_glp_1().as_ref().and_then(|attribute| attribute.value()).cloned(),
-        "_quiz_bundle_id" => quiz_bundle_id(line),
-        "_quiz_target_cents" => quiz_target_cents(line),
-        "_quiz_expected_paid_count" => quiz_expected_paid_count(line),
-        "_quiz_free_gift" => quiz_free_gift(line),
-        _ => None,
-    };
-    if built_in.is_some() {
-        return built_in;
+    if key == "__cart_gift_tier" {
+        if let Some(value) = cart_gift_tier(line) {
+            return Some(value);
+        }
+    } else if let Some(value) = metadata_value(line, key) {
+        return Some(value);
     }
     if config.l1.as_deref() == Some(key) { return line.custom_line_1().as_ref().and_then(|attribute| attribute.value()).cloned(); }
     if config.l2.as_deref() == Some(key) { return line.custom_line_2().as_ref().and_then(|attribute| attribute.value()).cloned(); }
@@ -946,19 +934,37 @@ fn cart_attribute_value(input: &Input, key: &str, config: &CompiledConfig) -> Op
 }
 
 fn quiz_bundle_id(line: &Lines) -> Option<String> {
-    line.quiz_bundle_id().as_ref().and_then(|attribute| attribute.value()).cloned()
+    metadata_value(line, "_quiz_bundle_id")
 }
 
 fn quiz_target_cents(line: &Lines) -> Option<String> {
-    line.quiz_target_cents().as_ref().and_then(|attribute| attribute.value()).cloned()
+    metadata_value(line, "_quiz_target_cents")
 }
 
 fn quiz_expected_paid_count(line: &Lines) -> Option<String> {
-    line.quiz_expected_paid_count().as_ref().and_then(|attribute| attribute.value()).cloned()
+    metadata_value(line, "_quiz_expected_paid_count")
 }
 
 fn quiz_free_gift(line: &Lines) -> Option<String> {
-    line.quiz_free_gift().as_ref().and_then(|attribute| attribute.value()).cloned()
+    metadata_value(line, "_quiz_free_gift")
+}
+
+fn cart_gift_tier(line: &Lines) -> Option<String> {
+    line.cart_gift_tier()
+        .as_ref()
+        .and_then(|attribute| attribute.value())
+        .cloned()
+        .or_else(|| metadata_value(line, "__cart_gift_tier"))
+}
+
+fn metadata_value(line: &Lines, key: &str) -> Option<String> {
+    let raw = line
+        .promo_metadata()
+        .as_ref()
+        .and_then(|attribute| attribute.value())?;
+    serde_json::from_str::<HashMap<String, String>>(raw)
+        .ok()?
+        .remove(key)
 }
 
 fn parse_config(input: &Input) -> Option<CompiledConfig> {
@@ -981,6 +987,7 @@ mod tests {
         config_json: &str,
         discount_classes: &str,
     ) -> String {
+        let packed_lines = pack_legacy_metadata(lines_json);
         format!(
             r#"{{
                 "discount": {{
@@ -993,7 +1000,7 @@ mod tests {
                 }}
             }}"#,
             config = serde_json::to_string(config_json).unwrap(),
-            lines = lines_json,
+            lines = packed_lines,
             subtotal = subtotal,
         )
     }
@@ -1005,6 +1012,7 @@ mod tests {
         number_of_orders: i64,
         amount_spent: &str,
     ) -> String {
+        let packed_lines = pack_legacy_metadata(lines_json);
         format!(
             r#"{{
                 "discount": {{
@@ -1023,9 +1031,47 @@ mod tests {
                 }}
             }}"#,
             config = serde_json::to_string(config_json).unwrap(),
-            lines = lines_json,
+            lines = packed_lines,
             subtotal = subtotal,
         )
+    }
+
+    fn pack_legacy_metadata(lines_json: &str) -> String {
+        let mut lines: serde_json::Value = serde_json::from_str(lines_json).unwrap();
+        let aliases = [
+            ("offerId", "_promo_engine_offer_id"),
+            ("rewardId", "_promo_engine_reward_id"),
+            ("offerVersion", "_promo_engine_offer_version"),
+            ("volumeDiscountBundleItem", "_bundle_item"),
+            ("volumeDiscountNektarGlp1", "_nektar_glp1"),
+            ("landingSource", "__landing_source"),
+            ("bundleType", "__bundle_type"),
+            ("quizBundleId", "_quiz_bundle_id"),
+            ("quizTargetCents", "_quiz_target_cents"),
+            ("quizExpectedPaidCount", "_quiz_expected_paid_count"),
+            ("quizFreeGift", "_quiz_free_gift"),
+        ];
+
+        for line in lines.as_array_mut().unwrap() {
+            let object = line.as_object_mut().unwrap();
+            let mut metadata = serde_json::Map::new();
+            for (alias, key) in aliases {
+                if let Some(value) = object
+                    .remove(alias)
+                    .and_then(|attribute| attribute.get("value").and_then(|value| value.as_str()).map(str::to_owned))
+                {
+                    metadata.insert(key.to_string(), serde_json::Value::String(value));
+                }
+            }
+            if !metadata.is_empty() {
+                object.insert(
+                    "promoMetadata".to_string(),
+                    serde_json::json!({ "value": serde_json::to_string(&metadata).unwrap() }),
+                );
+            }
+        }
+
+        serde_json::to_string(&lines).unwrap()
     }
 
     fn regular_line(id: &str, variant_id: &str, product_id: &str, price: &str, qty: i64) -> String {
