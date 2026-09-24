@@ -46,16 +46,17 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
       version: "1",
       compiledAt: new Date().toISOString(),
     };
-    await Promise.all([
-      pushMetafield(shopDomain, accessToken, discountId, emptyConfig),
-      syncCartValidation(shopDomain, accessToken, buildCartValidationConfig([])),
-      syncDiscountCombinationPolicy(
-        shopDomain,
-        accessToken,
-        discountId,
-        compileDiscountCombinationPolicy([]),
-      ),
-    ]);
+    // Stop discount generation first. The remaining writes only loosen/remove
+    // validation and combination state, so a later failure cannot grant an
+    // offer that was meant to be disabled.
+    await pushMetafield(shopDomain, accessToken, discountId, emptyConfig);
+    await syncCartValidation(shopDomain, accessToken, buildCartValidationConfig([]));
+    await syncDiscountCombinationPolicy(
+      shopDomain,
+      accessToken,
+      discountId,
+      compileDiscountCombinationPolicy([]),
+    );
     return;
   }
 
@@ -103,16 +104,17 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     throw new Error(`Function config is ${sizeBytes}B, exceeding the safe ${MAX_METAFIELD_BYTES}B limit. Pause or simplify active offers before publishing.`);
   }
 
-  await Promise.all([
-    pushMetafield(shopDomain, accessToken, discountId, config),
-    syncCartValidation(shopDomain, accessToken, buildCartValidationConfig(compiledOffers)),
-    syncDiscountCombinationPolicy(
-      shopDomain,
-      accessToken,
-      discountId,
-      compileDiscountCombinationPolicy(compiledOffers),
-    ),
-  ]);
+  // Publish guardrails before the discount config. If either prerequisite
+  // fails, the previous Function config stays active and the new offer cannot
+  // be granted with incomplete validation or combination rules.
+  await syncCartValidation(shopDomain, accessToken, buildCartValidationConfig(compiledOffers));
+  await syncDiscountCombinationPolicy(
+    shopDomain,
+    accessToken,
+    discountId,
+    compileDiscountCombinationPolicy(compiledOffers),
+  );
+  await pushMetafield(shopDomain, accessToken, discountId, config);
 
   for (const compiledOffer of compiledOffers) {
     await db

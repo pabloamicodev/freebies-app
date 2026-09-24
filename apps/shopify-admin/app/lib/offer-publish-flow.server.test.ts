@@ -1,15 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { canUseRuntimeOnlyConditions } from "./offer-publish-flow.server.js";
+import { isConditionEnforcedByFunction } from "./offer-publish-flow.server.js";
 
-describe("canUseRuntimeOnlyConditions", () => {
-  it("allows URL, Market, customer, and one-use conditions to gate gift-only offers", () => {
-    expect(canUseRuntimeOnlyConditions(["product_gift"])).toBe(true);
-    expect(canUseRuntimeOnlyConditions(["product_gift", "product_gift"])).toBe(true);
+describe("isConditionEnforcedByFunction", () => {
+  it.each([
+    "cart_value",
+    "cart_quantity",
+    "specific_product",
+    "pack_of_products",
+    "subscription_product_type",
+    "order_history_total_orders",
+    "order_history_total_spent",
+    "line_attribute",
+    "cart_attribute",
+    "exclude_products",
+  ])("allows Function-enforced condition %s", (conditionType) => {
+    expect(isConditionEnforcedByFunction(conditionType)).toBe(true);
   });
 
-  it("keeps automatic checkout discounts behind Function-enforced conditions", () => {
-    expect(canUseRuntimeOnlyConditions(["product_discount"])).toBe(false);
-    expect(canUseRuntimeOnlyConditions(["product_gift", "shipping_discount"])).toBe(false);
-    expect(canUseRuntimeOnlyConditions([])).toBe(false);
+  it.each([
+    "specific_link",
+    "page_url",
+    "markets",
+    "customer_tags",
+    "one_use_per_customer",
+    "sales_channels",
+    "exclude_collections",
+    "exclude_vendors",
+    "exclude_types",
+  ])("fails closed for storefront-only condition %s", (conditionType) => {
+    expect(isConditionEnforcedByFunction(conditionType)).toBe(false);
   });
 });

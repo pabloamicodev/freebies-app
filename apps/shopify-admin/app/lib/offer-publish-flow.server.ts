@@ -31,6 +31,7 @@ const FUNCTION_CONDITION_TYPES = new Set([
   "order_history_total_spent",
   "line_attribute",
   "cart_attribute",
+  "exclude_products",
 ]);
 
 const FUNCTION_NUMERIC_OPERATORS = new Set(["eq", "gt", "gte", "lt", "lte"]);
@@ -39,8 +40,8 @@ function firstIssueMessage(result: { success: boolean; error?: { issues?: Array<
   return result.error?.issues?.[0]?.message ?? "Invalid offer configuration.";
 }
 
-export function canUseRuntimeOnlyConditions(rewardTypes: string[]): boolean {
-  return rewardTypes.length > 0 && rewardTypes.every((rewardType) => rewardType === "product_gift");
+export function isConditionEnforcedByFunction(conditionType: string): boolean {
+  return FUNCTION_CONDITION_TYPES.has(conditionType);
 }
 
 export async function validateOffersPublishable(db: Db, shopId: string, offerIds: string[]): Promise<PublishValidationResult> {
@@ -80,8 +81,7 @@ export async function validateOffersPublishable(db: Db, shopId: string, offerIds
       const unsupportedShippingCondition = conditions.find(
         (condition) =>
           condition.isEnabled &&
-          condition.conditionType !== "cart_value" &&
-          condition.conditionType !== "subscription_product_type",
+          condition.conditionType !== "cart_value",
       );
       if (unsupportedShippingCondition) {
         return {
@@ -92,12 +92,12 @@ export async function validateOffersPublishable(db: Db, shopId: string, offerIds
     }
 
     const unsupportedFunctionCondition = conditions.find(
-      (condition) => condition.isEnabled && !FUNCTION_CONDITION_TYPES.has(condition.conditionType),
+      (condition) => condition.isEnabled && !isConditionEnforcedByFunction(condition.conditionType),
     );
-    if (unsupportedFunctionCondition && !canUseRuntimeOnlyConditions(rewards.map((reward) => reward.rewardType))) {
+    if (unsupportedFunctionCondition) {
       return {
         ok: false,
-        error: `Cannot publish "${offer.internalName}": ${unsupportedFunctionCondition.conditionType} is evaluated by the storefront/server and can only gate gift-only offers; this offer also contains a reward that Shopify Functions must evaluate automatically.`,
+        error: `Cannot publish "${offer.internalName}": ${unsupportedFunctionCondition.conditionType} is not enforced by Shopify Functions. Keeping the offer in draft prevents browser-controlled metadata from unlocking a discount or free gift.`,
       };
     }
 
