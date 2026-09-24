@@ -3,24 +3,30 @@ import { healthErrorDetails, summarizeHealthChecks } from "./health-status.serve
 
 describe("summarizeHealthChecks", () => {
   it("is healthy when critical checks pass and optional services are absent", () => {
-    expect(summarizeHealthChecks({
-      database: { status: "ok", critical: true },
-      redis: { status: "not_configured", critical: false },
-    })).toEqual({ status: "ok", statusCode: 200 });
+    expect(
+      summarizeHealthChecks({
+        database: { status: "ok", critical: true },
+        redis: { status: "not_configured", critical: false },
+      }),
+    ).toEqual({ status: "ok", statusCode: 200 });
   });
 
   it("reports optional service failures without taking the app out of readiness", () => {
-    expect(summarizeHealthChecks({
-      database: { status: "ok", critical: true },
-      redis: { status: "degraded", critical: false },
-    })).toEqual({ status: "degraded", statusCode: 200 });
+    expect(
+      summarizeHealthChecks({
+        database: { status: "ok", critical: true },
+        redis: { status: "degraded", critical: false },
+      }),
+    ).toEqual({ status: "degraded", statusCode: 200 });
   });
 
   it("returns 503 when a critical dependency fails", () => {
-    expect(summarizeHealthChecks({
-      database: { status: "fail", critical: true },
-      redis: { status: "ok", critical: false },
-    })).toEqual({ status: "unhealthy", statusCode: 503 });
+    expect(
+      summarizeHealthChecks({
+        database: { status: "fail", critical: true },
+        redis: { status: "ok", critical: false },
+      }),
+    ).toEqual({ status: "unhealthy", statusCode: 503 });
   });
 
   it("exposes only allowlisted machine-readable error codes", () => {
@@ -45,6 +51,18 @@ describe("summarizeHealthChecks", () => {
     });
     expect(healthErrorDetails(new Error("Connection is closed."))).toEqual({
       failureClass: "connection_closed",
+    });
+  });
+
+  it("classifies the safe root cause wrapped by Node fetch", () => {
+    const cause = Object.assign(new Error("getaddrinfo ENOTFOUND redis.example.test"), {
+      code: "ENOTFOUND",
+    });
+    const error = new TypeError("fetch failed", { cause });
+
+    expect(healthErrorDetails(error)).toEqual({
+      errorCode: "ENOTFOUND",
+      failureClass: "dns_failed",
     });
   });
 });
