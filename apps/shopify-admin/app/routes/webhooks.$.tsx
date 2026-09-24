@@ -1,9 +1,8 @@
 import type { ActionFunctionArgs } from "react-router";
-import { waitUntil } from "@vercel/functions";
 import { authenticate, sessionStorage } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs, giftCloneProducts, offers, webhookDeliveries } from "@promo/db";
-import { eq, and, inArray, or, sql } from "drizzle-orm";
+import { eq, and, inArray, lt, or, sql } from "drizzle-orm";
 import { decryptToken } from "../lib/token-crypto.server.js";
 import { syncInventoryFromWebhook } from "../lib/sync/inventory-sync.server.js";
 import { syncCollectionFromWebhook } from "../lib/sync/collection-sync.server.js";
@@ -21,6 +20,7 @@ import * as Sentry from "@sentry/node";
 export const action = async ({ request }: ActionFunctionArgs) => {
   const webhookId = request.headers.get("x-shopify-webhook-id");
   const { topic, shop, payload } = await authenticate.webhook(request);
+  let deliveryClaimed = false;
 
   // Shopify retries a delivery on any non-2xx response — including the 503s
   // we intentionally return below for transient errors — so the same
@@ -31,12 +31,43 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const db = getDb();
       const inserted = await db
         .insert(webhookDeliveries)
-        .values({ webhookId, topic, shopDomain: shop })
+        .values({ webhookId, topic, shopDomain: shop, status: "processing" })
         .onConflictDoNothing()
         .returning({ webhookId: webhookDeliveries.webhookId });
-      if (inserted.length === 0) {
-        console.info(`[webhooks] duplicate delivery ignored: topic=${topic} shop=${shop} webhookId=${webhookId}`);
-        return new Response("OK", { status: 200 });
+      deliveryClaimed = inserted.length > 0;
+      if (!deliveryClaimed) {
+        const staleBefore = new Date(Date.now() - 5 * 60 * 1000);
+        const reclaimed = await db
+          .update(webhookDeliveries)
+          .set({
+            status: "processing",
+            attempts: sql`${webhookDeliveries.attempts} + 1`,
+            lastError: null,
+            lastAttemptAt: new Date(),
+          })
+          .where(and(
+            eq(webhookDeliveries.webhookId, webhookId),
+            or(
+              eq(webhookDeliveries.status, "failed"),
+              and(eq(webhookDeliveries.status, "processing"), lt(webhookDeliveries.lastAttemptAt, staleBefore)),
+            ),
+          ))
+          .returning({ webhookId: webhookDeliveries.webhookId });
+        deliveryClaimed = reclaimed.length > 0;
+      }
+      if (!deliveryClaimed) {
+        const existing = await db
+          .select({ status: webhookDeliveries.status })
+          .from(webhookDeliveries)
+          .where(eq(webhookDeliveries.webhookId, webhookId))
+          .limit(1);
+        if (existing[0]?.status === "processed") {
+          console.info(`[webhooks] duplicate delivery ignored: topic=${topic} shop=${shop} webhookId=${webhookId}`);
+          return new Response("OK", { status: 200 });
+        }
+        // Another invocation still owns the claim. Ask Shopify to retry rather
+        // than acknowledging work whose completion is not yet durable.
+        return new Response("Processing", { status: 503 });
       }
     } catch (dedupErr) {
       // If the dedup check itself fails, fail open — processing twice is
@@ -109,11 +140,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   } catch (err) {
     Sentry.captureException(err, { tags: { topic, shop } });
     console.error(`Webhook handler failed: topic=${topic} shop=${shop}`, err instanceof Error ? err.message : err);
-    // Transient DB/network errors → 503 so Shopify retries delivery.
+    // Transient DB/network errors → mark retryable and return 503 so Shopify
+    // retries this delivery. A retry atomically reclaims the failed row.
     // Business logic errors (validation, missing shop) → 200 to ack and stop retries.
     if (isTransientError(err)) {
+      if (webhookId && deliveryClaimed) {
+        try {
+          await getDb()
+            .update(webhookDeliveries)
+            .set({
+              status: "failed",
+              lastError: err instanceof Error ? err.message.slice(0, 1_000) : "Transient webhook error",
+              lastAttemptAt: new Date(),
+            })
+            .where(eq(webhookDeliveries.webhookId, webhookId));
+        } catch (stateErr) {
+          Sentry.captureException(stateErr, { tags: { topic, shop, context: "webhook-state" } });
+        }
+      }
       return new Response("Temporary error", { status: 503 });
     }
+  }
+
+  if (webhookId && deliveryClaimed) {
+    await getDb()
+      .update(webhookDeliveries)
+      .set({ status: "processed", lastError: null, processedAt: new Date(), lastAttemptAt: new Date() })
+      .where(eq(webhookDeliveries.webhookId, webhookId));
   }
 
   return new Response("OK", { status: 200 });
@@ -321,20 +374,14 @@ async function handleInventoryUpdate(shop: string, payload: InventoryWebhookPayl
   const shopRecord = await getShopForWebhook(shop);
   if (!shopRecord) return;
   const accessToken = await decryptToken(shopRecord.accessTokenEncrypted);
-  waitUntil(
-    syncInventoryFromWebhook(shopRecord.id, shop, accessToken, payload.inventory_item_id, payload.available)
-      .catch((err) => console.error("inventory-sync failed", err instanceof Error ? err.message : err)),
-  );
+  await syncInventoryFromWebhook(shopRecord.id, shop, accessToken, payload.inventory_item_id, payload.available);
 }
 
 async function handleMarketChange(shop: string) {
   const shopRecord = await getShopForWebhook(shop);
   if (!shopRecord) return;
   const accessToken = await decryptToken(shopRecord.accessTokenEncrypted);
-  waitUntil(
-    syncMarketsForShop(shopRecord.id, shop, accessToken)
-      .catch((err) => console.error("market-sync failed", err instanceof Error ? err.message : err)),
-  );
+  await syncMarketsForShop(shopRecord.id, shop, accessToken);
 }
 
 async function handleCollectionChange(shop: string, legacyCollectionId: number) {
@@ -342,10 +389,7 @@ async function handleCollectionChange(shop: string, legacyCollectionId: number) 
   if (!shopRecord) return;
   const collectionGid = `gid://shopify/Collection/${legacyCollectionId}`;
   const accessToken = await decryptToken(shopRecord.accessTokenEncrypted);
-  waitUntil(
-    syncCollectionFromWebhook(shopRecord.id, shop, accessToken, collectionGid)
-      .catch((err) => console.error("collection-sync failed", err instanceof Error ? err.message : err)),
-  );
+  await syncCollectionFromWebhook(shopRecord.id, shop, accessToken, collectionGid);
 }
 
 async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
@@ -370,9 +414,8 @@ async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
   const totalPriceCents = Number.isFinite(amount) ? Math.round(amount * 100) : 0;
   const customerId = order.customer?.id != null ? String(order.customer.id) : null;
 
-  waitUntil(
-    Promise.allSettled([
-      reconcileOrderAttribution({
+  await Promise.all([
+    reconcileOrderAttribution({
         shopId,
         orderId: String(order.id),
         orderGid: order.admin_graphql_api_id,
@@ -381,8 +424,8 @@ async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
         totalPriceCents,
         offerIds,
         sessionId,
-      }).catch((err) => console.error("analytics-reconcile failed", err instanceof Error ? err.message : err)),
-      dispatchIntegrationEvents(shopId, db, {
+    }),
+    dispatchIntegrationEvents(shopId, db, {
         event: "order_paid",
         shopDomain: shop,
         orderId: order.admin_graphql_api_id,
@@ -390,9 +433,8 @@ async function handleOrderPaid(shop: string, order: OrderWebhookPayload) {
         totalPriceCents,
         sessionId,
         timestamp: new Date().toISOString(),
-      }).catch((err) => console.error("integration-dispatch failed", err instanceof Error ? err.message : err)),
-    ]),
-  );
+    }),
+  ]);
 }
 
 async function handleOrderCancelled(shop: string, order: OrderWebhookPayload) {
@@ -423,12 +465,7 @@ async function handleAppUninstalled(shop: string) {
     .set({ isActive: false, uninstalledAt: new Date() })
     .where(eq(shops.myshopifyDomain, shop));
 
-  // Run cleanup in background — failures are logged, never rethrow
-  waitUntil(
-    cleanupAfterUninstall(shopId, shop, accessTokenEncrypted).catch((err) =>
-      console.error("uninstall-cleanup failed", err instanceof Error ? err.message : err),
-    ),
-  );
+  await cleanupAfterUninstall(shopId, shop, accessTokenEncrypted);
 }
 
 async function cleanupAfterUninstall(
