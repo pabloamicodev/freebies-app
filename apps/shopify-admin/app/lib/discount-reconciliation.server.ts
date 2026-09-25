@@ -1,5 +1,5 @@
 import { getDb, offers, shops } from "@promo/db";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { publishOffersForShop } from "./sync/offer-publisher.server.js";
 
 export interface DiscountReconciliationTarget {
@@ -11,6 +11,16 @@ export interface DiscountReconciliationResult {
   attempted: number;
   succeeded: number;
   failures: Array<{ shopId: string; error: string }>;
+}
+
+export function needsDiscountReconciliation(state: {
+  discountId: string | null;
+  deliveryDiscountId: string | null;
+  compiledConfig: unknown | null;
+}): boolean {
+  return (
+    state.discountId === null || state.deliveryDiscountId === null || state.compiledConfig === null
+  );
 }
 
 export async function executeDiscountNodeReconciliation(
@@ -43,7 +53,16 @@ export async function reconcileActiveShopDiscountNodes(): Promise<DiscountReconc
     .select({ shopId: shops.id, shopDomain: shops.myshopifyDomain })
     .from(shops)
     .innerJoin(offers, and(eq(offers.shopId, shops.id), eq(offers.status, "active")))
-    .where(and(eq(shops.isActive, true), isNull(shops.deliveryDiscountId)));
+    .where(
+      and(
+        eq(shops.isActive, true),
+        or(
+          isNull(shops.discountId),
+          isNull(shops.deliveryDiscountId),
+          isNull(offers.compiledConfig),
+        ),
+      ),
+    );
 
   return executeDiscountNodeReconciliation(targets, publishOffersForShop);
 }
