@@ -1,8 +1,25 @@
-import { getDb, shops, offers, offerConditions, offerRewards, offerCombinationPolicies, variantCache, type Offer, type OfferCondition, type OfferReward, type OfferCombinationPolicy } from "@promo/db";
+import {
+  getDb,
+  shops,
+  offers,
+  offerConditions,
+  offerRewards,
+  offerCombinationPolicies,
+  variantCache,
+  type Offer,
+  type OfferCondition,
+  type OfferReward,
+  type OfferCombinationPolicy,
+} from "@promo/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { decryptToken } from "../token-crypto.server.js";
 import { shopifyGraphQL } from "../shopify-fetch.server.js";
-import { ensureDiscountNodes, syncDiscountCombinationPolicy } from "../discount-node.server.js";
+import {
+  CART_DISCOUNT_CLASSES,
+  DELIVERY_DISCOUNT_CLASSES,
+  ensureDiscountNodes,
+  syncDiscountCombinationPolicy,
+} from "../discount-node.server.js";
 import { buildCartValidationConfig, syncCartValidation } from "../cart-validation.server.js";
 import { computeOfferVersion } from "../offer-version.server.js";
 import {
@@ -24,22 +41,26 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
   const [shopRow] = await db
     .select({ accessTokenEncrypted: shops.accessTokenEncrypted })
     .from(shops)
-    .where(and(
-      eq(shops.id, shopId),
-      eq(shops.myshopifyDomain, shopDomain),
-      eq(shops.isActive, true),
-    ))
+    .where(
+      and(eq(shops.id, shopId), eq(shops.myshopifyDomain, shopDomain), eq(shops.isActive, true)),
+    )
     .limit(1);
 
   if (!shopRow) {
-    throw new Error("Cannot publish offers: active shop identity does not match the requested shop.");
+    throw new Error(
+      "Cannot publish offers: active shop identity does not match the requested shop.",
+    );
   }
 
   const accessToken = await decryptToken(shopRow.accessTokenEncrypted);
   // Self-heals if afterAuth's registration failed or hasn't run yet (e.g. the
   // function was deployed after this shop installed the app).
   const discountNodes = await ensureDiscountNodes(shopId, shopDomain, accessToken);
-  const discountIds = [discountNodes.cartLinesDiscountId, discountNodes.deliveryDiscountId];
+  const discountNodesWithClasses = [
+    { discountId: discountNodes.cartLinesDiscountId, discountClasses: CART_DISCOUNT_CLASSES },
+    { discountId: discountNodes.deliveryDiscountId, discountClasses: DELIVERY_DISCOUNT_CLASSES },
+  ];
+  const discountIds = discountNodesWithClasses.map(({ discountId }) => discountId);
 
   const activeOffers: Offer[] = await db
     .select()
@@ -58,17 +79,45 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     // offer that was meant to be disabled.
     await pushMetafields(shopDomain, accessToken, discountIds, emptyConfig);
     await syncCartValidation(shopDomain, accessToken, buildCartValidationConfig([]));
-    await Promise.all(discountIds.map((discountId) => syncDiscountCombinationPolicy(
-      shopDomain, accessToken, discountId, compileDiscountCombinationPolicy([]),
-    )));
+    await Promise.all(
+      discountNodesWithClasses.map(({ discountId, discountClasses }) =>
+        syncDiscountCombinationPolicy(
+          shopDomain,
+          accessToken,
+          discountId,
+          compileDiscountCombinationPolicy([]),
+          discountClasses,
+        ),
+      ),
+    );
     return;
   }
 
   const activeOfferIds = activeOffers.map((offer) => offer.id);
-  const [conditionRows, rewardRows, policyRows]: [OfferCondition[], OfferReward[], OfferCombinationPolicy[]] = await Promise.all([
-    db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), inArray(offerConditions.offerId, activeOfferIds))),
-    db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, activeOfferIds))),
-    db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), inArray(offerCombinationPolicies.offerId, activeOfferIds))),
+  const [conditionRows, rewardRows, policyRows]: [
+    OfferCondition[],
+    OfferReward[],
+    OfferCombinationPolicy[],
+  ] = await Promise.all([
+    db
+      .select()
+      .from(offerConditions)
+      .where(
+        and(eq(offerConditions.shopId, shopId), inArray(offerConditions.offerId, activeOfferIds)),
+      ),
+    db
+      .select()
+      .from(offerRewards)
+      .where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, activeOfferIds))),
+    db
+      .select()
+      .from(offerCombinationPolicies)
+      .where(
+        and(
+          eq(offerCombinationPolicies.shopId, shopId),
+          inArray(offerCombinationPolicies.offerId, activeOfferIds),
+        ),
+      ),
   ]);
 
   const compiledByOffer = activeOffers
@@ -94,12 +143,18 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     compiledByOffer.map((entry) => entry.offer),
   );
   const shippingOffers = compiledByOffer.flatMap((entry) => entry.shippingOffers);
-  const customerTags = [...new Set(compiledOffers.flatMap((offer) => [
-    ...(offer.requiredCustomerTags ?? []),
-    ...(offer.excludedCustomerTags ?? []),
-  ]))].sort();
+  const customerTags = [
+    ...new Set(
+      compiledOffers.flatMap((offer) => [
+        ...(offer.requiredCustomerTags ?? []),
+        ...(offer.excludedCustomerTags ?? []),
+      ]),
+    ),
+  ].sort();
   if (customerTags.length > 100) {
-    throw new Error("Active offers reference more than 100 unique customer tags. Reduce the tag set before publishing.");
+    throw new Error(
+      "Active offers reference more than 100 unique customer tags. Reduce the tag set before publishing.",
+    );
   }
 
   const config: CompiledFunctionConfig = {
@@ -113,16 +168,26 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
 
   const sizeBytes = estimateConfigSize(config);
   if (sizeBytes > MAX_METAFIELD_BYTES) {
-    throw new Error(`Function config is ${sizeBytes}B, exceeding the safe ${MAX_METAFIELD_BYTES}B limit. Pause or simplify active offers before publishing.`);
+    throw new Error(
+      `Function config is ${sizeBytes}B, exceeding the safe ${MAX_METAFIELD_BYTES}B limit. Pause or simplify active offers before publishing.`,
+    );
   }
 
   // Publish guardrails before the discount config. If either prerequisite
   // fails, the previous Function config stays active and the new offer cannot
   // be granted with incomplete validation or combination rules.
   await syncCartValidation(shopDomain, accessToken, buildCartValidationConfig(compiledOffers));
-  await Promise.all(discountIds.map((discountId) => syncDiscountCombinationPolicy(
-    shopDomain, accessToken, discountId, compileDiscountCombinationPolicy(compiledOffers),
-  )));
+  await Promise.all(
+    discountNodesWithClasses.map(({ discountId, discountClasses }) =>
+      syncDiscountCombinationPolicy(
+        shopDomain,
+        accessToken,
+        discountId,
+        compileDiscountCombinationPolicy(compiledOffers),
+        discountClasses,
+      ),
+    ),
+  );
   await pushMetafields(shopDomain, accessToken, discountIds, config);
 
   for (const compiledOffer of compiledOffers) {
@@ -142,11 +207,15 @@ async function resolveLegacyGiftVariants(
   shopId: string,
   compiledOffers: CompiledFunctionConfig["offers"],
 ): Promise<CompiledFunctionConfig["offers"]> {
-  const unresolvedProductIds = [...new Set(compiledOffers.flatMap((offer) =>
-    offer.giftRewards
-      .filter((reward) => reward.targetVariantIds.length === 0)
-      .flatMap((reward) => reward.targetProductIds),
-  ))];
+  const unresolvedProductIds = [
+    ...new Set(
+      compiledOffers.flatMap((offer) =>
+        offer.giftRewards
+          .filter((reward) => reward.targetVariantIds.length === 0)
+          .flatMap((reward) => reward.targetProductIds),
+      ),
+    ),
+  ];
   if (unresolvedProductIds.length === 0) return compiledOffers;
 
   const variants = await getDb()
@@ -159,14 +228,17 @@ async function resolveLegacyGiftVariants(
       requiresSellingPlan: variantCache.requiresSellingPlan,
     })
     .from(variantCache)
-    .where(and(eq(variantCache.shopId, shopId), inArray(variantCache.productGid, unresolvedProductIds)));
+    .where(
+      and(eq(variantCache.shopId, shopId), inArray(variantCache.productGid, unresolvedProductIds)),
+    );
   const eligibleByProduct = new Map<string, string[]>();
   for (const variant of variants) {
     if (
       !variant.availableForSale ||
       variant.requiresSellingPlan ||
       (variant.inventoryPolicy !== "CONTINUE" && (variant.inventoryQuantity ?? 0) <= 0)
-    ) continue;
+    )
+      continue;
     const ids = eligibleByProduct.get(variant.productGid) ?? [];
     ids.push(variant.variantGid);
     eligibleByProduct.set(variant.productGid, ids);
@@ -175,9 +247,11 @@ async function resolveLegacyGiftVariants(
   return compiledOffers.map((offer) => {
     const giftRewards = offer.giftRewards.map((reward) => {
       if (reward.targetVariantIds.length > 0) return reward;
-      const targetVariantIds = [...new Set(reward.targetProductIds.flatMap(
-        (productId) => eligibleByProduct.get(productId) ?? [],
-      ))].sort();
+      const targetVariantIds = [
+        ...new Set(
+          reward.targetProductIds.flatMap((productId) => eligibleByProduct.get(productId) ?? []),
+        ),
+      ].sort();
       if (targetVariantIds.length === 0) {
         throw new Error(
           `Gift reward ${reward.id} in offer ${offer.id} has no eligible one-time-purchase variants. Refresh the product catalog or update the reward before publishing.`,
@@ -220,5 +294,6 @@ async function pushMetafields(
   });
 
   const errors = data.metafieldsSet.userErrors;
-  if (errors.length > 0) throw new Error(`Metafield errors: ${errors.map((e) => e.message).join(", ")}`);
+  if (errors.length > 0)
+    throw new Error(`Metafield errors: ${errors.map((e) => e.message).join(", ")}`);
 }

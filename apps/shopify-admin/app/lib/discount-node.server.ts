@@ -15,10 +15,17 @@ const CART_DISCOUNT_TITLE = "Promo Engine";
 const DELIVERY_DISCOUNT_TITLE = "Promo Engine Shipping";
 export const CART_FUNCTION_TITLE = "Promo Engine Discount";
 export const DELIVERY_FUNCTION_TITLE = "Promo Engine Delivery Discount";
+export type DiscountClass = "ORDER" | "PRODUCT" | "SHIPPING";
+export const CART_DISCOUNT_CLASSES = [
+  "PRODUCT",
+  "ORDER",
+] as const satisfies readonly DiscountClass[];
+export const DELIVERY_DISCOUNT_CLASSES = ["SHIPPING"] as const satisfies readonly DiscountClass[];
 
 interface ShopifyFunctionSummary {
   id: string;
   apiType: string;
+  handle: string;
   title: string;
 }
 
@@ -56,23 +63,32 @@ export async function ensureDiscountNodes(
   }
 
   const functions = await findDiscountFunctions(shopDomain, accessToken);
-  const cartFunctionId = selectFunctionId(functions, CART_FUNCTION_TITLE);
-  const deliveryFunctionId = selectFunctionId(functions, DELIVERY_FUNCTION_TITLE);
-  if (!cartFunctionId || !deliveryFunctionId) {
+  const cartFunction = selectFunction(functions, CART_FUNCTION_TITLE);
+  const deliveryFunction = selectFunction(functions, DELIVERY_FUNCTION_TITLE);
+  if (!cartFunction || !deliveryFunction) {
     throw new Error(
       "Could not find both Promo Engine Discount Functions. Deploy the current Shopify app version before publishing offers.",
     );
   }
 
-  const cartLinesDiscountId = existing?.discountId
-    ?? await createOrFindAutomaticDiscount(shopDomain, accessToken, cartFunctionId, CART_DISCOUNT_TITLE);
-  const deliveryDiscountId = existing?.deliveryDiscountId
-    ?? await createOrFindAutomaticDiscount(
+  const cartLinesDiscountId =
+    existing?.discountId ??
+    (await createOrFindAutomaticDiscount(
       shopDomain,
       accessToken,
-      deliveryFunctionId,
+      cartFunction,
+      CART_DISCOUNT_TITLE,
+      CART_DISCOUNT_CLASSES,
+    ));
+  const deliveryDiscountId =
+    existing?.deliveryDiscountId ??
+    (await createOrFindAutomaticDiscount(
+      shopDomain,
+      accessToken,
+      deliveryFunction,
       DELIVERY_DISCOUNT_TITLE,
-    );
+      DELIVERY_DISCOUNT_CLASSES,
+    ));
 
   await db
     .update(shops)
@@ -91,6 +107,7 @@ export async function syncDiscountCombinationPolicy(
   accessToken: string,
   discountId: string,
   combinesWith: DiscountCombinationPolicyInput,
+  discountClasses: readonly DiscountClass[],
 ): Promise<void> {
   const data = await shopifyGraphQL<{
     discountAutomaticAppUpdate: {
@@ -108,18 +125,23 @@ export async function syncDiscountCombinationPolicy(
     }`,
     variables: {
       id: discountId,
-      discount: { combinesWith },
+      discount: buildAutomaticDiscountUpdateInput(combinesWith, discountClasses),
     },
   });
 
   const result = data.discountAutomaticAppUpdate;
   if (result.userErrors.length > 0 || !result.automaticAppDiscount) {
     const messages = result.userErrors.map((error) => error.message).join(", ");
-    throw new Error(`discountAutomaticAppUpdate failed: ${messages || "Shopify returned no updated discount"}`);
+    throw new Error(
+      `discountAutomaticAppUpdate failed: ${messages || "Shopify returned no updated discount"}`,
+    );
   }
 }
 
-async function findDiscountFunctions(shopDomain: string, accessToken: string): Promise<ShopifyFunctionSummary[]> {
+async function findDiscountFunctions(
+  shopDomain: string,
+  accessToken: string,
+): Promise<ShopifyFunctionSummary[]> {
   const data = await shopifyGraphQL<{
     shopifyFunctions: { nodes: ShopifyFunctionSummary[] };
   }>({
@@ -127,7 +149,7 @@ async function findDiscountFunctions(shopDomain: string, accessToken: string): P
     accessToken,
     query: `query FindDiscountFunction {
       shopifyFunctions(first: 25) {
-        nodes { id apiType title }
+        nodes { id apiType handle title }
       }
     }`,
   });
@@ -139,11 +161,42 @@ export function selectFunctionId(
   functions: ShopifyFunctionSummary[],
   expectedTitle: string,
 ): string | null {
+  return selectFunction(functions, expectedTitle)?.id ?? null;
+}
+
+function selectFunction(
+  functions: ShopifyFunctionSummary[],
+  expectedTitle: string,
+): ShopifyFunctionSummary | null {
   const normalizedTitle = expectedTitle.trim().toLocaleLowerCase();
-  const match = functions.find((fn) =>
-    fn.title.trim().toLocaleLowerCase() === normalizedTitle,
-  );
-  return match?.id ?? null;
+  const match = functions.find((fn) => fn.title.trim().toLocaleLowerCase() === normalizedTitle);
+  return match ?? null;
+}
+
+export function buildAutomaticDiscountCreateInput(
+  functionHandle: string,
+  title: string,
+  discountClasses: readonly DiscountClass[],
+  startsAt = new Date().toISOString(),
+) {
+  return {
+    title,
+    functionHandle,
+    discountClasses: [...discountClasses],
+    startsAt,
+    combinesWith: {
+      orderDiscounts: true,
+      productDiscounts: true,
+      shippingDiscounts: true,
+    },
+  };
+}
+
+export function buildAutomaticDiscountUpdateInput(
+  combinesWith: DiscountCombinationPolicyInput,
+  discountClasses: readonly DiscountClass[],
+) {
+  return { combinesWith, discountClasses: [...discountClasses] };
 }
 
 /** Reuses an existing "Promo Engine" automatic discount if one is already
@@ -152,10 +205,15 @@ export function selectFunctionId(
 async function createOrFindAutomaticDiscount(
   shopDomain: string,
   accessToken: string,
-  functionId: string,
+  shopifyFunction: ShopifyFunctionSummary,
   title: string,
+  discountClasses: readonly DiscountClass[],
 ): Promise<string> {
-  const existingId = await findExistingAutomaticDiscount(shopDomain, accessToken, functionId);
+  const existingId = await findExistingAutomaticDiscount(
+    shopDomain,
+    accessToken,
+    shopifyFunction.id,
+  );
   if (existingId) return existingId;
 
   const created = await shopifyGraphQL<{
@@ -173,16 +231,7 @@ async function createOrFindAutomaticDiscount(
       }
     }`,
     variables: {
-      discount: {
-        title,
-        functionId,
-        startsAt: new Date().toISOString(),
-        combinesWith: {
-          orderDiscounts: true,
-          productDiscounts: true,
-          shippingDiscounts: true,
-        },
-      },
+      discount: buildAutomaticDiscountCreateInput(shopifyFunction.handle, title, discountClasses),
     },
   });
 
@@ -191,19 +240,36 @@ async function createOrFindAutomaticDiscount(
 
   const alreadyExists = result.userErrors.some((e) => e.message.toLowerCase().includes("already"));
   if (!alreadyExists) {
-    throw new Error(`discountAutomaticAppCreate failed: ${result.userErrors.map((e) => e.message).join(", ")}`);
+    throw new Error(
+      `discountAutomaticAppCreate failed: ${result.userErrors.map((e) => e.message).join(", ")}`,
+    );
   }
 
-  const recoveredId = await findExistingAutomaticDiscount(shopDomain, accessToken, functionId);
+  const recoveredId = await findExistingAutomaticDiscount(
+    shopDomain,
+    accessToken,
+    shopifyFunction.id,
+  );
   if (!recoveredId) {
-    throw new Error(`discountAutomaticAppCreate reported a duplicate but no matching discount was found: ${result.userErrors.map((e) => e.message).join(", ")}`);
+    throw new Error(
+      `discountAutomaticAppCreate reported a duplicate but no matching discount was found: ${result.userErrors.map((e) => e.message).join(", ")}`,
+    );
   }
   return recoveredId;
 }
 
-async function findExistingAutomaticDiscount(shopDomain: string, accessToken: string, functionId: string): Promise<string | null> {
+async function findExistingAutomaticDiscount(
+  shopDomain: string,
+  accessToken: string,
+  functionId: string,
+): Promise<string | null> {
   const data = await shopifyGraphQL<{
-    discountNodes: { nodes: Array<{ id: string; discount: { __typename: string; appDiscountType?: { functionId: string } } }> };
+    discountNodes: {
+      nodes: Array<{
+        id: string;
+        discount: { __typename: string; appDiscountType?: { functionId: string } };
+      }>;
+    };
   }>({
     shopDomain,
     accessToken,
@@ -221,7 +287,9 @@ async function findExistingAutomaticDiscount(shopDomain: string, accessToken: st
   });
 
   const match = data.discountNodes.nodes.find(
-    (node) => node.discount.__typename === "DiscountAutomaticApp" && node.discount.appDiscountType?.functionId === functionId,
+    (node) =>
+      node.discount.__typename === "DiscountAutomaticApp" &&
+      node.discount.appDiscountType?.functionId === functionId,
   );
   return match?.id ?? null;
 }

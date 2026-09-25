@@ -22,29 +22,34 @@ const hasAuthFile = (() => {
 })();
 
 const isConfigured =
-  DEV_STORE_URL &&
-  DEV_STORE_URL !== "https://YOUR-DEV-STORE.myshopify.com" &&
-  APP_URL;
+  DEV_STORE_URL && DEV_STORE_URL !== "https://YOUR-DEV-STORE.myshopify.com" && APP_URL;
 
 if (!isConfigured) {
   throw new Error(
     "E2E configuration is required: set DEV_STORE_URL and APP_URL in .env.test or CI secrets.",
   );
 }
-if (isConfigured && !hasAuthFile && (!process.env["SHOPIFY_ADMIN_EMAIL"] || !process.env["SHOPIFY_ADMIN_PASSWORD"])) {
-  throw new Error("E2E authentication requires SHOPIFY_ADMIN_EMAIL and SHOPIFY_ADMIN_PASSWORD when no saved auth state exists.");
+if (
+  isConfigured &&
+  !hasAuthFile &&
+  (!process.env["SHOPIFY_ADMIN_EMAIL"] || !process.env["SHOPIFY_ADMIN_PASSWORD"])
+) {
+  throw new Error(
+    "E2E authentication requires SHOPIFY_ADMIN_EMAIL and SHOPIFY_ADMIN_PASSWORD when no saved auth state exists.",
+  );
 }
 
 if (process.env["CI"] === "true") {
-  const fixtureVars = [
+  const requiredCiVars = [
     "E2E_PRODUCT_HANDLE",
     "E2E_BUNDLE_PRODUCT_HANDLE",
     "E2E_VOLUME_PRODUCT_HANDLE",
     "E2E_QUALIFYING_VARIANT_ID",
+    "DEV_STORE_PASSWORD",
   ];
-  const missingFixtures = fixtureVars.filter((name) => !process.env[name]);
-  if (missingFixtures.length > 0) {
-    throw new Error(`E2E storefront fixtures are required in CI: ${missingFixtures.join(", ")}`);
+  const missingCiVars = requiredCiVars.filter((name) => !process.env[name]);
+  if (missingCiVars.length > 0) {
+    throw new Error(`E2E storefront configuration is required in CI: ${missingCiVars.join(", ")}`);
   }
 }
 
