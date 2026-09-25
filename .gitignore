@@ -52,3 +52,8 @@ CLAUDE.md
 .claude/settings.json.graphify-bak
 .codex/hooks.json
 .cursor/rules/graphify.mdc
+
+# Playwright auth state and artifacts
+apps/shopify-admin/tests/e2e/.auth/
+apps/shopify-admin/test-results/
+apps/shopify-admin/playwright-report/
