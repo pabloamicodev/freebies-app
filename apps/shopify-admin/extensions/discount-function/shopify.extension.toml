@@ -12,7 +12,8 @@ uid = "e1779323-ec7a-4f39-ba24-b562345ed2b3"
   export = "cart_lines_discounts_generate_run"
 
   [extensions.build]
-  command = "node ../../../../scripts/build-shopify-function.mjs target/wasm32-wasip1/release/promo-engine-discount-function.wasm 262143"
+  # 249000 leaves room for the ~13KB trampoline the Shopify CLI adds before its 256KB upload check.
+  command = "node ../../../../scripts/build-shopify-function.mjs target/wasm32-wasip1/release/promo-engine-discount-function.wasm 249000"
   path = "target/wasm32-wasip1/release/promo-engine-discount-function.wasm"
   watch = ["src/**/*.rs"]
 

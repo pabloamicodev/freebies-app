@@ -335,7 +335,7 @@ fn evaluate_product_reward(
             quantity,
             discount_type,
             discount_value,
-            &format!("Reward {}", reward.id),
+            "Discount",
         ));
     }
     candidates
@@ -423,7 +423,7 @@ fn evaluate_quiz_bundle_reward(
                 i64::from(*line.quantity()),
                 "percentage",
                 reward.discount_percentage_on_gifts,
-                &format!("Quiz bundle {bundle_id}"),
+                "Bundle discount",
             ));
         }
         let Some(target_cents) = group.target_cents else {
@@ -444,7 +444,7 @@ fn evaluate_quiz_bundle_reward(
         candidates.push(make_multi_line_fixed_candidate(
             group.paid,
             discount_needed,
-            &format!("Quiz bundle {bundle_id}"),
+            "Bundle discount",
         ));
     }
     candidates
@@ -561,7 +561,7 @@ fn make_order_candidate(
     Some(schema::OrderDiscountCandidate {
         associated_discount_code: None,
         conditions: None,
-        message: Some(format!("Order reward {}", reward.id)),
+        message: Some("Discount".to_string()),
         targets: vec![schema::OrderDiscountCandidateTarget::OrderSubtotal(
             schema::OrderSubtotalTarget {
                 excluded_cart_line_ids,
@@ -632,7 +632,7 @@ fn evaluate_gift_offer(
                 quantity,
                 &reward.discount_type,
                 reward.discount_value,
-                &format!("Gift reward {}", &reward.id[..reward.id.len().min(8)]),
+                "Free gift",
             ));
         }
         return candidates;
@@ -686,10 +686,7 @@ fn evaluate_gift_offer(
             qty_to_discount,
             &offer.discount_type,
             offer.discount_value,
-            &format!(
-                "Free gift from offer {}",
-                &offer.id[..offer.id.len().min(8)]
-            ),
+            "Free gift",
         ));
     }
 
@@ -1066,46 +1063,39 @@ fn best_candidate_per_line(
     candidates: Vec<schema::ProductDiscountCandidate>,
     input: &Input,
 ) -> Vec<schema::ProductDiscountCandidate> {
-    let unit_price = |line_id: &str| {
-        input
-            .cart()
-            .lines()
-            .iter()
-            .find(|line| line.id() == line_id)
-            .map(|line| line.cost().amount_per_quantity().amount().as_f64())
-            .unwrap_or(0.0)
-    };
-    let saving = |candidate: &schema::ProductDiscountCandidate| -> Option<(String, f64)> {
-        let [schema::ProductDiscountCandidateTarget::CartLine(target)] = candidate.targets.as_slice() else {
-            return None;
-        };
-        let quantity = f64::from(target.quantity.unwrap_or(1));
-        let value = match &candidate.value {
-            schema::ProductDiscountCandidateValue::Percentage(pct) => pct.value.0 / 100.0 * unit_price(&target.id) * quantity,
-            schema::ProductDiscountCandidateValue::FixedAmount(fixed) => {
-                if fixed.applies_to_each_item.unwrap_or(false) { fixed.amount.0 * quantity } else { fixed.amount.0 }
-            }
-        };
-        Some((target.id.clone(), value))
-    };
-
-    let mut best: HashMap<String, (usize, f64)> = HashMap::new();
-    for (index, candidate) in candidates.iter().enumerate() {
-        if let Some((line_id, value)) = saving(candidate) {
-            let entry = best.entry(line_id).or_insert((index, value));
-            if value > entry.1 {
-                *entry = (index, value);
+    let lines = input.cart().lines();
+    // (line index, saving) for single-line candidates; None passes through untouched.
+    let savings: Vec<Option<(usize, f64)>> = candidates
+        .iter()
+        .map(|candidate| {
+            let [schema::ProductDiscountCandidateTarget::CartLine(target)] = candidate.targets.as_slice() else {
+                return None;
+            };
+            let index = lines.iter().position(|line| line.id() == &target.id)?;
+            let quantity = f64::from(target.quantity.unwrap_or(1));
+            let saving = match &candidate.value {
+                schema::ProductDiscountCandidateValue::Percentage(pct) => {
+                    pct.value.0 * lines[index].cost().amount_per_quantity().amount().as_f64() * quantity
+                }
+                schema::ProductDiscountCandidateValue::FixedAmount(fixed) => fixed.amount.0 * quantity * 100.0,
+            };
+            Some((index, saving))
+        })
+        .collect();
+    let mut best = vec![(usize::MAX, f64::MIN); lines.len()];
+    for (position, entry) in savings.iter().enumerate() {
+        if let Some((index, saving)) = entry {
+            if *saving > best[*index].1 {
+                best[*index] = (position, *saving);
             }
         }
     }
     candidates
         .into_iter()
+        .zip(savings)
         .enumerate()
-        .filter(|(index, candidate)| match saving(candidate) {
-            Some((line_id, _)) => best.get(&line_id).map(|(keep, _)| keep == index).unwrap_or(true),
-            None => true,
-        })
-        .map(|(_, candidate)| candidate)
+        .filter(|(position, (_, entry))| entry.is_none_or(|(index, _)| best[index].0 == *position))
+        .map(|(_, (candidate, _))| candidate)
         .collect()
 }
 
