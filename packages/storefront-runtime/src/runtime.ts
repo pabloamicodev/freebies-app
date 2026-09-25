@@ -70,6 +70,8 @@ class PromoEngineRuntime {
   private lastCartHash: string | null = null;
   private savedFetch: typeof window.fetch = window.fetch.bind(window);
   private refreshGuard = false;
+  // Widgets (gift slider, bundles) mutate the cart outside the theme, so its drawer must be re-rendered.
+  private widgetChangedCart = false;
   private capturedThemeSectionIds: string[] = [];
   private lastEvaluationResult: EvaluationResult | null = null;
   private readonly evalEndpoint: string;
@@ -118,7 +120,10 @@ class PromoEngineRuntime {
     document.addEventListener("theme:cart:open", () => this.debouncedEvaluate.call());
 
     // Our own events
-    on(PromoEvents.CartChanged, () => this.debouncedEvaluate.call());
+    on(PromoEvents.CartChanged, () => {
+      this.widgetChangedCart = true;
+      this.debouncedEvaluate.call();
+    });
   }
 
   private patchFetch(): void {
@@ -300,6 +305,10 @@ class PromoEngineRuntime {
     const cartHash = this.buildCartHash(cart);
     if (!options.force && cartHash === this.lastCartHash) {
       this.log("Cart unchanged, skipping evaluation");
+      if (this.widgetChangedCart) {
+        this.widgetChangedCart = false;
+        await this.refreshCartUI();
+      }
       return this.lastEvaluationResult;
     }
 
@@ -356,7 +365,8 @@ class PromoEngineRuntime {
       }
 
       await this.applyCartActions(actions);
-      if (actions.length > 0) {
+      if (actions.length > 0 || this.widgetChangedCart) {
+        this.widgetChangedCart = false;
         await this.refreshCartUI();
       }
       if (options.emitResult !== false) emit(PromoEvents.EvaluationCompleted, result);
