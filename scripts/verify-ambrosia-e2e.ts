@@ -23,18 +23,20 @@ interface FixtureSetting {
   sellingPlanId: string;
   shirtProductId: string;
   shirtVariantIds: string[];
+  anchorVariantMap?: Record<string, string>;
   handles: {
     anchor: string;
     frother: string;
     otg: string;
     giftCard: string;
+    thirdGift?: string;
     shirt: string;
   };
 }
 
 interface CompiledConfig {
   offers: Array<{ id: string; [key: string]: unknown }>;
-  shippingOffers: unknown[];
+  shippingOffers?: unknown[];
   version: string;
   compiledAt: string;
 }
@@ -84,12 +86,14 @@ async function main(): Promise<void> {
     { getLegacyStorePreset },
     { shopifyGraphQL },
     { decryptToken },
+    { compactCompiledOffer },
   ] = await Promise.all([
     import("drizzle-orm"),
     import("@promo/db"),
     import("../apps/shopify-admin/app/lib/legacy-store-presets.server.js"),
     import("../apps/shopify-admin/app/lib/shopify-fetch.server.js"),
     import("../apps/shopify-admin/app/lib/token-crypto.server.js"),
+    import("../apps/shopify-admin/app/lib/sync/compile-config.js"),
   ]);
 
   const db = getDb();
@@ -160,12 +164,13 @@ async function main(): Promise<void> {
       return product;
     };
 
-    const [anchor, frother, otg, giftCard, shirt] = await Promise.all([
+    const [anchor, frother, otg, giftCard, shirt, thirdGift] = await Promise.all([
       fetchProduct(fixture.handles.anchor),
       fetchProduct(fixture.handles.frother),
       fetchProduct(fixture.handles.otg),
       fetchProduct(fixture.handles.giftCard),
       fetchProduct(fixture.handles.shirt),
+      fetchProduct(fixture.handles.thirdGift ?? fixture.handles.shirt),
     ]);
     assert.equal(anchor.id, fixture.anchorProductId);
     assert.ok(anchor.variants.nodes.some((variant) => variant.id === fixture.anchorVariantId));
@@ -176,9 +181,10 @@ async function main(): Promise<void> {
       "The configured subscription selling plan is not attached to the anchor product.",
     );
     assert.equal(shirt.id, fixture.shirtProductId);
-    assert.deepEqual(
-      shirt.variants.nodes.map((variant) => variant.id),
-      fixture.shirtVariantIds,
+    const shirtVariants = new Set(shirt.variants.nodes.map((variant) => variant.id));
+    assert.ok(
+      fixture.shirtVariantIds.every((id) => shirtVariants.has(id)),
+      "Every selectable gift variant must belong to the gift stand-in product.",
     );
 
     const preset = getLegacyStorePreset(AMBROSIA_SHOP);
@@ -189,9 +195,10 @@ async function main(): Promise<void> {
       frotherProductId: frother.id,
       otgProductId: otg.id,
       giftCardProductId: giftCard.id,
-      thirdGiftProductId: shirt.id,
+      thirdGiftProductId: thirdGift.id,
       shirtVariantIds: fixture.shirtVariantIds,
       sellingPlanId: fixture.sellingPlanId,
+      anchorVariantMap: fixture.anchorVariantMap,
     });
 
     const rows = await db
@@ -331,7 +338,7 @@ async function main(): Promise<void> {
       "compiledAt is not an ISO timestamp.",
     );
     assert.deepEqual(
-      published.shippingOffers,
+      published.shippingOffers ?? [],
       [],
       "Disabled Ambrosia shipping rules must not be published.",
     );
@@ -344,7 +351,7 @@ async function main(): Promise<void> {
       assert.ok(compiled, `${row.internalName} is absent from Shopify's published config.`);
       assertJsonEqual(
         compiled,
-        row.compiledConfig,
+        compactCompiledOffer(row.compiledConfig as Parameters<typeof compactCompiledOffer>[0]),
         `${row.internalName} published compiled config`,
       );
     }
@@ -387,7 +394,7 @@ async function main(): Promise<void> {
             })),
             publishedOfferCount: published.offers.length,
             ambrosiaPublishedOfferCount: activeRows.length,
-            publishedShippingOfferCount: published.shippingOffers.length,
+            publishedShippingOfferCount: published.shippingOffers?.length ?? 0,
           },
           fixtures: {
             anchor: {

@@ -19,6 +19,58 @@ const DISABLED_SOURCE_RULES = new Set([
   "landing-free-shipping-mtt5s7nx",
 ]);
 
+// Resolved from ambrosiacollective.com/products.json; the dev store carries the
+// same catalog under the same SKUs, so anchors map 1:1 instead of collapsing.
+export const AMBROSIA_ANCHOR_SKUS: Record<string, string> = {
+  "gid://shopify/ProductVariant/39328106578005": "AMBR-NEK-SRGMY",
+  "gid://shopify/ProductVariant/7623220887605": "AMBR-NEK-FRUS",
+  "gid://shopify/ProductVariant/41064870707285": "AMBR-NEK-STRWLY",
+  "gid://shopify/ProductVariant/40818314149973": "AMBR-NEK-PNMNG",
+  "gid://shopify/ProductVariant/22546471419989": "AMBR-NEK-APPS",
+  "gid://shopify/ProductVariant/40451298263125": "AMBR-NEK-HNYLM",
+  "gid://shopify/ProductVariant/42536493613141": "AMBR-PLA-SCCB",
+  "gid://shopify/ProductVariant/12796283650101": "AMBR-PLA-BMAP",
+  "gid://shopify/ProductVariant/32940576014421": "AMBR-PLA-CHCCB",
+  "gid://shopify/ProductVariant/40815124316245": "AMBR-PLA-CAC",
+  "gid://shopify/ProductVariant/21053881581653": "AMBR-PLA-SS",
+  "gid://shopify/ProductVariant/21240149803093": "AMBR-PLA-CC",
+  "gid://shopify/ProductVariant/22546599379029": "AMBR-PLA-PBC",
+  "gid://shopify/ProductVariant/31701929885781": "AMBR-PLA-PBB",
+  "gid://shopify/ProductVariant/32444848275541": "AMBR-PLA-PBJ",
+  "gid://shopify/ProductVariant/39908414029909": "AMBR-PLA-CMPSM",
+  "gid://shopify/ProductVariant/21236091813973": "AMBR-PLA-CINN",
+  "gid://shopify/ProductVariant/21240149770325": "AMBR-PLA-VAN",
+  "gid://shopify/ProductVariant/21281942110293": "AMBR-PLA-SPRI",
+  "gid://shopify/ProductVariant/32900793827413": "AMBR-PLA-GRBRD",
+  "gid://shopify/ProductVariant/40818313003093": "AMBR-KINET-TRPLM",
+  "gid://shopify/ProductVariant/39575663738965": "AMBR-KINET-BLRSP",
+  "gid://shopify/ProductVariant/39500842565717": "AMBR-KINET-STRWGV",
+  "gid://shopify/ProductVariant/39500842532949": "AMBR-KINET-WTRMLN",
+  "gid://shopify/ProductVariant/42465588576341": "AMBR-ATLAS-UNFLV",
+  "gid://shopify/ProductVariant/42465588609109": "AMBR-ATLAS-UNFLV-2x",
+};
+
+// Dev-store stand-ins, restricted to products that are published to the Online
+// Store and in stock so every rule can be exercised from the storefront.
+export const AMBROSIA_DEV_ANCHOR_FAMILIES: Record<string, string[]> = {
+  "AMBR-NEK": ["nad3-60", "nad3-240-an-all-natural-nad-booster-4-month-supply"],
+  "AMBR-PLA": ["planta-organic-plant-protein"],
+  "AMBR-KINET": ["pa7-mediator-mtor-elevation"],
+  "AMBR-ATLAS": ["c2-creapure"],
+};
+
+export const AMBROSIA_DEV_REWARD_HANDLES = {
+  frother: "test-gift-product",
+  otg: "planta-single-serving-packet",
+  giftCard: "6-foundations-to-mens-health-ebook",
+  thirdGift: "muscle-growth-system-ebook",
+  shirt: "the-complete-snowboard",
+} as const;
+
+export function ambrosiaAnchorFamily(sku: string): string {
+  return Object.keys(AMBROSIA_DEV_ANCHOR_FAMILIES).find((prefix) => sku.startsWith(`${prefix}-`)) ?? "";
+}
+
 interface FixtureCatalog {
   anchorProductId: string;
   anchorVariantId: string;
@@ -28,6 +80,8 @@ interface FixtureCatalog {
   thirdGiftProductId: string;
   shirtVariantIds: string[];
   sellingPlanId: string;
+  /** Ambrosia anchor variant GID -> dev variant GID. Without it, anchors collapse to anchorVariantId. */
+  anchorVariantMap?: Record<string, string>;
 }
 
 export interface SeedOffer {
@@ -91,9 +145,13 @@ export function mapAmbrosiaPresetToDev(
       }
       if ("requiredAnchorVariantIds" in target) {
         const original = Array.isArray(target.requiredAnchorVariantIds)
-          ? target.requiredAnchorVariantIds
+          ? target.requiredAnchorVariantIds.map(String)
           : [];
-        target.requiredAnchorVariantIds = original.length > 0 ? [fixtures.anchorVariantId] : [];
+        const map = fixtures.anchorVariantMap;
+        const mapped = map ? [...new Set(original.flatMap((id) => map[id] ?? []))] : [];
+        // An empty list means "no anchor required", so never let unmapped anchors widen a rule.
+        target.requiredAnchorVariantIds =
+          original.length === 0 ? [] : mapped.length > 0 ? mapped : [fixtures.anchorVariantId];
       }
       return { ...structuredClone(reward), target };
     }),
@@ -233,78 +291,75 @@ async function main(): Promise<void> {
       return { product, variant };
     };
 
-    let shirt = await getProduct("ambrosia-e2e-athletic-club-shirt");
-    if (!shirt) {
-      const created = await admin<{
-        productSet: {
-          product: {
+    const requirePublished = async (handle: string) => {
+      const data = await admin<{
+        products: {
+          nodes: Array<{
             id: string;
             handle: string;
             status: string;
-            variants: { nodes: Array<{ id: string; title: string }> };
-            sellingPlanGroups: { nodes: [] };
-          } | null;
-          userErrors: Array<{ code?: string | null; field?: string[] | null; message: string }>;
+            publishedAt: string | null;
+            variants: { nodes: Array<{ id: string; title: string; availableForSale: boolean }> };
+          }>;
         };
       }>(
         `#graphql
-        mutation CreateAmbrosiaFixture($input: ProductSetInput!, $synchronous: Boolean!) {
-          productSet(input: $input, synchronous: $synchronous) {
-            product {
-              id
-              handle
-              status
-              variants(first: 20) { nodes { id title } }
-              sellingPlanGroups(first: 1) { nodes { id } }
+        query PublishedFixtureProduct($query: String!) {
+          products(first: 2, query: $query) {
+            nodes {
+              id handle status publishedAt
+              variants(first: 20) { nodes { id title availableForSale } }
             }
-            userErrors { code field message }
           }
         }
       `,
-        {
-          synchronous: true,
-          input: {
-            title: "Ambrosia E2E Athletic Club T-Shirt",
-            handle: "ambrosia-e2e-athletic-club-shirt",
-            status: "ACTIVE",
-            productOptions: [
-              {
-                name: "Size",
-                position: 1,
-                values: [{ name: "S" }, { name: "M" }, { name: "L" }, { name: "XL" }],
-              },
-            ],
-            variants: ["S", "M", "L", "XL"].map((size) => ({
-              optionValues: [{ optionName: "Size", name: size }],
-              price: "20.00",
-            })),
-          },
-        },
+        { query: `handle:${handle}` },
       );
-      if (created.productSet.userErrors.length > 0 || !created.productSet.product) {
-        throw new Error(
-          `Unable to create the shirt fixture: ${JSON.stringify(created.productSet.userErrors)}`,
-        );
+      const product = data.products.nodes.find((candidate) => candidate.handle === handle);
+      if (!product || product.status !== "ACTIVE" || !product.publishedAt) {
+        throw new Error(`Fixture product ${handle} must be active and published to the Online Store.`);
       }
-      shirt = created.productSet.product;
-    }
-    if (shirt.variants.nodes.length !== 4) {
-      throw new Error(
-        `The shirt fixture has ${shirt.variants.nodes.length} variants; expected exactly four.`,
-      );
-    }
+      const variants = product.variants.nodes.filter((variant) => variant.availableForSale);
+      if (variants.length === 0) throw new Error(`Fixture product ${handle} has no variants for sale.`);
+      return { id: product.id, handle: product.handle, variants };
+    };
 
-    const [{ product: anchorProduct, variant: anchorVariant }, frother, otg, giftCard] =
+    const [{ product: anchorProduct, variant: anchorVariant }, frother, otg, giftCard, thirdGift, shirt] =
       await Promise.all([
         requireProduct("test-product"),
-        requireProduct("test-gift-product"),
-        requireProduct("test-bundle-product"),
-        requireProduct("test-volume-product"),
+        requirePublished(AMBROSIA_DEV_REWARD_HANDLES.frother),
+        requirePublished(AMBROSIA_DEV_REWARD_HANDLES.otg),
+        requirePublished(AMBROSIA_DEV_REWARD_HANDLES.giftCard),
+        requirePublished(AMBROSIA_DEV_REWARD_HANDLES.thirdGift),
+        requirePublished(AMBROSIA_DEV_REWARD_HANDLES.shirt),
       ]);
+    if (shirt.variants.length < 4) {
+      throw new Error(`${shirt.handle} needs four variants for sale to stand in for the shirt sizes.`);
+    }
+    const shirtVariantIds = shirt.variants.slice(0, 4).map((variant) => variant.id);
 
+    const familyVariants = new Map<string, string[]>();
+    const anchorProductIds = new Set<string>();
+    for (const [family, handles] of Object.entries(AMBROSIA_DEV_ANCHOR_FAMILIES)) {
+      const products = await Promise.all(handles.map(requirePublished));
+      for (const product of products) anchorProductIds.add(product.id);
+      familyVariants.set(family, products.flatMap((product) => product.variants.map((variant) => variant.id)));
+    }
+    // Spread each family's source variants across its stand-ins so rules keep several anchors.
+    const anchorVariantMap: Record<string, string> = {};
+    const familyCursor = new Map<string, number>();
+    for (const [sourceId, sku] of Object.entries(AMBROSIA_ANCHOR_SKUS)) {
+      const family = ambrosiaAnchorFamily(sku);
+      const pool = familyVariants.get(family) ?? [];
+      if (pool.length === 0) continue;
+      const cursor = familyCursor.get(family) ?? 0;
+      anchorVariantMap[sourceId] = pool[cursor % pool.length]!;
+      familyCursor.set(family, cursor + 1);
+    }
     let sellingPlanId = anchorProduct.sellingPlanGroups.nodes
       .flatMap((group) => group.sellingPlans.nodes)
       .at(0)?.id;
+    let createdGroupId: string | undefined;
     if (!sellingPlanId) {
       const result = await admin<{
         sellingPlanGroupCreate: {
@@ -357,8 +412,48 @@ async function main(): Promise<void> {
         );
       }
       sellingPlanId = result.sellingPlanGroupCreate.sellingPlanGroup?.sellingPlans.nodes[0]?.id;
+      createdGroupId = result.sellingPlanGroupCreate.sellingPlanGroup?.id;
     }
     if (!sellingPlanId) throw new Error("The anchor product has no usable selling plan.");
+
+    // Most Ambrosia rules require a subscription anchor, so every mapped anchor product needs the plan.
+    const groupId =
+      createdGroupId ??
+      anchorProduct.sellingPlanGroups.nodes.find((group) =>
+        group.sellingPlans.nodes.some((plan) => plan.id === sellingPlanId),
+      )?.id;
+    if (!groupId) throw new Error("Could not resolve the fixture selling plan group.");
+    const groupProducts = await admin<{
+      sellingPlanGroup: { products: { nodes: Array<{ id: string }> } } | null;
+    }>(
+      `#graphql
+      query FixtureSellingPlanGroupProducts($id: ID!) {
+        sellingPlanGroup(id: $id) { products(first: 250) { nodes { id } } }
+      }
+    `,
+      { id: groupId },
+    );
+    const attached = new Set(groupProducts.sellingPlanGroup?.products.nodes.map((node) => node.id) ?? []);
+    const toAttach = [...anchorProductIds].filter((id) => !attached.has(id));
+    if (toAttach.length > 0) {
+      const added = await admin<{
+        sellingPlanGroupAddProducts: { userErrors: Array<{ field?: string[] | null; message: string }> };
+      }>(
+        `#graphql
+        mutation AttachFixtureSellingPlan($id: ID!, $productIds: [ID!]!) {
+          sellingPlanGroupAddProducts(id: $id, productIds: $productIds) {
+            userErrors { field message }
+          }
+        }
+      `,
+        { id: groupId, productIds: toAttach },
+      );
+      if (added.sellingPlanGroupAddProducts.userErrors.length > 0) {
+        throw new Error(
+          `Unable to attach the subscription plan to anchors: ${JSON.stringify(added.sellingPlanGroupAddProducts.userErrors)}`,
+        );
+      }
+    }
 
     const sourcePreset = getLegacyStorePreset(AMBROSIA_SHOP);
     if (!sourcePreset) throw new Error("The Ambrosia migration preset is not registered.");
@@ -366,12 +461,13 @@ async function main(): Promise<void> {
     const mapped = mapAmbrosiaPresetToDev(sourcePreset, {
       anchorProductId: anchorProduct.id,
       anchorVariantId: anchorVariant.id,
-      frotherProductId: frother.product.id,
-      otgProductId: otg.product.id,
-      giftCardProductId: giftCard.product.id,
-      thirdGiftProductId: shirt.id,
-      shirtVariantIds: shirt.variants.nodes.map((variant) => variant.id),
+      frotherProductId: frother.id,
+      otgProductId: otg.id,
+      giftCardProductId: giftCard.id,
+      thirdGiftProductId: thirdGift.id,
+      shirtVariantIds,
       sellingPlanId,
+      anchorVariantMap,
     });
     for (const offer of mapped) {
       for (const condition of offer.conditions) {
@@ -392,6 +488,23 @@ async function main(): Promise<void> {
         }
       }
     }
+
+    const fixtureValue = JSON.stringify({
+      anchorProductId: anchorProduct.id,
+      anchorVariantId: anchorVariant.id,
+      sellingPlanId,
+      shirtProductId: shirt.id,
+      shirtVariantIds,
+      anchorVariantMap,
+      handles: {
+        anchor: anchorProduct.handle,
+        frother: frother.handle,
+        otg: otg.handle,
+        giftCard: giftCard.handle,
+        thirdGift: thirdGift.handle,
+        shirt: shirt.handle,
+      },
+    });
 
     await db.transaction(async (tx) => {
       await tx
@@ -503,43 +616,10 @@ async function main(): Promise<void> {
 
       await tx
         .insert(appSettings)
-        .values({
-          shopId: shop.id,
-          key: "ambrosia_e2e_fixture",
-          value: JSON.stringify({
-            anchorProductId: anchorProduct.id,
-            anchorVariantId: anchorVariant.id,
-            sellingPlanId,
-            shirtProductId: shirt.id,
-            shirtVariantIds: shirt.variants.nodes.map((variant) => variant.id),
-            handles: {
-              anchor: anchorProduct.handle,
-              frother: frother.product.handle,
-              otg: otg.product.handle,
-              giftCard: giftCard.product.handle,
-              shirt: shirt.handle,
-            },
-          }),
-        })
+        .values({ shopId: shop.id, key: "ambrosia_e2e_fixture", value: fixtureValue })
         .onConflictDoUpdate({
           target: [appSettings.shopId, appSettings.key],
-          set: {
-            value: JSON.stringify({
-              anchorProductId: anchorProduct.id,
-              anchorVariantId: anchorVariant.id,
-              sellingPlanId,
-              shirtProductId: shirt.id,
-              shirtVariantIds: shirt.variants.nodes.map((variant) => variant.id),
-              handles: {
-                anchor: anchorProduct.handle,
-                frother: frother.product.handle,
-                otg: otg.product.handle,
-                giftCard: giftCard.product.handle,
-                shirt: shirt.handle,
-              },
-            }),
-            updatedAt: new Date(),
-          },
+          set: { value: fixtureValue, updatedAt: new Date() },
         });
     });
 
@@ -552,6 +632,9 @@ async function main(): Promise<void> {
           sourceInventory: sourcePreset.offers.length,
           activeOffers: mapped.filter((offer) => offer.status === "active").length,
           draftOffers: mapped.filter((offer) => offer.status === "draft").length,
+          mappedAnchors: Object.keys(anchorVariantMap).length,
+          anchorProducts: [...anchorProductIds],
+          rewards: [frother, otg, giftCard, thirdGift].map((product) => product.handle),
           anchor: {
             productHandle: anchorProduct.handle,
             productId: anchorProduct.id,
@@ -561,7 +644,7 @@ async function main(): Promise<void> {
           shirt: {
             productHandle: shirt.handle,
             productId: shirt.id,
-            variantIds: shirt.variants.nodes.map((variant) => variant.id),
+            variantIds: shirtVariantIds,
           },
         },
         null,

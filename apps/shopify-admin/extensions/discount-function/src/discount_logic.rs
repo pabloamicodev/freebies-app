@@ -3017,4 +3017,98 @@ mod tests {
             run_function_with_input(run, &base).expect("missing URL metadata input");
         assert!(missing_metadata.operations.is_empty());
     }
+
+    #[test]
+    fn compact_metafield_produces_identical_output() {
+        const FULL: &str = include_str!("fixtures/ambrosia-function-config.full.json");
+        const COMPACT: &str = include_str!("fixtures/ambrosia-function-config.compact.json");
+        const ANCHOR: &str = "gid://shopify/ProductVariant/50000000000001";
+        let subscribed = |line: String| {
+            line.replace(
+                "\"sellingPlanAllocation\": null",
+                "\"sellingPlanAllocation\": { \"sellingPlan\": { \"id\": \"gid://shopify/SellingPlan/7000000001\" } }",
+            )
+        };
+        let landing_cart = |source: &str, gift_product: &str| {
+            format!(
+                "[{},{}]",
+                subscribed(scoped_line(
+                    "gid://shopify/CartLine/1",
+                    ANCHOR,
+                    "gid://shopify/Product/10000000000001",
+                    "60.00",
+                    2,
+                    Some(source),
+                    None,
+                )),
+                scoped_line(
+                    "gid://shopify/CartLine/2",
+                    "gid://shopify/ProductVariant/50000000000099",
+                    gift_product,
+                    "25.00",
+                    1,
+                    Some(source),
+                    None,
+                ),
+            )
+        };
+        let shirt_cart = format!(
+            "[{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                ANCHOR,
+                "gid://shopify/Product/10000000000001",
+                "90.00",
+                1
+            ),
+            gift_line_with_metadata(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/50000000000012",
+                "gid://shopify/Product/10000000000005",
+                (
+                    "00000001-0000-4000-8000-000000000002",
+                    "00000002-0000-4000-8000-000000000020",
+                    "154423745"
+                ),
+                "20.00",
+                1
+            ),
+        );
+        let carts = [
+            (
+                landing_cart("nektar-glp1-sk", "gid://shopify/Product/10000000000002"),
+                "145.00",
+            ),
+            (
+                landing_cart("atlas-sk-otg", "gid://shopify/Product/10000000000003"),
+                "145.00",
+            ),
+            (
+                landing_cart("unknown-source", "gid://shopify/Product/10000000000002"),
+                "145.00",
+            ),
+            (shirt_cart, "110.00"),
+        ];
+
+        let mut discounted_carts = 0;
+        for (lines, subtotal) in &carts {
+            let run_with = |config: &str| {
+                let payload =
+                    cart_json_with_classes(lines, subtotal, config, r#"["PRODUCT","ORDER"]"#);
+                format!(
+                    "{:?}",
+                    run_function_with_input(run, &payload).expect("valid input")
+                )
+            };
+            let full = run_with(FULL);
+            assert_eq!(run_with(COMPACT), full);
+            if full.contains("Add") {
+                discounted_carts += 1;
+            }
+        }
+        assert!(
+            discounted_carts >= 3,
+            "fixture carts must exercise live offers"
+        );
+    }
 }

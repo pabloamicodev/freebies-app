@@ -801,6 +801,113 @@ export function compileShippingOfferConfigs(
     });
 }
 
-export function estimateConfigSize(config: CompiledFunctionConfig): number {
-  return JSON.stringify(config).length;
+// Each table mirrors the serde defaults of the matching struct in
+// extensions/discount-function/src/config.rs and
+// extensions/delivery-discount-function/src/config.rs. A key is omitted only
+// when the Function would deserialize exactly this value without it.
+type FieldDefaults = Readonly<Record<string, unknown>>;
+
+const CONFIG_DEFAULTS: FieldDefaults = { shippingOffers: [], customerTags: [] };
+const OFFER_DEFAULTS: FieldDefaults = {
+  stopLowerPriority: false,
+  requiredProductIds: [],
+  requiredVariantIds: [],
+  excludedProductIds: [],
+  giftVariantIds: [],
+  giftProductIds: [],
+  requiredCustomerTags: [],
+  excludedCustomerTags: [],
+  treatGuestAsNoTags: true,
+  includeCountryCodes: [],
+  excludeCountryCodes: [],
+  discountType: "free",
+  discountValue: 100,
+  currencyCode: "USD",
+  requirements: [],
+  giftRewards: [],
+  productRewards: [],
+  orderRewards: [],
+  lineAttributeConditions: [],
+  cartAttributeConditions: [],
+  pageUrlConditions: [],
+};
+// Combination policy is applied to the discount node, never read by a Function.
+const OFFER_UNREAD_KEYS = [
+  "combinesWithOrderDiscounts",
+  "combinesWithShippingDiscounts",
+  "combinesWithProductDiscounts",
+];
+const GIFT_REWARD_DEFAULTS: FieldDefaults = { targetProductIds: [], targetVariantIds: [] };
+const PRODUCT_REWARD_DEFAULTS: FieldDefaults = {
+  targetProductIds: [],
+  targetVariantIds: [],
+  subscriptionMode: "any",
+  scopeMode: "sitewide",
+  requiredAnchorVariantIds: [],
+  requiredAnchorMinQuantity: 1,
+  requiresAnchorSubscription: false,
+  priceTiers: [],
+  quantityTiers: [],
+  selectionMode: "all",
+  countRule: "all",
+  discountPercentageOnGifts: 100,
+};
+const ORDER_REWARD_DEFAULTS: FieldDefaults = { subtotalTiers: [] };
+const PAGE_URL_CONDITION_DEFAULTS: FieldDefaults = { patterns: [], caseSensitive: false };
+const SHIPPING_OFFER_DEFAULTS: FieldDefaults = {
+  scopeMode: "sitewide",
+  requiredAnchorVariantIds: [],
+  requiredAnchorMinQuantity: 1,
+  requiresAnchorSubscription: false,
+};
+
+function omitDefaults(
+  value: object,
+  defaults: FieldDefaults,
+  unread: readonly string[] = [],
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([key, entry]) => {
+      if (entry === undefined || unread.includes(key)) return false;
+      if (!(key in defaults)) return true;
+      const fallback = defaults[key];
+      return Array.isArray(fallback)
+        ? !(Array.isArray(entry) && entry.length === 0)
+        : entry !== fallback;
+    }),
+  );
+}
+
+export function compactCompiledOffer(offer: CompiledOffer): Record<string, unknown> {
+  return omitDefaults(
+    {
+      ...offer,
+      giftRewards: offer.giftRewards.map((reward) => omitDefaults(reward, GIFT_REWARD_DEFAULTS)),
+      productRewards: offer.productRewards.map((reward) =>
+        omitDefaults(reward, PRODUCT_REWARD_DEFAULTS),
+      ),
+      orderRewards: offer.orderRewards.map((reward) => omitDefaults(reward, ORDER_REWARD_DEFAULTS)),
+      pageUrlConditions: offer.pageUrlConditions?.map((condition) =>
+        omitDefaults(condition, PAGE_URL_CONDITION_DEFAULTS),
+      ),
+    },
+    OFFER_DEFAULTS,
+    OFFER_UNREAD_KEYS,
+  );
+}
+
+/** The metafield value: Function metafield input is capped at 10,000 bytes. */
+export function serializeFunctionConfig(config: CompiledFunctionConfig): string {
+  return JSON.stringify(
+    omitDefaults(
+      {
+        ...config,
+        offers: config.offers.map(compactCompiledOffer),
+        shippingOffers: config.shippingOffers.map((offer) =>
+          omitDefaults(offer, SHIPPING_OFFER_DEFAULTS),
+        ),
+      },
+      CONFIG_DEFAULTS,
+    ),
+  );
 }

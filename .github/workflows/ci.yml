@@ -60,7 +60,11 @@ jobs:
         run: pnpm shopify:build
       - name: Check binary sizes
         run: |
-          for wasm in target/wasm32-wasip1/release/*.wasm; do
+          # Measure the optimized artifacts Shopify uploads, not the raw cargo output.
+          shopt -s nullglob
+          wasms=(apps/shopify-admin/extensions/*/target/wasm32-wasip1/release/*.wasm)
+          [ ${#wasms[@]} -gt 0 ] || { echo "❌ No optimized function binaries found"; exit 1; }
+          for wasm in "${wasms[@]}"; do
             size=$(wc -c < "$wasm")
             kb=$((size / 1024))
             name=$(basename "$wasm")

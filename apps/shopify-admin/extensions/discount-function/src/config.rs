@@ -5,6 +5,7 @@ use std::collections::HashMap;
 /// This is our own JSON shape (written by the offer-publisher worker), unrelated
 /// to Shopify's GraphQL schema, so it stays hand-written serde like before.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledConfig {
     pub offers: Vec<CompiledOffer>,
@@ -29,17 +30,24 @@ fn default_anchor_quantity() -> i64 {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledOffer {
     pub id: String,
     pub version: i32,
     pub offer_type: String,
     pub priority: i32,
+    #[serde(default)]
     pub stop_lower_priority: bool,
+    #[serde(default)]
     pub required_product_ids: Vec<String>,
+    #[serde(default)]
     pub required_variant_ids: Vec<String>,
+    #[serde(default)]
     pub excluded_product_ids: Vec<String>,
+    #[serde(default)]
     pub gift_variant_ids: Vec<String>,
+    #[serde(default)]
     pub gift_product_ids: Vec<String>,
     pub cart_value_threshold_cents: Option<i64>,
     pub cart_value_max_cents: Option<i64>,
@@ -61,8 +69,11 @@ pub struct CompiledOffer {
     #[serde(default)]
     pub exclude_country_codes: Vec<String>,
     pub max_gift_quantity: Option<i64>,
+    #[serde(default = "default_discount_type")]
     pub discount_type: String,
+    #[serde(default = "default_discount_value")]
     pub discount_value: f64,
+    #[serde(default = "default_currency_code")]
     pub currency_code: String,
     pub currency_overrides: Option<HashMap<String, i64>>,
     pub max_currency_overrides: Option<HashMap<String, i64>>,
@@ -86,7 +97,24 @@ fn default_treat_guest_as_no_tags() -> bool {
     true
 }
 
+fn default_discount_type() -> String {
+    "free".to_string()
+}
+
+fn default_discount_value() -> f64 {
+    100.0
+}
+
+fn default_currency_code() -> String {
+    "USD".to_string()
+}
+
+fn default_subscription_mode() -> String {
+    "any".to_string()
+}
+
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledAttributeCondition {
     pub key: String,
@@ -96,10 +124,13 @@ pub struct CompiledAttributeCondition {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledGiftReward {
     pub id: String,
+    #[serde(default)]
     pub target_product_ids: Vec<String>,
+    #[serde(default)]
     pub target_variant_ids: Vec<String>,
     pub discount_type: String,
     pub discount_value: f64,
@@ -107,6 +138,7 @@ pub struct CompiledGiftReward {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledRequirement {
     pub product_id: Option<String>,
@@ -117,16 +149,20 @@ pub struct CompiledRequirement {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledProductReward {
     pub id: String,
+    #[serde(default)]
     pub target_product_ids: Vec<String>,
+    #[serde(default)]
     pub target_variant_ids: Vec<String>,
     pub discount_type: String,
     pub discount_value: f64,
     pub max_quantity: Option<i64>,
     pub line_quantity_equals: Option<i64>,
     pub max_units_total: Option<i64>,
+    #[serde(default = "default_subscription_mode")]
     pub subscription_mode: String,
     #[serde(default = "default_shipping_scope")]
     pub scope_mode: String,
@@ -155,6 +191,7 @@ fn default_gift_percentage() -> f64 {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledPageUrlCondition {
     #[serde(default)]
@@ -175,6 +212,7 @@ fn default_selection_mode() -> String {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct ProductPriceTier {
     pub quantity: i64,
@@ -182,6 +220,7 @@ pub struct ProductPriceTier {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDiscountTier {
     pub minimum_quantity: i64,
@@ -192,6 +231,7 @@ pub struct ProductDiscountTier {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledOrderReward {
     pub id: String,
@@ -202,6 +242,7 @@ pub struct CompiledOrderReward {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct OrderSubtotalDiscountTier {
     pub minimum_subtotal_cents: Option<i64>,
@@ -253,4 +294,20 @@ pub fn resolve_threshold(
         }
     }
     base_cents
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FULL_FIXTURE: &str = include_str!("fixtures/ambrosia-function-config.full.json");
+    const COMPACT_FIXTURE: &str = include_str!("fixtures/ambrosia-function-config.compact.json");
+
+    #[test]
+    fn compact_metafield_deserializes_to_the_full_config() {
+        let full: CompiledConfig = serde_json::from_str(FULL_FIXTURE).unwrap();
+        let compact: CompiledConfig = serde_json::from_str(COMPACT_FIXTURE).unwrap();
+        assert_eq!(full.offers.len(), 13);
+        assert_eq!(compact, full);
+    }
 }

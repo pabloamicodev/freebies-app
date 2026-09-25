@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledConfig {
     #[serde(default)]
@@ -8,6 +9,7 @@ pub struct CompiledConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledShippingOffer {
     pub id: String,
@@ -34,6 +36,7 @@ fn default_anchor_quantity() -> i64 {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct ShippingTier {
     pub minimum_subtotal_cents: i64,
@@ -70,5 +73,23 @@ pub fn to_cents(amount: f64, currency_code: &str) -> i64 {
         amount.round() as i64
     } else {
         (amount * 100.0).round() as i64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_metafield_deserializes_to_the_full_config() {
+        let parse = |raw: &str| serde_json::from_str::<CompiledConfig>(raw).unwrap();
+        let full = parse(include_str!(
+            "../../discount-function/src/fixtures/ambrosia-function-config.full.json"
+        ));
+        let compact = parse(include_str!(
+            "../../discount-function/src/fixtures/ambrosia-function-config.compact.json"
+        ));
+        assert_eq!(full.shipping_offers.len(), 2);
+        assert_eq!(compact, full);
     }
 }

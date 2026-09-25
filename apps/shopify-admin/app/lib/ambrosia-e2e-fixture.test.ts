@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getLegacyStorePreset } from "./legacy-store-presets.server.js";
-import { mapAmbrosiaPresetToDev } from "../../../../scripts/seed-ambrosia-e2e.js";
+import { AMBROSIA_ANCHOR_SKUS, mapAmbrosiaPresetToDev } from "../../../../scripts/seed-ambrosia-e2e.js";
 
 const fixtures = {
   anchorProductId: "gid://shopify/Product/100",
@@ -69,5 +69,26 @@ describe("Ambrosia E2E fixture mapping", () => {
       isCustomerSelectable: true,
       target: { variantIds: fixtures.shirtVariantIds },
     });
+  });
+
+  it("maps anchors 1:1 by SKU and never widens a rule when anchors are unmapped", () => {
+    const preset = getLegacyStorePreset("ambrosia-nutraceuticals.myshopify.com")!;
+    const anchorVariantMap = Object.fromEntries(
+      Object.keys(AMBROSIA_ANCHOR_SKUS)
+        .filter((id) => !id.endsWith("/42465588609109"))
+        .map((id, index) => [id, `gid://shopify/ProductVariant/9${index}`]),
+    );
+    const mapped = mapAmbrosiaPresetToDev(preset, { ...fixtures, anchorVariantMap });
+    const serialized = JSON.stringify(mapped);
+    for (const id of Object.keys(AMBROSIA_ANCHOR_SKUS)) expect(serialized).not.toContain(id);
+
+    const nektar = mapped.find((offer) => offer.key === "nektar-glp1-shaker-gift");
+    expect(nektar?.rewards[0]?.target.requiredAnchorVariantIds).toHaveLength(6);
+    const atlas = mapped.find((offer) => offer.key === "landing-atlas-sk-otg-freegifts");
+    expect(atlas?.rewards[0]?.target.requiredAnchorVariantIds).toEqual([]);
+
+    const unmapped = mapAmbrosiaPresetToDev(preset, { ...fixtures, anchorVariantMap: {} });
+    const kinetic = unmapped.find((offer) => offer.key === "landing-kinetic-sk-otg-freegifts");
+    expect(kinetic?.rewards[0]?.target.requiredAnchorVariantIds).toEqual([fixtures.anchorVariantId]);
   });
 });

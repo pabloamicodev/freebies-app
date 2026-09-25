@@ -26,7 +26,7 @@ import {
   compileOfferConfig,
   compileDiscountCombinationPolicy,
   compileShippingOfferConfigs,
-  estimateConfigSize,
+  serializeFunctionConfig,
   type CompiledFunctionConfig,
 } from "./compile-config.js";
 import { buildAttributeQueryVariables } from "./attribute-query-variables.js";
@@ -83,7 +83,12 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     // Stop discount generation first. The remaining writes only loosen/remove
     // validation and combination state, so a later failure cannot grant an
     // offer that was meant to be disabled.
-    await pushMetafields(shopDomain, accessToken, discountIds, emptyConfig);
+    await pushMetafields(
+      shopDomain,
+      accessToken,
+      discountIds,
+      serializeFunctionConfig(emptyConfig),
+    );
     await syncCartValidation(shopDomain, accessToken, buildCartValidationConfig([]));
     await Promise.all(
       discountNodesWithClasses.map(({ discountId, discountClasses }) =>
@@ -186,7 +191,8 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
     ...buildAttributeQueryVariables(conditionRows),
   };
 
-  const sizeBytes = estimateConfigSize(config);
+  const value = serializeFunctionConfig(config);
+  const sizeBytes = new TextEncoder().encode(value).byteLength;
   if (sizeBytes > MAX_METAFIELD_BYTES) {
     throw new Error(
       `Function config is ${sizeBytes}B, exceeding the safe ${MAX_METAFIELD_BYTES}B limit. Pause or simplify active offers before publishing.`,
@@ -208,7 +214,7 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
       ),
     ),
   );
-  await pushMetafields(shopDomain, accessToken, discountIds, config);
+  await pushMetafields(shopDomain, accessToken, discountIds, value);
 
   for (const compiledOffer of compiledOffers) {
     await db
@@ -291,7 +297,7 @@ async function pushMetafields(
   shopDomain: string,
   accessToken: string,
   ownerIds: string[],
-  config: CompiledFunctionConfig,
+  value: string,
 ): Promise<void> {
   const data = await shopifyGraphQL<{ metafieldsSet: { userErrors: Array<{ message: string }> } }>({
     shopDomain,
@@ -308,7 +314,7 @@ async function pushMetafields(
         namespace: METAFIELD_NAMESPACE,
         key: METAFIELD_KEY,
         type: "json",
-        value: JSON.stringify(config),
+        value,
       })),
     },
   });
