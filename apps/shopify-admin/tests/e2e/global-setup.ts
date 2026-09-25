@@ -107,8 +107,13 @@ export default async function globalSetup() {
       const passwordInput = page.locator('input[name="password"]').first();
       await passwordInput.waitFor({ state: "visible", timeout: 10_000 });
       await passwordInput.fill(STOREFRONT_PASSWORD);
-      await page.locator('button[type="submit"], input[type="submit"]').first().click();
-      await page.waitForLoadState("networkidle", { timeout: 20_000 });
+      // Theme analytics keep the network busy, so wait for the redirect off /password instead of networkidle.
+      await Promise.all([
+        page
+          .waitForURL((url) => !isStorefrontPasswordUrl(url.toString(), DEV_STORE_URL), { timeout: 20_000 })
+          .catch(() => undefined),
+        page.locator('button[type="submit"], input[type="submit"]').first().click(),
+      ]);
 
       if (isStorefrontPasswordUrl(page.url(), DEV_STORE_URL)) {
         throw new Error("DEV_STORE_PASSWORD was rejected by Shopify.");

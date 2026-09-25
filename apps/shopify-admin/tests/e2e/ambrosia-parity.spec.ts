@@ -1,14 +1,30 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { readFileSync } from "node:fs";
+
+interface AmbrosiaFixtureRule {
+  key: string;
+  source: string;
+  anchorVariant: number | null;
+  sellingPlan: number | null;
+  anchorMinQuantity: number;
+  requiresSubscription: boolean;
+  targets: number[];
+}
+const fixture = JSON.parse(
+  readFileSync(new URL("./fixtures/ambrosia.json", import.meta.url), "utf8"),
+) as { rules: AmbrosiaFixtureRule[] };
+
+// Regenerate fixtures/ambrosia.json after re-running `pnpm seed:ambrosia-e2e`.
 const ANCHOR_HANDLE = process.env["E2E_PRODUCT_HANDLE"] ?? "test-product";
-const ANCHOR_VARIANT = Number(process.env["E2E_AMBROSIA_ANCHOR_VARIANT_ID"] ?? "50539370446931");
+const FALLBACK_ANCHOR = Number(process.env["E2E_AMBROSIA_ANCHOR_VARIANT_ID"] ?? "50539370446931");
 const SELLING_PLAN = Number(process.env["E2E_AMBROSIA_SELLING_PLAN_ID"] ?? "6553370707");
-const FROTHER_VARIANT = Number(process.env["E2E_AMBROSIA_FROTHER_VARIANT_ID"] ?? "50539424186451");
-const OTG_VARIANT = Number(process.env["E2E_AMBROSIA_OTG_VARIANT_ID"] ?? "50539371167827");
-const GIFT_CARD_VARIANT = Number(
-  process.env["E2E_AMBROSIA_GIFT_CARD_VARIANT_ID"] ?? "50539372806227",
-);
-const SHIRT_VARIANT = Number(process.env["E2E_AMBROSIA_SHIRT_VARIANT_ID"] ?? "50539598282835");
+const rules = fixture.rules.map((rule) => ({
+  ...rule,
+  anchorVariant: rule.anchorVariant ?? FALLBACK_ANCHOR,
+  sellingPlan: rule.sellingPlan ?? SELLING_PLAN,
+}));
+const rule = (key: string) => rules.find((candidate) => candidate.key === key)!;
 
 type CartItem = {
   variant_id: number;
@@ -94,15 +110,7 @@ function expectVariantsPaid(cart: Cart, variants: number[]): void {
   }
 }
 
-const subscriptionLandingRules = [
-  { source: "nektar-glp1-sk", targets: [FROTHER_VARIANT] },
-  { source: "nektar-skin-v2", targets: [FROTHER_VARIANT] },
-  { source: "kinetic-sk-otg", targets: [GIFT_CARD_VARIANT, OTG_VARIANT] },
-  { source: "atlas-sk-otg", targets: [GIFT_CARD_VARIANT, OTG_VARIANT, SHIRT_VARIANT] },
-  { source: "nektar-sk-otg", targets: [OTG_VARIANT] },
-  { source: "planta-sk-otg", targets: [OTG_VARIANT] },
-  { source: "nektar-sk-special-offer", targets: [FROTHER_VARIANT] },
-] as const;
+const subscriptionLandingRules = rules.filter((candidate) => candidate.requiresSubscription);
 
 test.describe("Ambrosia migration parity", () => {
   test.beforeEach(async ({ page }) => openStorefront(page));
@@ -111,51 +119,47 @@ test.describe("Ambrosia migration parity", () => {
     test(`${rule.source} grants the same subscription landing gifts`, async ({ page }) => {
       const properties = landingProperties(rule.source);
       const cart = await addLines(page, [
-        { id: ANCHOR_VARIANT, quantity: 1, selling_plan: SELLING_PLAN, properties },
+        { id: rule.anchorVariant, quantity: rule.anchorMinQuantity, selling_plan: rule.sellingPlan, properties },
         ...rule.targets.map((id) => ({ id, quantity: 1, properties })),
       ]);
-      expectVariantsFree(cart, [...rule.targets]);
+      expectVariantsFree(cart, rule.targets);
     });
   }
 
   test("subscription landing rule fails closed without a selling plan", async ({ page }) => {
-    const properties = landingProperties("nektar-glp1-sk");
+    const nektar = rule("nektar-glp1-shaker-gift");
+    const properties = landingProperties(nektar.source);
     const cart = await addLines(page, [
-      { id: ANCHOR_VARIANT, quantity: 1, properties },
-      { id: FROTHER_VARIANT, quantity: 1, properties },
+      { id: nektar.anchorVariant, quantity: 1, properties },
+      ...nektar.targets.map((id) => ({ id, quantity: 1, properties })),
     ]);
-    expectVariantsPaid(cart, [FROTHER_VARIANT]);
+    expectVariantsPaid(cart, nektar.targets);
   });
 
   test("landing rule does not accept an unscoped target line", async ({ page }) => {
-    const properties = landingProperties("nektar-glp1-sk");
+    const nektar = rule("nektar-glp1-shaker-gift");
+    const properties = landingProperties(nektar.source);
     const cart = await addLines(page, [
-      { id: ANCHOR_VARIANT, quantity: 1, selling_plan: SELLING_PLAN, properties },
-      { id: FROTHER_VARIANT, quantity: 1 },
+      { id: nektar.anchorVariant, quantity: 1, selling_plan: nektar.sellingPlan, properties },
+      ...nektar.targets.map((id) => ({ id, quantity: 1 })),
     ]);
-    expectVariantsPaid(cart, [FROTHER_VARIANT]);
+    expectVariantsPaid(cart, nektar.targets);
   });
 
   test("Planta + Atlas combo requires two scoped anchors and no subscription", async ({ page }) => {
-    const properties = landingProperties("planta-atlas-combo-sk");
-    let cart = await addLines(page, [
-      { id: ANCHOR_VARIANT, quantity: 1, properties },
-      { id: OTG_VARIANT, quantity: 1, properties },
-      { id: GIFT_CARD_VARIANT, quantity: 1, properties },
-    ]);
-    expectVariantsPaid(cart, [OTG_VARIANT, GIFT_CARD_VARIANT]);
+    const combo = rule("landing-scoped-product-mtvt54kq");
+    const properties = landingProperties(combo.source);
+    const targets = combo.targets.map((id) => ({ id, quantity: 1, properties }));
+    let cart = await addLines(page, [{ id: combo.anchorVariant, quantity: 1, properties }, ...targets]);
+    expectVariantsPaid(cart, combo.targets);
 
     await clearCart(page);
-    cart = await addLines(page, [
-      { id: ANCHOR_VARIANT, quantity: 2, properties },
-      { id: OTG_VARIANT, quantity: 1, properties },
-      { id: GIFT_CARD_VARIANT, quantity: 1, properties },
-    ]);
-    expectVariantsFree(cart, [OTG_VARIANT, GIFT_CARD_VARIANT]);
+    cart = await addLines(page, [{ id: combo.anchorVariant, quantity: 2, properties }, ...targets]);
+    expectVariantsFree(cart, combo.targets);
   });
 
-  test("$85 subtotal exposes one selectable free shirt and applies it", async ({ page }) => {
-    await addLines(page, [{ id: ANCHOR_VARIANT, quantity: 1 }]);
+  test("$85 subtotal exposes one selectable free gift and applies it", async ({ page }) => {
+    await addLines(page, [{ id: FALLBACK_ANCHOR, quantity: 1 }]);
 
     const slider = page.locator(".pe-slider-overlay");
     await expect(slider).toBeVisible({ timeout: 10_000 });

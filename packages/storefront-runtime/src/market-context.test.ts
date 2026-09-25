@@ -34,4 +34,11 @@ describe("buildMarketContext", () => {
       { currency: { active: "USD", rate: "1" } },
     )?.id).toBe("gid://shopify/Market/1");
   });
+
+  it("converts the numeric market id Liquid renders into a GID", () => {
+    expect(buildMarketContext(
+      { marketId: 30959829075, marketHandle: "us", countryCode: "US", currency: "USD", locale: "en" },
+      undefined,
+    )?.id).toBe("gid://shopify/Market/30959829075");
+  });
 });

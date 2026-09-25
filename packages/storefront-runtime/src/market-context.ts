@@ -1,5 +1,6 @@
 export interface MarketRuntimeConfig {
-  marketId?: string | null;
+  /** Liquid renders `localization.market.id` as a number; tests and older configs pass a GID. */
+  marketId?: string | number | null;
   marketHandle?: string | null;
   countryCode?: string | null;
   currency: string;
@@ -19,8 +20,9 @@ export function buildMarketContext(
   if (!config.marketId) return null;
 
   const rate = Number(shopify?.currency?.rate);
+  const rawId = String(config.marketId);
   return {
-    id: config.marketId,
+    id: /^\d+$/.test(rawId) ? `gid://shopify/Market/${rawId}` : rawId,
     handle: config.marketHandle ?? "",
     currencyCode: shopify?.currency?.active ?? config.currency,
     countryCode: config.countryCode ?? shopify?.country ?? null,

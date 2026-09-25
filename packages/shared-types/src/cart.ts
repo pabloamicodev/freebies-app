@@ -71,7 +71,11 @@ export const NormalizedCustomerSchema = z.object({
 export type NormalizedCustomer = z.infer<typeof NormalizedCustomerSchema>;
 
 export const MarketContextSchema = z.object({
-  id: z.string(),
+  // Storefront bundles cached before the GID fix send Liquid's numeric market id.
+  id: z.preprocess(
+    (value) => (typeof value === "number" ? `gid://shopify/Market/${value}` : value),
+    z.string(),
+  ),
   handle: z.string(),
   currencyCode: z.string().length(3),
   countryCode: z.string().length(2).nullable(),

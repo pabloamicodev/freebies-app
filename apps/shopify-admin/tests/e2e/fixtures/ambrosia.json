@@ -1,0 +1,113 @@
+{
+  "generatedFrom": "hpn-test-store Ambrosia E2E offers",
+  "rules": [
+    {
+      "key": "nektar-glp1-shaker-gift",
+      "source": "nektar-glp1-sk",
+      "anchorVariant": 45727016157267,
+      "anchorHandle": "nad3-60",
+      "sellingPlan": 6553370707,
+      "anchorMinQuantity": 1,
+      "requiresSubscription": true,
+      "targets": [
+        50539424186451
+      ]
+    },
+    {
+      "key": "landing-nektar-skin-v2",
+      "source": "nektar-skin-v2",
+      "anchorVariant": 45727016157267,
+      "anchorHandle": "nad3-60",
+      "sellingPlan": 6553370707,
+      "anchorMinQuantity": 1,
+      "requiresSubscription": true,
+      "targets": [
+        50539424186451
+      ]
+    },
+    {
+      "key": "landing-kinetic-sk-otg-freegifts",
+      "source": "kinetic-sk-otg",
+      "anchorVariant": 45727020122195,
+      "anchorHandle": "pa7-mediator-mtor-elevation",
+      "sellingPlan": 6553370707,
+      "anchorMinQuantity": 1,
+      "requiresSubscription": true,
+      "targets": [
+        45726990827603,
+        45727000100947
+      ]
+    },
+    {
+      "key": "landing-atlas-sk-otg-freegifts",
+      "source": "atlas-sk-otg",
+      "anchorVariant": null,
+      "anchorHandle": null,
+      "sellingPlan": null,
+      "anchorMinQuantity": 1,
+      "requiresSubscription": true,
+      "targets": [
+        45726990827603,
+        45727000100947,
+        45726992990291
+      ]
+    },
+    {
+      "key": "landing-nektar-sk-otg-freegifts",
+      "source": "nektar-sk-otg",
+      "anchorVariant": 45727016157267,
+      "anchorHandle": "nad3-60",
+      "sellingPlan": 6553370707,
+      "anchorMinQuantity": 1,
+      "requiresSubscription": true,
+      "targets": [
+        45727000100947
+      ]
+    },
+    {
+      "key": "landing-planta-sk-otg-freegifts",
+      "source": "planta-sk-otg",
+      "anchorVariant": 45727016321107,
+      "anchorHandle": "planta-organic-plant-protein",
+      "sellingPlan": 6553370707,
+      "anchorMinQuantity": 1,
+      "requiresSubscription": true,
+      "targets": [
+        45727000100947
+      ]
+    },
+    {
+      "key": "landing-scoped-product-mtvt54kq",
+      "source": "planta-atlas-combo-sk",
+      "anchorVariant": 45727016321107,
+      "anchorHandle": "planta-organic-plant-protein",
+      "sellingPlan": 6553370707,
+      "anchorMinQuantity": 2,
+      "requiresSubscription": false,
+      "targets": [
+        45727000100947,
+        45726990827603
+      ]
+    },
+    {
+      "key": "landing-nektar-sk-special-nfgc10kit",
+      "source": "nektar-sk-special-offer",
+      "anchorVariant": 45727016157267,
+      "anchorHandle": "nad3-60",
+      "sellingPlan": 6553370707,
+      "anchorMinQuantity": 1,
+      "requiresSubscription": true,
+      "targets": [
+        50539424186451
+      ]
+    }
+  ],
+  "subtotalGift": {
+    "variantIds": [
+      45726985879635,
+      45726985912403,
+      45726985945171,
+      45726985977939
+    ]
+  }
+}

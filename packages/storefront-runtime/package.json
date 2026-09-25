@@ -5,8 +5,8 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
-    "build": "node --input-type=module --eval \"import * as esbuild from 'esbuild'; await esbuild.build({ entryPoints: ['src/theme.ts'], outfile: 'dist/promo-engine.js', bundle: true, minify: true, platform: 'browser', format: 'iife', globalName: 'PromoEngine' })\"",
-    "build:dev": "node --input-type=module --eval \"import * as esbuild from 'esbuild'; await esbuild.build({ entryPoints: ['src/theme.ts'], outfile: 'dist/promo-engine.dev.js', bundle: true, platform: 'browser', format: 'iife', globalName: 'PromoEngine', sourcemap: true })\"",
+    "build": "node --input-type=module --eval \"import * as esbuild from 'esbuild'; await esbuild.build({ entryPoints: ['src/theme.ts'], outfile: 'dist/promo-engine.js', bundle: true, minify: true, platform: 'browser', format: 'iife' })\"",
+    "build:dev": "node --input-type=module --eval \"import * as esbuild from 'esbuild'; await esbuild.build({ entryPoints: ['src/theme.ts'], outfile: 'dist/promo-engine.dev.js', bundle: true, platform: 'browser', format: 'iife', sourcemap: true })\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
