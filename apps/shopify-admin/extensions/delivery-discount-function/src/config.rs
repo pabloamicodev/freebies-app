@@ -37,6 +37,7 @@ fn default_anchor_quantity() -> i64 {
 #[serde(rename_all = "camelCase")]
 pub struct ShippingTier {
     pub minimum_subtotal_cents: i64,
+    pub maximum_subtotal_cents: Option<i64>,
     pub discount_type: String,
     pub discount_value: f64,
     pub applies_when: Option<String>,
@@ -45,8 +46,22 @@ pub struct ShippingTier {
 pub fn is_zero_decimal(currency_code: &str) -> bool {
     matches!(
         currency_code,
-        "JPY" | "KRW" | "VND" | "BIF" | "CLP" | "GNF" | "ISK" | "KMF"
-            | "MGA" | "PYG" | "RWF" | "UGX" | "VUV" | "XAF" | "XOF" | "XPF"
+        "JPY"
+            | "KRW"
+            | "VND"
+            | "BIF"
+            | "CLP"
+            | "GNF"
+            | "ISK"
+            | "KMF"
+            | "MGA"
+            | "PYG"
+            | "RWF"
+            | "UGX"
+            | "VUV"
+            | "XAF"
+            | "XOF"
+            | "XPF"
     )
 }
 

@@ -78,6 +78,8 @@ pub struct CompiledOffer {
     pub line_attribute_conditions: Vec<CompiledAttributeCondition>,
     #[serde(default)]
     pub cart_attribute_conditions: Vec<CompiledAttributeCondition>,
+    #[serde(default)]
+    pub page_url_conditions: Vec<CompiledPageUrlCondition>,
 }
 
 fn default_treat_guest_as_no_tags() -> bool {
@@ -128,6 +130,7 @@ pub struct CompiledProductReward {
     pub subscription_mode: String,
     #[serde(default = "default_shipping_scope")]
     pub scope_mode: String,
+    pub required_offer_id: Option<String>,
     pub required_line_attribute_value: Option<String>,
     #[serde(default)]
     pub required_anchor_variant_ids: Vec<String>,
@@ -137,12 +140,38 @@ pub struct CompiledProductReward {
     pub requires_anchor_subscription: bool,
     #[serde(default)]
     pub price_tiers: Vec<ProductPriceTier>,
+    #[serde(default)]
+    pub quantity_tiers: Vec<ProductDiscountTier>,
+    #[serde(default = "default_selection_mode")]
+    pub selection_mode: String,
+    #[serde(default = "default_count_rule")]
+    pub count_rule: String,
     #[serde(default = "default_gift_percentage")]
     pub discount_percentage_on_gifts: f64,
 }
 
 fn default_gift_percentage() -> f64 {
     100.0
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledPageUrlCondition {
+    #[serde(default)]
+    pub patterns: Vec<String>,
+    pub match_mode: String,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    pub param_name: Option<String>,
+    pub param_value: Option<String>,
+}
+
+fn default_count_rule() -> String {
+    "all".to_string()
+}
+
+fn default_selection_mode() -> String {
+    "all".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -154,8 +183,31 @@ pub struct ProductPriceTier {
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct ProductDiscountTier {
+    pub minimum_quantity: i64,
+    pub maximum_quantity: Option<i64>,
+    pub discount_type: String,
+    pub discount_value: f64,
+    pub discounted_quantity: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct CompiledOrderReward {
     pub id: String,
+    pub discount_type: String,
+    pub discount_value: f64,
+    #[serde(default)]
+    pub subtotal_tiers: Vec<OrderSubtotalDiscountTier>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderSubtotalDiscountTier {
+    pub minimum_subtotal_cents: Option<i64>,
+    pub maximum_subtotal_cents: Option<i64>,
+    pub minimum_quantity: Option<i64>,
+    pub maximum_quantity: Option<i64>,
     pub discount_type: String,
     pub discount_value: f64,
 }
@@ -163,8 +215,22 @@ pub struct CompiledOrderReward {
 pub fn is_zero_decimal(currency_code: &str) -> bool {
     matches!(
         currency_code,
-        "JPY" | "KRW" | "VND" | "BIF" | "CLP" | "GNF" | "ISK" | "KMF"
-            | "MGA" | "PYG" | "RWF" | "UGX" | "VUV" | "XAF" | "XOF" | "XPF"
+        "JPY"
+            | "KRW"
+            | "VND"
+            | "BIF"
+            | "CLP"
+            | "GNF"
+            | "ISK"
+            | "KMF"
+            | "MGA"
+            | "PYG"
+            | "RWF"
+            | "UGX"
+            | "VUV"
+            | "XAF"
+            | "XOF"
+            | "XPF"
     )
 }
 

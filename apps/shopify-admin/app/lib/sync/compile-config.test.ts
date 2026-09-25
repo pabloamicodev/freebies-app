@@ -30,6 +30,7 @@ function condition(
     conditionType,
     value,
     operator,
+    scope: "main",
     isEnabled: true,
   } as CompileArgs[1][number];
 }
@@ -51,52 +52,135 @@ describe("compileShippingOfferConfigs", () => {
     const result = compileShippingOfferConfigs(
       offer(),
       [condition("cart_value", { thresholdCents: 1000 })],
-      [shippingReward({
-        value: {
-          amount: 25,
-          currencyCode: "USD",
-          tiers: [
-            {
-              minimumSubtotalCents: 2500,
-              discountType: "percentage",
-              discountValue: 25,
-              appliesWhen: "one_time_only",
-            },
-            {
-              minimumSubtotalCents: 5000,
-              discountType: "fixed_amount",
-              discountValue: 8,
-              appliesWhen: "has_subscription",
-            },
-          ],
-        },
-        target: { deliveryGroupTypes: ["SUBSCRIPTION"] },
-      })],
+      [
+        shippingReward({
+          value: {
+            amount: 25,
+            currencyCode: "USD",
+            tiers: [
+              {
+                minimumSubtotalCents: 2500,
+                maximumSubtotalCents: 4999,
+                discountType: "percentage",
+                discountValue: 25,
+                appliesWhen: "one_time_only",
+              },
+              {
+                minimumSubtotalCents: 5000,
+                discountType: "fixed_amount",
+                discountValue: 8,
+                appliesWhen: "has_subscription",
+              },
+            ],
+          },
+          target: { deliveryGroupTypes: ["SUBSCRIPTION"] },
+        }),
+      ],
     );
 
-    expect(result).toEqual<CompiledShippingOffer[]>([{
-      id: `${OFFER_ID}:${REWARD_ID}`,
-      priority: 7000,
-      targetGroupTypes: ["SUBSCRIPTION"],
-      scopeMode: "sitewide",
-      requiredAnchorVariantIds: [],
-      requiredAnchorMinQuantity: 1,
-      requiresAnchorSubscription: false,
-      tiers: [
+    expect(result).toEqual<CompiledShippingOffer[]>([
+      {
+        id: `${OFFER_ID}:${REWARD_ID}`,
+        priority: 7000,
+        targetGroupTypes: ["SUBSCRIPTION"],
+        scopeMode: "sitewide",
+        requiredAnchorVariantIds: [],
+        requiredAnchorMinQuantity: 1,
+        requiresAnchorSubscription: false,
+        tiers: [
+          {
+            minimumSubtotalCents: 2500,
+            maximumSubtotalCents: 4999,
+            discountType: "percentage",
+            discountValue: 25,
+            appliesWhen: "one_time_only",
+          },
+          {
+            minimumSubtotalCents: 5000,
+            discountType: "fixed_amount",
+            discountValue: 8,
+            appliesWhen: "has_subscription",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("compiles bounded product and order tiers for Rust", () => {
+    const result = compileOfferConfig(
+      offer({ type: "discount" }),
+      [],
+      [
         {
-          minimumSubtotalCents: 2500,
+          id: REWARD_ID,
+          rewardType: "product_discount",
           discountType: "percentage",
-          discountValue: 25,
-          appliesWhen: "one_time_only",
+          value: {
+            amount: 0,
+            currencyCode: "USD",
+            tiers: [
+              {
+                minimumQuantity: 2,
+                maximumQuantity: 4,
+                discountType: "percentage",
+                discountValue: 20,
+                discountedQuantity: 2,
+              },
+            ],
+          },
+          target: {
+            scopeMode: "sitewide",
+            scope: "all_products",
+            selectionMode: "cheapest",
+          },
+          sortOrder: 0,
         },
         {
-          minimumSubtotalCents: 5000,
-          discountType: "fixed_amount",
-          discountValue: 8,
-          appliesWhen: "has_subscription",
+          id: "33333333-3333-4333-8333-333333333333",
+          rewardType: "order_discount",
+          discountType: "percentage",
+          value: {
+            amount: 0,
+            currencyCode: "USD",
+            tiers: [
+              {
+                minimumSubtotalCents: 5_000,
+                maximumSubtotalCents: 9_999,
+                discountType: "fixed_amount",
+                discountValue: 10,
+              },
+            ],
+          },
+          target: { scope: "cart" },
+          sortOrder: 1,
+        },
+      ] as CompileArgs[2],
+      null,
+      1,
+    );
+
+    expect(result.productRewards[0]).toMatchObject({
+      selectionMode: "cheapest",
+      quantityTiers: [
+        {
+          minimumQuantity: 2,
+          maximumQuantity: 4,
+          discountType: "percentage",
+          discountValue: 20,
+          discountedQuantity: 2,
         },
       ],
-    }]);
+    });
+    expect(result.orderRewards[0]).toMatchObject({
+      subtotalTiers: [
+        {
+          minimumSubtotalCents: 5_000,
+          maximumSubtotalCents: 9_999,
+          discountType: "fixed_amount",
+          discountValue: 10,
+        },
+      ],
+    });
   });
 
   it("uses the cart-value condition for a legacy single-value reward", () => {
@@ -109,11 +193,13 @@ describe("compileShippingOfferConfigs", () => {
     expect(result[0]).toMatchObject({
       priority: 2000,
       targetGroupTypes: ["ONE_TIME_PURCHASE", "SUBSCRIPTION"],
-      tiers: [{
-        minimumSubtotalCents: 8500,
-        discountType: "percentage",
-        discountValue: 100,
-      }],
+      tiers: [
+        {
+          minimumSubtotalCents: 8500,
+          discountType: "percentage",
+          discountValue: 100,
+        },
+      ],
     });
   });
 
@@ -129,15 +215,86 @@ describe("compileShippingOfferConfigs", () => {
 });
 
 describe("compileOfferConfig", () => {
+  it("compiles URL paths and query parameters for checkout enforcement", () => {
+    const result = compileOfferConfig(
+      offer({ type: "discount" }),
+      [
+        condition("specific_link", {
+          requiredUrl: "https://store.example/pages/vip?code=summer",
+          paramName: "code",
+          paramValue: "summer sale",
+        }),
+        condition("page_url", {
+          patterns: ["/collections/sale"],
+          matchMode: "starts_with",
+          caseSensitive: false,
+        }),
+      ],
+      [],
+      null,
+      1,
+    );
+    expect(result.pageUrlConditions).toEqual([
+      {
+        patterns: ["/pages/vip"],
+        matchMode: "contains",
+        caseSensitive: false,
+        paramName: "code",
+        paramValue: "summer%20sale",
+      },
+      { patterns: ["/collections/sale"], matchMode: "starts_with", caseSensitive: false },
+    ]);
+  });
+
+  it("keeps visibility metadata out of checkout eligibility", () => {
+    const result = compileOfferConfig(
+      offer({ type: "upsell" }),
+      [
+        {
+          ...condition("cart_value", { thresholdCents: 999_999 }),
+          scope: "visibility",
+        },
+      ],
+      [],
+      null,
+      1,
+    );
+
+    expect(result.cartValueThresholdCents).toBeUndefined();
+  });
+
+  it("does not emit a zero-value Shopify discount for a display-only upsell", () => {
+    const result = compileOfferConfig(
+      offer({ type: "upsell" }),
+      [],
+      [
+        {
+          id: REWARD_ID,
+          rewardType: "upsell_discount",
+          discountType: "percentage",
+          value: { amount: 0, currencyCode: "USD" },
+          target: { variantIds: ["gid://shopify/ProductVariant/target"] },
+          sortOrder: 0,
+        },
+      ] as CompileArgs[2],
+      null,
+      1,
+    );
+
+    expect(result.productRewards).toEqual([]);
+  });
+
   it("compiles per-currency minimum and maximum cart-value bounds", () => {
     const result = compileOfferConfig(
       offer({ type: "gift" }),
-      [condition("cart_value", {
-        thresholdCents: 5000,
-        maxCents: 9999,
-        currencyOverrides: { EUR: 4500 },
-        maxCurrencyOverrides: { EUR: 8999 },
-      })],
+      [
+        condition("cart_value", {
+          thresholdCents: 5000,
+          maxCents: 9999,
+          currencyOverrides: { EUR: 4500 },
+          maxCurrencyOverrides: { EUR: 8999 },
+        }),
+      ],
       [],
       null,
       1,
@@ -207,12 +364,14 @@ describe("compileOfferConfig", () => {
       offer(),
       [
         condition("specific_product", {
-          requirements: [{
-            variantId: "gid://shopify/ProductVariant/trigger",
-            trackMode: "variant",
-            minQuantity: 2,
-            maxQuantity: 3,
-          }],
+          requirements: [
+            {
+              variantId: "gid://shopify/ProductVariant/trigger",
+              trackMode: "variant",
+              minQuantity: 2,
+              maxQuantity: 3,
+            },
+          ],
         }),
         condition("order_history_total_orders", { type: "total_orders", value: 3 }),
         condition("order_history_total_spent", { type: "total_spent", valueCents: 10_000 }, "lt"),
@@ -244,24 +403,30 @@ describe("compileOfferConfig", () => {
       1,
     );
 
-    expect(result.requirements).toEqual([{
-      variantId: "gid://shopify/ProductVariant/trigger",
-      trackMode: "variant",
-      minQuantity: 2,
-      maxQuantity: 3,
-    }]);
-    expect(result.productRewards).toEqual([expect.objectContaining({
-      targetVariantIds: ["gid://shopify/ProductVariant/target"],
-      discountType: "fixed_amount",
-      discountValue: 5,
-      lineQuantityEquals: 1,
-      maxUnitsTotal: 2,
-      subscriptionMode: "one_time_only",
-    })]);
-    expect(result.orderRewards).toEqual([expect.objectContaining({
-      discountType: "percentage",
-      discountValue: 15,
-    })]);
+    expect(result.requirements).toEqual([
+      {
+        variantId: "gid://shopify/ProductVariant/trigger",
+        trackMode: "variant",
+        minQuantity: 2,
+        maxQuantity: 3,
+      },
+    ]);
+    expect(result.productRewards).toEqual([
+      expect.objectContaining({
+        targetVariantIds: ["gid://shopify/ProductVariant/target"],
+        discountType: "fixed_amount",
+        discountValue: 5,
+        lineQuantityEquals: 1,
+        maxUnitsTotal: 2,
+        subscriptionMode: "one_time_only",
+      }),
+    ]);
+    expect(result.orderRewards).toEqual([
+      expect.objectContaining({
+        discountType: "percentage",
+        discountValue: 15,
+      }),
+    ]);
     expect(result.customerOrderCountMin).toBe(3);
     expect(result.customerAmountSpentMaxCents).toBe(9_999);
   });
@@ -334,11 +499,13 @@ describe("shipping reward validation", () => {
       {
         amount: 100,
         currencyCode: "USD",
-        tiers: [{
-          minimumSubtotalCents: 0,
-          discountType: "percentage",
-          discountValue: 101,
-        }],
+        tiers: [
+          {
+            minimumSubtotalCents: 0,
+            discountType: "percentage",
+            discountValue: 101,
+          },
+        ],
       },
       { deliveryGroupTypes: [] },
     );
@@ -351,64 +518,84 @@ describe("product reward scope validation", () => {
   const value = { amount: 100, currencyCode: "USD" };
 
   it("requires the landing marker and rejects landing-only fields on sitewide rewards", () => {
-    expect(validateRewardPayload("product_discount", "percentage", value, {
-      scopeMode: "landing",
-      scope: "cart",
-      requiredLineAttributeKey: "__landing_source",
-      requiredLineAttributeValue: "",
-      subscriptionMode: "any",
-    }).success).toBe(false);
+    expect(
+      validateRewardPayload("product_discount", "percentage", value, {
+        scopeMode: "landing",
+        scope: "cart",
+        requiredLineAttributeKey: "__landing_source",
+        requiredLineAttributeValue: "",
+        subscriptionMode: "any",
+      }).success,
+    ).toBe(false);
 
-    expect(validateRewardPayload("product_discount", "percentage", value, {
-      scopeMode: "sitewide",
-      scope: "cart",
-      subscriptionMode: "any",
-      requiredLineAttributeValue: "forged-landing",
-    }).success).toBe(false);
+    expect(
+      validateRewardPayload("product_discount", "percentage", value, {
+        scopeMode: "sitewide",
+        scope: "cart",
+        subscriptionMode: "any",
+        requiredLineAttributeValue: "forged-landing",
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps quiz rewards property-driven instead of accepting arbitrary product targets", () => {
-    expect(validateRewardPayload("product_discount", "free", value, {
-      scopeMode: "quiz_bundle",
-      scope: "cart",
-      discountPercentageOnGifts: 100,
-      variantIds: ["gid://shopify/ProductVariant/not-allowed"],
-    }).success).toBe(false);
+    expect(
+      validateRewardPayload("product_discount", "free", value, {
+        scopeMode: "quiz_bundle",
+        scope: "cart",
+        discountPercentageOnGifts: 100,
+        variantIds: ["gid://shopify/ProductVariant/not-allowed"],
+      }).success,
+    ).toBe(false);
 
-    expect(validateRewardPayload("product_discount", "free", value, {
-      scopeMode: "quiz_bundle",
-      scope: "cart",
-      discountPercentageOnGifts: 100,
-    }).success).toBe(true);
+    expect(
+      validateRewardPayload("product_discount", "free", value, {
+        scopeMode: "quiz_bundle",
+        scope: "cart",
+        discountPercentageOnGifts: 100,
+      }).success,
+    ).toBe(true);
   });
 
   it("applies strict targets to gifts, orders, bundles, and upsells", () => {
-    expect(validateRewardPayload("product_gift", "free", value, {
-      scope: "cart",
-      variantIds: ["gid://shopify/ProductVariant/gift"],
-      requiredLineAttributeValue: "not-allowed",
-    }).success).toBe(false);
-    expect(validateRewardPayload("order_discount", "percentage", value, {
-      scope: "cart",
-      variantIds: ["gid://shopify/ProductVariant/not-an-order-target"],
-    }).success).toBe(false);
-    expect(validateRewardPayload("bundle_discount", "percentage", value, {
-      variantIds: ["gid://shopify/ProductVariant/bundle"],
-    }).success).toBe(true);
-    expect(validateRewardPayload("upsell_discount", "percentage", value, {
-      variantIds: ["gid://shopify/ProductVariant/upsell"],
-      discountPercentageOnGifts: 100,
-    }).success).toBe(false);
+    expect(
+      validateRewardPayload("product_gift", "free", value, {
+        scope: "cart",
+        variantIds: ["gid://shopify/ProductVariant/gift"],
+        requiredLineAttributeValue: "not-allowed",
+      }).success,
+    ).toBe(false);
+    expect(
+      validateRewardPayload("order_discount", "percentage", value, {
+        scope: "cart",
+        variantIds: ["gid://shopify/ProductVariant/not-an-order-target"],
+      }).success,
+    ).toBe(false);
+    expect(
+      validateRewardPayload("bundle_discount", "percentage", value, {
+        variantIds: ["gid://shopify/ProductVariant/bundle"],
+      }).success,
+    ).toBe(true);
+    expect(
+      validateRewardPayload("upsell_discount", "percentage", value, {
+        variantIds: ["gid://shopify/ProductVariant/upsell"],
+        discountPercentageOnGifts: 100,
+      }).success,
+    ).toBe(false);
   });
 
   it("requires valid Shopify gift GIDs and only one gift product", () => {
-    expect(validateRewardPayload("product_gift", "free", value, {
-      productIds: ["gid://shopify/Product/10", "gid://shopify/Product/20"],
-      variantIds: ["gid://shopify/ProductVariant/11"],
-    }).success).toBe(false);
-    expect(validateRewardPayload("product_gift", "free", value, {
-      productId: "gid://shopify/Product/10",
-      variantIds: ["gid://shopify/ProductVariant/11", "gid://shopify/ProductVariant/12"],
-    }).success).toBe(true);
+    expect(
+      validateRewardPayload("product_gift", "free", value, {
+        productIds: ["gid://shopify/Product/10", "gid://shopify/Product/20"],
+        variantIds: ["gid://shopify/ProductVariant/11"],
+      }).success,
+    ).toBe(false);
+    expect(
+      validateRewardPayload("product_gift", "free", value, {
+        productId: "gid://shopify/Product/10",
+        variantIds: ["gid://shopify/ProductVariant/11", "gid://shopify/ProductVariant/12"],
+      }).success,
+    ).toBe(true);
   });
 });

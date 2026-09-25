@@ -30,6 +30,8 @@ import {
   type CompiledFunctionConfig,
 } from "./compile-config.js";
 import { buildAttributeQueryVariables } from "./attribute-query-variables.js";
+import { syncMarketsForShop } from "./market-sync.server.js";
+import { resolveMarketConditionsToCountries } from "./market-condition-resolution.server.js";
 
 const METAFIELD_NAMESPACE = "promo_engine";
 const METAFIELD_KEY = "function_config";
@@ -120,10 +122,24 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
       ),
   ]);
 
+  const hasMarketConditions = conditionRows.some(
+    (condition) =>
+      condition.isEnabled &&
+      (condition.scope === "main" || condition.scope === "sub") &&
+      condition.conditionType === "markets",
+  );
+  const functionConditionRows = hasMarketConditions
+    ? resolveMarketConditionsToCountries(
+        conditionRows,
+        await syncMarketsForShop(shopId, shopDomain, accessToken),
+      )
+    : conditionRows;
+
   const compiledByOffer = activeOffers
     .sort((a, b) => a.priority - b.priority)
     .map((offer) => {
-      const conditions = conditionRows.filter((c) => c.offerId === offer.id);
+      const conditions = functionConditionRows.filter((c) => c.offerId === offer.id);
+      const versionConditions = conditionRows.filter((c) => c.offerId === offer.id);
       const rewards = rewardRows.filter((r) => r.offerId === offer.id);
       const policy = policyRows.find((p) => p.offerId === offer.id) ?? null;
       return {
@@ -132,7 +148,7 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
           conditions,
           rewards,
           policy,
-          computeOfferVersion(offer, conditions, rewards, policy),
+          computeOfferVersion(offer, versionConditions, rewards, policy),
         ),
         shippingOffers: compileShippingOfferConfigs(offer, conditions, rewards),
       };

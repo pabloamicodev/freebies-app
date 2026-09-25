@@ -77,20 +77,28 @@ describe("buildCartValidationConfig", () => {
 
   it("does not create validation allowances for promotions without gifts", () => {
     const config = buildCartValidationConfig([
-      compiledOffer({ offerType: "discount", productRewards: [{
-        id: "product-reward",
-        targetProductIds: [],
-        targetVariantIds: ["gid://shopify/ProductVariant/99"],
-        discountType: "percentage",
-        discountValue: 10,
-        subscriptionMode: "any",
-        scopeMode: "sitewide",
-        requiredAnchorVariantIds: [],
-        requiredAnchorMinQuantity: 1,
-        requiresAnchorSubscription: false,
-        priceTiers: [],
-        discountPercentageOnGifts: 100,
-      }] }),
+      compiledOffer({
+        offerType: "discount",
+        productRewards: [
+          {
+            id: "product-reward",
+            targetProductIds: [],
+            targetVariantIds: ["gid://shopify/ProductVariant/99"],
+            discountType: "percentage",
+            discountValue: 10,
+            subscriptionMode: "any",
+            scopeMode: "sitewide",
+            requiredAnchorVariantIds: [],
+            requiredAnchorMinQuantity: 1,
+            requiresAnchorSubscription: false,
+            priceTiers: [],
+            quantityTiers: [],
+            selectionMode: "all",
+            countRule: "all",
+            discountPercentageOnGifts: 100,
+          },
+        ],
+      }),
     ]);
 
     expect(config.offerRules).toEqual({});

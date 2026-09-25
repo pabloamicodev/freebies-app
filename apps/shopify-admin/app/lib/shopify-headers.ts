@@ -7,12 +7,12 @@
  *   export { shopifyHeaders as headers } from "~/lib/shopify-headers";
  */
 import type { HeadersFunction } from "react-router";
+import { boundary } from "@shopify/shopify-app-react-router/server";
 
-export const shopifyHeaders: HeadersFunction = ({ loaderHeaders, actionHeaders }) => {
-  // Merge both: action headers take priority (cover POST/redirect flows)
-  const merged = new Headers(loaderHeaders);
-  for (const [key, value] of actionHeaders.entries()) {
-    merged.set(key, value);
-  }
-  return merged;
-};
+/**
+ * Preserve Shopify's auth recovery headers on loader, action, and error
+ * responses. In particular, errorHeaders can contain the App Bridge retry
+ * signal for an expired embedded-session token and must take precedence over
+ * normal loader headers.
+ */
+export const shopifyHeaders: HeadersFunction = (headersArgs) => boundary.headers(headersArgs);

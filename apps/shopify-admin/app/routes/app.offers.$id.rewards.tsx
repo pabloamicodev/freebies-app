@@ -35,9 +35,9 @@ function splitTextareaList(value: string | null): string[] {
   });
 }
 
-function parseShippingTiers(value: FormDataEntryValue | null):
-  | { tiers: ShippingDiscountTier[]; error?: never }
-  | { tiers?: never; error: string } {
+function parseShippingTiers(
+  value: FormDataEntryValue | null,
+): { tiers: ShippingDiscountTier[]; error?: never } | { tiers?: never; error: string } {
   if (typeof value !== "string") return { error: "Configure at least one shipping tier." };
   try {
     const result = ShippingDiscountTierSchema.array().min(1).safeParse(JSON.parse(value));
@@ -67,14 +67,38 @@ function LandingIntegrationContract({ source }: { source: string }) {
     <div className="b-banner b-banner-blue" style={{ marginTop: 14 }}>
       <div className="b-banner-body" style={{ width: "100%" }}>
         <p className="b-banner-title">Landing page integration contract</p>
-        <p className="b-banner-text">Add this line property to every landing-page cart line. The storefront runtime and Rust Function both verify the same value.</p>
-        {[{ label: "Product form", value: productFormSnippet }, { label: "Ajax cart payload", value: ajaxSnippet }].map((snippet) => (
+        <p className="b-banner-text">
+          Add this line property to every landing-page cart line. The storefront runtime and Rust
+          Function both verify the same value.
+        </p>
+        {[
+          { label: "Product form", value: productFormSnippet },
+          { label: "Ajax cart payload", value: ajaxSnippet },
+        ].map((snippet) => (
           <div key={snippet.label} style={{ marginTop: 10 }}>
             <div className="b-row-between" style={{ marginBottom: 4 }}>
               <span className="b-text-sm b-text-bold">{snippet.label}</span>
-              <button type="button" className="b-btn-plain b-text-sm" onClick={() => void navigator.clipboard.writeText(snippet.value)}>Copy code</button>
+              <button
+                type="button"
+                className="b-btn-plain b-text-sm"
+                onClick={() => void navigator.clipboard.writeText(snippet.value)}
+              >
+                Copy code
+              </button>
             </div>
-            <pre style={{ margin: 0, padding: 10, borderRadius: 6, overflowX: "auto", background: "var(--bg)", border: "1px solid var(--border)", fontSize: 12 }}><code>{snippet.value}</code></pre>
+            <pre
+              style={{
+                margin: 0,
+                padding: 10,
+                borderRadius: 6,
+                overflowX: "auto",
+                background: "var(--bg)",
+                border: "1px solid var(--border)",
+                fontSize: 12,
+              }}
+            >
+              <code>{snippet.value}</code>
+            </pre>
           </div>
         ))}
       </div>
@@ -87,7 +111,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const offerId = params["id"]!;
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
-  const rewardRows = await db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
+  const rewardRows = await db
+    .select()
+    .from(offerRewards)
+    .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
 
   return {
     offer,
@@ -117,14 +144,16 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const discountTypeResult = DiscountTypeSchema.safeParse(discountType);
     if (!discountTypeResult.success) return { error: "Discount type is invalid." };
     const rawDiscountValue = formData.get("discountValue");
-    const discountValue = typeof rawDiscountValue === "string" && rawDiscountValue.trim() !== ""
-      ? Number(rawDiscountValue)
-      : 0;
+    const discountValue =
+      typeof rawDiscountValue === "string" && rawDiscountValue.trim() !== ""
+        ? Number(rawDiscountValue)
+        : 0;
     if (!Number.isFinite(discountValue) || discountValue < 0) {
       return { error: "Discount value must be a valid non-negative number." };
     }
     const quantityRaw = formData.get("quantity");
-    const quantity = typeof quantityRaw === "string" && quantityRaw.trim() !== "" ? Number(quantityRaw) : null;
+    const quantity =
+      typeof quantityRaw === "string" && quantityRaw.trim() !== "" ? Number(quantityRaw) : null;
     if (quantity !== null && (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 250)) {
       return { error: "Quantity must be a whole number between 1 and 250." };
     }
@@ -135,12 +164,19 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const rawLabel = formData.get("label");
     const label = typeof rawLabel === "string" && rawLabel.trim() ? rawLabel.trim() : null;
     if (label && label.length > 120) return { error: "Reward label cannot exceed 120 characters." };
-    const currencyCode = String(formData.get("currencyCode") || "USD").trim().toUpperCase();
-    if (!/^[A-Z]{3}$/.test(currencyCode)) return { error: "Currency code must contain exactly 3 letters." };
+    const currencyCode = String(formData.get("currencyCode") || "USD")
+      .trim()
+      .toUpperCase();
+    if (!/^[A-Z]{3}$/.test(currencyCode))
+      return { error: "Currency code must contain exactly 3 letters." };
 
     if (!rewardType) return { error: "Reward type is required." };
 
-    const needsValue = rewardType !== "shipping_discount" && discountType !== "free" && discountType !== "cheapest_item_free" && discountType !== "most_expensive_item_discount";
+    const needsValue =
+      rewardType !== "shipping_discount" &&
+      discountType !== "free" &&
+      discountType !== "cheapest_item_free" &&
+      discountType !== "most_expensive_item_discount";
     if (needsValue && discountValue <= 0) {
       return { error: "Discount value must be greater than 0." };
     }
@@ -158,9 +194,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     let target: Record<string, unknown>;
     let value: Record<string, unknown>;
     if (rewardType === "shipping_discount") {
-      const groupTypesResult = DeliveryGroupTypeSchema.array().min(1).safeParse(
-        formData.getAll("deliveryGroupTypes"),
-      );
+      const groupTypesResult = DeliveryGroupTypeSchema.array()
+        .min(1)
+        .safeParse(formData.getAll("deliveryGroupTypes"));
       if (!groupTypesResult.success) {
         return { error: "Choose at least one delivery group type." };
       }
@@ -175,8 +211,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         ...(scopeMode === "landing"
           ? {
               requiredLineAttributeKey: "__landing_source",
-              requiredLineAttributeValue: String(formData.get("requiredLineAttributeValue") ?? "").trim(),
-              requiredAnchorVariantIds: splitTextareaList(formData.get("requiredAnchorVariantIds") as string | null),
+              requiredLineAttributeValue: String(
+                formData.get("requiredLineAttributeValue") ?? "",
+              ).trim(),
+              requiredAnchorVariantIds: splitTextareaList(
+                formData.get("requiredAnchorVariantIds") as string | null,
+              ),
               requiredAnchorMinQuantity,
               requiresAnchorSubscription: formData.get("requiresAnchorSubscription") === "on",
             }
@@ -195,17 +235,19 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         }
         const productGid = productGids[0]!;
         const [productRows, candidateVariants] = await Promise.all([
-          db.select({ status: productCache.status })
+          db
+            .select({ status: productCache.status })
             .from(productCache)
             .where(and(eq(productCache.shopId, shopId), eq(productCache.productGid, productGid)))
             .limit(1),
-          db.select({
-            variantGid: variantCache.variantGid,
-            availableForSale: variantCache.availableForSale,
-            inventoryQuantity: variantCache.inventoryQuantity,
-            inventoryPolicy: variantCache.inventoryPolicy,
-            requiresSellingPlan: variantCache.requiresSellingPlan,
-          })
+          db
+            .select({
+              variantGid: variantCache.variantGid,
+              availableForSale: variantCache.availableForSale,
+              inventoryQuantity: variantCache.inventoryQuantity,
+              inventoryPolicy: variantCache.inventoryPolicy,
+              requiresSellingPlan: variantCache.requiresSellingPlan,
+            })
             .from(variantCache)
             .where(and(eq(variantCache.shopId, shopId), eq(variantCache.productGid, productGid))),
         ]);
@@ -213,33 +255,38 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           return { error: "The selected gift product must be active in Shopify." };
         }
         const eligibleVariantIds = candidateVariants
-          .filter((variant) =>
-            variant.availableForSale &&
-            !variant.requiresSellingPlan &&
-            (variant.inventoryPolicy === "CONTINUE" || (variant.inventoryQuantity ?? 0) > 0),
+          .filter(
+            (variant) =>
+              variant.availableForSale &&
+              !variant.requiresSellingPlan &&
+              (variant.inventoryPolicy === "CONTINUE" || (variant.inventoryQuantity ?? 0) > 0),
           )
           .map((variant) => variant.variantGid);
         if (eligibleVariantIds.length === 0) {
           return { error: "The selected product has no available one-time-purchase variants." };
         }
         if (eligibleVariantIds.length > 1 && (quantity ?? 1) > eligibleVariantIds.length) {
-          return { error: `Gift quantity cannot exceed the ${eligibleVariantIds.length} available variants.` };
+          return {
+            error: `Gift quantity cannot exceed the ${eligibleVariantIds.length} available variants.`,
+          };
         }
         target = { productId: productGid, variantIds: eligibleVariantIds };
         isAutoAdd = eligibleVariantIds.length === 1;
         isCustomerSelectable = eligibleVariantIds.length > 1;
         trackMode = eligibleVariantIds.length === 1 ? "variant" : "product";
       } else {
-        target = variantGids.length > 0
-          ? { variantIds: variantGids }
-          : { scope: "cart" };
+        target = variantGids.length > 0 ? { variantIds: variantGids } : { scope: "cart" };
       }
       if (rewardType === "product_discount") {
         const lineQuantityEqualsRaw = Number(formData.get("lineQuantityEquals") ?? 0);
         const maxUnitsTotalRaw = Number(formData.get("maxUnitsTotal") ?? 0);
         const subscriptionMode = formData.get("subscriptionMode");
         const productScopeMode = formData.get("productScopeMode");
-        if (productScopeMode !== "sitewide" && productScopeMode !== "landing" && productScopeMode !== "quiz_bundle") {
+        if (
+          productScopeMode !== "sitewide" &&
+          productScopeMode !== "landing" &&
+          productScopeMode !== "quiz_bundle"
+        ) {
           return { error: "Product discount scope is invalid." };
         }
         let priceTiers: Array<{ quantity: number; targetPricePerUnit: number }> = [];
@@ -253,7 +300,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
               const candidate = tier as Record<string, unknown>;
               const tierQuantity = Number(candidate["quantity"]);
               const targetPricePerUnit = Number(candidate["targetPricePerUnit"]);
-              return Number.isInteger(tierQuantity) && tierQuantity > 0 && Number.isFinite(targetPricePerUnit) && targetPricePerUnit >= 0
+              return Number.isInteger(tierQuantity) &&
+                tierQuantity > 0 &&
+                Number.isFinite(targetPricePerUnit) &&
+                targetPricePerUnit >= 0
                 ? [{ quantity: tierQuantity, targetPricePerUnit }]
                 : [];
             });
@@ -277,21 +327,32 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           ...(productScopeMode === "landing"
             ? {
                 requiredLineAttributeKey: "__landing_source",
-                requiredLineAttributeValue: String(formData.get("requiredLineAttributeValue") ?? "").trim(),
-                requiredAnchorVariantIds: splitTextareaList(formData.get("requiredAnchorVariantIds") as string | null),
-                requiredAnchorMinQuantity: Math.max(1, Number(formData.get("requiredAnchorMinQuantity") ?? 1)),
+                requiredLineAttributeValue: String(
+                  formData.get("requiredLineAttributeValue") ?? "",
+                ).trim(),
+                requiredAnchorVariantIds: splitTextareaList(
+                  formData.get("requiredAnchorVariantIds") as string | null,
+                ),
+                requiredAnchorMinQuantity: Math.max(
+                  1,
+                  Number(formData.get("requiredAnchorMinQuantity") ?? 1),
+                ),
                 requiresAnchorSubscription: formData.get("requiresAnchorSubscription") === "on",
                 ...(priceTiers.length ? { priceTiers } : {}),
               }
             : {}),
         };
-        target = productScopeMode === "quiz_bundle"
-          ? {
-              scopeMode: "quiz_bundle",
-              scope: "cart",
-              discountPercentageOnGifts: Math.min(100, Math.max(0, Number(formData.get("discountPercentageOnGifts") ?? 100))),
-            }
-          : ordinaryTarget;
+        target =
+          productScopeMode === "quiz_bundle"
+            ? {
+                scopeMode: "quiz_bundle",
+                scope: "cart",
+                discountPercentageOnGifts: Math.min(
+                  100,
+                  Math.max(0, Number(formData.get("discountPercentageOnGifts") ?? 100)),
+                ),
+              }
+            : ordinaryTarget;
       }
       value = {
         amount: discountType === "percentage" ? discountValue : Math.round(discountValue * 100),
@@ -299,13 +360,19 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       };
     }
     const payloadResult = validateRewardPayload(rewardType, discountType, value, target);
-    if (!payloadResult.success) return { error: payloadResult.error.issues[0]?.message ?? "Reward configuration is invalid." };
+    if (!payloadResult.success)
+      return {
+        error: payloadResult.error.issues[0]?.message ?? "Reward configuration is invalid.",
+      };
 
-    const existing = await db.select({ id: offerRewards.id })
-      .from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
+    const existing = await db
+      .select({ id: offerRewards.id })
+      .from(offerRewards)
+      .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
 
     await db.insert(offerRewards).values({
-      shopId, offerId,
+      shopId,
+      offerId,
       rewardType: rewardTypeResult.data,
       discountType: discountTypeResult.data,
       value,
@@ -317,26 +384,64 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       sortOrder: existing.length,
       label,
     });
-    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+    const publishError = await republishIfActive(
+      db,
+      shopId,
+      session.shop,
+      offerId,
+      offer.status === "active",
+    );
     if (publishError) return { error: publishError };
-    void insertAuditLog(db, { shopId, entityType: "offer_reward", entityId: offerId, action: "add_reward", after: { rewardType, discountType }, performedBy: session.shop });
+    void insertAuditLog(db, {
+      shopId,
+      entityType: "offer_reward",
+      entityId: offerId,
+      action: "add_reward",
+      after: { rewardType, discountType },
+      performedBy: session.shop,
+    });
   }
 
   if (intent === "delete_reward") {
     const rewardId = formData.get("rewardId") as string;
     if (!rewardId) return { error: "Reward ID missing." };
     if (offer.status === "active") {
-      const rewards = await db.select({ id: offerRewards.id })
+      const rewards = await db
+        .select({ id: offerRewards.id })
         .from(offerRewards)
         .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
       if (rewards.length <= 1) {
-        return { error: "Cannot delete the last reward from an active offer. Pause it first or add another reward." };
+        return {
+          error:
+            "Cannot delete the last reward from an active offer. Pause it first or add another reward.",
+        };
       }
     }
-    await db.delete(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId)));
-    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+    await db
+      .delete(offerRewards)
+      .where(
+        and(
+          eq(offerRewards.shopId, shopId),
+          eq(offerRewards.offerId, offerId),
+          eq(offerRewards.id, rewardId),
+        ),
+      );
+    const publishError = await republishIfActive(
+      db,
+      shopId,
+      session.shop,
+      offerId,
+      offer.status === "active",
+    );
     if (publishError) return { error: publishError };
-    void insertAuditLog(db, { shopId, entityType: "offer_reward", entityId: rewardId, action: "delete_reward", before: { offerId }, performedBy: session.shop });
+    void insertAuditLog(db, {
+      shopId,
+      entityType: "offer_reward",
+      entityId: rewardId,
+      action: "delete_reward",
+      before: { offerId },
+      performedBy: session.shop,
+    });
   }
 
   return { success: true };
@@ -358,12 +463,12 @@ const DISCOUNT_TYPES = [
   { label: "Most expensive item discount", value: "most_expensive_item_discount" },
 ];
 
-const GIFT_DISCOUNT_TYPES = DISCOUNT_TYPES.filter((type) =>
-  type.value === "free" || type.value === "percentage" || type.value === "fixed_amount",
+const GIFT_DISCOUNT_TYPES = DISCOUNT_TYPES.filter(
+  (type) => type.value === "free" || type.value === "percentage" || type.value === "fixed_amount",
 );
 
-const ORDER_DISCOUNT_TYPES = DISCOUNT_TYPES.filter((type) =>
-  type.value === "free" || type.value === "percentage" || type.value === "fixed_amount",
+const ORDER_DISCOUNT_TYPES = DISCOUNT_TYPES.filter(
+  (type) => type.value === "free" || type.value === "percentage" || type.value === "fixed_amount",
 );
 
 const REWARD_TYPE_LABELS: Record<string, string> = {
@@ -376,6 +481,7 @@ const REWARD_TYPE_LABELS: Record<string, string> = {
 interface ShippingTierDraft {
   key: string;
   minimumSubtotal: string;
+  maximumSubtotal: string;
   discountType: "percentage" | "fixed_amount";
   discountValue: string;
   appliesWhen: "" | "has_subscription" | "one_time_only";
@@ -390,6 +496,7 @@ interface ProductPriceTierDraft {
 const DEFAULT_SHIPPING_TIER: ShippingTierDraft = {
   key: "shipping-tier-1",
   minimumSubtotal: "0",
+  maximumSubtotal: "",
   discountType: "percentage",
   discountValue: "100",
   appliesWhen: "",
@@ -417,7 +524,9 @@ export default function OfferRewardsPage() {
     requiredAnchorMinQuantity: "1",
     requiresAnchorSubscription: false,
     productScopeMode: "sitewide" as "sitewide" | "landing" | "quiz_bundle",
-    productPriceTiers: [{ key: "product-tier-1", quantity: "1", targetPricePerUnit: "" }] as ProductPriceTierDraft[],
+    productPriceTiers: [
+      { key: "product-tier-1", quantity: "1", targetPricePerUnit: "" },
+    ] as ProductPriceTierDraft[],
   });
   const {
     adding,
@@ -447,10 +556,19 @@ export default function OfferRewardsPage() {
   const setShippingTiers = createFieldSetter(setRewardField, "shippingTiers");
   const setDeliveryGroupTypes = createFieldSetter(setRewardField, "deliveryGroupTypes");
   const setShippingScopeMode = createFieldSetter(setRewardField, "shippingScopeMode");
-  const setRequiredLineAttributeValue = createFieldSetter(setRewardField, "requiredLineAttributeValue");
+  const setRequiredLineAttributeValue = createFieldSetter(
+    setRewardField,
+    "requiredLineAttributeValue",
+  );
   const setRequiredAnchorVariantIds = createFieldSetter(setRewardField, "requiredAnchorVariantIds");
-  const setRequiredAnchorMinQuantity = createFieldSetter(setRewardField, "requiredAnchorMinQuantity");
-  const setRequiresAnchorSubscription = createFieldSetter(setRewardField, "requiresAnchorSubscription");
+  const setRequiredAnchorMinQuantity = createFieldSetter(
+    setRewardField,
+    "requiredAnchorMinQuantity",
+  );
+  const setRequiresAnchorSubscription = createFieldSetter(
+    setRewardField,
+    "requiresAnchorSubscription",
+  );
   const setProductScopeMode = createFieldSetter(setRewardField, "productScopeMode");
   const setProductPriceTiers = createFieldSetter(setRewardField, "productPriceTiers");
 
@@ -468,9 +586,7 @@ export default function OfferRewardsPage() {
     value: string,
   ) {
     setShippingTiers((current) =>
-      current.map((tier, tierIndex) =>
-        tierIndex === index ? { ...tier, [field]: value } : tier,
-      ),
+      current.map((tier, tierIndex) => (tierIndex === index ? { ...tier, [field]: value } : tier)),
     );
   }
 
@@ -485,6 +601,9 @@ export default function OfferRewardsPage() {
   const serializedShippingTiers = JSON.stringify(
     shippingTiers.map((tier) => ({
       minimumSubtotalCents: Math.round(Number(tier.minimumSubtotal || 0) * 100),
+      ...(tier.maximumSubtotal
+        ? { maximumSubtotalCents: Math.round(Number(tier.maximumSubtotal) * 100) }
+        : {}),
       discountType: tier.discountType,
       discountValue: Number(tier.discountValue || 0),
       ...(tier.appliesWhen ? { appliesWhen: tier.appliesWhen } : {}),
@@ -494,7 +613,10 @@ export default function OfferRewardsPage() {
     productPriceTiers.flatMap((tier) => {
       const quantity = Number(tier.quantity);
       const targetPricePerUnit = Number(tier.targetPricePerUnit);
-      return Number.isInteger(quantity) && quantity > 0 && Number.isFinite(targetPricePerUnit) && targetPricePerUnit >= 0
+      return Number.isInteger(quantity) &&
+        quantity > 0 &&
+        Number.isFinite(targetPricePerUnit) &&
+        targetPricePerUnit >= 0
         ? [{ quantity, targetPricePerUnit }]
         : [];
     }),
@@ -505,7 +627,9 @@ export default function OfferRewardsPage() {
       <ProductPicker
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
-        title={rewardType === "product_discount" ? "Select Discounted Variants" : "Select Gift Products"}
+        title={
+          rewardType === "product_discount" ? "Select Discounted Variants" : "Select Gift Products"
+        }
         mode={rewardType === "product_gift" ? "products" : "variants"}
         allowMultiple={rewardType !== "product_gift"}
         selectedIds={selectedGiftGids}
@@ -518,7 +642,15 @@ export default function OfferRewardsPage() {
           title="Rewards / Gifts"
           subtitle={offer.internalName}
           backTo={`/app/offers/${offer.id}/conditions`}
-          actions={<button type="button" className="b-btn b-btn-primary" onClick={() => navigate(`/app/offers/${offer.id}`)}>Widget →</button>}
+          actions={
+            <button
+              type="button"
+              className="b-btn b-btn-primary"
+              onClick={() => navigate(`/app/offers/${offer.id}`)}
+            >
+              Widget →
+            </button>
+          }
         />
 
         {/* ── Action feedback banners ─────────────────────── */}
@@ -536,7 +668,9 @@ export default function OfferRewardsPage() {
           <div className="b-banner b-banner-green b-mb-4">
             <span className="b-banner-icon">✓</span>
             <div className="b-banner-body">
-              <p className="b-banner-text" style={{ margin: 0 }}>Saved successfully.</p>
+              <p className="b-banner-text" style={{ margin: 0 }}>
+                Saved successfully.
+              </p>
             </div>
           </div>
         )}
@@ -547,9 +681,7 @@ export default function OfferRewardsPage() {
             <span className="b-banner-icon">⚠️</span>
             <div className="b-banner-body">
               <p className="b-banner-title">No rewards configured</p>
-              <p className="b-banner-text">
-                Add at least one reward before publishing this offer.
-              </p>
+              <p className="b-banner-text">Add at least one reward before publishing this offer.</p>
             </div>
           </div>
         )}
@@ -579,17 +711,20 @@ export default function OfferRewardsPage() {
                     {r.quantity != null && (
                       <span className="b-text-sm b-text-sub">Qty: {r.quantity}</span>
                     )}
-                    {r.isAutoAdd && (
-                      <span className="b-badge b-badge-blue">Auto-add</span>
-                    )}
+                    {r.isAutoAdd && <span className="b-badge b-badge-blue">Auto-add</span>}
                     {r.isCustomerSelectable && (
                       <span className="b-badge b-badge-orange">Customer selects</span>
                     )}
                   </div>
 
                   {/* Right: delete button */}
-                  <Form method="POST" style={{ flexShrink: 0, marginLeft: 16 }}
-                    onSubmit={(e: React.FormEvent<HTMLFormElement>) => { if (!window.confirm("Remove this reward?")) e.preventDefault(); }}>
+                  <Form
+                    method="POST"
+                    style={{ flexShrink: 0, marginLeft: 16 }}
+                    onSubmit={(e: React.FormEvent<HTMLFormElement>) => {
+                      if (!window.confirm("Remove this reward?")) e.preventDefault();
+                    }}
+                  >
                     <input type="hidden" name="intent" value="delete_reward" />
                     <input type="hidden" name="rewardId" value={r.id} />
                     <button
@@ -646,7 +781,11 @@ export default function OfferRewardsPage() {
                         setRewardType(nextRewardType);
                         setSelectedGiftGids([]);
                         if (nextRewardType === "product_gift") setDiscountType("free");
-                        if (nextRewardType === "order_discount" || nextRewardType === "shipping_discount") setDiscountType("percentage");
+                        if (
+                          nextRewardType === "order_discount" ||
+                          nextRewardType === "shipping_discount"
+                        )
+                          setDiscountType("percentage");
                       }}
                     >
                       {REWARD_TYPES.map((o) => (
@@ -732,12 +871,14 @@ export default function OfferRewardsPage() {
                   )}
 
                   {/* Hidden discount value for fixed/free types */}
-                  {rewardType !== "shipping_discount" && (discountType === "free" || discountType === "cheapest_item_free") && (
-                    <input type="hidden" name="discountValue" value="100" />
-                  )}
-                  {rewardType !== "shipping_discount" && discountType === "most_expensive_item_discount" && (
-                    <input type="hidden" name="discountValue" value="0" />
-                  )}
+                  {rewardType !== "shipping_discount" &&
+                    (discountType === "free" || discountType === "cheapest_item_free") && (
+                      <input type="hidden" name="discountValue" value="100" />
+                    )}
+                  {rewardType !== "shipping_discount" &&
+                    discountType === "most_expensive_item_discount" && (
+                      <input type="hidden" name="discountValue" value="0" />
+                    )}
 
                   {rewardType === "shipping_discount" && (
                     <>
@@ -754,14 +895,17 @@ export default function OfferRewardsPage() {
                           name="shippingScopeMode"
                           className="b-select"
                           value={shippingScopeMode}
-                          onChange={(event) => setShippingScopeMode(event.target.value as typeof shippingScopeMode)}
+                          onChange={(event) =>
+                            setShippingScopeMode(event.target.value as typeof shippingScopeMode)
+                          }
                         >
                           <option value="sitewide">Sitewide subtotal tiers</option>
                           <option value="landing">Landing page line property</option>
                           <option value="quiz_bundle">Complete quiz bundle</option>
                         </select>
                         <p className="b-help">
-                          Scoped landing and quiz offers take precedence over sitewide shipping offers.
+                          Scoped landing and quiz offers take precedence over sitewide shipping
+                          offers.
                         </p>
                       </div>
 
@@ -788,7 +932,9 @@ export default function OfferRewardsPage() {
                                 name="requiredLineAttributeValue"
                                 className="b-input"
                                 value={requiredLineAttributeValue}
-                                onChange={(event) => setRequiredLineAttributeValue(event.target.value)}
+                                onChange={(event) =>
+                                  setRequiredLineAttributeValue(event.target.value)
+                                }
                                 required
                                 autoComplete="off"
                               />
@@ -803,7 +949,9 @@ export default function OfferRewardsPage() {
                                 className="b-input"
                                 rows={3}
                                 value={requiredAnchorVariantIds}
-                                onChange={(event) => setRequiredAnchorVariantIds(event.target.value)}
+                                onChange={(event) =>
+                                  setRequiredAnchorVariantIds(event.target.value)
+                                }
                                 placeholder="Optional, one ProductVariant GID per line"
                                 style={{ resize: "vertical" }}
                               />
@@ -820,7 +968,9 @@ export default function OfferRewardsPage() {
                                 min="1"
                                 step="1"
                                 value={requiredAnchorMinQuantity}
-                                onChange={(event) => setRequiredAnchorMinQuantity(event.target.value)}
+                                onChange={(event) =>
+                                  setRequiredAnchorMinQuantity(event.target.value)
+                                }
                                 required
                                 autoComplete="off"
                               />
@@ -831,9 +981,13 @@ export default function OfferRewardsPage() {
                               type="checkbox"
                               name="requiresAnchorSubscription"
                               checked={requiresAnchorSubscription}
-                              onChange={(event) => setRequiresAnchorSubscription(event.target.checked)}
+                              onChange={(event) =>
+                                setRequiresAnchorSubscription(event.target.checked)
+                              }
                             />
-                            <span className="b-checkbox-label">Require the anchor line to be a subscription</span>
+                            <span className="b-checkbox-label">
+                              Require the anchor line to be a subscription
+                            </span>
                           </label>
                           <LandingIntegrationContract source={requiredLineAttributeValue} />
                         </div>
@@ -852,7 +1006,9 @@ export default function OfferRewardsPage() {
                                 onChange={() => toggleDeliveryGroupType(groupType)}
                               />
                               <span className="b-checkbox-label">
-                                {groupType === "ONE_TIME_PURCHASE" ? "One-time purchase" : "Subscription"}
+                                {groupType === "ONE_TIME_PURCHASE"
+                                  ? "One-time purchase"
+                                  : "Subscription"}
                               </span>
                             </label>
                           ))}
@@ -880,7 +1036,8 @@ export default function OfferRewardsPage() {
                       <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
                         <legend className="b-label">Shipping discount tiers</legend>
                         <p className="b-help">
-                          The highest qualifying subtotal tier wins. Subscription-specific tiers take precedence when the cart contains a subscription.
+                          The highest qualifying subtotal tier wins. Subscription-specific tiers
+                          take precedence when the cart contains a subscription.
                         </p>
                         <div className="b-stack b-stack-3">
                           {shippingTiers.map((tier, index) => (
@@ -901,8 +1058,36 @@ export default function OfferRewardsPage() {
                                     min="0"
                                     step="0.01"
                                     value={tier.minimumSubtotal}
-                                    onChange={(event) => updateShippingTier(index, "minimumSubtotal", event.target.value)}
+                                    onChange={(event) =>
+                                      updateShippingTier(
+                                        index,
+                                        "minimumSubtotal",
+                                        event.target.value,
+                                      )
+                                    }
                                     required
+                                    autoComplete="off"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="b-label" htmlFor={`shipping-maximum-${index}`}>
+                                    Maximum subtotal
+                                  </label>
+                                  <input
+                                    id={`shipping-maximum-${index}`}
+                                    type="number"
+                                    className="b-input"
+                                    min={tier.minimumSubtotal || "0"}
+                                    step="0.01"
+                                    placeholder="No maximum"
+                                    value={tier.maximumSubtotal}
+                                    onChange={(event) =>
+                                      updateShippingTier(
+                                        index,
+                                        "maximumSubtotal",
+                                        event.target.value,
+                                      )
+                                    }
                                     autoComplete="off"
                                   />
                                 </div>
@@ -914,7 +1099,9 @@ export default function OfferRewardsPage() {
                                     id={`shipping-type-${index}`}
                                     className="b-select"
                                     value={tier.discountType}
-                                    onChange={(event) => updateShippingTier(index, "discountType", event.target.value)}
+                                    onChange={(event) =>
+                                      updateShippingTier(index, "discountType", event.target.value)
+                                    }
                                   >
                                     <option value="percentage">Percentage</option>
                                     <option value="fixed_amount">Fixed amount</option>
@@ -922,7 +1109,10 @@ export default function OfferRewardsPage() {
                                 </div>
                                 <div>
                                   <label className="b-label" htmlFor={`shipping-value-${index}`}>
-                                    Discount value {tier.discountType === "percentage" ? "(%)" : `(${currencyCode})`}
+                                    Discount value{" "}
+                                    {tier.discountType === "percentage"
+                                      ? "(%)"
+                                      : `(${currencyCode})`}
                                   </label>
                                   <input
                                     id={`shipping-value-${index}`}
@@ -932,24 +1122,33 @@ export default function OfferRewardsPage() {
                                     max={tier.discountType === "percentage" ? "100" : undefined}
                                     step="0.01"
                                     value={tier.discountValue}
-                                    onChange={(event) => updateShippingTier(index, "discountValue", event.target.value)}
+                                    onChange={(event) =>
+                                      updateShippingTier(index, "discountValue", event.target.value)
+                                    }
                                     required
                                     autoComplete="off"
                                   />
                                 </div>
                                 <div>
-                                  <label className="b-label" htmlFor={`shipping-condition-${index}`}>
+                                  <label
+                                    className="b-label"
+                                    htmlFor={`shipping-condition-${index}`}
+                                  >
                                     Cart composition
                                   </label>
                                   <select
                                     id={`shipping-condition-${index}`}
                                     className="b-select"
                                     value={tier.appliesWhen}
-                                    onChange={(event) => updateShippingTier(index, "appliesWhen", event.target.value)}
+                                    onChange={(event) =>
+                                      updateShippingTier(index, "appliesWhen", event.target.value)
+                                    }
                                   >
                                     <option value="">Any cart</option>
                                     <option value="one_time_only">One-time products only</option>
-                                    <option value="has_subscription">Contains a subscription</option>
+                                    <option value="has_subscription">
+                                      Contains a subscription
+                                    </option>
                                   </select>
                                 </div>
                               </div>
@@ -957,7 +1156,11 @@ export default function OfferRewardsPage() {
                                 <button
                                   type="button"
                                   className="b-btn b-btn-secondary b-btn-sm b-mt-3"
-                                  onClick={() => setShippingTiers((current) => current.filter((_, tierIndex) => tierIndex !== index))}
+                                  onClick={() =>
+                                    setShippingTiers((current) =>
+                                      current.filter((_, tierIndex) => tierIndex !== index),
+                                    )
+                                  }
                                 >
                                   Remove tier
                                 </button>
@@ -968,14 +1171,16 @@ export default function OfferRewardsPage() {
                         <button
                           type="button"
                           className="b-btn b-btn-secondary b-btn-sm b-mt-3"
-                          onClick={() => setShippingTiers((current) => [
-                            ...current,
-                            {
-                              ...DEFAULT_SHIPPING_TIER,
-                              key: `shipping-tier-${Date.now()}-${current.length}`,
-                              minimumSubtotal: "",
-                            },
-                          ])}
+                          onClick={() =>
+                            setShippingTiers((current) => [
+                              ...current,
+                              {
+                                ...DEFAULT_SHIPPING_TIER,
+                                key: `shipping-tier-${Date.now()}-${current.length}`,
+                                minimumSubtotal: "",
+                              },
+                            ])
+                          }
                         >
                           + Add shipping tier
                         </button>
@@ -991,7 +1196,9 @@ export default function OfferRewardsPage() {
                       {/* Product picker */}
                       <div>
                         <p className="b-label" style={{ marginBottom: 8 }}>
-                          {rewardType === "product_discount" ? "Discounted Variants" : "Gift Product"}
+                          {rewardType === "product_discount"
+                            ? "Discounted Variants"
+                            : "Gift Product"}
                         </p>
 
                         {/* Selected GID tags */}
@@ -1010,9 +1217,7 @@ export default function OfferRewardsPage() {
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    setSelectedGiftGids((prev) =>
-                                      prev.filter((g) => g !== gid)
-                                    )
+                                    setSelectedGiftGids((prev) => prev.filter((g) => g !== gid))
                                   }
                                   style={{
                                     background: "none",
@@ -1037,7 +1242,9 @@ export default function OfferRewardsPage() {
                           className="b-btn b-btn-secondary b-btn-sm"
                           onClick={() => setPickerOpen(true)}
                         >
-                          {rewardType === "product_discount" ? "Select Discounted Variants" : "🎁 Select Gift Product"}
+                          {rewardType === "product_discount"
+                            ? "Select Discounted Variants"
+                            : "🎁 Select Gift Product"}
                         </button>
                         <input
                           type="hidden"
@@ -1049,23 +1256,23 @@ export default function OfferRewardsPage() {
                       {/* Manual GID fallback is intentionally restricted to
                           advanced product-discount targeting. Gift products
                           must be resolved from the synced Shopify catalog. */}
-                      {rewardType === "product_discount" && <div>
-                        <label className="b-label" htmlFor="variantGidsManual">
-                          Or paste GIDs manually (one per line)
-                        </label>
-                        <textarea
-                          id="variantGidsManual"
-                          name="variantGidsManual"
-                          className="b-input"
-                          rows={2}
-                          autoComplete="off"
-                          placeholder="gid://shopify/ProductVariant/12345"
-                          style={{ resize: "vertical" }}
-                        />
-                        <p className="b-help">
-                          Optional: paste GIDs directly if you know them.
-                        </p>
-                      </div>}
+                      {rewardType === "product_discount" && (
+                        <div>
+                          <label className="b-label" htmlFor="variantGidsManual">
+                            Or paste GIDs manually (one per line)
+                          </label>
+                          <textarea
+                            id="variantGidsManual"
+                            name="variantGidsManual"
+                            className="b-input"
+                            rows={2}
+                            autoComplete="off"
+                            placeholder="gid://shopify/ProductVariant/12345"
+                            style={{ resize: "vertical" }}
+                          />
+                          <p className="b-help">Optional: paste GIDs directly if you know them.</p>
+                        </div>
+                      )}
 
                       {rewardType === "product_gift" && (
                         <div>
@@ -1091,7 +1298,9 @@ export default function OfferRewardsPage() {
                           <span className="b-banner-icon">✓</span>
                           <div className="b-banner-body">
                             <p className="b-banner-text" style={{ margin: 0 }}>
-                              Gift behavior is automatic: a product with one available variant is added directly; a product with multiple available variants opens the customer gift selector.
+                              Gift behavior is automatic: a product with one available variant is
+                              added directly; a product with multiple available variants opens the
+                              customer gift selector.
                             </p>
                           </div>
                         </div>
@@ -1100,13 +1309,17 @@ export default function OfferRewardsPage() {
                       {rewardType === "product_discount" && (
                         <div className="b-stack b-gap-4">
                           <div>
-                            <label className="b-label" htmlFor="productScopeMode">Discount scope</label>
+                            <label className="b-label" htmlFor="productScopeMode">
+                              Discount scope
+                            </label>
                             <select
                               id="productScopeMode"
                               name="productScopeMode"
                               className="b-select"
                               value={productScopeMode}
-                              onChange={(event) => setProductScopeMode(event.target.value as typeof productScopeMode)}
+                              onChange={(event) =>
+                                setProductScopeMode(event.target.value as typeof productScopeMode)
+                              }
                             >
                               <option value="sitewide">Sitewide / ordinary cart lines</option>
                               <option value="landing">Landing page lines (__landing_source)</option>
@@ -1117,16 +1330,45 @@ export default function OfferRewardsPage() {
                           {productScopeMode !== "quiz_bundle" && (
                             <div className="b-grid-2">
                               <div>
-                                <label className="b-label" htmlFor="lineQuantityEquals">Exact line quantity</label>
-                                <input id="lineQuantityEquals" name="lineQuantityEquals" type="number" className="b-input" min="1" step="1" placeholder="Optional" autoComplete="off" />
+                                <label className="b-label" htmlFor="lineQuantityEquals">
+                                  Exact line quantity
+                                </label>
+                                <input
+                                  id="lineQuantityEquals"
+                                  name="lineQuantityEquals"
+                                  type="number"
+                                  className="b-input"
+                                  min="1"
+                                  step="1"
+                                  placeholder="Optional"
+                                  autoComplete="off"
+                                />
                               </div>
                               <div>
-                                <label className="b-label" htmlFor="maxUnitsTotal">Maximum discounted units</label>
-                                <input id="maxUnitsTotal" name="maxUnitsTotal" type="number" className="b-input" min="1" step="1" placeholder="Optional" autoComplete="off" />
+                                <label className="b-label" htmlFor="maxUnitsTotal">
+                                  Maximum discounted units
+                                </label>
+                                <input
+                                  id="maxUnitsTotal"
+                                  name="maxUnitsTotal"
+                                  type="number"
+                                  className="b-input"
+                                  min="1"
+                                  step="1"
+                                  placeholder="Optional"
+                                  autoComplete="off"
+                                />
                               </div>
                               <div>
-                                <label className="b-label" htmlFor="subscriptionMode">Purchase type</label>
-                                <select id="subscriptionMode" name="subscriptionMode" className="b-select" defaultValue="any">
+                                <label className="b-label" htmlFor="subscriptionMode">
+                                  Purchase type
+                                </label>
+                                <select
+                                  id="subscriptionMode"
+                                  name="subscriptionMode"
+                                  className="b-select"
+                                  defaultValue="any"
+                                >
                                   <option value="any">Any purchase type</option>
                                   <option value="one_time_only">One-time purchase only</option>
                                   <option value="subscription_only">Subscription only</option>
@@ -1140,21 +1382,67 @@ export default function OfferRewardsPage() {
                               <legend className="b-label">Landing anti-abuse scope</legend>
                               <div className="b-stack b-gap-3">
                                 <div>
-                                  <label className="b-label" htmlFor="productLandingSource">Landing source value</label>
-                                  <input id="productLandingSource" name="requiredLineAttributeValue" className="b-input" value={requiredLineAttributeValue} onChange={(event) => setRequiredLineAttributeValue(event.target.value)} required autoComplete="off" placeholder="protein-complete-lp" />
+                                  <label className="b-label" htmlFor="productLandingSource">
+                                    Landing source value
+                                  </label>
+                                  <input
+                                    id="productLandingSource"
+                                    name="requiredLineAttributeValue"
+                                    className="b-input"
+                                    value={requiredLineAttributeValue}
+                                    onChange={(event) =>
+                                      setRequiredLineAttributeValue(event.target.value)
+                                    }
+                                    required
+                                    autoComplete="off"
+                                    placeholder="protein-complete-lp"
+                                  />
                                 </div>
                                 <div>
-                                  <label className="b-label" htmlFor="productAnchorVariants">Anchor variant GIDs (one per line)</label>
-                                  <textarea id="productAnchorVariants" name="requiredAnchorVariantIds" className="b-input" rows={3} value={requiredAnchorVariantIds} onChange={(event) => setRequiredAnchorVariantIds(event.target.value)} />
+                                  <label className="b-label" htmlFor="productAnchorVariants">
+                                    Anchor variant GIDs (one per line)
+                                  </label>
+                                  <textarea
+                                    id="productAnchorVariants"
+                                    name="requiredAnchorVariantIds"
+                                    className="b-input"
+                                    rows={3}
+                                    value={requiredAnchorVariantIds}
+                                    onChange={(event) =>
+                                      setRequiredAnchorVariantIds(event.target.value)
+                                    }
+                                  />
                                 </div>
                                 <div className="b-grid-2">
                                   <div>
-                                    <label className="b-label" htmlFor="productAnchorMinQuantity">Minimum anchor quantity</label>
-                                    <input id="productAnchorMinQuantity" name="requiredAnchorMinQuantity" type="number" className="b-input" min="1" step="1" value={requiredAnchorMinQuantity} onChange={(event) => setRequiredAnchorMinQuantity(event.target.value)} />
+                                    <label className="b-label" htmlFor="productAnchorMinQuantity">
+                                      Minimum anchor quantity
+                                    </label>
+                                    <input
+                                      id="productAnchorMinQuantity"
+                                      name="requiredAnchorMinQuantity"
+                                      type="number"
+                                      className="b-input"
+                                      min="1"
+                                      step="1"
+                                      value={requiredAnchorMinQuantity}
+                                      onChange={(event) =>
+                                        setRequiredAnchorMinQuantity(event.target.value)
+                                      }
+                                    />
                                   </div>
                                   <label className="b-checkbox-row">
-                                    <input type="checkbox" name="requiresAnchorSubscription" checked={requiresAnchorSubscription} onChange={(event) => setRequiresAnchorSubscription(event.target.checked)} />
-                                    <span className="b-checkbox-label">Anchor must be a subscription</span>
+                                    <input
+                                      type="checkbox"
+                                      name="requiresAnchorSubscription"
+                                      checked={requiresAnchorSubscription}
+                                      onChange={(event) =>
+                                        setRequiresAnchorSubscription(event.target.checked)
+                                      }
+                                    />
+                                    <span className="b-checkbox-label">
+                                      Anchor must be a subscription
+                                    </span>
                                   </label>
                                 </div>
                               </div>
@@ -1165,33 +1453,121 @@ export default function OfferRewardsPage() {
                           {productScopeMode === "landing" && discountType === "fixed_price" && (
                             <fieldset className="b-card b-p-4">
                               <legend className="b-label">Quantity price tiers</legend>
-                              <input type="hidden" name="productPriceTiers" value={serializedProductPriceTiers} />
+                              <input
+                                type="hidden"
+                                name="productPriceTiers"
+                                value={serializedProductPriceTiers}
+                              />
                               <div className="b-stack b-gap-3">
                                 {productPriceTiers.map((tier, index) => (
                                   <div className="b-grid-2" key={tier.key}>
                                     <div>
-                                      <label className="b-label" htmlFor={`product-tier-quantity-${index}`}>Quantity</label>
-                                      <input id={`product-tier-quantity-${index}`} className="b-input" type="number" min="1" step="1" value={tier.quantity} onChange={(event) => setProductPriceTiers((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, quantity: event.target.value } : item))} />
+                                      <label
+                                        className="b-label"
+                                        htmlFor={`product-tier-quantity-${index}`}
+                                      >
+                                        Quantity
+                                      </label>
+                                      <input
+                                        id={`product-tier-quantity-${index}`}
+                                        className="b-input"
+                                        type="number"
+                                        min="1"
+                                        step="1"
+                                        value={tier.quantity}
+                                        onChange={(event) =>
+                                          setProductPriceTiers((current) =>
+                                            current.map((item, itemIndex) =>
+                                              itemIndex === index
+                                                ? { ...item, quantity: event.target.value }
+                                                : item,
+                                            ),
+                                          )
+                                        }
+                                      />
                                     </div>
                                     <div>
-                                      <label className="b-label" htmlFor={`product-tier-price-${index}`}>Target price per unit</label>
-                                      <input id={`product-tier-price-${index}`} className="b-input" type="number" min="0" step="0.01" value={tier.targetPricePerUnit} onChange={(event) => setProductPriceTiers((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, targetPricePerUnit: event.target.value } : item))} />
+                                      <label
+                                        className="b-label"
+                                        htmlFor={`product-tier-price-${index}`}
+                                      >
+                                        Target price per unit
+                                      </label>
+                                      <input
+                                        id={`product-tier-price-${index}`}
+                                        className="b-input"
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        value={tier.targetPricePerUnit}
+                                        onChange={(event) =>
+                                          setProductPriceTiers((current) =>
+                                            current.map((item, itemIndex) =>
+                                              itemIndex === index
+                                                ? {
+                                                    ...item,
+                                                    targetPricePerUnit: event.target.value,
+                                                  }
+                                                : item,
+                                            ),
+                                          )
+                                        }
+                                      />
                                     </div>
                                     {productPriceTiers.length > 1 && (
-                                      <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setProductPriceTiers((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Remove tier</button>
+                                      <button
+                                        type="button"
+                                        className="b-btn b-btn-secondary b-btn-sm"
+                                        onClick={() =>
+                                          setProductPriceTiers((current) =>
+                                            current.filter((_, itemIndex) => itemIndex !== index),
+                                          )
+                                        }
+                                      >
+                                        Remove tier
+                                      </button>
                                     )}
                                   </div>
                                 ))}
-                                <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setProductPriceTiers((current) => [...current, { key: `product-tier-${Date.now()}`, quantity: String(current.length + 1), targetPricePerUnit: "" }])}>+ Add price tier</button>
+                                <button
+                                  type="button"
+                                  className="b-btn b-btn-secondary b-btn-sm"
+                                  onClick={() =>
+                                    setProductPriceTiers((current) => [
+                                      ...current,
+                                      {
+                                        key: `product-tier-${Date.now()}`,
+                                        quantity: String(current.length + 1),
+                                        targetPricePerUnit: "",
+                                      },
+                                    ])
+                                  }
+                                >
+                                  + Add price tier
+                                </button>
                               </div>
                             </fieldset>
                           )}
 
                           {productScopeMode === "quiz_bundle" && (
                             <div>
-                              <label className="b-label" htmlFor="discountPercentageOnGifts">Quiz gift discount percentage</label>
-                              <input id="discountPercentageOnGifts" name="discountPercentageOnGifts" type="number" className="b-input" min="0" max="100" step="0.01" defaultValue="100" />
-                              <p className="b-help">Paid components reach _quiz_target_cents only when every expected paid line remains in the cart.</p>
+                              <label className="b-label" htmlFor="discountPercentageOnGifts">
+                                Quiz gift discount percentage
+                              </label>
+                              <input
+                                id="discountPercentageOnGifts"
+                                name="discountPercentageOnGifts"
+                                type="number"
+                                className="b-input"
+                                min="0"
+                                max="100"
+                                step="0.01"
+                                defaultValue="100"
+                              />
+                              <p className="b-help">
+                                Paid components reach _quiz_target_cents only when every expected
+                                paid line remains in the cart.
+                              </p>
                             </div>
                           )}
                         </div>
@@ -1202,8 +1578,7 @@ export default function OfferRewardsPage() {
                   {/* Label */}
                   <div>
                     <label className="b-label" htmlFor="label">
-                      Label{" "}
-                      <span className="b-text-muted b-text-xs">(optional)</span>
+                      Label <span className="b-text-muted b-text-xs">(optional)</span>
                     </label>
                     <input
                       id="label"
@@ -1217,11 +1592,7 @@ export default function OfferRewardsPage() {
 
                   {/* Form actions */}
                   <div className="b-row b-gap-3 b-mt-2">
-                    <button
-                      type="submit"
-                      className="b-btn b-btn-primary"
-                      disabled={isSubmitting}
-                    >
+                    <button type="submit" className="b-btn b-btn-primary" disabled={isSubmitting}>
                       {isSubmitting ? "Adding…" : "Add Reward"}
                     </button>
                     <button

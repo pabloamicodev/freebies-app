@@ -51,31 +51,31 @@ const ALL_SUBCONDITIONS: SubconditionDef[] = [
     id: "subscription",
     name: "Productos de suscripción",
     desc: "Condición con productos de suscripción.",
-    plus: true,
+    plus: false,
   },
   {
     id: "sales_channel",
     name: "Canales de ventas",
     desc: "Condición para la compra de clientes de la aplicación móvil, el canal de venta de POS",
-    plus: true,
+    plus: false,
   },
   {
     id: "markets",
     name: "Mercados",
     desc: "Condición por mercados de Shopify para segmentar por región.",
-    plus: true,
+    plus: false,
   },
   {
     id: "custom_attribute",
     name: "Campo personalizado de la tienda",
     desc: "Condición por una propiedad de línea o atributo del carrito definido por esta tienda.",
-    plus: true,
+    plus: false,
   },
   {
     id: "quantity_limit",
     name: "Límites de cantidad de productos",
     desc: "Limita el regalo según la cantidad de productos específicos en el carrito.",
-    plus: true,
+    plus: false,
   },
 ];
 

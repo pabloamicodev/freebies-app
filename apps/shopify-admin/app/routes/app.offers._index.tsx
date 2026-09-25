@@ -12,7 +12,11 @@ import {
 import { eq, and, like, desc, count, inArray } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
-  IconCopy, IconTrash, IconArchive, IconEye, IconSearch,
+  IconCopy,
+  IconTrash,
+  IconArchive,
+  IconEye,
+  IconSearch,
   SortIcon,
 } from "../components/Icons.js";
 import { AccessibleModal } from "../components/AccessibleModal.js";
@@ -21,7 +25,10 @@ import { OfferToggle } from "../components/BogosSwitch.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
-import { publishShopConfig as publishShopConfigToShopify, validateOffersPublishable } from "../lib/offer-publish-flow.server.js";
+import {
+  publishShopConfig as publishShopConfigToShopify,
+  validateOffersPublishable,
+} from "../lib/offer-publish-flow.server.js";
 import type { OfferCreateModalType } from "../components/offers/OfferCreateModalFlow.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -33,14 +40,22 @@ const OfferCreateModalFlow = lazy(() => import("../components/offers/OfferCreate
 const PAGE_SIZE = 50;
 
 const SORT_COLUMNS = ["internalName", "type", "startsAt", "status", "updatedAt"] as const;
-type SortColumn = typeof SORT_COLUMNS[number];
+type SortColumn = (typeof SORT_COLUMNS)[number];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const timer = createRouteTimer("app.offers._index");
   const { shopId, db } = await timer.time("shop_context", () => getShopContext(request));
   if (!shopId) {
     timer.done({ shopFound: false });
-    return { offers: [], total: 0, page: 1, pageSize: PAGE_SIZE, sortBy: "updatedAt" as SortColumn, sortDir: "desc" as "asc" | "desc", search: "" };
+    return {
+      offers: [],
+      total: 0,
+      page: 1,
+      pageSize: PAGE_SIZE,
+      sortBy: "updatedAt" as SortColumn,
+      sortDir: "desc" as "asc" | "desc",
+      search: "",
+    };
   }
 
   const url = new URL(request.url);
@@ -48,7 +63,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const search = url.searchParams.get("q") ?? "";
   const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10) || 1);
   const rawSortBy = url.searchParams.get("sortBy") ?? "updatedAt";
-  const sortBy: SortColumn = (SORT_COLUMNS as readonly string[]).includes(rawSortBy) ? rawSortBy as SortColumn : "updatedAt";
+  const sortBy: SortColumn = (SORT_COLUMNS as readonly string[]).includes(rawSortBy)
+    ? (rawSortBy as SortColumn)
+    : "updatedAt";
   const sortDir: "asc" | "desc" = url.searchParams.get("sortDir") === "asc" ? "asc" : "desc";
 
   const whereConditions = [eq(offers.shopId, shopId)];
@@ -134,19 +151,40 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     await db.transaction(async (tx) => {
       await Promise.all([
-        tx.delete(analyticsEvents).where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.offerId, offerId))),
-        tx.delete(cartMutationLogs).where(and(eq(cartMutationLogs.shopId, shopId), eq(cartMutationLogs.offerId, offerId))),
-        tx.delete(giftCloneProducts).where(and(eq(giftCloneProducts.shopId, shopId), eq(giftCloneProducts.offerId, offerId))),
-        tx.delete(appSettings).where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, `widget.market_overrides.${offerId}`))),
+        tx
+          .delete(analyticsEvents)
+          .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.offerId, offerId))),
+        tx
+          .delete(cartMutationLogs)
+          .where(and(eq(cartMutationLogs.shopId, shopId), eq(cartMutationLogs.offerId, offerId))),
+        tx
+          .delete(giftCloneProducts)
+          .where(and(eq(giftCloneProducts.shopId, shopId), eq(giftCloneProducts.offerId, offerId))),
+        tx
+          .delete(appSettings)
+          .where(
+            and(
+              eq(appSettings.shopId, shopId),
+              eq(appSettings.key, `widget.market_overrides.${offerId}`),
+            ),
+          ),
         tx.delete(widgets).where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId))),
-        tx.delete(bundleDefinitions).where(and(eq(bundleDefinitions.shopId, shopId), eq(bundleDefinitions.offerId, offerId))),
+        tx
+          .delete(bundleDefinitions)
+          .where(and(eq(bundleDefinitions.shopId, shopId), eq(bundleDefinitions.offerId, offerId))),
       ]);
       await tx.delete(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
     });
 
     const publishError = await publishShopConfig();
     if (publishError) return { error: publishError };
-    void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "delete", performedBy: session.shop });
+    void insertAuditLog(db, {
+      shopId,
+      entityType: "offer",
+      entityId: offerId,
+      action: "delete",
+      performedBy: session.shop,
+    });
     return null;
   }
 
@@ -156,20 +194,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         .select({ id: offers.id, status: offers.status })
         .from(offers)
         .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
-      await db.update(offers)
+      await db
+        .update(offers)
         .set({ status: "paused", updatedAt: new Date() })
         .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
       const publishError = await publishShopConfig();
       if (publishError) {
         // Restore individual statuses inside a transaction so the rollback is also atomic.
         await db.transaction(async (tx) => {
-          await Promise.all(previous.map((row) =>
-            tx.update(offers).set({ status: row.status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, row.id))),
-          ));
+          await Promise.all(
+            previous.map((row) =>
+              tx
+                .update(offers)
+                .set({ status: row.status, updatedAt: new Date() })
+                .where(and(eq(offers.shopId, shopId), eq(offers.id, row.id))),
+            ),
+          );
         });
         return { error: publishError };
       }
-      void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerIds.join(","), action: "bulk_pause", after: { offerIds }, performedBy: session.shop });
+      void insertAuditLog(db, {
+        shopId,
+        entityType: "offer",
+        entityId: offerIds.join(","),
+        action: "bulk_pause",
+        after: { offerIds },
+        performedBy: session.shop,
+      });
       break;
     }
     case "bulk_activate": {
@@ -179,19 +230,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         .select({ id: offers.id, status: offers.status })
         .from(offers)
         .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
-      await db.update(offers)
+      await db
+        .update(offers)
         .set({ status: "active", updatedAt: new Date() })
         .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
       const publishError = await publishShopConfig();
       if (publishError) {
         await db.transaction(async (tx) => {
-          await Promise.all(previous.map((row) =>
-            tx.update(offers).set({ status: row.status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, row.id))),
-          ));
+          await Promise.all(
+            previous.map((row) =>
+              tx
+                .update(offers)
+                .set({ status: row.status, updatedAt: new Date() })
+                .where(and(eq(offers.shopId, shopId), eq(offers.id, row.id))),
+            ),
+          );
         });
         return { error: publishError };
       }
-      void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerIds.join(","), action: "bulk_activate", after: { offerIds }, performedBy: session.shop });
+      void insertAuditLog(db, {
+        shopId,
+        entityType: "offer",
+        entityId: offerIds.join(","),
+        action: "bulk_activate",
+        after: { offerIds },
+        performedBy: session.shop,
+      });
       break;
     }
     case "toggle_status": {
@@ -202,10 +266,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const validation = await validateOffersPublishable(db, shopId, [offerId]);
         if (!validation.ok) return { error: validation.error };
       }
-      await db.update(offers).set({ status: newStatus, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+      await db
+        .update(offers)
+        .set({ status: newStatus, updatedAt: new Date() })
+        .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
       const publishError = await publishShopConfig();
       if (publishError) {
-        await db.update(offers).set({ status: currentStatus as OfferStatus, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+        await db
+          .update(offers)
+          .set({ status: currentStatus as OfferStatus, updatedAt: new Date() })
+          .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
         return { error: publishError };
       }
       break;
@@ -217,10 +287,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         .from(offers)
         .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
         .limit(1);
-      await db.update(offers).set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+      await db
+        .update(offers)
+        .set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() })
+        .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
       const publishError = await publishShopConfig();
       if (publishError && previous) {
-        await db.update(offers).set({ status: previous.status, archivedAt: previous.archivedAt, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+        await db
+          .update(offers)
+          .set({ status: previous.status, archivedAt: previous.archivedAt, updatedAt: new Date() })
+          .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
         return { error: publishError };
       }
       break;
@@ -228,18 +304,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     case "duplicate": {
       const offerId = formData.get("offerId") as string;
       if (!offerId) return { error: "Missing offerId" };
-      const [source] = await db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1);
+      const [source] = await db
+        .select()
+        .from(offers)
+        .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
+        .limit(1);
       if (!source) return { error: "Offer not found" };
-      const [newOffer] = await db.insert(offers).values({
-        ...source,
-        id: undefined as unknown as string,
-        internalName: `${source.internalName}-copy`,
-        status: "draft",
-        compiledConfig: null,
-        archivedAt: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }).returning({ id: offers.id });
+      const [newOffer] = await db
+        .insert(offers)
+        .values({
+          ...source,
+          id: undefined as unknown as string,
+          internalName: `${source.internalName}-copy`,
+          status: "draft",
+          compiledConfig: null,
+          archivedAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning({ id: offers.id });
       if (newOffer) return redirect(`/app/offers/${newOffer.id}`);
       break;
     }
@@ -291,7 +374,6 @@ type ConfirmActionState = {
   offer: Pick<OfferRow, "id" | "internalName">;
 };
 
-
 const TABS = [
   { label: "All", value: "all" },
   { label: "Active", value: "active" },
@@ -316,30 +398,68 @@ function TypeIcon({ type }: { type: string }) {
   return (
     <div className={`b-offer-icon b-offer-icon-${type}`}>
       {type === "gift" && (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/>
-          <line x1="12" y1="22" x2="12" y2="7"/>
-          <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
-          <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="white"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <polyline points="20 12 20 22 4 22 4 12" />
+          <rect x="2" y="7" width="20" height="5" />
+          <line x1="12" y1="22" x2="12" y2="7" />
+          <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" />
+          <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" />
         </svg>
       )}
       {type === "bundle" && (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="2" y="14" width="20" height="8" rx="2"/>
-          <rect x="4" y="9" width="16" height="6" rx="2"/>
-          <rect x="6" y="4" width="12" height="6" rx="2"/>
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="white"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <rect x="2" y="14" width="20" height="8" rx="2" />
+          <rect x="4" y="9" width="16" height="6" rx="2" />
+          <rect x="6" y="4" width="12" height="6" rx="2" />
         </svg>
       )}
       {type === "upsell" && (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M5 12h14"/><path d="M12 5l7 7-7 7"/>
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="white"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M5 12h14" />
+          <path d="M12 5l7 7-7 7" />
         </svg>
       )}
-      {(type !== "gift" && type !== "bundle" && type !== "upsell") && (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-          <line x1="7" y1="7" x2="7.01" y2="7"/>
-          <line x1="9" y1="14" x2="15" y2="8"/>
+      {type !== "gift" && type !== "bundle" && type !== "upsell" && (
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="white"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+          <line x1="7" y1="7" x2="7.01" y2="7" />
+          <line x1="9" y1="14" x2="15" y2="8" />
         </svg>
       )}
     </div>
@@ -348,23 +468,44 @@ function TypeIcon({ type }: { type: string }) {
 function OfferCreateModalFallback({ onClose }: { onClose: () => void }) {
   return (
     <AccessibleModal ariaLabel="Create offer" className="b-modal-sm" onClose={onClose}>
-        <div className="b-modal-header">
-          <h2 className="b-modal-title">Create offer</h2>
-          <button type="button" className="b-modal-close" onClick={onClose} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      <div className="b-modal-header">
+        <h2 className="b-modal-title">Create offer</h2>
+        <button type="button" className="b-modal-close" onClick={onClose} aria-label="Close">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+          >
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div className="b-modal-body">
+        <div className="b-route-loader-mark" aria-hidden="true">
+          <span />
+          <span />
+          <span />
         </div>
-        <div className="b-modal-body">
-          <div className="b-route-loader-mark" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </div>
-        </div>
+      </div>
     </AccessibleModal>
   );
 }
 
 export default function OffersPage() {
-  const { offers: offerRows, total, page, pageSize, sortBy, sortDir, search: loaderSearch } = useLoaderData<typeof loader>();
+  const {
+    offers: offerRows,
+    total,
+    page,
+    pageSize,
+    sortBy,
+    sortDir,
+    search: loaderSearch,
+  } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [bannerVisible, setBannerVisible] = useState(true);
@@ -378,64 +519,88 @@ export default function OffersPage() {
   const duplicateFetcher = useFetcher();
 
   // Modal state
-  const [modal, setModal] = useState<OfferCreateModalType | null>(null);
-  const closeModal = useCallback(() => setModal(null), []);
+  const [modal, setModal] = useState<OfferCreateModalType | null>(
+    searchParams.get("create") === "1" ? "type" : null,
+  );
+  const closeModal = useCallback(() => {
+    setModal(null);
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.delete("create");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [setSearchParams]);
   const openModal = useCallback(() => setModal("type"), []);
   const dismissBanner = useCallback(() => setBannerVisible(false), []);
   const clearChecked = useCallback(() => setCheckedIds(new Set()), []);
 
-  const handleSort = useCallback((col: string) => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (next.get("sortBy") === col) {
-        next.set("sortDir", next.get("sortDir") === "asc" ? "desc" : "asc");
-      } else {
-        next.set("sortBy", col);
-        next.set("sortDir", "asc");
-      }
-      next.set("page", "1");
-      return next;
-    });
-  }, [setSearchParams]);
+  const handleSort = useCallback(
+    (col: string) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        if (next.get("sortBy") === col) {
+          next.set("sortDir", next.get("sortDir") === "asc" ? "desc" : "asc");
+        } else {
+          next.set("sortBy", col);
+          next.set("sortDir", "asc");
+        }
+        next.set("page", "1");
+        return next;
+      });
+    },
+    [setSearchParams],
+  );
 
-  const handleSearchSubmit = useCallback((value: string) => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (value.trim()) next.set("q", value.trim());
-      else next.delete("q");
-      next.set("page", "1");
-      return next;
-    });
-  }, [setSearchParams]);
+  const handleSearchSubmit = useCallback(
+    (value: string) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        if (value.trim()) next.set("q", value.trim());
+        else next.delete("q");
+        next.set("page", "1");
+        return next;
+      });
+    },
+    [setSearchParams],
+  );
 
   const activeTab = searchParams.get("status") ?? "all";
 
   const allOfferIds = useMemo(() => offerRows.map((offer) => offer.id), [offerRows]);
 
-  const deletingId = deleteFetcher.state !== "idle"
-    ? (deleteFetcher.formData?.get("offerId") as string | null)
-    : null;
-  const archivingId = archiveFetcher.state !== "idle"
-    ? (archiveFetcher.formData?.get("offerId") as string | null)
-    : null;
+  const deletingId =
+    deleteFetcher.state !== "idle"
+      ? (deleteFetcher.formData?.get("offerId") as string | null)
+      : null;
+  const archivingId =
+    archiveFetcher.state !== "idle"
+      ? (archiveFetcher.formData?.get("offerId") as string | null)
+      : null;
 
   const visibleOffers = useMemo(
-    () => offerRows.filter((offer) => {
-      if (deletingId && offer.id === deletingId) return false;
-      if (archivingId && offer.id === archivingId && activeTab !== "archived") return false;
-      return true;
-    }),
+    () =>
+      offerRows.filter((offer) => {
+        if (deletingId && offer.id === deletingId) return false;
+        if (archivingId && offer.id === archivingId && activeTab !== "archived") return false;
+        return true;
+      }),
     [activeTab, archivingId, deletingId, offerRows],
   );
 
-  const setTab = useCallback((val: string) => {
-    if (val === "all") {
-      setSearchParams({});
-    } else {
-      setSearchParams({ status: val });
-    }
-    // reset to page 1 on tab change
-  }, [setSearchParams]);
+  const setTab = useCallback(
+    (val: string) => {
+      if (val === "all") {
+        setSearchParams({});
+      } else {
+        setSearchParams({ status: val });
+      }
+      // reset to page 1 on tab change
+    },
+    [setSearchParams],
+  );
 
   const toggleCheck = useCallback((id: string) => {
     setCheckedIds((prev) => {
@@ -462,35 +627,47 @@ export default function OffersPage() {
     setConfirmAction({ type: "delete", offer: { id: offer.id, internalName: offer.internalName } });
   }, []);
 
-  const executeDelete = useCallback((offerId: string) => {
-    const fd = new FormData();
-    fd.append("intent", "delete");
-    fd.append("offerId", offerId);
-    void deleteFetcher.submit(fd, { method: "DELETE" });
-    closeConfirmAction();
-  }, [closeConfirmAction, deleteFetcher]);
+  const executeDelete = useCallback(
+    (offerId: string) => {
+      const fd = new FormData();
+      fd.append("intent", "delete");
+      fd.append("offerId", offerId);
+      void deleteFetcher.submit(fd, { method: "DELETE" });
+      closeConfirmAction();
+    },
+    [closeConfirmAction, deleteFetcher],
+  );
 
   const confirmArchive = useCallback((offer: OfferRow) => {
-    setConfirmAction({ type: "archive", offer: { id: offer.id, internalName: offer.internalName } });
+    setConfirmAction({
+      type: "archive",
+      offer: { id: offer.id, internalName: offer.internalName },
+    });
   }, []);
 
-  const executeArchive = useCallback((offerId: string) => {
-    const fd = new FormData();
-    fd.append("intent", "archive");
-    fd.append("offerId", offerId);
-    void archiveFetcher.submit(fd, { method: "POST" });
-    closeConfirmAction();
-  }, [archiveFetcher, closeConfirmAction]);
+  const executeArchive = useCallback(
+    (offerId: string) => {
+      const fd = new FormData();
+      fd.append("intent", "archive");
+      fd.append("offerId", offerId);
+      void archiveFetcher.submit(fd, { method: "POST" });
+      closeConfirmAction();
+    },
+    [archiveFetcher, closeConfirmAction],
+  );
 
-  const bulkAction = useCallback((intent: "bulk_pause" | "bulk_activate") => {
-    const fd = new FormData();
-    fd.append("intent", intent);
-    for (const id of checkedIds) {
-      fd.append("offerIds[]", id);
-    }
-    void bulkFetcher.submit(fd, { method: "POST" });
-    setCheckedIds(new Set());
-  }, [bulkFetcher, checkedIds]);
+  const bulkAction = useCallback(
+    (intent: "bulk_pause" | "bulk_activate") => {
+      const fd = new FormData();
+      fd.append("intent", intent);
+      for (const id of checkedIds) {
+        fd.append("offerIds[]", id);
+      }
+      void bulkFetcher.submit(fd, { method: "POST" });
+      setCheckedIds(new Set());
+    },
+    [bulkFetcher, checkedIds],
+  );
 
   return (
     <div className="b-page">
@@ -504,7 +681,11 @@ export default function OffersPage() {
       <div className="b-page-header">
         <h1 className="b-page-title">All Offers</h1>
         <div className="b-page-actions">
-          <button type="button" className="b-btn b-btn-secondary" onClick={() => void downloadOffersCsv()}>
+          <button
+            type="button"
+            className="b-btn b-btn-secondary"
+            onClick={() => void downloadOffersCsv()}
+          >
             Export CSV
           </button>
           <button type="button" className="b-btn b-btn-primary" onClick={openModal}>
@@ -518,9 +699,25 @@ export default function OffersPage() {
         <div className="b-banner">
           <div className="b-banner-icon">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="10" fill="#2c6ecb"/>
-              <line x1="12" y1="8" x2="12" y2="12" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-              <line x1="12" y1="16" x2="12.01" y2="16" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+              <circle cx="12" cy="12" r="10" fill="#2c6ecb" />
+              <line
+                x1="12"
+                y1="8"
+                x2="12"
+                y2="12"
+                stroke="white"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+              <line
+                x1="12"
+                y1="16"
+                x2="12.01"
+                y2="16"
+                stroke="white"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
             </svg>
           </div>
           <div className="b-banner-body">
@@ -530,43 +727,84 @@ export default function OffersPage() {
               additional integration work to detect cart changes correctly.
             </p>
           </div>
-          <button type="button" className="b-banner-close" onClick={dismissBanner} aria-label="Dismiss">×</button>
+          <button
+            type="button"
+            className="b-banner-close"
+            onClick={dismissBanner}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
         </div>
       )}
 
       {/* ── Action confirmation dialog ──────────────────────── */}
       {confirmAction && (
-        <AccessibleModal ariaLabel={confirmAction.type === "delete" ? "Delete offer permanently" : "Archive offer"} className="b-modal-sm" onClose={closeConfirmAction}>
-            <div className="b-modal-header">
-              <h2 className="b-modal-title">
-                {confirmAction.type === "delete" ? "Delete offer permanently?" : "Archive offer?"}
-              </h2>
-              <button type="button" className="b-modal-close" onClick={closeConfirmAction} aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-            </div>
-            <div className="b-modal-body">
-              <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0, lineHeight: 1.6 }}>
-                {confirmAction.type === "delete" ? (
-                  <>
-                    This will <strong style={{ color: "var(--text)" }}>permanently delete</strong> the offer and all its data. This action cannot be undone.
-                  </>
-                ) : (
-                  "The offer will be archived and hidden from customers. You can restore it later from the archived view."
-                )}
-                {" "}Offer: {confirmAction.offer.internalName}.
-              </p>
-            </div>
-            <div className="b-modal-footer">
-              <button type="button" className="b-btn b-btn-secondary" onClick={closeConfirmAction}>Cancel</button>
+        <AccessibleModal
+          ariaLabel={confirmAction.type === "delete" ? "Delete offer permanently" : "Archive offer"}
+          className="b-modal-sm"
+          onClose={closeConfirmAction}
+        >
+          <div className="b-modal-header">
+            <h2 className="b-modal-title">
+              {confirmAction.type === "delete" ? "Delete offer permanently?" : "Archive offer?"}
+            </h2>
+            <button
+              type="button"
+              className="b-modal-close"
+              onClick={closeConfirmAction}
+              aria-label="Close"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+              >
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+          <div className="b-modal-body">
+            <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0, lineHeight: 1.6 }}>
               {confirmAction.type === "delete" ? (
-                <button type="button" className="b-btn b-btn-danger" onClick={() => executeDelete(confirmAction.offer.id)}>
-                  Delete permanently
-                </button>
+                <>
+                  This will <strong style={{ color: "var(--text)" }}>permanently delete</strong> the
+                  offer and all its data. This action cannot be undone.
+                </>
               ) : (
-                <button type="button" className="b-btn b-btn-secondary" onClick={() => executeArchive(confirmAction.offer.id)} style={{ borderColor: "#9ca3af" }}>
-                  Archive offer
-                </button>
-              )}
-            </div>
+                "The offer will be archived and hidden from customers. You can restore it later from the archived view."
+              )}{" "}
+              Offer: {confirmAction.offer.internalName}.
+            </p>
+          </div>
+          <div className="b-modal-footer">
+            <button type="button" className="b-btn b-btn-secondary" onClick={closeConfirmAction}>
+              Cancel
+            </button>
+            {confirmAction.type === "delete" ? (
+              <button
+                type="button"
+                className="b-btn b-btn-danger"
+                onClick={() => executeDelete(confirmAction.offer.id)}
+              >
+                Delete permanently
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="b-btn b-btn-secondary"
+                onClick={() => executeArchive(confirmAction.offer.id)}
+                style={{ borderColor: "#9ca3af" }}
+              >
+                Archive offer
+              </button>
+            )}
+          </div>
         </AccessibleModal>
       )}
 
@@ -576,21 +814,24 @@ export default function OffersPage() {
           <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginRight: 4 }}>
             {checkedIds.size} selected
           </span>
-          <button type="button"
+          <button
+            type="button"
             className="b-btn b-btn-secondary b-btn-sm"
             onClick={() => bulkAction("bulk_activate")}
             disabled={bulkFetcher.state !== "idle"}
           >
             Activate
           </button>
-          <button type="button"
+          <button
+            type="button"
             className="b-btn b-btn-secondary b-btn-sm"
             onClick={() => bulkAction("bulk_pause")}
             disabled={bulkFetcher.state !== "idle"}
           >
             Pause
           </button>
-          <button type="button"
+          <button
+            type="button"
             className="b-btn b-btn-plain b-btn-sm"
             style={{ marginLeft: "auto", color: "var(--text-sub)", fontSize: 13 }}
             onClick={clearChecked}
@@ -607,7 +848,8 @@ export default function OffersPage() {
           <ul className="b-tabs-list">
             {TABS.map((tab) => (
               <li key={tab.value}>
-                <button type="button"
+                <button
+                  type="button"
                   className={`b-tab${activeTab === tab.value ? " active" : ""}`}
                   style={{ background: "none", border: "none", cursor: "pointer" }}
                   onClick={() => setTab(tab.value)}
@@ -623,7 +865,13 @@ export default function OffersPage() {
               className="b-btn-icon"
               aria-label={searchOpen ? "Close search" : "Search offers"}
               aria-pressed={searchOpen}
-              onClick={() => { setSearchOpen((o) => !o); if (searchOpen) { setSearchInput(""); handleSearchSubmit(""); } }}
+              onClick={() => {
+                setSearchOpen((o) => !o);
+                if (searchOpen) {
+                  setSearchInput("");
+                  handleSearchSubmit("");
+                }
+              }}
             >
               <IconSearch />
             </button>
@@ -633,7 +881,12 @@ export default function OffersPage() {
         {/* Search input row */}
         {searchOpen && (
           <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border-mid)" }}>
-            <form onSubmit={(e) => { e.preventDefault(); handleSearchSubmit(searchInput); }}>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSearchSubmit(searchInput);
+              }}
+            >
               <input
                 autoFocus
                 type="search"
@@ -641,7 +894,13 @@ export default function OffersPage() {
                 placeholder="Search by offer name…"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Escape") { setSearchOpen(false); setSearchInput(""); handleSearchSubmit(""); } }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setSearchOpen(false);
+                    setSearchInput("");
+                    handleSearchSubmit("");
+                  }
+                }}
                 style={{ width: "100%", maxWidth: 360 }}
               />
             </form>
@@ -662,7 +921,11 @@ export default function OffersPage() {
                 />
               </th>
               <th>
-                <button className="bogos-sort-btn" type="button" onClick={() => handleSort("internalName")}>
+                <button
+                  className="bogos-sort-btn"
+                  type="button"
+                  onClick={() => handleSort("internalName")}
+                >
                   <SortIcon active={sortBy === "internalName" ? sortDir : undefined} />
                   <span>Title</span>
                 </button>
@@ -674,32 +937,59 @@ export default function OffersPage() {
                 </button>
               </th>
               <th>
-                <button className="bogos-sort-btn" type="button" onClick={() => handleSort("startsAt")}>
+                <button
+                  className="bogos-sort-btn"
+                  type="button"
+                  onClick={() => handleSort("startsAt")}
+                >
                   <SortIcon active={sortBy === "startsAt" ? sortDir : undefined} />
                   <span>Start date</span>
                 </button>
               </th>
               <th>
-                <button className="bogos-sort-btn" type="button" onClick={() => handleSort("status")}>
+                <button
+                  className="bogos-sort-btn"
+                  type="button"
+                  onClick={() => handleSort("status")}
+                >
                   <SortIcon active={sortBy === "status" ? sortDir : undefined} />
                   <span>Status</span>
                 </button>
               </th>
-              <th><span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-sub)" }}>On / Off</span></th>
-              <th><span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-sub)" }}>Actions</span></th>
+              <th>
+                <span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-sub)" }}>
+                  On / Off
+                </span>
+              </th>
+              <th>
+                <span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-sub)" }}>
+                  Actions
+                </span>
+              </th>
             </tr>
           </thead>
           <tbody>
             {visibleOffers.length === 0 ? (
               <tr>
                 <td colSpan={7} style={{ textAlign: "center", padding: "48px 24px" }}>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: 12,
+                    }}
+                  >
                     <div style={{ fontSize: 40 }}>🎁</div>
-                    <p style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Create your first promotion</p>
+                    <p style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
+                      Create your first promotion
+                    </p>
                     <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0 }}>
                       Add free gifts, bundles, upsells and discounts to your store.
                     </p>
-                    <button type="button" className="b-btn b-btn-primary" onClick={openModal}>Create offer</button>
+                    <button type="button" className="b-btn b-btn-primary" onClick={openModal}>
+                      Create offer
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -710,7 +1000,12 @@ export default function OffersPage() {
                     <input
                       aria-label={`Select offer ${offer.internalName}`}
                       type="checkbox"
-                      style={{ accentColor: "var(--blue)", width: 15, height: 15, cursor: "pointer" }}
+                      style={{
+                        accentColor: "var(--blue)",
+                        width: 15,
+                        height: 15,
+                        cursor: "pointer",
+                      }}
                       checked={checkedIds.has(offer.id)}
                       onChange={() => toggleCheck(offer.id)}
                     />
@@ -733,7 +1028,9 @@ export default function OffersPage() {
                         )}
                       </div>
                       <div className="bogos-row-reveal" title="Preview">
-                        <span style={{ color: "var(--text-muted)", display: "flex" }}><IconEye /></span>
+                        <span style={{ color: "var(--text-muted)", display: "flex" }}>
+                          <IconEye />
+                        </span>
                       </div>
                     </div>
                   </td>
@@ -783,7 +1080,10 @@ export default function OffersPage() {
                       <button
                         type="button"
                         className="bogos-action-btn"
-                        onClick={(e) => { e.stopPropagation(); confirmArchive(offer); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          confirmArchive(offer);
+                        }}
                         aria-label="Archive offer"
                         title="Archive"
                         style={{ color: "var(--text-sub)" }}
@@ -793,7 +1093,10 @@ export default function OffersPage() {
                       <button
                         type="button"
                         className="bogos-action-btn red"
-                        onClick={(e) => { e.stopPropagation(); confirmDelete(offer); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          confirmDelete(offer);
+                        }}
                         aria-label="Delete offer permanently"
                         title="Delete permanently"
                       >
@@ -809,7 +1112,15 @@ export default function OffersPage() {
 
         {/* ── Pagination ── */}
         {total > pageSize && (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderTop: "1px solid var(--b-border)" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "12px 16px",
+              borderTop: "1px solid var(--b-border)",
+            }}
+          >
             <span style={{ fontSize: 13, color: "var(--b-text-sub)" }}>
               {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}
             </span>

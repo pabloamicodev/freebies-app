@@ -1,5 +1,12 @@
 import {
-  pgTable, uuid, text, integer, boolean, timestamp, jsonb, unique,
+  pgTable,
+  uuid,
+  text,
+  integer,
+  boolean,
+  timestamp,
+  jsonb,
+  unique,
 } from "drizzle-orm/pg-core";
 import { shops } from "./shops";
 import { offers } from "./offers";
@@ -77,6 +84,8 @@ export const bundleTiers = pgTable("bundle_tiers", {
     .notNull()
     .references(() => bundleDefinitions.id, { onDelete: "cascade" }),
   minQuantity: integer("min_quantity").notNull(),
+  /** Optional inclusive upper bound for this tier. */
+  maxQuantity: integer("max_quantity"),
   label: text("label").notNull(),
   discountType: discountTypeEnum("discount_type").notNull(),
   /** Discount value — JSONB for multi-currency: { default: 10, USD: 10, EUR: 9 } */

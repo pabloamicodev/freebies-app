@@ -34,16 +34,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
     const [activeOffersResult, orderEventRows] = await Promise.all([
-      db.select({ count: count() }).from(offers)
+      db
+        .select({ count: count() })
+        .from(offers)
         .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")))
         .catch(() => [{ count: 0 }]),
-      db.select({ orderId: analyticsEvents.orderId, properties: analyticsEvents.properties })
+      db
+        .select({ orderId: analyticsEvents.orderId, properties: analyticsEvents.properties })
         .from(analyticsEvents)
-        .where(and(
-          eq(analyticsEvents.shopId, shopId),
-          eq(analyticsEvents.eventName, "order_placed_attributed"),
-          gte(analyticsEvents.occurredAt, since30d),
-        ))
+        .where(
+          and(
+            eq(analyticsEvents.shopId, shopId),
+            eq(analyticsEvents.eventName, "order_placed_attributed"),
+            gte(analyticsEvents.occurredAt, since30d),
+          ),
+        )
         .orderBy(desc(analyticsEvents.occurredAt))
         .limit(2000)
         .catch(() => []),
@@ -95,27 +100,64 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 function IconCheck() {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-      <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      <path
+        d="M2 6l3 3 5-5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
 function IconChevron() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 18l6-6-6-6"/>
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9 18l6-6-6-6" />
     </svg>
   );
 }
 
 const DASHBOARD_SUPPORT_LINKS = [
-  { icon: "📋", title: "Installation status", desc: "Check theme setup and extension status", href: "/app/settings/installation" },
-  { icon: "🪲", title: "Error logs", desc: "Review recent errors reported by the app", href: "/app/logs" },
-  { icon: "🩺", title: "Diagnostics", desc: "Inspect sync status and run manual checks", href: "/app/diagnostics" },
+  {
+    icon: "📋",
+    title: "Installation status",
+    desc: "Check theme setup and extension status",
+    href: "/app/settings/installation",
+  },
+  {
+    icon: "🪲",
+    title: "Error logs",
+    desc: "Review recent errors reported by the app",
+    href: "/app/logs",
+  },
+  {
+    icon: "🩺",
+    title: "Diagnostics",
+    desc: "Inspect sync status and run manual checks",
+    href: "/app/diagnostics",
+  },
 ];
 
-
 export default function Dashboard() {
-  const { activeOffers, shopDisplayName, currencyCode, totalSalesCents, orderCount, avgOrderCents, warnings } = useLoaderData<typeof loader>();
+  const {
+    activeOffers,
+    shopDisplayName,
+    currencyCode,
+    totalSalesCents,
+    orderCount,
+    avgOrderCents,
+    warnings,
+  } = useLoaderData<typeof loader>();
   const [showOnboarding, setShowOnboarding] = useState(true);
 
   const fmt = getDashboardCurrencyFormatter(currencyCode);
@@ -124,19 +166,25 @@ export default function Dashboard() {
 
   const embedVerified = !warnings.some((w) => w.code === "app_embed_not_verified");
 
-  const onboardingSteps = useMemo(() => [
-    { label: "Enable Promo Engine in themes", done: embedVerified },
-    { label: "Create your first offer", done: activeOffers > 0 },
-    { label: "Check the offer in your Online Store", done: false },
-    { label: "Customize the appearance", done: false },
-  ], [activeOffers, embedVerified]);
+  const onboardingSteps = useMemo(
+    () => [
+      { label: "Enable Promo Engine in themes", done: embedVerified },
+      { label: "Create your first offer", done: activeOffers > 0 },
+      { label: "Check the offer in your Online Store", done: false },
+      { label: "Customize the appearance", done: false },
+    ],
+    [activeOffers, embedVerified],
+  );
   const completedSteps = onboardingSteps.filter((s) => s.done).length;
   const progressPct = Math.round((completedSteps / onboardingSteps.length) * 100);
-  const statsRows = useMemo(() => [
-    { label: "Total sales (30d)", value: totalSalesFmt },
-    { label: "Average order value (30d)", value: avgOrderFmt },
-    { label: "Orders with gifts (30d)", value: String(orderCount) },
-  ], [totalSalesFmt, avgOrderFmt, orderCount]);
+  const statsRows = useMemo(
+    () => [
+      { label: "Total sales (30d)", value: totalSalesFmt },
+      { label: "Average order value (30d)", value: avgOrderFmt },
+      { label: "Orders with gifts (30d)", value: String(orderCount) },
+    ],
+    [totalSalesFmt, avgOrderFmt, orderCount],
+  );
   const dismissOnboarding = useCallback(() => setShowOnboarding(false), []);
 
   return (
@@ -194,7 +242,15 @@ export default function Dashboard() {
       {/* ── Welcome + Stats row ──────────────────────────────── */}
       <div className="b-mb-4" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         {/* Welcome card */}
-        <div className="b-card b-card-body" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div
+          className="b-card b-card-body"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
           <div>
             <h2 style={{ fontSize: 18, fontWeight: 700, margin: "0 0 6px", color: "var(--text)" }}>
               Welcome to Promo Engine, {shopDisplayName}
@@ -202,7 +258,9 @@ export default function Dashboard() {
             <p style={{ fontSize: 14, color: "var(--text-sub)", margin: "0 0 16px" }}>
               Create an offer and increase your AOV now
             </p>
-            <Link to="/app/offers/new" className="b-btn b-btn-primary">Create offer</Link>
+            <Link to="/app/offers?create=1" className="b-btn b-btn-primary">
+              Create offer
+            </Link>
           </div>
           {/* Person + boxes illustration */}
           <div style={{ position: "relative", width: 120, height: 140, flexShrink: 0 }}>
@@ -224,7 +282,9 @@ export default function Dashboard() {
 
         {/* Stats overview */}
         <div className="b-card b-card-body">
-          <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 16px", color: "var(--text)" }}>Overview</p>
+          <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 16px", color: "var(--text)" }}>
+            Overview
+          </p>
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
             {statsRows.map((row, i) => (
               <div
@@ -238,7 +298,9 @@ export default function Dashboard() {
                 }}
               >
                 <span style={{ fontSize: 14, color: "var(--text)" }}>{row.label}</span>
-                <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>{row.value}</span>
+                <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>
+                  {row.value}
+                </span>
               </div>
             ))}
           </div>
@@ -251,9 +313,18 @@ export default function Dashboard() {
           <div className="b-card-body">
             <div className="b-row-between" style={{ marginBottom: 4 }}>
               <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Getting Started Guide</h3>
-              <button type="button"
+              <button
+                type="button"
                 onClick={dismissOnboarding}
-                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-sub)", fontSize: 18, lineHeight: 1, padding: "2px 4px" }}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--text-sub)",
+                  fontSize: 18,
+                  lineHeight: 1,
+                  padding: "2px 4px",
+                }}
                 aria-label="Dismiss"
               >
                 ×
@@ -268,7 +339,9 @@ export default function Dashboard() {
             <div className="b-checklist">
               {onboardingSteps.map((step) => (
                 <div key={step.label} className="b-check-item">
-                  <div className={`b-check-circle ${step.done ? "b-check-circle-done" : "b-check-circle-todo"}`}>
+                  <div
+                    className={`b-check-circle ${step.done ? "b-check-circle-done" : "b-check-circle-todo"}`}
+                  >
                     {step.done && <IconCheck />}
                   </div>
                   <span className="b-check-text">{step.label}</span>
@@ -279,7 +352,6 @@ export default function Dashboard() {
         </div>
       )}
 
-
       {/* ── Support ──────────────────────────────────────────── */}
       <div className="b-card">
         <div className="b-card-body">
@@ -287,12 +359,16 @@ export default function Dashboard() {
           <div className="b-support-grid">
             {DASHBOARD_SUPPORT_LINKS.map((link) => (
               <a key={link.title} href={link.href} className="b-support-card">
-                <div className="b-support-icon" style={{ background: "var(--border-light)" }}>{link.icon}</div>
+                <div className="b-support-icon" style={{ background: "var(--border-light)" }}>
+                  {link.icon}
+                </div>
                 <div>
                   <div className="b-support-title">{link.title}</div>
                   <div className="b-support-desc">{link.desc}</div>
                 </div>
-                <div className="b-support-chevron"><IconChevron /></div>
+                <div className="b-support-chevron">
+                  <IconChevron />
+                </div>
               </a>
             ))}
           </div>

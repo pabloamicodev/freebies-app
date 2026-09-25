@@ -6,6 +6,7 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { NavMenu } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
+import { shopifyHeaders } from "../lib/shopify-headers.js";
 import type { LoaderFunctionArgs, HeadersFunction } from "react-router";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 import bogosStyles from "../styles/bogos.css?url";
@@ -17,9 +18,7 @@ export const links: LinksFunction = () => [
 ];
 
 // Required for Shopify embedded app auth with React Router v7 single-fetch
-export const headers: HeadersFunction = (headersArgs) => {
-  return headersArgs.loaderHeaders;
-};
+export const headers: HeadersFunction = shopifyHeaders;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const timer = createRouteTimer("app");

@@ -16,6 +16,7 @@ import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
 import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
 import { initGiftSlider } from "./widgets/gift-slider.js";
 import { initFbtWidget } from "./widgets/fbt.js";
+import { initBundleBuilder } from "./widgets/bundle-builder.js";
 import { buildMarketContext } from "./market-context.js";
 import type { EvaluationResult, CartAction } from "./types.js";
 
@@ -103,7 +104,8 @@ class PromoEngineRuntime {
     // Dawn: exposes <cart-drawer> web component → section rendering works natively
     // Others: we rely on patchFetch to capture the theme's own section IDs at runtime
     const hasDawnDrawer = !!document.querySelector("cart-drawer");
-    if (hasDawnDrawer) this.log("[PromoEngine] Cart component: cart-drawer web component (Dawn-style)");
+    if (hasDawnDrawer)
+      this.log("[PromoEngine] Cart component: cart-drawer web component (Dawn-style)");
   }
 
   private listenForCartChanges(): void {
@@ -141,23 +143,26 @@ class PromoEngineRuntime {
         // Themes include sections in add/update responses (or in separate GET /cart?sections=…).
         // We capture the section IDs so refreshCartUI can reuse them later.
         const cloned = response.clone();
-        cloned.json().then((data: unknown) => {
-          if (
-            !this.refreshGuard &&
-            data !== null &&
-            typeof data === "object" &&
-            "sections" in (data as object)
-          ) {
-            const s = (data as { sections?: Record<string, unknown> }).sections ?? {};
-            const htmlKeys = Object.keys(s).filter(
-              (k) => typeof s[k] === "string" && (s[k] as string).length > 0,
-            );
-            if (htmlKeys.length > 0) {
-              this.capturedThemeSectionIds = htmlKeys;
-              this.log("Theme section IDs captured:", htmlKeys.join(", "));
+        cloned
+          .json()
+          .then((data: unknown) => {
+            if (
+              !this.refreshGuard &&
+              data !== null &&
+              typeof data === "object" &&
+              "sections" in (data as object)
+            ) {
+              const s = (data as { sections?: Record<string, unknown> }).sections ?? {};
+              const htmlKeys = Object.keys(s).filter(
+                (k) => typeof s[k] === "string" && (s[k] as string).length > 0,
+              );
+              if (htmlKeys.length > 0) {
+                this.capturedThemeSectionIds = htmlKeys;
+                this.log("Theme section IDs captured:", htmlKeys.join(", "));
+              }
             }
-          }
-        }).catch(() => {});
+          })
+          .catch(() => {});
 
         if (isCartMutation && !this.refreshGuard) {
           this.log(`[PromoEngine] Cart mutation detected (${url}) — scheduling evaluation`);
@@ -197,7 +202,7 @@ class PromoEngineRuntime {
     // ── Tier 2: Scan DOM for cart-related section wrappers ────────────────
     const CART_KEYWORDS = ["cart", "drawer", "mini"];
     const domSections: Array<{ sectionId: string; selector: string }> = [];
-    document.querySelectorAll("[id^=\"shopify-section-\"]").forEach((el) => {
+    document.querySelectorAll('[id^="shopify-section-"]').forEach((el) => {
       const sectionId = el.id.replace("shopify-section-", "");
       if (CART_KEYWORDS.some((kw) => sectionId.toLowerCase().includes(kw))) {
         domSections.push({ sectionId, selector: `#${el.id}` });
@@ -206,12 +211,12 @@ class PromoEngineRuntime {
 
     // ── Tier 3: Hardcoded well-known cart section targets ────────────────
     const COMMON: Array<{ sectionId: string; selector: string }> = [
-      { sectionId: "cart-drawer",      selector: "#CartDrawer" },
-      { sectionId: "cart-drawer",      selector: "#shopify-section-cart-drawer" },
+      { sectionId: "cart-drawer", selector: "#CartDrawer" },
+      { sectionId: "cart-drawer", selector: "#shopify-section-cart-drawer" },
       { sectionId: "cart-icon-bubble", selector: "#cart-icon-bubble" },
-      { sectionId: "mini-cart",        selector: "#mini-cart" },
-      { sectionId: "mini-cart",        selector: "[data-section-id=\"mini-cart\"]" },
-      { sectionId: "cart",             selector: "#shopify-section-cart" },
+      { sectionId: "mini-cart", selector: "#mini-cart" },
+      { sectionId: "mini-cart", selector: '[data-section-id="mini-cart"]' },
+      { sectionId: "cart", selector: "#shopify-section-cart" },
     ];
 
     // Tier 0 has highest priority; dedup and keep only DOM-present targets
@@ -232,15 +237,15 @@ class PromoEngineRuntime {
     if (allTargets.length > 0) {
       const sectionIds = [...new Set(allTargets.map((t) => t.sectionId))];
       try {
-        const resp = await this.savedFetch(
-          `/cart?sections=${sectionIds.join(",")}`,
-          { headers: { Accept: "application/json" } },
-        );
+        const resp = await this.savedFetch(`/cart?sections=${sectionIds.join(",")}`, {
+          headers: { Accept: "application/json" },
+        });
         if (resp.ok) {
-          const data = await resp.json() as { sections?: Record<string, string> };
+          const data = (await resp.json()) as { sections?: Record<string, string> };
           this.log(
             "refreshCartUI — section render response keys:",
-            Object.keys(data.sections ?? {}).join(", ") || "none (Shopify returned plain cart JSON — section IDs not valid for this theme)",
+            Object.keys(data.sections ?? {}).join(", ") ||
+              "none (Shopify returned plain cart JSON — section IDs not valid for this theme)",
           );
           if (data.sections) {
             let updated = 0;
@@ -258,7 +263,9 @@ class PromoEngineRuntime {
               updated++;
             }
             if (updated > 0) {
-              this.log(`[PromoEngine] Cart UI refreshed via section rendering (${updated} element(s))`);
+              this.log(
+                `[PromoEngine] Cart UI refreshed via section rendering (${updated} element(s))`,
+              );
               return;
             }
           }
@@ -297,7 +304,11 @@ class PromoEngineRuntime {
     }
 
     const qualifyingSubtotal = cart.items_subtotal_price ?? cart.total_price;
-    this.log("[PromoEngine] Evaluating cart —", cart.items.map(i => `${i.title} ×${i.quantity}`).join(", ") || "empty", `| subtotal: $${(qualifyingSubtotal / 100).toFixed(2)}`);
+    this.log(
+      "[PromoEngine] Evaluating cart —",
+      cart.items.map((i) => `${i.title} ×${i.quantity}`).join(", ") || "empty",
+      `| subtotal: $${(qualifyingSubtotal / 100).toFixed(2)}`,
+    );
 
     const signal = this.evaluationAbort.start();
 
@@ -334,7 +345,12 @@ class PromoEngineRuntime {
 
       const actions = Array.isArray(result.cartActions) ? result.cartActions : [];
       if (actions.length > 0) {
-        this.log("[PromoEngine] Cart actions to apply:", actions.map(a => `${a.action}(${a.variantId ?? a.lineKey ?? ""}×${a.quantity ?? 0})`).join(", "));
+        this.log(
+          "[PromoEngine] Cart actions to apply:",
+          actions
+            .map((a) => `${a.action}(${a.variantId ?? a.lineKey ?? ""}×${a.quantity ?? 0})`)
+            .join(", "),
+        );
       } else {
         this.log("[PromoEngine] Evaluation complete — no cart actions");
       }
@@ -345,7 +361,6 @@ class PromoEngineRuntime {
       }
       if (options.emitResult !== false) emit(PromoEvents.EvaluationCompleted, result);
       return result;
-
     } catch (e: unknown) {
       if ((e as Error).name === "AbortError") {
         this.log("Evaluation aborted (superseded by newer request)");
@@ -358,18 +373,21 @@ class PromoEngineRuntime {
   }
 
   private async applyCartActions(actions: CartAction[]): Promise<void> {
-
     for (const action of actions) {
       try {
         switch (action.action) {
           case "add_line": {
             if (!action.variantId) break;
-            this.log(`[PromoEngine] → add_line variantId=${action.variantId} qty=${action.quantity ?? 1}`);
-            await AjaxCartAdapter.addLines([{
-              variantId: action.variantId,
-              quantity: action.quantity ?? 1,
-              properties: action.properties ?? {},
-            }]);
+            this.log(
+              `[PromoEngine] → add_line variantId=${action.variantId} qty=${action.quantity ?? 1}`,
+            );
+            await AjaxCartAdapter.addLines([
+              {
+                variantId: action.variantId,
+                quantity: action.quantity ?? 1,
+                properties: action.properties ?? {},
+              },
+            ]);
             emit(PromoEvents.GiftAutoAdded, {
               variantId: action.variantId,
               quantity: action.quantity,
@@ -383,12 +401,22 @@ class PromoEngineRuntime {
           }
 
           case "update_line": {
-            this.log(`[PromoEngine] → update_line key=${action.lineKey ?? "?"} qty=${action.quantity ?? 1}`);
+            this.log(
+              `[PromoEngine] → update_line key=${action.lineKey ?? "?"} qty=${action.quantity ?? 1}`,
+            );
             const freshCart = await fetchFreshCart();
-            const currentLine = freshCart.items.find((item) => item.key === action.lineKey)
-              ?? (action.offerId ? findGiftLineByOfferId(freshCart, action.offerId) : null);
-            const lineKey = currentLine?.key
-              ?? (action.variantId ? resolveLineKey(freshCart, parseInt(action.variantId.split("/").pop() ?? action.variantId, 10), action.properties ?? {}) : null);
+            const currentLine =
+              freshCart.items.find((item) => item.key === action.lineKey) ??
+              (action.offerId ? findGiftLineByOfferId(freshCart, action.offerId) : null);
+            const lineKey =
+              currentLine?.key ??
+              (action.variantId
+                ? resolveLineKey(
+                    freshCart,
+                    parseInt(action.variantId.split("/").pop() ?? action.variantId, 10),
+                    action.properties ?? {},
+                  )
+                : null);
             if (!lineKey) break;
             if (action.quantity === 0) {
               await AjaxCartAdapter.removeLine({ key: lineKey });
@@ -410,12 +438,22 @@ class PromoEngineRuntime {
           }
 
           case "remove_line": {
-            this.log(`[PromoEngine] → remove_line key=${action.lineKey ?? "?"} reason=${action.reason ?? "offer_disqualified"}`);
+            this.log(
+              `[PromoEngine] → remove_line key=${action.lineKey ?? "?"} reason=${action.reason ?? "offer_disqualified"}`,
+            );
             const freshCart = await fetchFreshCart();
-            const currentLine = freshCart.items.find((item) => item.key === action.lineKey)
-              ?? (action.offerId ? findGiftLineByOfferId(freshCart, action.offerId) : null);
-            const lineKey = currentLine?.key
-              ?? (action.variantId ? resolveLineKey(freshCart, parseInt(action.variantId.split("/").pop() ?? action.variantId, 10), action.properties ?? {}) : null);
+            const currentLine =
+              freshCart.items.find((item) => item.key === action.lineKey) ??
+              (action.offerId ? findGiftLineByOfferId(freshCart, action.offerId) : null);
+            const lineKey =
+              currentLine?.key ??
+              (action.variantId
+                ? resolveLineKey(
+                    freshCart,
+                    parseInt(action.variantId.split("/").pop() ?? action.variantId, 10),
+                    action.properties ?? {},
+                  )
+                : null);
             if (!lineKey) break;
             await AjaxCartAdapter.removeLine({ key: lineKey });
             emit(PromoEvents.GiftRemoved, { lineKey });
@@ -441,20 +479,22 @@ class PromoEngineRuntime {
 
   private buildCartHash(cart: CartData): string {
     const parts = [
-      ...cart.items.map((item) => {
-        const properties = Object.entries(item.properties ?? {})
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([key, value]) => `${key}=${String(value)}`)
-          .join(",");
-        return [
-          item.key,
-          item.variant_id,
-          item.quantity,
-          item.final_price ?? item.price,
-          item.final_line_price ?? item.line_price ?? item.price * item.quantity,
-          properties,
-        ].join(":");
-      }).sort(),
+      ...cart.items
+        .map((item) => {
+          const properties = Object.entries(item.properties ?? {})
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, value]) => `${key}=${String(value)}`)
+            .join(",");
+          return [
+            item.key,
+            item.variant_id,
+            item.quantity,
+            item.final_price ?? item.price,
+            item.final_line_price ?? item.line_price ?? item.price * item.quantity,
+            properties,
+          ].join(":");
+        })
+        .sort(),
       String(cart.items_subtotal_price ?? cart.total_price),
       ...(cart.discount_codes?.map((discount) => discount.code).sort() ?? []),
       cart.currency,
@@ -528,6 +568,7 @@ declare global {
     // Called directly by theme blocks (fbt.liquid) that mount a widget into a
     // specific container rather than reacting to a runtime-wide event.
     initFbtWidget?: typeof initFbtWidget;
+    initBundleBuilder?: typeof initBundleBuilder;
   }
 }
 
@@ -542,6 +583,7 @@ function initRuntime() {
   // Exposed as its own global (not nested under PromoEngine) because blocks
   // like fbt.liquid poll for `window.initFbtWidget` directly.
   window.initFbtWidget = initFbtWidget;
+  window.initBundleBuilder = initBundleBuilder;
   initGiftSlider(getOrCreateSessionId());
   runtime.init();
 }

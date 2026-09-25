@@ -13,34 +13,44 @@ import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
 import { statusForSubmit } from "../lib/offer-scheduling.server.js";
-import { parseDateRange, parseInteger, parseJsonStringArray, parseMoneyAmount, requiredText } from "../lib/offer-validation.server.js";
+import {
+  parseDateRange,
+  parseInteger,
+  parseJsonRecord,
+  parseJsonStringArray,
+  parseMoneyAmount,
+  requiredText,
+} from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { SelectedProductsList } from "../components/SelectedProductsList.js";
+import { OfferConditionsBuilder } from "../components/OfferConditionsBuilder.js";
+import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
+import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 // ─── Slug → internal template ID ─────────────────────────────────────────────
 
 const SLUG_TO_TEMPLATE: Record<string, string> = {
-  "checkout": "checkout",
-  "fbt": "fbt",
+  checkout: "checkout",
+  fbt: "fbt",
   "thank-you": "thank_you",
 };
 
 // ─── Default internal names by slug ──────────────────────────────────────────
 
 const SLUG_DEFAULT_NAME: Record<string, string> = {
-  "checkout": "Checkout Upsell #1",
-  "fbt": "Frequently Bought Together",
+  checkout: "Checkout Upsell #1",
+  fbt: "Frequently Bought Together",
   "thank-you": "Thank You Upsell",
 };
 
 const UPSELL_PAGE_TITLES: Record<string, string> = {
-  "checkout": "Create Checkout upsell",
-  "fbt": "Create upsell",
+  checkout: "Create Checkout upsell",
+  fbt: "Create upsell",
   "thank-you": "Create a thank-you page to boost sales",
 };
 
@@ -55,7 +65,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
-  const { shopId, db } = context;
+  const { shopId, db, session } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
@@ -74,12 +84,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const upsellMethod = (formData.get("upsellMethod") as string) || "manual";
   const widgetType = (formData.get("widgetType") as string) || "fbt";
   const discountEnabled = formData.get("discountEnabled") === "on";
-  const discountMinProductsResult = parseInteger(formData, "discountMinProducts", 2, { min: 1, label: "Discount minimum products" });
+  const discountMinProductsResult = parseInteger(formData, "discountMinProducts", 2, {
+    min: 1,
+    label: "Discount minimum products",
+  });
   if (discountMinProductsResult.error) return { error: discountMinProductsResult.error };
   const discountMinProducts = discountMinProductsResult.data!;
   const discountApplyTo = (formData.get("discountApplyTo") as string) || "any";
   const discountType = (formData.get("discountType") as string) || "percentage";
-  const discountValueResult = parseMoneyAmount(formData, "discountValue", 10, { min: 0, max: discountType === "percentage" ? 100 : undefined, label: "Discount value" });
+  const discountValueResult = parseMoneyAmount(formData, "discountValue", 10, {
+    min: 0,
+    max: discountType === "percentage" ? 100 : undefined,
+    label: "Discount value",
+  });
   if (discountValueResult.error) return { error: discountValueResult.error };
   const discountValue = discountValueResult.data!;
   const allowCustomerQty = formData.get("allowCustomerQty") === "true";
@@ -93,12 +110,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "publish" && upsellProducts.length === 0) {
     return { error: "Select at least one upsell product before publishing." };
   }
+  const triggerProductsResult = parseJsonStringArray(formData, "triggerProducts");
+  if (triggerProductsResult.error) return { error: triggerProductsResult.error };
+  const triggerProducts = triggerProductsResult.data!;
+  if (
+    intent === "publish" &&
+    ["product", "product_selected", "product_except"].includes(triggerType) &&
+    triggerProducts.length === 0
+  ) {
+    return { error: "Select at least one trigger product before publishing." };
+  }
+  const subconditionsResult = parseJsonRecord(formData, "subconditions");
+  if (subconditionsResult.error) return { error: subconditionsResult.error };
+  const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!);
+  if (!normalizedSubconditions.success) return { error: normalizedSubconditions.error };
+  const normalizedSubconditionRows = normalizedSubconditions.data;
 
   const status = statusForSubmit(intent, startsAt);
 
   const rewardAmount =
-    discountType === "percentage" ? discountValue
-    : Math.round(discountValue * 100);
+    templateRaw === "fbt" && !discountEnabled
+      ? 0
+      : discountType === "percentage"
+        ? discountValue
+        : Math.round(discountValue * 100);
+  const hasPositiveTrigger = ["product", "product_selected"].includes(triggerType);
+  const triggerRequirements = triggerProducts.map((id) => ({
+    ...(id.includes("/ProductVariant/") ? { variantId: id } : { productId: id }),
+    trackMode: id.includes("/ProductVariant/") ? ("variant" as const) : ("product" as const),
+    minQuantity: 1,
+  }));
 
   // Offer + its children are created atomically — a mid-sequence failure must
   // not leave an orphan offer row. The unique-name retry wraps the whole tx
@@ -125,6 +166,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         tx.insert(offerConditions).values({
           shopId,
           offerId: offer.id,
+          scope: "main",
+          conditionType: hasPositiveTrigger ? "specific_product" : "cart_quantity",
+          operator: "gte",
+          value: hasPositiveTrigger
+            ? { requirements: triggerRequirements, multiplyByGroups: false }
+            : { minQuantity: 1, includeGiftValues: false },
+          sortOrder: 0,
+          isEnabled: true,
+        }),
+        tx.insert(offerConditions).values({
+          shopId,
+          offerId: offer.id,
           scope: "visibility",
           conditionType: "sales_channels",
           operator: "eq",
@@ -139,16 +192,56 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             discountMinProducts: templateRaw === "fbt" ? discountMinProducts : undefined,
             discountApplyTo: templateRaw === "fbt" ? discountApplyTo : undefined,
           },
-          sortOrder: 0,
+          sortOrder: 1,
           isEnabled: true,
         }),
+        ...normalizedSubconditionRows.map((subcondition, index) =>
+          tx.insert(offerConditions).values({
+            shopId,
+            offerId: offer.id,
+            scope: "sub",
+            conditionType: subcondition.conditionType,
+            operator: subcondition.operator,
+            value: subcondition.value,
+            sortOrder: index + 2,
+            isEnabled: true,
+          }),
+        ),
+        ...(triggerType === "product_except"
+          ? [
+              tx.insert(offerConditions).values({
+                shopId,
+                offerId: offer.id,
+                scope: "sub",
+                conditionType: "exclude_products",
+                operator: "in",
+                value: {
+                  productIds: triggerProducts.filter((id) => id.includes("/Product/")),
+                  variantIds: triggerProducts.filter((id) => id.includes("/ProductVariant/")),
+                },
+                sortOrder: normalizedSubconditionRows.length + 2,
+                isEnabled: true,
+              }),
+            ]
+          : []),
         tx.insert(offerRewards).values({
           shopId,
           offerId: offer.id,
           rewardType: "upsell_discount",
-          discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
+          discountType: discountType as
+            | "percentage"
+            | "fixed_amount"
+            | "fixed_price"
+            | "free"
+            | "cheapest_item_free"
+            | "most_expensive_item_discount",
           value: { amount: rewardAmount, currencyCode: "USD" },
-          target: { variantIds: upsellProducts },
+          target: {
+            scopeMode: "sitewide",
+            scope: "cart",
+            productIds: upsellProducts.filter((id) => id.includes("/Product/")),
+            variantIds: upsellProducts.filter((id) => id.includes("/ProductVariant/")),
+          },
           isAutoAdd: false,
           isCustomerSelectable: true,
           trackMode: "product",
@@ -179,12 +272,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (!newOffer) return { error: "Failed to create offer" };
+  const publishError = await finalizeCreatedOffer(db, shopId, session.shop, newOffer.id, status);
+  if (publishError) return { error: publishError };
 
   return redirect(`/app/offers/${newOffer.id}`);
 };
 
 // ─── Component ───────────────────────────────────────────────────────────────
-
 
 export default function NewUpsellOfferPage() {
   const actionData = useActionData<typeof action>();
@@ -223,7 +317,9 @@ export default function NewUpsellOfferPage() {
     combinesOrderDiscounts: true,
     combinesShippingDiscounts: true,
     advancedOpen: false,
-    infoBannerDismissed: typeof window !== "undefined" && window.localStorage.getItem("upsell_banner_dismissed") === "1",
+    infoBannerDismissed:
+      typeof window !== "undefined" &&
+      window.localStorage.getItem("upsell_banner_dismissed") === "1",
     fieldErrors: {} as { internalName?: string },
     showToast: false,
     toastMsg: "",
@@ -295,7 +391,6 @@ export default function NewUpsellOfferPage() {
     return true;
   }
 
-
   // ── Page title ───────────────────────────────────────────────────────────
   const pageTitle = UPSELL_PAGE_TITLES[templateSlug] ?? "Create upsell";
 
@@ -305,7 +400,6 @@ export default function NewUpsellOfferPage() {
   const isThankYou = templateSlug === "thank-you";
   return (
     <div className="b-page">
-
       {/* ── Header ── */}
       <div style={{ marginBottom: 28 }}>
         <button
@@ -314,18 +408,52 @@ export default function NewUpsellOfferPage() {
           style={{ display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 14 }}
           onClick={() => void navigate("/app/offers")}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15 18l-6-6 6-6"/>
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M15 18l-6-6 6-6" />
           </svg>
           All Offers
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
           <div className="rd-style-054">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="white"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
+              <polyline points="17 6 23 6 23 12" />
+            </svg>
           </div>
           <div>
-            <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, color: "var(--text)", lineHeight: 1.2 }}>{pageTitle}</h1>
-            <div style={{ fontSize: 12, color: "var(--text-sub)", marginTop: 2 }}>Configure your upsell offer</div>
+            <h1
+              style={{
+                margin: 0,
+                fontFamily: "var(--font-display)",
+                fontSize: 22,
+                fontWeight: 700,
+                color: "var(--text)",
+                lineHeight: 1.2,
+              }}
+            >
+              {pageTitle}
+            </h1>
+            <div style={{ fontSize: 12, color: "var(--text-sub)", marginTop: 2 }}>
+              Configure your upsell offer
+            </div>
           </div>
           <span className="rd-style-055">Upsell</span>
         </div>
@@ -339,14 +467,21 @@ export default function NewUpsellOfferPage() {
               Quick tour: How to create an upsell
             </div>
             <div style={{ fontSize: 13, color: "var(--text-sub)" }}>
-              <a href="https://help.secomapp.com" className="b-btn b-btn-plain" style={{ color: "var(--upsell-color)", textDecoration: "underline" }}>
+              <a
+                href="https://help.secomapp.com"
+                className="b-btn b-btn-plain"
+                style={{ color: "var(--upsell-color)", textDecoration: "underline" }}
+              >
                 Get familiar with our tour or learn more in our onboarding guide.
               </a>
             </div>
           </div>
           <button
             type="button"
-            onClick={() => { setInfoBannerDismissed(true); localStorage.setItem("upsell_banner_dismissed", "1"); }}
+            onClick={() => {
+              setInfoBannerDismissed(true);
+              localStorage.setItem("upsell_banner_dismissed", "1");
+            }}
             className="rd-style-057"
             aria-label="Close"
           >
@@ -355,7 +490,13 @@ export default function NewUpsellOfferPage() {
         </div>
       )}
 
-      <Form method="POST" onChange={markDirty} onSubmit={(e: React.FormEvent<HTMLFormElement>) => { if (!validate()) e.preventDefault(); }}>
+      <Form
+        method="POST"
+        onChange={markDirty}
+        onSubmit={(e: React.FormEvent<HTMLFormElement>) => {
+          if (!validate()) e.preventDefault();
+        }}
+      >
         <input type="hidden" name="template" value={templateId} />
         <input type="hidden" name="triggerType" value={triggerType} />
         <input type="hidden" name="triggerProducts" value={JSON.stringify(triggerProducts)} />
@@ -363,66 +504,123 @@ export default function NewUpsellOfferPage() {
         <input type="hidden" name="widgetType" value={widgetType} />
         <input type="hidden" name="allowCustomerQty" value={String(allowCustomerQty)} />
         <input type="hidden" name="upsellProducts" value={JSON.stringify(upsellProducts)} />
-        <input type="hidden" name="combinesOrderDiscounts" value={combinesOrderDiscounts ? "on" : "off"} />
-        <input type="hidden" name="combinesShippingDiscounts" value={combinesShippingDiscounts ? "on" : "off"} />
+        <input
+          type="hidden"
+          name="combinesOrderDiscounts"
+          value={combinesOrderDiscounts ? "on" : "off"}
+        />
+        <input
+          type="hidden"
+          name="combinesShippingDiscounts"
+          value={combinesShippingDiscounts ? "on" : "off"}
+        />
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-
           {/* ── Left column ── */}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-
             {/* ── Card: Información de venta adicional ── */}
             <div className="b-card" style={{ borderTop: "3px solid var(--upsell-color)" }}>
-              <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
+              <div
+                className="b-card-header"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  position: "relative",
+                  overflow: "hidden",
+                }}
+              >
                 <div className="rd-style-058">1</div>
-                <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Upsell information</span>
+                <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>
+                  Upsell information
+                </span>
                 <span className="rd-style-059">1</span>
               </div>
-              <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div
+                className="b-card-body"
+                style={{ display: "flex", flexDirection: "column", gap: 14 }}
+              >
                 <div>
-                  <label className="b-label" htmlFor="internalName">Upsell name</label>
+                  <label className="b-label" htmlFor="internalName">
+                    Upsell name
+                  </label>
                   <input
-                    id="internalName" className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`} name="internalName"
-                    value={internalName} onChange={(e) => setInternalName(e.target.value)}
-                    autoComplete="off" placeholder="e.g., Checkout Upsell #1"
+                    id="internalName"
+                    className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`}
+                    name="internalName"
+                    value={internalName}
+                    onChange={(e) => setInternalName(e.target.value)}
+                    autoComplete="off"
+                    placeholder="e.g., Checkout Upsell #1"
                   />
                   <div className="b-help">Internal use only, not shown to customers.</div>
                 </div>
 
                 <div>
-                  <label className="b-label" htmlFor="publicTitle">Upsell title <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(shown to customers)</span></label>
+                  <label className="b-label" htmlFor="publicTitle">
+                    Upsell title{" "}
+                    <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>
+                      (shown to customers)
+                    </span>
+                  </label>
                   <input
-                    id="publicTitle" className="b-input" name="publicTitle"
-                    value={publicTitle} onChange={(e) => setPublicTitle(e.target.value)}
-                    autoComplete="off" placeholder="e.g., Complete your order"
+                    id="publicTitle"
+                    className="b-input"
+                    name="publicTitle"
+                    value={publicTitle}
+                    onChange={(e) => setPublicTitle(e.target.value)}
+                    autoComplete="off"
+                    placeholder="e.g., Complete your order"
                   />
                 </div>
 
                 {/* FBT-only: description field */}
                 {isFbt && (
                   <div>
-                    <label className="b-label" htmlFor="description">Upsell description <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(optional)</span></label>
+                    <label className="b-label" htmlFor="description">
+                      Upsell description{" "}
+                      <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>(optional)</span>
+                    </label>
                     <input
-                      id="description" className="b-input" name="description"
-                      value={description} onChange={(e) => setDescription(e.target.value)}
-                      autoComplete="off" placeholder=""
+                      id="description"
+                      className="b-input"
+                      name="description"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      autoComplete="off"
+                      placeholder=""
                     />
                   </div>
                 )}
 
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <div>
-                    <label className="b-label" htmlFor="startsAt">Start time <span style={{ fontWeight: 400, color: "var(--text-sub)", fontSize: 11 }}>(your local timezone)</span></label>
+                    <label className="b-label" htmlFor="startsAt">
+                      Start time{" "}
+                      <span style={{ fontWeight: 400, color: "var(--text-sub)", fontSize: 11 }}>
+                        (your local timezone)
+                      </span>
+                    </label>
                     <input
-                      id="startsAt" className="b-input" type="datetime-local" name="startsAt"
-                      value={startsAt} onChange={(e) => setStartsAt(e.target.value)}
+                      id="startsAt"
+                      className="b-input"
+                      type="datetime-local"
+                      name="startsAt"
+                      value={startsAt}
+                      onChange={(e) => setStartsAt(e.target.value)}
                     />
                   </div>
                   <div>
-                    <label className="b-label" htmlFor="endsAt">End time</label>
+                    <label className="b-label" htmlFor="endsAt">
+                      End time
+                    </label>
                     <input
-                      id="endsAt" className="b-input" type="datetime-local" name="endsAt"
-                      value={endsAt} onChange={(e) => setEndsAt(e.target.value)}
+                      id="endsAt"
+                      className="b-input"
+                      type="datetime-local"
+                      name="endsAt"
+                      value={endsAt}
+                      onChange={(e) => setEndsAt(e.target.value)}
                     />
                   </div>
                 </div>
@@ -431,12 +629,26 @@ export default function NewUpsellOfferPage() {
 
             {/* ── Card: Upsell trigger ── */}
             <div className="b-card" style={{ borderTop: "3px solid var(--upsell-color)" }}>
-              <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
+              <div
+                className="b-card-header"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  position: "relative",
+                  overflow: "hidden",
+                }}
+              >
                 <div className="rd-style-058">2</div>
-                <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Upsell trigger</span>
+                <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>
+                  Upsell trigger
+                </span>
                 <span className="rd-style-059">2</span>
               </div>
-              <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div
+                className="b-card-body"
+                style={{ display: "flex", flexDirection: "column", gap: 10 }}
+              >
                 {isFbt ? (
                   <>
                     {[
@@ -444,11 +656,20 @@ export default function NewUpsellOfferPage() {
                       { value: "product_selected", label: "Selected products" },
                       { value: "product_except", label: "All except selected products" },
                       { value: "collection_selected", label: "Selected collections/types/vendors" },
-                      { value: "collection_except", label: "All except selected collections/types/vendors" },
+                      {
+                        value: "collection_except",
+                        label: "All except selected collections/types/vendors",
+                      },
                     ].map(({ value, label }) => (
-                      <label key={value} className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
+                      <label
+                        key={value}
+                        className="b-checkbox-row"
+                        style={{ cursor: "pointer", gap: 10 }}
+                      >
                         <input
-                          type="radio" name="_triggerTypeRadio" value={value}
+                          type="radio"
+                          name="_triggerTypeRadio"
+                          value={value}
                           checked={triggerType === value}
                           onChange={() => setTriggerType(value)}
                           style={{ accentColor: "var(--upsell-color)", width: 15, height: 15 }}
@@ -458,15 +679,25 @@ export default function NewUpsellOfferPage() {
                     ))}
                     {triggerType === "always" && (
                       <div className="b-help" style={{ marginTop: 4 }}>
-                        This upsell shows on every qualifying visit with no product or cart condition.
+                        This upsell shows on every qualifying visit with no product or cart
+                        condition.
                       </div>
                     )}
                     {(triggerType === "product_selected" || triggerType === "product_except") && (
                       <div style={{ marginTop: 4 }}>
-                        <button type="button" className="b-btn b-btn-secondary" onClick={() => setTriggerPickerOpen(true)}>
+                        <button
+                          type="button"
+                          className="b-btn b-btn-secondary"
+                          onClick={() => setTriggerPickerOpen(true)}
+                        >
                           Select trigger products
                         </button>
-                        <SelectedProductsList gids={triggerProducts} onRemove={(gid) => setTriggerProducts(triggerProducts.filter((id) => id !== gid))} />
+                        <SelectedProductsList
+                          gids={triggerProducts}
+                          onRemove={(gid) =>
+                            setTriggerProducts(triggerProducts.filter((id) => id !== gid))
+                          }
+                        />
                       </div>
                     )}
                   </>
@@ -478,9 +709,15 @@ export default function NewUpsellOfferPage() {
                       { value: "product", label: "Specific product trigger" },
                       { value: "customer", label: "Customer trigger" },
                     ].map(({ value, label }) => (
-                      <label key={value} className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
+                      <label
+                        key={value}
+                        className="b-checkbox-row"
+                        style={{ cursor: "pointer", gap: 10 }}
+                      >
                         <input
-                          type="radio" name="_triggerTypeRadio" value={value}
+                          type="radio"
+                          name="_triggerTypeRadio"
+                          value={value}
                           checked={triggerType === value}
                           onChange={() => setTriggerType(value)}
                           style={{ accentColor: "var(--upsell-color)", width: 15, height: 15 }}
@@ -490,15 +727,25 @@ export default function NewUpsellOfferPage() {
                     ))}
                     {triggerType === "always" && (
                       <div className="b-help" style={{ marginTop: 4 }}>
-                        This upsell shows on every qualifying visit with no product or cart condition.
+                        This upsell shows on every qualifying visit with no product or cart
+                        condition.
                       </div>
                     )}
                     {triggerType === "product" && (
                       <div style={{ marginTop: 4 }}>
-                        <button type="button" className="b-btn b-btn-secondary" onClick={() => setTriggerPickerOpen(true)}>
+                        <button
+                          type="button"
+                          className="b-btn b-btn-secondary"
+                          onClick={() => setTriggerPickerOpen(true)}
+                        >
                           Select trigger products
                         </button>
-                        <SelectedProductsList gids={triggerProducts} onRemove={(gid) => setTriggerProducts(triggerProducts.filter((id) => id !== gid))} />
+                        <SelectedProductsList
+                          gids={triggerProducts}
+                          onRemove={(gid) =>
+                            setTriggerProducts(triggerProducts.filter((id) => id !== gid))
+                          }
+                        />
                       </div>
                     )}
                   </>
@@ -507,10 +754,24 @@ export default function NewUpsellOfferPage() {
             </div>
 
             {/* Add sub-condition (dashed) */}
-            <div className="b-card" style={{ background: "var(--bg)", border: "1.5px dashed var(--border)" }}>
+            <div
+              className="b-card"
+              style={{ background: "var(--bg)", border: "1.5px dashed var(--border)" }}
+            >
               <div className="b-card-body rd-style-060">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="16" />
+                  <line x1="8" y1="12" x2="16" y2="12" />
                 </svg>
                 Add sub-condition
               </div>
@@ -518,17 +779,32 @@ export default function NewUpsellOfferPage() {
 
             {/* ── Card: Upsell method ── */}
             <div className="b-card" style={{ borderTop: "3px solid var(--upsell-color)" }}>
-              <div className="b-card-header" style={{ display: "flex", alignItems: "center", gap: 10, position: "relative", overflow: "hidden" }}>
+              <div
+                className="b-card-header"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  position: "relative",
+                  overflow: "hidden",
+                }}
+              >
                 <div className="rd-style-058">3</div>
-                <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Upsell method</span>
+                <span style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>
+                  Upsell method
+                </span>
                 <span className="rd-style-059">3</span>
               </div>
-              <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-
+              <div
+                className="b-card-body"
+                style={{ display: "flex", flexDirection: "column", gap: 16 }}
+              >
                 {/* FBT: Widget type selector */}
                 {isFbt && (
                   <div>
-                    <div className="b-label" style={{ marginBottom: 8 }}>Upsell widget type</div>
+                    <div className="b-label" style={{ marginBottom: 8 }}>
+                      Upsell widget type
+                    </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                       {[
                         { value: "fbt", label: "Frequently bought together" },
@@ -538,7 +814,14 @@ export default function NewUpsellOfferPage() {
                           key={value}
                           type="button"
                           onClick={() => setWidgetType(value)}
-                          className="rd-style-061" style={{ border: `2px solid ${widgetType === value ? "var(--upsell-color)" : "var(--border)"}`, background: widgetType === value ? "rgba(124,58,237,0.06)" : "var(--bg)", fontWeight: widgetType === value ? 600 : 400, color: widgetType === value ? "var(--upsell-color)" : "var(--text)" }}
+                          className="rd-style-061"
+                          style={{
+                            border: `2px solid ${widgetType === value ? "var(--upsell-color)" : "var(--border)"}`,
+                            background:
+                              widgetType === value ? "rgba(124,58,237,0.06)" : "var(--bg)",
+                            fontWeight: widgetType === value ? 600 : 400,
+                            color: widgetType === value ? "var(--upsell-color)" : "var(--text)",
+                          }}
                         >
                           {label}
                         </button>
@@ -549,16 +832,32 @@ export default function NewUpsellOfferPage() {
 
                 {/* Method tabs: Manual | Auto | (Aleatorio for fbt/thank-you) */}
                 <div>
-                  <div className="b-label" style={{ marginBottom: 8 }}>Select method</div>
+                  <div className="b-label" style={{ marginBottom: 8 }}>
+                    Select method
+                  </div>
                   <div style={{ display: "flex", borderBottom: "1px solid var(--border)" }}>
                     {["manual", "auto", ...(isCheckout ? [] : ["random"])].map((m) => {
-                      const labels: Record<string, string> = { manual: "Manual", auto: "Auto", random: "Random" };
+                      const labels: Record<string, string> = {
+                        manual: "Manual",
+                        auto: "Auto",
+                        random: "Random",
+                      };
                       return (
                         <button
                           key={m}
                           type="button"
                           onClick={() => setUpsellMethod(m)}
-                          className="rd-style-062" style={{ fontWeight: upsellMethod === m ? 600 : 400, color: upsellMethod === m ? "var(--upsell-color)" : "var(--text-sub)", borderBottom: upsellMethod === m ? "2px solid var(--upsell-color)" : "2px solid transparent", borderBottomColor: upsellMethod === m ? "var(--upsell-color)" : "transparent" }}
+                          className="rd-style-062"
+                          style={{
+                            fontWeight: upsellMethod === m ? 600 : 400,
+                            color: upsellMethod === m ? "var(--upsell-color)" : "var(--text-sub)",
+                            borderBottom:
+                              upsellMethod === m
+                                ? "2px solid var(--upsell-color)"
+                                : "2px solid transparent",
+                            borderBottomColor:
+                              upsellMethod === m ? "var(--upsell-color)" : "transparent",
+                          }}
                         >
                           {labels[m]}
                         </button>
@@ -569,48 +868,79 @@ export default function NewUpsellOfferPage() {
 
                 {/* Product selection */}
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: "var(--text)",
+                      marginBottom: 10,
+                    }}
+                  >
                     Select upsell product
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <button
-                      type="button" className="b-btn b-btn-secondary"
+                      type="button"
+                      className="b-btn b-btn-secondary"
                       onClick={() => setProductPickerOpen(true)}
                     >
                       Select products
                     </button>
-                    <SelectedProductsList gids={upsellProducts} onRemove={(gid) => setUpsellProducts(upsellProducts.filter((id) => id !== gid))} />
+                    <SelectedProductsList
+                      gids={upsellProducts}
+                      onRemove={(gid) =>
+                        setUpsellProducts(upsellProducts.filter((id) => id !== gid))
+                      }
+                    />
                   </div>
 
                   {/* FBT: set qty for current item */}
                   {isFbt && (
                     <>
                       <div style={{ marginTop: 10 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: "var(--text)",
+                            marginBottom: 8,
+                          }}
+                        >
                           Upsell product quantity:
                         </div>
-                        <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, marginBottom: 6 }}>
+                        <label
+                          className="b-checkbox-row"
+                          style={{ cursor: "pointer", gap: 10, marginBottom: 6 }}
+                        >
                           <input
-                            type="radio" name="_allowCustomerQtyRadio"
+                            type="radio"
+                            name="_allowCustomerQtyRadio"
                             checked={allowCustomerQty}
                             onChange={() => setAllowCustomerQty(true)}
                             style={{ accentColor: "var(--upsell-color)", width: 15, height: 15 }}
                           />
                           <div>
-                            <div className="b-checkbox-label">Allow customers to change quantity</div>
-                            <div className="b-checkbox-help">Customers can adjust the quantity before adding to cart.</div>
+                            <div className="b-checkbox-label">
+                              Allow customers to change quantity
+                            </div>
+                            <div className="b-checkbox-help">
+                              Customers can adjust the quantity before adding to cart.
+                            </div>
                           </div>
                         </label>
                         <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                           <input
-                            type="radio" name="_allowCustomerQtyRadio"
+                            type="radio"
+                            name="_allowCustomerQtyRadio"
                             checked={!allowCustomerQty}
                             onChange={() => setAllowCustomerQty(false)}
                             style={{ accentColor: "var(--upsell-color)", width: 15, height: 15 }}
                           />
                           <div>
                             <div className="b-checkbox-label">Fixed quantity</div>
-                            <div className="b-checkbox-help">The quantity is fixed and cannot be changed by the customer.</div>
+                            <div className="b-checkbox-help">
+                              The quantity is fixed and cannot be changed by the customer.
+                            </div>
                           </div>
                         </label>
                       </div>
@@ -621,15 +951,24 @@ export default function NewUpsellOfferPage() {
                 {/* Checkout: Discount section (inside method card) */}
                 {isCheckout && (
                   <div className="b-card" style={{ background: "var(--bg-hover, #f9f9f9)" }}>
-                    <div className="b-card-header" style={{ fontSize: 13 }}>Discount</div>
-                    <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div className="b-card-header" style={{ fontSize: 13 }}>
+                      Discount
+                    </div>
+                    <div
+                      className="b-card-body"
+                      style={{ display: "flex", flexDirection: "column", gap: 12 }}
+                    >
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                         <div>
-                          <label className="b-label" htmlFor="checkout-discount-type">Type:</label>
+                          <label className="b-label" htmlFor="checkout-discount-type">
+                            Type:
+                          </label>
                           <select
                             id="checkout-discount-type"
                             aria-label="Checkout discount type"
-                            className="b-select" name="discountType" value={discountType}
+                            className="b-select"
+                            name="discountType"
+                            value={discountType}
                             onChange={(e) => setDiscountType(e.target.value)}
                           >
                             <option value="percentage">Percentage</option>
@@ -637,7 +976,9 @@ export default function NewUpsellOfferPage() {
                           </select>
                         </div>
                         <div>
-                          <label className="b-label" htmlFor="checkout-discount-value">Value:</label>
+                          <label className="b-label" htmlFor="checkout-discount-value">
+                            Value:
+                          </label>
                           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                             <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
                               {discountType === "percentage" ? "%" : "$"}
@@ -645,9 +986,13 @@ export default function NewUpsellOfferPage() {
                             <input
                               id="checkout-discount-value"
                               aria-label="Checkout discount value"
-                              className="b-input" type="number" name="discountValue"
-                              value={discountValue} onChange={(e) => setDiscountValue(e.target.value)}
-                              min="0" autoComplete="off"
+                              className="b-input"
+                              type="number"
+                              name="discountValue"
+                              value={discountValue}
+                              onChange={(e) => setDiscountValue(e.target.value)}
+                              min="0"
+                              autoComplete="off"
                             />
                           </div>
                         </div>
@@ -662,12 +1007,20 @@ export default function NewUpsellOfferPage() {
             {isFbt && (
               <div className="b-card">
                 <div className="b-card-header">Discount</div>
-                <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  <label className="b-checkbox-row" htmlFor="fbt-discount-enabled" style={{ cursor: "pointer", gap: 10 }}>
+                <div
+                  className="b-card-body"
+                  style={{ display: "flex", flexDirection: "column", gap: 14 }}
+                >
+                  <label
+                    className="b-checkbox-row"
+                    htmlFor="fbt-discount-enabled"
+                    style={{ cursor: "pointer", gap: 10 }}
+                  >
                     <input
                       id="fbt-discount-enabled"
                       aria-label="Enable discount"
-                      type="checkbox" name="discountEnabled"
+                      type="checkbox"
+                      name="discountEnabled"
                       checked={discountEnabled}
                       onChange={(e) => setDiscountEnabled(e.target.checked)}
                     />
@@ -681,17 +1034,27 @@ export default function NewUpsellOfferPage() {
                           Number of unique products required for discount
                         </label>
                         <input
-                          id="discountMinProducts" aria-label="Number of unique products required for discount" className="b-input" type="number"
+                          id="discountMinProducts"
+                          aria-label="Number of unique products required for discount"
+                          className="b-input"
+                          type="number"
                           name="discountMinProducts"
                           value={discountMinProducts}
                           onChange={(e) => setDiscountMinProducts(e.target.value)}
-                          min="1" style={{ maxWidth: 120 }} autoComplete="off"
+                          min="1"
+                          style={{ maxWidth: 120 }}
+                          autoComplete="off"
                         />
                       </div>
                       <div>
-                        <label className="b-label" htmlFor="discountApplyTo">Apply discount to:</label>
+                        <label className="b-label" htmlFor="discountApplyTo">
+                          Apply discount to:
+                        </label>
                         <select
-                          id="discountApplyTo" aria-label="Apply discount to" className="b-select" name="discountApplyTo"
+                          id="discountApplyTo"
+                          aria-label="Apply discount to"
+                          className="b-select"
+                          name="discountApplyTo"
                           value={discountApplyTo}
                           onChange={(e) => setDiscountApplyTo(e.target.value)}
                         >
@@ -702,11 +1065,15 @@ export default function NewUpsellOfferPage() {
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                         <div>
-                          <label className="b-label" htmlFor="fbt-discount-type">Type:</label>
+                          <label className="b-label" htmlFor="fbt-discount-type">
+                            Type:
+                          </label>
                           <select
                             id="fbt-discount-type"
                             aria-label="Frequently bought together discount type"
-                            className="b-select" name="discountType" value={discountType}
+                            className="b-select"
+                            name="discountType"
+                            value={discountType}
                             onChange={(e) => setDiscountType(e.target.value)}
                           >
                             <option value="percentage">Percentage</option>
@@ -714,7 +1081,9 @@ export default function NewUpsellOfferPage() {
                           </select>
                         </div>
                         <div>
-                          <label className="b-label" htmlFor="fbt-discount-value">Value:</label>
+                          <label className="b-label" htmlFor="fbt-discount-value">
+                            Value:
+                          </label>
                           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                             <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
                               {discountType === "percentage" ? "%" : "$"}
@@ -722,9 +1091,13 @@ export default function NewUpsellOfferPage() {
                             <input
                               id="fbt-discount-value"
                               aria-label="Frequently bought together discount value"
-                              className="b-input" type="number" name="discountValue"
-                              value={discountValue} onChange={(e) => setDiscountValue(e.target.value)}
-                              min="0" autoComplete="off"
+                              className="b-input"
+                              type="number"
+                              name="discountValue"
+                              value={discountValue}
+                              onChange={(e) => setDiscountValue(e.target.value)}
+                              min="0"
+                              autoComplete="off"
                             />
                           </div>
                         </div>
@@ -739,14 +1112,21 @@ export default function NewUpsellOfferPage() {
             {isThankYou && (
               <div className="b-card">
                 <div className="b-card-header">Discount</div>
-                <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div
+                  className="b-card-body"
+                  style={{ display: "flex", flexDirection: "column", gap: 12 }}
+                >
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div>
-                      <label className="b-label" htmlFor="thank-you-discount-type">Tipo:</label>
+                      <label className="b-label" htmlFor="thank-you-discount-type">
+                        Tipo:
+                      </label>
                       <select
                         id="thank-you-discount-type"
                         aria-label="Tipo de descuento"
-                        className="b-select" name="discountType" value={discountType}
+                        className="b-select"
+                        name="discountType"
+                        value={discountType}
                         onChange={(e) => setDiscountType(e.target.value)}
                       >
                         <option value="percentage">Porcentaje</option>
@@ -754,7 +1134,9 @@ export default function NewUpsellOfferPage() {
                       </select>
                     </div>
                     <div>
-                      <label className="b-label" htmlFor="thank-you-discount-value">Valor:</label>
+                      <label className="b-label" htmlFor="thank-you-discount-value">
+                        Valor:
+                      </label>
                       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                         <span style={{ fontSize: 13, color: "var(--text-sub)" }}>
                           {discountType === "percentage" ? "%" : "$"}
@@ -762,9 +1144,13 @@ export default function NewUpsellOfferPage() {
                         <input
                           id="thank-you-discount-value"
                           aria-label="Valor del descuento"
-                          className="b-input" type="number" name="discountValue"
-                          value={discountValue} onChange={(e) => setDiscountValue(e.target.value)}
-                          min="0" autoComplete="off"
+                          className="b-input"
+                          type="number"
+                          name="discountValue"
+                          value={discountValue}
+                          onChange={(e) => setDiscountValue(e.target.value)}
+                          min="0"
+                          autoComplete="off"
                         />
                       </div>
                     </div>
@@ -772,6 +1158,11 @@ export default function NewUpsellOfferPage() {
                 </div>
               </div>
             )}
+
+            <OfferConditionsBuilder
+              title="Eligibility conditions"
+              description="Limit this upsell by URL, customer tags, Markets/country, subscription status, cart attributes, or usage history."
+            />
 
             {/* ── Checkout/Thank-You: Configuración avanzada (collapsible) ── */}
             {(isCheckout || isThankYou) && (
@@ -783,24 +1174,40 @@ export default function NewUpsellOfferPage() {
                 >
                   <span>Advanced settings (optional)</span>
                   <svg
-                    width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                    style={{ transform: advancedOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{
+                      transform: advancedOpen ? "rotate(180deg)" : "none",
+                      transition: "transform 0.2s",
+                    }}
                   >
-                    <polyline points="6 9 12 15 18 9"/>
+                    <polyline points="6 9 12 15 18 9" />
                   </svg>
                 </button>
                 {advancedOpen && (
-                  <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                  <div
+                    className="b-card-body"
+                    style={{ display: "flex", flexDirection: "column", gap: 16 }}
+                  >
                     {/* Discount code */}
                     <div className="b-card" style={{ background: "var(--bg-hover, #f9f9f9)" }}>
-                      <div className="b-card-header" style={{ fontSize: 13 }}>Discount code</div>
+                      <div className="b-card-header" style={{ fontSize: 13 }}>
+                        Discount code
+                      </div>
                       <div className="b-card-body">
                         <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                           <input type="checkbox" />
                           <div>
                             <div className="b-checkbox-label">Add a custom discount code</div>
-                            <div className="b-checkbox-help">Customers can enter a discount code at checkout.</div>
+                            <div className="b-checkbox-help">
+                              Customers can enter a discount code at checkout.
+                            </div>
                           </div>
                         </label>
                       </div>
@@ -808,10 +1215,20 @@ export default function NewUpsellOfferPage() {
 
                     {/* Combinations */}
                     <div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 10 }}>
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: "var(--text)",
+                          marginBottom: 10,
+                        }}
+                      >
                         This upsell discount can be combined with
                       </div>
-                      <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, marginBottom: 8 }}>
+                      <label
+                        className="b-checkbox-row"
+                        style={{ cursor: "pointer", gap: 10, marginBottom: 8 }}
+                      >
                         <input
                           type="checkbox"
                           checked={combinesOrderDiscounts}
@@ -843,7 +1260,9 @@ export default function NewUpsellOfferPage() {
                       <input type="checkbox" />
                       <div>
                         <div className="b-checkbox-label">Add a custom discount code</div>
-                        <div className="b-checkbox-help">Customers can enter a discount code at checkout.</div>
+                        <div className="b-checkbox-help">
+                          Customers can enter a discount code at checkout.
+                        </div>
                       </div>
                     </label>
                   </div>
@@ -851,7 +1270,10 @@ export default function NewUpsellOfferPage() {
 
                 <div className="b-card">
                   <div className="b-card-header">This upsell discount can be combined with</div>
-                  <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div
+                    className="b-card-body"
+                    style={{ display: "flex", flexDirection: "column", gap: 8 }}
+                  >
                     <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                       <input
                         type="checkbox"
@@ -878,9 +1300,13 @@ export default function NewUpsellOfferPage() {
               <div className="b-card">
                 <div className="b-card-header">Checkout surface</div>
                 <div className="b-card-body">
-                  <label className="b-label" htmlFor="checkoutTarget">Checkout target</label>
+                  <label className="b-label" htmlFor="checkoutTarget">
+                    Checkout target
+                  </label>
                   <select
-                    id="checkoutTarget" className="b-select" name="checkoutTarget"
+                    id="checkoutTarget"
+                    className="b-select"
+                    name="checkoutTarget"
                     value={checkoutTarget}
                     onChange={(e) => setCheckoutTarget(e.target.value)}
                   >
@@ -892,31 +1318,47 @@ export default function NewUpsellOfferPage() {
                 </div>
               </div>
             )}
-
           </div>
-
-
         </div>
 
         {/* ── Footer ── */}
-        <div style={{ fontSize: 12, color: "var(--text-sub)", textAlign: "right", paddingBottom: 6 }}>
-          <strong>Save draft</strong> — saves without activating. <strong>Publish</strong> — activates immediately (or at the scheduled start time).
+        <div
+          style={{ fontSize: 12, color: "var(--text-sub)", textAlign: "right", paddingBottom: 6 }}
+        >
+          <strong>Save draft</strong> — saves without activating. <strong>Publish</strong> —
+          activates immediately (or at the scheduled start time).
         </div>
         <div className="rd-style-031">
           <button
-            type="button" className="b-btn b-btn-secondary"
+            type="button"
+            className="b-btn b-btn-secondary"
             onClick={() => void navigate("/app/offers")}
           >
             Cancel
           </button>
-          <button type="submit" name="intent" value="draft" className="b-btn b-btn-secondary" disabled={isSubmitting}>
+          <button
+            type="submit"
+            name="intent"
+            value="draft"
+            className="b-btn b-btn-secondary"
+            disabled={isSubmitting}
+          >
             {isSubmitting ? "Saving…" : "Save draft"}
           </button>
-          <button type="submit" name="intent" value="publish" className="b-btn b-btn-primary" style={{ background: "var(--upsell-grad)", boxShadow: "0 4px 12px rgba(124,58,237,0.3)" }} disabled={isSubmitting}>
+          <button
+            type="submit"
+            name="intent"
+            value="publish"
+            className="b-btn b-btn-primary"
+            style={{
+              background: "var(--upsell-grad)",
+              boxShadow: "0 4px 12px rgba(124,58,237,0.3)",
+            }}
+            disabled={isSubmitting}
+          >
             {isSubmitting ? "Publishing…" : "Publish offer"}
           </button>
         </div>
-
       </Form>
 
       <ProductPicker
@@ -937,17 +1379,57 @@ export default function NewUpsellOfferPage() {
       />
 
       {(showToast || actionData?.error) && (
-        <Toast message={actionData?.error ?? toastMsg} type="error" onDismiss={() => setShowToast(false)} />
+        <Toast
+          message={actionData?.error ?? toastMsg}
+          type="error"
+          onDismiss={() => setShowToast(false)}
+        />
       )}
 
       {blocker.state === "blocked" && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div style={{ background: "var(--surface)", borderRadius: 10, padding: 24, maxWidth: 380, width: "90%", boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}>
-            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>Discard unsaved changes?</div>
-            <div style={{ fontSize: 13, color: "var(--text-sub)", marginBottom: 20 }}>You have unsaved changes. If you leave, your changes will be lost.</div>
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <div
+            style={{
+              background: "var(--surface)",
+              borderRadius: 10,
+              padding: 24,
+              maxWidth: 380,
+              width: "90%",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
+            }}
+          >
+            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>
+              Discard unsaved changes?
+            </div>
+            <div style={{ fontSize: 13, color: "var(--text-sub)", marginBottom: 20 }}>
+              You have unsaved changes. If you leave, your changes will be lost.
+            </div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button type="button" className="b-btn b-btn-secondary" onClick={() => blocker.reset()}>Keep editing</button>
-              <button type="button" className="b-btn" style={{ background: "var(--error, #e53e3e)", color: "#fff" }} onClick={() => blocker.proceed()}>Discard</button>
+              <button
+                type="button"
+                className="b-btn b-btn-secondary"
+                onClick={() => blocker.reset()}
+              >
+                Keep editing
+              </button>
+              <button
+                type="button"
+                className="b-btn"
+                style={{ background: "var(--error, #e53e3e)", color: "#fff" }}
+                onClick={() => blocker.proceed()}
+              >
+                Discard
+              </button>
             </div>
           </div>
         </div>

@@ -1,27 +1,36 @@
-import { validateConditionValue, type ConditionOperator, type ConditionType } from "@promo/shared-types";
+import {
+  validateConditionValue,
+  type ConditionOperator,
+  type ConditionType,
+} from "@promo/shared-types";
 
-export interface NormalizedGiftSubcondition {
+export interface NormalizedOfferSubcondition {
   conditionType: ConditionType;
   operator: ConditionOperator;
   value: Record<string, unknown>;
 }
 
 type NormalizeResult =
-  | { success: true; data: NormalizedGiftSubcondition[] }
+  | { success: true; data: NormalizedOfferSubcondition[] }
   | { success: false; error: string };
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 
 function csv(value: unknown, uppercase = false): string[] {
-  if (Array.isArray(value)) return value.flatMap((item) => typeof item === "string" ? [uppercase ? item.toUpperCase() : item] : []);
-  return String(value ?? "").split(",").flatMap((item) => {
-    const trimmed = item.trim();
-    return trimmed ? [uppercase ? trimmed.toUpperCase() : trimmed] : [];
-  });
+  if (Array.isArray(value))
+    return value.flatMap((item) =>
+      typeof item === "string" ? [uppercase ? item.toUpperCase() : item] : [],
+    );
+  return String(value ?? "")
+    .split(",")
+    .flatMap((item) => {
+      const trimmed = item.trim();
+      return trimmed ? [uppercase ? trimmed.toUpperCase() : trimmed] : [];
+    });
 }
 
 function positiveInteger(value: unknown): number | null {
@@ -29,8 +38,8 @@ function positiveInteger(value: unknown): number | null {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
-export function normalizeGiftSubconditions(input: Record<string, unknown>): NormalizeResult {
-  const conditions: NormalizedGiftSubcondition[] = [];
+export function normalizeOfferSubconditions(input: Record<string, unknown>): NormalizeResult {
+  const conditions: NormalizedOfferSubcondition[] = [];
 
   for (const [id, raw] of Object.entries(input)) {
     const value = record(raw);
@@ -43,8 +52,12 @@ export function normalizeGiftSubconditions(input: Record<string, unknown>): Norm
           operator: "eq",
           value: {
             requiredUrl: String(value["requiredUrl"] ?? "").trim(),
-            ...(String(value["paramName"] ?? "").trim() ? { paramName: String(value["paramName"]).trim() } : {}),
-            ...(value["paramValue"] === undefined || String(value["paramValue"]).length === 0 ? {} : { paramValue: String(value["paramValue"]) }),
+            ...(String(value["paramName"] ?? "").trim()
+              ? { paramName: String(value["paramName"]).trim() }
+              : {}),
+            ...(value["paramValue"] === undefined || String(value["paramValue"]).length === 0
+              ? {}
+              : { paramValue: String(value["paramValue"]) }),
           },
         });
         break;
@@ -55,14 +68,16 @@ export function normalizeGiftSubconditions(input: Record<string, unknown>): Norm
           break;
         }
         const threshold = Number(value["threshold"] ?? 0);
-        if (!Number.isFinite(threshold) || threshold < 0) return { success: false, error: "Order history threshold must be zero or greater." };
-        const conditionType = metric === "last_order_spent"
-          ? "order_history_last_order_spent"
-          : metric === "total_orders"
-            ? "order_history_total_orders"
-            : "order_history_total_spent";
+        if (!Number.isFinite(threshold) || threshold < 0)
+          return { success: false, error: "Order history threshold must be zero or greater." };
+        const conditionType =
+          metric === "last_order_spent"
+            ? "order_history_last_order_spent"
+            : metric === "total_orders"
+              ? "order_history_total_orders"
+              : "order_history_total_spent";
         const operator = ["eq", "gt", "gte", "lt", "lte"].includes(String(value["operator"]))
-          ? String(value["operator"]) as ConditionOperator
+          ? (String(value["operator"]) as ConditionOperator)
           : "gte";
         conditions.push({
           conditionType,
@@ -70,64 +85,103 @@ export function normalizeGiftSubconditions(input: Record<string, unknown>): Norm
           value: {
             type: metric,
             operator,
-            ...(metric === "total_orders" ? { value: Math.floor(threshold) } : { valueCents: Math.round(threshold * 100) }),
+            ...(metric === "total_orders"
+              ? { value: Math.floor(threshold) }
+              : { valueCents: Math.round(threshold * 100) }),
           },
         });
         break;
       }
       case "customer_tags": {
-        const tags = csv(value["tags"]);
-        if (tags.length === 0) return { success: false, error: "Enter at least one customer tag." };
+        const hasCanonicalValues = "includeTags" in value || "excludeTags" in value;
+        const includeTags = hasCanonicalValues
+          ? csv(value["includeTags"])
+          : value["exclude"]
+            ? []
+            : csv(value["tags"]);
+        const excludeTags = hasCanonicalValues
+          ? csv(value["excludeTags"])
+          : value["exclude"]
+            ? csv(value["tags"])
+            : [];
+        if (includeTags.length === 0 && excludeTags.length === 0)
+          return { success: false, error: "Enter at least one customer tag." };
         conditions.push({
           conditionType: "customer_tags",
           operator: "eq",
           value: {
-            includeTags: value["exclude"] ? [] : tags,
-            excludeTags: value["exclude"] ? tags : [],
-            treatGuestAsNoTags: value["guest"] !== false,
+            includeTags,
+            excludeTags,
+            treatGuestAsNoTags: (value["treatGuestAsNoTags"] ?? value["guest"]) !== false,
           },
         });
         break;
       }
       case "location": {
-        const countries = csv(value["countries"], true);
-        if (countries.length === 0) return { success: false, error: "Enter at least one two-letter country code." };
+        const hasCanonicalValues = "includeCountryCodes" in value || "excludeCountryCodes" in value;
+        const includeCountryCodes = hasCanonicalValues
+          ? csv(value["includeCountryCodes"], true)
+          : value["exclude"]
+            ? []
+            : csv(value["countries"], true);
+        const excludeCountryCodes = hasCanonicalValues
+          ? csv(value["excludeCountryCodes"], true)
+          : value["exclude"]
+            ? csv(value["countries"], true)
+            : [];
+        if (includeCountryCodes.length === 0 && excludeCountryCodes.length === 0)
+          return { success: false, error: "Enter at least one two-letter country code." };
         conditions.push({
           conditionType: "customer_location",
           operator: "eq",
-          value: {
-            includeCountryCodes: value["exclude"] ? [] : countries,
-            excludeCountryCodes: value["exclude"] ? countries : [],
-          },
+          value: { includeCountryCodes, excludeCountryCodes },
         });
         break;
       }
-      case "subscription":
+      case "subscription": {
+        const rawMode = String(value["mode"] ?? "subscription_only");
+        const mode =
+          rawMode === "one_time" || rawMode === "one_time_only"
+            ? "one_time_only"
+            : rawMode === "any"
+              ? "any"
+              : "subscription_only";
         conditions.push({
           conditionType: "subscription_product_type",
           operator: "eq",
-          value: { mode: value["mode"] === "one_time" ? "one_time_only" : "subscription_only" },
+          value: { mode },
         });
         break;
+      }
       case "sales_channel": {
-        const channels = [
-          value["online"] ? "online_store" : null,
-          value["mobile"] ? "mobile_app" : null,
-          value["pos"] ? "pos" : null,
-        ].filter((channel): channel is string => Boolean(channel));
+        const channels = Array.isArray(value["channels"])
+          ? csv(value["channels"])
+          : [
+              value["online"] ? "online_store" : null,
+              value["mobile"] ? "mobile_app" : null,
+              value["pos"] ? "pos" : null,
+            ].filter((channel): channel is string => Boolean(channel));
         conditions.push({ conditionType: "sales_channels", operator: "eq", value: { channels } });
         break;
       }
       case "markets": {
-        const marketIds = csv(value["marketIds"]);
-        if (marketIds.length === 0) return { success: false, error: "Select at least one Shopify Market." };
+        const hasCanonicalValues = "includeMarketIds" in value || "excludeMarketIds" in value;
+        const includeMarketIds = hasCanonicalValues
+          ? csv(value["includeMarketIds"])
+          : value["exclude"]
+            ? []
+            : csv(value["marketIds"]);
+        const excludeMarketIds = hasCanonicalValues
+          ? csv(value["excludeMarketIds"])
+          : value["exclude"]
+            ? csv(value["marketIds"])
+            : [];
+        if (includeMarketIds.length === 0 && excludeMarketIds.length === 0)
+          return { success: false, error: "Select at least one Shopify Market." };
         conditions.push({
           conditionType: "markets",
           operator: "eq",
-          value: {
-            includeMarketIds: value["exclude"] ? [] : marketIds,
-            excludeMarketIds: value["exclude"] ? marketIds : [],
-          },
+          value: { includeMarketIds, excludeMarketIds },
         });
         break;
       }
@@ -140,14 +194,20 @@ export function normalizeGiftSubconditions(input: Record<string, unknown>): Norm
             key: String(value["key"] ?? "").trim(),
             value: String(value["value"] ?? ""),
             matchMode: value["matchMode"] === "not_equals" ? "not_equals" : "equals",
-            ...(scope === "line" ? { minMatchingQuantity: Math.max(1, Number(value["minMatchingQuantity"] ?? 1) || 1) } : {}),
+            ...(scope === "line"
+              ? { minMatchingQuantity: Math.max(1, Number(value["minMatchingQuantity"] ?? 1) || 1) }
+              : {}),
           },
         });
         break;
       }
       case "quantity_limit": {
         if (value["matchMode"] === "any") {
-          return { success: false, error: "Quantity limits currently require ‘All rules’ so checkout enforcement can match storefront evaluation." };
+          return {
+            success: false,
+            error:
+              "Quantity limits currently require ‘All rules’ so checkout enforcement can match storefront evaluation.",
+          };
         }
         const rawRules = value["rules"];
         const rules: Record<string, unknown>[] = Array.isArray(rawRules)
@@ -159,7 +219,8 @@ export function normalizeGiftSubconditions(input: Record<string, unknown>): Norm
         const requirements: Array<Record<string, unknown>> = [];
         for (const rule of rules) {
           const quantity = positiveInteger(rule["qty"]);
-          if (quantity === null || quantity < 1) return { success: false, error: "Every quantity limit must be at least 1." };
+          if (quantity === null || quantity < 1)
+            return { success: false, error: "Every quantity limit must be at least 1." };
           if (rule["scope"] === "any_product") {
             conditions.push({
               conditionType: "cart_quantity",
@@ -173,7 +234,11 @@ export function normalizeGiftSubconditions(input: Record<string, unknown>): Norm
             continue;
           }
           const ids = csv(rule["productIds"]);
-          if (ids.length === 0) return { success: false, error: "Select at least one product for every product quantity rule." };
+          if (ids.length === 0)
+            return {
+              success: false,
+              error: "Select at least one product for every product quantity rule.",
+            };
           for (const id of ids) {
             const isVariant = id.includes("/ProductVariant/");
             requirements.push({
@@ -185,7 +250,11 @@ export function normalizeGiftSubconditions(input: Record<string, unknown>): Norm
           }
         }
         if (requirements.length > 0) {
-          conditions.push({ conditionType: "specific_product", operator: "gte", value: { requirements, multiplyByGroups: false } });
+          conditions.push({
+            conditionType: "specific_product",
+            operator: "gte",
+            value: { requirements, multiplyByGroups: false },
+          });
         }
         break;
       }
@@ -195,9 +264,16 @@ export function normalizeGiftSubconditions(input: Record<string, unknown>): Norm
   for (const condition of conditions) {
     const parsed = validateConditionValue(condition.conditionType, condition.value);
     if (!parsed.success) {
-      return { success: false, error: parsed.error.issues[0]?.message ?? `Invalid ${condition.conditionType} condition.` };
+      return {
+        success: false,
+        error: parsed.error.issues[0]?.message ?? `Invalid ${condition.conditionType} condition.`,
+      };
     }
   }
 
   return { success: true, data: conditions };
 }
+
+/** @deprecated Use the offer-wide name. Kept for existing gift imports. */
+export const normalizeGiftSubconditions = normalizeOfferSubconditions;
+export type NormalizedGiftSubcondition = NormalizedOfferSubcondition;

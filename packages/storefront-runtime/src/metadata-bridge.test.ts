@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   needsPromoMetadataPacking,
   packCartAddRequest,
@@ -6,6 +6,14 @@ import {
 } from "./metadata-bridge.js";
 
 describe("withPromoMetadata", () => {
+  it("stamps and packs the originating storefront URL for checkout enforcement", () => {
+    const properties = withPromoMetadata({}, "/pages/vip?code=summer");
+    expect(properties._promo_page_url).toBe("/pages/vip?code=summer");
+    expect(JSON.parse(properties._promo_engine_metadata!)).toMatchObject({
+      _promo_page_url: "/pages/vip?code=summer",
+    });
+  });
+
   it("packs legacy and current promotion properties into one Function field", () => {
     const properties = withPromoMetadata({
       _promo_engine_line_type: "gift",
@@ -41,34 +49,64 @@ describe("withPromoMetadata", () => {
   });
 
   it("detects legacy promotional properties that still need packing", () => {
-    expect(needsPromoMetadataPacking({
-      _promo_engine_offer_id: "offer-legacy",
-      _promo_engine_reward_id: "reward-legacy",
-    })).toBe(true);
-    expect(needsPromoMetadataPacking(withPromoMetadata({
-      _promo_engine_offer_id: "offer-current",
-    }))).toBe(false);
+    expect(
+      needsPromoMetadataPacking({
+        _promo_engine_offer_id: "offer-legacy",
+        _promo_engine_reward_id: "reward-legacy",
+      }),
+    ).toBe(true);
+    expect(
+      needsPromoMetadataPacking(
+        withPromoMetadata({
+          _promo_engine_offer_id: "offer-current",
+        }),
+      ),
+    ).toBe(false);
     expect(needsPromoMetadataPacking({ engraving: "Ada" })).toBe(true);
   });
 });
 
 describe("packCartAddRequest", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("stamps URL metadata on ordinary JSON cart lines that have no properties", async () => {
+    vi.stubGlobal("window", {
+      location: { origin: "https://store.example", pathname: "/pages/vip", search: "?code=summer" },
+    });
+    const [input, init] = await packCartAddRequest("/cart/add.js", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ items: [{ id: 123, quantity: 1 }] }),
+    });
+
+    expect(input).toBe("/cart/add.js");
+    const payload = JSON.parse(String(init?.body)) as {
+      items: Array<{ properties: Record<string, string> }>;
+    };
+    expect(payload.items[0]!.properties._promo_page_url).toBe("/pages/vip?code=summer");
+    expect(JSON.parse(payload.items[0]!.properties._promo_engine_metadata!)).toMatchObject({
+      _promo_page_url: "/pages/vip?code=summer",
+    });
+  });
+
   it("packs metadata from a Request body when fetch has no init argument", async () => {
     const request = new Request("https://store.example/cart/add.js", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        items: [{
-          id: 123,
-          quantity: 1,
-          properties: { _promo_engine_offer_id: "offer-request" },
-        }],
+        items: [
+          {
+            id: 123,
+            quantity: 1,
+            properties: { _promo_engine_offer_id: "offer-request" },
+          },
+        ],
       }),
     });
 
     const [packed] = await packCartAddRequest(request);
     expect(packed).toBeInstanceOf(Request);
-    const payload = await (packed as Request).json() as {
+    const payload = (await (packed as Request).json()) as {
       items: Array<{ properties: Record<string, string> }>;
     };
     expect(JSON.parse(payload.items[0]!.properties._promo_engine_metadata!)).toEqual({

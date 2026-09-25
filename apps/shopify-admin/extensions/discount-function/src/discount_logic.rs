@@ -1,11 +1,11 @@
 use crate::config::{
     resolve_threshold, to_cents, CompiledConfig, CompiledOffer, CompiledOrderReward,
-    CompiledProductReward,
+    CompiledPageUrlCondition, CompiledProductReward,
 };
 use crate::schema;
-use schema::cart_lines_discounts_generate_run::Input;
-use schema::cart_lines_discounts_generate_run::input::cart::Lines;
 use schema::cart_lines_discounts_generate_run::input::cart::lines::Merchandise;
+use schema::cart_lines_discounts_generate_run::input::cart::Lines;
+use schema::cart_lines_discounts_generate_run::Input;
 use shopify_function::Result;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -98,12 +98,14 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
         ));
     }
 
-    Ok(schema::CartLinesDiscountsGenerateRunResult {
-        operations,
-    })
+    Ok(schema::CartLinesDiscountsGenerateRunResult { operations })
 }
 
-fn evaluate_offer(offer: &CompiledOffer, input: &Input, config: &CompiledConfig) -> Vec<schema::ProductDiscountCandidate> {
+fn evaluate_offer(
+    offer: &CompiledOffer,
+    input: &Input,
+    config: &CompiledConfig,
+) -> Vec<schema::ProductDiscountCandidate> {
     if !offer.gift_rewards.is_empty() || offer.offer_type == "gift" {
         return evaluate_gift_offer(offer, input, config);
     }
@@ -134,8 +136,16 @@ fn evaluate_product_reward(
         return vec![];
     }
 
-    let product_ids: HashSet<&str> = reward.target_product_ids.iter().map(String::as_str).collect();
-    let variant_ids: HashSet<&str> = reward.target_variant_ids.iter().map(String::as_str).collect();
+    let product_ids: HashSet<&str> = reward
+        .target_product_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let variant_ids: HashSet<&str> = reward
+        .target_variant_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
     let mut eligible: Vec<&Lines> = input
         .cart()
         .lines()
@@ -143,7 +153,12 @@ fn evaluate_product_reward(
         .filter(|line| !is_gift_line(line))
         .filter(|line| {
             reward.scope_mode != "landing"
-                || landing_source(line).as_deref() == reward.required_line_attribute_value.as_deref()
+                || landing_source(line).as_deref()
+                    == reward.required_line_attribute_value.as_deref()
+        })
+        .filter(|line| {
+            reward.scope_mode != "tagged_offer"
+                || line_offer_id(line).as_deref() == reward.required_offer_id.as_deref()
         })
         .filter(|line| {
             let Some((variant_id, product_id)) = variant_and_product_id(line) else {
@@ -171,10 +186,35 @@ fn evaluate_product_reward(
     }
     eligible.sort_by(|a, b| a.id().cmp(b.id()));
 
+    let total_quantity: i64 = if reward.count_rule == "unique" {
+        eligible
+            .iter()
+            .filter_map(|line| variant_and_product_id(line).map(|(_, product_id)| product_id))
+            .collect::<HashSet<_>>()
+            .len() as i64
+    } else {
+        eligible
+            .iter()
+            .map(|line| i64::from(*line.quantity()))
+            .sum()
+    };
+    let quantity_tier = reward
+        .quantity_tiers
+        .iter()
+        .filter(|tier| {
+            total_quantity >= tier.minimum_quantity
+                && tier
+                    .maximum_quantity
+                    .is_none_or(|maximum| total_quantity <= maximum)
+        })
+        .max_by_key(|tier| tier.minimum_quantity);
+    if !reward.quantity_tiers.is_empty() && quantity_tier.is_none() {
+        return vec![];
+    }
+
     let tier_target_price = if reward.price_tiers.is_empty() {
         None
     } else {
-        let total_quantity: i64 = eligible.iter().map(|line| i64::from(*line.quantity())).sum();
         reward
             .price_tiers
             .iter()
@@ -186,7 +226,7 @@ fn evaluate_product_reward(
         return vec![];
     }
 
-    if reward.discount_type == "cheapest_item_free" {
+    if reward.selection_mode == "cheapest" || reward.discount_type == "cheapest_item_free" {
         eligible.sort_by(|a, b| {
             a.cost()
                 .amount_per_quantity()
@@ -196,8 +236,9 @@ fn evaluate_product_reward(
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then(a.id().cmp(b.id()))
         });
-        eligible.truncate(1);
-    } else if reward.discount_type == "most_expensive_item_discount" {
+    } else if reward.selection_mode == "most_expensive"
+        || reward.discount_type == "most_expensive_item_discount"
+    {
         eligible.sort_by(|a, b| {
             b.cost()
                 .amount_per_quantity()
@@ -207,12 +248,21 @@ fn evaluate_product_reward(
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then(a.id().cmp(b.id()))
         });
-        eligible.truncate(1);
     }
 
-    let mut remaining = reward
-        .max_units_total
+    let mut remaining = quantity_tier
+        .and_then(|tier| tier.discounted_quantity)
+        .or(reward.max_units_total)
         .or(reward.max_quantity)
+        .or_else(|| {
+            if reward.discount_type == "cheapest_item_free"
+                || reward.discount_type == "most_expensive_item_discount"
+            {
+                Some(1)
+            } else {
+                None
+            }
+        })
         .unwrap_or(i64::MAX);
     let mut candidates = Vec::new();
     for line in eligible {
@@ -221,16 +271,27 @@ fn evaluate_product_reward(
         }
         let quantity = i64::from(*line.quantity()).min(remaining);
         remaining -= quantity;
+        let effective_discount_type = quantity_tier
+            .map(|tier| tier.discount_type.as_str())
+            .unwrap_or(reward.discount_type.as_str());
+        let effective_discount_value = quantity_tier
+            .map(|tier| tier.discount_value)
+            .unwrap_or(reward.discount_value);
         let (discount_type, discount_value) = if let Some(target_price) = tier_target_price {
             let current_price = line.cost().amount_per_quantity().amount().as_f64();
             ("fixed_amount", (current_price - target_price).max(0.0))
-        } else if reward.discount_type == "fixed_price" {
+        } else if effective_discount_type == "fixed_price" {
             let current_price = line.cost().amount_per_quantity().amount().as_f64();
-            ("fixed_amount", (current_price - reward.discount_value).max(0.0))
-        } else if reward.discount_type == "cheapest_item_free" {
+            (
+                "fixed_amount",
+                (current_price - effective_discount_value).max(0.0),
+            )
+        } else if effective_discount_type == "cheapest_item_free"
+            || effective_discount_type == "free"
+        {
             ("free", 100.0)
         } else {
-            (reward.discount_type.as_str(), reward.discount_value)
+            (effective_discount_type, effective_discount_value)
         };
         if discount_type == "fixed_amount" && discount_value <= 0.0 {
             continue;
@@ -269,7 +330,9 @@ fn landing_anchor_qualifies(reward: &CompiledProductReward, input: &Input) -> bo
                 .map(|(variant_id, _)| anchor_ids.contains(variant_id.as_str()))
                 .unwrap_or(false)
         })
-        .filter(|line| !reward.requires_anchor_subscription || line.selling_plan_allocation().is_some())
+        .filter(|line| {
+            !reward.requires_anchor_subscription || line.selling_plan_allocation().is_some()
+        })
         .map(|line| i64::from(*line.quantity()))
         .sum();
     quantity >= reward.required_anchor_min_quantity
@@ -288,7 +351,9 @@ fn evaluate_quiz_bundle_reward(
 ) -> Vec<schema::ProductDiscountCandidate> {
     let mut groups: BTreeMap<String, QuizGroup<'_>> = BTreeMap::new();
     for line in input.cart().lines() {
-        let Some(bundle_id) = quiz_bundle_id(line) else { continue };
+        let Some(bundle_id) = quiz_bundle_id(line) else {
+            continue;
+        };
         let group = groups.entry(bundle_id).or_insert_with(|| QuizGroup {
             paid: vec![],
             gifts: vec![],
@@ -301,17 +366,20 @@ fn evaluate_quiz_bundle_reward(
             group.paid.push(line);
         }
         if group.target_cents.is_none() {
-            group.target_cents = quiz_target_cents(line).and_then(|value| value.parse::<i64>().ok());
+            group.target_cents =
+                quiz_target_cents(line).and_then(|value| value.parse::<i64>().ok());
         }
         if group.expected_paid_count.is_none() {
-            group.expected_paid_count = quiz_expected_paid_count(line)
-                .and_then(|value| value.parse::<usize>().ok());
+            group.expected_paid_count =
+                quiz_expected_paid_count(line).and_then(|value| value.parse::<usize>().ok());
         }
     }
 
     let mut candidates = vec![];
     for (bundle_id, group) in groups {
-        let Some(expected_paid_count) = group.expected_paid_count else { continue };
+        let Some(expected_paid_count) = group.expected_paid_count else {
+            continue;
+        };
         if group.paid.len() < expected_paid_count {
             continue;
         }
@@ -324,7 +392,9 @@ fn evaluate_quiz_bundle_reward(
                 &format!("Quiz bundle {bundle_id}"),
             ));
         }
-        let Some(target_cents) = group.target_cents else { continue };
+        let Some(target_cents) = group.target_cents else {
+            continue;
+        };
         if group.paid.is_empty() {
             continue;
         }
@@ -361,30 +431,95 @@ fn evaluate_order_offer(
         .filter(|line| is_gift_line(line))
         .map(|line| line.id().clone())
         .collect();
+    let active_currency = input
+        .cart()
+        .cost()
+        .subtotal_amount()
+        .currency_code()
+        .to_string();
+    let eligible_lines: Vec<_> = input
+        .cart()
+        .lines()
+        .iter()
+        .filter(|line| !is_gift_line(line))
+        .collect();
+    let qualifying_subtotal_cents: i64 = eligible_lines
+        .iter()
+        .map(|line| {
+            to_cents(
+                line.cost().subtotal_amount().amount().as_f64(),
+                &active_currency,
+            )
+        })
+        .sum();
+    let qualifying_quantity: i64 = eligible_lines
+        .iter()
+        .map(|line| i64::from(*line.quantity()))
+        .sum();
 
     offer
         .order_rewards
         .iter()
-        .filter_map(|reward| make_order_candidate(reward, excluded_gift_line_ids.clone()))
+        .filter_map(|reward| {
+            make_order_candidate(
+                reward,
+                excluded_gift_line_ids.clone(),
+                qualifying_subtotal_cents,
+                qualifying_quantity,
+            )
+        })
         .collect()
 }
 
 fn make_order_candidate(
     reward: &CompiledOrderReward,
     excluded_cart_line_ids: Vec<String>,
+    qualifying_subtotal_cents: i64,
+    _qualifying_quantity: i64,
 ) -> Option<schema::OrderDiscountCandidate> {
-    let value = match reward.discount_type.as_str() {
+    let tier = reward
+        .subtotal_tiers
+        .iter()
+        .filter(|tier| {
+            tier.minimum_subtotal_cents
+                .is_none_or(|minimum| qualifying_subtotal_cents >= minimum)
+                && tier
+                    .maximum_subtotal_cents
+                    .is_none_or(|maximum| qualifying_subtotal_cents <= maximum)
+                && tier
+                    .minimum_quantity
+                    .is_none_or(|minimum| _qualifying_quantity >= minimum)
+                && tier
+                    .maximum_quantity
+                    .is_none_or(|maximum| _qualifying_quantity <= maximum)
+        })
+        .max_by_key(|tier| {
+            (
+                tier.minimum_subtotal_cents.unwrap_or(0),
+                tier.minimum_quantity.unwrap_or(0),
+            )
+        });
+    if !reward.subtotal_tiers.is_empty() && tier.is_none() {
+        return None;
+    }
+    let discount_type = tier
+        .map(|tier| tier.discount_type.as_str())
+        .unwrap_or(reward.discount_type.as_str());
+    let discount_value = tier
+        .map(|tier| tier.discount_value)
+        .unwrap_or(reward.discount_value);
+    let value = match discount_type {
         "free" => schema::OrderDiscountCandidateValue::Percentage(schema::Percentage {
             value: shopify_function::scalars::Decimal(100.0),
         }),
-        "percentage" if reward.discount_value > 0.0 => {
+        "percentage" if discount_value > 0.0 => {
             schema::OrderDiscountCandidateValue::Percentage(schema::Percentage {
-                value: shopify_function::scalars::Decimal(reward.discount_value.min(100.0)),
+                value: shopify_function::scalars::Decimal(discount_value.min(100.0)),
             })
         }
-        "fixed_amount" if reward.discount_value > 0.0 => {
+        "fixed_amount" if discount_value > 0.0 => {
             schema::OrderDiscountCandidateValue::FixedAmount(schema::FixedAmount {
-                amount: shopify_function::scalars::Decimal(reward.discount_value),
+                amount: shopify_function::scalars::Decimal(discount_value),
             })
         }
         _ => return None,
@@ -406,7 +541,11 @@ fn make_order_candidate(
 /// offer's runtime already tagged as its gift, but only if the variant is
 /// actually in this offer's allowed gift list — protects against a buyer
 /// editing cart line properties to claim an unrelated product as "the gift".
-fn evaluate_gift_offer(offer: &CompiledOffer, input: &Input, config: &CompiledConfig) -> Vec<schema::ProductDiscountCandidate> {
+fn evaluate_gift_offer(
+    offer: &CompiledOffer,
+    input: &Input,
+    config: &CompiledConfig,
+) -> Vec<schema::ProductDiscountCandidate> {
     if !check_main_condition(offer, input, config) {
         return vec![];
     }
@@ -426,11 +565,19 @@ fn evaluate_gift_offer(offer: &CompiledOffer, input: &Input, config: &CompiledCo
                 continue;
             }
 
-            let Some(reward_id) = line_reward_id(line) else { continue };
-            let Some(reward) = offer.gift_rewards.iter().find(|candidate| candidate.id == reward_id) else {
+            let Some(reward_id) = line_reward_id(line) else {
                 continue;
             };
-            let Some((variant_id, product_id)) = variant_and_product_id(line) else { continue };
+            let Some(reward) = offer
+                .gift_rewards
+                .iter()
+                .find(|candidate| candidate.id == reward_id)
+            else {
+                continue;
+            };
+            let Some((variant_id, product_id)) = variant_and_product_id(line) else {
+                continue;
+            };
             let target_matches = if !reward.target_variant_ids.is_empty() {
                 reward.target_variant_ids.iter().any(|id| id == &variant_id)
             } else {
@@ -459,8 +606,10 @@ fn evaluate_gift_offer(offer: &CompiledOffer, input: &Input, config: &CompiledCo
 
     // Backward-compatible fallback for already-published configs that predate
     // per-reward gift validation. New publishes always populate giftRewards.
-    let gift_variant_set: HashSet<&str> = offer.gift_variant_ids.iter().map(String::as_str).collect();
-    let gift_product_set: HashSet<&str> = offer.gift_product_ids.iter().map(String::as_str).collect();
+    let gift_variant_set: HashSet<&str> =
+        offer.gift_variant_ids.iter().map(String::as_str).collect();
+    let gift_product_set: HashSet<&str> =
+        offer.gift_product_ids.iter().map(String::as_str).collect();
     let max_gift_qty = offer.max_gift_quantity.unwrap_or(i64::MAX);
     let mut gift_qty_applied: i64 = 0;
     let mut candidates = Vec::new();
@@ -470,7 +619,9 @@ fn evaluate_gift_offer(offer: &CompiledOffer, input: &Input, config: &CompiledCo
         if line_quantity <= 0 {
             continue;
         }
-        if line_type(line).as_deref() != Some(LINE_TYPE_GIFT) || line_offer_id(line).as_deref() != Some(&offer.id) {
+        if line_type(line).as_deref() != Some(LINE_TYPE_GIFT)
+            || line_offer_id(line).as_deref() != Some(&offer.id)
+        {
             continue;
         }
 
@@ -501,20 +652,35 @@ fn evaluate_gift_offer(offer: &CompiledOffer, input: &Input, config: &CompiledCo
             qty_to_discount,
             &offer.discount_type,
             offer.discount_value,
-            &format!("Free gift from offer {}", &offer.id[..offer.id.len().min(8)]),
+            &format!(
+                "Free gift from offer {}",
+                &offer.id[..offer.id.len().min(8)]
+            ),
         ));
     }
 
     candidates
 }
 
-fn evaluate_discount_offer(offer: &CompiledOffer, input: &Input, config: &CompiledConfig) -> Vec<schema::ProductDiscountCandidate> {
+fn evaluate_discount_offer(
+    offer: &CompiledOffer,
+    input: &Input,
+    config: &CompiledConfig,
+) -> Vec<schema::ProductDiscountCandidate> {
     if !check_main_condition(offer, input, config) {
         return vec![];
     }
 
-    let required_set: HashSet<&str> = offer.required_product_ids.iter().map(String::as_str).collect();
-    let excluded_set: HashSet<&str> = offer.excluded_product_ids.iter().map(String::as_str).collect();
+    let required_set: HashSet<&str> = offer
+        .required_product_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let excluded_set: HashSet<&str> = offer
+        .excluded_product_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
 
     let eligible: Vec<_> = input
         .cart()
@@ -532,10 +698,18 @@ fn evaluate_discount_offer(offer: &CompiledOffer, input: &Input, config: &Compil
             let cheapest = eligible.iter().min_by(|a, b| {
                 let pa = a.cost().amount_per_quantity().amount().as_f64();
                 let pb = b.cost().amount_per_quantity().amount().as_f64();
-                pa.partial_cmp(&pb).unwrap_or(std::cmp::Ordering::Equal).then(a.id().cmp(b.id()))
+                pa.partial_cmp(&pb)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.id().cmp(b.id()))
             });
             match cheapest {
-                Some(line) => vec![make_candidate(line.id().clone(), 1, "free", 100.0, "Cheapest item free")],
+                Some(line) => vec![make_candidate(
+                    line.id().clone(),
+                    1,
+                    "free",
+                    100.0,
+                    "Cheapest item free",
+                )],
                 None => vec![],
             }
         }
@@ -543,7 +717,9 @@ fn evaluate_discount_offer(offer: &CompiledOffer, input: &Input, config: &Compil
             let most_expensive = eligible.iter().max_by(|a, b| {
                 let pa = a.cost().amount_per_quantity().amount().as_f64();
                 let pb = b.cost().amount_per_quantity().amount().as_f64();
-                pa.partial_cmp(&pb).unwrap_or(std::cmp::Ordering::Equal).then(b.id().cmp(a.id()))
+                pa.partial_cmp(&pb)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(b.id().cmp(a.id()))
             });
             match most_expensive {
                 Some(line) => vec![make_candidate(
@@ -558,17 +734,31 @@ fn evaluate_discount_offer(offer: &CompiledOffer, input: &Input, config: &Compil
         }
         "percentage" | "fixed_amount" => eligible
             .iter()
-            .map(|line| make_candidate(line.id().clone(), *line.quantity() as i64, &offer.discount_type, offer.discount_value, "Discount applied"))
+            .map(|line| {
+                make_candidate(
+                    line.id().clone(),
+                    *line.quantity() as i64,
+                    &offer.discount_type,
+                    offer.discount_value,
+                    "Discount applied",
+                )
+            })
             .collect(),
         _ => vec![],
     }
 }
 
-fn is_eligible_line(line: &Lines, required_set: &HashSet<&str>, excluded_set: &HashSet<&str>) -> bool {
+fn is_eligible_line(
+    line: &Lines,
+    required_set: &HashSet<&str>,
+    excluded_set: &HashSet<&str>,
+) -> bool {
     if is_gift_line(line) {
         return false;
     }
-    let Some((_, product_id)) = variant_and_product_id(line) else { return false };
+    let Some((_, product_id)) = variant_and_product_id(line) else {
+        return false;
+    };
     !excluded_set.contains(product_id.as_str())
         && (required_set.is_empty() || required_set.contains(product_id.as_str()))
 }
@@ -577,7 +767,12 @@ fn is_eligible_line(line: &Lines, required_set: &HashSet<&str>, excluded_set: &H
 /// current cart at checkout time — the merchant may have edited the offer, or
 /// the cart may have changed, since the storefront runtime's own evaluation.
 fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledConfig) -> bool {
-    let active_currency = input.cart().cost().subtotal_amount().currency_code().to_string();
+    let active_currency = input
+        .cart()
+        .cost()
+        .subtotal_amount()
+        .currency_code()
+        .to_string();
     let excluded_products: HashSet<&str> = offer
         .excluded_product_ids
         .iter()
@@ -595,10 +790,26 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         })
         .collect();
 
+    if !offer.page_url_conditions.is_empty()
+        && !non_gift_lines.iter().any(|line| {
+            metadata_value(line, "_promo_page_url").is_some_and(|page_url| {
+                offer
+                    .page_url_conditions
+                    .iter()
+                    .all(|condition| page_url_condition_matches(&page_url, condition))
+            })
+        })
+    {
+        return false;
+    }
+
     for condition in &offer.line_attribute_conditions {
         let matching_quantity: i64 = non_gift_lines
             .iter()
-            .filter(|line| line_attribute_value(line, &condition.key, config).as_deref() == Some(condition.value.as_str()))
+            .filter(|line| {
+                line_attribute_value(line, &condition.key, config).as_deref()
+                    == Some(condition.value.as_str())
+            })
             .map(|line| i64::from(*line.quantity()))
             .sum();
         let passes = if condition.match_mode == "not_equals" {
@@ -635,18 +846,16 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         // still emits no volume-discount candidate of its own.
         let cart_value_cents = (raw_cart_value_cents
             - projected_volume_discount_cents(&non_gift_lines, &active_currency))
-            .max(0);
+        .max(0);
 
-        let effective_threshold = resolve_threshold(threshold_cents, &offer.currency_overrides, &active_currency);
+        let effective_threshold =
+            resolve_threshold(threshold_cents, &offer.currency_overrides, &active_currency);
         if cart_value_cents < effective_threshold {
             return false;
         }
         if let Some(maximum) = offer.cart_value_max_cents {
-            let effective_maximum = resolve_threshold(
-                maximum,
-                &offer.max_currency_overrides,
-                &active_currency,
-            );
+            let effective_maximum =
+                resolve_threshold(maximum, &offer.max_currency_overrides, &active_currency);
             if cart_value_cents > effective_maximum {
                 return false;
             }
@@ -654,7 +863,10 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
     }
 
     if let Some(threshold_qty) = offer.cart_quantity_threshold {
-        let cart_qty: i64 = non_gift_lines.iter().map(|line| *line.quantity() as i64).sum();
+        let cart_qty: i64 = non_gift_lines
+            .iter()
+            .map(|line| *line.quantity() as i64)
+            .sum();
         if cart_qty < threshold_qty {
             return false;
         }
@@ -677,8 +889,8 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         }
     }
 
-    let has_customer_tag_condition = !offer.required_customer_tags.is_empty()
-        || !offer.excluded_customer_tags.is_empty();
+    let has_customer_tag_condition =
+        !offer.required_customer_tags.is_empty() || !offer.excluded_customer_tags.is_empty();
     if has_customer_tag_condition {
         let customer = input
             .cart()
@@ -698,8 +910,14 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
                     .collect()
             })
             .unwrap_or_default();
-        if !offer.required_customer_tags.iter().all(|tag| matching_tags.contains(tag.as_str()))
-            || offer.excluded_customer_tags.iter().any(|tag| matching_tags.contains(tag.as_str()))
+        if !offer
+            .required_customer_tags
+            .iter()
+            .all(|tag| matching_tags.contains(tag.as_str()))
+            || offer
+                .excluded_customer_tags
+                .iter()
+                .any(|tag| matching_tags.contains(tag.as_str()))
         {
             return false;
         }
@@ -708,8 +926,14 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
     if !offer.include_country_codes.is_empty() || !offer.exclude_country_codes.is_empty() {
         let country_code = input.localization().country().iso_code().to_string();
         if (!offer.include_country_codes.is_empty()
-            && !offer.include_country_codes.iter().any(|code| code.eq_ignore_ascii_case(&country_code)))
-            || offer.exclude_country_codes.iter().any(|code| code.eq_ignore_ascii_case(&country_code))
+            && !offer
+                .include_country_codes
+                .iter()
+                .any(|code| code.eq_ignore_ascii_case(&country_code)))
+            || offer
+                .exclude_country_codes
+                .iter()
+                .any(|code| code.eq_ignore_ascii_case(&country_code))
         {
             return false;
         }
@@ -728,18 +952,23 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
             return false;
         };
         let number_of_orders = i64::from(*customer.number_of_orders());
-        if offer.customer_order_count_min.is_some_and(|minimum| number_of_orders < minimum)
-            || offer.customer_order_count_max.is_some_and(|maximum| number_of_orders > maximum)
+        if offer
+            .customer_order_count_min
+            .is_some_and(|minimum| number_of_orders < minimum)
+            || offer
+                .customer_order_count_max
+                .is_some_and(|maximum| number_of_orders > maximum)
         {
             return false;
         }
         let amount_spent = customer.amount_spent();
-        let amount_spent_cents = to_cents(
-            amount_spent.amount().as_f64(),
-            &offer.currency_code,
-        );
-        if offer.customer_amount_spent_min_cents.is_some_and(|minimum| amount_spent_cents < minimum)
-            || offer.customer_amount_spent_max_cents.is_some_and(|maximum| amount_spent_cents > maximum)
+        let amount_spent_cents = to_cents(amount_spent.amount().as_f64(), &offer.currency_code);
+        if offer
+            .customer_amount_spent_min_cents
+            .is_some_and(|minimum| amount_spent_cents < minimum)
+            || offer
+                .customer_amount_spent_max_cents
+                .is_some_and(|maximum| amount_spent_cents > maximum)
         {
             return false;
         }
@@ -770,13 +999,22 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
             }
         }
     } else if !offer.required_product_ids.is_empty() || !offer.required_variant_ids.is_empty() {
-        let required_products: HashSet<&str> = offer.required_product_ids.iter().map(String::as_str).collect();
-        let required_variants: HashSet<&str> = offer.required_variant_ids.iter().map(String::as_str).collect();
+        let required_products: HashSet<&str> = offer
+            .required_product_ids
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let required_variants: HashSet<&str> = offer
+            .required_variant_ids
+            .iter()
+            .map(String::as_str)
+            .collect();
 
         let has_required = input.cart().lines().iter().any(|line| {
             variant_and_product_id(line)
                 .map(|(variant_id, product_id)| {
-                    required_products.contains(product_id.as_str()) || required_variants.contains(variant_id.as_str())
+                    required_products.contains(product_id.as_str())
+                        || required_variants.contains(variant_id.as_str())
                 })
                 .unwrap_or(false)
         });
@@ -797,25 +1035,33 @@ fn make_candidate(
 ) -> schema::ProductDiscountCandidate {
     let value = match discount_type {
         "free" | "percentage" => {
-            let pct = if discount_type == "free" { 100.0 } else { discount_value.min(100.0) };
+            let pct = if discount_type == "free" {
+                100.0
+            } else {
+                discount_value.min(100.0)
+            };
             schema::ProductDiscountCandidateValue::Percentage(schema::Percentage {
                 value: shopify_function::scalars::Decimal(pct),
             })
         }
-        _ => schema::ProductDiscountCandidateValue::FixedAmount(schema::ProductDiscountCandidateFixedAmount {
-            amount: shopify_function::scalars::Decimal(discount_value),
-            applies_to_each_item: Some(true),
-        }),
+        _ => schema::ProductDiscountCandidateValue::FixedAmount(
+            schema::ProductDiscountCandidateFixedAmount {
+                amount: shopify_function::scalars::Decimal(discount_value),
+                applies_to_each_item: Some(true),
+            },
+        ),
     };
 
     schema::ProductDiscountCandidate {
         associated_discount_code: None,
         message: Some(message.to_string()),
         prerequisites: None,
-        targets: vec![schema::ProductDiscountCandidateTarget::CartLine(schema::CartLineTarget {
-            id: cart_line_id,
-            quantity: Some(quantity as i32),
-        })],
+        targets: vec![schema::ProductDiscountCandidateTarget::CartLine(
+            schema::CartLineTarget {
+                id: cart_line_id,
+                quantity: Some(quantity as i32),
+            },
+        )],
         value,
     }
 }
@@ -849,7 +1095,9 @@ fn make_multi_line_fixed_candidate(
 
 fn variant_and_product_id(line: &Lines) -> Option<(String, String)> {
     match line.merchandise() {
-        Merchandise::ProductVariant(variant) => Some((variant.id().to_string(), variant.product().id().to_string())),
+        Merchandise::ProductVariant(variant) => {
+            Some((variant.id().to_string(), variant.product().id().to_string()))
+        }
         Merchandise::Other => None,
     }
 }
@@ -888,8 +1136,12 @@ fn projected_volume_discount_cents(lines: &[&Lines], currency_code: &str) -> i64
         {
             continue;
         }
-        let Merchandise::ProductVariant(variant) = line.merchandise() else { continue };
-        let Some(metafield) = variant.product().volume_discount_tiers() else { continue };
+        let Merchandise::ProductVariant(variant) = line.merchandise() else {
+            continue;
+        };
+        let Some(metafield) = variant.product().volume_discount_tiers() else {
+            continue;
+        };
         let Ok(tiers) = serde_json::from_str::<Vec<VolumeDiscountTier>>(metafield.value()) else {
             continue;
         };
@@ -933,15 +1185,66 @@ fn projected_volume_discount_cents(lines: &[&Lines], currency_code: &str) -> i64
                             .unwrap_or(std::cmp::Ordering::Equal)
                     })
                 })
-                .map(|tier| {
-                    ((group.subtotal_cents as f64 * tier.percent) / 100.0).round() as i64
-                })
+                .map(|tier| ((group.subtotal_cents as f64 * tier.percent) / 100.0).round() as i64)
         })
         .sum()
 }
 
 fn landing_source(line: &Lines) -> Option<String> {
     metadata_value(line, "__landing_source")
+}
+
+fn page_url_condition_matches(page_url: &str, condition: &CompiledPageUrlCondition) -> bool {
+    let path_and_query = page_url
+        .split_once("://")
+        .and_then(|(_, remainder)| remainder.find('/').map(|index| &remainder[index..]))
+        .unwrap_or(page_url);
+    let path = path_and_query
+        .split_once('?')
+        .map(|(value, _)| value)
+        .unwrap_or(path_and_query)
+        .split('#')
+        .next()
+        .unwrap_or("");
+    let normalized_path = if condition.case_sensitive {
+        path.to_string()
+    } else {
+        path.to_ascii_lowercase()
+    };
+    let path_matches = condition.patterns.is_empty()
+        || condition.patterns.iter().any(|pattern| {
+            let normalized_pattern = if condition.case_sensitive {
+                pattern.clone()
+            } else {
+                pattern.to_ascii_lowercase()
+            };
+            match condition.match_mode.as_str() {
+                "exact" => normalized_path == normalized_pattern,
+                "starts_with" => normalized_path.starts_with(&normalized_pattern),
+                "ends_with" => normalized_path.ends_with(&normalized_pattern),
+                _ => normalized_path.contains(&normalized_pattern),
+            }
+        });
+    if !path_matches {
+        return false;
+    }
+
+    let Some(param_name) = condition.param_name.as_deref() else {
+        return true;
+    };
+    let actual = query_parameter(path_and_query, param_name);
+    match condition.param_value.as_deref() {
+        Some(expected) => actual == Some(expected),
+        None => actual.is_some(),
+    }
+}
+
+fn query_parameter<'a>(page_url: &'a str, name: &str) -> Option<&'a str> {
+    let query = page_url.split_once('?')?.1.split('#').next()?;
+    query.split('&').find_map(|pair| {
+        let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
+        (raw_key == name).then_some(raw_value)
+    })
 }
 
 fn line_attribute_value(line: &Lines, key: &str, config: &CompiledConfig) -> Option<String> {
@@ -952,18 +1255,56 @@ fn line_attribute_value(line: &Lines, key: &str, config: &CompiledConfig) -> Opt
     } else if let Some(value) = metadata_value(line, key) {
         return Some(value);
     }
-    if config.l1.as_deref() == Some(key) { return line.custom_line_1().as_ref().and_then(|attribute| attribute.value()).cloned(); }
-    if config.l2.as_deref() == Some(key) { return line.custom_line_2().as_ref().and_then(|attribute| attribute.value()).cloned(); }
+    if config.l1.as_deref() == Some(key) {
+        return line
+            .custom_line_1()
+            .as_ref()
+            .and_then(|attribute| attribute.value())
+            .cloned();
+    }
+    if config.l2.as_deref() == Some(key) {
+        return line
+            .custom_line_2()
+            .as_ref()
+            .and_then(|attribute| attribute.value())
+            .cloned();
+    }
     None
 }
 
 fn cart_attribute_value(input: &Input, key: &str, config: &CompiledConfig) -> Option<String> {
     if key == "source" {
-        return input.cart().source_attribute().as_ref().and_then(|attribute| attribute.value()).cloned();
+        return input
+            .cart()
+            .source_attribute()
+            .as_ref()
+            .and_then(|attribute| attribute.value())
+            .cloned();
     }
-    if config.c1.as_deref() == Some(key) { return input.cart().custom_cart_1().as_ref().and_then(|attribute| attribute.value()).cloned(); }
-    if config.c2.as_deref() == Some(key) { return input.cart().custom_cart_2().as_ref().and_then(|attribute| attribute.value()).cloned(); }
-    if config.c3.as_deref() == Some(key) { return input.cart().custom_cart_3().as_ref().and_then(|attribute| attribute.value()).cloned(); }
+    if config.c1.as_deref() == Some(key) {
+        return input
+            .cart()
+            .custom_cart_1()
+            .as_ref()
+            .and_then(|attribute| attribute.value())
+            .cloned();
+    }
+    if config.c2.as_deref() == Some(key) {
+        return input
+            .cart()
+            .custom_cart_2()
+            .as_ref()
+            .and_then(|attribute| attribute.value())
+            .cloned();
+    }
+    if config.c3.as_deref() == Some(key) {
+        return input
+            .cart()
+            .custom_cart_3()
+            .as_ref()
+            .and_then(|attribute| attribute.value())
+            .cloned();
+    }
     None
 }
 
@@ -1093,10 +1434,12 @@ mod tests {
             let object = line.as_object_mut().unwrap();
             let mut metadata = serde_json::Map::new();
             for (alias, key) in aliases {
-                if let Some(value) = object
-                    .remove(alias)
-                    .and_then(|attribute| attribute.get("value").and_then(|value| value.as_str()).map(str::to_owned))
-                {
+                if let Some(value) = object.remove(alias).and_then(|attribute| {
+                    attribute
+                        .get("value")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned)
+                }) {
                     metadata.insert(key.to_string(), serde_json::Value::String(value));
                 }
             }
@@ -1152,7 +1495,14 @@ mod tests {
         )
     }
 
-    fn gift_line(id: &str, variant_id: &str, product_id: &str, offer_id: &str, price: &str, qty: i64) -> String {
+    fn gift_line(
+        id: &str,
+        variant_id: &str,
+        product_id: &str,
+        offer_id: &str,
+        price: &str,
+        qty: i64,
+    ) -> String {
         format!(
             r#"{{
                 "id": "{id}", "quantity": {qty},
@@ -1238,15 +1588,29 @@ mod tests {
         quiz: Option<(&str, &str, &str, bool)>,
     ) -> String {
         let subtotal = price.parse::<f64>().unwrap() * qty as f64;
-        let landing_json = landing.map(|value| format!(r#"{{ "value": "{value}" }}"#)).unwrap_or_else(|| "null".to_string());
+        let landing_json = landing
+            .map(|value| format!(r#"{{ "value": "{value}" }}"#))
+            .unwrap_or_else(|| "null".to_string());
         let (quiz_id, target, expected, gift) = quiz
-            .map(|(bundle_id, target_cents, expected_count, is_gift)| (
-                format!(r#"{{ "value": "{bundle_id}" }}"#),
-                format!(r#"{{ "value": "{target_cents}" }}"#),
-                format!(r#"{{ "value": "{expected_count}" }}"#),
-                format!(r#"{{ "value": "{}" }}"#, if is_gift { "true" } else { "false" }),
-            ))
-            .unwrap_or_else(|| ("null".to_string(), "null".to_string(), "null".to_string(), "null".to_string()));
+            .map(|(bundle_id, target_cents, expected_count, is_gift)| {
+                (
+                    format!(r#"{{ "value": "{bundle_id}" }}"#),
+                    format!(r#"{{ "value": "{target_cents}" }}"#),
+                    format!(r#"{{ "value": "{expected_count}" }}"#),
+                    format!(
+                        r#"{{ "value": "{}" }}"#,
+                        if is_gift { "true" } else { "false" }
+                    ),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    "null".to_string(),
+                    "null".to_string(),
+                    "null".to_string(),
+                    "null".to_string(),
+                )
+            });
         format!(
             r#"{{
                 "id": "{id}", "quantity": {qty},
@@ -1296,71 +1660,171 @@ mod tests {
 
     #[test]
     fn registered_line_attribute_guards_gift_offer() {
-        let paid = regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1)
-            .replace("\"volumeDiscountNektarGlp1\": null", "\"volumeDiscountNektarGlp1\": null, \"bundleType\": { \"value\": \"starter\" }");
-        let lines = format!("[{},{}]", paid, gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1));
+        let paid = regular_line(
+            "gid://shopify/CartLine/1",
+            "gid://shopify/ProductVariant/v1",
+            "gid://shopify/Product/p1",
+            "60.00",
+            1,
+        )
+        .replace(
+            "\"volumeDiscountNektarGlp1\": null",
+            "\"volumeDiscountNektarGlp1\": null, \"bundleType\": { \"value\": \"starter\" }",
+        );
+        let lines = format!(
+            "[{},{}]",
+            paid,
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            )
+        );
         let config = gift_offer_config(5000, 1).replace(
             "\"combinesWithOrderDiscounts\":true",
             "\"lineAttributeConditions\":[{\"key\":\"__bundle_type\",\"value\":\"starter\",\"matchMode\":\"equals\",\"minMatchingQuantity\":1}],\"combinesWithOrderDiscounts\":true",
         );
-        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &config)).expect("should not error");
+        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &config))
+            .expect("should not error");
         assert_eq!(result.operations.len(), 1);
     }
 
     #[test]
     fn registered_cart_attribute_guards_gift_offer() {
-        let lines = format!("[{},{}]", regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1), gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1));
+        let lines = format!(
+            "[{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            )
+        );
         let config = gift_offer_config(5000, 1).replace(
             "\"combinesWithOrderDiscounts\":true",
             "\"cartAttributeConditions\":[{\"key\":\"source\",\"value\":\"vip-landing\",\"matchMode\":\"equals\",\"minMatchingQuantity\":1}],\"combinesWithOrderDiscounts\":true",
         );
-        let payload = cart_json(&lines, "80.00", &config).replace("\"cart\": {", "\"cart\": { \"sourceAttribute\": { \"value\": \"vip-landing\" },");
+        let payload = cart_json(&lines, "80.00", &config).replace(
+            "\"cart\": {",
+            "\"cart\": { \"sourceAttribute\": { \"value\": \"vip-landing\" },",
+        );
         let result = run_function_with_input(run, &payload).expect("should not error");
         assert_eq!(result.operations.len(), 1);
     }
 
     #[test]
     fn store_specific_line_attribute_is_loaded_through_the_function_variable_slot() {
-        let paid = regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1)
-            .replace("\"volumeDiscountNektarGlp1\": null", "\"volumeDiscountNektarGlp1\": null, \"customLine1\": { \"value\": \"VIP\" }");
-        let lines = format!("[{},{}]", paid, gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1));
+        let paid = regular_line(
+            "gid://shopify/CartLine/1",
+            "gid://shopify/ProductVariant/v1",
+            "gid://shopify/Product/p1",
+            "60.00",
+            1,
+        )
+        .replace(
+            "\"volumeDiscountNektarGlp1\": null",
+            "\"volumeDiscountNektarGlp1\": null, \"customLine1\": { \"value\": \"VIP\" }",
+        );
+        let lines = format!(
+            "[{},{}]",
+            paid,
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            )
+        );
         let config = gift_offer_config(5000, 1)
             .replace("{\"offers\":", "{\"l1\":\"engraving_message\",\"offers\":")
             .replace(
                 "\"combinesWithOrderDiscounts\":true",
                 "\"lineAttributeConditions\":[{\"key\":\"engraving_message\",\"value\":\"VIP\",\"matchMode\":\"equals\",\"minMatchingQuantity\":1}],\"combinesWithOrderDiscounts\":true",
             );
-        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &config)).expect("should not error");
+        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &config))
+            .expect("should not error");
         assert_eq!(result.operations.len(), 1);
     }
 
     #[test]
     fn additional_store_specific_line_attributes_are_loaded_from_packed_metadata() {
-        let paid = regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1);
-        let lines = format!("[{},{}]", paid, gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1));
+        let paid = regular_line(
+            "gid://shopify/CartLine/1",
+            "gid://shopify/ProductVariant/v1",
+            "gid://shopify/Product/p1",
+            "60.00",
+            1,
+        );
+        let lines = format!(
+            "[{},{}]",
+            paid,
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            )
+        );
         let config = gift_offer_config(5000, 1).replace(
             "\"combinesWithOrderDiscounts\":true",
             "\"lineAttributeConditions\":[{\"key\":\"third_custom_key\",\"value\":\"VIP\",\"matchMode\":\"equals\",\"minMatchingQuantity\":1}],\"combinesWithOrderDiscounts\":true",
         );
-        let mut payload: serde_json::Value = serde_json::from_str(&cart_json(&lines, "80.00", &config)).unwrap();
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&cart_json(&lines, "80.00", &config)).unwrap();
         payload["cart"]["lines"][0]["promoMetadata"] = serde_json::json!({
             "value": serde_json::to_string(&serde_json::json!({ "third_custom_key": "VIP" })).unwrap(),
         });
-        let result = run_function_with_input(run, &serde_json::to_string(&payload).unwrap()).expect("should not error");
+        let result = run_function_with_input(run, &serde_json::to_string(&payload).unwrap())
+            .expect("should not error");
         assert_eq!(result.operations.len(), 1);
     }
 
     #[test]
     fn store_specific_cart_attribute_is_loaded_through_the_function_variable_slot() {
-        let lines = format!("[{},{}]", regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1), gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1));
+        let lines = format!(
+            "[{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            )
+        );
         let config = gift_offer_config(5000, 1)
             .replace("{\"offers\":", "{\"c1\":\"affiliate_campaign\",\"offers\":")
             .replace(
                 "\"combinesWithOrderDiscounts\":true",
                 "\"cartAttributeConditions\":[{\"key\":\"affiliate_campaign\",\"value\":\"creator-42\",\"matchMode\":\"equals\",\"minMatchingQuantity\":1}],\"combinesWithOrderDiscounts\":true",
             );
-        let payload = cart_json(&lines, "80.00", &config)
-            .replace("\"cart\": {", "\"cart\": { \"customCart1\": { \"value\": \"creator-42\" },");
+        let payload = cart_json(&lines, "80.00", &config).replace(
+            "\"cart\": {",
+            "\"cart\": { \"customCart1\": { \"value\": \"creator-42\" },",
+        );
         let result = run_function_with_input(run, &payload).expect("should not error");
         assert_eq!(result.operations.len(), 1);
     }
@@ -1369,14 +1833,28 @@ mod tests {
     fn cart_value_maximum_uses_the_active_currency_override() {
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "85.00", 1),
-            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "85.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            ),
         );
         let config = gift_offer_config(5000, 1).replace(
             "\"cartValueThresholdCents\":5000",
             "\"cartValueThresholdCents\":5000,\"cartValueMaxCents\":9999,\"currencyOverrides\":{\"EUR\":4000},\"maxCurrencyOverrides\":{\"EUR\":7999}",
         );
-        let payload = cart_json(&lines, "105.00", &config).replace("\"currencyCode\": \"USD\"", "\"currencyCode\": \"EUR\"");
+        let payload = cart_json(&lines, "105.00", &config)
+            .replace("\"currencyCode\": \"USD\"", "\"currencyCode\": \"EUR\"");
         let result = run_function_with_input(run, &payload).expect("should not error");
         assert!(result.operations.is_empty());
     }
@@ -1385,8 +1863,21 @@ mod tests {
     fn gift_discount_applies_to_valid_gift_line() {
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
-            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            ),
         );
         let payload = cart_json(&lines, "80.00", &gift_offer_config(5000, 1));
 
@@ -1405,13 +1896,29 @@ mod tests {
     fn gift_discount_not_applied_when_threshold_not_met() {
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "40.00", 1),
-            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "40.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            ),
         );
         let payload = cart_json(&lines, "60.00", &gift_offer_config(10000, 1));
 
         let result = run_function_with_input(run, &payload).expect("should not error");
-        assert!(result.operations.is_empty(), "should not discount below threshold");
+        assert!(
+            result.operations.is_empty(),
+            "should not discount below threshold"
+        );
     }
 
     #[test]
@@ -1429,14 +1936,30 @@ mod tests {
         );
         let lines = format!(
             "[{},{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "40.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "40.00",
+                1
+            ),
             legacy_gift,
-            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            ),
         );
         let payload = cart_json(&lines, "80.00", &gift_offer_config(5000, 1));
 
         let result = run_function_with_input(run, &payload).expect("should not error");
-        assert!(result.operations.is_empty(), "legacy gift value must not unlock the threshold");
+        assert!(
+            result.operations.is_empty(),
+            "legacy gift value must not unlock the threshold"
+        );
     }
 
     #[test]
@@ -1452,35 +1975,75 @@ mod tests {
                 3,
                 r#"[{"qty":3,"percent":20}]"#,
             ),
-            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            ),
         );
         let result = run_function_with_input(
             run,
             &cart_json(&lines, "109.07", &gift_offer_config(8500, 1)),
-        ).expect("should not error");
+        )
+        .expect("should not error");
 
-        assert!(result.operations.is_empty(), "$89.07 less 20% is $71.26 and must not unlock $85");
+        assert!(
+            result.operations.is_empty(),
+            "$89.07 less 20% is $71.26 and must not unlock $85"
+        );
     }
 
     #[test]
     fn tampered_gift_line_not_discounted() {
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
-            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/expensive-tampered", "gid://shopify/Product/p-expensive", "offer-1", "500.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/expensive-tampered",
+                "gid://shopify/Product/p-expensive",
+                "offer-1",
+                "500.00",
+                1
+            ),
         );
         let payload = cart_json(&lines, "560.00", &gift_offer_config(5000, 1));
 
         let result = run_function_with_input(run, &payload).expect("should not error");
-        assert!(result.operations.is_empty(), "tampered gift variant should not be discounted");
+        assert!(
+            result.operations.is_empty(),
+            "tampered gift variant should not be discounted"
+        );
     }
 
     #[test]
     fn max_gift_quantity_enforced() {
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
-            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 3),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                3
+            ),
         );
         let payload = cart_json(&lines, "120.00", &gift_offer_config(5000, 1));
 
@@ -1490,7 +2053,9 @@ mod tests {
             schema::CartOperation::ProductDiscountsAdd(op) => {
                 let target = &op.candidates[0].targets[0];
                 match target {
-                    schema::ProductDiscountCandidateTarget::CartLine(t) => assert_eq!(t.quantity, Some(1)),
+                    schema::ProductDiscountCandidateTarget::CartLine(t) => {
+                        assert_eq!(t.quantity, Some(1))
+                    }
                 }
             }
             other => panic!("expected ProductDiscountsAdd, got {other:?}"),
@@ -1501,7 +2066,13 @@ mod tests {
     fn strict_gift_rejects_cross_reward_variant_tampering() {
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
             gift_line_with_metadata(
                 "gid://shopify/CartLine/2",
                 "gid://shopify/ProductVariant/gift-v2",
@@ -1511,15 +2082,26 @@ mod tests {
                 1,
             ),
         );
-        let result = run_function_with_input(run, &cart_json(&lines, "80.00", strict_gift_offer_config())).expect("should not error");
-        assert!(result.operations.is_empty(), "a reward cannot claim another reward's variant");
+        let result =
+            run_function_with_input(run, &cart_json(&lines, "80.00", strict_gift_offer_config()))
+                .expect("should not error");
+        assert!(
+            result.operations.is_empty(),
+            "a reward cannot claim another reward's variant"
+        );
     }
 
     #[test]
     fn strict_gift_rejects_unlisted_variant_from_allowed_product() {
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
             gift_line_with_metadata(
                 "gid://shopify/CartLine/2",
                 "gid://shopify/ProductVariant/unlisted",
@@ -1529,16 +2111,30 @@ mod tests {
                 1,
             ),
         );
-        let result = run_function_with_input(run, &cart_json(&lines, "160.00", strict_gift_offer_config())).expect("should not error");
-        assert!(result.operations.is_empty(), "an explicit variant allowlist must take precedence over its product id");
+        let result = run_function_with_input(
+            run,
+            &cart_json(&lines, "160.00", strict_gift_offer_config()),
+        )
+        .expect("should not error");
+        assert!(
+            result.operations.is_empty(),
+            "an explicit variant allowlist must take precedence over its product id"
+        );
     }
 
     #[test]
     fn gift_rewards_are_enforced_even_when_offer_type_is_misconfigured() {
-        let config = strict_gift_offer_config().replace("\"offerType\":\"gift\"", "\"offerType\":\"discount\"");
+        let config = strict_gift_offer_config()
+            .replace("\"offerType\":\"gift\"", "\"offerType\":\"discount\"");
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
             gift_line_with_metadata(
                 "gid://shopify/CartLine/2",
                 "gid://shopify/ProductVariant/gift-v1",
@@ -1548,8 +2144,13 @@ mod tests {
                 1,
             ),
         );
-        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &config)).expect("should not error");
-        assert_eq!(result.operations.len(), 1, "gift reward data must select the strict gift path");
+        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &config))
+            .expect("should not error");
+        assert_eq!(
+            result.operations.len(),
+            1,
+            "gift reward data must select the strict gift path"
+        );
     }
 
     #[test]
@@ -1567,17 +2168,34 @@ mod tests {
                 "60.00",
                 1,
             ),
-            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            ),
         );
-        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &config)).expect("should not error");
-        assert!(result.operations.is_empty(), "excluded products must not count toward gift qualification");
+        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &config))
+            .expect("should not error");
+        assert!(
+            result.operations.is_empty(),
+            "excluded products must not count toward gift qualification"
+        );
     }
 
     #[test]
     fn strict_gift_rejects_stale_offer_version() {
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
             gift_line_with_metadata(
                 "gid://shopify/CartLine/2",
                 "gid://shopify/ProductVariant/gift-v1",
@@ -1587,15 +2205,26 @@ mod tests {
                 1,
             ),
         );
-        let result = run_function_with_input(run, &cart_json(&lines, "80.00", strict_gift_offer_config())).expect("should not error");
-        assert!(result.operations.is_empty(), "a stale offer version must not receive a discount");
+        let result =
+            run_function_with_input(run, &cart_json(&lines, "80.00", strict_gift_offer_config()))
+                .expect("should not error");
+        assert!(
+            result.operations.is_empty(),
+            "a stale offer version must not receive a discount"
+        );
     }
 
     #[test]
     fn strict_gift_applies_each_reward_discount_and_quantity_limit() {
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
             gift_line_with_metadata(
                 "gid://shopify/CartLine/2",
                 "gid://shopify/ProductVariant/gift-v2",
@@ -1605,15 +2234,23 @@ mod tests {
                 3,
             ),
         );
-        let result = run_function_with_input(run, &cart_json(&lines, "120.00", strict_gift_offer_config())).expect("should not error");
+        let result = run_function_with_input(
+            run,
+            &cart_json(&lines, "120.00", strict_gift_offer_config()),
+        )
+        .expect("should not error");
         match &result.operations[0] {
             schema::CartOperation::ProductDiscountsAdd(operation) => {
                 assert_eq!(operation.candidates[0].targets.len(), 1);
                 match &operation.candidates[0].targets[0] {
-                    schema::ProductDiscountCandidateTarget::CartLine(target) => assert_eq!(target.quantity, Some(2)),
+                    schema::ProductDiscountCandidateTarget::CartLine(target) => {
+                        assert_eq!(target.quantity, Some(2))
+                    }
                 }
                 match &operation.candidates[0].value {
-                    schema::ProductDiscountCandidateValue::Percentage(value) => assert_eq!(value.value.0, 50.0),
+                    schema::ProductDiscountCandidateValue::Percentage(value) => {
+                        assert_eq!(value.value.0, 50.0)
+                    }
                     other => panic!("expected percentage, got {other:?}"),
                 }
             }
@@ -1637,9 +2274,27 @@ mod tests {
         }]}"#;
         let lines = format!(
             "[{},{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/trigger", "gid://shopify/Product/trigger", "30.00", 2),
-            regular_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/target", "gid://shopify/Product/target", "20.00", 1),
-            regular_line("gid://shopify/CartLine/3", "gid://shopify/ProductVariant/other", "gid://shopify/Product/other", "20.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/trigger",
+                "gid://shopify/Product/trigger",
+                "30.00",
+                2
+            ),
+            regular_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/target",
+                "gid://shopify/Product/target",
+                "20.00",
+                1
+            ),
+            regular_line(
+                "gid://shopify/CartLine/3",
+                "gid://shopify/ProductVariant/other",
+                "gid://shopify/Product/other",
+                "20.00",
+                1
+            ),
         );
         let payload = cart_json(&lines, "100.00", config);
         let result = run_function_with_input(run, &payload).expect("should not error");
@@ -1659,6 +2314,119 @@ mod tests {
     }
 
     #[test]
+    fn bounded_product_tier_discounts_only_the_configured_cheapest_quantity() {
+        let config = r#"{"offers":[{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[],"orderRewards":[],"productRewards":[{
+                "id":"tiered","targetProductIds":[],"targetVariantIds":[],"discountType":"percentage","discountValue":0,
+                "subscriptionMode":"any","scopeMode":"sitewide","priceTiers":[],"selectionMode":"cheapest",
+                "quantityTiers":[{"minimumQuantity":2,"maximumQuantity":3,"discountType":"percentage","discountValue":20,"discountedQuantity":1}],
+                "discountPercentageOnGifts":100
+            }]
+        }]}"#;
+        let lines = format!(
+            "[{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/expensive",
+                "gid://shopify/ProductVariant/a",
+                "gid://shopify/Product/a",
+                "30.00",
+                1
+            ),
+            regular_line(
+                "gid://shopify/CartLine/cheap",
+                "gid://shopify/ProductVariant/b",
+                "gid://shopify/Product/b",
+                "10.00",
+                1
+            ),
+        );
+        let result = run_function_with_input(run, &cart_json(&lines, "40.00", config))
+            .expect("should not error");
+
+        match &result.operations[0] {
+            schema::CartOperation::ProductDiscountsAdd(op) => {
+                assert_eq!(op.candidates.len(), 1);
+                match &op.candidates[0].targets[0] {
+                    schema::ProductDiscountCandidateTarget::CartLine(target) => {
+                        assert_eq!(target.id, "gid://shopify/CartLine/cheap");
+                        assert_eq!(target.quantity, Some(1));
+                    }
+                }
+                match &op.candidates[0].value {
+                    schema::ProductDiscountCandidateValue::Percentage(value) => {
+                        assert_eq!(value.value.0, 20.0)
+                    }
+                    other => panic!("expected percentage, got {other:?}"),
+                }
+            }
+            other => panic!("expected ProductDiscountsAdd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unique_count_rule_deduplicates_split_lines_of_the_same_product() {
+        let config = r#"{"offers":[{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[],"orderRewards":[],"productRewards":[{
+                "id":"tiered","targetProductIds":[],"targetVariantIds":[],"discountType":"percentage","discountValue":0,
+                "subscriptionMode":"any","scopeMode":"sitewide","priceTiers":[],"selectionMode":"all","countRule":"unique",
+                "quantityTiers":[{"minimumQuantity":2,"discountType":"percentage","discountValue":20}],
+                "discountPercentageOnGifts":100
+            }]
+        }]}"#;
+        let same_product = format!(
+            "[{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/a",
+                "gid://shopify/Product/shared",
+                "10.00",
+                4
+            ),
+            regular_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/b",
+                "gid://shopify/Product/shared",
+                "10.00",
+                1
+            ),
+        );
+        let not_qualified =
+            run_function_with_input(run, &cart_json(&same_product, "50.00", config))
+                .expect("should not error");
+        assert!(not_qualified.operations.is_empty());
+
+        let distinct_products = format!(
+            "[{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/a",
+                "gid://shopify/Product/a",
+                "10.00",
+                1
+            ),
+            regular_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/b",
+                "gid://shopify/Product/b",
+                "10.00",
+                1
+            ),
+        );
+        let qualified =
+            run_function_with_input(run, &cart_json(&distinct_products, "20.00", config))
+                .expect("should not error");
+        assert_eq!(qualified.operations.len(), 1);
+    }
+
+    #[test]
     fn order_reward_excludes_gift_lines_from_order_subtotal_target() {
         let config = r#"{"offers":[{
             "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
@@ -1670,8 +2438,21 @@ mod tests {
         }]}"#;
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/paid", "gid://shopify/Product/paid", "50.00", 1),
-            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift", "gid://shopify/Product/gift", "offer-2", "20.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/paid",
+                "gid://shopify/Product/paid",
+                "50.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift",
+                "gid://shopify/Product/gift",
+                "offer-2",
+                "20.00",
+                1
+            ),
         );
         let payload = cart_json_with_classes(&lines, "70.00", config, r#"["ORDER"]"#);
         let result = run_function_with_input(run, &payload).expect("should not error");
@@ -1679,10 +2460,140 @@ mod tests {
         match &result.operations[0] {
             schema::CartOperation::OrderDiscountsAdd(op) => match &op.candidates[0].targets[0] {
                 schema::OrderDiscountCandidateTarget::OrderSubtotal(target) => {
-                    assert_eq!(target.excluded_cart_line_ids, vec!["gid://shopify/CartLine/2"]);
+                    assert_eq!(
+                        target.excluded_cart_line_ids,
+                        vec!["gid://shopify/CartLine/2"]
+                    );
                 }
             },
             other => panic!("expected OrderDiscountsAdd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bounded_order_tier_stops_above_its_maximum() {
+        let config = r#"{"offers":[{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[],"productRewards":[],
+            "orderRewards":[{"id":"order-1","discountType":"percentage","discountValue":0,
+              "subtotalTiers":[{"minimumSubtotalCents":5000,"maximumSubtotalCents":9999,"discountType":"fixed_amount","discountValue":10}]}]
+        }]}"#;
+        let line = regular_line(
+            "gid://shopify/CartLine/1",
+            "gid://shopify/ProductVariant/paid",
+            "gid://shopify/Product/paid",
+            "120.00",
+            1,
+        );
+        let above = run_function_with_input(
+            run,
+            &cart_json_with_classes(&format!("[{line}]"), "120.00", config, r#"["ORDER"]"#),
+        )
+        .expect("should not error");
+        assert!(above.operations.is_empty());
+
+        let line = regular_line(
+            "gid://shopify/CartLine/1",
+            "gid://shopify/ProductVariant/paid",
+            "gid://shopify/Product/paid",
+            "80.00",
+            1,
+        );
+        let inside = run_function_with_input(
+            run,
+            &cart_json_with_classes(&format!("[{line}]"), "80.00", config, r#"["ORDER"]"#),
+        )
+        .expect("should not error");
+        assert_eq!(inside.operations.len(), 1);
+    }
+
+    #[test]
+    fn bounded_order_quantity_tier_uses_paid_item_count() {
+        let config = r#"{"offers":[{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[],"productRewards":[],
+            "orderRewards":[{"id":"order-1","discountType":"percentage","discountValue":0,
+              "subtotalTiers":[{"minimumQuantity":2,"maximumQuantity":3,"discountType":"percentage","discountValue":15}]}]
+        }]}"#;
+        let two_items = regular_line(
+            "gid://shopify/CartLine/1",
+            "gid://shopify/ProductVariant/paid",
+            "gid://shopify/Product/paid",
+            "10.00",
+            2,
+        );
+        let inside = run_function_with_input(
+            run,
+            &cart_json_with_classes(&format!("[{two_items}]"), "20.00", config, r#"["ORDER"]"#),
+        )
+        .expect("should not error");
+        assert_eq!(inside.operations.len(), 1);
+
+        let four_items = regular_line(
+            "gid://shopify/CartLine/1",
+            "gid://shopify/ProductVariant/paid",
+            "gid://shopify/Product/paid",
+            "10.00",
+            4,
+        );
+        let above = run_function_with_input(
+            run,
+            &cart_json_with_classes(&format!("[{four_items}]"), "40.00", config, r#"["ORDER"]"#),
+        )
+        .expect("should not error");
+        assert!(above.operations.is_empty());
+    }
+
+    #[test]
+    fn tagged_offer_scope_discounts_only_lines_signed_for_that_bundle() {
+        let config = r#"{"offers":[{
+            "id":"offer-1","version":1,"offerType":"bundle","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[],"orderRewards":[],"productRewards":[{
+                "id":"bundle-tier","targetProductIds":[],"targetVariantIds":[],"discountType":"percentage","discountValue":0,
+                "subscriptionMode":"any","scopeMode":"tagged_offer","requiredOfferId":"offer-1","selectionMode":"all","countRule":"all",
+                "quantityTiers":[{"minimumQuantity":1,"discountType":"percentage","discountValue":20}],
+                "priceTiers":[],"discountPercentageOnGifts":100
+            }]
+        }]}"#;
+        let tagged = regular_line(
+            "gid://shopify/CartLine/tagged",
+            "gid://shopify/ProductVariant/a",
+            "gid://shopify/Product/a",
+            "10.00",
+            1,
+        )
+        .replace(r#""offerId": null"#, r#""offerId": {"value":"offer-1"}"#);
+        let ordinary = regular_line(
+            "gid://shopify/CartLine/ordinary",
+            "gid://shopify/ProductVariant/b",
+            "gid://shopify/Product/b",
+            "10.00",
+            1,
+        );
+        let result = run_function_with_input(
+            run,
+            &cart_json(&format!("[{tagged},{ordinary}]"), "20.00", config),
+        )
+        .expect("should not error");
+        match &result.operations[0] {
+            schema::CartOperation::ProductDiscountsAdd(op) => {
+                assert_eq!(op.candidates.len(), 1);
+                match &op.candidates[0].targets[0] {
+                    schema::ProductDiscountCandidateTarget::CartLine(target) => {
+                        assert_eq!(target.id, "gid://shopify/CartLine/tagged")
+                    }
+                }
+            }
+            other => panic!("expected ProductDiscountsAdd, got {other:?}"),
         }
     }
 
@@ -1704,11 +2615,36 @@ mod tests {
         }]}"#;
         let lines = format!(
             "[{},{},{}]",
-            scoped_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/protein", "gid://shopify/Product/protein", "50.00", 2, Some("protein-lp"), None),
-            scoped_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/protein", "gid://shopify/Product/protein", "50.00", 1, Some("protein-lp"), None),
-            scoped_line("gid://shopify/CartLine/3", "gid://shopify/ProductVariant/protein", "gid://shopify/Product/protein", "50.00", 1, None, None),
+            scoped_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/protein",
+                "gid://shopify/Product/protein",
+                "50.00",
+                2,
+                Some("protein-lp"),
+                None
+            ),
+            scoped_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/protein",
+                "gid://shopify/Product/protein",
+                "50.00",
+                1,
+                Some("protein-lp"),
+                None
+            ),
+            scoped_line(
+                "gid://shopify/CartLine/3",
+                "gid://shopify/ProductVariant/protein",
+                "gid://shopify/Product/protein",
+                "50.00",
+                1,
+                None,
+                None
+            ),
         );
-        let result = run_function_with_input(run, &cart_json(&lines, "200.00", config)).expect("should not error");
+        let result = run_function_with_input(run, &cart_json(&lines, "200.00", config))
+            .expect("should not error");
         match &result.operations[0] {
             schema::CartOperation::ProductDiscountsAdd(op) => {
                 assert_eq!(op.candidates.len(), 2);
@@ -1742,24 +2678,37 @@ mod tests {
             }]
         }]}"#;
         let one_time_anchor = scoped_line(
-            "gid://shopify/CartLine/1", "gid://shopify/ProductVariant/anchor", "gid://shopify/Product/anchor",
-            "50.00", 2, Some("atlas-sk-otg"), None,
+            "gid://shopify/CartLine/1",
+            "gid://shopify/ProductVariant/anchor",
+            "gid://shopify/Product/anchor",
+            "50.00",
+            2,
+            Some("atlas-sk-otg"),
+            None,
         );
         let subscription_anchor = one_time_anchor.replace(
             "\"sellingPlanAllocation\": null",
             "\"sellingPlanAllocation\": { \"sellingPlan\": { \"id\": \"gid://shopify/SellingPlan/monthly\" } }",
         );
         let gift = scoped_line(
-            "gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift", "gid://shopify/Product/gift",
-            "20.00", 1, Some("atlas-sk-otg"), None,
+            "gid://shopify/CartLine/2",
+            "gid://shopify/ProductVariant/gift",
+            "gid://shopify/Product/gift",
+            "20.00",
+            1,
+            Some("atlas-sk-otg"),
+            None,
         );
 
         let without_subscription = format!("[{one_time_anchor},{gift}]");
-        let result = run_function_with_input(run, &cart_json(&without_subscription, "120.00", config)).expect("one-time input should parse");
+        let result =
+            run_function_with_input(run, &cart_json(&without_subscription, "120.00", config))
+                .expect("one-time input should parse");
         assert!(result.operations.is_empty());
 
         let with_subscription = format!("[{subscription_anchor},{gift}]");
-        let result = run_function_with_input(run, &cart_json(&with_subscription, "120.00", config)).expect("subscription input should parse");
+        let result = run_function_with_input(run, &cart_json(&with_subscription, "120.00", config))
+            .expect("subscription input should parse");
         assert_eq!(result.operations.len(), 1);
     }
 
@@ -1777,20 +2726,51 @@ mod tests {
                 "priceTiers":[],"discountPercentageOnGifts":100
             }]
         }]}"#;
-        let paid_one = scoped_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/p1", "gid://shopify/Product/p1", "50.00", 1, None, Some(("bundle-a", "8000", "2", false)));
-        let paid_two = scoped_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/p2", "gid://shopify/Product/p2", "50.00", 1, None, Some(("bundle-a", "8000", "2", false)));
-        let gift = scoped_line("gid://shopify/CartLine/3", "gid://shopify/ProductVariant/gift", "gid://shopify/Product/gift", "10.00", 1, None, Some(("bundle-a", "8000", "2", true)));
+        let paid_one = scoped_line(
+            "gid://shopify/CartLine/1",
+            "gid://shopify/ProductVariant/p1",
+            "gid://shopify/Product/p1",
+            "50.00",
+            1,
+            None,
+            Some(("bundle-a", "8000", "2", false)),
+        );
+        let paid_two = scoped_line(
+            "gid://shopify/CartLine/2",
+            "gid://shopify/ProductVariant/p2",
+            "gid://shopify/Product/p2",
+            "50.00",
+            1,
+            None,
+            Some(("bundle-a", "8000", "2", false)),
+        );
+        let gift = scoped_line(
+            "gid://shopify/CartLine/3",
+            "gid://shopify/ProductVariant/gift",
+            "gid://shopify/Product/gift",
+            "10.00",
+            1,
+            None,
+            Some(("bundle-a", "8000", "2", true)),
+        );
 
         let incomplete = format!("[{paid_one},{gift}]");
-        let incomplete_result = run_function_with_input(run, &cart_json(&incomplete, "60.00", config)).expect("should not error");
+        let incomplete_result =
+            run_function_with_input(run, &cart_json(&incomplete, "60.00", config))
+                .expect("should not error");
         assert!(incomplete_result.operations.is_empty());
 
         let complete = format!("[{paid_one},{paid_two},{gift}]");
-        let complete_result = run_function_with_input(run, &cart_json(&complete, "110.00", config)).expect("should not error");
+        let complete_result = run_function_with_input(run, &cart_json(&complete, "110.00", config))
+            .expect("should not error");
         match &complete_result.operations[0] {
             schema::CartOperation::ProductDiscountsAdd(op) => {
                 assert_eq!(op.candidates.len(), 2);
-                let combined = op.candidates.iter().find(|candidate| candidate.targets.len() == 2).expect("combined paid candidate");
+                let combined = op
+                    .candidates
+                    .iter()
+                    .find(|candidate| candidate.targets.len() == 2)
+                    .expect("combined paid candidate");
                 match &combined.value {
                     schema::ProductDiscountCandidateValue::FixedAmount(value) => {
                         assert_eq!(value.amount.0, 20.0);
@@ -1818,21 +2798,33 @@ mod tests {
                 "requiresAnchorSubscription":false,"priceTiers":[],"discountPercentageOnGifts":100
             }]
         }]}"#;
-        let lines = format!("[{}]", regular_line(
-            "gid://shopify/CartLine/1",
-            "gid://shopify/ProductVariant/loyalty",
-            "gid://shopify/Product/loyalty",
-            "50.00",
-            1,
-        ));
+        let lines = format!(
+            "[{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/loyalty",
+                "gid://shopify/Product/loyalty",
+                "50.00",
+                1,
+            )
+        );
 
-        let guest = run_function_with_input(run, &cart_json(&lines, "50.00", config)).expect("guest input");
+        let guest =
+            run_function_with_input(run, &cart_json(&lines, "50.00", config)).expect("guest input");
         assert!(guest.operations.is_empty());
 
-        let not_qualified = run_function_with_input(run, &cart_json_with_customer(&lines, "50.00", config, 2, "200.00")).expect("customer input");
+        let not_qualified = run_function_with_input(
+            run,
+            &cart_json_with_customer(&lines, "50.00", config, 2, "200.00"),
+        )
+        .expect("customer input");
         assert!(not_qualified.operations.is_empty());
 
-        let qualified = run_function_with_input(run, &cart_json_with_customer(&lines, "50.00", config, 3, "100.00")).expect("customer input");
+        let qualified = run_function_with_input(
+            run,
+            &cart_json_with_customer(&lines, "50.00", config, 3, "100.00"),
+        )
+        .expect("customer input");
         assert_eq!(qualified.operations.len(), 1);
     }
 
@@ -1844,16 +2836,41 @@ mod tests {
         );
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
-            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            ),
         );
         let base = cart_json(&lines, "80.00", &config);
-        let qualified = run_function_with_input(run, &with_customer_tags(&base, &[("vip", true), ("blocked", false)])).expect("tagged customer");
+        let qualified = run_function_with_input(
+            run,
+            &with_customer_tags(&base, &[("vip", true), ("blocked", false)]),
+        )
+        .expect("tagged customer");
         assert_eq!(qualified.operations.len(), 1);
 
-        let missing = run_function_with_input(run, &with_customer_tags(&base, &[("vip", false), ("blocked", false)])).expect("untagged customer");
+        let missing = run_function_with_input(
+            run,
+            &with_customer_tags(&base, &[("vip", false), ("blocked", false)]),
+        )
+        .expect("untagged customer");
         assert!(missing.operations.is_empty());
-        let excluded = run_function_with_input(run, &with_customer_tags(&base, &[("vip", true), ("blocked", true)])).expect("excluded customer");
+        let excluded = run_function_with_input(
+            run,
+            &with_customer_tags(&base, &[("vip", true), ("blocked", true)]),
+        )
+        .expect("excluded customer");
         assert!(excluded.operations.is_empty());
     }
 
@@ -1865,10 +2882,24 @@ mod tests {
         );
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
-            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            ),
         );
-        let guest = run_function_with_input(run, &cart_json(&lines, "80.00", &config)).expect("guest input");
+        let guest = run_function_with_input(run, &cart_json(&lines, "80.00", &config))
+            .expect("guest input");
         assert!(guest.operations.is_empty());
     }
 
@@ -1880,8 +2911,21 @@ mod tests {
         );
         let lines = format!(
             "[{},{}]",
-            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
-            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            ),
         );
         let base = cart_json(&lines, "80.00", &config);
         let allowed = run_function_with_input(run, &with_country(&base, "US")).expect("US input");
@@ -1890,5 +2934,87 @@ mod tests {
         assert!(excluded.operations.is_empty());
         let outside = run_function_with_input(run, &with_country(&base, "MX")).expect("MX input");
         assert!(outside.operations.is_empty());
+    }
+
+    #[test]
+    fn page_url_conditions_match_paths_and_encoded_query_parameters() {
+        let exact = CompiledPageUrlCondition {
+            patterns: vec!["/pages/vip".to_string()],
+            match_mode: "exact".to_string(),
+            case_sensitive: false,
+            param_name: Some("code".to_string()),
+            param_value: Some("summer%20sale".to_string()),
+        };
+        assert!(page_url_condition_matches(
+            "/pages/vip?code=summer%20sale#offer",
+            &exact,
+        ));
+        assert!(!page_url_condition_matches(
+            "/pages/vip?code=winter",
+            &exact,
+        ));
+
+        let prefix = CompiledPageUrlCondition {
+            patterns: vec!["/collections/sale".to_string()],
+            match_mode: "starts_with".to_string(),
+            case_sensitive: true,
+            param_name: None,
+            param_value: None,
+        };
+        assert!(page_url_condition_matches(
+            "/collections/sale/shoes?sort=price",
+            &prefix,
+        ));
+        assert!(!page_url_condition_matches(
+            "/collections/Sale/shoes",
+            &prefix,
+        ));
+    }
+
+    #[test]
+    fn checkout_rejects_offer_when_source_page_url_does_not_match() {
+        let config = gift_offer_config(5000, 1).replace(
+            "\"combinesWithOrderDiscounts\":true",
+            "\"pageUrlConditions\":[{\"patterns\":[\"/pages/vip\"],\"matchMode\":\"exact\",\"caseSensitive\":false,\"paramName\":\"code\",\"paramValue\":\"summer\"}],\"combinesWithOrderDiscounts\":true",
+        );
+        let lines = format!(
+            "[{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            ),
+        );
+        let base = cart_json(&lines, "80.00", &config);
+
+        let with_page_url = |url: &str| {
+            let mut payload: serde_json::Value = serde_json::from_str(&base).unwrap();
+            payload["cart"]["lines"][0]["promoMetadata"] = serde_json::json!({
+                "value": serde_json::to_string(&serde_json::json!({ "_promo_page_url": url })).unwrap(),
+            });
+            serde_json::to_string(&payload).unwrap()
+        };
+
+        let allowed = run_function_with_input(run, &with_page_url("/pages/vip?code=summer"))
+            .expect("matching URL input");
+        assert_eq!(allowed.operations.len(), 1);
+
+        let wrong_path = run_function_with_input(run, &with_page_url("/pages/general?code=summer"))
+            .expect("wrong URL input");
+        assert!(wrong_path.operations.is_empty());
+
+        let missing_metadata =
+            run_function_with_input(run, &base).expect("missing URL metadata input");
+        assert!(missing_metadata.operations.is_empty());
     }
 }

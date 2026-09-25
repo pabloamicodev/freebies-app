@@ -3,7 +3,17 @@
  * Shown prominently in the admin dashboard.
  */
 
-import { getDb, offers, offerRewards, productCache, appSettings, variantCache, type Offer, type OfferReward, type VariantCache } from "@promo/db";
+import {
+  getDb,
+  offers,
+  offerRewards,
+  productCache,
+  appSettings,
+  variantCache,
+  type Offer,
+  type OfferReward,
+  type VariantCache,
+} from "@promo/db";
 import { eq, and, count, inArray } from "drizzle-orm";
 
 const CACHE_TTL_MS = 60_000;
@@ -21,7 +31,10 @@ export function invalidateDashboardWarningsCache(shopId: string) {
   warningsCache.delete(shopId);
 }
 
-export async function getDashboardWarnings(shopId: string, _shopDomain: string): Promise<DashboardWarning[]> {
+export async function getDashboardWarnings(
+  shopId: string,
+  _shopDomain: string,
+): Promise<DashboardWarning[]> {
   const cached = warningsCache.get(shopId);
   if (cached && cached.expiresAt > Date.now()) return cached.warnings;
 
@@ -29,7 +42,8 @@ export async function getDashboardWarnings(shopId: string, _shopDomain: string):
   const warnings: DashboardWarning[] = [];
 
   // ── 1. App embed disabled check ───────────────────────────────────────────────
-  const [embedSetting] = await db.select({ value: appSettings.value })
+  const [embedSetting] = await db
+    .select({ value: appSettings.value })
     .from(appSettings)
     .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, "app.embed_verified")))
     .limit(1);
@@ -39,23 +53,34 @@ export async function getDashboardWarnings(shopId: string, _shopDomain: string):
       code: "app_embed_not_verified",
       severity: "warning",
       title: "App embed status unknown",
-      message: "The promo engine app embed may not be enabled in your theme. Gifts and widgets won't display until it's enabled.",
+      message:
+        "The promo engine app embed may not be enabled in your theme. Gifts and widgets won't display until it's enabled.",
       action: { label: "Go to Installation", url: "/app/settings/installation" },
     });
   }
 
   // ── 3. Active offers with OOS gifts ──────────────────────────────────────────
   type ActiveOffer = Pick<Offer, "id" | "internalName" | "compiledConfig">;
-  type GiftVariant = Pick<VariantCache, "variantGid" | "availableForSale" | "inventoryQuantity" | "inventoryPolicy">;
+  type GiftVariant = Pick<
+    VariantCache,
+    "variantGid" | "availableForSale" | "inventoryQuantity" | "inventoryPolicy"
+  >;
 
-  const activeOffers: ActiveOffer[] = await db.select({ id: offers.id, internalName: offers.internalName, compiledConfig: offers.compiledConfig })
+  const activeOffers: ActiveOffer[] = await db
+    .select({
+      id: offers.id,
+      internalName: offers.internalName,
+      compiledConfig: offers.compiledConfig,
+    })
     .from(offers)
     .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")));
   const activeOfferById = new Map(activeOffers.map((offer) => [offer.id, offer]));
 
   if (activeOffers.length > 0) {
     const activeOfferIds = activeOffers.map((o) => o.id);
-    const rewards: OfferReward[] = await db.select().from(offerRewards)
+    const rewards: OfferReward[] = await db
+      .select()
+      .from(offerRewards)
       .where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, activeOfferIds)));
 
     const giftVariantChecks = rewards.flatMap((reward) => {
@@ -65,28 +90,35 @@ export async function getDashboardWarnings(shopId: string, _shopDomain: string):
       return variantIds.slice(0, 5).map((variantId) => ({ reward, variantId }));
     });
     const giftVariantIds = [...new Set(giftVariantChecks.map(({ variantId }) => variantId))];
-    const giftVariants: GiftVariant[] = giftVariantIds.length > 0
-      ? await db.select({
-        variantGid: variantCache.variantGid,
-        availableForSale: variantCache.availableForSale,
-        inventoryQuantity: variantCache.inventoryQuantity,
-        inventoryPolicy: variantCache.inventoryPolicy,
-      })
-        .from(variantCache)
-        .where(and(
-          eq(variantCache.shopId, shopId),
-          inArray(variantCache.variantGid, giftVariantIds),
-        ))
-      : [];
+    const giftVariants: GiftVariant[] =
+      giftVariantIds.length > 0
+        ? await db
+            .select({
+              variantGid: variantCache.variantGid,
+              availableForSale: variantCache.availableForSale,
+              inventoryQuantity: variantCache.inventoryQuantity,
+              inventoryPolicy: variantCache.inventoryPolicy,
+            })
+            .from(variantCache)
+            .where(
+              and(
+                eq(variantCache.shopId, shopId),
+                inArray(variantCache.variantGid, giftVariantIds),
+              ),
+            )
+        : [];
     const giftVariantById = new Map(giftVariants.map((variant) => [variant.variantGid, variant]));
     const warnedOfferIds = new Set<string>();
 
     for (const { reward, variantId } of giftVariantChecks) {
       if (warnedOfferIds.has(reward.offerId)) continue;
       const variant = giftVariantById.get(variantId);
-      if (variant && !variant.availableForSale &&
+      if (
+        variant &&
+        !variant.availableForSale &&
         variant.inventoryPolicy !== "CONTINUE" &&
-        (variant.inventoryQuantity ?? 0) <= 0) {
+        (variant.inventoryQuantity ?? 0) <= 0
+      ) {
         const offer = activeOfferById.get(reward.offerId);
         warnings.push({
           code: `gift_oos_${reward.id}`,
@@ -124,13 +156,15 @@ export async function getDashboardWarnings(shopId: string, _shopDomain: string):
       code: "no_active_offers",
       severity: "info",
       title: "No active offers",
-      message: "You have no active promotions. Create and publish an offer to start showing gifts and discounts to customers.",
-      action: { label: "Create Offer", url: "/app/offers/new" },
+      message:
+        "You have no active promotions. Create and publish an offer to start showing gifts and discounts to customers.",
+      action: { label: "Create Offer", url: "/app/offers?create=1" },
     });
   }
 
   // ── 7. Product cache empty ────────────────────────────────────────────────────
-  const [cacheCount] = await db.select({ count: count() })
+  const [cacheCount] = await db
+    .select({ count: count() })
     .from(productCache)
     .where(eq(productCache.shopId, shopId));
 
@@ -139,7 +173,8 @@ export async function getDashboardWarnings(shopId: string, _shopDomain: string):
       code: "product_cache_empty",
       severity: "error",
       title: "Product catalog not synced",
-      message: "The product catalog is empty. Gift and bundle offer product selections won't work until a sync completes.",
+      message:
+        "The product catalog is empty. Gift and bundle offer product selections won't work until a sync completes.",
       action: { label: "Trigger Sync", url: "/app/diagnostics" },
     });
   }

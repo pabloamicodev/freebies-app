@@ -26,6 +26,7 @@ export interface CompiledFunctionConfig {
 
 export interface CompiledShippingTier {
   minimumSubtotalCents: number;
+  maximumSubtotalCents?: number;
   discountType: "percentage" | "fixed_amount";
   discountValue: number;
   appliesWhen?: "has_subscription" | "one_time_only";
@@ -83,6 +84,7 @@ export interface CompiledOffer {
   orderRewards: CompiledOrderReward[];
   lineAttributeConditions?: CompiledAttributeCondition[];
   cartAttributeConditions?: CompiledAttributeCondition[];
+  pageUrlConditions?: CompiledPageUrlCondition[];
 }
 
 export interface CompiledAttributeCondition {
@@ -90,6 +92,14 @@ export interface CompiledAttributeCondition {
   value: string;
   matchMode: "equals" | "not_equals";
   minMatchingQuantity: number;
+}
+
+export interface CompiledPageUrlCondition {
+  patterns: string[];
+  matchMode: "exact" | "contains" | "starts_with" | "ends_with";
+  caseSensitive: boolean;
+  paramName?: string;
+  paramValue?: string;
 }
 
 export interface CompiledRequirement {
@@ -119,17 +129,39 @@ export interface CompiledProductReward {
   lineQuantityEquals?: number;
   maxUnitsTotal?: number;
   subscriptionMode: "any" | "subscription_only" | "one_time_only";
-  scopeMode: "sitewide" | "landing" | "quiz_bundle";
+  scopeMode: "sitewide" | "landing" | "quiz_bundle" | "tagged_offer";
+  requiredOfferId?: string;
   requiredLineAttributeValue?: string;
   requiredAnchorVariantIds: string[];
   requiredAnchorMinQuantity: number;
   requiresAnchorSubscription: boolean;
   priceTiers: Array<{ quantity: number; targetPricePerUnit: number }>;
+  quantityTiers: CompiledProductDiscountTier[];
+  selectionMode: "all" | "cheapest" | "most_expensive";
+  countRule: "all" | "unique";
   discountPercentageOnGifts: number;
+}
+
+export interface CompiledProductDiscountTier {
+  minimumQuantity: number;
+  maximumQuantity?: number;
+  discountType: "percentage" | "fixed_amount" | "fixed_price" | "free";
+  discountValue: number;
+  discountedQuantity?: number;
 }
 
 export interface CompiledOrderReward {
   id: string;
+  discountType: "percentage" | "fixed_amount" | "free";
+  discountValue: number;
+  subtotalTiers: CompiledSubtotalDiscountTier[];
+}
+
+export interface CompiledSubtotalDiscountTier {
+  minimumSubtotalCents?: number;
+  maximumSubtotalCents?: number;
+  minimumQuantity?: number;
+  maximumQuantity?: number;
   discountType: "percentage" | "fixed_amount" | "free";
   discountValue: number;
 }
@@ -190,23 +222,33 @@ export function compileOfferConfig(
     orderRewards: [],
     lineAttributeConditions: [],
     cartAttributeConditions: [],
+    pageUrlConditions: [],
   };
 
-  for (const cond of conditions.filter((c) => c.isEnabled)) {
-    const value = normalizeConditionValue(cond.conditionType, cond.value as Record<string, unknown>);
+  for (const cond of conditions.filter(
+    (candidate) => candidate.isEnabled && (candidate.scope === "main" || candidate.scope === "sub"),
+  )) {
+    const value = normalizeConditionValue(
+      cond.conditionType,
+      cond.value as Record<string, unknown>,
+    );
     switch (cond.conditionType) {
       case "cart_value": {
         config.cartValueThresholdCents = Number(value["thresholdCents"] ?? 0);
-        if (Number(value["maxCents"] ?? 0) > 0) config.cartValueMaxCents = Number(value["maxCents"]);
-        if (value["currencyOverrides"]) config.currencyOverrides = value["currencyOverrides"] as Record<string, number>;
-        if (value["maxCurrencyOverrides"]) config.maxCurrencyOverrides = value["maxCurrencyOverrides"] as Record<string, number>;
+        if (Number(value["maxCents"] ?? 0) > 0)
+          config.cartValueMaxCents = Number(value["maxCents"]);
+        if (value["currencyOverrides"])
+          config.currencyOverrides = value["currencyOverrides"] as Record<string, number>;
+        if (value["maxCurrencyOverrides"])
+          config.maxCurrencyOverrides = value["maxCurrencyOverrides"] as Record<string, number>;
         const filter = value["scopeFilter"] as Record<string, string[]> | undefined;
         if (filter?.excludeProductIds) config.excludedProductIds.push(...filter.excludeProductIds);
         break;
       }
       case "cart_quantity":
         config.cartQuantityThreshold = Number(value["minQuantity"] ?? 0);
-        if (Number(value["maxQuantity"] ?? 0) > 0) config.cartQuantityMax = Number(value["maxQuantity"]);
+        if (Number(value["maxQuantity"] ?? 0) > 0)
+          config.cartQuantityMax = Number(value["maxQuantity"]);
         break;
       case "subscription_product_type":
         if (
@@ -219,24 +261,38 @@ export function compileOfferConfig(
         break;
       case "order_history_total_orders": {
         const threshold = Math.max(0, Number(value["value"] ?? 0));
-        applyIntegerBounds(config, "customerOrderCountMin", "customerOrderCountMax", cond.operator, threshold);
+        applyIntegerBounds(
+          config,
+          "customerOrderCountMin",
+          "customerOrderCountMax",
+          cond.operator,
+          threshold,
+        );
         break;
       }
       case "order_history_total_spent": {
         const threshold = Math.max(0, Number(value["valueCents"] ?? 0));
-        applyIntegerBounds(config, "customerAmountSpentMinCents", "customerAmountSpentMaxCents", cond.operator, threshold);
+        applyIntegerBounds(
+          config,
+          "customerAmountSpentMinCents",
+          "customerAmountSpentMaxCents",
+          cond.operator,
+          threshold,
+        );
         break;
       }
       case "specific_product": {
-        const reqs = (value["requirements"] as Array<{
-          productId?: string;
-          variantId?: string;
-          trackMode?: string;
-          minQuantity?: number;
-          maxQuantity?: number;
-        }>) ?? [];
+        const reqs =
+          (value["requirements"] as Array<{
+            productId?: string;
+            variantId?: string;
+            trackMode?: string;
+            minQuantity?: number;
+            maxQuantity?: number;
+          }>) ?? [];
         for (const req of reqs) {
-          if (req.trackMode === "variant" && req.variantId) config.requiredVariantIds.push(req.variantId);
+          if (req.trackMode === "variant" && req.variantId)
+            config.requiredVariantIds.push(req.variantId);
           else if (req.productId) config.requiredProductIds.push(req.productId);
           config.requirements.push({
             ...(req.productId ? { productId: req.productId } : {}),
@@ -249,14 +305,16 @@ export function compileOfferConfig(
         break;
       }
       case "pack_of_products": {
-        const reqs = (value["requirements"] as Array<{
-          productId?: string;
-          variantId?: string;
-          trackMode?: string;
-          quantityPerPack?: number;
-        }>) ?? [];
+        const reqs =
+          (value["requirements"] as Array<{
+            productId?: string;
+            variantId?: string;
+            trackMode?: string;
+            quantityPerPack?: number;
+          }>) ?? [];
         for (const req of reqs) {
-          if (req.trackMode === "variant" && req.variantId) config.requiredVariantIds.push(req.variantId);
+          if (req.trackMode === "variant" && req.variantId)
+            config.requiredVariantIds.push(req.variantId);
           else if (req.productId) config.requiredProductIds.push(req.productId);
           config.requirements.push({
             ...(req.productId ? { productId: req.productId } : {}),
@@ -297,11 +355,50 @@ export function compileOfferConfig(
         break;
       case "customer_location":
         config.includeCountryCodes = Array.isArray(value["includeCountryCodes"])
-          ? value["includeCountryCodes"].filter((code): code is string => typeof code === "string").map((code) => code.toUpperCase())
+          ? value["includeCountryCodes"]
+              .filter((code): code is string => typeof code === "string")
+              .map((code) => code.toUpperCase())
           : [];
         config.excludeCountryCodes = Array.isArray(value["excludeCountryCodes"])
-          ? value["excludeCountryCodes"].filter((code): code is string => typeof code === "string").map((code) => code.toUpperCase())
+          ? value["excludeCountryCodes"]
+              .filter((code): code is string => typeof code === "string")
+              .map((code) => code.toUpperCase())
           : [];
+        break;
+      case "specific_link": {
+        const requiredUrl = String(value["requiredUrl"] ?? "").trim();
+        let requiredPath = requiredUrl.split("?")[0] ?? "";
+        try {
+          requiredPath = new URL(requiredUrl).pathname;
+        } catch {
+          // Relative paths are already in the representation stamped by the storefront.
+        }
+        config.pageUrlConditions!.push({
+          patterns: requiredPath ? [requiredPath] : [],
+          matchMode: "contains",
+          caseSensitive: false,
+          ...(typeof value["paramName"] === "string"
+            ? { paramName: encodeURIComponent(value["paramName"]) }
+            : {}),
+          ...(typeof value["paramValue"] === "string"
+            ? { paramValue: encodeURIComponent(value["paramValue"]) }
+            : {}),
+        });
+        break;
+      }
+      case "page_url":
+        config.pageUrlConditions!.push({
+          patterns: Array.isArray(value["patterns"])
+            ? value["patterns"].filter((pattern): pattern is string => typeof pattern === "string")
+            : [],
+          matchMode:
+            value["matchMode"] === "exact" ||
+            value["matchMode"] === "starts_with" ||
+            value["matchMode"] === "ends_with"
+              ? value["matchMode"]
+              : "contains",
+          caseSensitive: value["caseSensitive"] === true,
+        });
         break;
     }
   }
@@ -310,8 +407,12 @@ export function compileOfferConfig(
     const target = reward.target as Record<string, unknown>;
     const value = reward.value as Record<string, unknown>;
     if (reward.rewardType === "product_gift") {
-      const variantIds = (target["variantIds"] as string[]) ?? (target["variantId"] ? [target["variantId"] as string] : []);
-      const productIds = (target["productIds"] as string[]) ?? (target["productId"] ? [target["productId"] as string] : []);
+      const variantIds =
+        (target["variantIds"] as string[]) ??
+        (target["variantId"] ? [target["variantId"] as string] : []);
+      const productIds =
+        (target["productIds"] as string[]) ??
+        (target["productId"] ? [target["productId"] as string] : []);
       config.giftVariantIds.push(...variantIds);
       config.giftProductIds.push(...productIds);
       if (reward.quantity) config.maxGiftQuantity = (config.maxGiftQuantity ?? 0) + reward.quantity;
@@ -335,26 +436,47 @@ export function compileOfferConfig(
       reward.rewardType === "bundle_discount" ||
       reward.rewardType === "upsell_discount"
     ) {
-      const targetVariantIds = (target["variantIds"] as string[]) ?? (target["variantId"] ? [target["variantId"] as string] : []);
-      const targetProductIds = (target["productIds"] as string[]) ?? (target["productId"] ? [target["productId"] as string] : []);
+      const configuredAmount = Number(value["amount"] ?? 0);
+      const hasConfiguredTiers =
+        (Array.isArray(value["tiers"]) && value["tiers"].length > 0) ||
+        (Array.isArray(target["priceTiers"]) && target["priceTiers"].length > 0);
+      if (reward.rewardType === "upsell_discount" && configuredAmount <= 0 && !hasConfiguredTiers) {
+        continue;
+      }
+      const targetVariantIds =
+        (target["variantIds"] as string[]) ??
+        (target["variantId"] ? [target["variantId"] as string] : []);
+      const targetProductIds =
+        (target["productIds"] as string[]) ??
+        (target["productId"] ? [target["productId"] as string] : []);
       const currencyCode = String(value["currencyCode"] ?? "USD");
       config.productRewards.push({
         id: reward.id,
         targetProductIds,
         targetVariantIds,
         discountType: reward.discountType,
-        discountValue: functionDiscountValue(reward.discountType, Number(value["amount"] ?? 0), currencyCode),
+        discountValue: functionDiscountValue(reward.discountType, configuredAmount, currencyCode),
         ...(reward.quantity ? { maxQuantity: reward.quantity } : {}),
-        ...(Number.isInteger(target["lineQuantityEquals"]) ? { lineQuantityEquals: Number(target["lineQuantityEquals"]) } : {}),
-        ...(Number.isInteger(target["maxUnitsTotal"]) ? { maxUnitsTotal: Number(target["maxUnitsTotal"]) } : {}),
+        ...(Number.isInteger(target["lineQuantityEquals"])
+          ? { lineQuantityEquals: Number(target["lineQuantityEquals"]) }
+          : {}),
+        ...(Number.isInteger(target["maxUnitsTotal"])
+          ? { maxUnitsTotal: Number(target["maxUnitsTotal"]) }
+          : {}),
         subscriptionMode:
-          target["subscriptionMode"] === "subscription_only" || target["subscriptionMode"] === "one_time_only"
+          target["subscriptionMode"] === "subscription_only" ||
+          target["subscriptionMode"] === "one_time_only"
             ? target["subscriptionMode"]
             : "any",
         scopeMode:
-          target["scopeMode"] === "landing" || target["scopeMode"] === "quiz_bundle"
+          target["scopeMode"] === "landing" ||
+          target["scopeMode"] === "quiz_bundle" ||
+          target["scopeMode"] === "tagged_offer"
             ? target["scopeMode"]
             : "sitewide",
+        ...(typeof target["requiredOfferId"] === "string"
+          ? { requiredOfferId: target["requiredOfferId"] }
+          : {}),
         ...(typeof target["requiredLineAttributeValue"] === "string"
           ? { requiredLineAttributeValue: target["requiredLineAttributeValue"] }
           : {}),
@@ -369,23 +491,160 @@ export function compileOfferConfig(
               const candidate = tier as Record<string, unknown>;
               const quantity = Number(candidate["quantity"]);
               const targetPricePerUnit = Number(candidate["targetPricePerUnit"]);
-              return Number.isInteger(quantity) && quantity > 0 && Number.isFinite(targetPricePerUnit) && targetPricePerUnit >= 0
+              return Number.isInteger(quantity) &&
+                quantity > 0 &&
+                Number.isFinite(targetPricePerUnit) &&
+                targetPricePerUnit >= 0
                 ? [{ quantity, targetPricePerUnit }]
                 : [];
             })
           : [],
-        discountPercentageOnGifts: Math.min(100, Math.max(0, Number(target["discountPercentageOnGifts"] ?? 100))),
+        quantityTiers: Array.isArray(value["tiers"])
+          ? value["tiers"].flatMap((tier) => {
+              if (!tier || typeof tier !== "object") return [];
+              const candidate = tier as Record<string, unknown>;
+              const minimumQuantity = Number(candidate["minimumQuantity"]);
+              const maximumQuantity =
+                candidate["maximumQuantity"] === undefined
+                  ? undefined
+                  : Number(candidate["maximumQuantity"]);
+              const discountValue = Number(candidate["discountValue"]);
+              const discountType = candidate["discountType"];
+              if (
+                !Number.isInteger(minimumQuantity) ||
+                minimumQuantity < 1 ||
+                !Number.isFinite(discountValue) ||
+                discountValue < 0
+              )
+                return [];
+              if (
+                maximumQuantity !== undefined &&
+                (!Number.isInteger(maximumQuantity) || maximumQuantity < minimumQuantity)
+              )
+                return [];
+              if (
+                discountType !== "percentage" &&
+                discountType !== "fixed_amount" &&
+                discountType !== "fixed_price" &&
+                discountType !== "free"
+              )
+                return [];
+              const discountedQuantity =
+                candidate["discountedQuantity"] === undefined
+                  ? undefined
+                  : Number(candidate["discountedQuantity"]);
+              if (
+                discountedQuantity !== undefined &&
+                (!Number.isInteger(discountedQuantity) || discountedQuantity < 1)
+              )
+                return [];
+              return [
+                {
+                  minimumQuantity,
+                  ...(maximumQuantity === undefined ? {} : { maximumQuantity }),
+                  discountType,
+                  discountValue,
+                  ...(discountedQuantity === undefined ? {} : { discountedQuantity }),
+                },
+              ];
+            })
+          : [],
+        selectionMode:
+          target["selectionMode"] === "cheapest" || target["selectionMode"] === "most_expensive"
+            ? target["selectionMode"]
+            : "all",
+        countRule: target["countRule"] === "unique" ? "unique" : "all",
+        discountPercentageOnGifts: Math.min(
+          100,
+          Math.max(0, Number(target["discountPercentageOnGifts"] ?? 100)),
+        ),
       });
     }
     if (reward.rewardType === "order_discount") {
       const currencyCode = String(value["currencyCode"] ?? "USD");
-      const discountType = reward.discountType === "fixed_amount" ? "fixed_amount"
-        : reward.discountType === "free" ? "free"
-        : "percentage";
+      const discountType =
+        reward.discountType === "fixed_amount"
+          ? "fixed_amount"
+          : reward.discountType === "free"
+            ? "free"
+            : "percentage";
       config.orderRewards.push({
         id: reward.id,
         discountType,
-        discountValue: functionDiscountValue(discountType, Number(value["amount"] ?? 0), currencyCode),
+        discountValue: functionDiscountValue(
+          discountType,
+          Number(value["amount"] ?? 0),
+          currencyCode,
+        ),
+        subtotalTiers: Array.isArray(value["tiers"])
+          ? value["tiers"].flatMap((tier) => {
+              if (!tier || typeof tier !== "object") return [];
+              const candidate = tier as Record<string, unknown>;
+              const minimumSubtotalCents =
+                candidate["minimumSubtotalCents"] === undefined
+                  ? undefined
+                  : Number(candidate["minimumSubtotalCents"]);
+              const maximumSubtotalCents =
+                candidate["maximumSubtotalCents"] === undefined
+                  ? undefined
+                  : Number(candidate["maximumSubtotalCents"]);
+              const minimumQuantity =
+                candidate["minimumQuantity"] === undefined
+                  ? undefined
+                  : Number(candidate["minimumQuantity"]);
+              const maximumQuantity =
+                candidate["maximumQuantity"] === undefined
+                  ? undefined
+                  : Number(candidate["maximumQuantity"]);
+              const discountValue = Number(candidate["discountValue"]);
+              const tierDiscountType = candidate["discountType"];
+              const hasSubtotalBounds = minimumSubtotalCents !== undefined;
+              const hasQuantityBounds = minimumQuantity !== undefined;
+              if (
+                hasSubtotalBounds === hasQuantityBounds ||
+                !Number.isFinite(discountValue) ||
+                discountValue < 0
+              )
+                return [];
+              if (
+                minimumSubtotalCents !== undefined &&
+                (!Number.isInteger(minimumSubtotalCents) || minimumSubtotalCents < 0)
+              )
+                return [];
+              if (
+                minimumQuantity !== undefined &&
+                (!Number.isInteger(minimumQuantity) || minimumQuantity < 1)
+              )
+                return [];
+              if (
+                maximumSubtotalCents !== undefined &&
+                (!Number.isInteger(maximumSubtotalCents) ||
+                  maximumSubtotalCents < (minimumSubtotalCents ?? 0))
+              )
+                return [];
+              if (
+                maximumQuantity !== undefined &&
+                (!Number.isInteger(maximumQuantity) || maximumQuantity < (minimumQuantity ?? 1))
+              )
+                return [];
+              if (
+                tierDiscountType !== "percentage" &&
+                tierDiscountType !== "fixed_amount" &&
+                tierDiscountType !== "free"
+              )
+                return [];
+              return [
+                {
+                  ...(minimumSubtotalCents === undefined ? {} : { minimumSubtotalCents }),
+                  ...(maximumSubtotalCents === undefined ? {} : { maximumSubtotalCents }),
+                  ...(minimumQuantity === undefined ? {} : { minimumQuantity }),
+                  ...(maximumQuantity === undefined ? {} : { maximumQuantity }),
+                  discountType: tierDiscountType,
+                  discountValue,
+                },
+              ];
+            })
+          : [],
       });
     }
   }
@@ -417,12 +676,30 @@ function applyIntegerBounds(
   }
 }
 
-function functionDiscountValue(discountType: string, storedAmount: number, currencyCode: string): number {
+function functionDiscountValue(
+  discountType: string,
+  storedAmount: number,
+  currencyCode: string,
+): number {
   if (discountType === "free") return 100;
   if (discountType === "percentage") return storedAmount;
   const zeroDecimalCurrencies = new Set([
-    "JPY", "KRW", "VND", "BIF", "CLP", "GNF", "ISK", "KMF",
-    "MGA", "PYG", "RWF", "UGX", "VUV", "XAF", "XOF", "XPF",
+    "JPY",
+    "KRW",
+    "VND",
+    "BIF",
+    "CLP",
+    "GNF",
+    "ISK",
+    "KMF",
+    "MGA",
+    "PYG",
+    "RWF",
+    "UGX",
+    "VUV",
+    "XAF",
+    "XOF",
+    "XPF",
   ]);
   return zeroDecimalCurrencies.has(currencyCode.toUpperCase()) ? storedAmount : storedAmount / 100;
 }
@@ -432,7 +709,9 @@ export function compileShippingOfferConfigs(
   conditions: ConditionRow[],
   rewards: RewardRow[],
 ): CompiledShippingOffer[] {
-  const enabledConditions = conditions.filter((condition) => condition.isEnabled);
+  const enabledConditions = conditions.filter(
+    (condition) => condition.isEnabled && (condition.scope === "main" || condition.scope === "sub"),
+  );
   const cartValueCondition = enabledConditions.find(
     (condition) => condition.conditionType === "cart_value",
   );
@@ -452,6 +731,7 @@ export function compileShippingOfferConfigs(
         amount?: unknown;
         tiers?: Array<{
           minimumSubtotalCents?: unknown;
+          maximumSubtotalCents?: unknown;
           discountType?: unknown;
           discountValue?: unknown;
           appliesWhen?: unknown;
@@ -468,18 +748,25 @@ export function compileShippingOfferConfigs(
 
       const tiers: CompiledShippingTier[] = value.tiers?.map((tier) => ({
         minimumSubtotalCents: Number(tier.minimumSubtotalCents ?? 0),
+        ...(tier.maximumSubtotalCents === undefined
+          ? {}
+          : { maximumSubtotalCents: Number(tier.maximumSubtotalCents) }),
         discountType: tier.discountType === "fixed_amount" ? "fixed_amount" : "percentage",
         discountValue: Number(tier.discountValue ?? 0),
         ...(tier.appliesWhen === "has_subscription" || tier.appliesWhen === "one_time_only"
           ? { appliesWhen: tier.appliesWhen }
           : {}),
-      })) ?? [{
-        minimumSubtotalCents: fallbackThresholdCents,
-        discountType: reward.discountType === "fixed_amount" ? "fixed_amount" : "percentage",
-        discountValue: reward.discountType === "free" ? 100 : Number(value.amount ?? 0),
-      }];
+      })) ?? [
+        {
+          minimumSubtotalCents: fallbackThresholdCents,
+          discountType: reward.discountType === "fixed_amount" ? "fixed_amount" : "percentage",
+          discountValue: reward.discountType === "free" ? 100 : Number(value.amount ?? 0),
+        },
+      ];
 
-      const targetGroupTypes: CompiledShippingOffer["targetGroupTypes"] = Array.isArray(target.deliveryGroupTypes)
+      const targetGroupTypes: CompiledShippingOffer["targetGroupTypes"] = Array.isArray(
+        target.deliveryGroupTypes,
+      )
         ? target.deliveryGroupTypes.filter(
             (groupType): groupType is "ONE_TIME_PURCHASE" | "SUBSCRIPTION" =>
               groupType === "ONE_TIME_PURCHASE" || groupType === "SUBSCRIPTION",
@@ -488,26 +775,29 @@ export function compileShippingOfferConfigs(
 
       if (tiers.length === 0 || targetGroupTypes.length === 0) return [];
 
-      const scopeMode = target.scopeMode === "landing" || target.scopeMode === "quiz_bundle"
-        ? target.scopeMode
-        : "sitewide";
+      const scopeMode =
+        target.scopeMode === "landing" || target.scopeMode === "quiz_bundle"
+          ? target.scopeMode
+          : "sitewide";
       const requiredAnchorVariantIds = Array.isArray(target.requiredAnchorVariantIds)
         ? target.requiredAnchorVariantIds.filter((id): id is string => typeof id === "string")
         : [];
 
-      return [{
-        id: `${offer.id}:${reward.id}`,
-        priority: offer.priority * 1000 + rewardIndex,
-        tiers,
-        targetGroupTypes,
-        scopeMode,
-        ...(scopeMode === "landing" && typeof target.requiredLineAttributeValue === "string"
-          ? { requiredLineAttributeValue: target.requiredLineAttributeValue }
-          : {}),
-        requiredAnchorVariantIds,
-        requiredAnchorMinQuantity: Math.max(1, Number(target.requiredAnchorMinQuantity ?? 1)),
-        requiresAnchorSubscription: target.requiresAnchorSubscription === true,
-      }];
+      return [
+        {
+          id: `${offer.id}:${reward.id}`,
+          priority: offer.priority * 1000 + rewardIndex,
+          tiers,
+          targetGroupTypes,
+          scopeMode,
+          ...(scopeMode === "landing" && typeof target.requiredLineAttributeValue === "string"
+            ? { requiredLineAttributeValue: target.requiredLineAttributeValue }
+            : {}),
+          requiredAnchorVariantIds,
+          requiredAnchorMinQuantity: Math.max(1, Number(target.requiredAnchorMinQuantity ?? 1)),
+          requiresAnchorSubscription: target.requiresAnchorSubscription === true,
+        },
+      ];
     });
 }
 

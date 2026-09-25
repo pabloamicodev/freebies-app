@@ -8,20 +8,34 @@ function existingMetadata(value: string | undefined): LineProperties {
     const parsed: unknown = JSON.parse(value);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     return Object.fromEntries(
-      Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
     );
   } catch {
     return {};
   }
 }
 
-export function withPromoMetadata(properties: LineProperties): LineProperties {
-  const metadata = existingMetadata(properties[METADATA_PROPERTY]);
-  for (const [key, value] of Object.entries(properties)) {
+function browserPageUrl(): string | undefined {
+  if (typeof window === "undefined" || !window.location) return undefined;
+  return `${window.location.pathname}${window.location.search}`;
+}
+
+export function withPromoMetadata(
+  properties: LineProperties,
+  sourcePageUrl = browserPageUrl(),
+): LineProperties {
+  const enriched =
+    sourcePageUrl && !properties["_promo_page_url"]
+      ? { ...properties, _promo_page_url: sourcePageUrl }
+      : properties;
+  const metadata = existingMetadata(enriched[METADATA_PROPERTY]);
+  for (const [key, value] of Object.entries(enriched)) {
     if (key !== METADATA_PROPERTY) metadata[key] = value;
   }
-  if (Object.keys(metadata).length === 0) return properties;
-  return { ...properties, [METADATA_PROPERTY]: JSON.stringify(metadata) };
+  if (Object.keys(metadata).length === 0) return enriched;
+  return { ...enriched, [METADATA_PROPERTY]: JSON.stringify(metadata) };
 }
 
 export function needsPromoMetadataPacking(
@@ -29,12 +43,11 @@ export function needsPromoMetadataPacking(
 ): boolean {
   if (!properties) return false;
   const packed = existingMetadata(
-    typeof properties[METADATA_PROPERTY] === "string"
-      ? properties[METADATA_PROPERTY]
-      : undefined,
+    typeof properties[METADATA_PROPERTY] === "string" ? properties[METADATA_PROPERTY] : undefined,
   );
-  return Object.entries(properties).some(([key, value]) =>
-    key !== METADATA_PROPERTY && typeof value === "string" && packed[key] !== value,
+  return Object.entries(properties).some(
+    ([key, value]) =>
+      key !== METADATA_PROPERTY && typeof value === "string" && packed[key] !== value,
   );
 }
 
@@ -48,20 +61,28 @@ function packJsonPayload(payload: unknown): unknown {
         if (!item || typeof item !== "object" || Array.isArray(item)) return item;
         const line = item as Record<string, unknown>;
         const properties = line["properties"];
-        if (!properties || typeof properties !== "object" || Array.isArray(properties)) return item;
-        return { ...line, properties: withPromoMetadata(stringProperties(properties)) };
+        const normalizedProperties =
+          properties && typeof properties === "object" && !Array.isArray(properties)
+            ? stringProperties(properties)
+            : {};
+        return { ...line, properties: withPromoMetadata(normalizedProperties) };
       }),
     };
   }
   const properties = object["properties"];
-  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return payload;
-  return { ...object, properties: withPromoMetadata(stringProperties(properties)) };
+  const normalizedProperties =
+    properties && typeof properties === "object" && !Array.isArray(properties)
+      ? stringProperties(properties)
+      : {};
+  return { ...object, properties: withPromoMetadata(normalizedProperties) };
 }
 
 function stringProperties(value: object): LineProperties {
   return Object.fromEntries(
     Object.entries(value).flatMap(([key, candidate]) =>
-      typeof candidate === "string" || typeof candidate === "number" || typeof candidate === "boolean"
+      typeof candidate === "string" ||
+      typeof candidate === "number" ||
+      typeof candidate === "boolean"
         ? [[key, String(candidate)]]
         : [],
     ),
@@ -106,7 +127,8 @@ function packedBody(body: BodyInit | null | undefined): BodyInit | null | undefi
 }
 
 function isCartAddRequest(input: RequestInfo | URL, init?: RequestInit): boolean {
-  if ((init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase() !== "POST") return false;
+  if ((init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase() !== "POST")
+    return false;
   const rawUrl = input instanceof Request ? input.url : input.toString();
   try {
     const baseUrl = typeof window === "undefined" ? "https://localhost" : window.location.origin;
@@ -158,26 +180,36 @@ function installPromoMetadataBridge(): void {
     return nativeFetch(packedInput, packedInit);
   }) as typeof window.fetch;
 
-  document.addEventListener("submit", (event) => {
-    const form = event.target;
-    if (!(form instanceof HTMLFormElement) || !isCartAddRequest(form.action, { method: form.method })) return;
-    const properties: LineProperties = {};
-    new FormData(form).forEach((value, name) => {
-      const match = /^properties\[([^\]]+)]$/.exec(name);
-      const key = match?.[1];
-      if (key && typeof value === "string") properties[key] = value;
-    });
-    const packed = withPromoMetadata(properties)[METADATA_PROPERTY];
-    if (!packed) return;
-    let input = form.querySelector<HTMLInputElement>(`input[name="properties[${METADATA_PROPERTY}]"]`);
-    if (!input) {
-      input = document.createElement("input");
-      input.type = "hidden";
-      input.name = `properties[${METADATA_PROPERTY}]`;
-      form.append(input);
-    }
-    input.value = packed;
-  }, true);
+  document.addEventListener(
+    "submit",
+    (event) => {
+      const form = event.target;
+      if (
+        !(form instanceof HTMLFormElement) ||
+        !isCartAddRequest(form.action, { method: form.method })
+      )
+        return;
+      const properties: LineProperties = {};
+      new FormData(form).forEach((value, name) => {
+        const match = /^properties\[([^\]]+)]$/.exec(name);
+        const key = match?.[1];
+        if (key && typeof value === "string") properties[key] = value;
+      });
+      const packed = withPromoMetadata(properties)[METADATA_PROPERTY];
+      if (!packed) return;
+      let input = form.querySelector<HTMLInputElement>(
+        `input[name="properties[${METADATA_PROPERTY}]"]`,
+      );
+      if (!input) {
+        input = document.createElement("input");
+        input.type = "hidden";
+        input.name = `properties[${METADATA_PROPERTY}]`;
+        form.append(input);
+      }
+      input.value = packed;
+    },
+    true,
+  );
 }
 
 if (typeof window !== "undefined" && typeof document !== "undefined") installPromoMetadataBridge();

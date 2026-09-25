@@ -1,7 +1,7 @@
 use crate::config::{to_cents, CompiledConfig, CompiledShippingOffer};
 use crate::schema;
-use schema::cart_delivery_options_discounts_generate_run::Input;
 use schema::cart_delivery_options_discounts_generate_run::input::cart::{DeliveryGroups, Lines};
+use schema::cart_delivery_options_discounts_generate_run::Input;
 use shopify_function::Result;
 
 /// Tiered shipping discounts by cart subtotal, with sitewide, landing-source,
@@ -29,9 +29,16 @@ pub fn run(input: Input) -> Result<schema::CartDeliveryOptionsDiscountsGenerateR
         return Ok(empty_result());
     }
 
-    let has_subscription_line = delivery_groups.iter().any(delivery_group_has_subscription_line);
+    let has_subscription_line = delivery_groups
+        .iter()
+        .any(delivery_group_has_subscription_line);
 
-    let subtotal_currency = input.cart().cost().subtotal_amount().currency_code().to_string();
+    let subtotal_currency = input
+        .cart()
+        .cost()
+        .subtotal_amount()
+        .currency_code()
+        .to_string();
     let subtotal_cents = qualifying_subtotal_cents(
         input.cart().lines(),
         input.cart().cost().subtotal_amount().amount().as_f64(),
@@ -42,14 +49,20 @@ pub fn run(input: Input) -> Result<schema::CartDeliveryOptionsDiscountsGenerateR
     offers.sort_by(|left, right| {
         let left_scope_rank = if left.scope_mode == "sitewide" { 1 } else { 0 };
         let right_scope_rank = if right.scope_mode == "sitewide" { 1 } else { 0 };
-        (left_scope_rank, left.priority, &left.id).cmp(&(right_scope_rank, right.priority, &right.id))
+        (left_scope_rank, left.priority, &left.id).cmp(&(
+            right_scope_rank,
+            right.priority,
+            &right.id,
+        ))
     });
 
     for offer in &offers {
         if !shipping_offer_qualifies(offer, input.cart().lines()) {
             continue;
         }
-        let Some(value) = tiered_delivery_discount_value(offer, subtotal_cents, has_subscription_line) else {
+        let Some(value) =
+            tiered_delivery_discount_value(offer, subtotal_cents, has_subscription_line)
+        else {
             continue;
         };
 
@@ -68,9 +81,11 @@ pub fn run(input: Input) -> Result<schema::CartDeliveryOptionsDiscountsGenerateR
                         targets: eligible_groups
                             .iter()
                             .map(|group| {
-                                schema::DeliveryDiscountCandidateTarget::DeliveryGroup(schema::DeliveryGroupTarget {
-                                    id: group.id().clone(),
-                                })
+                                schema::DeliveryDiscountCandidateTarget::DeliveryGroup(
+                                    schema::DeliveryGroupTarget {
+                                        id: group.id().clone(),
+                                    },
+                                )
                             })
                             .collect(),
                         value,
@@ -85,7 +100,9 @@ pub fn run(input: Input) -> Result<schema::CartDeliveryOptionsDiscountsGenerateR
 
 fn shipping_offer_qualifies(offer: &CompiledShippingOffer, lines: &[Lines]) -> bool {
     match offer.scope_mode.as_str() {
-        "landing" => landing_anchor_quantity(offer, lines) >= offer.required_anchor_min_quantity.max(1),
+        "landing" => {
+            landing_anchor_quantity(offer, lines) >= offer.required_anchor_min_quantity.max(1)
+        }
         "quiz_bundle" => has_complete_quiz_bundle(lines),
         _ => true,
     }
@@ -204,7 +221,11 @@ fn tiered_delivery_discount_value(
     subtotal_cents: i64,
     has_subscription_line: bool,
 ) -> Option<schema::DeliveryDiscountCandidateValue> {
-    let active_condition = if has_subscription_line { "has_subscription" } else { "one_time_only" };
+    let active_condition = if has_subscription_line {
+        "has_subscription"
+    } else {
+        "one_time_only"
+    };
 
     let matching_tier = offer
         .tiers
@@ -215,16 +236,26 @@ fn tiered_delivery_discount_value(
             }
             _ => true,
         })
-        .filter(|tier| subtotal_cents >= tier.minimum_subtotal_cents && tier.discount_value > 0.0)
+        .filter(|tier| {
+            subtotal_cents >= tier.minimum_subtotal_cents
+                && tier
+                    .maximum_subtotal_cents
+                    .is_none_or(|maximum| subtotal_cents <= maximum)
+                && tier.discount_value > 0.0
+        })
         .max_by_key(|tier| tier.minimum_subtotal_cents)?;
 
     match matching_tier.discount_type.as_str() {
-        "percentage" => Some(schema::DeliveryDiscountCandidateValue::Percentage(schema::Percentage {
-            value: shopify_function::scalars::Decimal(matching_tier.discount_value.min(100.0)),
-        })),
-        "fixed_amount" => Some(schema::DeliveryDiscountCandidateValue::FixedAmount(schema::FixedAmount {
-            amount: shopify_function::scalars::Decimal(matching_tier.discount_value),
-        })),
+        "percentage" => Some(schema::DeliveryDiscountCandidateValue::Percentage(
+            schema::Percentage {
+                value: shopify_function::scalars::Decimal(matching_tier.discount_value.min(100.0)),
+            },
+        )),
+        "fixed_amount" => Some(schema::DeliveryDiscountCandidateValue::FixedAmount(
+            schema::FixedAmount {
+                amount: shopify_function::scalars::Decimal(matching_tier.discount_value),
+            },
+        )),
         _ => None,
     }
 }
@@ -240,14 +271,18 @@ fn targeted_delivery_groups<'a>(
         return vec![];
     }
 
-    let include_one_time = configured_group_types.iter().any(|t| t == "ONE_TIME_PURCHASE");
+    let include_one_time = configured_group_types
+        .iter()
+        .any(|t| t == "ONE_TIME_PURCHASE");
     let include_subscription = configured_group_types.iter().any(|t| t == "SUBSCRIPTION");
 
     delivery_groups
         .iter()
         .filter(|group| {
-            if matches!(group.group_type(), schema::CartDeliveryGroupType::Subscription)
-                || delivery_group_has_subscription_line(group)
+            if matches!(
+                group.group_type(),
+                schema::CartDeliveryGroupType::Subscription
+            ) || delivery_group_has_subscription_line(group)
             {
                 include_subscription
             } else {
@@ -271,7 +306,12 @@ mod tests {
         format!(r#"{{"offers":[],"shippingOffers":{offers_json}}}"#)
     }
 
-    fn one_tier_offer(min_cents: i64, discount_type: &str, value: f64, applies_when: &str) -> String {
+    fn one_tier_offer(
+        min_cents: i64,
+        discount_type: &str,
+        value: f64,
+        applies_when: &str,
+    ) -> String {
         let applies_when_json = if applies_when.is_empty() {
             "null".to_string()
         } else {
@@ -326,7 +366,12 @@ mod tests {
         )
     }
 
-    fn run_with(discount_classes: &str, subtotal: &str, config: &str, groups_json: &str) -> schema::CartDeliveryOptionsDiscountsGenerateRunResult {
+    fn run_with(
+        discount_classes: &str,
+        subtotal: &str,
+        config: &str,
+        groups_json: &str,
+    ) -> schema::CartDeliveryOptionsDiscountsGenerateRunResult {
         let json = payload(discount_classes, subtotal, config, groups_json);
         run_function_with_input(super::run, &json).expect("should not error")
     }
@@ -345,7 +390,14 @@ mod tests {
     #[test]
     fn no_op_without_shipping_discount_class() {
         let config = shipping_config(&format!("[{}]", one_tier_offer(0, "percentage", 100.0, "")));
-        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
         let result = run_with(r#"["PRODUCT"]"#, "80.00", &config, &groups);
         assert!(result.operations.is_empty());
     }
@@ -353,7 +405,14 @@ mod tests {
     #[test]
     fn no_op_with_no_shipping_offers_configured() {
         let config = shipping_config("[]");
-        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
         let result = run_with(r#"["SHIPPING"]"#, "80.00", &config, &groups);
         assert!(result.operations.is_empty());
     }
@@ -367,8 +426,18 @@ mod tests {
 
     #[test]
     fn applies_percentage_discount_when_subtotal_meets_threshold() {
-        let config = shipping_config(&format!("[{}]", one_tier_offer(5000, "percentage", 100.0, "")));
-        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let config = shipping_config(&format!(
+            "[{}]",
+            one_tier_offer(5000, "percentage", 100.0, "")
+        ));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
         let result = run_with(r#"["SHIPPING"]"#, "80.00", &config, &groups);
 
         assert_eq!(result.operations.len(), 1);
@@ -377,7 +446,9 @@ mod tests {
                 assert_eq!(op.candidates.len(), 1);
                 assert_eq!(op.candidates[0].targets.len(), 1);
                 match &op.candidates[0].value {
-                    schema::DeliveryDiscountCandidateValue::Percentage(p) => assert_eq!(p.value.0, 100.0),
+                    schema::DeliveryDiscountCandidateValue::Percentage(p) => {
+                        assert_eq!(p.value.0, 100.0)
+                    }
                     other => panic!("expected Percentage, got {other:?}"),
                 }
             }
@@ -387,9 +458,38 @@ mod tests {
 
     #[test]
     fn no_discount_below_threshold() {
-        let config = shipping_config(&format!("[{}]", one_tier_offer(5000, "percentage", 100.0, "")));
-        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let config = shipping_config(&format!(
+            "[{}]",
+            one_tier_offer(5000, "percentage", 100.0, "")
+        ));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
         let result = run_with(r#"["SHIPPING"]"#, "30.00", &config, &groups);
+        assert!(result.operations.is_empty());
+    }
+
+    #[test]
+    fn no_discount_above_explicit_tier_maximum() {
+        let offer = r#"{
+            "id":"ship-1","priority":100,"targetGroupTypes":null,
+            "tiers":[{"minimumSubtotalCents":0,"maximumSubtotalCents":4999,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}]
+        }"#;
+        let config = shipping_config(&format!("[{offer}]"));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
+        let result = run_with(r#"["SHIPPING"]"#, "60.00", &config, &groups);
         assert!(result.operations.is_empty());
     }
 
@@ -405,12 +505,21 @@ mod tests {
                 ]
             }"#.to_string();
         let config = shipping_config(&format!("[{offer}]"));
-        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
         let result = run_with(r#"["SHIPPING"]"#, "80.00", &config, &groups);
 
         match &result.operations[0] {
             schema::DeliveryOperation::DeliveryDiscountsAdd(op) => match &op.candidates[0].value {
-                schema::DeliveryDiscountCandidateValue::Percentage(p) => assert_eq!(p.value.0, 50.0),
+                schema::DeliveryDiscountCandidateValue::Percentage(p) => {
+                    assert_eq!(p.value.0, 50.0)
+                }
                 other => panic!("expected Percentage, got {other:?}"),
             },
             other => panic!("expected DeliveryDiscountsAdd, got {other:?}"),
@@ -419,13 +528,25 @@ mod tests {
 
     #[test]
     fn fixed_amount_discount_type() {
-        let config = shipping_config(&format!("[{}]", one_tier_offer(0, "fixed_amount", 1.99, "")));
-        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let config = shipping_config(&format!(
+            "[{}]",
+            one_tier_offer(0, "fixed_amount", 1.99, "")
+        ));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
         let result = run_with(r#"["SHIPPING"]"#, "10.00", &config, &groups);
 
         match &result.operations[0] {
             schema::DeliveryOperation::DeliveryDiscountsAdd(op) => match &op.candidates[0].value {
-                schema::DeliveryDiscountCandidateValue::FixedAmount(a) => assert_eq!(a.amount.0, 1.99),
+                schema::DeliveryDiscountCandidateValue::FixedAmount(a) => {
+                    assert_eq!(a.amount.0, 1.99)
+                }
                 other => panic!("expected FixedAmount, got {other:?}"),
             },
             other => panic!("expected DeliveryDiscountsAdd, got {other:?}"),
@@ -434,21 +555,48 @@ mod tests {
 
     #[test]
     fn has_subscription_tier_only_matches_when_cart_has_a_subscription_line() {
-        let config = shipping_config(&format!("[{}]", one_tier_offer(0, "percentage", 100.0, "has_subscription")));
+        let config = shipping_config(&format!(
+            "[{}]",
+            one_tier_offer(0, "percentage", 100.0, "has_subscription")
+        ));
 
-        let one_time_groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let one_time_groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
         let result_one_time = run_with(r#"["SHIPPING"]"#, "10.00", &config, &one_time_groups);
-        assert!(result_one_time.operations.is_empty(), "should not match a one-time-only cart");
+        assert!(
+            result_one_time.operations.is_empty(),
+            "should not match a one-time-only cart"
+        );
 
-        let subscription_groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "SUBSCRIPTION", true));
-        let result_subscription = run_with(r#"["SHIPPING"]"#, "10.00", &config, &subscription_groups);
-        assert_eq!(result_subscription.operations.len(), 1, "should match a cart with a subscription line");
+        let subscription_groups = format!(
+            "[{}]",
+            group("gid://shopify/CartDeliveryGroup/1", "SUBSCRIPTION", true)
+        );
+        let result_subscription =
+            run_with(r#"["SHIPPING"]"#, "10.00", &config, &subscription_groups);
+        assert_eq!(
+            result_subscription.operations.len(),
+            1,
+            "should match a cart with a subscription line"
+        );
     }
 
     #[test]
     fn one_time_only_tier_does_not_match_when_cart_has_a_subscription_line() {
-        let config = shipping_config(&format!("[{}]", one_tier_offer(0, "percentage", 100.0, "one_time_only")));
-        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "SUBSCRIPTION", true));
+        let config = shipping_config(&format!(
+            "[{}]",
+            one_tier_offer(0, "percentage", 100.0, "one_time_only")
+        ));
+        let groups = format!(
+            "[{}]",
+            group("gid://shopify/CartDeliveryGroup/1", "SUBSCRIPTION", true)
+        );
         let result = run_with(r#"["SHIPPING"]"#, "10.00", &config, &groups);
         assert!(result.operations.is_empty());
     }
@@ -456,7 +604,10 @@ mod tests {
     #[test]
     fn tier_with_no_applies_when_matches_regardless_of_subscription_state() {
         let config = shipping_config(&format!("[{}]", one_tier_offer(0, "percentage", 100.0, "")));
-        let sub_groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "SUBSCRIPTION", true));
+        let sub_groups = format!(
+            "[{}]",
+            group("gid://shopify/CartDeliveryGroup/1", "SUBSCRIPTION", true)
+        );
         let result = run_with(r#"["SHIPPING"]"#, "10.00", &config, &sub_groups);
         assert_eq!(result.operations.len(), 1);
     }
@@ -470,7 +621,11 @@ mod tests {
         let config = shipping_config(&format!("[{offer}]"));
         let groups = format!(
             "[{},{}]",
-            group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false),
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            ),
             group("gid://shopify/CartDeliveryGroup/2", "SUBSCRIPTION", true),
         );
         let result = run_with(r#"["SHIPPING"]"#, "10.00", &config, &groups);
@@ -496,7 +651,14 @@ mod tests {
             "tiers":[{"minimumSubtotalCents":0,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}]
         }"#;
         let config = shipping_config(&format!("[{offer}]"));
-        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
         let result = run_with(r#"["SHIPPING"]"#, "10.00", &config, &groups);
         assert!(result.operations.is_empty());
     }
@@ -512,12 +674,21 @@ mod tests {
             "tiers":[{"minimumSubtotalCents":0,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}]
         }"#;
         let config = shipping_config(&format!("[{low_priority_offer},{high_priority_offer}]"));
-        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
         let result = run_with(r#"["SHIPPING"]"#, "10.00", &config, &groups);
 
         match &result.operations[0] {
             schema::DeliveryOperation::DeliveryDiscountsAdd(op) => match &op.candidates[0].value {
-                schema::DeliveryDiscountCandidateValue::Percentage(p) => assert_eq!(p.value.0, 10.0),
+                schema::DeliveryDiscountCandidateValue::Percentage(p) => {
+                    assert_eq!(p.value.0, 10.0)
+                }
                 other => panic!("expected Percentage, got {other:?}"),
             },
             other => panic!("expected DeliveryDiscountsAdd, got {other:?}"),
@@ -535,12 +706,21 @@ mod tests {
             "tiers":[{"minimumSubtotalCents":0,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}]
         }"#;
         let config = shipping_config(&format!("[{non_matching_offer},{matching_offer}]"));
-        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
         let result = run_with(r#"["SHIPPING"]"#, "10.00", &config, &groups);
 
         match &result.operations[0] {
             schema::DeliveryOperation::DeliveryDiscountsAdd(op) => match &op.candidates[0].value {
-                schema::DeliveryDiscountCandidateValue::Percentage(p) => assert_eq!(p.value.0, 100.0),
+                schema::DeliveryDiscountCandidateValue::Percentage(p) => {
+                    assert_eq!(p.value.0, 100.0)
+                }
                 other => panic!("expected Percentage, got {other:?}"),
             },
             other => panic!("expected DeliveryDiscountsAdd, got {other:?}"),
@@ -558,7 +738,10 @@ mod tests {
             "tiers":[{"minimumSubtotalCents":0,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}]
         }"#;
         let config = shipping_config(&format!("[{offer}]"));
-        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "SUBSCRIPTION", true));
+        let groups = format!(
+            "[{}]",
+            group("gid://shopify/CartDeliveryGroup/1", "SUBSCRIPTION", true)
+        );
         let incomplete_line = r#"[{
             "quantity":1,
             "cost":{"subtotalAmount":{"amount":"10.00","currencyCode":"USD"}},
@@ -570,7 +753,13 @@ mod tests {
         }]"#;
         let complete_line = incomplete_line.replace("\"quantity\":1", "\"quantity\":2");
 
-        let incomplete = run_with_lines(r#"["SHIPPING"]"#, "10.00", &config, &groups, incomplete_line);
+        let incomplete = run_with_lines(
+            r#"["SHIPPING"]"#,
+            "10.00",
+            &config,
+            &groups,
+            incomplete_line,
+        );
         assert!(incomplete.operations.is_empty());
 
         let complete = run_with_lines(r#"["SHIPPING"]"#, "10.00", &config, &groups, &complete_line);
@@ -588,17 +777,32 @@ mod tests {
             "tiers":[{"minimumSubtotalCents":0,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}]
         }"#;
         let config = shipping_config(&format!("[{sitewide},{quiz}]"));
-        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
         let complete_bundle = r#"[
           {"quantity":1,"cost":{"subtotalAmount":{"amount":"4.00","currencyCode":"USD"}},"lineTypeAttribute":null,"cartGiftTierAttribute":null,"landingSourceAttribute":null,"quizBundleIdAttribute":{"value":"quiz-1"},"quizFreeGiftAttribute":{"value":"false"},"quizExpectedPaidCountAttribute":{"value":"2"},"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/1"}},
           {"quantity":1,"cost":{"subtotalAmount":{"amount":"4.00","currencyCode":"USD"}},"lineTypeAttribute":null,"cartGiftTierAttribute":null,"landingSourceAttribute":null,"quizBundleIdAttribute":{"value":"quiz-1"},"quizFreeGiftAttribute":{"value":"false"},"quizExpectedPaidCountAttribute":{"value":"2"},"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/2"}},
           {"quantity":1,"cost":{"subtotalAmount":{"amount":"2.00","currencyCode":"USD"}},"lineTypeAttribute":null,"cartGiftTierAttribute":null,"landingSourceAttribute":null,"quizBundleIdAttribute":{"value":"quiz-1"},"quizFreeGiftAttribute":{"value":"true"},"quizExpectedPaidCountAttribute":{"value":"2"},"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/3"}}
         ]"#;
-        let result = run_with_lines(r#"["SHIPPING"]"#, "10.00", &config, &groups, complete_bundle);
+        let result = run_with_lines(
+            r#"["SHIPPING"]"#,
+            "10.00",
+            &config,
+            &groups,
+            complete_bundle,
+        );
 
         match &result.operations[0] {
             schema::DeliveryOperation::DeliveryDiscountsAdd(op) => match &op.candidates[0].value {
-                schema::DeliveryDiscountCandidateValue::Percentage(p) => assert_eq!(p.value.0, 100.0),
+                schema::DeliveryDiscountCandidateValue::Percentage(p) => {
+                    assert_eq!(p.value.0, 100.0)
+                }
                 other => panic!("expected Percentage, got {other:?}"),
             },
             other => panic!("expected DeliveryDiscountsAdd, got {other:?}"),
@@ -609,7 +813,14 @@ mod tests {
     fn cart_gift_tier_value_does_not_unlock_a_shipping_threshold() {
         let offer = one_tier_offer(5000, "percentage", 100.0, "");
         let config = shipping_config(&format!("[{offer}]"));
-        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
         let lines = r#"[
           {"quantity":1,"cost":{"subtotalAmount":{"amount":"40.00","currencyCode":"USD"}},"lineTypeAttribute":null,"cartGiftTierAttribute":null,"landingSourceAttribute":null,"quizBundleIdAttribute":null,"quizFreeGiftAttribute":null,"quizExpectedPaidCountAttribute":null,"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/paid"}},
           {"quantity":1,"cost":{"subtotalAmount":{"amount":"20.00","currencyCode":"USD"}},"lineTypeAttribute":null,"cartGiftTierAttribute":{"value":"tier-1"},"landingSourceAttribute":null,"quizBundleIdAttribute":null,"quizFreeGiftAttribute":null,"quizExpectedPaidCountAttribute":null,"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/gift"}}

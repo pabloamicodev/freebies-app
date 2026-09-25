@@ -45,6 +45,7 @@ interface BundleStep {
 
 interface BundleTier {
   minQuantity: number;
+  maxQuantity?: number | null;
   label: string;
   discountType: string;
   discountValue: number;
@@ -62,14 +63,22 @@ interface BundleBuilderConfig {
 }
 
 function formatPrice(cents: number, currency: string): string {
-  return new Intl.NumberFormat(navigator.language, { style: "currency", currency }).format(cents / 100);
+  return new Intl.NumberFormat(navigator.language, { style: "currency", currency }).format(
+    cents / 100,
+  );
 }
 
-function getActiveTier(totalQty: number, tiers: BundleTier[]): BundleTier | null {
+export function getActiveTier(totalQty: number, tiers: BundleTier[]): BundleTier | null {
   return (
     [...tiers]
       .sort((a, b) => b.minQuantity - a.minQuantity)
-      .find((t) => totalQty >= t.minQuantity) ?? null
+      .find(
+        (tier) =>
+          totalQty >= tier.minQuantity &&
+          (tier.maxQuantity === undefined ||
+            tier.maxQuantity === null ||
+            totalQty <= tier.maxQuantity),
+      ) ?? null
   );
 }
 
@@ -129,7 +138,11 @@ function BundleBuilderComponent({
     if (adding) return;
     setAdding(true);
     try {
-      const lines: Array<{ variantId: string; quantity: number; properties: Record<string, string> }> = [];
+      const lines: Array<{
+        variantId: string;
+        quantity: number;
+        properties: Record<string, string>;
+      }> = [];
       for (const [stepId, stepMap] of selections.entries()) {
         for (const [variantId, qty] of stepMap.entries()) {
           lines.push({
@@ -183,11 +196,14 @@ function BundleBuilderComponent({
               class={`pe-bb-tier${activeTier?.minQuantity === tier.minQuantity ? " pe-active" : ""}`}
             >
               <span class="pe-bb-tier-label">{tier.label}</span>
-              <span class="pe-bb-tier-qty">Buy {tier.minQuantity}+</span>
+              <span class="pe-bb-tier-qty">
+                Buy {tier.minQuantity}
+                {tier.maxQuantity ? `–${tier.maxQuantity}` : "+"}
+              </span>
               <span class="pe-bb-tier-discount">
                 {tier.discountType === "percentage"
                   ? `-${Math.round(tier.discountValue)}%`
-                  : formatPrice(tier.discountValue, config.currency)}
+                  : formatPrice(Math.round(tier.discountValue * 100), config.currency)}
               </span>
             </div>
           ))}
@@ -245,7 +261,12 @@ function BundleBuilderComponent({
                     class={`pe-bb-product${qty > 0 ? " pe-selected" : ""}${!product.isAvailable ? " pe-unavailable" : ""}${atMax ? " pe-at-max" : ""}`}
                   >
                     {product.imageUrl && (
-                      <img class="pe-bb-img" src={product.imageUrl} alt={product.title} loading="lazy" />
+                      <img
+                        class="pe-bb-img"
+                        src={product.imageUrl}
+                        alt={product.title}
+                        loading="lazy"
+                      />
                     )}
                     <p class="pe-bb-product-name">{product.title}</p>
                     {product.variantTitle && <p class="pe-bb-variant">{product.variantTitle}</p>}
@@ -255,16 +276,22 @@ function BundleBuilderComponent({
                     ) : (
                       <div class="pe-bb-qty-ctrl">
                         <button
-                          onClick={() => updateSelection(step.id, product.variantId, Math.max(0, qty - 1))}
+                          onClick={() =>
+                            updateSelection(step.id, product.variantId, Math.max(0, qty - 1))
+                          }
                           disabled={qty === 0}
                           aria-label={`Remove ${product.title}`}
-                        >−</button>
+                        >
+                          −
+                        </button>
                         <span class="pe-bb-qty">{qty}</span>
                         <button
                           onClick={() => updateSelection(step.id, product.variantId, qty + 1)}
                           disabled={atMax}
                           aria-label={`Add ${product.title}`}
-                        >+</button>
+                        >
+                          +
+                        </button>
                       </div>
                     )}
                   </div>
@@ -305,7 +332,9 @@ function BundleBuilderComponent({
                 onClick={handleAddToCart}
                 disabled={adding || !config.steps.every((s) => isStepValid(s))}
               >
-                {adding ? "Adding…" : `Add Bundle to Cart${activeTier ? ` (${activeTier.label})` : ""}`}
+                {adding
+                  ? "Adding…"
+                  : `Add Bundle to Cart${activeTier ? ` (${activeTier.label})` : ""}`}
               </button>
             )}
           </div>
@@ -332,5 +361,15 @@ export function initBundleBuilder(
   config: BundleBuilderConfig,
   sessionId: string,
 ) {
+  if (!document.getElementById("pe-bundle-builder-styles")) {
+    const style = document.createElement("style");
+    style.id = "pe-bundle-builder-styles";
+    style.textContent = BUNDLE_BUILDER_STYLES;
+    document.head.appendChild(style);
+  }
   render(h(BundleBuilderComponent, { config, sessionId }), container);
 }
+
+const BUNDLE_BUILDER_STYLES = `
+.pe-bb{font-family:inherit;color:inherit;max-width:1200px;margin:0 auto}.pe-bb-title{font-size:clamp(1.8rem,4vw,2.75rem);margin:0 0 .5rem}.pe-bb-desc{color:rgba(0,0,0,.65);margin:0 0 1.5rem}.pe-bb-tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.75rem;margin:0 0 1.5rem}.pe-bb-tier{border:1px solid rgba(0,0,0,.14);border-radius:12px;padding:.9rem;display:grid;gap:.25rem;background:#fff}.pe-bb-tier.pe-active{border-color:#2563eb;box-shadow:0 0 0 2px rgba(37,99,235,.14)}.pe-bb-tier-label{font-weight:700}.pe-bb-tier-qty{font-size:.82rem;color:rgba(0,0,0,.62)}.pe-bb-tier-discount{font-weight:700;color:#166534}.pe-bb-step{margin:0 0 1.75rem}.pe-bb-step-header{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;flex-wrap:wrap}.pe-bb-step-title{font-size:1.25rem;margin:0}.pe-bb-step-subtitle,.pe-bb-step-count{color:rgba(0,0,0,.62);margin:.35rem 0}.pe-bb-search{width:100%;box-sizing:border-box;border:1px solid rgba(0,0,0,.2);border-radius:10px;padding:.75rem;margin:.75rem 0}.pe-bb-products{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1rem}.pe-bb-product{border:1px solid rgba(0,0,0,.14);border-radius:14px;padding:.85rem;background:#fff;transition:border-color .15s,box-shadow .15s}.pe-bb-product.pe-selected{border-color:#2563eb;box-shadow:0 0 0 2px rgba(37,99,235,.12)}.pe-bb-product.pe-unavailable{opacity:.55}.pe-bb-img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:9px}.pe-bb-product-name{font-weight:650;margin:.7rem 0 .2rem}.pe-bb-variant,.pe-bb-price,.pe-bb-oos{font-size:.88rem;margin:.2rem 0;color:rgba(0,0,0,.65)}.pe-bb-qty-ctrl{display:grid;grid-template-columns:40px 1fr 40px;align-items:center;margin-top:.75rem;border:1px solid rgba(0,0,0,.15);border-radius:9px;overflow:hidden}.pe-bb-qty-ctrl button{min-height:40px;border:0;background:#f5f5f5;font-size:1.15rem;cursor:pointer}.pe-bb-qty-ctrl button:disabled{opacity:.4;cursor:not-allowed}.pe-bb-qty{text-align:center;font-weight:700}.pe-bb-footer{position:sticky;bottom:0;background:rgba(255,255,255,.96);border-top:1px solid rgba(0,0,0,.12);padding:1rem 0}.pe-bb-nav,.pe-bb-summary{display:flex;align-items:center;justify-content:flex-end;gap:.75rem;flex-wrap:wrap}.pe-bb-btn-prev,.pe-bb-btn-next,.pe-bb-btn-add,.pe-bb-success button{min-height:44px;border:0;border-radius:10px;padding:.75rem 1.1rem;font:inherit;font-weight:700;cursor:pointer}.pe-bb-btn-prev{background:#eee}.pe-bb-btn-next,.pe-bb-btn-add,.pe-bb-success button{background:#111;color:#fff}.pe-bb-btn-next:disabled,.pe-bb-btn-add:disabled{opacity:.45;cursor:not-allowed}.pe-bb-total,.pe-bb-saving{margin:0}.pe-bb-success{padding:1.5rem;border:1px solid #86efac;border-radius:14px;background:#f0fdf4}.pe-bb button:focus-visible,.pe-bb input:focus-visible{outline:3px solid rgba(37,99,235,.4);outline-offset:2px}@media(max-width:640px){.pe-bb-products{grid-template-columns:repeat(2,minmax(0,1fr))}.pe-bb-step-header{display:block}.pe-bb-footer{padding:1rem}.pe-bb-btn-add{width:100%}}
+`;

@@ -1,0 +1,65 @@
+{% comment %}
+  Promo Engine — Bundle Builder Block
+  Mounts an active bundle definition from the signed app proxy.
+{% endcomment %}
+
+<div
+  id="pe-bundle-builder-{{ block.id }}"
+  data-offer-id="{{ block.settings.offer_id | escape }}"
+  {{ block.shopify_attributes }}
+></div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var container = document.getElementById('pe-bundle-builder-{{ block.id }}');
+    if (!container) return;
+    var attempts = 0;
+
+    function fail(message) {
+      container.setAttribute('data-promo-engine-error', 'true');
+      console.warn('[Promo Engine] Bundle builder could not load:', message);
+    }
+
+    function tryInit() {
+      attempts += 1;
+      if (!window.initBundleBuilder) {
+        if (attempts < 50) setTimeout(tryInit, 200);
+        else fail('Promo Engine app embed is not enabled.');
+        return;
+      }
+      var offerId = container.dataset.offerId;
+      var params = new URLSearchParams({ page_url: window.location.href });
+      if (offerId) params.set('offer_id', offerId);
+      fetch('/apps/promo-engine/bundle?' + params.toString(), { headers: { Accept: 'application/json' } })
+        .then(function(response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.json();
+        })
+        .then(function(result) {
+          if (!result.bundleBuilder) {
+            container.hidden = true;
+            return;
+          }
+          var sessionId = sessionStorage.getItem('promo_engine_session_id') || 'anon';
+          window.initBundleBuilder(container, result.bundleBuilder, sessionId);
+        })
+        .catch(function(error) { fail(error && error.message ? error.message : String(error)); });
+    }
+    tryInit();
+  });
+</script>
+
+{% schema %}
+{
+  "name": "Bundle builder",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "offer_id",
+      "label": "Bundle offer ID",
+      "info": "Leave empty to use the highest-priority active bundle."
+    }
+  ]
+}
+{% endschema %}
