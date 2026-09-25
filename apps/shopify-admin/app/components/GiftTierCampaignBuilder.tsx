@@ -8,6 +8,7 @@ interface TierDraft {
   minimumSubtotal: string;
   quantity: string;
   variantIds: string[];
+  fallbackVariantIds: string[];
 }
 
 export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
@@ -17,9 +18,10 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
     "highest_tier_only",
   );
   const [tiers, setTiers] = useState<TierDraft[]>([
-    { id: "tier-1", minimumSubtotal: "50", quantity: "1", variantIds: [] },
+    { id: "tier-1", minimumSubtotal: "50", quantity: "1", variantIds: [], fallbackVariantIds: [] },
   ]);
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
+  const [fallbackPickerIndex, setFallbackPickerIndex] = useState<number | null>(null);
 
   const serialized = useMemo(
     () =>
@@ -32,6 +34,7 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
           minimumSubtotalCents: Math.round(Number(tier.minimumSubtotal) * 100),
           quantity: Number(tier.quantity),
           variantIds: tier.variantIds,
+          ...(tier.fallbackVariantIds.length ? { fallbackVariantIds: tier.fallbackVariantIds } : {}),
         })),
       }),
     [campaignId, name, stackingMode, tiers],
@@ -54,6 +57,18 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
         onSelect={(ids) => {
           if (pickerIndex !== null) updateTier(pickerIndex, { variantIds: ids });
           setPickerIndex(null);
+        }}
+      />
+      <ProductPicker
+        open={fallbackPickerIndex !== null}
+        onClose={() => setFallbackPickerIndex(null)}
+        mode="variants"
+        allowMultiple
+        title="Select fallback gifts (used in order)"
+        selectedIds={fallbackPickerIndex === null ? [] : (tiers[fallbackPickerIndex]?.fallbackVariantIds ?? [])}
+        onSelect={(ids) => {
+          if (fallbackPickerIndex !== null) updateTier(fallbackPickerIndex, { fallbackVariantIds: ids.slice(0, 5) });
+          setFallbackPickerIndex(null);
         }}
       />
       <Form method="post" action={action} className="b-card b-p-5 b-stack b-gap-5">
@@ -200,6 +215,28 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
                   ))}
                 </div>
               )}
+              <div className="b-fieldset b-mt-4">
+                <p className="b-form-title">Fallback gift if out of stock (optional)</p>
+                <p className="b-form-desc">
+                  If this tier's gift sells out, customers get the first in-stock fallback instead.
+                  Without a fallback, a sold-out gift is not given: no popup appears and no other
+                  product is offered.
+                </p>
+                <div className="b-row b-gap-3 b-wrap b-mt-4">
+                  <button
+                    type="button"
+                    className="b-btn b-btn-secondary"
+                    onClick={() => setFallbackPickerIndex(index)}
+                  >
+                    Select fallback gifts
+                  </button>
+                  <span className="b-text-sm b-text-muted">
+                    {tier.fallbackVariantIds.length
+                      ? `${tier.fallbackVariantIds.length} selected`
+                      : "None — a sold-out gift is skipped"}
+                  </span>
+                </div>
+              </div>
             </section>
           ))}
         </div>
@@ -221,6 +258,7 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
                   minimumSubtotal: "",
                   quantity: "1",
                   variantIds: [],
+                  fallbackVariantIds: [],
                 },
               ])
             }

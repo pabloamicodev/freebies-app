@@ -34,4 +34,22 @@ describe("buildGiftTierOfferDrafts", () => {
     expect(buildGiftTierOfferDrafts(campaign, "USD").every((draft) => draft.internalName.startsWith(prefix))).toBe(true);
     expect(buildGiftTierOfferDrafts({ ...campaign, campaignId: "holiday" }, "USD").some((draft) => draft.internalName.startsWith(prefix))).toBe(false);
   });
+
+  it("carries each tier's fallback gifts into its reward, ignoring duplicates of the primary", () => {
+    const withFallback: GiftTierCampaign = {
+      ...campaign,
+      tiers: [
+        {
+          ...campaign.tiers[0]!,
+          fallbackVariantIds: ["gid://shopify/ProductVariant/200", "gid://shopify/ProductVariant/900"],
+        },
+        campaign.tiers[1]!,
+      ],
+    };
+    const drafts = buildGiftTierOfferDrafts(withFallback, "USD");
+    const tier100 = drafts.find((draft) => draft.condition.thresholdCents === 10000);
+    const tier50 = drafts.find((draft) => draft.condition.thresholdCents === 5000);
+    expect(tier100?.reward.target.fallbackVariantIds).toEqual(["gid://shopify/ProductVariant/900"]);
+    expect(tier50?.reward.target).not.toHaveProperty("fallbackVariantIds");
+  });
 });

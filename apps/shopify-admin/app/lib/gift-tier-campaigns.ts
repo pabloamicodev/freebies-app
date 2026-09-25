@@ -10,6 +10,8 @@ export const giftTierCampaignSchema = z.object({
     id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/).max(48),
     minimumSubtotalCents: z.number().int().nonnegative(),
     variantIds: z.array(variantGid).min(1),
+    /** Ordered replacements given only while the tier's gifts are sold out. */
+    fallbackVariantIds: z.array(variantGid).max(5).optional(),
     quantity: z.number().int().positive().max(20),
   }).strict()).min(1).max(20),
 }).strict().superRefine((config, ctx) => {
@@ -31,7 +33,7 @@ export interface GiftTierOfferDraft {
   priority: number;
   condition: { thresholdCents: number; maxCents?: number; currencyCode: string; includeGiftValues: false };
   reward: {
-    target: { scope: "cart"; variantIds: string[] };
+    target: { scope: "cart"; variantIds: string[]; fallbackVariantIds?: string[] };
     quantity: number;
     isAutoAdd: boolean;
     isCustomerSelectable: boolean;
@@ -63,7 +65,13 @@ export function buildGiftTierOfferDrafts(raw: GiftTierCampaign, currencyCode: st
       priority: 200 + index,
       condition,
       reward: {
-        target: { scope: "cart", variantIds: tier.variantIds },
+        target: {
+          scope: "cart",
+          variantIds: tier.variantIds,
+          ...(tier.fallbackVariantIds?.length
+            ? { fallbackVariantIds: tier.fallbackVariantIds.filter((id) => !tier.variantIds.includes(id)) }
+            : {}),
+        },
         quantity: tier.quantity,
         isAutoAdd: tier.variantIds.length === 1,
         isCustomerSelectable: tier.variantIds.length > 1,
