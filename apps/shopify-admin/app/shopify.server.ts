@@ -21,6 +21,7 @@ if (process.env["SENTRY_DSN"]) {
   Sentry.init({
     dsn: process.env["SENTRY_DSN"],
     environment: process.env["NODE_ENV"] ?? "production",
+    release: process.env["VERCEL_GIT_COMMIT_SHA"] || process.env["VERCEL_DEPLOYMENT_ID"],
     // Lower sample rate in dev/staging to reduce noise; full rate in prod
     tracesSampleRate: isProd ? 0.15 : 0.01,
     beforeSend(event, hint) {

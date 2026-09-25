@@ -37,10 +37,11 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",
+    "@sentry/vite-plugin": "^5.4.0",
+    "@shopify/cli": "4.8.2",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@shopify/cli": "4.8.2",
     "@vercel/react-router": "^1.0.0",
     "dotenv": "^17.2.3",
     "typescript": "^5.7.0",
