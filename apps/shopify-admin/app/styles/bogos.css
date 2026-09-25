@@ -242,9 +242,6 @@
   align-items: center;
   gap: 8px;
 }
-.b-card + .b-card {
-  margin-top: 12px;
-}
 
 /* ── Buttons ────────────────────────────────────────────── */
 .b-btn {
