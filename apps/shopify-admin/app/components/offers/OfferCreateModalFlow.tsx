@@ -1,8 +1,18 @@
 import { useState, useCallback } from "react";
 import { useNavigate } from "react-router";
 import { AccessibleModal } from "../AccessibleModal.js";
+import { SUBSCRIPTION_OFFER_TEMPLATES } from "../../lib/subscription-offer-templates.js";
 
-export type OfferCreateModalType = "type" | "gift" | "bundle" | "upsell" | "discount" | "shipping";
+export type OfferCreateModalType =
+  | "type"
+  | "gift"
+  | "bundle"
+  | "upsell"
+  | "discount"
+  | "shipping"
+  | "subscription";
+
+const SUBSCRIPTION_GRAD = "linear-gradient(135deg, #818cf8 0%, #4f46e5 100%)";
 
 const GIFT_SLUG_MAP: Record<string, string> = {
   buy_x_get_y: "bxgy",
@@ -126,6 +136,27 @@ function ShippingSvg() {
   );
 }
 
+function SubscriptionSvg() {
+  return (
+    <svg
+      width="28"
+      height="28"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="white"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21 12a9 9 0 0 1-15.4 6.4L3 16" />
+      <path d="M3 21v-5h5" />
+      <path d="M3 12a9 9 0 0 1 15.4-6.4L21 8" />
+      <path d="M21 3v5h-5" />
+    </svg>
+  );
+}
+
 /* Gift offer templates */
 const GIFT_TEMPLATES = [
   {
@@ -242,7 +273,7 @@ const GIFT_TEMPLATES = [
   {
     id: "tiered",
     name: "Tiered spend with gifts",
-    desc: "e.g. Spend $500 get 1 gift, $1000 get 2 gifts.",
+    desc: "e.g. Spend $500 get 1 gift, $1000 get 2 gifts. One draft offer per tier.",
     IllusComponent: () => (
       <div
         style={{
@@ -376,9 +407,27 @@ const OFFER_CATALOG = [
     glow: "rgba(56,189,248,0.18)",
     iconBg: "rgba(56,189,248,0.10)",
     iconBorder: "rgba(56,189,248,0.22)",
+    grad: "linear-gradient(135deg, #38bdf8 0%, #0369a1 100%)",
     Icon: ShippingSvg,
   },
+  {
+    value: "subscription",
+    name: "Subscription offer",
+    tagline: "Recurring pricing and delivery for subscribers",
+    examples: ["First cycle 20% off, then $2 off", "Skio shipping price per cycle"],
+    accent: "#4f46e5",
+    glow: "rgba(79,70,229,0.18)",
+    iconBg: "rgba(79,70,229,0.10)",
+    iconBorder: "rgba(79,70,229,0.22)",
+    grad: SUBSCRIPTION_GRAD,
+    Icon: SubscriptionSvg,
+  },
 ];
+
+// Types without dedicated CSS tokens (shipping, subscription) fall back to catalog values.
+const typeColor = (type: (typeof OFFER_CATALOG)[number]) => `var(--${type.value}-color, ${type.accent})`;
+const typeGrad = (type: (typeof OFFER_CATALOG)[number]) =>
+  `var(--${type.value}-grad, ${"grad" in type ? type.grad : type.accent})`;
 
 function Modal1TypeSelector({
   onClose,
@@ -428,7 +477,7 @@ function Modal1TypeSelector({
                 onMouseLeave={handleMouseLeave}
                 className="rd-style-042"
                 style={{
-                  border: `2px solid ${isHovered ? `var(--${type.value}-color)` : "var(--border)"}`,
+                  border: `2px solid ${isHovered ? typeColor(type) : "var(--border)"}`,
                   transform: isHovered ? "translateY(-3px)" : "translateY(0)",
                   boxShadow: isHovered
                     ? "0 8px 24px rgba(28,25,23,0.14), 0 2px 6px rgba(28,25,23,0.08)"
@@ -438,7 +487,7 @@ function Modal1TypeSelector({
                 {/* Gradient illustration band */}
                 <div
                   style={{
-                    background: `var(--${type.value}-grad)`,
+                    background: typeGrad(type),
                     height: 92,
                     display: "flex",
                     alignItems: "center",
@@ -494,7 +543,7 @@ function Modal1TypeSelector({
                             height: 4,
                             borderRadius: "50%",
                             flexShrink: 0,
-                            background: `var(--${type.value}-color)`,
+                            background: typeColor(type),
                             marginTop: 6,
                           }}
                         />
@@ -517,7 +566,7 @@ function Modal1TypeSelector({
                     }}
                   >
                     <span
-                      style={{ fontSize: 12, fontWeight: 600, color: `var(--${type.value}-color)` }}
+                      style={{ fontSize: 12, fontWeight: 600, color: typeColor(type) }}
                     >
                       Get started
                     </span>
@@ -530,7 +579,7 @@ function Modal1TypeSelector({
                       strokeWidth="2.5"
                       strokeLinecap="round"
                       style={{
-                        color: `var(--${type.value}-color)`,
+                        color: typeColor(type),
                         transition: "transform 0.18s",
                         transform: isHovered ? "translateX(2px)" : "translateX(0)",
                       }}
@@ -1547,6 +1596,88 @@ function Modal2ShippingWizard({ onClose, onBack }: { onClose: () => void; onBack
   );
 }
 
+function Modal2SubscriptionWizard({
+  onClose,
+  onBack,
+}: {
+  onClose: () => void;
+  onBack: () => void;
+}) {
+  const [selected, setSelected] = useState<string>(SUBSCRIPTION_OFFER_TEMPLATES[0].slug);
+  const navigate = useNavigate();
+  return (
+    <AccessibleModal ariaLabel="Create subscription offer" onClose={onClose}>
+      <div className="b-modal-header">
+        <div>
+          <h2 className="b-modal-title">Create subscription offer</h2>
+          <p className="b-modal-subtitle">
+            Saved to Shopify selling plans or Skio, managed from their own lists
+          </p>
+        </div>
+        <button type="button" className="b-modal-close" onClick={onClose} aria-label="Close">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+          >
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div className="b-modal-body">
+        <div className="b-template-grid">
+          {SUBSCRIPTION_OFFER_TEMPLATES.map((template) => (
+            <button
+              key={template.slug}
+              type="button"
+              className={`b-template-card${selected === template.slug ? " selected" : ""}`}
+              onClick={() => setSelected(template.slug)}
+              aria-pressed={selected === template.slug}
+            >
+              <div
+                className="b-template-illus"
+                style={{ display: "grid", placeItems: "center", background: SUBSCRIPTION_GRAD }}
+              >
+                <SubscriptionSvg />
+              </div>
+              <div className="b-template-info">
+                <div className="b-template-radio-row" aria-hidden="true">
+                  <span
+                    className={`b-template-radio${selected === template.slug ? " selected" : ""}`}
+                  />
+                  <p className="b-template-name">{template.name}</p>
+                </div>
+                <p className="b-template-desc">{template.desc}</p>
+                <span style={{ fontSize: 11, color: "var(--text-sub)" }}>{template.badge}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="b-modal-footer">
+        <button type="button" className="b-btn b-btn-secondary" onClick={onBack}>
+          Back
+        </button>
+        <button
+          type="button"
+          className="b-btn b-btn-dark"
+          onClick={() => {
+            void navigate(`/app/offers/new/subscription/${selected}`);
+            onClose();
+          }}
+        >
+          Create subscription offer
+        </button>
+      </div>
+    </AccessibleModal>
+  );
+}
+
 type OfferCreateModalFlowProps = {
   modal: OfferCreateModalType;
   onClose: () => void;
@@ -1568,7 +1699,8 @@ export default function OfferCreateModalFlow({
             type === "bundle" ||
             type === "upsell" ||
             type === "discount" ||
-            type === "shipping"
+            type === "shipping" ||
+            type === "subscription"
           ) {
             onChange(type);
           }
@@ -1587,6 +1719,10 @@ export default function OfferCreateModalFlow({
 
   if (modal === "upsell") {
     return <Modal2UpsellWizard onClose={onClose} onBack={() => onChange("type")} />;
+  }
+
+  if (modal === "subscription") {
+    return <Modal2SubscriptionWizard onClose={onClose} onBack={() => onChange("type")} />;
   }
 
   if (modal === "shipping") {

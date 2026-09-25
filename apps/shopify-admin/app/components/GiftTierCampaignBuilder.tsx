@@ -59,7 +59,7 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
       <Form method="post" action={action} className="b-card b-p-5 b-stack b-gap-5">
         <input type="hidden" name="intent" value="create-campaign" />
         <input type="hidden" name="campaign" value={serialized} />
-        <div className="b-grid-2">
+        <div className="b-grid-3">
           <div>
             <label className="b-label" htmlFor="giftCampaignName">
               Campaign name
@@ -106,8 +106,8 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
         <div className="b-stack b-gap-4">
           {tiers.map((tier, index) => (
             <section className="b-subcard" key={`${index}-${tier.id}`}>
-              <div className="b-row b-justify-between b-mb-4">
-                <h3 className="b-editor-section-title">Gift tier {index + 1}</h3>
+              <div className="b-row b-justify-between b-gap-3 b-mb-4">
+                <h3 className="b-form-title">Gift tier {index + 1}</h3>
                 {tiers.length > 1 && (
                   <button
                     type="button"
@@ -170,7 +170,7 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
                   />
                 </div>
               </div>
-              <div className="b-row b-gap-3 b-mt-4">
+              <div className="b-row b-gap-3 b-wrap b-mt-4">
                 <button
                   type="button"
                   className="b-btn b-btn-secondary"
@@ -209,7 +209,7 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
           description="Apply the same URL, customer, location, subscription, attribute, and usage conditions to every generated tier."
         />
 
-        <div className="b-row b-gap-3">
+        <div className="b-form-actions">
           <button
             type="button"
             className="b-btn b-btn-secondary"
@@ -235,7 +235,7 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
             Create draft offers
           </button>
         </div>
-        <p className="b-help">
+        <p className="b-help b-m-0">
           Each tier becomes a normal draft offer with an inclusive lower bound and an automatically
           derived upper bound, so tiers never overlap.
         </p>

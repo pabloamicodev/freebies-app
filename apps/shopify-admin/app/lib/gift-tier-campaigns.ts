@@ -39,6 +39,11 @@ export interface GiftTierOfferDraft {
   };
 }
 
+// Shared by generated internal names and the offers-list search that surfaces them.
+export function giftTierCampaignNamePrefix(campaignId: string): string {
+  return `[Gift tiers:${campaignId}:`;
+}
+
 export function buildGiftTierOfferDrafts(raw: GiftTierCampaign, currencyCode: string): GiftTierOfferDraft[] {
   const campaign = giftTierCampaignSchema.parse(raw);
   const tiers = [...campaign.tiers].sort((a, b) => a.minimumSubtotalCents - b.minimumSubtotalCents);
@@ -53,7 +58,7 @@ export function buildGiftTierOfferDrafts(raw: GiftTierCampaign, currencyCode: st
       condition.maxCents = nextTier.minimumSubtotalCents - 1;
     }
     return {
-      internalName: `[Gift tiers:${campaign.campaignId}:${tier.id}] ${campaign.name}`,
+      internalName: `${giftTierCampaignNamePrefix(campaign.campaignId)}${tier.id}] ${campaign.name}`,
       publicTitle: `${campaign.name} — ${tier.id}`,
       priority: 200 + index,
       condition,

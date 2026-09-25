@@ -226,7 +226,7 @@ export default function OfferPreviewPage() {
       {actionData && "error" in actionData && <div className="b-banner b-banner-red" role="alert">{actionData.error}</div>}
 
       {/* Main layout */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16, alignItems: "start" }}>
+      <div className="b-editor-layout">
         {/* Left column */}
         <div className="b-stack b-stack-4">
           {/* Merchant-facing storefront preview */}

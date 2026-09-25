@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildGiftTierOfferDrafts, type GiftTierCampaign } from "./gift-tier-campaigns.js";
+import { buildGiftTierOfferDrafts, giftTierCampaignNamePrefix, type GiftTierCampaign } from "./gift-tier-campaigns.js";
 
 const campaign: GiftTierCampaign = {
   campaignId: "holiday-gifts", name: "Holiday gifts", stackingMode: "highest_tier_only",
@@ -27,5 +27,11 @@ describe("buildGiftTierOfferDrafts", () => {
     const drafts = buildGiftTierOfferDrafts(campaign, "USD");
     expect(drafts[0]?.reward).toMatchObject({ isAutoAdd: false, isCustomerSelectable: true });
     expect(drafts[1]?.reward).toMatchObject({ isAutoAdd: true, isCustomerSelectable: false });
+  });
+
+  it("prefixes every internal name so the offers list can find the whole campaign", () => {
+    const prefix = giftTierCampaignNamePrefix(campaign.campaignId);
+    expect(buildGiftTierOfferDrafts(campaign, "USD").every((draft) => draft.internalName.startsWith(prefix))).toBe(true);
+    expect(buildGiftTierOfferDrafts({ ...campaign, campaignId: "holiday" }, "USD").some((draft) => draft.internalName.startsWith(prefix))).toBe(false);
   });
 });

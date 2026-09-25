@@ -1,4 +1,4 @@
-import { useLoaderData, useNavigate, useSearchParams, useFetcher, redirect } from "react-router";
+import { Link, useLoaderData, useNavigate, useSearchParams, useFetcher, redirect } from "react-router";
 import { lazy, Suspense, useCallback, useMemo, useState } from "react";
 import {
   analyticsEvents,
@@ -30,6 +30,7 @@ import {
   validateOffersPublishable,
 } from "../lib/offer-publish-flow.server.js";
 import type { OfferCreateModalType } from "../components/offers/OfferCreateModalFlow.js";
+import { SUBSCRIPTION_OFFER_TEMPLATES } from "../lib/subscription-offer-templates.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
@@ -737,6 +738,24 @@ export default function OffersPage() {
           </button>
         </div>
       )}
+
+      {/* Subscription offers live in Shopify selling plans / Skio, not in `offers`. */}
+      <div className="b-card b-p-4 b-mb-4 b-row b-items-center b-justify-between b-gap-4 b-wrap">
+        <div>
+          <strong>Subscription offers</strong>
+          <p className="b-help b-m-0">
+            Cycle pricing and Skio shipping are stored in Shopify and Skio, so they are managed from
+            their own lists.
+          </p>
+        </div>
+        <div className="b-row b-gap-2 b-wrap">
+          {SUBSCRIPTION_OFFER_TEMPLATES.map((template) => (
+            <Link key={template.slug} className="b-btn b-btn-secondary b-btn-sm" to={template.manageTo}>
+              {template.name}
+            </Link>
+          ))}
+        </div>
+      </div>
 
       {/* ── Action confirmation dialog ──────────────────────── */}
       {confirmAction && (

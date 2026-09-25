@@ -100,6 +100,8 @@ export default function SkioShippingPage() {
     <div className="b-page">
       <PageHeader
         title="Skio shipping"
+        backTo="/app/offers"
+        backLabel="← All Offers"
         subtitle="Set the delivery price for each subscription cycle without changing Shopify checkout discounts."
       />
       {actionData?.error && <div className="b-banner b-banner-red" role="alert">{actionData.error}</div>}
@@ -109,15 +111,15 @@ export default function SkioShippingPage() {
       <section className="b-card b-p-5 b-mb-5">
         <div className="b-row b-justify-between b-gap-4">
           <div>
-            <h2 className="b-editor-section-title">Skio connection</h2>
-            <p className="b-text-muted">The private key is encrypted and never returned to the browser.</p>
+            <h2 className="b-form-title">Skio connection</h2>
+            <p className="b-form-desc">The private key is encrypted and never returned to the browser.</p>
           </div>
           <span className={`b-status-pill ${data.apiKeyConnected ? "b-status-pill-green" : "b-status-pill-muted"}`}>
             {data.apiKeyConnected ? "Connected" : "Not connected"}
           </span>
         </div>
         {data.apiKeyConnected ? (
-          <div className="b-row b-gap-3 b-mt-4">
+          <div className="b-row b-gap-3 b-wrap b-mt-4">
             <Form method="post"><input type="hidden" name="intent" value="sync" /><button className="b-btn b-btn-primary" type="submit">Sync now</button></Form>
             <Form method="post" onSubmit={(event: FormEvent<HTMLFormElement>) => { if (!window.confirm("Disconnect Skio? Existing delivery overrides remain in Skio.")) event.preventDefault(); }}>
               <input type="hidden" name="intent" value="disconnect" /><button className="b-btn b-btn-secondary" type="submit">Disconnect</button>

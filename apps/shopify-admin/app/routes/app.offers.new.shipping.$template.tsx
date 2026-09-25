@@ -292,7 +292,7 @@ export default function NewShippingOfferPage() {
           <div className="b-card" style={{ borderTop: "3px solid #0ea5e9" }}>
             <div className="b-card-header">Offer information</div>
             <div className="b-card-body" style={{ display: "grid", gap: 14 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div className="b-grid-2">
                 <div>
                   <label className="b-label" htmlFor="shipping-name">
                     Internal name
@@ -329,7 +329,7 @@ export default function NewShippingOfferPage() {
                   rows={2}
                 />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div className="b-grid-2">
                 <div>
                   <label className="b-label" htmlFor="shipping-start">
                     Starts at
@@ -389,7 +389,7 @@ export default function NewShippingOfferPage() {
                     placeholder="gid://shopify/ProductVariant/…"
                   />
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div className="b-grid-2">
                   <div>
                     <label className="b-label" htmlFor="anchor-minimum">
                       Minimum anchor quantity

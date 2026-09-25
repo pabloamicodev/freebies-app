@@ -8,9 +8,10 @@ interface Props {
   error?: string;
   isSubmitting: boolean;
   submitLabel: string;
+  cancelTo?: string;
 }
 
-export function SubscriptionCyclePricingForm({ plan, error, isSubmitting, submitLabel }: Props) {
+export function SubscriptionCyclePricingForm({ plan, error, isSubmitting, submitLabel, cancelTo = "/app/subscription-pricing" }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [productIds, setProductIds] = useState(plan?.productIds ?? []);
 
@@ -33,7 +34,7 @@ export function SubscriptionCyclePricingForm({ plan, error, isSubmitting, submit
           <input id="cyclePlanName" name="name" className="b-input" defaultValue={plan?.name ?? ""} required autoComplete="off" placeholder="3-month subscription" />
         </div>
 
-        <div className="b-grid-2">
+        <div className="b-grid-3">
           <div>
             <label className="b-label" htmlFor="intervalUnit">Billing interval</label>
             <select id="intervalUnit" name="intervalUnit" className="b-select" defaultValue={plan?.intervalUnit ?? "MONTH"}>
@@ -53,7 +54,7 @@ export function SubscriptionCyclePricingForm({ plan, error, isSubmitting, submit
           </div>
         </div>
 
-        <fieldset className="b-card b-p-4">
+        <fieldset className="b-fieldset">
           <legend className="b-label">First cycle</legend>
           <div className="b-grid-2">
             <select name="firstCycleDiscountType" className="b-select" aria-label="First-cycle discount type" defaultValue={plan?.firstCycleDiscount.type ?? "percentage"}>
@@ -64,7 +65,7 @@ export function SubscriptionCyclePricingForm({ plan, error, isSubmitting, submit
           </div>
         </fieldset>
 
-        <fieldset className="b-card b-p-4">
+        <fieldset className="b-fieldset">
           <legend className="b-label">Cycle 2 onward</legend>
           <div className="b-grid-2">
             <select name="recurringDiscountType" className="b-select" aria-label="Recurring discount type" defaultValue={plan?.recurringDiscount.type ?? "fixed_amount"}>
@@ -75,15 +76,15 @@ export function SubscriptionCyclePricingForm({ plan, error, isSubmitting, submit
           </div>
         </fieldset>
 
-        <fieldset className="b-card b-p-4">
+        <fieldset className="b-fieldset">
           <legend className="b-label">Products</legend>
           <input type="hidden" name="productIds" value={JSON.stringify(productIds)} />
           <div className="b-row b-gap-3">
             <button type="button" className="b-btn b-btn-secondary" onClick={() => setPickerOpen(true)}>Select products</button>
-            <span className="b-text-muted">{productIds.length} selected</span>
+            <span className="b-text-sm b-text-muted">{productIds.length} selected</span>
           </div>
           {productIds.length > 0 && (
-            <ul className="b-stack b-gap-2 b-mt-3">
+            <ul className="b-list-reset b-stack b-gap-2 b-mt-3">
               {productIds.map((id) => (
                 <li key={id} className="b-row b-gap-2">
                   <span>{plan?.productTitlesById[id] ?? id.split("/").pop()}</span>
@@ -94,9 +95,9 @@ export function SubscriptionCyclePricingForm({ plan, error, isSubmitting, submit
           )}
         </fieldset>
 
-        <div className="b-row b-gap-3">
+        <div className="b-form-actions">
           <button type="submit" className="b-btn b-btn-primary" disabled={isSubmitting || productIds.length === 0}>{isSubmitting ? "Saving…" : submitLabel}</button>
-          <Link to="/app/subscription-pricing" className="b-btn b-btn-secondary">Cancel</Link>
+          <Link to={cancelTo} className="b-btn b-btn-secondary">Cancel</Link>
         </div>
       </Form>
     </>

@@ -33,6 +33,9 @@ import { GIFT_SUBCONDITIONS } from "../components/subconditions/types.js";
 import type { SubconditionId } from "../components/subconditions/types.js";
 import { normalizeGiftSubconditions } from "../lib/gift-subconditions.js";
 import { GiftTierCampaignBuilder } from "../components/GiftTierCampaignBuilder.js";
+import { OfferWizardHeader } from "../components/offers/OfferWizardLayout.js";
+import { createGiftTierCampaignOffers } from "../lib/gift-tier-campaigns.server.js";
+import { giftTierCampaignNamePrefix } from "../lib/gift-tier-campaigns.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -171,6 +174,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
+  if (intent === "create-campaign") {
+    const result = await createGiftTierCampaignOffers(context, formData);
+    if ("error" in result) return { error: result.error };
+    if (result.created === 0) return { error: "Every tier in this campaign already exists." };
+    return redirect(
+      `/app/offers?q=${encodeURIComponent(giftTierCampaignNamePrefix(result.campaign.campaignId))}`,
+    );
+  }
   const internalNameResult = requiredText(formData, "internalName", "Internal name");
   if (internalNameResult.error) return { error: internalNameResult.error };
   const publicTitleResult = requiredText(formData, "publicTitle", "Public title");
@@ -511,24 +522,38 @@ export default function NewGiftOfferPage() {
   if (templateId === "tiered") {
     return (
       <div className="b-page">
-        <div style={{ marginBottom: 24 }}>
-          <button
-            type="button"
-            className="b-btn-plain b-text-sm"
-            onClick={() => void navigate("/app/offers")}
-            style={{ marginBottom: 14 }}
-          >
-            ← All Offers
-          </button>
-          <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: 22 }}>
-            Spend more, get more
-          </h1>
-          <p className="b-help">
-            Create bounded gift tiers with the same eligibility tools used by every other offer
-            flow.
-          </p>
-        </div>
-        <GiftTierCampaignBuilder action="/app/gift-tiers" />
+        <OfferWizardHeader
+          title="New Gift Offer"
+          subtitle="Tiered spend with gifts — each tier becomes a draft gift offer"
+          badge="Gift"
+          accent={{
+            color: "var(--gift-color)",
+            gradient: "var(--gift-grad)",
+            soft: "rgba(217,119,6,0.12)",
+          }}
+          icon={
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="white"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="20 12 20 22 4 22 4 12" />
+              <rect x="2" y="7" width="20" height="5" />
+              <line x1="12" y1="22" x2="12" y2="7" />
+              <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" />
+              <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" />
+            </svg>
+          }
+        />
+        <GiftTierCampaignBuilder />
+        {actionData?.error && (
+          <Toast message={actionData.error} type="error" onDismiss={() => setShowToast(false)} />
+        )}
       </div>
     );
   }
@@ -690,7 +715,7 @@ export default function NewGiftOfferPage() {
                     <div className="b-help">Shown to customers in your online store.</div>
                   )}
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div className="b-grid-2">
                   <div>
                     <label className="b-label" htmlFor="startsAt">
                       Start time{" "}
@@ -782,7 +807,7 @@ export default function NewGiftOfferPage() {
                     {/* cart_value */}
                     {conditionType === "cart_value" && (
                       <>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                        <div className="b-grid-2">
                           <div>
                             <label className="b-label" htmlFor="gift-min-amount">
                               Min.
@@ -955,7 +980,7 @@ export default function NewGiftOfferPage() {
                     {/* cart_quantity */}
                     {conditionType === "cart_quantity" && (
                       <>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                        <div className="b-grid-2">
                           <div>
                             <label className="b-label" htmlFor="gift-min-qty">
                               Min.
@@ -1199,7 +1224,7 @@ export default function NewGiftOfferPage() {
                   {/* Config fields for the selected condition type */}
                   {selectedMainCond === "cart_value" && (
                     <>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <div className="b-grid-2">
                         <div>
                           <label className="b-label" htmlFor="scratch-gift-min-amount">
                             Min.
@@ -1286,7 +1311,7 @@ export default function NewGiftOfferPage() {
 
                   {selectedMainCond === "cart_quantity" && (
                     <>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <div className="b-grid-2">
                         <div>
                           <label className="b-label" htmlFor="scratch-gift-min-qty">
                             Min. quantity
@@ -1492,7 +1517,7 @@ export default function NewGiftOfferPage() {
                     >
                       Gift discount type
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div className="b-grid-2">
                       <div>
                         <label className="b-label" htmlFor="gift-discount-type">
                           Type:

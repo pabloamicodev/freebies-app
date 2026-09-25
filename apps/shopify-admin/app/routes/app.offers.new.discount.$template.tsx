@@ -854,7 +854,7 @@ export default function NewDiscountOfferPage() {
                       </div>
                     </div>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div className="b-grid-2">
                     <div>
                       <label className="b-label" htmlFor="startsAt">
                         Start time{" "}
@@ -949,7 +949,7 @@ export default function NewDiscountOfferPage() {
                       </div>
                     </div>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div className="b-grid-2">
                     <div>
                       <label className="b-label" htmlFor="startsAt">
                         Start time{" "}
@@ -1044,7 +1044,7 @@ export default function NewDiscountOfferPage() {
                       </div>
                     </div>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div className="b-grid-2">
                     <div>
                       <label className="b-label" htmlFor="startsAt">
                         Start time{" "}
@@ -1365,9 +1365,7 @@ export default function NewDiscountOfferPage() {
                         className="b-card-body"
                         style={{ display: "flex", flexDirection: "column", gap: 10 }}
                       >
-                        <div
-                          style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}
-                        >
+                        <div className="b-grid-3">
                           <div>
                             <label className="b-label" htmlFor={`volume-tier-${tier.id}-qty`}>
                               Minimum quantity
@@ -1413,7 +1411,7 @@ export default function NewDiscountOfferPage() {
                             />
                           </div>
                         </div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <div className="b-grid-2">
                           <div>
                             <label
                               className="b-label"
@@ -1618,9 +1616,7 @@ export default function NewDiscountOfferPage() {
                         className="b-card-body"
                         style={{ display: "flex", flexDirection: "column", gap: 10 }}
                       >
-                        <div
-                          style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}
-                        >
+                        <div className="b-grid-3">
                           <div>
                             <label
                               className="b-label"
@@ -1676,7 +1672,7 @@ export default function NewDiscountOfferPage() {
                             />
                           </div>
                         </div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <div className="b-grid-2">
                           <div>
                             <label className="b-label" htmlFor={`cheapest-tier-${tier.id}-type`}>
                               Type
@@ -1767,7 +1763,7 @@ export default function NewDiscountOfferPage() {
                   className="b-card-body"
                   style={{ display: "flex", flexDirection: "column", gap: 14 }}
                 >
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div className="b-grid-2">
                     <div>
                       <label className="b-label" htmlFor="discount-cart-discount-by">
                         Discount by:
@@ -1844,9 +1840,7 @@ export default function NewDiscountOfferPage() {
                         className="b-card-body"
                         style={{ display: "flex", flexDirection: "column", gap: 10 }}
                       >
-                        <div
-                          style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}
-                        >
+                        <div className="b-grid-3">
                           <div>
                             <label className="b-label" htmlFor={`cart-tier-${tier.id}-threshold`}>
                               {cartDiscountBy === "quantity"

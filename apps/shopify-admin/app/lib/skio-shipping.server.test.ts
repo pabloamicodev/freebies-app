@@ -4,6 +4,7 @@ const { shopifyGraphQLMock } = vi.hoisted(() => ({ shopifyGraphQLMock: vi.fn() }
 vi.mock("./shopify-fetch.server.js", () => ({ shopifyGraphQL: shopifyGraphQLMock }));
 
 import {
+  addSkioShippingTier,
   deleteSkioShippingTier,
   loadSkioShippingConfig,
   saveSkioShippingConfig,
@@ -78,6 +79,14 @@ describe("Skio shipping configuration", () => {
     expect(upsertSkioShippingTier(original, updatedTier).tiers[0]?.name).toBe("Renamed");
     expect(original.tiers[0]?.name).toBe("Three months over $50");
     expect(deleteSkioShippingTier(original, "three-month-over-50").tiers).toEqual([]);
+  });
+
+  it("adds new tiers but refuses to overwrite an existing ID", () => {
+    const newTier = { ...config.tiers[0]!, id: "six-month", name: "Six months" };
+    expect(addSkioShippingTier(config, newTier)).toEqual({ config: { tiers: [...config.tiers, newTier] } });
+    expect(addSkioShippingTier(config, { ...newTier, id: "three-month-over-50" })).toEqual({
+      error: 'A Skio shipping tier with ID "three-month-over-50" already exists.',
+    });
   });
 });
 

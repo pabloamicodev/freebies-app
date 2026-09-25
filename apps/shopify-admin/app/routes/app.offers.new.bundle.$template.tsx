@@ -762,7 +762,7 @@ export default function NewBundleOfferPage() {
                       </div>
                     </div>
 
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div className="b-grid-2">
                       <div>
                         <label className="b-label" htmlFor="startsAt">
                           Start time{" "}
@@ -912,7 +912,7 @@ export default function NewBundleOfferPage() {
                     className="b-card-body"
                     style={{ display: "flex", flexDirection: "column", gap: 14 }}
                   >
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div className="b-grid-2">
                       <div>
                         <label className="b-label" htmlFor="bundle-discount-type">
                           Type
@@ -1054,7 +1054,7 @@ export default function NewBundleOfferPage() {
                         </div>
                       </div>
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div className="b-grid-2">
                       <div>
                         <label className="b-label" htmlFor="startsAt">
                           Start time{" "}
@@ -1347,7 +1347,7 @@ export default function NewBundleOfferPage() {
                               />
                             </div>
                           </div>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                          <div className="b-grid-2">
                             <div>
                               <label
                                 className="b-label"
@@ -1517,7 +1517,7 @@ export default function NewBundleOfferPage() {
                         </div>
                       </div>
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div className="b-grid-2">
                       <div>
                         <label className="b-label" htmlFor="startsAt">
                           Start time{" "}
@@ -1552,7 +1552,7 @@ export default function NewBundleOfferPage() {
                 </div>
 
                 {/* Layout selector */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div className="b-grid-2">
                   <label
                     className="rd-style-091"
                     style={{

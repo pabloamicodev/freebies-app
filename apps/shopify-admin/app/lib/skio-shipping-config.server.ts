@@ -98,6 +98,17 @@ export function upsertSkioShippingTier(
   };
 }
 
+// Create-only variant for the wizard: never silently overwrites an existing tier.
+export function addSkioShippingTier(
+  config: SkioShippingTiersConfig,
+  tier: SkioShippingTier,
+): { config: SkioShippingTiersConfig } | { error: string } {
+  if (config.tiers.some((candidate) => candidate.id === tier.id)) {
+    return { error: `A Skio shipping tier with ID "${tier.id}" already exists.` };
+  }
+  return { config: upsertSkioShippingTier(config, tier) };
+}
+
 export function deleteSkioShippingTier(
   config: SkioShippingTiersConfig,
   tierId: string,

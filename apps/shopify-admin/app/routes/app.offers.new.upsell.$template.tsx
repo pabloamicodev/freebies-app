@@ -593,7 +593,7 @@ export default function NewUpsellOfferPage() {
                   </div>
                 )}
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div className="b-grid-2">
                   <div>
                     <label className="b-label" htmlFor="startsAt">
                       Start time{" "}
@@ -805,7 +805,7 @@ export default function NewUpsellOfferPage() {
                     <div className="b-label" style={{ marginBottom: 8 }}>
                       Upsell widget type
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div className="b-grid-2">
                       {[
                         { value: "fbt", label: "Frequently bought together" },
                         { value: "product_add_on", label: "Product add-on" },
@@ -958,7 +958,7 @@ export default function NewUpsellOfferPage() {
                       className="b-card-body"
                       style={{ display: "flex", flexDirection: "column", gap: 12 }}
                     >
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <div className="b-grid-2">
                         <div>
                           <label className="b-label" htmlFor="checkout-discount-type">
                             Type:
@@ -1063,7 +1063,7 @@ export default function NewUpsellOfferPage() {
                           <option value="most_expensive">Most expensive item</option>
                         </select>
                       </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <div className="b-grid-2">
                         <div>
                           <label className="b-label" htmlFor="fbt-discount-type">
                             Type:
@@ -1116,7 +1116,7 @@ export default function NewUpsellOfferPage() {
                   className="b-card-body"
                   style={{ display: "flex", flexDirection: "column", gap: 12 }}
                 >
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div className="b-grid-2">
                     <div>
                       <label className="b-label" htmlFor="thank-you-discount-type">
                         Tipo:

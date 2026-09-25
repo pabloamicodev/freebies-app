@@ -35,11 +35,13 @@ export default function SubscriptionPricingPage() {
       <PageHeader
         title="Subscription cycle pricing"
         subtitle="Set one price for the first shipment and another from cycle 2 onward."
-        actions={<Link className="b-btn b-btn-primary" to="/app/subscription-pricing/new">New plan</Link>}
+        backTo="/app/offers"
+        backLabel="← All Offers"
+        actions={<Link className="b-btn b-btn-primary" to="/app/offers/new/subscription/cycle-pricing">New plan</Link>}
       />
       {actionData?.error && <div className="b-banner b-banner-red" role="alert">{actionData.error}</div>}
       {plans.length === 0 ? (
-        <div className="b-card b-p-5"><p>No cycle-pricing plans yet.</p></div>
+        <div className="b-card b-p-5"><p>No cycle-pricing plans yet. <Link to="/app/offers/new/subscription/cycle-pricing">Create your first plan</Link>.</p></div>
       ) : (
         <div className="b-card b-table-wrap">
           <table className="b-table">

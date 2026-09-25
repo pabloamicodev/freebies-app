@@ -574,7 +574,7 @@ function ConditionCard({
         {/* ── Cart value ────────────────────────────────────── */}
         {conditionType === "cart_value" && (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 12, alignItems: "end" }}>
               <div>
                 <label htmlFor={`condition-${conditionId}-min`} style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Min.</label>
                 <div style={{ position: "relative" }}>
@@ -658,7 +658,7 @@ function ConditionCard({
         {/* ── Cart quantity ──────────────────────────────────── */}
         {conditionType === "cart_quantity" && (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div className="b-grid-2">
               <div>
                 <label htmlFor={`condition-${conditionId}-min-quantity`} style={{ fontSize: 12, color: "var(--text-sub)", display: "block", marginBottom: 4 }}>Min. quantity</label>
                 <input
@@ -1150,7 +1150,7 @@ export default function OfferDetailPage() {
             </div>
           </div>
 
-          <div className="b-editor-side">
+          <div className="b-editor-sidebar">
             <div className="b-card">
               <div className="b-card-header">Summary</div>
               <div className="b-card-body">

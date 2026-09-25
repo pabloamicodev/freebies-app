@@ -6,6 +6,9 @@ import type { CycleOverride, SkioShippingTier } from "../lib/skio-shipping-tiers
 interface Props {
   tiers: SkioShippingTier[];
   disabled?: boolean;
+  /** Wizard mode: only the new-tier form, cancelling calls onCancel. */
+  createOnly?: boolean;
+  onCancel?: () => void;
 }
 
 interface Draft {
@@ -76,8 +79,9 @@ function money(value: number | null): string {
   return value === null ? "Shopify rate" : value === 0 ? "Free" : `$${value.toFixed(2)}`;
 }
 
-export function SkioShippingManager({ tiers, disabled = false }: Props) {
-  const [draft, setDraft] = useState<Draft | null>(null);
+export function SkioShippingManager({ tiers, disabled = false, createOnly = false, onCancel }: Props) {
+  const [draft, setDraft] = useState<Draft | null>(createOnly ? emptyDraft() : null);
+  const closeDraft = () => (createOnly ? onCancel?.() : setDraft(null));
   const [pickerOpen, setPickerOpen] = useState(false);
   const serialized = useMemo(() => draft ? JSON.stringify(serializeDraft(draft)) : "", [draft]);
 
@@ -102,10 +106,11 @@ export function SkioShippingManager({ tiers, disabled = false }: Props) {
         onSelect={(ids) => { update("productVariantIds", ids); setPickerOpen(false); }}
       />
 
+      {!createOnly && (<>
       <div className="b-row b-justify-between b-gap-4">
         <div>
-          <h2 className="b-editor-section-title">Shipping tiers</h2>
-          <p className="b-text-muted">The first matching tier wins. Maximum subtotal is exclusive.</p>
+          <h2 className="b-form-title">Shipping tiers</h2>
+          <p className="b-form-desc">The first matching tier wins. Maximum subtotal is exclusive.</p>
         </div>
         <button type="button" className="b-btn b-btn-primary" disabled={disabled} onClick={() => setDraft(emptyDraft())}>New tier</button>
       </div>
@@ -140,14 +145,15 @@ export function SkioShippingManager({ tiers, disabled = false }: Props) {
           </table>
         </div>
       )}
+      </>)}
 
       {draft && (
         <Form method="post" className="b-card b-p-5 b-stack b-gap-5">
           <input type="hidden" name="intent" value="save-tier" />
           <input type="hidden" name="tier" value={serialized} />
-          <div className="b-row b-justify-between">
-            <div><h3 className="b-editor-section-title">{draft.originalId ? "Edit shipping tier" : "New shipping tier"}</h3><p className="b-text-muted">Blank price means keep Skio's current calculated delivery price.</p></div>
-            <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setDraft(null)}>Close</button>
+          <div className="b-row b-justify-between b-items-start b-gap-4">
+            <div><h3 className="b-form-title">{draft.originalId ? "Edit shipping tier" : "New shipping tier"}</h3><p className="b-form-desc">Blank price means keep Skio's current calculated delivery price.</p></div>
+            <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={closeDraft}>Close</button>
           </div>
 
           <div className="b-grid-2">
@@ -159,7 +165,7 @@ export function SkioShippingManager({ tiers, disabled = false }: Props) {
             <div><label className="b-label" htmlFor="skioMax">Maximum subtotal</label><input id="skioMax" className="b-input" type="number" min="0" step="0.01" placeholder="No upper limit" value={draft.maxSubtotal} onChange={(event) => update("maxSubtotal", event.target.value)} /></div>
           </div>
 
-          <fieldset className="b-stack b-gap-3">
+          <fieldset className="b-fieldset b-stack b-gap-3">
             <legend className="b-label">Cycle overrides</legend>
             {draft.cycleOverrides.map((entry, index) => (
               <div className="b-grid-3" key={`${index}-${entry.cycle}`}>
@@ -171,14 +177,14 @@ export function SkioShippingManager({ tiers, disabled = false }: Props) {
             <button type="button" className="b-btn b-btn-secondary b-self-start" onClick={() => update("cycleOverrides", [...draft.cycleOverrides, { cycle: String(draft.cycleOverrides.length + 1), amount: "" }])}>Add cycle</button>
           </fieldset>
 
-          <fieldset className="b-stack b-gap-3">
+          <fieldset className="b-fieldset b-stack b-gap-3">
             <legend className="b-label">Product targeting</legend>
-            <p className="b-help">Leave empty to match every product in a qualifying subscription.</p>
-            <div className="b-row b-gap-3"><button type="button" className="b-btn b-btn-secondary" onClick={() => setPickerOpen(true)}>Select variants</button><span className="b-text-muted">{draft.productVariantIds.length || "All products"}</span></div>
+            <p className="b-help b-m-0">Leave empty to match every product in a qualifying subscription.</p>
+            <div className="b-row b-gap-3 b-wrap"><button type="button" className="b-btn b-btn-secondary" onClick={() => setPickerOpen(true)}>Select variants</button><span className="b-text-muted">{draft.productVariantIds.length || "All products"}</span></div>
             {draft.productVariantIds.length > 0 && <div className="b-chip-list">{draft.productVariantIds.map((id) => <button key={id} type="button" className="b-chip" onClick={() => update("productVariantIds", draft.productVariantIds.filter((value) => value !== id))}>{id.split("/").pop()} ×</button>)}</div>}
           </fieldset>
 
-          <div className="b-row b-gap-3"><button type="submit" className="b-btn b-btn-primary">Save tier</button><button type="button" className="b-btn b-btn-secondary" onClick={() => setDraft(null)}>Cancel</button></div>
+          <div className="b-form-actions"><button type="submit" className="b-btn b-btn-primary">Save tier</button><button type="button" className="b-btn b-btn-secondary" onClick={closeDraft}>Cancel</button></div>
         </Form>
       )}
     </section>

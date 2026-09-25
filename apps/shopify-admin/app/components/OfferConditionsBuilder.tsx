@@ -31,9 +31,9 @@ export function OfferConditionsBuilder({
     <>
       <input type="hidden" name={name} value={JSON.stringify(values)} />
       <section className="b-card">
-        <div className="b-card-header">
+        <div className="b-card-header" style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
           <div style={{ fontWeight: 600 }}>{title}</div>
-          <div className="b-help" style={{ marginTop: 4 }}>
+          <div className="b-help b-m-0" style={{ fontWeight: 400 }}>
             {description}
           </div>
         </div>
