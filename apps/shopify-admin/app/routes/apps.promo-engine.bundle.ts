@@ -165,9 +165,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
                 imageUrl: variant.imageUrl,
                 priceCents: cents(variant.price),
                 compareAtPriceCents: variant.compareAtPrice ? cents(variant.compareAtPrice) : null,
-                isAvailable:
-                  variant.availableForSale &&
-                  (variant.inventoryPolicy === "CONTINUE" || (variant.inventoryQuantity ?? 0) > 0),
+                // availableForSale already covers untracked inventory and oversell policy.
+                isAvailable: variant.availableForSale,
                 vendor: variant.vendor ?? "",
                 productType: variant.productType ?? "",
                 tags: variant.tags,

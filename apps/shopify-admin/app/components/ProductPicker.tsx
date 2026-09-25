@@ -262,10 +262,9 @@ function ProductPickerContent({
             items={products}
             renderItem={(product) => {
               const isExpanded = expandedProducts.has(product.id);
+              // availableForSale already covers untracked inventory and oversell policy.
               const selectableVariants = product.variants?.filter((variant) =>
-                variant.availableForSale &&
-                !variant.requiresSellingPlan &&
-                (variant.inventoryPolicy === "CONTINUE" || (variant.inventoryQuantity ?? 0) > 0),
+                variant.availableForSale && !variant.requiresSellingPlan,
               ) ?? [];
               const variantGids = selectableVariants.map((variant) => variant.id);
               const productSelectable = product.status === "ACTIVE" && variantGids.length > 0;

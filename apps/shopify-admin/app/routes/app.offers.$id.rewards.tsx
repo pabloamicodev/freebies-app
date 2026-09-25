@@ -254,12 +254,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           return { error: "The selected gift product must be active in Shopify." };
         }
         const eligibleVariantIds = candidateVariants
-          .filter(
-            (variant) =>
-              variant.availableForSale &&
-              !variant.requiresSellingPlan &&
-              (variant.inventoryPolicy === "CONTINUE" || (variant.inventoryQuantity ?? 0) > 0),
-          )
+          .filter((variant) => variant.availableForSale && !variant.requiresSellingPlan)
           .map((variant) => variant.variantGid);
         if (eligibleVariantIds.length === 0) {
           return { error: "The selected product has no available one-time-purchase variants." };

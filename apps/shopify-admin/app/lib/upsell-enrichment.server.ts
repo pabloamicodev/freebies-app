@@ -68,7 +68,7 @@ export async function buildUpsells(
         : originalPriceCents;
 
     const isInStock = variant
-      ? variant.availableForSale && (variant.inventoryPolicy === "CONTINUE" || (variant.inventoryQuantity ?? 0) > 0)
+      ? variant.availableForSale // already covers untracked inventory and oversell policy
       : false;
 
     payloads.push({

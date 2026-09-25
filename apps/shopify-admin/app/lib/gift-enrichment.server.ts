@@ -17,13 +17,11 @@ interface GiftVariantStock {
   inventoryQuantity: number | null;
 }
 
+// Shopify's availableForSale already accounts for untracked inventory and the
+// "continue selling when out of stock" policy; a raw quantity of 0 is normal for untracked items.
 function isGiftVariantAvailable(variant: GiftVariantStock | undefined): boolean {
   return Boolean(
-    variant &&
-      variant.productStatus === "ACTIVE" &&
-      variant.availableForSale &&
-      !variant.requiresSellingPlan &&
-      (variant.inventoryPolicy === "CONTINUE" || (variant.inventoryQuantity ?? 0) > 0),
+    variant && variant.productStatus === "ACTIVE" && variant.availableForSale && !variant.requiresSellingPlan,
   );
 }
 
