@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useFetcher } from "react-router";
 
 interface BogosSwitchProps {
   on: boolean;
@@ -28,27 +28,20 @@ export function OfferToggle({ offerId, status, endpoint }: {
   status: string;
   endpoint?: string;
 }) {
-  const [on, setOn] = useState(status === "active");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // A fetcher (not raw fetch) resolves ?index on index routes, surfaces action errors
+  // returned with 200, and revalidates the list so the switch reflects the saved status.
+  const fetcher = useFetcher<{ error?: string }>();
+  const pending = fetcher.formData?.get("currentStatus");
+  const on = pending ? pending !== "active" : status === "active";
+  const loading = fetcher.state !== "idle";
+  const error = fetcher.state === "idle" ? (fetcher.data?.error ?? null) : null;
 
-  const handleChange = async (next: boolean) => {
-    setOn(next);
-    setLoading(true);
-    setError(null);
+  const handleChange = () => {
     const fd = new FormData();
     fd.append("intent", "toggle_status");
     fd.append("offerId", offerId);
-    fd.append("currentStatus", on ? "active" : "paused");
-    try {
-      const res = await fetch(endpoint ?? window.location.pathname, { method: "POST", body: fd });
-      if (!res.ok) throw new Error(`Server error ${res.status}`);
-    } catch (err) {
-      setOn(!next); // rollback
-      setError(err instanceof Error ? err.message : "Failed to update status");
-    } finally {
-      setLoading(false);
-    }
+    fd.append("currentStatus", status === "active" ? "active" : "paused");
+    void fetcher.submit(fd, { method: "POST", ...(endpoint ? { action: endpoint } : {}) });
   };
 
   return (
