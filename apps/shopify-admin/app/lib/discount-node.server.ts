@@ -40,6 +40,12 @@ export interface DiscountCombinationPolicyInput {
   shippingDiscounts: boolean;
 }
 
+interface DiscountUserError {
+  field: string[] | null;
+  message: string;
+  code?: string;
+}
+
 export async function ensureDiscountNodes(
   shopId: string,
   shopDomain: string,
@@ -112,7 +118,7 @@ export async function syncDiscountCombinationPolicy(
   const data = await shopifyGraphQL<{
     discountAutomaticAppUpdate: {
       automaticAppDiscount: { discountId: string } | null;
-      userErrors: Array<{ field: string[] | null; message: string; code?: string }>;
+      userErrors: DiscountUserError[];
     };
   }>({
     shopDomain,
@@ -131,7 +137,7 @@ export async function syncDiscountCombinationPolicy(
 
   const result = data.discountAutomaticAppUpdate;
   if (result.userErrors.length > 0 || !result.automaticAppDiscount) {
-    const messages = result.userErrors.map((error) => error.message).join(", ");
+    const messages = formatDiscountUserErrors(result.userErrors);
     throw new Error(
       `discountAutomaticAppUpdate failed: ${messages || "Shopify returned no updated discount"}`,
     );
@@ -179,16 +185,21 @@ export function buildAutomaticDiscountCreateInput(
   discountClasses: readonly DiscountClass[],
   startsAt = new Date().toISOString(),
 ) {
+  const combinesWith = normalizeDiscountCombinationPolicy(
+    {
+      orderDiscounts: true,
+      productDiscounts: true,
+      shippingDiscounts: true,
+    },
+    discountClasses,
+  );
+
   return {
     title,
     functionHandle,
     discountClasses: [...discountClasses],
     startsAt,
-    combinesWith: {
-      orderDiscounts: true,
-      productDiscounts: true,
-      shippingDiscounts: true,
-    },
+    combinesWith,
   };
 }
 
@@ -196,7 +207,28 @@ export function buildAutomaticDiscountUpdateInput(
   combinesWith: DiscountCombinationPolicyInput,
   discountClasses: readonly DiscountClass[],
 ) {
-  return { combinesWith, discountClasses: [...discountClasses] };
+  return {
+    combinesWith: normalizeDiscountCombinationPolicy(combinesWith, discountClasses),
+    discountClasses: [...discountClasses],
+  };
+}
+
+function normalizeDiscountCombinationPolicy(
+  combinesWith: DiscountCombinationPolicyInput,
+  discountClasses: readonly DiscountClass[],
+): DiscountCombinationPolicyInput {
+  const isShippingOnly = discountClasses.length === 1 && discountClasses[0] === "SHIPPING";
+  return isShippingOnly ? { ...combinesWith, shippingDiscounts: false } : combinesWith;
+}
+
+export function formatDiscountUserErrors(errors: DiscountUserError[]): string {
+  return errors
+    .map((error) => {
+      const code = error.code ? `[${error.code}] ` : "";
+      const field = error.field?.length ? `${error.field.join(".")}: ` : "";
+      return `${code}${field}${error.message}`;
+    })
+    .join(", ");
 }
 
 /** Reuses an existing "Promo Engine" automatic discount if one is already
@@ -219,7 +251,7 @@ async function createOrFindAutomaticDiscount(
   const created = await shopifyGraphQL<{
     discountAutomaticAppCreate: {
       automaticAppDiscount: { discountId: string } | null;
-      userErrors: Array<{ field: string[] | null; message: string; code?: string }>;
+      userErrors: DiscountUserError[];
     };
   }>({
     shopDomain,
@@ -241,7 +273,7 @@ async function createOrFindAutomaticDiscount(
   const alreadyExists = result.userErrors.some((e) => e.message.toLowerCase().includes("already"));
   if (!alreadyExists) {
     throw new Error(
-      `discountAutomaticAppCreate failed: ${result.userErrors.map((e) => e.message).join(", ")}`,
+      `discountAutomaticAppCreate failed: ${formatDiscountUserErrors(result.userErrors) || "Shopify returned no created discount"}`,
     );
   }
 
@@ -252,7 +284,7 @@ async function createOrFindAutomaticDiscount(
   );
   if (!recoveredId) {
     throw new Error(
-      `discountAutomaticAppCreate reported a duplicate but no matching discount was found: ${result.userErrors.map((e) => e.message).join(", ")}`,
+      `discountAutomaticAppCreate reported a duplicate but no matching discount was found: ${formatDiscountUserErrors(result.userErrors)}`,
     );
   }
   return recoveredId;

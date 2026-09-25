@@ -6,6 +6,7 @@ import {
   CART_FUNCTION_TITLE,
   DELIVERY_DISCOUNT_CLASSES,
   DELIVERY_FUNCTION_TITLE,
+  formatDiscountUserErrors,
   selectFunctionId,
 } from "./discount-node.server.js";
 
@@ -64,10 +65,35 @@ describe("automatic discount inputs", () => {
     });
   });
 
-  it("keeps the shipping node constrained to the shipping class", () => {
+  it("uses Shopify's supported combination policy for a shipping-only automatic discount", () => {
     expect(buildAutomaticDiscountUpdateInput(combinesWith, DELIVERY_DISCOUNT_CLASSES)).toEqual({
-      combinesWith,
+      combinesWith: {
+        orderDiscounts: true,
+        productDiscounts: false,
+        shippingDiscounts: false,
+      },
       discountClasses: ["SHIPPING"],
     });
+  });
+
+  it("preserves same-class combination settings for the unified cart discount", () => {
+    expect(buildAutomaticDiscountUpdateInput(combinesWith, CART_DISCOUNT_CLASSES)).toEqual({
+      combinesWith,
+      discountClasses: ["PRODUCT", "ORDER"],
+    });
+  });
+
+  it("includes Shopify error codes and field paths in operational errors", () => {
+    expect(
+      formatDiscountUserErrors([
+        {
+          code: "INVALID_COMBINES_WITH_FOR_DISCOUNT_CLASS",
+          field: ["automaticAppDiscount", "combinesWith", "shippingDiscounts"],
+          message: "is not supported with these combines_with settings",
+        },
+      ]),
+    ).toBe(
+      "[INVALID_COMBINES_WITH_FOR_DISCOUNT_CLASS] automaticAppDiscount.combinesWith.shippingDiscounts: is not supported with these combines_with settings",
+    );
   });
 });
