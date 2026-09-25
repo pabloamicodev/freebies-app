@@ -191,8 +191,10 @@ describe("serializeFunctionConfig", () => {
     console.info("Ambrosia function config bytes", sizes);
 
     expect(dev.offers).toHaveLength(9);
-    expect(sizes.devCompact).toBeLessThan(7000);
-    expect(sizes.productionCompact).toBeLessThan(7000);
+    // Publish refuses configs over 9500 bytes (Shopify drops metafields over 10,000); keep
+    // ~1.5KB of headroom for customer-facing titles and future Ambrosia rules.
+    expect(sizes.devCompact).toBeLessThan(8000);
+    expect(sizes.productionCompact).toBeLessThan(8000);
     expect(sizes.productionValidation).toBeLessThan(9500);
   });
 

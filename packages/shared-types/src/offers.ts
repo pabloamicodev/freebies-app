@@ -338,6 +338,7 @@ export const RewardTargetSchema = z.object({
   productIds: z.array(z.string()).optional(),
   lineQuantityEquals: z.number().int().positive().optional(),
   maxUnitsTotal: z.number().int().positive().optional(),
+  maxUnitsPerProduct: z.number().int().positive().optional(),
   subscriptionMode: z.enum(["any", "subscription_only", "one_time_only"]).optional(),
   scopeMode: z.enum(["sitewide", "landing", "quiz_bundle", "tagged_offer"]).optional(),
   requiredOfferId: z.string().uuid().optional(),
@@ -416,6 +417,7 @@ const ProductTargetIdsSchema = z.object({
   productIds: z.array(z.string()).optional(),
   lineQuantityEquals: z.number().int().positive().optional(),
   maxUnitsTotal: z.number().int().positive().optional(),
+  maxUnitsPerProduct: z.number().int().positive().optional(),
   subscriptionMode: z.enum(["any", "subscription_only", "one_time_only"]).default("any"),
   selectionMode: z.enum(["all", "cheapest", "most_expensive"]).default("all"),
   countRule: z.enum(["all", "unique"]).default("all"),
@@ -830,6 +832,7 @@ export const CompiledOfferSchema = z.object({
         maxQuantity: z.number().int().positive().optional(),
         lineQuantityEquals: z.number().int().positive().optional(),
         maxUnitsTotal: z.number().int().positive().optional(),
+        maxUnitsPerProduct: z.number().int().positive().optional(),
         subscriptionMode: z.enum(["any", "subscription_only", "one_time_only"]),
         scopeMode: z
           .enum(["sitewide", "landing", "quiz_bundle", "tagged_offer"])

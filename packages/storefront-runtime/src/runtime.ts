@@ -242,17 +242,20 @@ class PromoEngineRuntime {
     if (allTargets.length > 0) {
       const sectionIds = [...new Set(allTargets.map((t) => t.sectionId))];
       try {
-        const resp = await this.savedFetch(`/cart?sections=${sectionIds.join(",")}`, {
-          headers: { Accept: "application/json" },
-        });
+        // Section Rendering API: `/?sections=` returns `{ [id]: html }`. `/cart` with an
+        // `Accept: application/json` header returns the cart JSON and ignores `sections`.
+        const resp = await this.savedFetch(`/?sections=${sectionIds.join(",")}`);
         if (resp.ok) {
-          const data = (await resp.json()) as { sections?: Record<string, string> };
+          const body = (await resp.json()) as Record<string, unknown>;
+          const sections = Object.fromEntries(
+            Object.entries(body).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+          );
           this.log(
             "refreshCartUI — section render response keys:",
-            Object.keys(data.sections ?? {}).join(", ") ||
-              "none (Shopify returned plain cart JSON — section IDs not valid for this theme)",
+            Object.keys(sections).join(", ") || "none (section IDs not valid for this theme)",
           );
-          if (data.sections) {
+          const data = { sections };
+          if (Object.keys(sections).length > 0) {
             let updated = 0;
             for (const { sectionId, selector } of allTargets) {
               const rawHtml = data.sections[sectionId];

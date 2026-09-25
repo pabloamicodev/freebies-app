@@ -21,7 +21,15 @@ use std::collections::{HashMap, HashSet};
 #[shopify_function(rename_all = "camelCase")]
 pub struct FunctionInput {
     pub cart: Cart,
+    pub buyer_journey: Option<BuyerJourney>,
     pub validation_node: ValidationNode,
+}
+
+#[derive(Debug, Deserialize, shopify_function::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[shopify_function(rename_all = "camelCase")]
+pub struct BuyerJourney {
+    pub step: Option<String>,
 }
 
 #[derive(Debug, Deserialize, shopify_function::Deserialize)]
@@ -235,6 +243,15 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
     let clone_products: HashSet<&str> =
         config.clone_product_ids.iter().map(|s| s.as_str()).collect();
 
+    // During cart edits the storefront runtime removes a gift that stopped qualifying, but only
+    // after the edit succeeds; rejecting it here would stop customers removing the product that
+    // unlocked the gift. Checkout still blocks any gift our discount no longer covers.
+    let cart_interaction = input
+        .buyer_journey
+        .as_ref()
+        .and_then(|journey| journey.step.as_deref())
+        == Some("CART_INTERACTION");
+
     let mut errors: Vec<ValidationError> = Vec::new();
 
     let mut gift_qty_by_offer: HashMap<String, i64> = HashMap::new();
@@ -295,7 +312,7 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
             // from our own discount node proves the server-side offer
             // conditions qualified; browser-controlled line attributes alone
             // can never authorize a freebie.
-            if !has_promo_engine_discount(line) {
+            if !cart_interaction && !has_promo_engine_discount(line) {
                 errors.push(ValidationError {
                     message: "This free gift is not eligible for the current cart. Please update your cart.".to_string(),
                     target: "$.cart".to_string(),
@@ -441,6 +458,7 @@ mod tests {
         let config_json = serde_json::to_string(&config).unwrap();
         let line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-1", 1);
         let input = FunctionInput {
+            buyer_journey: None,
             cart: Cart { lines: vec![line] },
             validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
         };
@@ -455,6 +473,7 @@ mod tests {
         // Buyer has 3 gifts but max is 1
         let line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-1", 3);
         let input = FunctionInput {
+            buyer_journey: None,
             cart: Cart { lines: vec![line] },
             validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
         };
@@ -470,6 +489,7 @@ mod tests {
         // Using a variant NOT in the allowed list
         let line = make_gift_line("l1", "gid://shopify/ProductVariant/expensive-product", "p1", "offer-1", 1);
         let input = FunctionInput {
+            buyer_journey: None,
             cart: Cart { lines: vec![line] },
             validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
         };
@@ -496,6 +516,7 @@ mod tests {
         // offer-2 is not in max_quantities — buyer tries to add 2 gifts (> DEFAULT_MAX of 1)
         let line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-2", 2);
         let input = FunctionInput {
+            buyer_journey: None,
             cart: Cart { lines: vec![line] },
             validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
         };
@@ -506,6 +527,7 @@ mod tests {
     #[test]
     fn test_no_config_fails_open() {
         let input = FunctionInput {
+            buyer_journey: None,
             cart: Cart { lines: vec![] },
             validation_node: ValidationNode { metafield: None },
         };
@@ -548,7 +570,12 @@ mod tests {
     }
 
     fn run_with_config(config: ValidationConfig, lines: Vec<CartLine>) -> FunctionOutput {
+        run_at_step(config, lines, None)
+    }
+
+    fn run_at_step(config: ValidationConfig, lines: Vec<CartLine>, step: Option<&str>) -> FunctionOutput {
         function(FunctionInput {
+            buyer_journey: Some(BuyerJourney { step: step.map(str::to_string) }),
             cart: Cart { lines },
             validation_node: ValidationNode {
                 metafield: Some(Metafield { value: serde_json::to_string(&config).unwrap() }),
@@ -604,6 +631,22 @@ mod tests {
         set_gift_metadata(&mut excessive, "reward-1", "3");
         let output = run_with_config(strict_config(), vec![excessive]);
         assert!(validation_errors(&output).iter().any(|error| error.message.contains("this reward")));
+    }
+
+    #[test]
+    fn allows_undiscounted_gift_during_cart_edits_but_blocks_checkout() {
+        let make = || {
+            let mut line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-1", 1);
+            set_gift_metadata(&mut line, "reward-1", "3");
+            line.discount_allocations.clear();
+            line
+        };
+        let not_eligible = |output: &FunctionOutput| {
+            validation_errors(output).iter().any(|error| error.message.contains("not eligible"))
+        };
+        assert!(!not_eligible(&run_at_step(strict_config(), vec![make()], Some("CART_INTERACTION"))));
+        assert!(not_eligible(&run_at_step(strict_config(), vec![make()], Some("CHECKOUT_INTERACTION"))));
+        assert!(not_eligible(&run_at_step(strict_config(), vec![make()], Some("CHECKOUT_COMPLETION"))));
     }
 
     #[test]

@@ -57,16 +57,25 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
             }
         }
 
-        let offer_candidates = if has_product_discount {
+        let mut offer_candidates = if has_product_discount {
             evaluate_offer(offer, &input, &config)
         } else {
             vec![]
         };
-        let offer_order_candidates = if has_order_discount {
+        let mut offer_order_candidates = if has_order_discount {
             evaluate_order_offer(offer, &input, &config)
         } else {
             vec![]
         };
+        // Shopify shows the candidate message as the discount name in cart and checkout.
+        if let Some(title) = offer.title.as_deref().filter(|title| !title.is_empty()) {
+            for candidate in &mut offer_candidates {
+                candidate.message = Some(title.to_string());
+            }
+            for candidate in &mut offer_order_candidates {
+                candidate.message = Some(title.to_string());
+            }
+        }
         if !offer_candidates.is_empty() || !offer_order_candidates.is_empty() {
             if offer.stop_lower_priority {
                 stop_after_priority = Some(offer.priority);
@@ -80,6 +89,8 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
         return Ok(schema::CartLinesDiscountsGenerateRunResult { operations: vec![] });
     }
 
+    let candidates = best_candidate_per_line(candidates, &input);
+
     let mut operations = Vec::new();
     if !candidates.is_empty() {
         operations.push(schema::CartOperation::ProductDiscountsAdd(
@@ -90,9 +101,11 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
         ));
     }
     if !order_candidates.is_empty() {
+        // Competing order offers resolve to the biggest saving for the customer;
+        // merchants who need one offer to win use stopLowerPriority.
         operations.push(schema::CartOperation::OrderDiscountsAdd(
             schema::OrderDiscountsAddOperation {
-                selection_strategy: schema::OrderDiscountSelectionStrategy::First,
+                selection_strategy: schema::OrderDiscountSelectionStrategy::Maximum,
                 candidates: order_candidates,
             },
         ));
@@ -116,7 +129,7 @@ fn evaluate_offer(
         return offer
             .product_rewards
             .iter()
-            .flat_map(|reward| evaluate_product_reward(reward, input))
+            .flat_map(|reward| evaluate_product_reward(reward, input, &offer.excluded_product_ids))
             .collect();
     }
     if offer.offer_type == "discount" {
@@ -128,6 +141,7 @@ fn evaluate_offer(
 fn evaluate_product_reward(
     reward: &CompiledProductReward,
     input: &Input,
+    excluded_product_ids: &[String],
 ) -> Vec<schema::ProductDiscountCandidate> {
     if reward.scope_mode == "quiz_bundle" {
         return evaluate_quiz_bundle_reward(reward, input);
@@ -164,6 +178,10 @@ fn evaluate_product_reward(
             let Some((variant_id, product_id)) = variant_and_product_id(line) else {
                 return false;
             };
+            // Offer-level exclusions apply to the reward too, not only to the qualifying subtotal.
+            if excluded_product_ids.iter().any(|id| id == &product_id) {
+                return false;
+            }
             (product_ids.is_empty() && variant_ids.is_empty())
                 || product_ids.contains(product_id.as_str())
                 || variant_ids.contains(variant_id.as_str())
@@ -209,6 +227,10 @@ fn evaluate_product_reward(
         })
         .max_by_key(|tier| tier.minimum_quantity);
     if !reward.quantity_tiers.is_empty() && quantity_tier.is_none() {
+        return vec![];
+    }
+    // "Cheapest item free" needs something to pair with; a lone item is not a BOGO.
+    if reward.discount_type == "cheapest_item_free" && reward.quantity_tiers.is_empty() && total_quantity < 2 {
         return vec![];
     }
 
@@ -265,11 +287,21 @@ fn evaluate_product_reward(
         })
         .unwrap_or(i64::MAX);
     let mut candidates = Vec::new();
+    let mut applied_by_product: HashMap<String, i64> = HashMap::new();
     for line in eligible {
         if remaining <= 0 {
             break;
         }
-        let quantity = i64::from(*line.quantity()).min(remaining);
+        let mut quantity = i64::from(*line.quantity()).min(remaining);
+        if let Some(per_product) = reward.max_units_per_product {
+            let product_id = variant_and_product_id(line).map(|(_, product)| product).unwrap_or_default();
+            let applied = applied_by_product.entry(product_id).or_insert(0);
+            quantity = quantity.min((per_product - *applied).max(0));
+            *applied += quantity;
+            if quantity <= 0 {
+                continue;
+            }
+        }
         remaining -= quantity;
         let effective_discount_type = quantity_tier
             .map(|tier| tier.discount_type.as_str())
@@ -290,10 +322,12 @@ fn evaluate_product_reward(
             || effective_discount_type == "free"
         {
             ("free", 100.0)
+        } else if effective_discount_type == "most_expensive_item_discount" {
+            ("percentage", effective_discount_value)
         } else {
             (effective_discount_type, effective_discount_value)
         };
-        if discount_type == "fixed_amount" && discount_value <= 0.0 {
+        if discount_value <= 0.0 {
             continue;
         }
         candidates.push(make_candidate(
@@ -1024,6 +1058,55 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
     }
 
     true
+}
+
+/// Shopify applies only one of our candidates per line (the first). Keep the largest saving per
+/// line so overlapping offers resolve in the customer's favor; multi-line candidates pass through.
+fn best_candidate_per_line(
+    candidates: Vec<schema::ProductDiscountCandidate>,
+    input: &Input,
+) -> Vec<schema::ProductDiscountCandidate> {
+    let unit_price = |line_id: &str| {
+        input
+            .cart()
+            .lines()
+            .iter()
+            .find(|line| line.id() == line_id)
+            .map(|line| line.cost().amount_per_quantity().amount().as_f64())
+            .unwrap_or(0.0)
+    };
+    let saving = |candidate: &schema::ProductDiscountCandidate| -> Option<(String, f64)> {
+        let [schema::ProductDiscountCandidateTarget::CartLine(target)] = candidate.targets.as_slice() else {
+            return None;
+        };
+        let quantity = f64::from(target.quantity.unwrap_or(1));
+        let value = match &candidate.value {
+            schema::ProductDiscountCandidateValue::Percentage(pct) => pct.value.0 / 100.0 * unit_price(&target.id) * quantity,
+            schema::ProductDiscountCandidateValue::FixedAmount(fixed) => {
+                if fixed.applies_to_each_item.unwrap_or(false) { fixed.amount.0 * quantity } else { fixed.amount.0 }
+            }
+        };
+        Some((target.id.clone(), value))
+    };
+
+    let mut best: HashMap<String, (usize, f64)> = HashMap::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        if let Some((line_id, value)) = saving(candidate) {
+            let entry = best.entry(line_id).or_insert((index, value));
+            if value > entry.1 {
+                *entry = (index, value);
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .enumerate()
+        .filter(|(index, candidate)| match saving(candidate) {
+            Some((line_id, _)) => best.get(&line_id).map(|(keep, _)| keep == index).unwrap_or(true),
+            None => true,
+        })
+        .map(|(_, candidate)| candidate)
+        .collect()
 }
 
 fn make_candidate(
@@ -3110,5 +3193,98 @@ mod tests {
             discounted_carts >= 3,
             "fixture carts must exercise live offers"
         );
+    }
+
+    fn product_offer(id: &str, priority: i32, excluded: &str, reward: &str) -> String {
+        format!(
+            r#"{{"id":"{id}","version":1,"offerType":"discount","priority":{priority},
+            "excludedProductIds":[{excluded}],"productRewards":[{reward}]}}"#
+        )
+    }
+
+    fn product_candidates(offers: &[String], lines: &[String], subtotal: &str) -> Vec<(String, schema::ProductDiscountCandidateValue)> {
+        let config = format!(r#"{{"offers":[{}]}}"#, offers.join(","));
+        let result = run_function_with_input(run, &cart_json(&format!("[{}]", lines.join(",")), subtotal, &config))
+            .expect("should not error");
+        result
+            .operations
+            .iter()
+            .filter_map(|op| match op {
+                schema::CartOperation::ProductDiscountsAdd(op) => Some(op.candidates.clone()),
+                _ => None,
+            })
+            .flatten()
+            .map(|candidate| {
+                let schema::ProductDiscountCandidateTarget::CartLine(target) = &candidate.targets[0];
+                (target.id.clone(), candidate.value.clone())
+            })
+            .collect()
+    }
+
+    fn line_a(qty: i64) -> String {
+        regular_line("gid://shopify/CartLine/a", "gid://shopify/ProductVariant/a", "gid://shopify/Product/a", "20.00", qty)
+    }
+    fn line_b() -> String {
+        regular_line("gid://shopify/CartLine/b", "gid://shopify/ProductVariant/b", "gid://shopify/Product/b", "25.00", 1)
+    }
+
+    #[test]
+    fn excluded_products_do_not_receive_product_rewards() {
+        let reward = r#"{"id":"r","discountType":"percentage","discountValue":10,"scopeMode":"sitewide"}"#;
+        let offers = [product_offer("o1", 1, r#""gid://shopify/Product/b""#, reward)];
+        let found = product_candidates(&offers, &[line_a(2), line_b()], "65.00");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "gid://shopify/CartLine/a");
+    }
+
+    #[test]
+    fn cheapest_item_free_needs_at_least_two_items() {
+        let reward = r#"{"id":"r","discountType":"cheapest_item_free","discountValue":100,"scopeMode":"sitewide"}"#;
+        let offers = [product_offer("o1", 1, "", reward)];
+        assert!(product_candidates(&offers, &[line_a(1)], "20.00").is_empty());
+        let found = product_candidates(&offers, &[line_a(1), line_b()], "45.00");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "gid://shopify/CartLine/a");
+    }
+
+    #[test]
+    fn most_expensive_item_discount_is_a_percentage_of_the_priciest_item() {
+        let reward = r#"{"id":"r","discountType":"most_expensive_item_discount","discountValue":50,"scopeMode":"sitewide"}"#;
+        let offers = [product_offer("o1", 1, "", reward)];
+        let found = product_candidates(&offers, &[line_a(1), line_b()], "45.00");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "gid://shopify/CartLine/b");
+        match &found[0].1 {
+            schema::ProductDiscountCandidateValue::Percentage(pct) => assert_eq!(pct.value.0, 50.0),
+            other => panic!("expected percentage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn overlapping_product_offers_keep_the_biggest_saving_per_line() {
+        let small = r#"{"id":"small","discountType":"percentage","discountValue":10,"scopeMode":"sitewide"}"#;
+        let big = r#"{"id":"big","discountType":"percentage","discountValue":30,"scopeMode":"sitewide"}"#;
+        let offers = [product_offer("o1", 1, "", small), product_offer("o2", 2, "", big)];
+        let found = product_candidates(&offers, &[line_a(1)], "20.00");
+        assert_eq!(found.len(), 1);
+        match &found[0].1 {
+            schema::ProductDiscountCandidateValue::Percentage(pct) => assert_eq!(pct.value.0, 30.0),
+            other => panic!("expected percentage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn max_units_per_product_frees_one_unit_of_each_target() {
+        let reward = r#"{"id":"r","discountType":"free","discountValue":100,"scopeMode":"sitewide","maxUnitsPerProduct":1}"#;
+        let offers = [product_offer("o1", 1, "", reward)];
+        let found = product_candidates(&offers, &[line_a(2), line_b()], "65.00");
+        assert_eq!(found.len(), 2);
+        let config = format!(r#"{{"offers":[{}]}}"#, offers.join(","));
+        let result = run_function_with_input(run, &cart_json(&format!("[{},{}]", line_a(2), line_b()), "65.00", &config)).unwrap();
+        let schema::CartOperation::ProductDiscountsAdd(op) = &result.operations[0] else { panic!("expected product discounts") };
+        for candidate in &op.candidates {
+            let schema::ProductDiscountCandidateTarget::CartLine(target) = &candidate.targets[0];
+            assert_eq!(target.quantity, Some(1));
+        }
     }
 }

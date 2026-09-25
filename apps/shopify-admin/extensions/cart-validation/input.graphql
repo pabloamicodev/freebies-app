@@ -33,6 +33,9 @@ query CartValidationInput {
       }
     }
   }
+  buyerJourney {
+    step
+  }
   validationNode: validation {
     metafield(namespace: "promo_engine", key: "validation_config") {
       value

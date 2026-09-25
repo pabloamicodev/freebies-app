@@ -36,6 +36,8 @@ pub struct CompiledOffer {
     pub id: String,
     pub version: i32,
     pub offer_type: String,
+    #[serde(default)]
+    pub title: Option<String>,
     pub priority: i32,
     #[serde(default)]
     pub stop_lower_priority: bool,
@@ -162,6 +164,8 @@ pub struct CompiledProductReward {
     pub max_quantity: Option<i64>,
     pub line_quantity_equals: Option<i64>,
     pub max_units_total: Option<i64>,
+    #[serde(default)]
+    pub max_units_per_product: Option<i64>,
     #[serde(default = "default_subscription_mode")]
     pub subscription_mode: String,
     #[serde(default = "default_shipping_scope")]

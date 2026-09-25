@@ -175,12 +175,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const needsValue =
       rewardType !== "shipping_discount" &&
       discountType !== "free" &&
-      discountType !== "cheapest_item_free" &&
-      discountType !== "most_expensive_item_discount";
+      discountType !== "cheapest_item_free";
     if (needsValue && discountValue <= 0) {
       return { error: "Discount value must be greater than 0." };
     }
-    if (discountType === "percentage" && discountValue > 100) {
+    if ((discountType === "percentage" || discountType === "most_expensive_item_discount") && discountValue > 100) {
       return { error: "Percentage discount cannot exceed 100%." };
     }
 
@@ -577,8 +576,7 @@ export default function OfferRewardsPage() {
   const needsValue =
     rewardType !== "shipping_discount" &&
     discountType !== "free" &&
-    discountType !== "cheapest_item_free" &&
-    discountType !== "most_expensive_item_discount";
+    discountType !== "cheapest_item_free";
 
   function updateShippingTier(
     index: number,
@@ -836,7 +834,7 @@ export default function OfferRewardsPage() {
                         <label className="b-label" htmlFor="discountValue">
                           Discount Value{" "}
                           <span className="b-text-muted">
-                            ({discountType === "percentage" ? "%" : "$"})
+                            ({discountType === "percentage" || discountType === "most_expensive_item_discount" ? "%" : "$"})
                           </span>
                         </label>
                         <input
@@ -874,10 +872,6 @@ export default function OfferRewardsPage() {
                   {rewardType !== "shipping_discount" &&
                     (discountType === "free" || discountType === "cheapest_item_free") && (
                       <input type="hidden" name="discountValue" value="100" />
-                    )}
-                  {rewardType !== "shipping_discount" &&
-                    discountType === "most_expensive_item_discount" && (
-                      <input type="hidden" name="discountValue" value="0" />
                     )}
 
                   {rewardType === "shipping_discount" && (

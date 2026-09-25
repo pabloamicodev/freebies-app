@@ -48,6 +48,8 @@ export interface CompiledOffer {
   id: string;
   version: number;
   offerType: string;
+  /** Customer-facing discount name shown in cart and checkout. */
+  title?: string;
   priority: number;
   stopLowerPriority: boolean;
   requiredProductIds: string[];
@@ -128,6 +130,8 @@ export interface CompiledProductReward {
   maxQuantity?: number;
   lineQuantityEquals?: number;
   maxUnitsTotal?: number;
+  /** Caps discounted units of each target product (e.g. one free unit per gift product). */
+  maxUnitsPerProduct?: number;
   subscriptionMode: "any" | "subscription_only" | "one_time_only";
   scopeMode: "sitewide" | "landing" | "quiz_bundle" | "tagged_offer";
   requiredOfferId?: string;
@@ -203,6 +207,7 @@ export function compileOfferConfig(
     id: offer.id,
     version: versionNumber,
     offerType: offer.type,
+    title: offer.publicTitle?.trim() || undefined,
     priority: offer.priority,
     stopLowerPriority: policy?.stopLowerPriority ?? false,
     requiredProductIds: [],
@@ -463,6 +468,9 @@ export function compileOfferConfig(
         ...(Number.isInteger(target["maxUnitsTotal"])
           ? { maxUnitsTotal: Number(target["maxUnitsTotal"]) }
           : {}),
+        ...(Number.isInteger(target["maxUnitsPerProduct"])
+          ? { maxUnitsPerProduct: Number(target["maxUnitsPerProduct"]) }
+          : {}),
         subscriptionMode:
           target["subscriptionMode"] === "subscription_only" ||
           target["subscriptionMode"] === "one_time_only"
@@ -682,7 +690,8 @@ function functionDiscountValue(
   currencyCode: string,
 ): number {
   if (discountType === "free") return 100;
-  if (discountType === "percentage") return storedAmount;
+  // most_expensive_item_discount is a percentage off the priciest eligible item.
+  if (discountType === "percentage" || discountType === "most_expensive_item_discount") return storedAmount;
   const zeroDecimalCurrencies = new Set([
     "JPY",
     "KRW",

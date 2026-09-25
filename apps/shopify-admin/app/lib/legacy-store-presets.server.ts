@@ -300,7 +300,8 @@ function ambrosiaLandingOffer(
         discountType: "free",
         value: { amount: 100, currencyCode: "USD" },
         target: landingTarget(
-          { productIds: targetProductIds, subscriptionMode: "any" },
+          // The source function frees one unit of each target product, not every unit.
+          { productIds: targetProductIds, subscriptionMode: "any", maxUnitsPerProduct: 1 },
           source,
           anchorVariantIds,
           anchorQuantity,
