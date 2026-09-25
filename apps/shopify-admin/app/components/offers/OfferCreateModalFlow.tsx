@@ -442,7 +442,7 @@ function Modal1TypeSelector({
   const handleSelect = useCallback((type: string) => onSelect(type), [onSelect]);
 
   return (
-    <AccessibleModal ariaLabel="Create a new offer" onClose={onClose} style={{ maxWidth: 580 }}>
+    <AccessibleModal ariaLabel="Create a new offer" onClose={onClose} style={{ maxWidth: 960, width: "min(960px, calc(100vw - 32px))" }}>
       <div className="b-modal-header">
         <div>
           <h2 className="b-modal-title">Create a new offer</h2>
@@ -465,7 +465,8 @@ function Modal1TypeSelector({
       </div>
 
       <div className="b-modal-body" style={{ padding: "20px 24px 24px" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        {/* b-grid-3 collapses to 2 columns at 900px and 1 column at 640px */}
+        <div className="b-grid-3" style={{ gap: 12 }}>
           {OFFER_CATALOG.map((type) => {
             const isHovered = hoveredType === type.value;
             return (
