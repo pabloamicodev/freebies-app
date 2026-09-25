@@ -31,10 +31,8 @@ const PRODUCT_HANDLE = process.env["E2E_PRODUCT_HANDLE"] ?? "test-product";
 export const AUTH_FILE = path.join(__dirname, ".auth", "shopify.json");
 
 export default async function globalSetup() {
-  if (!APP_URL || !DEV_STORE_URL || !EMAIL || !PASSWORD) {
-    throw new Error(
-      "E2E auth requires APP_URL, DEV_STORE_URL, SHOPIFY_ADMIN_EMAIL, and SHOPIFY_ADMIN_PASSWORD.",
-    );
+  if (!APP_URL || !DEV_STORE_URL) {
+    throw new Error("E2E setup requires APP_URL and DEV_STORE_URL.");
   }
 
   const authDir = path.dirname(AUTH_FILE);
@@ -47,39 +45,49 @@ export default async function globalSetup() {
   console.info("[global-setup] Starting Shopify OAuth flow...");
 
   try {
-    // Start at the explicit login route. Opening APP_URL without Shopify's
-    // embedded query parameters redirects to /app and correctly returns 410.
-    await page.goto(buildShopifyOAuthUrl(APP_URL, DEV_STORE_URL), {
-      waitUntil: "domcontentloaded",
-      timeout: 30_000,
-    });
+    if (EMAIL && PASSWORD) {
+      // Start at the explicit login route. Opening APP_URL without Shopify's
+      // embedded query parameters redirects to /app and correctly returns 410.
+      await page.goto(buildShopifyOAuthUrl(APP_URL, DEV_STORE_URL), {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      });
 
-    // If redirected to Shopify login, fill credentials
-    if (page.url().includes("accounts.shopify.com") || page.url().includes("/admin/login")) {
-      console.info("[global-setup] Logging in to Shopify...");
+      if (page.url().includes("accounts.shopify.com") || page.url().includes("/admin/login")) {
+        console.info("[global-setup] Logging in to Shopify...");
 
-      const emailInput = page.locator('input[type="email"], input[name="account[email]"]').first();
-      if (await emailInput.isVisible({ timeout: 10_000 })) {
-        await emailInput.fill(EMAIL);
-        await page.locator('button[type="submit"]').first().click();
-        await page.waitForTimeout(1000);
+        const emailInput = page
+          .locator('input[type="email"], input[name="account[email]"]')
+          .first();
+        if (await emailInput.isVisible({ timeout: 10_000 })) {
+          await emailInput.fill(EMAIL);
+          await page.locator('button[type="submit"]').first().click();
+          await page.waitForTimeout(1000);
+        }
+
+        const passwordInput = page
+          .locator('input[type="password"], input[name="account[password]"]')
+          .first();
+        if (await passwordInput.isVisible({ timeout: 10_000 })) {
+          await passwordInput.fill(PASSWORD);
+          await page.locator('button[type="submit"]').first().click();
+        }
+
+        await page.waitForURL((url) => url.href.startsWith(APP_URL), { timeout: 30_000 });
+        console.info("[global-setup] OAuth complete, landed at:", page.url());
       }
 
-      const passwordInput = page
-        .locator('input[type="password"], input[name="account[password]"]')
-        .first();
-      if (await passwordInput.isVisible({ timeout: 10_000 })) {
-        await passwordInput.fill(PASSWORD);
-        await page.locator('button[type="submit"]').first().click();
+      await page.waitForLoadState("networkidle", { timeout: 20_000 });
+    } else {
+      if (EMAIL || PASSWORD) {
+        console.info(
+          "[global-setup] Incomplete admin credential pair ignored for storefront-only tests.",
+        );
       }
-
-      // Wait for OAuth redirect back to the app
-      await page.waitForURL((url) => url.href.startsWith(APP_URL), { timeout: 30_000 });
-      console.info("[global-setup] OAuth complete, landed at:", page.url());
+      console.info(
+        "[global-setup] Admin OAuth skipped; storefront tests do not require admin credentials.",
+      );
     }
-
-    // Wait for the app to finish loading.
-    await page.waitForLoadState("networkidle", { timeout: 20_000 });
 
     // Development stores are password protected. Unlock the Online Store in
     // the same browser context so storefront specs inherit storefront_digest.

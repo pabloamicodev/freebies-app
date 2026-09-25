@@ -29,16 +29,6 @@ if (!isConfigured) {
     "E2E configuration is required: set DEV_STORE_URL and APP_URL in .env.test or CI secrets.",
   );
 }
-if (
-  isConfigured &&
-  !hasAuthFile &&
-  (!process.env["SHOPIFY_ADMIN_EMAIL"] || !process.env["SHOPIFY_ADMIN_PASSWORD"])
-) {
-  throw new Error(
-    "E2E authentication requires SHOPIFY_ADMIN_EMAIL and SHOPIFY_ADMIN_PASSWORD when no saved auth state exists.",
-  );
-}
-
 if (process.env["CI"] === "true") {
   const requiredCiVars = [
     "E2E_PRODUCT_HANDLE",

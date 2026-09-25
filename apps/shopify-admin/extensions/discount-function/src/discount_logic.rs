@@ -250,9 +250,6 @@ fn landing_anchor_qualifies(reward: &CompiledProductReward, input: &Input) -> bo
     let Some(required_source) = reward.required_line_attribute_value.as_deref() else {
         return false;
     };
-    if reward.required_anchor_variant_ids.is_empty() {
-        return true;
-    }
     let anchor_ids: HashSet<&str> = reward
         .required_anchor_variant_ids
         .iter()
@@ -265,6 +262,9 @@ fn landing_anchor_qualifies(reward: &CompiledProductReward, input: &Input) -> bo
         .filter(|line| !is_gift_line(line))
         .filter(|line| landing_source(line).as_deref() == Some(required_source))
         .filter(|line| {
+            if anchor_ids.is_empty() {
+                return true;
+            }
             variant_and_product_id(line)
                 .map(|(variant_id, _)| anchor_ids.contains(variant_id.as_str()))
                 .unwrap_or(false)
@@ -1724,6 +1724,43 @@ mod tests {
             }
             other => panic!("expected ProductDiscountsAdd, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn landing_scope_without_explicit_anchor_ids_still_enforces_quantity_and_subscription() {
+        let config = r#"{"offers":[{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[],"orderRewards":[],"productRewards":[{
+                "id":"atlas-gifts","rewardType":"product_discount","targetProductIds":[],
+                "targetVariantIds":["gid://shopify/ProductVariant/gift"],"discountType":"free","discountValue":100,
+                "subscriptionMode":"any","scopeMode":"landing","requiredLineAttributeValue":"atlas-sk-otg",
+                "requiredAnchorVariantIds":[],"requiredAnchorMinQuantity":2,"requiresAnchorSubscription":true,
+                "priceTiers":[],"discountPercentageOnGifts":100
+            }]
+        }]}"#;
+        let one_time_anchor = scoped_line(
+            "gid://shopify/CartLine/1", "gid://shopify/ProductVariant/anchor", "gid://shopify/Product/anchor",
+            "50.00", 2, Some("atlas-sk-otg"), None,
+        );
+        let subscription_anchor = one_time_anchor.replace(
+            "\"sellingPlanAllocation\": null",
+            "\"sellingPlanAllocation\": { \"sellingPlan\": { \"id\": \"gid://shopify/SellingPlan/monthly\" } }",
+        );
+        let gift = scoped_line(
+            "gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift", "gid://shopify/Product/gift",
+            "20.00", 1, Some("atlas-sk-otg"), None,
+        );
+
+        let without_subscription = format!("[{one_time_anchor},{gift}]");
+        let result = run_function_with_input(run, &cart_json(&without_subscription, "120.00", config)).expect("one-time input should parse");
+        assert!(result.operations.is_empty());
+
+        let with_subscription = format!("[{subscription_anchor},{gift}]");
+        let result = run_function_with_input(run, &cart_json(&with_subscription, "120.00", config)).expect("subscription input should parse");
+        assert_eq!(result.operations.len(), 1);
     }
 
     #[test]
