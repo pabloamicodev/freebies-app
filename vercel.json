@@ -1,12 +1,27 @@
 {
   "framework": "react-router",
+  "regions": [
+    "pdx1"
+  ],
   "installCommand": "pnpm install --frozen-lockfile",
   "buildCommand": "node scripts/vercel-migrate.mjs && pnpm --filter shopify-admin build",
   "outputDirectory": "apps/shopify-admin/build/client",
   "crons": [
-    { "path": "/api/cron/offers", "schedule": "*/5 * * * *" },
-    { "path": "/api/cron/catalog-sync", "schedule": "* * * * *" },
-    { "path": "/api/cron/skio-shipping", "schedule": "*/15 * * * *" },
-    { "path": "/api/cron/analytics-cleanup", "schedule": "0 3 * * *" }
+    {
+      "path": "/api/cron/offers",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/catalog-sync",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/skio-shipping",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/analytics-cleanup",
+      "schedule": "0 3 * * *"
+    }
   ]
 }
