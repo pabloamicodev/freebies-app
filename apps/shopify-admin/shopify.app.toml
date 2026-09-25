@@ -5,7 +5,7 @@ embedded = true
 handle = "promo-engine-hpn"
 
 [build]
-automatically_update_urls_on_dev = true
+automatically_update_urls_on_dev = false
 
 [auth]
 redirect_urls = [
@@ -53,7 +53,7 @@ shop_deletion_url = "https://freebies-app-shopify-admin.vercel.app/webhooks/gdpr
 [access_scopes]
 # read_all_orders removed: it requires Shopify approval and is unnecessary —
 # read_orders covers the trailing-60-day window the analytics dashboard uses.
-scopes = "read_products,write_products,read_inventory,read_markets,read_discounts,write_discounts,read_validations,write_validations,write_purchase_options,read_customers,read_orders,read_themes,write_app_proxy"
+scopes = "read_products,write_products,read_inventory,read_markets,read_discounts,write_discounts,read_validations,write_validations,write_cart_transforms,write_purchase_options,read_customers,read_orders,read_themes,write_app_proxy"
 
 [pos]
 embedded = false

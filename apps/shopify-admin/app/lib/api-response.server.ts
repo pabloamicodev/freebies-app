@@ -1,3 +1,4 @@
+import { waitUntil } from "@vercel/functions";
 import * as Sentry from "@sentry/node";
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -99,6 +100,7 @@ export function handleApiError(
 
   const requestId = getRequestId(request);
   Sentry.captureException(error, { tags: { route: context, requestId } });
+  waitUntil(Sentry.flush(2000));
   console.error(`[${context}] request failed`, {
     requestId,
     error: error instanceof Error

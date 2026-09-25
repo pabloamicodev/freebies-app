@@ -1,9 +1,14 @@
 import { Session } from "@shopify/shopify-api";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   databaseRowToSession,
   sessionToDatabaseRow,
+  sessionToStoredRow,
+  storedRowToSession,
 } from "./postgres-session-storage.server.js";
+import { isEncryptedToken } from "./token-crypto.server.js";
+
+type Row = Parameters<typeof storedRowToSession>[0];
 
 describe("PostgresSessionStorage serialization", () => {
   it("round-trips offline sessions without losing expiry precision required by Shopify", () => {
@@ -71,5 +76,54 @@ describe("PostgresSessionStorage serialization", () => {
       collaborator: false,
       email_verified: true,
     });
+  });
+});
+
+describe("PostgresSessionStorage access token encryption", () => {
+  const originalKey = process.env["TOKEN_ENCRYPTION_KEY"];
+  const token = `shpat_${"a".repeat(32)}`;
+  const session = () => new Session({
+    id: "offline_store.myshopify.com",
+    shop: "store.myshopify.com",
+    state: "state",
+    isOnline: false,
+    accessToken: token,
+  });
+
+  beforeEach(() => {
+    process.env["TOKEN_ENCRYPTION_KEY"] = "ab".repeat(32);
+  });
+
+  afterEach(() => {
+    if (originalKey === undefined) delete process.env["TOKEN_ENCRYPTION_KEY"];
+    else process.env["TOKEN_ENCRYPTION_KEY"] = originalKey;
+  });
+
+  it("encrypts the access token at rest within the varchar(255) column", async () => {
+    const row = await sessionToStoredRow(session());
+    expect(row.accessToken).not.toContain(token);
+    expect(isEncryptedToken(row.accessToken!)).toBe(true);
+    expect(row.accessToken!.length).toBeLessThanOrEqual(255);
+
+    const restored = await storedRowToSession(row as Row);
+    expect(restored.accessToken).toBe(token);
+  });
+
+  it("loads legacy plaintext rows unchanged", async () => {
+    const row = sessionToDatabaseRow(session());
+    expect(row.accessToken).toBe(token);
+    const restored = await storedRowToSession(row as Row);
+    expect(restored.accessToken).toBe(token);
+  });
+
+  it("keeps sessions without an access token empty", async () => {
+    const row = await sessionToStoredRow(new Session({
+      id: "online_store_1",
+      shop: "store.myshopify.com",
+      state: "state",
+      isOnline: true,
+    }));
+    expect(row.accessToken).toBeNull();
+    expect((await storedRowToSession(row as Row)).accessToken).toBeUndefined();
   });
 });

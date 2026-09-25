@@ -1,4 +1,5 @@
 import type { ActionFunctionArgs } from "react-router";
+import { waitUntil } from "@vercel/functions";
 import * as Sentry from "@sentry/node";
 import { checkRateLimit, getClientIp } from "../lib/rate-limit.server.js";
 import { apiError, apiJson, handleApiError, readJsonBody } from "../lib/api-response.server.js";
@@ -42,6 +43,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       tags: { source: "client_error_boundary" },
       extra: { url: typeof body.url === "string" ? safeUrl(body.url) : undefined },
     });
+    waitUntil(Sentry.flush(2000));
   } catch (error) {
     return handleApiError(request, error, "api.report-error");
   }

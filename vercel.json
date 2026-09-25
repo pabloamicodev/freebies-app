@@ -1,7 +1,7 @@
 {
   "framework": "react-router",
   "installCommand": "pnpm install --frozen-lockfile",
-  "buildCommand": "node -e \"if(!process.env.DATABASE_URL_UNPOOLED)throw new Error('DATABASE_URL_UNPOOLED is required for production migrations')\" && pnpm --filter @promo/db db:migrate && pnpm --filter shopify-admin build",
+  "buildCommand": "if [ \"$VERCEL_ENV\" = production ]; then node -e \"if(!process.env.DATABASE_URL_UNPOOLED)throw new Error('DATABASE_URL_UNPOOLED is required for production migrations')\" && pnpm --filter @promo/db db:migrate; fi && pnpm --filter shopify-admin build",
   "outputDirectory": "apps/shopify-admin/build/client",
   "crons": [
     { "path": "/api/cron/offers", "schedule": "*/5 * * * *" },

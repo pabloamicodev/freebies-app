@@ -30,6 +30,7 @@ import {
   type CompiledFunctionConfig,
 } from "./compile-config.js";
 import { buildAttributeQueryVariables } from "./attribute-query-variables.js";
+import { isShadowModeEnabled } from "../shadow-mode.server.js";
 import { syncMarketsForShop } from "./market-sync.server.js";
 import { resolveMarketConditionsToCountries } from "./market-condition-resolution.server.js";
 
@@ -64,10 +65,13 @@ export async function publishOffersForShop(shopId: string, shopDomain: string): 
   ];
   const discountIds = discountNodesWithClasses.map(({ discountId }) => discountId);
 
-  const activeOffers: Offer[] = await db
-    .select()
-    .from(offers)
-    .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")));
+  // Shadow mode runs in parallel with BOGOS: publishing live config would double-discount.
+  const activeOffers: Offer[] = (await isShadowModeEnabled(shopId))
+    ? []
+    : await db
+        .select()
+        .from(offers)
+        .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")));
 
   if (activeOffers.length === 0) {
     const emptyConfig: CompiledFunctionConfig = {

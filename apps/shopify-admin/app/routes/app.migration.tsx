@@ -14,6 +14,7 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { offers } from "@promo/db";
 import { and, count, eq } from "drizzle-orm";
 import { isShadowModeEnabled, setShadowMode } from "../lib/shadow-mode.server.js";
+import { publishShopConfig } from "../lib/offer-publish-flow.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { getLegacyStorePreset, importLegacyPreset, inspectLegacyPreset } from "../lib/legacy-store-presets.server.js";
 
@@ -54,11 +55,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   switch (intent) {
     case "enable_shadow":
-      await setShadowMode(shopId, true);
+    case "disable_shadow": {
+      await setShadowMode(shopId, intent === "enable_shadow");
+      const publishError = await publishShopConfig(shopId, shopDomain);
+      if (publishError) return { error: `Shadow mode saved, but republishing to Shopify failed: ${publishError}` };
       break;
-    case "disable_shadow":
-      await setShadowMode(shopId, false);
-      break;
+    }
     case "import_legacy_preset": {
       const preset = getLegacyStorePreset(shopDomain);
       if (!preset) return { error: "No legacy store preset is registered for this shop." };

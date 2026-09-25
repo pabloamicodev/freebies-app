@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@sentry/node", () => ({ captureException: vi.fn() }));
+vi.mock("@sentry/node", () => ({ captureException: vi.fn(), flush: vi.fn(() => Promise.resolve(true)) }));
+vi.mock("@vercel/functions", () => ({ waitUntil: vi.fn() }));
 
 const {
   ApiError,

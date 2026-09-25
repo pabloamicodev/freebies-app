@@ -3,12 +3,24 @@ import { PassThrough } from "node:stream";
 import type { AppLoadContext, EntryContext } from "react-router";
 import { createReadableStreamFromReadable } from "@react-router/node";
 import { ServerRouter } from "react-router";
+import type { HandleErrorFunction } from "react-router";
+import * as Sentry from "@sentry/node";
+import { waitUntil } from "@vercel/functions";
 import { isbot } from "isbot";
 import type { RenderToPipeableStreamOptions } from "react-dom/server";
 import { renderToPipeableStream } from "react-dom/server";
 import { addDocumentResponseHeaders } from "./shopify.server.js";
 
 export const streamTimeout = 5_000;
+
+// Loader/action errors are caught by React Router and never reach Sentry otherwise.
+// Serverless freezes after the response, so the flush must be kept alive with waitUntil.
+export const handleError: HandleErrorFunction = (error, { request }) => {
+  if (request.signal.aborted) return;
+  Sentry.captureException(error, { tags: { route: new URL(request.url).pathname, method: request.method } });
+  console.error(error);
+  waitUntil(Sentry.flush(2000));
+};
 
 export default function handleRequest(
   request: Request,

@@ -3,10 +3,11 @@
  * Shows: compiled function config, metafield status, recent evaluation errors.
  */
 
-import { useLoaderData, Form } from "react-router";
+import { useActionData, useLoaderData, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
+import { publishShopConfig } from "../lib/offer-publish-flow.server.js";
 import { cartMutationLogs, analyticsEvents } from "@promo/db";
 import { eq, and, desc, count, gte } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -101,20 +102,32 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   };
 };
 
-export const action = async ({ request, params: _params }: ActionFunctionArgs) => {
-  await getShopContext(request);
-  const formData = await request.formData();
-  const intent = formData.get("intent");
+export const action = async ({ request, params }: ActionFunctionArgs) => {
+  const { shopId, shopDomain, db } = await getShopContext(request);
+  const offerId = params["id"]!;
+  await loadOwnedOffer(db, shopId, offerId);
+  const intent = (await request.formData()).get("intent");
 
   if (intent === "republish_config") {
-    // Force republish — handled by caller
-    return { ok: true };
+    const error = await publishShopConfig(shopId, shopDomain);
+    return error ? { ok: false, message: error } : { ok: true, message: "Configuration republished to Shopify." };
   }
   if (intent === "clear_logs") {
-    // Clear logs — handled by caller
-    return { ok: true };
+    await Promise.all([
+      db.delete(cartMutationLogs).where(and(
+        eq(cartMutationLogs.shopId, shopId),
+        eq(cartMutationLogs.offerId, offerId),
+        eq(cartMutationLogs.status, "error"),
+      )),
+      db.delete(analyticsEvents).where(and(
+        eq(analyticsEvents.shopId, shopId),
+        eq(analyticsEvents.offerId, offerId),
+        eq(analyticsEvents.eventName, "promo_engine:cart_mutation_error"),
+      )),
+    ]);
+    return { ok: true, message: "Error logs cleared." };
   }
-  return { ok: false };
+  return { ok: false, message: "Unsupported action." };
 };
 
 function metafieldBadgeClass(status: string) {
@@ -125,6 +138,7 @@ function metafieldBadgeClass(status: string) {
 
 export default function OfferDebugPage() {
   const { offer, recentErrors, mutationErrors, eventStats } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
 
   const allErrors = [
     ...recentErrors.map((e) => ({
@@ -320,6 +334,9 @@ export default function OfferDebugPage() {
           <div className="b-card">
             <div className="b-card-header">Quick Actions</div>
             <div className="b-card-body b-stack b-stack-3">
+              {actionData?.message && (
+                <div className={`b-banner ${actionData.ok ? "b-banner-green" : "b-banner-red"}`} role={actionData.ok ? "status" : "alert"}>{actionData.message}</div>
+              )}
               <Form method="post">
                 <input type="hidden" name="intent" value="republish_config" />
                 <button

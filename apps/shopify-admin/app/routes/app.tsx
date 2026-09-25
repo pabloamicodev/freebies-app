@@ -1,9 +1,10 @@
-import { Outlet, useFetchers, useLoaderData, useLocation, useNavigation, useRouteError } from "react-router";
+import { Outlet, isRouteErrorResponse, useFetchers, useLoaderData, useLocation, useNavigation, useRouteError } from "react-router";
 import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { NavMenu } from "@shopify/app-bridge-react";
+import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
 import { shopifyHeaders } from "../lib/shopify-headers.js";
@@ -137,15 +138,25 @@ export function ErrorBoundary() {
   const error = useRouteError();
   const isDev = import.meta.env.DEV;
 
+  const isClientError = isRouteErrorResponse(error) && error.status < 500;
+
   useEffect(() => {
-    const message = error instanceof Error ? error.message : String(error);
+    if (isClientError) return;
+    const message = error instanceof Error
+      ? error.message
+      : isRouteErrorResponse(error)
+        ? `${error.status} ${error.statusText}: ${typeof error.data === "string" ? error.data : JSON.stringify(error.data)}`
+        : JSON.stringify(error);
     const stack = error instanceof Error ? (error.stack ?? "") : "";
     fetch("/api/report-error", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, stack, url: window.location.href }),
     }).catch(() => undefined);
-  }, [error]);
+  }, [error, isClientError]);
+
+  // Shopify auth throws Responses (App Bridge redirects, reauth); boundary.error renders them.
+  if (isClientError) return boundary.error(error);
 
   return (
     <div style={{ padding: "2rem", fontFamily: "system-ui" }}>

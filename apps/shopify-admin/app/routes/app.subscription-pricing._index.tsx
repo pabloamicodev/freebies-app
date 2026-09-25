@@ -1,4 +1,4 @@
-import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -35,7 +35,7 @@ export default function SubscriptionPricingPage() {
       <PageHeader
         title="Subscription cycle pricing"
         subtitle="Set one price for the first shipment and another from cycle 2 onward."
-        actions={<a className="b-btn b-btn-primary" href="/app/subscription-pricing/new">New plan</a>}
+        actions={<Link className="b-btn b-btn-primary" to="/app/subscription-pricing/new">New plan</Link>}
       />
       {actionData?.error && <div className="b-banner b-banner-red" role="alert">{actionData.error}</div>}
       {plans.length === 0 ? (
@@ -53,7 +53,7 @@ export default function SubscriptionPricingPage() {
                   <td>{plan.productIds.length}</td>
                   <td>
                     <div className="b-row b-gap-2">
-                      <a className="b-btn b-btn-secondary b-btn-sm" href={`/app/subscription-pricing/${encodeURIComponent(plan.id)}`}>Edit</a>
+                      <Link className="b-btn b-btn-secondary b-btn-sm" to={`/app/subscription-pricing/${encodeURIComponent(plan.id)}`}>Edit</Link>
                       <Form method="post" onSubmit={(event: React.FormEvent<HTMLFormElement>) => { if (!window.confirm(`Delete ${plan.name}? Existing contracts remain, but new customers cannot select it.`)) event.preventDefault(); }}>
                         <input type="hidden" name="intent" value="delete" />
                         <input type="hidden" name="planId" value={plan.id} />

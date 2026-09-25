@@ -13,6 +13,7 @@ import {
   useSettings,
   useTotalAmount,
 } from "@shopify/ui-extensions/checkout/preact";
+import { APP_URL } from "./app-url.js";
 
 interface UpsellProduct {
   variantId: string;
@@ -105,21 +106,22 @@ function CheckoutUpsell() {
       totalQuantity: cartLines.reduce((sum, line) => sum + line.quantity, 0),
     };
 
-    fetch(`https://${shopDomain}/apps/promo-engine/evaluate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        shopDomain,
-        cart: cartNormalized,
-        customer: null,
-        market: null,
-        locale: null,
-        salesChannel: "online_store",
-        requestedUrl: null,
-        sessionId: "checkout",
-      }),
-      signal: controller.signal,
-    })
+    api.sessionToken.get()
+      .then((token) => fetch(`${APP_URL}/api/checkout/evaluate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          shopDomain,
+          cart: cartNormalized,
+          customer: null,
+          market: null,
+          locale: null,
+          salesChannel: "online_store",
+          requestedUrl: null,
+          sessionId: "checkout",
+        }),
+        signal: controller.signal,
+      }))
       .then(async (response) => {
         if (!response.ok) throw new Error(`Evaluation failed: ${response.status}`);
         return response.json() as Promise<EvaluateResponse>;

@@ -5,7 +5,7 @@ import * as Sentry from "@sentry/node";
 // Fail at module load time, not on the first request. Vercel surfaces this
 // as a deployment error rather than a runtime 500 mid-traffic.
 {
-  const always = ["SHOPIFY_API_KEY", "SHOPIFY_API_SECRET", "DATABASE_URL", "SHOPIFY_APP_URL"];
+  const always = ["SHOPIFY_API_KEY", "SHOPIFY_API_SECRET", "DATABASE_URL", "SHOPIFY_APP_URL", "SCOPES"];
   const prodOnly = ["TOKEN_ENCRYPTION_KEY", "CRON_SECRET"];
   const isProdEnv = (process.env["NODE_ENV"] ?? "production") === "production";
   const required = isProdEnv ? [...always, ...prodOnly] : always;
@@ -47,6 +47,7 @@ import { shopifyGraphQL } from "./lib/shopify-fetch.server.js";
 import { waitUntil } from "@vercel/functions";
 import { drainProductSyncQueue, queueProductSync } from "./lib/sync/product-sync.server.js";
 import { publishOffersForShop } from "./lib/sync/offer-publisher.server.js";
+import { ensureCartTransform } from "./lib/cart-transform.server.js";
 import { productCache } from "@promo/db";
 import { count, eq as drizzleEq } from "drizzle-orm";
 
@@ -183,6 +184,13 @@ const shopify = shopifyApp({
       } catch (discountErr) {
         Sentry.captureException(discountErr, { extra: { shop: session.shop, context: "afterAuth-ensure-promotion-functions" } });
         console.error("[afterAuth] Could not register promotion functions:", discountErr instanceof Error ? discountErr.message : discountErr);
+      }
+
+      try {
+        if (session.accessToken) await ensureCartTransform(session.shop, session.accessToken);
+      } catch (cartTransformErr) {
+        Sentry.captureException(cartTransformErr, { extra: { shop: session.shop, context: "afterAuth-ensure-cart-transform" } });
+        console.error("[afterAuth] Could not register cart transform:", cartTransformErr instanceof Error ? cartTransformErr.message : cartTransformErr);
       }
     },
   },

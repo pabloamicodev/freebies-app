@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Form } from "react-router";
+import { Form, Link } from "react-router";
 import { ProductPicker } from "./ProductPicker.js";
 import type { SubscriptionCyclePricingPlan } from "../lib/subscription-cycle-pricing.js";
 
@@ -96,7 +96,7 @@ export function SubscriptionCyclePricingForm({ plan, error, isSubmitting, submit
 
         <div className="b-row b-gap-3">
           <button type="submit" className="b-btn b-btn-primary" disabled={isSubmitting || productIds.length === 0}>{isSubmitting ? "Saving…" : submitLabel}</button>
-          <a href="/app/subscription-pricing" className="b-btn b-btn-secondary">Cancel</a>
+          <Link to="/app/subscription-pricing" className="b-btn b-btn-secondary">Cancel</Link>
         </div>
       </Form>
     </>

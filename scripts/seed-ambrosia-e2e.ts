@@ -129,6 +129,7 @@ async function main(): Promise<void> {
     { getLegacyStorePreset, validateLegacyStorePreset },
     { validateConditionValue, validateRewardPayload },
     { shopifyGraphQL },
+    { decryptToken },
     { publishOffersForShop },
   ] = await Promise.all([
     import("drizzle-orm"),
@@ -136,6 +137,7 @@ async function main(): Promise<void> {
     import("../apps/shopify-admin/app/lib/legacy-store-presets.server.js"),
     import("@promo/shared-types"),
     import("../apps/shopify-admin/app/lib/shopify-fetch.server.js"),
+    import("../apps/shopify-admin/app/lib/token-crypto.server.js"),
     import("../apps/shopify-admin/app/lib/sync/offer-publisher.server.js"),
   ]);
 
@@ -157,10 +159,11 @@ async function main(): Promise<void> {
     if (!session?.accessToken)
       throw new Error("No offline Shopify session exists for the development store.");
 
+    const accessToken = await decryptToken(session.accessToken!);
     const admin = <T>(query: string, variables: Record<string, unknown> = {}) =>
       shopifyGraphQL<T>({
         shopDomain: DEV_SHOP,
-        accessToken: session.accessToken!,
+        accessToken,
         query,
         variables,
       });

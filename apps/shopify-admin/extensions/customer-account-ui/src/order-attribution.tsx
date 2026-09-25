@@ -10,6 +10,7 @@ import {
   useApi,
   useOrder,
 } from "@shopify/ui-extensions/customer-account/preact";
+import { APP_URL } from "./app-url.js";
 
 interface OfferAttribution {
   offerId: string;
@@ -46,10 +47,11 @@ function OrderAttribution() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);
 
-    fetch(
-      `https://${shopDomain}/apps/promo-engine/customer/order-attribution?order_gid=${encodeURIComponent(orderId)}`,
-      { signal: controller.signal },
-    )
+    api.sessionToken.get()
+      .then((token) => fetch(
+        `${APP_URL}/api/customer-account/order-attribution?order_gid=${encodeURIComponent(orderId)}`,
+        { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal },
+      ))
       .then(async (response) => {
         if (!response.ok) throw new Error(`Attribution failed: ${response.status}`);
         return response.json() as Promise<AttributionResponse>;

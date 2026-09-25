@@ -6,6 +6,7 @@ import {
   type ShopifySessionRow,
 } from "@promo/db";
 import { eq, inArray } from "drizzle-orm";
+import { decryptToken, encryptToken } from "./token-crypto.server.js";
 
 export function sessionToDatabaseRow(session: Session): NewShopifySessionRow {
   const user = session.onlineAccessInfo?.associated_user;
@@ -42,9 +43,23 @@ export function databaseRowToSession(row: ShopifySessionRow): Session {
   return Session.fromPropertyArray(entries, true);
 }
 
+// Legacy plaintext rows still load (decryptToken passes non-encrypted values
+// through) and are re-encrypted the next time Shopify stores the session.
+export async function sessionToStoredRow(session: Session): Promise<NewShopifySessionRow> {
+  const row = sessionToDatabaseRow(session);
+  return { ...row, accessToken: row.accessToken ? await encryptToken(row.accessToken) : null };
+}
+
+export async function storedRowToSession(row: ShopifySessionRow): Promise<Session> {
+  return databaseRowToSession({
+    ...row,
+    accessToken: row.accessToken ? await decryptToken(row.accessToken) : null,
+  });
+}
+
 export class PostgresSessionStorage {
   async storeSession(session: Session): Promise<boolean> {
-    const values = sessionToDatabaseRow(session);
+    const values = await sessionToStoredRow(session);
     await getDb()
       .insert(shopifySessions)
       .values(values)
@@ -78,7 +93,7 @@ export class PostgresSessionStorage {
       .from(shopifySessions)
       .where(eq(shopifySessions.id, id))
       .limit(1);
-    return row ? databaseRowToSession(row) : undefined;
+    return row ? storedRowToSession(row) : undefined;
   }
 
   async deleteSession(id: string): Promise<boolean> {
@@ -98,6 +113,6 @@ export class PostgresSessionStorage {
       .select()
       .from(shopifySessions)
       .where(eq(shopifySessions.shop, shop));
-    return rows.map(databaseRowToSession);
+    return Promise.all(rows.map(storedRowToSession));
   }
 }

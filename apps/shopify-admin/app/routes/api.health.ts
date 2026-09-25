@@ -1,6 +1,7 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { getDb } from "@promo/db";
 import { sql } from "drizzle-orm";
+import { waitUntil } from "@vercel/functions";
 import * as Sentry from "@sentry/node";
 import {
   getLastRedisConnectionError,
@@ -106,6 +107,7 @@ function elapsedMs(startedAt: number): number {
 
 function reportHealthFailure(check: string, requestId: string, error: unknown): void {
   Sentry.captureException(error, { tags: { route: "api.health", check, requestId } });
+  waitUntil(Sentry.flush(2000));
   console.error("[api.health] dependency check failed", {
     check,
     requestId,

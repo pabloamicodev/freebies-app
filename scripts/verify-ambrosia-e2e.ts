@@ -83,11 +83,13 @@ async function main(): Promise<void> {
     },
     { getLegacyStorePreset },
     { shopifyGraphQL },
+    { decryptToken },
   ] = await Promise.all([
     import("drizzle-orm"),
     import("@promo/db"),
     import("../apps/shopify-admin/app/lib/legacy-store-presets.server.js"),
     import("../apps/shopify-admin/app/lib/shopify-fetch.server.js"),
+    import("../apps/shopify-admin/app/lib/token-crypto.server.js"),
   ]);
 
   const db = getDb();
@@ -117,10 +119,11 @@ async function main(): Promise<void> {
     const fixture = JSON.parse(fixtureRow.value) as FixtureSetting;
     assert.equal(fixture.shirtVariantIds.length, 4, "The shirt fixture must have four variants.");
 
+    const accessToken = await decryptToken(session.accessToken!);
     const admin = <T>(query: string, variables: Record<string, unknown> = {}) =>
       shopifyGraphQL<T>({
         shopDomain: DEV_SHOP,
-        accessToken: session.accessToken!,
+        accessToken,
         query,
         variables,
       });

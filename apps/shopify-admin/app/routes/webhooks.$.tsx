@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate, sessionStorage } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs, giftCloneProducts, offers, webhookDeliveries } from "@promo/db";
+import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs, offers, webhookDeliveries } from "@promo/db";
 import { eq, and, inArray, lt, or, sql } from "drizzle-orm";
 import { decryptToken } from "../lib/token-crypto.server.js";
 import { syncInventoryFromWebhook } from "../lib/sync/inventory-sync.server.js";
@@ -12,7 +12,6 @@ import {
 import { syncMarketsForShop } from "../lib/sync/market-sync.server.js";
 import { reconcileOrderAttribution } from "../lib/sync/analytics-reconcile.server.js";
 import { dispatchIntegrationEvents, PermanentIntegrationError } from "../lib/integration-dispatcher.server.js";
-import { shopifyGraphQL } from "../lib/shopify-fetch.server.js";
 import * as Sentry from "@sentry/node";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -482,100 +481,27 @@ async function handleOrderCancelled(shop: string, order: OrderWebhookPayload) {
   }).onConflictDoNothing({ target: analyticsEvents.deduplicationKey });
 }
 
+// Shopify revokes the access token before this webhook is delivered, so no
+// Admin API calls are possible here: gift clone products and the discount's
+// function_config metafield stay in the store. Only local state is cleaned up.
+// Every step is idempotent so Shopify retries (on 503) are safe.
 async function handleAppUninstalled(shop: string) {
-  const shopRecord = await getShopForWebhook(shop);
-  if (!shopRecord) return;
-  const { id: shopId, accessTokenEncrypted } = shopRecord;
   const db = getDb();
-
-  // Mark shop inactive first so no new mutations can happen
-  await db
+  const [shopRecord] = await db
     .update(shops)
     .set({ isActive: false, uninstalledAt: new Date() })
-    .where(eq(shops.myshopifyDomain, shop));
+    .where(eq(shops.myshopifyDomain, shop))
+    .returning({ id: shops.id });
 
-  await cleanupAfterUninstall(shopId, shop, accessTokenEncrypted);
-}
-
-async function cleanupAfterUninstall(
-  shopId: string,
-  shopDomain: string,
-  accessTokenEncrypted: string,
-): Promise<void> {
-  const db = getDb();
-  let accessToken: string;
-  try {
-    accessToken = await decryptToken(accessTokenEncrypted);
-  } catch {
-    console.error("uninstall-cleanup: could not decrypt token, skipping Shopify API cleanup");
-    return;
+  if (shopRecord) {
+    await db
+      .update(offers)
+      .set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(offers.shopId, shopRecord.id), eq(offers.status, "active")));
   }
 
-  // 1. Delete all gift clone products from the merchant's Shopify catalog
-  const clones = await db
-    .select({ cloneProductGid: giftCloneProducts.cloneProductGid })
-    .from(giftCloneProducts)
-    .where(eq(giftCloneProducts.shopId, shopId));
-
-  for (const clone of clones) {
-    try {
-      await shopifyGraphQL({
-        shopDomain,
-        accessToken,
-        query: `mutation ProductDelete($id: ID!) {
-          productDelete(input: { id: $id }) {
-            deletedProductId
-            userErrors { message }
-          }
-        }`,
-        variables: { id: clone.cloneProductGid },
-      });
-    } catch (err) {
-      console.error(`uninstall-cleanup: failed to delete clone ${clone.cloneProductGid}`, err instanceof Error ? err.message : err);
-    }
-  }
-
-  // 2. Clear the compiled Discount Function config metafield (empty offers list)
-  try {
-    const [shopRow] = await db.select({ discountId: shops.discountId }).from(shops).where(eq(shops.id, shopId)).limit(1);
-    if (shopRow?.discountId) {
-      await shopifyGraphQL({
-        shopDomain,
-        accessToken,
-        query: `mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
-          metafieldsSet(metafields: $metafields) {
-            userErrors { message }
-          }
-        }`,
-        variables: {
-          metafields: [{
-            ownerId: shopRow.discountId,
-            namespace: "promo_engine",
-            key: "function_config",
-            type: "json",
-            value: JSON.stringify({ offers: [], version: "1", compiledAt: new Date().toISOString() }),
-          }],
-        },
-      });
-    }
-  } catch (err) {
-    console.error("uninstall-cleanup: failed to clear metafield", err instanceof Error ? err.message : err);
-  }
-
-  // 3. Archive all active offers in DB
-  await db
-    .update(offers)
-    .set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() })
-    .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")));
-
-  // 4. Purge the shop's admin sessions — nothing should be able to act as
-  // this shop once the app is uninstalled.
-  try {
-    const sessions = await sessionStorage.findSessionsByShop(shopDomain);
-    if (sessions.length > 0) await sessionStorage.deleteSessions(sessions.map((s) => s.id));
-  } catch (err) {
-    console.error("uninstall-cleanup: failed to purge sessions", err instanceof Error ? err.message : err);
-  }
+  const sessions = await sessionStorage.findSessionsByShop(shop);
+  if (sessions.length > 0) await sessionStorage.deleteSessions(sessions.map((s) => s.id));
 }
 
 async function handleCustomersUpdate(_shop: string, _payload: CustomerGdprPayload) {
