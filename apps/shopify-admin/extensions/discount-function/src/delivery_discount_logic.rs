@@ -828,4 +828,44 @@ mod tests {
         let result = run_with_lines(r#"["SHIPPING"]"#, "60.00", &config, &groups, lines);
         assert!(result.operations.is_empty());
     }
+
+    #[test]
+    fn landing_shipping_beats_sitewide_regardless_of_priority_or_size() {
+        let sitewide = r#"{
+            "id":"sitewide","priority":1,"scopeMode":"sitewide","targetGroupTypes":null,
+            "tiers":[{"minimumSubtotalCents":0,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}]
+        }"#;
+        let landing = r#"{
+            "id":"landing","priority":999,"scopeMode":"landing",
+            "requiredLineAttributeValue":"lp","requiredAnchorVariantIds":[],"requiredAnchorMinQuantity":1,
+            "targetGroupTypes":null,
+            "tiers":[{"minimumSubtotalCents":2000,"discountType":"percentage","discountValue":25.0,"appliesWhen":null}]
+        }"#;
+        let config = shipping_config(&format!("[{sitewide},{landing}]"));
+        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let line = |source: &str, amount: &str| {
+            let attribute = if source.is_empty() { "null".to_string() } else { format!(r#"{{"value":"{source}"}}"#) };
+            format!(
+                r#"[{{"quantity":1,"cost":{{"subtotalAmount":{{"amount":"{amount}","currencyCode":"USD"}}}},"lineTypeAttribute":null,"cartGiftTierAttribute":null,"landingSourceAttribute":{attribute},"quizBundleIdAttribute":null,"quizFreeGiftAttribute":null,"quizExpectedPaidCountAttribute":null,"sellingPlanAllocation":null,"merchandise":{{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/1"}}}}]"#
+            )
+        };
+        let percentage = |result: &schema::CartDeliveryOptionsDiscountsGenerateRunResult| -> f64 {
+            let schema::DeliveryOperation::DeliveryDiscountsAdd(op) = &result.operations[0] else {
+                panic!("expected a delivery discount");
+            };
+            match &op.candidates[0].value {
+                schema::DeliveryDiscountCandidateValue::Percentage(pct) => pct.value.0,
+                other => panic!("expected percentage, got {other:?}"),
+            }
+        };
+
+        let landing_cart = run_with_lines(r#"["SHIPPING"]"#, "30.00", &config, &groups, &line("lp", "30.00"));
+        assert_eq!(percentage(&landing_cart), 25.0, "landing rule must win over the bigger sitewide one");
+
+        let plain_cart = run_with_lines(r#"["SHIPPING"]"#, "30.00", &config, &groups, &line("", "30.00"));
+        assert_eq!(percentage(&plain_cart), 100.0, "carts without the landing source get the sitewide rule");
+
+        let below_landing_tier = run_with_lines(r#"["SHIPPING"]"#, "10.00", &config, &groups, &line("lp", "10.00"));
+        assert_eq!(percentage(&below_landing_tier), 100.0, "a landing cart below its tier falls back to sitewide");
+    }
 }

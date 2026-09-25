@@ -9,6 +9,61 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { GiftSliderPayload } from "@promo/shared-types";
 import type { OfferDefinition } from "@promo/rule-engine";
 
+interface GiftVariantStock {
+  productStatus: string | null;
+  availableForSale: boolean;
+  requiresSellingPlan: boolean;
+  inventoryPolicy: string | null;
+  inventoryQuantity: number | null;
+}
+
+function isGiftVariantAvailable(variant: GiftVariantStock | undefined): boolean {
+  return Boolean(
+    variant &&
+      variant.productStatus === "ACTIVE" &&
+      variant.availableForSale &&
+      !variant.requiresSellingPlan &&
+      (variant.inventoryPolicy === "CONTINUE" || (variant.inventoryQuantity ?? 0) > 0),
+  );
+}
+
+/**
+ * Drops auto-add gift actions for sold-out variants. Shopify rejects the add anyway, and
+ * the runtime would retry it on every cart change. Variants missing from the catalog cache
+ * are kept, because a cache miss is not evidence of being sold out.
+ */
+export async function dropSoldOutGiftAdds<T extends { action: string; variantId?: string; properties?: Record<string, string> }>(
+  shopId: string,
+  cartActions: T[],
+): Promise<T[]> {
+  const giftAdds = cartActions.filter(
+    (action) => action.action === "add_line" && action.variantId && action.properties?.["_promo_engine_line_type"] === "gift",
+  );
+  if (giftAdds.length === 0) return cartActions;
+
+  const rows = await getDb()
+    .select({
+      variantGid: variantCache.variantGid,
+      availableForSale: variantCache.availableForSale,
+      inventoryQuantity: variantCache.inventoryQuantity,
+      inventoryPolicy: variantCache.inventoryPolicy,
+      requiresSellingPlan: variantCache.requiresSellingPlan,
+      productStatus: productCache.status,
+    })
+    .from(variantCache)
+    .leftJoin(
+      productCache,
+      and(eq(productCache.shopId, variantCache.shopId), eq(productCache.productGid, variantCache.productGid)),
+    )
+    .where(and(eq(variantCache.shopId, shopId), inArray(variantCache.variantGid, giftAdds.map((action) => action.variantId!))));
+  const stockById = new Map(rows.map((row) => [row.variantGid, row]));
+  return cartActions.filter((action) => {
+    if (!giftAdds.includes(action)) return true;
+    const stock = stockById.get(action.variantId!);
+    return !stock || isGiftVariantAvailable(stock);
+  });
+}
+
 export async function enrichGiftSlider(
   shopId: string,
   payload: GiftSliderPayload | null,
@@ -64,13 +119,7 @@ export async function enrichGiftSlider(
               : reward?.discountType === "fixed_price"
                 ? Math.max(0, Math.round(amount))
                 : originalPriceCents;
-      const isAvailable = Boolean(
-        variant &&
-        variant.productStatus === "ACTIVE" &&
-        variant.availableForSale &&
-        !variant.requiresSellingPlan &&
-        (variant.inventoryPolicy === "CONTINUE" || (variant.inventoryQuantity ?? 0) > 0),
-      );
+      const isAvailable = isGiftVariantAvailable(variant);
 
       return {
         ...gift,
