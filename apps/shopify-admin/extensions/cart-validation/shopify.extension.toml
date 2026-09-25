@@ -12,6 +12,7 @@ uid = "0bfc8576-81cd-48b3-b315-c1dc3ec25946"
   export = "run"
 
   [extensions.build]
-  command = "cargo build --target=wasm32-wasip1 --release"
+  # Cargo workspace members build into the repo-root target/ unless told otherwise; `path` below is extension-local.
+  command = "cargo build --target=wasm32-wasip1 --release --target-dir=target"
   path = "target/wasm32-wasip1/release/promo_engine_cart_validation.wasm"
   watch = ["src/**/*.rs"]
