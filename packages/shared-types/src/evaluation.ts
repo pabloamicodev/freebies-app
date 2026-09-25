@@ -56,6 +56,8 @@ export const GiftSliderPayloadSchema = z.object({
     discountedPriceCents: z.number().int(),
     isAvailable: z.boolean(),
     isSelected: z.boolean(),
+    /** Title of the sold-out gift this fallback replaces. */
+    replacesTitle: z.string().optional(),
   })),
   maxSelectableCount: z.number().int().positive(),
   alreadySelectedCount: z.number().int().nonnegative(),

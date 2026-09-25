@@ -194,8 +194,11 @@ export async function evaluate(
       // that reward's exact variant allow-list.
       for (const gift of existingOfferGifts) {
         const reward = giftRewardById.get(gift.rewardId);
-        const target = reward?.target as { variantId?: string; variantIds?: string[] } | undefined;
-        const allowedVariantIds = target?.variantIds ?? (target?.variantId ? [target.variantId] : []);
+        const target = reward?.target as { variantId?: string; variantIds?: string[]; fallbackVariantIds?: string[] } | undefined;
+        const allowedVariantIds = [
+          ...(target?.variantIds ?? (target?.variantId ? [target.variantId] : [])),
+          ...(target?.fallbackVariantIds ?? []),
+        ];
         if (
           !reward ||
           gift.offerVersion !== String(offer.version) ||
@@ -214,9 +217,11 @@ export async function evaluate(
       // Generate cart actions for rewards
       for (const reward of offer.rewards.sort((a, b) => a.sortOrder - b.sortOrder)) {
         if (reward.rewardType === "product_gift" && reward.isAutoAdd) {
-          const target = reward.target as { variantId?: string; variantIds?: string[] };
+          const target = reward.target as { variantId?: string; variantIds?: string[]; fallbackVariantIds?: string[] };
           const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
           const qty = reward.quantity ?? 1;
+          // A fallback already added for a sold-out gift fulfils the reward too.
+          const fulfillingVariantIds = new Set([...variantIds, ...(target.fallbackVariantIds ?? [])]);
 
           // Multi-variant gift products require a customer choice. Never add
           // every variant just because an old/hand-edited config set auto-add.
@@ -226,7 +231,7 @@ export async function evaluate(
             (gift) =>
               gift.rewardId === reward.id &&
               gift.offerVersion === String(offer.version) &&
-              gift.variantId === variantId,
+              fulfillingVariantIds.has(gift.variantId),
           );
           const existingQty = existingGifts.reduce((acc, gift) => acc + gift.quantity, 0);
 

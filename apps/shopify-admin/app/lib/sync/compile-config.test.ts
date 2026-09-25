@@ -308,6 +308,32 @@ describe("compileOfferConfig", () => {
     });
   });
 
+  it("accepts merchant-configured fallback gifts as valid gift targets", () => {
+    const result = compileOfferConfig(
+      offer({ type: "gift" }),
+      [condition("cart_value", { thresholdCents: 5000 })],
+      [
+        shippingReward({
+          rewardType: "product_gift",
+          discountType: "free",
+          value: { amount: 100, currencyCode: "USD" },
+          target: {
+            variantIds: ["gid://shopify/ProductVariant/11"],
+            fallbackVariantIds: ["gid://shopify/ProductVariant/99"],
+          },
+          quantity: 1,
+        }),
+      ],
+      null,
+      3,
+    );
+    expect(result.giftRewards[0]?.targetVariantIds).toEqual([
+      "gid://shopify/ProductVariant/11",
+      "gid://shopify/ProductVariant/99",
+    ]);
+    expect(result.giftRewards[0]?.maxQuantity).toBe(1);
+  });
+
   it("compiles gift rules per reward instead of flattening their limits and discounts", () => {
     const result = compileOfferConfig(
       offer({ type: "gift" }),

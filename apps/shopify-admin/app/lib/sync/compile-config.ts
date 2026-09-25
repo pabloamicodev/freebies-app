@@ -412,9 +412,16 @@ export function compileOfferConfig(
     const target = reward.target as Record<string, unknown>;
     const value = reward.value as Record<string, unknown>;
     if (reward.rewardType === "product_gift") {
-      const variantIds =
-        (target["variantIds"] as string[]) ??
-        (target["variantId"] ? [target["variantId"] as string] : []);
+      const fallbackVariantIds = Array.isArray(target["fallbackVariantIds"])
+        ? (target["fallbackVariantIds"] as string[])
+        : [];
+      // Fallback variants must be accepted by the Function and cart validation when the
+      // storefront swaps them in for a sold-out gift.
+      const variantIds = [
+        ...((target["variantIds"] as string[]) ??
+          (target["variantId"] ? [target["variantId"] as string] : [])),
+        ...fallbackVariantIds,
+      ];
       const productIds =
         (target["productIds"] as string[]) ??
         (target["productId"] ? [target["productId"] as string] : []);

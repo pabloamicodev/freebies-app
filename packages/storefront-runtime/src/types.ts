@@ -78,6 +78,8 @@ export interface SelectableGift {
   discountedPriceCents: number;
   isAvailable: boolean;
   isSelected: boolean;
+  /** Title of the sold-out gift this merchant-configured fallback replaces. */
+  replacesTitle?: string;
 }
 
 export interface CartMessagePayload {

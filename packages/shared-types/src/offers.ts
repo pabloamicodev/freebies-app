@@ -334,6 +334,7 @@ export const RewardTargetSchema = z.object({
   scope: z.string().optional(),
   variantId: z.string().optional(),
   variantIds: z.array(z.string()).optional(),
+  fallbackVariantIds: z.array(z.string()).optional(),
   productId: z.string().optional(),
   productIds: z.array(z.string()).optional(),
   lineQuantityEquals: z.number().int().positive().optional(),
@@ -371,6 +372,8 @@ export const ProductGiftTargetSchema = z
     scope: z.literal("cart").optional(),
     variantId: ShopifyVariantGidSchema.optional(),
     variantIds: z.array(ShopifyVariantGidSchema).min(1).optional(),
+    /** Ordered replacements used only while every primary gift variant is sold out. */
+    fallbackVariantIds: z.array(ShopifyVariantGidSchema).max(5).optional(),
     productId: ShopifyProductGidSchema.optional(),
     productIds: z.array(ShopifyProductGidSchema).min(1).max(1).optional(),
   })

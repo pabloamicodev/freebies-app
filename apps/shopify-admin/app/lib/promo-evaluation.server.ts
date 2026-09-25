@@ -7,7 +7,7 @@ import { checkRateLimit, getClientIp } from "./rate-limit.server.js";
 import { getOfferDefinitions } from "./offer-definitions.server.js";
 import { resolveCustomer } from "./resolve-customer.server.js";
 import { buildUpsells } from "./upsell-enrichment.server.js";
-import { dropSoldOutGiftAdds, enrichGiftSlider } from "./gift-enrichment.server.js";
+import { enrichGiftSlider, resolveSoldOutGiftAdds } from "./gift-enrichment.server.js";
 import { isShadowModeEnabled } from "./shadow-mode.server.js";
 import { apiError, apiJson, readJsonBody } from "./api-response.server.js";
 
@@ -82,8 +82,8 @@ export async function handleEvaluationRequest(
 
   [result.upsells, result.giftSlider, result.cartActions] = await Promise.all([
     buildUpsells(shop.id, result.qualifiedOffers, offerDefinitions),
-    enrichGiftSlider(shop.id, result.giftSlider, offerDefinitions),
-    dropSoldOutGiftAdds(shop.id, result.cartActions),
+    enrichGiftSlider(shop.id, result.giftSlider, offerDefinitions, input.cart.lines),
+    resolveSoldOutGiftAdds(shop.id, result.cartActions, offerDefinitions),
   ]);
 
   // Shadow mode: log what WOULD have happened during the BOGOS migration

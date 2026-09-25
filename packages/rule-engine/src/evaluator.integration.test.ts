@@ -152,6 +152,38 @@ describe("evaluate — cart value condition", () => {
     }
   });
 
+  it("treats a merchant-configured fallback already in the cart as the fulfilled gift", async () => {
+    const offer = makeGiftOffer("offer-1", 5000);
+    offer.rewards[0] = {
+      ...offer.rewards[0]!,
+      target: {
+        variantIds: ["gid://shopify/ProductVariant/gift-offer-1"],
+        fallbackVariantIds: ["gid://shopify/ProductVariant/backup"],
+      },
+    };
+    const base = makeCart(6000);
+    const cart = makeCart(6000, {
+      lines: [
+        ...base.lines,
+        {
+          ...base.lines[0]!,
+          key: "gift-line",
+          variantId: "gid://shopify/ProductVariant/backup",
+          priceCents: 0,
+          properties: {
+            _promo_engine_line_type: "gift",
+            _promo_engine_offer_id: "offer-1",
+            _promo_engine_reward_id: "reward-offer-1",
+            _promo_engine_offer_version: "1",
+          },
+        },
+      ],
+    });
+    const result = await evaluate(makeInput(cart), { offers: [offer], oneUseStates: [], now: NOW });
+    // Neither removed as a tampered gift nor topped up with the sold-out primary.
+    expect(result.cartActions).toEqual([]);
+  });
+
   it("uses the slider for multi-variant gifts even if a legacy config says auto-add", async () => {
     const offer = makeGiftOffer("offer-1", 5000);
     offer.rewards[0] = {

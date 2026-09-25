@@ -269,7 +269,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
             error: `Gift quantity cannot exceed the ${eligibleVariantIds.length} available variants.`,
           };
         }
-        target = { productId: productGid, variantIds: eligibleVariantIds };
+        const fallbackVariantIds = splitTextareaList(formData.get("fallbackVariantGids") as string | null)
+          .filter((gid) => /^gid:\/\/shopify\/ProductVariant\/\d+$/.test(gid) && !eligibleVariantIds.includes(gid))
+          .slice(0, 5);
+        target = {
+          productId: productGid,
+          variantIds: eligibleVariantIds,
+          ...(fallbackVariantIds.length > 0 ? { fallbackVariantIds } : {}),
+        };
         isAutoAdd = eligibleVariantIds.length === 1;
         isCustomerSelectable = eligibleVariantIds.length > 1;
         trackMode = eligibleVariantIds.length === 1 ? "variant" : "product";
@@ -513,6 +520,8 @@ export default function OfferRewardsPage() {
     discountType: "free",
     pickerOpen: false,
     selectedGiftGids: [] as string[],
+    fallbackPickerOpen: false,
+    fallbackGids: [] as string[],
     currencyCode: "USD",
     giftQuantity: "1",
     shippingTiers: [{ ...DEFAULT_SHIPPING_TIER }],
@@ -533,6 +542,8 @@ export default function OfferRewardsPage() {
     discountType,
     pickerOpen,
     selectedGiftGids,
+    fallbackPickerOpen,
+    fallbackGids,
     currencyCode,
     giftQuantity,
     shippingTiers,
@@ -550,6 +561,8 @@ export default function OfferRewardsPage() {
   const setDiscountType = createFieldSetter(setRewardField, "discountType");
   const setPickerOpen = createFieldSetter(setRewardField, "pickerOpen");
   const setSelectedGiftGids = createFieldSetter(setRewardField, "selectedGiftGids");
+  const setFallbackPickerOpen = createFieldSetter(setRewardField, "fallbackPickerOpen");
+  const setFallbackGids = createFieldSetter(setRewardField, "fallbackGids");
   const setCurrencyCode = createFieldSetter(setRewardField, "currencyCode");
   const setGiftQuantity = createFieldSetter(setRewardField, "giftQuantity");
   const setShippingTiers = createFieldSetter(setRewardField, "shippingTiers");
@@ -632,6 +645,15 @@ export default function OfferRewardsPage() {
         allowMultiple={rewardType !== "product_gift"}
         selectedIds={selectedGiftGids}
         onSelect={setSelectedGiftGids}
+      />
+      <ProductPicker
+        open={fallbackPickerOpen}
+        onClose={() => setFallbackPickerOpen(false)}
+        title="Select fallback gifts (used in order)"
+        mode="variants"
+        allowMultiple
+        selectedIds={fallbackGids}
+        onSelect={(gids) => setFallbackGids(gids.slice(0, 5))}
       />
 
       <div className="b-page">
@@ -1246,6 +1268,31 @@ export default function OfferRewardsPage() {
                           value={selectedGiftGids.join("\n")}
                         />
                       </div>
+
+                      {rewardType === "product_gift" && (
+                        <div className="b-fieldset">
+                          <p className="b-form-title">Fallback gift if out of stock (optional)</p>
+                          <p className="b-form-desc">
+                            If this gift sells out, customers get the first in-stock fallback instead:
+                            added automatically for auto-add gifts, or shown in its place in the gift
+                            selector. Without a fallback, a sold-out gift is not given: no popup
+                            appears and no other product is offered.
+                          </p>
+                          <div className="b-row b-gap-2 b-wrap" style={{ marginTop: 10 }}>
+                            <button
+                              type="button"
+                              className="b-btn b-btn-secondary b-btn-sm"
+                              onClick={() => setFallbackPickerOpen(true)}
+                            >
+                              Select fallback gifts
+                            </button>
+                            <span className="b-text-sub b-text-sm">
+                              {fallbackGids.length === 0 ? "None — a sold-out gift is skipped" : `${fallbackGids.length} selected`}
+                            </span>
+                          </div>
+                          <input type="hidden" name="fallbackVariantGids" value={fallbackGids.join("\n")} />
+                        </div>
+                      )}
 
                       {/* Manual GID fallback is intentionally restricted to
                           advanced product-discount targeting. Gift products

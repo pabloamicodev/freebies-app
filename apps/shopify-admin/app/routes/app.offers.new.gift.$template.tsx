@@ -255,6 +255,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const rewardProductsResult = parseJsonStringArray(formData, "rewardProducts");
   if (rewardProductsResult.error) return { error: rewardProductsResult.error };
   const rewardProducts = rewardProductsResult.data!;
+  const fallbackProductsResult = parseJsonStringArray(formData, "fallbackProducts");
+  if (fallbackProductsResult.error) return { error: fallbackProductsResult.error };
+  // A fallback that is also a primary gift would never act as a replacement.
+  const fallbackProducts = fallbackProductsResult.data!.filter((id) => !rewardProducts.includes(id)).slice(0, 5);
   if (
     intent === "publish" &&
     conditionType === "specific_product" &&
@@ -339,7 +343,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             | "cheapest_item_free"
             | "most_expensive_item_discount",
           value: { amount: rewardAmount, currencyCode: "USD" },
-          target: { scope: "cart", variantIds: rewardProducts },
+          target: {
+            scope: "cart",
+            variantIds: rewardProducts,
+            ...(fallbackProducts.length > 0 ? { fallbackVariantIds: fallbackProducts } : {}),
+          },
           quantity: giftCount,
           isAutoAdd,
           isCustomerSelectable: !isAutoAdd,
@@ -421,7 +429,9 @@ export default function NewGiftOfferPage() {
     isAutoAdd: false,
     giftCount: 1,
     rewardProducts: [] as string[],
+    fallbackProducts: [] as string[],
     rewardPickerOpen: false,
+    fallbackPickerOpen: false,
     advancedOpen: false,
     priority: "1",
     stopLower: false,
@@ -458,7 +468,9 @@ export default function NewGiftOfferPage() {
     isAutoAdd,
     giftCount,
     rewardProducts,
+    fallbackProducts,
     rewardPickerOpen,
+    fallbackPickerOpen,
     advancedOpen,
     priority,
     stopLower,
@@ -496,6 +508,8 @@ export default function NewGiftOfferPage() {
   const setGiftCount = createFieldSetter(setFormField, "giftCount");
   const setRewardProducts = createFieldSetter(setFormField, "rewardProducts");
   const setRewardPickerOpen = createFieldSetter(setFormField, "rewardPickerOpen");
+  const setFallbackProducts = createFieldSetter(setFormField, "fallbackProducts");
+  const setFallbackPickerOpen = createFieldSetter(setFormField, "fallbackPickerOpen");
   const setAdvancedOpen = createFieldSetter(setFormField, "advancedOpen");
   const setPriority = createFieldSetter(setFormField, "priority");
   const setStopLower = createFieldSetter(setFormField, "stopLower");
@@ -636,6 +650,7 @@ export default function NewGiftOfferPage() {
         />
         <input type="hidden" name="conditionProducts" value={JSON.stringify(conditionProducts)} />
         <input type="hidden" name="rewardProducts" value={JSON.stringify(rewardProducts)} />
+        <input type="hidden" name="fallbackProducts" value={JSON.stringify(fallbackProducts)} />
         <input type="hidden" name="isAutoAdd" value={String(isAutoAdd)} />
         <input type="hidden" name="minAmount" value={minAmount} />
         <input type="hidden" name="maxAmount" value={maxAmount} />
@@ -1655,6 +1670,31 @@ export default function NewGiftOfferPage() {
                       }
                     />
                   </div>
+
+                  <div className="b-fieldset" style={{ marginTop: 16 }}>
+                    <p className="b-form-title">Fallback gift if out of stock (optional)</p>
+                    <p className="b-form-desc">
+                      If a gift above sells out, customers get the first fallback that is in stock
+                      instead — added automatically for auto-add gifts, or shown in its place in the
+                      gift selector. Without a fallback, a sold-out gift is simply not given: no
+                      popup appears and no other product is offered.
+                    </p>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+                      <button
+                        type="button"
+                        className="b-btn b-btn-secondary"
+                        onClick={() => setFallbackPickerOpen(true)}
+                      >
+                        Select fallback gifts
+                      </button>
+                      <SelectedProductsList
+                        gids={fallbackProducts}
+                        onRemove={(gid) =>
+                          setFallbackProducts(fallbackProducts.filter((id) => id !== gid))
+                        }
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1956,6 +1996,15 @@ export default function NewGiftOfferPage() {
         allowMultiple
         selectedIds={rewardProducts}
         onSelect={(gids) => setRewardProducts(gids)}
+      />
+
+      <ProductPicker
+        open={fallbackPickerOpen}
+        onClose={() => setFallbackPickerOpen(false)}
+        title="Select fallback gifts (used in order)"
+        allowMultiple
+        selectedIds={fallbackProducts}
+        onSelect={(gids) => setFallbackProducts(gids.slice(0, 5))}
       />
 
       {blocker.state === "blocked" && (

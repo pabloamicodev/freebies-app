@@ -284,6 +284,9 @@ function GiftSlider({ payload, sessionId, onClose, onConfirm }: GiftSliderProps)
                       </>
                     )}
                   </p>
+                  {gift.replacesTitle && (
+                    <p class="pe-gift-variant">Replaces {gift.replacesTitle} (out of stock)</p>
+                  )}
                   {unavailable && <p class="pe-gift-unavailable">Out of stock</p>}
                 </button>
               );
