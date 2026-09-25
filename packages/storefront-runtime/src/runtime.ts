@@ -262,11 +262,13 @@ class PromoEngineRuntime {
               if (!rawHtml) continue;
               const el = document.querySelector(selector);
               if (!el) continue;
-              const innerHtml = cartDrawerEl?.getSectionInnerHTML
-                ? cartDrawerEl.getSectionInnerHTML(rawHtml)
-                : (new DOMParser()
-                    .parseFromString(rawHtml, "text/html")
-                    .querySelector(".shopify-section")?.innerHTML ?? rawHtml);
+              // Replace like Dawn does: take the same selector out of the rendered section, so a
+              // section that contains its own wrapper (#CartDrawer inside <cart-drawer>) isn't nested.
+              const rendered = new DOMParser().parseFromString(rawHtml, "text/html");
+              const innerHtml =
+                rendered.querySelector(selector)?.innerHTML ??
+                rendered.querySelector(".shopify-section")?.innerHTML ??
+                rawHtml;
               el.innerHTML = innerHtml;
               updated++;
             }
