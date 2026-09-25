@@ -35,7 +35,6 @@ if (process.env["CI"] === "true") {
     "E2E_BUNDLE_PRODUCT_HANDLE",
     "E2E_VOLUME_PRODUCT_HANDLE",
     "E2E_QUALIFYING_VARIANT_ID",
-    "DEV_STORE_PASSWORD",
   ];
   const missingCiVars = requiredCiVars.filter((name) => !process.env[name]);
   if (missingCiVars.length > 0) {

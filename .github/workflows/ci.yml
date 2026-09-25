@@ -104,7 +104,8 @@ jobs:
       - run: pnpm lint
 
   # ── E2E Tests ────────────────────────────────────────────────────────────────
-  # Required production gate: missing credentials or fixtures fail the job.
+  # Required production gate: missing storefront configuration or fixtures fail
+  # the job. Admin credentials are intentionally unnecessary for buyer-flow E2E.
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
@@ -113,8 +114,6 @@ jobs:
       DEV_STORE_URL: ${{ secrets.DEV_STORE_URL }}
       DEV_STORE_PASSWORD: ${{ secrets.DEV_STORE_PASSWORD }}
       APP_URL: ${{ secrets.APP_URL }}
-      SHOPIFY_ADMIN_EMAIL: ${{ secrets.SHOPIFY_ADMIN_EMAIL }}
-      SHOPIFY_ADMIN_PASSWORD: ${{ secrets.SHOPIFY_ADMIN_PASSWORD }}
       E2E_PRODUCT_HANDLE: ${{ secrets.E2E_PRODUCT_HANDLE }}
       E2E_BUNDLE_PRODUCT_HANDLE: ${{ secrets.E2E_BUNDLE_PRODUCT_HANDLE }}
       E2E_VOLUME_PRODUCT_HANDLE: ${{ secrets.E2E_VOLUME_PRODUCT_HANDLE }}
@@ -122,7 +121,7 @@ jobs:
     steps:
       - name: Check secrets
         run: |
-          if [ -z "$DEV_STORE_URL" ] || [ -z "$DEV_STORE_PASSWORD" ] || [ -z "$APP_URL" ] || [ -z "$SHOPIFY_ADMIN_EMAIL" ] || [ -z "$SHOPIFY_ADMIN_PASSWORD" ] || [ -z "$E2E_PRODUCT_HANDLE" ] || [ -z "$E2E_BUNDLE_PRODUCT_HANDLE" ] || [ -z "$E2E_VOLUME_PRODUCT_HANDLE" ] || [ -z "$E2E_QUALIFYING_VARIANT_ID" ]; then
+          if [ -z "$DEV_STORE_URL" ] || [ -z "$APP_URL" ] || [ -z "$E2E_PRODUCT_HANDLE" ] || [ -z "$E2E_BUNDLE_PRODUCT_HANDLE" ] || [ -z "$E2E_VOLUME_PRODUCT_HANDLE" ] || [ -z "$E2E_QUALIFYING_VARIANT_ID" ]; then
             echo "::error::E2E secrets are required; refusing to report a green build without browser tests."
             exit 1
           fi

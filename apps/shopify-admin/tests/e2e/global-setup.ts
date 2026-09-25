@@ -91,7 +91,8 @@ export default async function globalSetup() {
 
     // Development stores are password protected. Unlock the Online Store in
     // the same browser context so storefront specs inherit storefront_digest.
-    await page.goto(`${DEV_STORE_URL}/products/${encodeURIComponent(PRODUCT_HANDLE)}`, {
+    const productUrl = `${DEV_STORE_URL}/products/${encodeURIComponent(PRODUCT_HANDLE)}`;
+    let storefrontResponse = await page.goto(productUrl, {
       waitUntil: "domcontentloaded",
       timeout: 30_000,
     });
@@ -112,6 +113,16 @@ export default async function globalSetup() {
       if (isStorefrontPasswordUrl(page.url(), DEV_STORE_URL)) {
         throw new Error("DEV_STORE_PASSWORD was rejected by Shopify.");
       }
+      storefrontResponse = await page.goto(productUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      });
+    }
+
+    if (storefrontResponse?.status() === 404) {
+      throw new Error(
+        `The E2E product ${PRODUCT_HANDLE} is not published to the Online Store sales channel.`,
+      );
     }
 
     // Save auth state (cookies + localStorage)
