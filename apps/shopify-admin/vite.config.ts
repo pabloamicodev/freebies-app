@@ -3,6 +3,10 @@ import { reactRouter } from "@react-router/dev/vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 
+if (process.env["VERCEL"] && !process.env["SENTRY_AUTH_TOKEN"]) {
+  console.warn("[sentry] SENTRY_AUTH_TOKEN is not available at build time; source maps will not be uploaded.");
+}
+
 export default defineConfig({
   plugins: [
     reactRouter(),
@@ -15,6 +19,7 @@ export default defineConfig({
       release: { name: process.env["VERCEL_GIT_COMMIT_SHA"] || process.env["VERCEL_DEPLOYMENT_ID"] },
       sourcemaps: { filesToDeleteAfterUpload: ["./build/**/*.map"] },
       telemetry: false,
+      debug: process.env["SENTRY_DEBUG"] === "1",
     }),
   ],
   build: {
