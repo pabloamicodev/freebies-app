@@ -22,14 +22,18 @@
       "productRewards": [
         {
           "id": "00000002-0000-4000-8000-000000000000",
-          "targetProductIds": ["gid://shopify/Product/10000000000002"],
+          "targetProductIds": [
+            "gid://shopify/Product/10000000000002"
+          ],
           "targetVariantIds": [],
           "discountType": "free",
           "discountValue": 100,
           "subscriptionMode": "any",
           "scopeMode": "landing",
           "requiredLineAttributeValue": "nektar-glp1-sk",
-          "requiredAnchorVariantIds": ["gid://shopify/ProductVariant/50000000000001"],
+          "requiredAnchorVariantIds": [
+            "gid://shopify/ProductVariant/50000000000001"
+          ],
           "requiredAnchorMinQuantity": 1,
           "requiresAnchorSubscription": true,
           "priceTiers": [],
@@ -66,14 +70,18 @@
       "productRewards": [
         {
           "id": "00000002-0000-4000-8000-000000000010",
-          "targetProductIds": ["gid://shopify/Product/10000000000002"],
+          "targetProductIds": [
+            "gid://shopify/Product/10000000000002"
+          ],
           "targetVariantIds": [],
           "discountType": "free",
           "discountValue": 100,
           "subscriptionMode": "any",
           "scopeMode": "landing",
           "requiredLineAttributeValue": "nektar-skin-v2",
-          "requiredAnchorVariantIds": ["gid://shopify/ProductVariant/50000000000001"],
+          "requiredAnchorVariantIds": [
+            "gid://shopify/ProductVariant/50000000000001"
+          ],
           "requiredAnchorMinQuantity": 1,
           "requiresAnchorSubscription": true,
           "priceTiers": [],
@@ -216,7 +224,9 @@
           "subscriptionMode": "any",
           "scopeMode": "landing",
           "requiredLineAttributeValue": "kinetic-sk-otg",
-          "requiredAnchorVariantIds": ["gid://shopify/ProductVariant/50000000000001"],
+          "requiredAnchorVariantIds": [
+            "gid://shopify/ProductVariant/50000000000001"
+          ],
           "requiredAnchorMinQuantity": 1,
           "requiresAnchorSubscription": true,
           "priceTiers": [],
@@ -301,14 +311,18 @@
       "productRewards": [
         {
           "id": "00000002-0000-4000-8000-000000000070",
-          "targetProductIds": ["gid://shopify/Product/10000000000003"],
+          "targetProductIds": [
+            "gid://shopify/Product/10000000000003"
+          ],
           "targetVariantIds": [],
           "discountType": "free",
           "discountValue": 100,
           "subscriptionMode": "any",
           "scopeMode": "landing",
           "requiredLineAttributeValue": "nektar-sk-otg",
-          "requiredAnchorVariantIds": ["gid://shopify/ProductVariant/50000000000001"],
+          "requiredAnchorVariantIds": [
+            "gid://shopify/ProductVariant/50000000000001"
+          ],
           "requiredAnchorMinQuantity": 1,
           "requiresAnchorSubscription": true,
           "priceTiers": [],
@@ -345,14 +359,18 @@
       "productRewards": [
         {
           "id": "00000002-0000-4000-8000-000000000080",
-          "targetProductIds": ["gid://shopify/Product/10000000000003"],
+          "targetProductIds": [
+            "gid://shopify/Product/10000000000003"
+          ],
           "targetVariantIds": [],
           "discountType": "free",
           "discountValue": 100,
           "subscriptionMode": "any",
           "scopeMode": "landing",
           "requiredLineAttributeValue": "planta-sk-otg",
-          "requiredAnchorVariantIds": ["gid://shopify/ProductVariant/50000000000001"],
+          "requiredAnchorVariantIds": [
+            "gid://shopify/ProductVariant/50000000000001"
+          ],
           "requiredAnchorMinQuantity": 1,
           "requiresAnchorSubscription": true,
           "priceTiers": [],
@@ -399,7 +417,9 @@
           "subscriptionMode": "any",
           "scopeMode": "landing",
           "requiredLineAttributeValue": "planta-atlas-combo-sk",
-          "requiredAnchorVariantIds": ["gid://shopify/ProductVariant/50000000000001"],
+          "requiredAnchorVariantIds": [
+            "gid://shopify/ProductVariant/50000000000001"
+          ],
           "requiredAnchorMinQuantity": 2,
           "requiresAnchorSubscription": false,
           "priceTiers": [],
@@ -436,14 +456,18 @@
       "productRewards": [
         {
           "id": "00000002-0000-4000-8000-000000000100",
-          "targetProductIds": ["gid://shopify/Product/10000000000002"],
+          "targetProductIds": [
+            "gid://shopify/Product/10000000000002"
+          ],
           "targetVariantIds": [],
           "discountType": "free",
           "discountValue": 100,
           "subscriptionMode": "any",
           "scopeMode": "landing",
           "requiredLineAttributeValue": "nektar-sk-special-offer",
-          "requiredAnchorVariantIds": ["gid://shopify/ProductVariant/50000000000001"],
+          "requiredAnchorVariantIds": [
+            "gid://shopify/ProductVariant/50000000000001"
+          ],
           "requiredAnchorMinQuantity": 1,
           "requiresAnchorSubscription": true,
           "priceTiers": [],
@@ -480,7 +504,9 @@
       "productRewards": [
         {
           "id": "00000002-0000-4000-8000-000000000110",
-          "targetProductIds": ["gid://shopify/Product/10000000000006"],
+          "targetProductIds": [
+            "gid://shopify/Product/10000000000006"
+          ],
           "targetVariantIds": [],
           "discountType": "percentage",
           "discountValue": 15,
@@ -507,12 +533,16 @@
       "cartAttributeConditions": [],
       "pageUrlConditions": [
         {
-          "patterns": ["/pages/promo"],
+          "patterns": [
+            "/pages/promo"
+          ],
           "matchMode": "contains",
           "caseSensitive": false
         }
       ],
-      "requiredCustomerTags": ["vip"],
+      "requiredCustomerTags": [
+        "vip"
+      ],
       "excludedCustomerTags": [],
       "treatGuestAsNoTags": false
     },
@@ -554,7 +584,9 @@
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
       "requiredCustomerTags": [],
-      "excludedCustomerTags": ["wholesale"],
+      "excludedCustomerTags": [
+        "wholesale"
+      ],
       "treatGuestAsNoTags": true
     }
   ],
@@ -582,7 +614,10 @@
           "appliesWhen": "one_time_only"
         }
       ],
-      "targetGroupTypes": ["ONE_TIME_PURCHASE", "SUBSCRIPTION"],
+      "targetGroupTypes": [
+        "ONE_TIME_PURCHASE",
+        "SUBSCRIPTION"
+      ],
       "scopeMode": "sitewide",
       "requiredAnchorVariantIds": [],
       "requiredAnchorMinQuantity": 1,
@@ -599,10 +634,15 @@
           "appliesWhen": "has_subscription"
         }
       ],
-      "targetGroupTypes": ["ONE_TIME_PURCHASE", "SUBSCRIPTION"],
+      "targetGroupTypes": [
+        "ONE_TIME_PURCHASE",
+        "SUBSCRIPTION"
+      ],
       "scopeMode": "landing",
       "requiredLineAttributeValue": "nektar-glp1-sk",
-      "requiredAnchorVariantIds": ["gid://shopify/ProductVariant/50000000000001"],
+      "requiredAnchorVariantIds": [
+        "gid://shopify/ProductVariant/50000000000001"
+      ],
       "requiredAnchorMinQuantity": 1,
       "requiresAnchorSubscription": true
     }

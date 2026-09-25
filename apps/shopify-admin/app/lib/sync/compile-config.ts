@@ -807,7 +807,19 @@ export function compileShippingOfferConfigs(
 // when the Function would deserialize exactly this value without it.
 type FieldDefaults = Readonly<Record<string, unknown>>;
 
-const CONFIG_DEFAULTS: FieldDefaults = { shippingOffers: [], customerTags: [] };
+const CONFIG_DEFAULTS: FieldDefaults = { shippingOffers: [] };
+
+// The metafield doubles as the Function's input-query variables. Shopify passes null for any
+// declared variable missing from it (query defaults are ignored), and the query declares them
+// non-null, so every run fails before executing unless all of them are present.
+export const FUNCTION_QUERY_VARIABLE_DEFAULTS = {
+  l1: "_promo_engine_unused",
+  l2: "_promo_engine_unused",
+  c1: "_promo_engine_unused",
+  c2: "_promo_engine_unused",
+  c3: "_promo_engine_unused",
+  customerTags: [] as string[],
+};
 const OFFER_DEFAULTS: FieldDefaults = {
   stopLowerPriority: false,
   requiredProductIds: [],
@@ -901,6 +913,7 @@ export function serializeFunctionConfig(config: CompiledFunctionConfig): string 
   return JSON.stringify(
     omitDefaults(
       {
+        ...FUNCTION_QUERY_VARIABLE_DEFAULTS,
         ...config,
         offers: config.offers.map(compactCompiledOffer),
         shippingOffers: config.shippingOffers.map((offer) =>

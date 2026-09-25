@@ -10,6 +10,7 @@ import { computeOfferVersion } from "../offer-version.server.js";
 import { buildCartValidationConfig } from "../cart-validation.server.js";
 import { buildAttributeQueryVariables } from "./attribute-query-variables.js";
 import {
+  FUNCTION_QUERY_VARIABLE_DEFAULTS,
   compactCompiledOffer,
   compileOfferConfig,
   compileShippingOfferConfigs,
@@ -198,7 +199,8 @@ describe("serializeFunctionConfig", () => {
   it("only drops keys the Functions default or never read", () => {
     const config = fixtureConfig();
     const compact = JSON.parse(serializeFunctionConfig(config)) as Record<string, unknown>;
-    const full = JSON.parse(JSON.stringify(config)) as Record<string, unknown>;
+    // Query-variable placeholders are added, not dropped, so they belong to the full shape too.
+    const full = JSON.parse(JSON.stringify({ ...FUNCTION_QUERY_VARIABLE_DEFAULTS, ...config })) as Record<string, unknown>;
 
     const isSubset = (partial: unknown, whole: unknown): boolean => {
       if (Array.isArray(partial))

@@ -313,6 +313,8 @@ function GiftSlider({ payload, sessionId, onClose, onConfirm }: GiftSliderProps)
                 <span class="pe-spinner" style={{ display: "inline-block" }} aria-hidden="true" />
                 <span class="pe-sr-only">Updating gifts</span>
               </>
+            ) : selected.size === 0 && initiallySelectedCount.current === 0 ? (
+              "Select a gift"
             ) : selected.size === 0 ? (
               "Remove Gifts from Cart"
             ) : (
