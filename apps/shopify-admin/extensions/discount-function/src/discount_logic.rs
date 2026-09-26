@@ -1398,14 +1398,6 @@ fn line_attribute_value(line: &Lines, key: &str, _config: &CompiledConfig) -> Op
 }
 
 fn cart_attribute_value(input: &Input, key: &str, config: &CompiledConfig) -> Option<String> {
-    if key == "source" {
-        return input
-            .cart()
-            .source_attribute()
-            .as_ref()
-            .and_then(|attribute| attribute.value())
-            .cloned();
-    }
     if config.c1.as_deref() == Some(key) {
         return input
             .cart()
@@ -1841,10 +1833,10 @@ mod tests {
         let config = gift_offer_config(5000, 1).replace(
             "\"combinesWithOrderDiscounts\":true",
             "\"cartAttributeConditions\":[{\"key\":\"source\",\"value\":\"vip-landing\",\"matchMode\":\"equals\",\"minMatchingQuantity\":1}],\"combinesWithOrderDiscounts\":true",
-        );
+        ).replacen('{', "{\"c1\":\"source\",", 1);
         let payload = cart_json(&lines, "80.00", &config).replace(
             "\"cart\": {",
-            "\"cart\": { \"sourceAttribute\": { \"value\": \"vip-landing\" },",
+            "\"cart\": { \"customCart1\": { \"value\": \"vip-landing\" },",
         );
         let result = run_function_with_input(run, &payload).expect("should not error");
         assert_eq!(result.operations.len(), 1);
@@ -3588,10 +3580,10 @@ mod tests {
         let config = gift_offer_config(5000, 1).replace(
             "\"combinesWithOrderDiscounts\":true",
             "\"cartAttributeConditions\":[{\"key\":\"source\",\"matchMode\":\"exists\",\"minMatchingQuantity\":1}],\"combinesWithOrderDiscounts\":true",
-        );
+        ).replacen('{', "{\"c1\":\"source\",", 1);
         let present = cart_json(&lines, "80.00", &config).replace(
             "\"cart\": {",
-            "\"cart\": { \"sourceAttribute\": { \"value\": \"anything-at-all\" },",
+            "\"cart\": { \"customCart1\": { \"value\": \"anything-at-all\" },",
         );
         let result = run_function_with_input(run, &present).expect("should not error");
         assert_eq!(result.operations.len(), 1, "any attribute value must satisfy 'exists'");

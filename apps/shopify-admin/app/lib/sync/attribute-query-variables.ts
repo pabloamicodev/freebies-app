@@ -1,5 +1,3 @@
-import { CART_ATTRIBUTE_KEYS, LINE_ATTRIBUTE_KEYS } from "@promo/shared-types";
-
 // Line attributes reach the Function through the metadata bridge's packed property;
 // only cart attributes need query-variable slots (Shopify caps query complexity at 30).
 export const MAX_CUSTOM_CART_ATTRIBUTE_KEYS = 3;
@@ -19,18 +17,15 @@ function conditionKey(condition: AttributeCondition): string | null {
 function customKeys(
   conditions: AttributeCondition[],
   conditionType: "line_attribute" | "cart_attribute",
-  builtIns: readonly string[],
 ): string[] {
-  const builtInSet = new Set(builtIns);
   return [...new Set(conditions
     .filter((condition) => condition.conditionType === conditionType)
-    .flatMap((condition) => conditionKey(condition) ?? [])
-    .filter((key) => !builtInSet.has(key)))]
+    .flatMap((condition) => conditionKey(condition) ?? []))]
     .sort((left, right) => left.localeCompare(right));
 }
 
 export function buildAttributeQueryVariables(conditions: AttributeCondition[]): Record<string, string> {
-  const cartKeys = customKeys(conditions, "cart_attribute", CART_ATTRIBUTE_KEYS);
+  const cartKeys = customKeys(conditions, "cart_attribute");
 
   if (cartKeys.length > MAX_CUSTOM_CART_ATTRIBUTE_KEYS) {
     throw new Error(`Active offers use ${cartKeys.length} custom cart attribute keys; this app currently supports up to ${MAX_CUSTOM_CART_ATTRIBUTE_KEYS} active keys per store within Shopify's Function query-size limit.`);

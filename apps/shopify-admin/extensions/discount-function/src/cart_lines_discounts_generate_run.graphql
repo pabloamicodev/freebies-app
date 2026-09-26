@@ -14,9 +14,6 @@ query Input(
     customCart1: attribute(key: $c1) { value }
     customCart2: attribute(key: $c2) { value }
     customCart3: attribute(key: $c3) { value }
-    sourceAttribute: attribute(key: "source") {
-      value
-    }
     buyerIdentity {
       customer {
         numberOfOrders
