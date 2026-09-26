@@ -1,8 +1,11 @@
-import { isRouteErrorResponse, useRouteError } from "react-router";
+import { isRouteErrorResponse, useRouteError, Link } from "react-router";
+import { boundary } from "@shopify/shopify-app-react-router/server";
 
 export function RouteErrorBoundary() {
   const error = useRouteError();
   const isDev = import.meta.env.DEV;
+  // Shopify auth responses (App Bridge bounce, reauth) must render as-is to re-establish the session.
+  if (isRouteErrorResponse(error) && (error.status < 400 || error.status === 401)) return boundary.error(error);
 
   let title = "Something went wrong";
   let detail = "An unexpected error occurred. Please refresh or go back.";
@@ -31,7 +34,7 @@ export function RouteErrorBoundary() {
             {devDetail}
           </pre>
         )}
-        <a href="/app/offers" className="b-btn b-btn-primary">Go to Offers</a>
+        <Link to="/app/offers" className="b-btn b-btn-primary">Go to Offers</Link>
       </div>
     </div>
   );

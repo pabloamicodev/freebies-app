@@ -3,7 +3,7 @@
  * Controls stacking, combination with other discounts, max applications.
  */
 
-import { useLoaderData, useActionData, useNavigation, Form } from "react-router";
+import { useLoaderData, useActionData, useNavigation, Form, Link } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { NotFound } from "../components/NotFound.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -141,7 +141,7 @@ export default function OfferCombinationPage() {
                   {entry.offers.map((o, i) => (
                     <span key={o.id}>
                       {i > 0 && ", "}
-                      <a href={`/app/offers/${o.id}/combination`}>{o.internalName}</a>
+                      <Link to={`/app/offers/${o.id}/combination`}>{o.internalName}</Link>
                     </span>
                   ))}
                 </li>

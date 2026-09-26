@@ -135,10 +135,13 @@ export function ErrorBoundary() {
   const error = useRouteError();
   const isDev = import.meta.env.DEV;
 
-  const isClientError = isRouteErrorResponse(error) && error.status < 500;
+  // Shopify's auth helpers throw 2xx/3xx responses (App Bridge bounce page, exit-iframe) and 401 reauth
+  // whose HTML must run; real 4xx failures are rendered as escaped text.
+  const isShopifyAuthResponse = isRouteErrorResponse(error) && (error.status < 400 || error.status === 401);
+  const isClientError = isRouteErrorResponse(error) && error.status >= 400 && error.status < 500 && !isShopifyAuthResponse;
 
   useEffect(() => {
-    if (isClientError) return;
+    if (isClientError || isShopifyAuthResponse) return;
     const message = error instanceof Error
       ? error.message
       : isRouteErrorResponse(error)
@@ -152,9 +155,7 @@ export function ErrorBoundary() {
     }).catch(() => undefined);
   }, [error, isClientError]);
 
-  // Only Shopify's reauth bounce (401) needs boundary.error: it injects error.data as raw HTML.
-  // Every other 4xx is rendered as escaped text.
-  if (isRouteErrorResponse(error) && error.status === 401) return boundary.error(error);
+  if (isShopifyAuthResponse) return boundary.error(error);
   if (isClientError) {
     return (
       <div style={{ padding: "2rem", fontFamily: "system-ui" }}>

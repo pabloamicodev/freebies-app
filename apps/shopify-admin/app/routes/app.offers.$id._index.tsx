@@ -1,4 +1,4 @@
-import { useLoaderData, useNavigate, useFetcher, useActionData, redirect } from "react-router";
+import { useLoaderData, useNavigate, useFetcher, useActionData, redirect, Link } from "react-router";
 import { useState } from "react";
 import { SUPPORTED_CURRENCIES, validateConditionValue, validateRewardPayload, ConditionTypeSchema, ConditionScopeSchema } from "@promo/shared-types";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -1453,7 +1453,7 @@ export default function OfferDetailPage() {
                   </div>
                   <p style={{ fontSize: 12, color: "var(--text-sub)", margin: 0 }}>
                     To change combination policies, go to the{" "}
-                    <a href={`/app/offers/${offer.id}/combination`} style={{ color: "var(--blue)" }}>Combination settings</a> page.
+                    <Link to={`/app/offers/${offer.id}/combination`} style={{ color: "var(--blue)" }}>Combination settings</Link> page.
                   </p>
                 </div>
               </div>

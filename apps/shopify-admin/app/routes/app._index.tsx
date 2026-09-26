@@ -354,7 +354,7 @@ export default function Dashboard() {
           <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 14px" }}>Get support</h3>
           <div className="b-support-grid">
             {DASHBOARD_SUPPORT_LINKS.map((link) => (
-              <a key={link.title} href={link.href} className="b-support-card">
+              <Link key={link.title} to={link.href} className="b-support-card">
                 <div className="b-support-icon" style={{ background: "var(--border-light)" }}>
                   {link.icon}
                 </div>
@@ -365,7 +365,7 @@ export default function Dashboard() {
                 <div className="b-support-chevron">
                   <IconChevron />
                 </div>
-              </a>
+              </Link>
             ))}
           </div>
         </div>
