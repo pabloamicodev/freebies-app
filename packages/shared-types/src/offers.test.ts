@@ -180,3 +180,15 @@ describe("tier contracts", () => {
     ).toMatchObject({ minimumSubtotalCents: 5_000, maximumSubtotalCents: 9_999 });
   });
 });
+
+describe("validateRewardPayload attribute-unlocked rewards", () => {
+  it("accepts a product allowlist on quiz_bundle and tagged_offer targets", () => {
+    const value = { amount: 0, currencyCode: "USD" };
+    expect(validateRewardPayload("product_discount", "fixed_price", value, {
+      scopeMode: "quiz_bundle", scope: "cart", discountPercentageOnGifts: 100, productIds: ["gid://shopify/Product/1"],
+    }).success).toBe(true);
+    expect(validateRewardPayload("product_discount", "percentage", { amount: 10, currencyCode: "USD" }, {
+      scopeMode: "tagged_offer", requiredOfferId: "11111111-1111-4111-8111-111111111111", variantIds: ["gid://shopify/ProductVariant/1"],
+    }).success).toBe(true);
+  });
+});

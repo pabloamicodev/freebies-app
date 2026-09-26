@@ -677,15 +677,15 @@ describe("product reward scope validation", () => {
     ).toBe(false);
   });
 
-  it("keeps quiz rewards property-driven instead of accepting arbitrary product targets", () => {
+  it("lets quiz rewards carry the product allowlist publishing requires", () => {
     expect(
       validateRewardPayload("product_discount", "free", value, {
         scopeMode: "quiz_bundle",
         scope: "cart",
         discountPercentageOnGifts: 100,
-        variantIds: ["gid://shopify/ProductVariant/not-allowed"],
+        variantIds: ["gid://shopify/ProductVariant/1"],
       }).success,
-    ).toBe(false);
+    ).toBe(true);
 
     expect(
       validateRewardPayload("product_discount", "free", value, {

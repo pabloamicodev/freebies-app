@@ -443,6 +443,15 @@ const ProductTargetIdsSchema = z.object({
   requiredLineAttribute: RequiredLineAttributeSchema.optional(),
 });
 
+// Rewards unlocked by a client-set line attribute (quiz bundle id / offer id)
+// must name the products they apply to — publish rejects them otherwise.
+const TAGGED_REWARD_ALLOWLIST = {
+  productId: z.string().optional(),
+  productIds: z.array(z.string()).optional(),
+  variantId: z.string().optional(),
+  variantIds: z.array(z.string()).optional(),
+};
+
 export const ProductDiscountTargetSchema = z.discriminatedUnion("scopeMode", [
   ProductTargetIdsSchema.extend({
     scopeMode: z.literal("sitewide"),
@@ -469,12 +478,14 @@ export const ProductDiscountTargetSchema = z.discriminatedUnion("scopeMode", [
   ProductTargetIdsSchema.extend({
     scopeMode: z.literal("tagged_offer"),
     requiredOfferId: z.string().uuid(),
+    ...TAGGED_REWARD_ALLOWLIST,
   }).strict(),
   z
     .object({
       scopeMode: z.literal("quiz_bundle"),
       scope: z.literal("cart").default("cart"),
       discountPercentageOnGifts: z.number().min(0).max(100).default(100),
+      ...TAGGED_REWARD_ALLOWLIST,
     })
     .strict(),
 ]);

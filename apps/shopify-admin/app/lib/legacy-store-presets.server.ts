@@ -567,6 +567,21 @@ const TRU_VARIANTS = [
   "gid://shopify/ProductVariant/32773556240465",
 ];
 const TRU_SOURCE = "protein-complete-lp";
+// Every product the live quiz (templates/page.quiz.json) can put in a bundle:
+// bundle components, bb_eligible products and the free-gift handles.
+const TRU_QUIZ_PRODUCTS = [
+  "gid://shopify/Product/4388962828369", // tru-protein
+  "gid://shopify/Product/4388961845329", // tru-metabolism
+  "gid://shopify/Product/4388962271313", // acv-apple-cider-vinegar-plantcaps
+  "gid://shopify/Product/14894655471984", // tru-hydration-complete
+  "gid://shopify/Product/4388961910865", // tru-energy
+  "gid://shopify/Product/4673222443089", // tru-her
+  "gid://shopify/Product/14654778900848", // tru-greens-complete
+  "gid://shopify/Product/4388962336849", // tru-creatine
+  "gid://shopify/Product/15083050828144", // lifestyle-nutrition-guide (free)
+  "gid://shopify/Product/7461732286545", // tru-training-fabric-mini-bands-set-of-3 (free)
+  "gid://shopify/Product/14646566519152", // sculpt (free)
+];
 
 function truLandingGift(
   key: string,
@@ -715,11 +730,9 @@ const GETTRU_PRESET: LegacyStorePreset = {
       key: "quiz-bundle-price-match",
       internalName: "[HPN preset] Quiz bundle price match",
       publicTitle: "Product Quiz Bundle",
-      // The source rule (quiz_bundle_price_match) has no product IDs — it matches
-      // purely on the client-set _quiz_bundle_id line attribute. It needs a
-      // product allowlist before activation is possible here.
-      description:
-        "Imported from hpn-scripts-migration. Created as a draft for review. Needs product allowlist before activation.",
+      // The source rule has no product IDs (it trusts the client-set
+      // _quiz_bundle_id); here it is restricted to the quiz's products.
+      description: "Imported from hpn-scripts-migration. Created as a draft for review.",
       type: "discount",
       priority: 130,
       conditions: [],
@@ -728,7 +741,7 @@ const GETTRU_PRESET: LegacyStorePreset = {
           rewardType: "product_discount",
           discountType: "fixed_price",
           value: { amount: 0, currencyCode: "USD" },
-          target: { scopeMode: "quiz_bundle", scope: "cart", discountPercentageOnGifts: 100 },
+          target: { scopeMode: "quiz_bundle", scope: "cart", discountPercentageOnGifts: 100, productIds: TRU_QUIZ_PRODUCTS },
           label: "Quiz bundle price match",
         },
       ],
