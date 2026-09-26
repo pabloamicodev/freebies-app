@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate, sessionStorage } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs, offers, webhookDeliveries } from "@promo/db";
+import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs, offers, offerConditions, webhookDeliveries } from "@promo/db";
 import { eq, and, inArray, lt, notInArray, or, sql } from "drizzle-orm";
 import { decryptToken } from "../lib/token-crypto.server.js";
 import { syncInventoryFromWebhook } from "../lib/sync/inventory-sync.server.js";
@@ -10,6 +10,7 @@ import {
   syncCollectionFromWebhook,
 } from "../lib/sync/collection-sync.server.js";
 import { syncMarketsForShop } from "../lib/sync/market-sync.server.js";
+import { publishOffersForShop } from "../lib/sync/offer-publisher.server.js";
 import { reconcileOrderAttribution } from "../lib/sync/analytics-reconcile.server.js";
 import { dispatchIntegrationEvents, PermanentIntegrationError } from "../lib/integration-dispatcher.server.js";
 import * as Sentry from "@sentry/node";
@@ -411,6 +412,26 @@ async function handleMarketChange(shop: string) {
   if (!shopRecord) return;
   const accessToken = await decryptToken(shopRecord.accessTokenEncrypted);
   await syncMarketsForShop(shopRecord.id, shop, accessToken);
+  // The Function only sees the country codes a markets condition resolved to
+  // at publish time — republish so a changed market's countries apply at checkout.
+  const [marketOffer] = await getDb()
+    .select({ id: offers.id })
+    .from(offers)
+    .innerJoin(offerConditions, eq(offerConditions.offerId, offers.id))
+    .where(and(
+      eq(offers.shopId, shopRecord.id),
+      eq(offers.status, "active"),
+      eq(offerConditions.conditionType, "markets"),
+      eq(offerConditions.isEnabled, true),
+    ))
+    .limit(1);
+  if (marketOffer) {
+    waitUntil(
+      publishOffersForShop(shopRecord.id, shop).catch((error) => {
+        Sentry.captureException(error, { extra: { shop, context: "markets-republish" } });
+      }),
+    );
+  }
 }
 
 async function handleCollectionChange(shop: string, legacyCollectionId: number) {
