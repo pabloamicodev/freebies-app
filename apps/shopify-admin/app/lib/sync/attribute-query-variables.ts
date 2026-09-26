@@ -1,10 +1,7 @@
 import { CART_ATTRIBUTE_KEYS, LINE_ATTRIBUTE_KEYS } from "@promo/shared-types";
 
-// The metadata bridge packs every line property into one Function input field.
-// Keep two direct slots as a compatibility fallback for carts created by code
-// that bypasses the storefront runtime, while staying under Shopify's query
-// complexity limit.
-export const MAX_CUSTOM_LINE_ATTRIBUTE_KEYS = 2;
+// Line attributes reach the Function through the metadata bridge's packed property;
+// only cart attributes need query-variable slots (Shopify caps query complexity at 30).
 export const MAX_CUSTOM_CART_ATTRIBUTE_KEYS = 3;
 
 interface AttributeCondition {
@@ -33,7 +30,6 @@ function customKeys(
 }
 
 export function buildAttributeQueryVariables(conditions: AttributeCondition[]): Record<string, string> {
-  const lineKeys = customKeys(conditions, "line_attribute", LINE_ATTRIBUTE_KEYS);
   const cartKeys = customKeys(conditions, "cart_attribute", CART_ATTRIBUTE_KEYS);
 
   if (cartKeys.length > MAX_CUSTOM_CART_ATTRIBUTE_KEYS) {
@@ -41,7 +37,6 @@ export function buildAttributeQueryVariables(conditions: AttributeCondition[]): 
   }
 
   return {
-    ...Object.fromEntries(lineKeys.slice(0, MAX_CUSTOM_LINE_ATTRIBUTE_KEYS).map((key, index) => [`l${index + 1}`, key])),
     ...Object.fromEntries(cartKeys.map((key, index) => [`c${index + 1}`, key])),
   };
 }

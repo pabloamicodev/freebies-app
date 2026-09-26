@@ -842,8 +842,6 @@ const CONFIG_DEFAULTS: FieldDefaults = { shippingOffers: [] };
 // declared variable missing from it (query defaults are ignored), and the query declares them
 // non-null, so every run fails before executing unless all of them are present.
 export const FUNCTION_QUERY_VARIABLE_DEFAULTS = {
-  l1: "_promo_engine_unused",
-  l2: "_promo_engine_unused",
   c1: "_promo_engine_unused",
   c2: "_promo_engine_unused",
   c3: "_promo_engine_unused",

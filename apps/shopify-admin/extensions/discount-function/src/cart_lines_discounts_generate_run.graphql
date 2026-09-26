@@ -1,6 +1,4 @@
 query Input(
-  $l1: String! = "_promo_engine_unused"
-  $l2: String! = "_promo_engine_unused"
   $c1: String! = "_promo_engine_unused"
   $c2: String! = "_promo_engine_unused"
   $c3: String! = "_promo_engine_unused"
@@ -32,8 +30,6 @@ query Input(
       }
     }
     lines {
-      customLine1: attribute(key: $l1) { value }
-      customLine2: attribute(key: $l2) { value }
       id
       quantity
       cost {
@@ -64,22 +60,7 @@ query Input(
       lineType: attribute(key: "_promo_engine_line_type") {
         value
       }
-      cartGiftTier: attribute(key: "__cart_gift_tier") {
-        value
-      }
       landingSource: attribute(key: "__landing_source") {
-        value
-      }
-      quizBundleId: attribute(key: "_quiz_bundle_id") {
-        value
-      }
-      quizTargetCents: attribute(key: "_quiz_target_cents") {
-        value
-      }
-      quizExpectedPaidCount: attribute(key: "_quiz_expected_paid_count") {
-        value
-      }
-      quizFreeGift: attribute(key: "_quiz_free_gift") {
         value
       }
       volumeDiscountBundleItem: attribute(key: "_bundle_item") {

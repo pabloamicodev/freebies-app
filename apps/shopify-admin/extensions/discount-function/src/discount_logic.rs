@@ -1358,29 +1358,10 @@ fn query_parameter<'a>(page_url: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
-fn line_attribute_value(line: &Lines, key: &str, config: &CompiledConfig) -> Option<String> {
-    if key == "__cart_gift_tier" {
-        if let Some(value) = cart_gift_tier(line) {
-            return Some(value);
-        }
-    } else if let Some(value) = metadata_value(line, key) {
-        return Some(value);
-    }
-    if config.l1.as_deref() == Some(key) {
-        return line
-            .custom_line_1()
-            .as_ref()
-            .and_then(|attribute| attribute.value())
-            .cloned();
-    }
-    if config.l2.as_deref() == Some(key) {
-        return line
-            .custom_line_2()
-            .as_ref()
-            .and_then(|attribute| attribute.value())
-            .cloned();
-    }
-    None
+// Line attributes other than the direct ones in the input query come from the packed
+// metadata property (the input query is capped at complexity 30).
+fn line_attribute_value(line: &Lines, key: &str, _config: &CompiledConfig) -> Option<String> {
+    metadata_value(line, key)
 }
 
 fn cart_attribute_value(input: &Input, key: &str, config: &CompiledConfig) -> Option<String> {
@@ -1420,45 +1401,23 @@ fn cart_attribute_value(input: &Input, key: &str, config: &CompiledConfig) -> Op
 }
 
 fn quiz_bundle_id(line: &Lines) -> Option<String> {
-    attr_or_metadata(
-        line.quiz_bundle_id().and_then(|attribute| attribute.value()),
-        line,
-        "_quiz_bundle_id",
-    )
+    metadata_value(line, "_quiz_bundle_id")
 }
 
 fn quiz_target_cents(line: &Lines) -> Option<String> {
-    attr_or_metadata(
-        line.quiz_target_cents()
-            .and_then(|attribute| attribute.value()),
-        line,
-        "_quiz_target_cents",
-    )
+    metadata_value(line, "_quiz_target_cents")
 }
 
 fn quiz_expected_paid_count(line: &Lines) -> Option<String> {
-    attr_or_metadata(
-        line.quiz_expected_paid_count()
-            .and_then(|attribute| attribute.value()),
-        line,
-        "_quiz_expected_paid_count",
-    )
+    metadata_value(line, "_quiz_expected_paid_count")
 }
 
 fn quiz_free_gift(line: &Lines) -> Option<String> {
-    attr_or_metadata(
-        line.quiz_free_gift().and_then(|attribute| attribute.value()),
-        line,
-        "_quiz_free_gift",
-    )
+    metadata_value(line, "_quiz_free_gift")
 }
 
 fn cart_gift_tier(line: &Lines) -> Option<String> {
-    attr_or_metadata(
-        line.cart_gift_tier().and_then(|attribute| attribute.value()),
-        line,
-        "__cart_gift_tier",
-    )
+    metadata_value(line, "__cart_gift_tier")
 }
 
 fn metadata_value(line: &Lines, key: &str) -> Option<String> {
@@ -1557,6 +1516,8 @@ mod tests {
             ("quizTargetCents", "_quiz_target_cents"),
             ("quizExpectedPaidCount", "_quiz_expected_paid_count"),
             ("quizFreeGift", "_quiz_free_gift"),
+            ("cartGiftTier", "__cart_gift_tier"),
+            ("engravingMessage", "engraving_message"),
         ];
 
         for line in lines.as_array_mut().unwrap() {
@@ -1855,7 +1816,7 @@ mod tests {
     }
 
     #[test]
-    fn store_specific_line_attribute_is_loaded_through_the_function_variable_slot() {
+    fn store_specific_line_attribute_is_loaded_from_packed_metadata() {
         let paid = regular_line(
             "gid://shopify/CartLine/1",
             "gid://shopify/ProductVariant/v1",
@@ -1865,7 +1826,7 @@ mod tests {
         )
         .replace(
             "\"volumeDiscountNektarGlp1\": null",
-            "\"volumeDiscountNektarGlp1\": null, \"customLine1\": { \"value\": \"VIP\" }",
+            "\"volumeDiscountNektarGlp1\": null, \"engravingMessage\": { \"value\": \"VIP\" }",
         );
         let lines = format!(
             "[{},{}]",
@@ -1880,7 +1841,7 @@ mod tests {
             )
         );
         let config = gift_offer_config(5000, 1)
-            .replace("{\"offers\":", "{\"l1\":\"engraving_message\",\"offers\":")
+            .replace("{\"offers\":", "{\"offers\":")
             .replace(
                 "\"combinesWithOrderDiscounts\":true",
                 "\"lineAttributeConditions\":[{\"key\":\"engraving_message\",\"value\":\"VIP\",\"matchMode\":\"equals\",\"minMatchingQuantity\":1}],\"combinesWithOrderDiscounts\":true",
