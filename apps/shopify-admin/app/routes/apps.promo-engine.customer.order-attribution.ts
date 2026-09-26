@@ -4,6 +4,10 @@ import { proxyRateLimitResponse } from "../lib/proxy-rate-limit.server.js";
 import { getOrderAttributions } from "../lib/order-attribution.server.js";
 import { apiJson, handleApiError } from "../lib/api-response.server.js";
 
+// Storefront endpoints get their own Vercel function (a distinct route config
+// splits the server bundle) so a cold start doesn't load the whole admin app.
+export const config = { maxDuration: 15 };
+
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const shop = await getSignedShop(request);

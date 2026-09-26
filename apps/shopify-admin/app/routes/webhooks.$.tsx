@@ -16,6 +16,10 @@ import { dispatchIntegrationEvents, PermanentIntegrationError } from "../lib/int
 import * as Sentry from "@sentry/node";
 import { waitUntil } from "@vercel/functions";
 
+// Own Vercel function: Shopify drops webhook deliveries that take over 5s, so
+// cold starts must not load the admin app.
+export const config = { maxDuration: 60 };
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**

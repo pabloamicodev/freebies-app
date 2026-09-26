@@ -5,6 +5,10 @@ import { getSignedShop } from "../lib/app-proxy-auth.server.js";
 import { checkRateLimit, getClientIp } from "../lib/rate-limit.server.js";
 import { apiError, apiJson, handleApiError, readJsonBody } from "../lib/api-response.server.js";
 
+// Storefront endpoints get their own Vercel function (a distinct route config
+// splits the server bundle) so a cold start doesn't load the whole admin app.
+export const config = { maxDuration: 15 };
+
 const MAX_ANALYTICS_BODY_BYTES = 64 * 1024;
 const PUBLIC_ANALYTICS_EVENTS = new Set([
   "page_viewed",

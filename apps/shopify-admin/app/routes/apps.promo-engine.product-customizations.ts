@@ -5,6 +5,10 @@ import { getSignedShop } from "../lib/app-proxy-auth.server.js";
 import { proxyRateLimitResponse } from "../lib/proxy-rate-limit.server.js";
 import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
 
+// Storefront endpoints get their own Vercel function (a distinct route config
+// splits the server bundle) so a cold start doesn't load the whole admin app.
+export const config = { maxDuration: 15 };
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const VARIANT_GID = /^gid:\/\/shopify\/ProductVariant\/\d+$/;
 
