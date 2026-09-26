@@ -56,10 +56,32 @@ export interface EvaluationShop {
  * Shared by the App Proxy (storefront) and the session-token checkout route.
  * `loggedInCustomerId` must come from a Shopify-verified source, never the body.
  */
+/** Server-Timing phases (ms) so slow evaluations can be attributed from the browser or logs. */
+export function createPhaseTimer(initial: [string, number][] = []) {
+  const phases = [...initial];
+  let last = performance.now();
+  return {
+    mark(name: string) {
+      const now = performance.now();
+      phases.push([name, now - last]);
+      last = now;
+    },
+    header() {
+      return phases.map(([name, ms]) => `${name};dur=${ms.toFixed(1)}`).join(", ");
+    },
+    total() {
+      return phases.reduce((sum, [, ms]) => sum + ms, 0);
+    },
+  };
+}
+
+const SLOW_EVALUATION_MS = 1_500;
+
 export async function handleEvaluationRequest(
   request: Request,
   shop: EvaluationShop,
   loggedInCustomerId: string | null,
+  timer = createPhaseTimer(),
 ): Promise<Response> {
   const body = await readJsonBody<unknown>(request, {
     maxBytes: MAX_EVALUATION_BODY_BYTES,
@@ -85,11 +107,13 @@ export async function handleEvaluationRequest(
   // every anonymous visitor into one shared bucket. Falls back to the cart
   // token, then IP as a last resort (e.g. no cart yet). Both limits run in
   // parallel — each is a Redis round trip on the hot path.
+  timer.mark("body");
   const identity = loggedInCustomerId ?? parsed.data.cart.token ?? getClientIp(request);
   const [shopRateLimit, rateLimit] = await Promise.all([
     checkRateLimit(`evaluate:shop:${shop.id}`, { limit: 3_000, windowMs: 60_000 }),
     checkRateLimit(`evaluate:${shop.id}:${identity}`, { limit: 120, windowMs: 60_000 }),
   ]);
+  timer.mark("ratelimit");
   if (!shopRateLimit.ok) {
     return apiError(request, {
       status: 429,
@@ -113,6 +137,7 @@ export async function handleEvaluationRequest(
     getOfferDefinitions(shop.id, shop.db),
     isShadowModeEnabled(shop.id),
   ]);
+  timer.mark("offers");
 
   // resolveCustomer's Admin API round trip is only needed when some active
   // offer inspects the profile it fetches (tags/spend/location) — skip it
@@ -127,6 +152,7 @@ export async function handleEvaluationRequest(
       : Promise.resolve(null),
     getOneUseStates(shop.id, shop.db, customerGid, offerDefinitions.map((offer) => offer.id)),
   ]);
+  timer.mark("customer");
 
   const input: EvaluationInput = {
     ...parsed.data,
@@ -140,6 +166,7 @@ export async function handleEvaluationRequest(
     now: new Date(),
     shopCurrencyCode: shop.currencyCode ?? undefined,
   });
+  timer.mark("evaluate");
 
   // enrichGiftSlider and resolveSoldOutGiftAdds both need pricing/stock for
   // largely the same gift + fallback variants — one shared query instead of
@@ -151,6 +178,7 @@ export async function handleEvaluationRequest(
     buildUpsells(shop.id, result.qualifiedOffers, offerDefinitions),
     result.giftSlider ? loadGiftSliderTranslations(shop.id, locale).catch(() => null) : Promise.resolve(null),
   ]);
+  timer.mark("enrich");
   result.upsells = upsells;
   result.giftSlider = enrichGiftSlider(giftCatalog, result.giftSlider, offerDefinitions, input.cart.lines, giftLabels);
   result.cartActions = resolveSoldOutGiftAdds(giftCatalog, result.cartActions, offerDefinitions);
@@ -181,7 +209,11 @@ export async function handleEvaluationRequest(
     });
   }
 
-  return apiJson(request, parsedResult.data);
+  timer.mark("serialize");
+  if (timer.total() > SLOW_EVALUATION_MS) {
+    console.warn(`[evaluate] slow ${timer.total().toFixed(0)}ms shop=${shop.id} ${timer.header()}`);
+  }
+  return apiJson(request, parsedResult.data, { headers: { "Server-Timing": timer.header() } });
 }
 
 async function getOneUseStates(
