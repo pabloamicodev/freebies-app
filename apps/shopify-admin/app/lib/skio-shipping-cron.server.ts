@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { appSettings, shops, type Db } from "@promo/db";
+import * as Sentry from "@sentry/node";
 import { decryptToken } from "./token-crypto.server.js";
 import { SKIO_API_KEY_SETTING } from "./skio-credentials.server.js";
 import { loadSkioShippingConfig } from "./skio-shipping-config.server.js";
@@ -58,6 +59,7 @@ export async function runAllSkioShippingSyncs(db: Db): Promise<SkioCronResult> {
       result.shopsFailed += 1;
       result.errors.push({ shopDomain: connection.shopDomain, message });
       console.error("[cron:skio-shipping] shop failed", { shopDomain: connection.shopDomain, error });
+      Sentry.captureException(error, { tags: { cron: "skio-shipping", shop: connection.shopDomain } });
     }
   }
 

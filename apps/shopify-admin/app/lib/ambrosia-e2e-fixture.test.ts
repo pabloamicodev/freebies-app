@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { validateConditionValue } from "@promo/shared-types";
 import { getLegacyStorePreset } from "./legacy-store-presets.server.js";
 import { AMBROSIA_ANCHOR_SKUS, mapAmbrosiaPresetToDev } from "../../../../scripts/seed-ambrosia-e2e.js";
 
@@ -90,5 +91,16 @@ describe("Ambrosia E2E fixture mapping", () => {
     const unmapped = mapAmbrosiaPresetToDev(preset, { ...fixtures, anchorVariantMap: {} });
     const kinetic = unmapped.find((offer) => offer.key === "landing-kinetic-sk-otg-freegifts");
     expect(kinetic?.rewards[0]?.target.requiredAnchorVariantIds).toEqual([fixtures.anchorVariantId]);
+  });
+
+  it("defaults a main condition onto every offer so validateOffersPublishable's enabled-main-condition check holds", () => {
+    const preset = getLegacyStorePreset("ambrosia-nutraceuticals.myshopify.com")!;
+    const mapped = mapAmbrosiaPresetToDev(preset, fixtures);
+    for (const offer of mapped) {
+      expect(offer.conditions.length).toBeGreaterThan(0);
+      for (const condition of offer.conditions) {
+        expect(validateConditionValue(condition.conditionType, condition.value).success).toBe(true);
+      }
+    }
   });
 });

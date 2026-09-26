@@ -152,8 +152,17 @@ export function ErrorBoundary() {
     }).catch(() => undefined);
   }, [error, isClientError]);
 
-  // Shopify auth throws Responses (App Bridge redirects, reauth); boundary.error renders them.
-  if (isClientError) return boundary.error(error);
+  // Only Shopify's reauth bounce (401) needs boundary.error: it injects error.data as raw HTML.
+  // Every other 4xx is rendered as escaped text.
+  if (isRouteErrorResponse(error) && error.status === 401) return boundary.error(error);
+  if (isClientError) {
+    return (
+      <div style={{ padding: "2rem", fontFamily: "system-ui" }}>
+        <h1>{error.status === 404 ? "Not found" : "Request failed"}</h1>
+        <p>{typeof error.data === "string" && error.data.length < 300 ? error.data : error.statusText}</p>
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: "2rem", fontFamily: "system-ui" }}>

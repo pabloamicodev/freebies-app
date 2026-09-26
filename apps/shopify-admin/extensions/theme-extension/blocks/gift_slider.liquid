@@ -11,19 +11,19 @@
     data-promo-gift-slider-trigger
     data-offer-id="{{ block.settings.offer_id | escape }}"
     style="
-      background: {{ block.settings.button_color | default: '#111111' }};
-      color: {{ block.settings.text_color | default: '#ffffff' }};
+      background: {{ block.settings.button_color | default: '#111111' | escape }};
+      color: {{ block.settings.text_color | default: '#ffffff' | escape }};
       border: none; border-radius: 6px; padding: 10px 20px;
       font-size: 14px; font-weight: 700; cursor: pointer;
     "
     {{ block.shopify_attributes }}
   >
-    🎁 {{ block.settings.button_label | default: 'Choose Your Gift' }}
+    🎁 {{ block.settings.button_label | default: 'Choose Your Gift' | escape }}
   </button>
 {%- else -%}
   <promo-gift-icon
-    offer-id="{{ block.settings.offer_id }}"
-    label="{{ block.settings.button_label | default: 'Free Gift' }}"
+    offer-id="{{ block.settings.offer_id | escape }}"
+    label="{{ block.settings.button_label | default: 'Free Gift' | escape }}"
     {{ block.shopify_attributes }}
   ></promo-gift-icon>
 {%- endif -%}

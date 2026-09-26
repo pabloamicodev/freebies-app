@@ -6,7 +6,37 @@ import { h, Fragment } from "preact";
 import { render } from "preact";
 import { on, emit, PromoEvents, publishAnalytics } from "../event-bus.js";
 import { AjaxCartAdapter } from "../cart-adapter.js";
+import {
+  giftRewardKey,
+  loadDeclinedGiftRewards,
+  saveDeclinedGiftRewards,
+} from "../declined-gifts.js";
 import type { GiftSliderPayload, SelectableGift, EvaluationResult } from "../types.js";
+
+const AUTO_OPENED_STORAGE_KEY = "promo_engine_gift_slider_auto_opened";
+const MAX_TRACKED_AUTO_OPENED = 50;
+
+function loadAutoOpenedCartStates(): Set<string> {
+  try {
+    const raw = sessionStorage.getItem(AUTO_OPENED_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed.filter((v) => typeof v === "string")) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveAutoOpenedCartStates(states: Set<string>): void {
+  try {
+    sessionStorage.setItem(
+      AUTO_OPENED_STORAGE_KEY,
+      JSON.stringify([...states].slice(-MAX_TRACKED_AUTO_OPENED)),
+    );
+  } catch {
+    // Storage unavailable — worst case the slider can auto-open again this page view.
+  }
+}
 
 // ─── Styles — injected once ───────────────────────────────────────────────────
 
@@ -121,13 +151,23 @@ interface GiftSliderProps {
   sessionId: string;
   onClose: () => void;
   onConfirm: (selectedGifts: SelectableGift[]) => Promise<void>;
+  /** Called when the customer dismisses the slider (X, backdrop, Escape)
+   * without ever selecting a gift — as opposed to onClose, which also fires
+   * after a successful confirm. */
+  onDismissWithoutSelection: () => void;
 }
 
 function giftKey(gift: Pick<SelectableGift, "rewardId" | "variantId">): string {
   return `${gift.rewardId}:${gift.variantId}`;
 }
 
-function GiftSlider({ payload, sessionId, onClose, onConfirm }: GiftSliderProps) {
+function GiftSlider({
+  payload,
+  sessionId,
+  onClose,
+  onConfirm,
+  onDismissWithoutSelection,
+}: GiftSliderProps) {
   const [selected, setSelected] = useState<Set<string>>(
     new Set(payload.selectableGifts.filter((gift) => gift.isSelected).map(giftKey)),
   );
@@ -183,10 +223,18 @@ function GiftSlider({ payload, sessionId, onClose, onConfirm }: GiftSliderProps)
     }
   }
 
+  // Dismiss without confirming (X button, backdrop click, Escape) — as
+  // opposed to onClose, which is also called after a successful confirm.
+  function handleDismiss() {
+    if (loading) return;
+    if (selected.size === 0) onDismissWithoutSelection();
+    onClose();
+  }
+
   // Close on backdrop click
   function handleOverlayClick(e: MouseEvent) {
     if (!loading && e.target === e.currentTarget) {
-      onClose();
+      handleDismiss();
     }
   }
 
@@ -210,7 +258,7 @@ function GiftSlider({ payload, sessionId, onClose, onConfirm }: GiftSliderProps)
       onClick={handleOverlayClick}
       onCancel={(event) => {
         event.preventDefault();
-        if (!loading) onClose();
+        handleDismiss();
       }}
       aria-busy={loading}
     >
@@ -230,7 +278,7 @@ function GiftSlider({ payload, sessionId, onClose, onConfirm }: GiftSliderProps)
             ref={closeButtonRef}
             type="button"
             class="pe-slider-close"
-            onClick={onClose}
+            onClick={handleDismiss}
             disabled={loading}
             aria-label="Close gift selection"
           >
@@ -354,6 +402,12 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string) {
     }
   };
 
+  const handleDismissWithoutSelection = () => {
+    const declined = loadDeclinedGiftRewards();
+    for (const gift of payload.selectableGifts) declined.add(giftRewardKey(payload.offerId, gift.rewardId));
+    saveDeclinedGiftRewards(declined);
+  };
+
   const handleConfirm = async (selectedGifts: SelectableGift[]) => {
     const freshPayload = await window.PromoEngine?.validateGiftOffer(payload.offerId);
     if (!freshPayload) {
@@ -434,6 +488,7 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string) {
       sessionId,
       onClose: unmount,
       onConfirm: handleConfirm,
+      onDismissWithoutSelection: handleDismissWithoutSelection,
     }),
     sliderContainer,
   );
@@ -447,7 +502,10 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string) {
 /** Initialize the gift slider — listens for slider requests from runtime. */
 export function initGiftSlider(sessionId: string) {
   const payloadByOfferId = new Map<string, GiftSliderPayload>();
-  const autoOpenedCartStates = new Set<string>();
+  // Persisted (not just in-memory) — Shopify storefront navigation is a full
+  // page reload, so an in-memory Set would let the slider auto-open again on
+  // every single page view for the same unchanged cart state.
+  const autoOpenedCartStates = loadAutoOpenedCartStates();
   let latestPayload: GiftSliderPayload | null = null;
 
   on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
@@ -460,15 +518,21 @@ export function initGiftSlider(sessionId: string) {
     const autoOpenKey = result.giftSlider
       ? `${result.giftSlider.offerId}:${result.cartHash}:${result.giftSlider.selectableGifts.map((gift) => gift.offerVersion).join(",")}`
       : null;
+    const declinedGiftRewards = loadDeclinedGiftRewards();
+    const hasNonDeclinedGift = (slider: GiftSliderPayload) =>
+      slider.selectableGifts.some(
+        (gift) => gift.isAvailable && !declinedGiftRewards.has(giftRewardKey(slider.offerId, gift.rewardId)),
+      );
     if (
       result.giftSlider &&
       Array.isArray(result.giftSlider.selectableGifts) &&
       result.giftSlider.alreadySelectedCount === 0 &&
-      result.giftSlider.selectableGifts.some((gift) => gift.isAvailable) &&
+      hasNonDeclinedGift(result.giftSlider) &&
       autoOpenKey &&
       !autoOpenedCartStates.has(autoOpenKey)
     ) {
       autoOpenedCartStates.add(autoOpenKey);
+      saveAutoOpenedCartStates(autoOpenedCartStates);
       mountSlider(result.giftSlider, sessionId);
     }
   });

@@ -10,19 +10,47 @@
  * 5. Broadcast evaluation results to all widgets.
  */
 
-import { AjaxCartAdapter, type CartData } from "./cart-adapter.js";
+import { AjaxCartAdapter, type CartData, type CartItem } from "./cart-adapter.js";
 import { debounce, AbortableRequest } from "./debounce.js";
 import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
 import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
+import { giftRewardKey, loadDeclinedGiftRewards, saveDeclinedGiftRewards } from "./declined-gifts.js";
 import { initGiftSlider } from "./widgets/gift-slider.js";
 import { initFbtWidget } from "./widgets/fbt.js";
 import { initBundleBuilder } from "./widgets/bundle-builder.js";
 import { buildMarketContext } from "./market-context.js";
 import type { EvaluationResult, CartAction } from "./types.js";
 
+/** Elements that indicate the page actually needs an evaluation even with an
+ * empty cart (product-page gift icons, FBT/bundle widgets, etc). Used to skip
+ * the boot evaluate() on ordinary empty-cart pages. */
+const PROMO_WIDGET_SELECTOR = [
+  "promo-progress-bar",
+  "promo-cart-message",
+  "promo-volume-discount",
+  "promo-today-offer-block",
+  "promo-gift-icon",
+  "promo-gift-thumbnail",
+  "[data-promo-widget]",
+  '[id^="pe-bundle-builder-"]',
+  '[id^="pe-fbt-"]',
+].join(",");
+
+/** Gift line properties → `offerId:rewardId`, or null for a non-gift line. */
+function giftKeyOfItem(item: CartItem): string | null {
+  const props = item.properties ?? {};
+  if (props["_promo_engine_line_type"] !== "gift") return null;
+  const offerId = props["_promo_engine_offer_id"];
+  const rewardId = props["_promo_engine_reward_id"];
+  return offerId && rewardId ? giftRewardKey(offerId, rewardId) : null;
+}
+
 const DEFAULT_EVAL_DEBOUNCE_MS = 300;
 const DEFAULT_EVAL_ENDPOINT = "/apps/promo-engine/evaluate";
 const SESSION_KEY = "promo_engine_session_id";
+// Module-scope (not instance) — XMLHttpRequest.prototype is a single global,
+// so patching it twice (e.g. a stray double-init) would double-fire evaluations.
+let xhrPatched = false;
 
 /** crypto.randomUUID() requires a secure context and isn't present on older
  * Safari — fall back to a manual UUID v4 rather than let init() throw. */
@@ -60,6 +88,9 @@ interface RuntimeConfig {
   debug: boolean;
   debounceMs?: number;
   evalEndpoint?: string;
+  /** `cart.item_count` inlined by the app embed — lets init() skip the boot
+   * evaluate() on an empty cart with no promo widgets on the page. */
+  cartItemCount?: number | null;
 }
 
 class PromoEngineRuntime {
@@ -75,6 +106,13 @@ class PromoEngineRuntime {
   private capturedThemeSectionIds: string[] = [];
   private lastEvaluationResult: EvaluationResult | null = null;
   private readonly evalEndpoint: string;
+  // Serializes runEvaluation bodies so a superseded response can never run
+  // applyCartActions after (or concurrently with) a newer one.
+  private evaluationChain: Promise<void> = Promise.resolve();
+  // Gift lines we expect to be in the cart, predicted from our own last
+  // add/remove actions — used to detect a customer-initiated removal.
+  private knownGiftKeys: Set<string> | null = null;
+  private declinedGiftRewards: Set<string> = loadDeclinedGiftRewards();
 
   constructor(config: RuntimeConfig) {
     this.config = config;
@@ -94,6 +132,10 @@ class PromoEngineRuntime {
     this.log("Promo Engine initialized", this.config);
     this.detectTheme();
     this.listenForCartChanges();
+    if (this.config.cartItemCount === 0 && !document.querySelector(PROMO_WIDGET_SELECTOR)) {
+      this.log("Skipping boot evaluation — empty cart and no promo widgets on this page");
+      return;
+    }
     void this.triggerEvaluation();
   }
 
@@ -110,13 +152,32 @@ class PromoEngineRuntime {
       this.log("[PromoEngine] Cart component: cart-drawer web component (Dawn-style)");
   }
 
-  private listenForCartChanges(): void {
-    // Patch window.fetch to catch themes (e.g. Dawn) that never fire cart events
-    this.patchFetch();
+  /** Run fn with self-mutation flagged so the fetch/XHR patches and Tier-4
+   * fallback events below don't schedule another evaluation for our own
+   * cart writes (gift auto-add, refresh, metadata migration). */
+  private async withRefreshGuard<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this.refreshGuard;
+    this.refreshGuard = true;
+    try {
+      return await fn();
+    } finally {
+      this.refreshGuard = prev;
+    }
+  }
 
-    // Standard Shopify cart change events (fallback / other themes)
-    document.addEventListener("cart:updated", () => this.debouncedEvaluate.call());
-    document.addEventListener("cart:refresh", () => this.debouncedEvaluate.call());
+  private listenForCartChanges(): void {
+    // Patch window.fetch / XHR to catch themes (e.g. Dawn) that never fire cart events
+    this.patchFetch();
+    this.patchXhr();
+
+    // Standard Shopify cart change events (fallback / other themes). Guarded
+    // because refreshCartUI's Tier-4 fallback dispatches these same events.
+    document.addEventListener("cart:updated", () => {
+      if (!this.refreshGuard) this.debouncedEvaluate.call();
+    });
+    document.addEventListener("cart:refresh", () => {
+      if (!this.refreshGuard) this.debouncedEvaluate.call();
+    });
     document.addEventListener("theme:cart:open", () => this.debouncedEvaluate.call());
 
     // Our own events
@@ -127,17 +188,17 @@ class PromoEngineRuntime {
   }
 
   private patchFetch(): void {
-    const CART_MUTATE_RE = /\/cart\/(add|change|update)(\.js)?(\?|$)/;
+    const CART_MUTATE_RE = /\/cart\/(add|change|update|clear)(\.js)?(\?|$)/;
     // Only /cart* requests are worth cloning+parsing — every other fetch on
     // the page (product data, app pixels, third-party scripts) was being
     // intercepted and JSON-parsed for nothing.
-    const CART_RELATED_RE = /\/cart(\.js|\/(add|change|update)(\.js)?)?(\?|$)/;
+    const CART_RELATED_RE = /\/cart(\.js|\/(add|change|update|clear)(\.js)?)?(\?|$)/;
     this.savedFetch = window.fetch.bind(window);
     const originalFetch = this.savedFetch;
 
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      const method = (init?.method ?? "GET").toUpperCase();
+      const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
       const isCartMutation = method === "POST" && CART_MUTATE_RE.test(url);
       const isCartRelated = CART_RELATED_RE.test(url);
 
@@ -179,6 +240,44 @@ class PromoEngineRuntime {
     };
   }
 
+  /** Light XMLHttpRequest hook — some themes/apps still add to cart via
+   * jQuery.ajax or a raw XHR instead of fetch. */
+  private patchXhr(): void {
+    if (xhrPatched) return;
+    xhrPatched = true;
+    const CART_MUTATE_RE = /\/cart\/(add|change|update|clear)(\.js)?(\?|$)/;
+    const runtime = this;
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+    const flagged = new WeakSet<XMLHttpRequest>();
+
+    XMLHttpRequest.prototype.open = function (
+      this: XMLHttpRequest,
+      method: string,
+      url: string | URL,
+      ...rest: unknown[]
+    ) {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (method.toUpperCase() === "POST" && CART_MUTATE_RE.test(urlStr)) {
+        flagged.add(this);
+      } else {
+        flagged.delete(this);
+      }
+      return (originalOpen as (...args: unknown[]) => void).apply(this, [method, url, ...rest]);
+    } as typeof XMLHttpRequest.prototype.open;
+
+    XMLHttpRequest.prototype.send = function (this: XMLHttpRequest, ...args: unknown[]) {
+      if (flagged.has(this)) {
+        this.addEventListener("loadend", () => {
+          if (!runtime.refreshGuard && this.status >= 200 && this.status < 300) {
+            runtime.debouncedEvaluate.call();
+          }
+        });
+      }
+      return (originalSend as (...args: unknown[]) => void).apply(this, args);
+    } as typeof XMLHttpRequest.prototype.send;
+  }
+
   private async refreshCartUI(): Promise<void> {
     type CartDrawerEl = HTMLElement & {
       getSectionsToRender?: () => Array<{ id: string; selector?: string }>;
@@ -204,17 +303,11 @@ class PromoEngineRuntime {
           }))
         : [];
 
-    // ── Tier 2: Scan DOM for cart-related section wrappers ────────────────
-    const CART_KEYWORDS = ["cart", "drawer", "mini"];
-    const domSections: Array<{ sectionId: string; selector: string }> = [];
-    document.querySelectorAll('[id^="shopify-section-"]').forEach((el) => {
-      const sectionId = el.id.replace("shopify-section-", "");
-      if (CART_KEYWORDS.some((kw) => sectionId.toLowerCase().includes(kw))) {
-        domSections.push({ sectionId, selector: `#${el.id}` });
-      }
-    });
-
-    // ── Tier 3: Hardcoded well-known cart section targets ────────────────
+    // ── Tier 2: Hardcoded well-known cart section targets ─────────────────
+    // (A previous keyword scan over every `shopify-section-*` id containing
+    // "cart"/"drawer"/"mini" also matched unrelated sections, e.g. a menu
+    // drawer — dropped in favor of theme-requested ids (Tier 0/1) plus this
+    // known list.)
     const COMMON: Array<{ sectionId: string; selector: string }> = [
       { sectionId: "cart-drawer", selector: "#CartDrawer" },
       { sectionId: "cart-drawer", selector: "#shopify-section-cart-drawer" },
@@ -226,7 +319,7 @@ class PromoEngineRuntime {
 
     // Tier 0 has highest priority; dedup and keep only DOM-present targets
     const seenSelectors = new Set<string>();
-    const allTargets = [...tier0, ...nativeTargets, ...domSections, ...COMMON].filter((t) => {
+    const allTargets = [...tier0, ...nativeTargets, ...COMMON].filter((t) => {
       if (seenSelectors.has(t.selector)) return false;
       seenSelectors.add(t.selector);
       return !!document.querySelector(t.selector);
@@ -244,7 +337,9 @@ class PromoEngineRuntime {
       try {
         // Section Rendering API: `/?sections=` returns `{ [id]: html }`. `/cart` with an
         // `Accept: application/json` header returns the cart JSON and ignores `sections`.
-        const resp = await this.savedFetch(`/?sections=${sectionIds.join(",")}`);
+        // Must go through routes.root so a locale-prefixed store (/en-fr/) doesn't 404/redirect.
+        const root = window.Shopify?.routes?.root ?? "/";
+        const resp = await this.savedFetch(`${root}?sections=${sectionIds.join(",")}`);
         if (resp.ok) {
           const body = (await resp.json()) as Record<string, unknown>;
           const sections = Object.fromEntries(
@@ -254,17 +349,23 @@ class PromoEngineRuntime {
             "refreshCartUI — section render response keys:",
             Object.keys(sections).join(", ") || "none (section IDs not valid for this theme)",
           );
-          const data = { sections };
           if (Object.keys(sections).length > 0) {
             let updated = 0;
+            // One DOMParser pass per section id, reused across every target
+            // selector that maps to it (multiple selectors can share a sectionId).
+            const parsedBySectionId = new Map<string, Document>();
             for (const { sectionId, selector } of allTargets) {
-              const rawHtml = data.sections[sectionId];
+              const rawHtml = sections[sectionId];
               if (!rawHtml) continue;
               const el = document.querySelector(selector);
               if (!el) continue;
+              let rendered = parsedBySectionId.get(sectionId);
+              if (!rendered) {
+                rendered = new DOMParser().parseFromString(rawHtml, "text/html");
+                parsedBySectionId.set(sectionId, rendered);
+              }
               // Replace like Dawn does: take the same selector out of the rendered section, so a
               // section that contains its own wrapper (#CartDrawer inside <cart-drawer>) isn't nested.
-              const rendered = new DOMParser().parseFromString(rawHtml, "text/html");
               const innerHtml =
                 rendered.querySelector(selector)?.innerHTML ??
                 rendered.querySelector(".shopify-section")?.innerHTML ??
@@ -294,25 +395,49 @@ class PromoEngineRuntime {
     document.dispatchEvent(new CustomEvent("theme:cart:add", { bubbles: true }));
   }
 
-  private async triggerEvaluation(
+  /** Public entry point. Aborts any in-flight evaluation's fetch immediately,
+   * then chains onto evaluationChain so runEvaluation bodies never overlap —
+   * a superseded evaluation whose response already parsed must not still run
+   * applyCartActions concurrently with (or after) a newer one. */
+  private triggerEvaluation(
     options: { force?: boolean; emitResult?: boolean } = {},
   ): Promise<EvaluationResult | null> {
     if (options.emitResult !== false) emit(PromoEvents.EvaluationRequested);
+    const signal = this.evaluationAbort.start();
+    const run = this.evaluationChain.then(
+      () => this.runEvaluation(options, signal),
+      () => this.runEvaluation(options, signal),
+    );
+    this.evaluationChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async runEvaluation(
+    options: { force?: boolean; emitResult?: boolean },
+    signal: AbortSignal,
+  ): Promise<EvaluationResult | null> {
+    if (signal.aborted) return null;
 
     let cart: CartData;
     try {
-      cart = await AjaxCartAdapter.getCart();
+      cart = await this.withRefreshGuard(() => AjaxCartAdapter.getCart());
     } catch (e) {
       this.log("Failed to fetch cart", e);
       return null;
     }
+    if (signal.aborted) return null;
+
+    this.detectDeclinedGifts(cart);
 
     const cartHash = this.buildCartHash(cart);
     if (!options.force && cartHash === this.lastCartHash) {
       this.log("Cart unchanged, skipping evaluation");
       if (this.widgetChangedCart) {
         this.widgetChangedCart = false;
-        await this.refreshCartUI();
+        await this.withRefreshGuard(() => this.refreshCartUI());
       }
       return this.lastEvaluationResult;
     }
@@ -323,8 +448,6 @@ class PromoEngineRuntime {
       cart.items.map((i) => `${i.title} ×${i.quantity}`).join(", ") || "empty",
       `| subtotal: $${(qualifyingSubtotal / 100).toFixed(2)}`,
     );
-
-    const signal = this.evaluationAbort.start();
 
     // Liquid provides the real Market GID. Currency alone is not a Market id.
     const shopifyGlobal = window.Shopify;
@@ -344,9 +467,11 @@ class PromoEngineRuntime {
           salesChannel: "online_store",
           requestedUrl: window.location.href,
           sessionId: this.sessionId,
+          declinedGiftRewards: [...this.declinedGiftRewards],
         }),
         signal,
       });
+      if (signal.aborted) return null;
 
       if (!response.ok) {
         const errText = await response.text().catch(() => "(no body)");
@@ -354,6 +479,8 @@ class PromoEngineRuntime {
       }
 
       const result: EvaluationResult = await response.json();
+      if (signal.aborted) return null;
+
       this.lastCartHash = cartHash;
       this.lastEvaluationResult = result;
 
@@ -369,15 +496,18 @@ class PromoEngineRuntime {
         this.log("[PromoEngine] Evaluation complete — no cart actions");
       }
 
-      await this.applyCartActions(actions);
+      this.predictKnownGiftKeys(cart, actions);
+      this.clearDeclinedGiftsForUnqualifiedOffers(result);
+
+      await this.withRefreshGuard(() => this.applyCartActions(actions));
       if (actions.length > 0 || this.widgetChangedCart) {
         this.widgetChangedCart = false;
-        await this.refreshCartUI();
+        await this.withRefreshGuard(() => this.refreshCartUI());
       }
       if (options.emitResult !== false) emit(PromoEvents.EvaluationCompleted, result);
       return result;
     } catch (e: unknown) {
-      if ((e as Error).name === "AbortError") {
+      if (signal.aborted) {
         this.log("Evaluation aborted (superseded by newer request)");
         return null;
       }
@@ -385,6 +515,77 @@ class PromoEngineRuntime {
       emit(PromoEvents.CartMutationError, { error: (e as Error).message });
       return null;
     }
+  }
+
+  /** A previously-known gift line (added by us, or already in the cart last
+   * time we looked) that's now gone was removed by the customer — via the
+   * theme's own cart controls, the cart drawer, or the gift slider's own
+   * removeLines call. Record it so we don't force it back in. */
+  private detectDeclinedGifts(cart: CartData): void {
+    if (!this.knownGiftKeys) return; // nothing observed yet (first load)
+    const currentGiftKeys = new Set(
+      cart.items.flatMap((item) => {
+        const key = giftKeyOfItem(item);
+        return key ? [key] : [];
+      }),
+    );
+    let changed = false;
+    for (const key of this.knownGiftKeys) {
+      if (!currentGiftKeys.has(key) && !this.declinedGiftRewards.has(key)) {
+        this.declinedGiftRewards.add(key);
+        changed = true;
+      }
+    }
+    if (changed) saveDeclinedGiftRewards(this.declinedGiftRewards);
+  }
+
+  /** Predict the gift lines that should exist after this cycle's actions are
+   * applied, without an extra cart round-trip — compared against next
+   * cycle's actual fetch by detectDeclinedGifts above. */
+  private predictKnownGiftKeys(cart: CartData, actions: CartAction[]): void {
+    const lineKeyToGiftKey = new Map<string, string>();
+    const predicted = new Set<string>();
+    for (const item of cart.items) {
+      const key = giftKeyOfItem(item);
+      if (key) {
+        lineKeyToGiftKey.set(item.key, key);
+        predicted.add(key);
+      }
+    }
+    for (const action of actions) {
+      if (action.action === "add_line" && action.properties) {
+        const offerId = action.properties["_promo_engine_offer_id"];
+        const rewardId = action.properties["_promo_engine_reward_id"];
+        if (offerId && rewardId) predicted.add(giftRewardKey(offerId, rewardId));
+      } else if (action.action === "remove_line" && action.lineKey) {
+        const key = lineKeyToGiftKey.get(action.lineKey);
+        if (key) predicted.delete(key);
+      } else if (action.action === "update_line" && action.quantity === 0 && action.lineKey) {
+        const key = lineKeyToGiftKey.get(action.lineKey);
+        if (key) predicted.delete(key);
+      }
+    }
+    this.knownGiftKeys = predicted;
+  }
+
+  /** A decline only blocks re-adding while the offer keeps qualifying for a
+   * gift the customer already turned down. Once the offer stops qualifying
+   * entirely, drop it — if it starts qualifying again later that's a fresh
+   * chance to accept the gift. */
+  private clearDeclinedGiftsForUnqualifiedOffers(result: EvaluationResult): void {
+    if (this.declinedGiftRewards.size === 0) return;
+    const qualifiedOfferIds = new Set(
+      (Array.isArray(result.qualifiedOffers) ? result.qualifiedOffers : []).map((o) => o.offerId),
+    );
+    let changed = false;
+    for (const key of [...this.declinedGiftRewards]) {
+      const offerId = key.split(":")[0];
+      if (offerId && !qualifiedOfferIds.has(offerId)) {
+        this.declinedGiftRewards.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) saveDeclinedGiftRewards(this.declinedGiftRewards);
   }
 
   private async applyCartActions(actions: CartAction[]): Promise<void> {

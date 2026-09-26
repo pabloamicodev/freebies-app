@@ -6,8 +6,8 @@
 {% endcomment %}
 
 <promo-today-offer-block
-  offer-ids="{{ block.settings.offer_ids }}"
-  title="{{ block.settings.title | default: "Today's Offers" }}"
+  offer-ids="{{ block.settings.offer_ids | escape }}"
+  title="{{ block.settings.title | default: "Today's Offers" | escape }}"
   {{ block.shopify_attributes }}
 ></promo-today-offer-block>
 

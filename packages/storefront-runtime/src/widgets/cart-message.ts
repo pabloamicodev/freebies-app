@@ -16,7 +16,7 @@ class PromoCartMessage extends HTMLElement {
     this.offerId = this.getAttribute("offer-id") ?? "";
     this.widgetId = this.getAttribute("widget-id") ?? "";
 
-    this.attachShadow({ mode: "open" });
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this.render(null);
 
     this.unsubscribe = on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
@@ -74,6 +74,8 @@ class PromoCartMessage extends HTMLElement {
   }
 }
 
-customElements.define("promo-cart-message", PromoCartMessage);
+if (!customElements.get("promo-cart-message")) {
+  customElements.define("promo-cart-message", PromoCartMessage);
+}
 
 export {};

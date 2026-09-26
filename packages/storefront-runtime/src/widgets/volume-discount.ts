@@ -50,13 +50,14 @@ class PromoVolumeDiscount extends HTMLElement {
   private variantId: string = "";
   private currency: string = "USD";
   private unsubscribeVariant: (() => void) | null = null;
+  private abortController: AbortController | null = null;
 
   connectedCallback() {
     this.offerId = this.getAttribute("offer-id") ?? "";
     this.variantId = this.getAttribute("variant-id") ?? "";
     this.currency = this.getAttribute("currency") ?? "USD";
 
-    this.attachShadow({ mode: "open" });
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     void this.loadAndRender();
 
     // Listen for variant changes (product page variant selector)
@@ -72,29 +73,38 @@ class PromoVolumeDiscount extends HTMLElement {
 
   disconnectedCallback() {
     this.unsubscribeVariant?.();
+    this.abortController?.abort();
   }
 
   private async loadAndRender() {
     if (!this.offerId || !this.variantId) return;
     if (!this.shadowRoot) return;
 
-    // Fetch tier config from runtime endpoint
+    // A newer variant selection supersedes any in-flight request so a slow,
+    // stale response can't land after a faster, newer one and overwrite it.
+    this.abortController?.abort();
+    const controller = new AbortController();
+    this.abortController = controller;
+
     try {
       const response = await fetch(
         `/apps/promo-engine/product-customizations?offer_id=${encodeURIComponent(this.offerId)}&variant_id=${encodeURIComponent(this.variantId)}`,
-        { headers: { Accept: "application/json" } },
+        { headers: { Accept: "application/json" }, signal: controller.signal },
       );
+      if (controller.signal.aborted) return;
 
       if (!response.ok) { this.renderEmpty(); return; }
 
       const data = await response.json() as { volumeDiscount?: VolumeDiscountPayload };
+      if (controller.signal.aborted) return;
+
       if (data.volumeDiscount) {
         this.renderTiers(data.volumeDiscount);
       } else {
         this.renderEmpty();
       }
     } catch {
-      this.renderEmpty();
+      if (!controller.signal.aborted) this.renderEmpty();
     }
   }
 
@@ -163,6 +173,8 @@ class PromoVolumeDiscount extends HTMLElement {
   }
 }
 
-customElements.define("promo-volume-discount", PromoVolumeDiscount);
+if (!customElements.get("promo-volume-discount")) {
+  customElements.define("promo-volume-discount", PromoVolumeDiscount);
+}
 
 export {};

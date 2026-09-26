@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isConditionEnforcedByFunction } from "./offer-publish-flow.server.js";
+import { isConditionEnforcedByFunction, isUnscopedTaggedReward } from "./offer-publish-flow.server.js";
 
 describe("isConditionEnforcedByFunction", () => {
   it.each([
@@ -30,5 +30,39 @@ describe("isConditionEnforcedByFunction", () => {
     "exclude_types",
   ])("fails closed for storefront-only condition %s", (conditionType) => {
     expect(isConditionEnforcedByFunction(conditionType)).toBe(false);
+  });
+});
+
+describe("isUnscopedTaggedReward", () => {
+  it("flags quiz_bundle and tagged_offer product rewards with no product/variant allowlist", () => {
+    expect(isUnscopedTaggedReward("product_discount", { scopeMode: "quiz_bundle" })).toBe(true);
+    expect(
+      isUnscopedTaggedReward("bundle_discount", {
+        scopeMode: "tagged_offer",
+        requiredOfferId: "11111111-1111-1111-1111-111111111111",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows quiz_bundle/tagged_offer rewards once they have a product or variant allowlist", () => {
+    expect(
+      isUnscopedTaggedReward("product_discount", {
+        scopeMode: "quiz_bundle",
+        productIds: ["gid://shopify/Product/1"],
+      }),
+    ).toBe(false);
+    expect(
+      isUnscopedTaggedReward("upsell_discount", {
+        scopeMode: "tagged_offer",
+        variantId: "gid://shopify/ProductVariant/1",
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores other scope modes and reward types — landing anchors are enforced elsewhere", () => {
+    expect(isUnscopedTaggedReward("product_discount", { scopeMode: "sitewide" })).toBe(false);
+    expect(isUnscopedTaggedReward("product_discount", { scopeMode: "landing" })).toBe(false);
+    expect(isUnscopedTaggedReward("product_gift", { scopeMode: "quiz_bundle" })).toBe(false);
+    expect(isUnscopedTaggedReward("shipping_discount", { scopeMode: "quiz_bundle" })).toBe(false);
   });
 });

@@ -31,6 +31,10 @@ export const analyticsEvents = pgTable(
     index("analytics_events_shop_event_idx").on(t.shopId, t.eventName, t.occurredAt),
     index("analytics_events_order_idx").on(t.orderId),
     index("analytics_events_shop_customer_idx").on(t.shopId, t.customerId),
+    // Retention cleanup (cleanupOldAnalyticsEvents) filters/orders by this
+    // column shop-independently — the composite indexes above all lead with
+    // shopId, so they can't serve that scan.
+    index("analytics_events_occurred_at_idx").on(t.occurredAt),
     uniqueIndex("analytics_events_deduplication_key_idx").on(t.deduplicationKey),
   ],
 );

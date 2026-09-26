@@ -340,6 +340,8 @@ export const RewardTargetSchema = z.object({
   lineQuantityEquals: z.number().int().positive().optional(),
   maxUnitsTotal: z.number().int().positive().optional(),
   maxUnitsPerProduct: z.number().int().positive().optional(),
+  maxUnitsPerLine: z.number().int().positive().optional(),
+  maxUnitsPerVariant: z.number().int().positive().optional(),
   subscriptionMode: z.enum(["any", "subscription_only", "one_time_only"]).optional(),
   scopeMode: z.enum(["sitewide", "landing", "quiz_bundle", "tagged_offer"]).optional(),
   requiredOfferId: z.string().uuid().optional(),
@@ -421,6 +423,8 @@ const ProductTargetIdsSchema = z.object({
   lineQuantityEquals: z.number().int().positive().optional(),
   maxUnitsTotal: z.number().int().positive().optional(),
   maxUnitsPerProduct: z.number().int().positive().optional(),
+  maxUnitsPerLine: z.number().int().positive().optional(),
+  maxUnitsPerVariant: z.number().int().positive().optional(),
   subscriptionMode: z.enum(["any", "subscription_only", "one_time_only"]).default("any"),
   selectionMode: z.enum(["all", "cheapest", "most_expensive"]).default("all"),
   countRule: z.enum(["all", "unique"]).default("all"),
@@ -562,7 +566,9 @@ export const ShippingDiscountTierSchema = z
     minimumSubtotalCents: z.number().int().nonnegative(),
     maximumSubtotalCents: z.number().int().nonnegative().optional(),
     discountType: z.enum(["percentage", "fixed_amount"]),
-    discountValue: z.number().positive(),
+    // 0 is valid: a 0% tier that's the highest qualifying one means "no
+    // discount for this bracket" without falling through to a lower tier.
+    discountValue: z.number().nonnegative(),
     appliesWhen: ShippingTierAppliesWhenSchema.optional(),
   })
   .strict()

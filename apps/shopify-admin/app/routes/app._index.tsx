@@ -2,7 +2,7 @@ import { useLoaderData, Link } from "react-router";
 import { useMemo, useCallback, useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { offers, analyticsEvents } from "@promo/db";
-import { and, count, desc, eq, gte } from "drizzle-orm";
+import { and, count, eq, gte, sql } from "drizzle-orm";
 import { getDashboardWarnings } from "../lib/dashboard-warnings.server.js";
 import type { LoaderFunctionArgs } from "react-router";
 
@@ -33,42 +33,38 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    const [activeOffersResult, orderEventRows] = await Promise.all([
+    const [activeOffersResult, [totals]] = await Promise.all([
       db
         .select({ count: count() })
         .from(offers)
         .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")))
         .catch(() => [{ count: 0 }]),
-      db
-        .select({ orderId: analyticsEvents.orderId, properties: analyticsEvents.properties })
-        .from(analyticsEvents)
-        .where(
-          and(
-            eq(analyticsEvents.shopId, shopId),
-            eq(analyticsEvents.eventName, "order_placed_attributed"),
-            gte(analyticsEvents.occurredAt, since30d),
-          ),
+      // A SQL aggregate, not a capped row scan: the previous `.limit(2000)`
+      // JS-side sum silently undercounted once a shop passed 2000 attributed
+      // events in the window. One row is written per attributed offer, so an
+      // order with two offers produces two rows — DISTINCT ON order_id dedupes
+      // before summing, or a multi-offer order double-counts its own total.
+      db.execute<{ total_sales_cents: string | null; order_count: number }>(sql`
+        WITH deduped_orders AS (
+          SELECT DISTINCT ON (order_id)
+            order_id,
+            COALESCE((properties->>'subtotalCents')::bigint, 0) AS subtotal_cents
+          FROM analytics_events
+          WHERE shop_id = ${shopId}
+            AND event_name = 'order_placed_attributed'
+            AND occurred_at >= ${since30d}
+            AND order_id IS NOT NULL
+          ORDER BY order_id, occurred_at DESC
         )
-        .orderBy(desc(analyticsEvents.occurredAt))
-        .limit(2000)
-        .catch(() => []),
+        SELECT COALESCE(SUM(subtotal_cents), 0)::bigint AS total_sales_cents, COUNT(*)::int AS order_count
+        FROM deduped_orders
+      `).catch(() => [{ total_sales_cents: "0", order_count: 0 }]),
     ]);
 
     const warnings = await getDashboardWarnings(shopId, shopDomain).catch(() => []);
 
-    // One row is written per attributed offer, so an order with two offers
-    // produces two rows — dedupe by orderId before summing, or a multi-offer
-    // order double-counts its own total.
-    const seenOrderIds = new Set<string>();
-    let totalSalesCents = 0;
-    for (const row of orderEventRows) {
-      if (!row.orderId || seenOrderIds.has(row.orderId)) continue;
-      seenOrderIds.add(row.orderId);
-      const props = row.properties as Record<string, unknown> | null;
-      const subtotal = typeof props?.subtotalCents === "number" ? props.subtotalCents : 0;
-      totalSalesCents += subtotal;
-    }
-    const orderCount = seenOrderIds.size;
+    const totalSalesCents = Number(totals?.total_sales_cents ?? 0);
+    const orderCount = Number(totals?.order_count ?? 0);
     const avgOrderCents = orderCount > 0 ? Math.round(totalSalesCents / orderCount) : 0;
 
     return {

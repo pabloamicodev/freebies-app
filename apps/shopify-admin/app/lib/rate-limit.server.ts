@@ -1,6 +1,6 @@
 import { getDb } from "@promo/db";
 import { sql } from "drizzle-orm";
-import { getSharedRedis, resetSharedRedis } from "./redis.server.js";
+import { getSharedRedis, recordRedisFailure, resetSharedRedis } from "./redis.server.js";
 
 interface RateLimitOptions {
   limit: number;
@@ -47,6 +47,7 @@ async function redisCheckRateLimit(
     if (count <= options.limit) return { ok: true };
     return { ok: false, retryAfterSeconds: windowSeconds };
   } catch {
+    recordRedisFailure();
     resetSharedRedis();
     return null;
   }

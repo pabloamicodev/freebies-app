@@ -7,6 +7,8 @@ export const rateLimits = pgTable("rate_limits", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
   index("rate_limits_window_start_idx").on(t.windowStart),
+  // operational-retention's staleRateLimits cleanup filters by this column.
+  index("rate_limits_updated_at_idx").on(t.updatedAt),
 ]);
 
 export type RateLimit = typeof rateLimits.$inferSelect;

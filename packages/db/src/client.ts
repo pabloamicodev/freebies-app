@@ -13,10 +13,11 @@ export function getDb() {
 
     const normalizedUrl = normalizeDatabaseUrl(databaseUrl);
     _sql = postgres(normalizedUrl, {
-      // Kept low deliberately: each serverless function instance holds its
-      // own pool, and Neon's pooler has a hard ceiling shared across every
-      // concurrent instance — a high per-instance max exhausts it under load.
-      max: 3,
+      // Each serverless function instance holds its own pool against Neon's
+      // pooler, which has a hard ceiling shared across every concurrent
+      // instance. Raised from 3: the evaluate hot path plus background sync/cron
+      // work was serializing on the old ceiling under moderate load.
+      max: 8,
       idle_timeout: 20,
       connect_timeout: 10,
       ssl: isLocalDatabaseUrl(normalizedUrl) ? false : { rejectUnauthorized: true },
@@ -25,6 +26,17 @@ export function getDb() {
     _client = drizzle(_sql, { schema });
   }
   return _client;
+}
+
+/**
+ * Reserves a single dedicated connection from the pool. `pg_advisory_lock` /
+ * `pg_advisory_unlock` must run on the same connection, which the normal
+ * pooled `getDb()` client can't guarantee across awaits — callers must
+ * release the reservation (and unlock) themselves, in a `finally`.
+ */
+export async function reserveConnection() {
+  getDb(); // ensures _sql is initialized
+  return _sql!.reserve();
 }
 
 export async function closeDb(): Promise<void> {

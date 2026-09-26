@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  installPromoMetadataBridge,
   needsPromoMetadataPacking,
   packCartAddRequest,
   withPromoMetadata,
@@ -119,5 +120,33 @@ describe("packCartAddRequest", () => {
     const [packed, init] = await packCartAddRequest(request);
     expect(packed).toBe(request);
     expect(init).toBeUndefined();
+  });
+});
+
+describe("installPromoMetadataBridge", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("falls back to the original request if metadata packing throws", async () => {
+    const nativeFetch = vi.fn().mockResolvedValue(new Response("ok"));
+    vi.stubGlobal("window", {
+      fetch: nativeFetch,
+      location: { origin: "https://store.example", pathname: "/", search: "" },
+    });
+    vi.stubGlobal("document", { addEventListener: vi.fn() });
+
+    installPromoMetadataBridge();
+
+    // Content-type says multipart but the body isn't — formData() parsing rejects,
+    // which used to propagate out of window.fetch instead of falling back.
+    const badRequest = new Request("https://store.example/cart/add.js", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=x" },
+      body: "not actually multipart",
+    });
+
+    const response = await window.fetch(badRequest);
+    expect(response).toBeInstanceOf(Response);
+    expect(nativeFetch).toHaveBeenCalledTimes(1);
+    expect(nativeFetch).toHaveBeenCalledWith(badRequest, undefined);
   });
 });

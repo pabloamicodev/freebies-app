@@ -149,6 +149,14 @@ fn evaluate_product_reward(
     if reward.scope_mode == "landing" && !landing_anchor_qualifies(reward, input) {
         return vec![];
     }
+    // A tagged offer with no configured targets would otherwise discount any
+    // product carrying a copied/guessed offer id — fail closed instead.
+    if reward.scope_mode == "tagged_offer"
+        && reward.target_product_ids.is_empty()
+        && reward.target_variant_ids.is_empty()
+    {
+        return vec![];
+    }
 
     let product_ids: HashSet<&str> = reward
         .target_product_ids
@@ -175,7 +183,7 @@ fn evaluate_product_reward(
                 || line_offer_id(line).as_deref() == reward.required_offer_id.as_deref()
         })
         .filter(|line| {
-            let Some((variant_id, product_id)) = variant_and_product_id(line) else {
+            let Some((_, product_id)) = variant_and_product_id(line) else {
                 return false;
             };
             // Offer-level exclusions apply to the reward too, not only to the qualifying subtotal.
@@ -183,8 +191,7 @@ fn evaluate_product_reward(
                 return false;
             }
             (product_ids.is_empty() && variant_ids.is_empty())
-                || product_ids.contains(product_id.as_str())
-                || variant_ids.contains(variant_id.as_str())
+                || is_one_of(line, &product_ids, &variant_ids)
         })
         .filter(|line| {
             reward
@@ -248,27 +255,15 @@ fn evaluate_product_reward(
         return vec![];
     }
 
-    if reward.selection_mode == "cheapest" || reward.discount_type == "cheapest_item_free" {
+    let cheapest_first = reward.selection_mode == "cheapest" || reward.discount_type == "cheapest_item_free";
+    let most_expensive_first = reward.selection_mode == "most_expensive"
+        || reward.discount_type == "most_expensive_item_discount";
+    if cheapest_first || most_expensive_first {
         eligible.sort_by(|a, b| {
-            a.cost()
-                .amount_per_quantity()
-                .amount()
-                .as_f64()
-                .partial_cmp(&b.cost().amount_per_quantity().amount().as_f64())
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.id().cmp(b.id()))
-        });
-    } else if reward.selection_mode == "most_expensive"
-        || reward.discount_type == "most_expensive_item_discount"
-    {
-        eligible.sort_by(|a, b| {
-            b.cost()
-                .amount_per_quantity()
-                .amount()
-                .as_f64()
-                .partial_cmp(&a.cost().amount_per_quantity().amount().as_f64())
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.id().cmp(b.id()))
+            let ordering = line_price(a)
+                .partial_cmp(&line_price(b))
+                .unwrap_or(std::cmp::Ordering::Equal);
+            (if cheapest_first { ordering } else { ordering.reverse() }).then(a.id().cmp(b.id()))
         });
     }
 
@@ -288,15 +283,28 @@ fn evaluate_product_reward(
         .unwrap_or(i64::MAX);
     let mut candidates = Vec::new();
     let mut applied_by_product: HashMap<String, i64> = HashMap::new();
+    let mut applied_by_variant: HashMap<String, i64> = HashMap::new();
     for line in eligible {
         if remaining <= 0 {
             break;
         }
         let mut quantity = i64::from(*line.quantity()).min(remaining);
+        if let Some(per_line) = reward.max_units_per_line {
+            quantity = quantity.min(per_line);
+        }
         if let Some(per_product) = reward.max_units_per_product {
             let product_id = variant_and_product_id(line).map(|(_, product)| product).unwrap_or_default();
             let applied = applied_by_product.entry(product_id).or_insert(0);
             quantity = quantity.min((per_product - *applied).max(0));
+            *applied += quantity;
+            if quantity <= 0 {
+                continue;
+            }
+        }
+        if let Some(per_variant) = reward.max_units_per_variant {
+            let variant_id = variant_and_product_id(line).map(|(variant, _)| variant).unwrap_or_default();
+            let applied = applied_by_variant.entry(variant_id).or_insert(0);
+            quantity = quantity.min((per_variant - *applied).max(0));
             *applied += quantity;
             if quantity <= 0 {
                 continue;
@@ -350,6 +358,16 @@ fn landing_anchor_qualifies(reward: &CompiledProductReward, input: &Input) -> bo
         .iter()
         .map(String::as_str)
         .collect();
+    let target_product_ids: HashSet<&str> = reward
+        .target_product_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let target_variant_ids: HashSet<&str> = reward
+        .target_variant_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
     let quantity: i64 = input
         .cart()
         .lines()
@@ -358,7 +376,10 @@ fn landing_anchor_qualifies(reward: &CompiledProductReward, input: &Input) -> bo
         .filter(|line| landing_source(line).as_deref() == Some(required_source))
         .filter(|line| {
             if anchor_ids.is_empty() {
-                return true;
+                // No configured anchor variant — any tagged line counts except
+                // the reward's own targets, otherwise a customer could tag
+                // just the target product itself and self-unlock the reward.
+                return !is_one_of(line, &target_product_ids, &target_variant_ids);
             }
             variant_and_product_id(line)
                 .map(|(variant_id, _)| anchor_ids.contains(variant_id.as_str()))
@@ -383,11 +404,26 @@ fn evaluate_quiz_bundle_reward(
     reward: &CompiledProductReward,
     input: &Input,
 ) -> Vec<schema::ProductDiscountCandidate> {
+    let target_product_ids: HashSet<&str> = reward
+        .target_product_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let target_variant_ids: HashSet<&str> = reward
+        .target_variant_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let restrict_to_targets = !target_product_ids.is_empty() || !target_variant_ids.is_empty();
+
     let mut groups: BTreeMap<String, QuizGroup<'_>> = BTreeMap::new();
     for line in input.cart().lines() {
         let Some(bundle_id) = quiz_bundle_id(line) else {
             continue;
         };
+        if restrict_to_targets && !is_one_of(line, &target_product_ids, &target_variant_ids) {
+            continue;
+        }
         let group = groups.entry(bundle_id).or_insert_with(|| QuizGroup {
             paid: vec![],
             gifts: vec![],
@@ -410,7 +446,7 @@ fn evaluate_quiz_bundle_reward(
     }
 
     let mut candidates = vec![];
-    for (bundle_id, group) in groups {
+    for (_bundle_id, group) in groups {
         let Some(expected_paid_count) = group.expected_paid_count else {
             continue;
         };
@@ -429,6 +465,11 @@ fn evaluate_quiz_bundle_reward(
         let Some(target_cents) = group.target_cents else {
             continue;
         };
+        // A target of 0 (or negative) would discount the paid lines to free —
+        // reject it instead of silently treating it as a 100%-off bundle.
+        if target_cents <= 0 {
+            continue;
+        }
         if group.paid.is_empty() {
             continue;
         }
@@ -437,7 +478,7 @@ fn evaluate_quiz_bundle_reward(
             .iter()
             .map(|line| line.cost().subtotal_amount().amount().as_f64())
             .sum();
-        let discount_needed = current_total - target_cents as f64 / 100.0;
+        let discount_needed = (current_total - target_cents as f64 / 100.0).min(current_total);
         if discount_needed <= 0.0 {
             continue;
         }
@@ -638,59 +679,7 @@ fn evaluate_gift_offer(
         return candidates;
     }
 
-    // Backward-compatible fallback for already-published configs that predate
-    // per-reward gift validation. New publishes always populate giftRewards.
-    let gift_variant_set: HashSet<&str> =
-        offer.gift_variant_ids.iter().map(String::as_str).collect();
-    let gift_product_set: HashSet<&str> =
-        offer.gift_product_ids.iter().map(String::as_str).collect();
-    let max_gift_qty = offer.max_gift_quantity.unwrap_or(i64::MAX);
-    let mut gift_qty_applied: i64 = 0;
-    let mut candidates = Vec::new();
-
-    for line in input.cart().lines().iter() {
-        let line_quantity = *line.quantity() as i64;
-        if line_quantity <= 0 {
-            continue;
-        }
-        if line_type(line).as_deref() != Some(LINE_TYPE_GIFT)
-            || line_offer_id(line).as_deref() != Some(&offer.id)
-        {
-            continue;
-        }
-
-        let (variant_id, product_id) = match variant_and_product_id(line) {
-            Some(ids) => ids,
-            None => continue,
-        };
-
-        let target_matches = if !gift_variant_set.is_empty() {
-            gift_variant_set.contains(variant_id.as_str())
-        } else {
-            gift_product_set.contains(product_id.as_str())
-        };
-        if !target_matches {
-            // Tampered: claims to be this offer's gift but isn't an allowed variant/product.
-            continue;
-        }
-
-        let qty_remaining = max_gift_qty - gift_qty_applied;
-        if qty_remaining <= 0 {
-            break;
-        }
-        let qty_to_discount = line_quantity.min(qty_remaining);
-        gift_qty_applied += qty_to_discount;
-
-        candidates.push(make_candidate(
-            line.id().clone(),
-            qty_to_discount,
-            &offer.discount_type,
-            offer.discount_value,
-            "Free gift",
-        ));
-    }
-
-    candidates
+    vec![]
 }
 
 fn evaluate_discount_offer(
@@ -1119,7 +1108,7 @@ fn make_candidate(
         }
         _ => schema::ProductDiscountCandidateValue::FixedAmount(
             schema::ProductDiscountCandidateFixedAmount {
-                amount: shopify_function::scalars::Decimal(discount_value),
+                amount: shopify_function::scalars::Decimal(round_to_cents(discount_value)),
                 applies_to_each_item: Some(true),
             },
         ),
@@ -1159,11 +1148,33 @@ fn make_multi_line_fixed_candidate(
             .collect(),
         value: schema::ProductDiscountCandidateValue::FixedAmount(
             schema::ProductDiscountCandidateFixedAmount {
-                amount: shopify_function::scalars::Decimal(discount_value),
+                amount: shopify_function::scalars::Decimal(round_to_cents(discount_value)),
                 applies_to_each_item: Some(false),
             },
         ),
     }
+}
+
+/// Fixed-amount candidates are computed from floating-point subtraction (e.g.
+/// price-tier targets), which can leave artifacts like 7.500000000000004.
+/// Round to the nearest cent so Shopify sees a clean currency amount.
+fn round_to_cents(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+/// Shared by every reward-target check (eligible-line filter, landing anchor
+/// exclusion, quiz-bundle restriction) — one shared body instead of a
+/// duplicated closure per call site matters for the wasm size budget.
+fn line_price(line: &Lines) -> f64 {
+    line.cost().amount_per_quantity().amount().as_f64()
+}
+
+fn is_one_of(line: &Lines, product_ids: &HashSet<&str>, variant_ids: &HashSet<&str>) -> bool {
+    variant_and_product_id(line)
+        .map(|(variant_id, product_id)| {
+            variant_ids.contains(variant_id.as_str()) || product_ids.contains(product_id.as_str())
+        })
+        .unwrap_or(false)
 }
 
 fn variant_and_product_id(line: &Lines) -> Option<(String, String)> {
@@ -1204,9 +1215,7 @@ fn line_offer_version(line: &Lines) -> Option<String> {
 fn projected_volume_discount_cents(lines: &[&Lines], currency_code: &str) -> i64 {
     let mut groups: BTreeMap<String, VolumeDiscountGroup> = BTreeMap::new();
     for line in lines {
-        if metadata_value(line, "_bundle_item").as_deref() == Some("true")
-            || metadata_value(line, "_nektar_glp1").is_some()
-        {
+        if bundle_item(line).as_deref() == Some("true") || nektar_glp1(line).is_some() {
             continue;
         }
         let Merchandise::ProductVariant(variant) = line.merchandise() else {
@@ -1263,8 +1272,37 @@ fn projected_volume_discount_cents(lines: &[&Lines], currency_code: &str) -> i64
         .sum()
 }
 
+// Shared by every direct-attribute-with-packed-metadata-fallback lookup below —
+// keeping the `or_else` glue in one place instead of duplicated per field
+// matters for the discount function's wasm size budget.
+fn attr_or_metadata(direct: Option<&String>, line: &Lines, key: &str) -> Option<String> {
+    direct.cloned().or_else(|| metadata_value(line, key))
+}
+
 fn landing_source(line: &Lines) -> Option<String> {
-    metadata_value(line, "__landing_source")
+    attr_or_metadata(
+        line.landing_source().and_then(|attribute| attribute.value()),
+        line,
+        "__landing_source",
+    )
+}
+
+fn bundle_item(line: &Lines) -> Option<String> {
+    attr_or_metadata(
+        line.volume_discount_bundle_item()
+            .and_then(|attribute| attribute.value()),
+        line,
+        "_bundle_item",
+    )
+}
+
+fn nektar_glp1(line: &Lines) -> Option<String> {
+    attr_or_metadata(
+        line.volume_discount_nektar_glp_1()
+            .and_then(|attribute| attribute.value()),
+        line,
+        "_nektar_glp1",
+    )
 }
 
 fn page_url_condition_matches(page_url: &str, condition: &CompiledPageUrlCondition) -> bool {
@@ -1382,27 +1420,45 @@ fn cart_attribute_value(input: &Input, key: &str, config: &CompiledConfig) -> Op
 }
 
 fn quiz_bundle_id(line: &Lines) -> Option<String> {
-    metadata_value(line, "_quiz_bundle_id")
+    attr_or_metadata(
+        line.quiz_bundle_id().and_then(|attribute| attribute.value()),
+        line,
+        "_quiz_bundle_id",
+    )
 }
 
 fn quiz_target_cents(line: &Lines) -> Option<String> {
-    metadata_value(line, "_quiz_target_cents")
+    attr_or_metadata(
+        line.quiz_target_cents()
+            .and_then(|attribute| attribute.value()),
+        line,
+        "_quiz_target_cents",
+    )
 }
 
 fn quiz_expected_paid_count(line: &Lines) -> Option<String> {
-    metadata_value(line, "_quiz_expected_paid_count")
+    attr_or_metadata(
+        line.quiz_expected_paid_count()
+            .and_then(|attribute| attribute.value()),
+        line,
+        "_quiz_expected_paid_count",
+    )
 }
 
 fn quiz_free_gift(line: &Lines) -> Option<String> {
-    metadata_value(line, "_quiz_free_gift")
+    attr_or_metadata(
+        line.quiz_free_gift().and_then(|attribute| attribute.value()),
+        line,
+        "_quiz_free_gift",
+    )
 }
 
 fn cart_gift_tier(line: &Lines) -> Option<String> {
-    line.cart_gift_tier()
-        .as_ref()
-        .and_then(|attribute| attribute.value())
-        .cloned()
-        .or_else(|| metadata_value(line, "__cart_gift_tier"))
+    attr_or_metadata(
+        line.cart_gift_tier().and_then(|attribute| attribute.value()),
+        line,
+        "__cart_gift_tier",
+    )
 }
 
 fn metadata_value(line: &Lines, key: &str) -> Option<String> {
@@ -1711,7 +1767,8 @@ mod tests {
                 "giftVariantIds":["gid://shopify/ProductVariant/gift-v1"],"giftProductIds":[],
                 "cartValueThresholdCents":{threshold_cents},"maxGiftQuantity":{max_qty},
                 "discountType":"free","discountValue":100.0,"currencyCode":"USD",
-                "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true
+                "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+                "giftRewards":[{{"id":"reward-1","targetVariantIds":["gid://shopify/ProductVariant/gift-v1"],"discountType":"free","discountValue":100.0,"maxQuantity":{max_qty}}}]
             }}]}}"#
         )
     }
@@ -2631,7 +2688,7 @@ mod tests {
             "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
             "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
             "requirements":[],"orderRewards":[],"productRewards":[{
-                "id":"bundle-tier","targetProductIds":[],"targetVariantIds":[],"discountType":"percentage","discountValue":0,
+                "id":"bundle-tier","targetProductIds":[],"targetVariantIds":["gid://shopify/ProductVariant/a"],"discountType":"percentage","discountValue":0,
                 "subscriptionMode":"any","scopeMode":"tagged_offer","requiredOfferId":"offer-1","selectionMode":"all","countRule":"all",
                 "quantityTiers":[{"minimumQuantity":1,"discountType":"percentage","discountValue":20}],
                 "priceTiers":[],"discountPercentageOnGifts":100
@@ -2687,7 +2744,7 @@ mod tests {
             }]
         }]}"#;
         let lines = format!(
-            "[{},{},{}]",
+            "[{},{},{},{}]",
             scoped_line(
                 "gid://shopify/CartLine/1",
                 "gid://shopify/ProductVariant/protein",
@@ -2713,6 +2770,17 @@ mod tests {
                 "50.00",
                 1,
                 None,
+                None
+            ),
+            // A genuine (non-target) anchor line — the target lines above no
+            // longer count toward their own anchor requirement.
+            scoped_line(
+                "gid://shopify/CartLine/4",
+                "gid://shopify/ProductVariant/protein-lp-anchor",
+                "gid://shopify/Product/protein-lp-anchor",
+                "5.00",
+                1,
+                Some("protein-lp"),
                 None
             ),
         );
@@ -3276,5 +3344,184 @@ mod tests {
             let schema::ProductDiscountCandidateTarget::CartLine(target) = &candidate.targets[0];
             assert_eq!(target.quantity, Some(1));
         }
+    }
+
+    #[test]
+    fn max_units_per_line_caps_each_line_independently_without_accumulating() {
+        let reward = r#"{"id":"r","discountType":"free","discountValue":100,"scopeMode":"sitewide","maxUnitsPerLine":1}"#;
+        let offers = [product_offer("o1", 1, "", reward)];
+        let line_1 = regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/a", "gid://shopify/Product/a", "20.00", 3);
+        let line_2 = regular_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/a", "gid://shopify/Product/a", "20.00", 2);
+        let config = format!(r#"{{"offers":[{}]}}"#, offers.join(","));
+        let result = run_function_with_input(run, &cart_json(&format!("[{line_1},{line_2}]"), "100.00", &config)).unwrap();
+        let schema::CartOperation::ProductDiscountsAdd(op) = &result.operations[0] else { panic!("expected product discounts") };
+        assert_eq!(op.candidates.len(), 2, "each line gets its own independently-capped candidate");
+        for candidate in &op.candidates {
+            let schema::ProductDiscountCandidateTarget::CartLine(target) = &candidate.targets[0];
+            assert_eq!(target.quantity, Some(1));
+        }
+    }
+
+    #[test]
+    fn max_units_per_variant_accumulates_across_lines_of_the_same_variant() {
+        let reward = r#"{"id":"r","discountType":"free","discountValue":100,"scopeMode":"sitewide","maxUnitsPerVariant":1}"#;
+        let offers = [product_offer("o1", 1, "", reward)];
+        let line_1 = regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/a", "gid://shopify/Product/a", "20.00", 1);
+        let line_2 = regular_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/a", "gid://shopify/Product/a", "20.00", 1);
+        let config = format!(r#"{{"offers":[{}]}}"#, offers.join(","));
+        let result = run_function_with_input(run, &cart_json(&format!("[{line_1},{line_2}]"), "40.00", &config)).unwrap();
+        let schema::CartOperation::ProductDiscountsAdd(op) = &result.operations[0] else { panic!("expected product discounts") };
+        // Unlike maxUnitsPerLine, the cap is shared across every line of the same
+        // variant — once the first line exhausts it, later lines get nothing.
+        assert_eq!(op.candidates.len(), 1);
+        let schema::ProductDiscountCandidateTarget::CartLine(target) = &op.candidates[0].targets[0];
+        assert_eq!(target.id, "gid://shopify/CartLine/1");
+        assert_eq!(target.quantity, Some(1));
+    }
+
+    #[test]
+    fn fixed_amount_price_tier_discount_rounds_to_the_nearest_cent() {
+        let reward = r#"{"id":"r","discountType":"fixed_price","discountValue":0,"scopeMode":"sitewide","priceTiers":[{"quantity":1,"targetPricePerUnit":42.49}]}"#;
+        let offers = [product_offer("o1", 1, "", reward)];
+        let line = regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/a", "gid://shopify/Product/a", "49.99", 1);
+        let found = product_candidates(&offers, &[line], "49.99");
+        assert_eq!(found.len(), 1);
+        match &found[0].1 {
+            // 49.99 - 42.49 is 7.500000000000004 in f64 — must be rounded to 7.5.
+            schema::ProductDiscountCandidateValue::FixedAmount(value) => assert_eq!(value.amount.0, 7.5),
+            other => panic!("expected fixed amount, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tagged_offer_without_configured_targets_fails_closed() {
+        let reward = r#"{"id":"r","discountType":"free","discountValue":100,"scopeMode":"tagged_offer","requiredOfferId":"11111111-1111-1111-1111-111111111111"}"#;
+        let offers = [product_offer("o1", 1, "", reward)];
+        let tagged = regular_line(
+            "gid://shopify/CartLine/a",
+            "gid://shopify/ProductVariant/a",
+            "gid://shopify/Product/a",
+            "20.00",
+            1,
+        )
+        .replace(
+            "\"offerId\": null",
+            "\"offerId\": { \"value\": \"11111111-1111-1111-1111-111111111111\" }",
+        );
+        let found = product_candidates(&offers, &[tagged], "20.00");
+        assert!(
+            found.is_empty(),
+            "a tagged_offer reward with no configured targets must not discount anything"
+        );
+    }
+
+    #[test]
+    fn landing_anchor_self_reference_is_rejected_without_a_genuine_anchor_line() {
+        let config = r#"{"offers":[{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[],"orderRewards":[],"productRewards":[{
+                "id":"atlas-gifts","rewardType":"product_discount","targetProductIds":[],
+                "targetVariantIds":["gid://shopify/ProductVariant/gift"],"discountType":"free","discountValue":100,
+                "subscriptionMode":"any","scopeMode":"landing","requiredLineAttributeValue":"atlas-sk-otg",
+                "requiredAnchorVariantIds":[],"requiredAnchorMinQuantity":1,"requiresAnchorSubscription":false,
+                "priceTiers":[],"discountPercentageOnGifts":100
+            }]
+        }]}"#;
+        let self_only = scoped_line(
+            "gid://shopify/CartLine/1",
+            "gid://shopify/ProductVariant/gift",
+            "gid://shopify/Product/gift",
+            "20.00",
+            1,
+            Some("atlas-sk-otg"),
+            None,
+        );
+        let result = run_function_with_input(run, &cart_json(&format!("[{self_only}]"), "20.00", config))
+            .expect("should not error");
+        assert!(
+            result.operations.is_empty(),
+            "tagging only the target line must not unlock its own discount"
+        );
+
+        let atlas_kit = scoped_line(
+            "gid://shopify/CartLine/2",
+            "gid://shopify/ProductVariant/atlas-kit",
+            "gid://shopify/Product/atlas-kit",
+            "30.00",
+            1,
+            Some("atlas-sk-otg"),
+            None,
+        );
+        let with_anchor = format!("[{self_only},{atlas_kit}]");
+        let result = run_function_with_input(run, &cart_json(&with_anchor, "50.00", config))
+            .expect("should not error");
+        assert_eq!(
+            result.operations.len(),
+            1,
+            "a genuine tagged anchor line alongside the target must unlock the discount"
+        );
+    }
+
+    #[test]
+    fn quiz_bundle_reward_with_targets_only_counts_matching_lines() {
+        let config = r#"{"offers":[{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[],"orderRewards":[],"productRewards":[{
+                "id":"quiz","rewardType":"product_discount","targetProductIds":[],
+                "targetVariantIds":["gid://shopify/ProductVariant/p1"],
+                "discountType":"free","discountValue":100,"subscriptionMode":"any","scopeMode":"quiz_bundle",
+                "requiredAnchorVariantIds":[],"requiredAnchorMinQuantity":1,"requiresAnchorSubscription":false,
+                "priceTiers":[],"discountPercentageOnGifts":100
+            }]
+        }]}"#;
+        let p1 = scoped_line(
+            "gid://shopify/CartLine/1", "gid://shopify/ProductVariant/p1", "gid://shopify/Product/p1",
+            "50.00", 1, None, Some(("bundle-a", "8000", "2", false)),
+        );
+        let p2_other = scoped_line(
+            "gid://shopify/CartLine/2", "gid://shopify/ProductVariant/p2", "gid://shopify/Product/p2",
+            "50.00", 1, None, Some(("bundle-a", "8000", "2", false)),
+        );
+        // Only one matching (p1) paid line exists — the non-target p2 line must
+        // not count toward expectedPaidCount, so the bundle stays incomplete.
+        let incomplete = format!("[{p1},{p2_other}]");
+        let result = run_function_with_input(run, &cart_json(&incomplete, "100.00", config)).unwrap();
+        assert!(result.operations.is_empty());
+
+        let p1_second = scoped_line(
+            "gid://shopify/CartLine/3", "gid://shopify/ProductVariant/p1", "gid://shopify/Product/p1",
+            "50.00", 1, None, Some(("bundle-a", "8000", "2", false)),
+        );
+        let complete = format!("[{p1},{p1_second},{p2_other}]");
+        let result = run_function_with_input(run, &cart_json(&complete, "150.00", config)).unwrap();
+        assert_eq!(result.operations.len(), 1);
+    }
+
+    #[test]
+    fn quiz_bundle_target_of_zero_is_rejected() {
+        let config = r#"{"offers":[{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[],"orderRewards":[],"productRewards":[{
+                "id":"quiz","rewardType":"product_discount","targetProductIds":[],"targetVariantIds":[],
+                "discountType":"free","discountValue":100,"subscriptionMode":"any","scopeMode":"quiz_bundle",
+                "requiredAnchorVariantIds":[],"requiredAnchorMinQuantity":1,"requiresAnchorSubscription":false,
+                "priceTiers":[],"discountPercentageOnGifts":100
+            }]
+        }]}"#;
+        let paid = scoped_line(
+            "gid://shopify/CartLine/1", "gid://shopify/ProductVariant/p1", "gid://shopify/Product/p1",
+            "50.00", 1, None, Some(("bundle-a", "0", "1", false)),
+        );
+        let result = run_function_with_input(run, &cart_json(&format!("[{paid}]"), "50.00", config)).unwrap();
+        assert!(result.operations.is_empty(), "a target of 0 must not make the paid lines free");
     }
 }

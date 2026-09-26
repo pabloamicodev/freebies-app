@@ -42,6 +42,9 @@ export function parseCyclePricingFormData(formData: FormData) {
 }
 
 const MERCHANT_CODE_PREFIX = "freebies-cycle-pricing";
+// hpn-scripts-migration (the app this replaces) used this prefix; keep listing
+// and editing those plans so merchants aren't left with orphaned selling plans.
+const LEGACY_MERCHANT_CODE_PREFIX = "hpn-cycle-pricing";
 const GROUP_OPTION_NAME = "Subscription plan";
 
 const GROUP_FRAGMENT = `
@@ -283,7 +286,10 @@ export async function listCyclePricingPlans(client: CyclePricingClient): Promise
       };
     } = await graphQL(client, LIST_QUERY, { first: 50, after });
     for (const node of data.sellingPlanGroups.nodes) {
-      if (!node.merchantCode?.startsWith(MERCHANT_CODE_PREFIX)) continue;
+      const isOwned =
+        node.merchantCode?.startsWith(MERCHANT_CODE_PREFIX) ||
+        node.merchantCode?.startsWith(LEGACY_MERCHANT_CODE_PREFIX);
+      if (!isOwned) continue;
       const plan = parseGroup(node);
       if (plan) plans.push(plan);
     }

@@ -109,6 +109,16 @@ describe("tier contracts", () => {
     ).toBe(true);
   });
 
+  it("accepts a 0% shipping discount tier (highest qualifying tier can mean no discount)", () => {
+    expect(
+      ShippingDiscountTierSchema.safeParse({
+        minimumSubtotalCents: 5_000,
+        discountType: "percentage",
+        discountValue: 0,
+      }).success,
+    ).toBe(true);
+  });
+
   it("rejects an upper tier bound below its lower bound", () => {
     expect(
       ShippingDiscountTierSchema.safeParse({

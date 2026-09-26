@@ -11,6 +11,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import process from "node:process";
 import type { LegacyStorePreset } from "../apps/shopify-admin/app/lib/legacy-store-presets.server.js";
+import { ensureMainCondition } from "../apps/shopify-admin/app/lib/legacy-store-presets.server.js";
 
 const DEV_SHOP = "hpn-test-store.myshopify.com";
 const AMBROSIA_SHOP = "ambrosia-nutraceuticals.myshopify.com";
@@ -132,7 +133,9 @@ export function mapAmbrosiaPresetToDev(
     internalName: `[Ambrosia E2E] ${offer.key}`,
     description: `${offer.description} Development-store parity fixture; source state: ${DISABLED_SOURCE_RULES.has(offer.key) ? "disabled" : "active"}.`,
     status: DISABLED_SOURCE_RULES.has(offer.key) ? "draft" : "active",
-    conditions: structuredClone(offer.conditions),
+    // Same faithful no-op default as importLegacyPreset: publishing requires
+    // an enabled main condition, and most Ambrosia rules have none.
+    conditions: ensureMainCondition(structuredClone(offer.conditions)),
     rewards: offer.rewards.map((reward) => {
       const target = structuredClone(reward.target);
       if ("productIds" in target) target.productIds = mapProducts(target.productIds);

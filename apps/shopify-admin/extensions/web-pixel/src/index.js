@@ -104,9 +104,10 @@ function flush() {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
-// Extract session ID from init context (set by app embed before pixel loads)
+// A random per-load id: never the customer id, so pixel analytics carry no customer identifier
+// (customer attribution comes only from the signed app-proxy logged_in_customer_id).
 try {
-  sessionId = init?.data?.["customer"]?.["id"] ?? crypto.randomUUID();
+  sessionId = crypto.randomUUID();
 } catch {
   sessionId = "anon";
 }

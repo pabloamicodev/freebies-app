@@ -18,6 +18,13 @@ interface ShopifyGraphQLOptions {
   query: string;
   variables?: Record<string, unknown>;
   maxRetries?: number;
+  /** Overrides the default 10s request timeout — used by latency-sensitive
+   * callers on the evaluate hot path that would rather fail fast than block. */
+  timeoutMs?: number;
+  /** Skips the proactive 1s backoff when the cost bucket is nearly empty.
+   * That backoff protects background/bulk callers from throttling on the
+   * *next* call, which doesn't apply to a one-shot hot-path lookup. */
+  skipThrottleBackoff?: boolean;
 }
 
 interface GraphQLResponse<T> {
@@ -38,6 +45,8 @@ export async function shopifyGraphQL<T>({
   query,
   variables,
   maxRetries = 4,
+  timeoutMs = 10_000,
+  skipThrottleBackoff = false,
 }: ShopifyGraphQLOptions): Promise<T> {
   const url = `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
   let lastError: Error | null = null;
@@ -57,7 +66,7 @@ export async function shopifyGraphQL<T>({
           "X-Shopify-Access-Token": accessToken,
         },
         body: JSON.stringify({ query, variables }),
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (networkErr) {
       lastError = networkErr instanceof Error ? networkErr : new Error(String(networkErr));
@@ -96,7 +105,7 @@ export async function shopifyGraphQL<T>({
 
     // Proactively back off if the cost bucket is nearly empty (next call would throttle)
     const throttle = body.extensions?.cost?.throttleStatus;
-    if (throttle && throttle.currentlyAvailable < 100) {
+    if (!skipThrottleBackoff && throttle && throttle.currentlyAvailable < 100) {
       await sleep(1000);
     }
 

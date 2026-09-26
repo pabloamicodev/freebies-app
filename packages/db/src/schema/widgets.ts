@@ -1,5 +1,5 @@
 import {
-  pgTable, pgEnum, uuid, text, boolean, integer, timestamp, jsonb,
+  pgTable, pgEnum, uuid, text, boolean, integer, timestamp, jsonb, index,
 } from "drizzle-orm/pg-core";
 import { shops } from "./shops";
 import { offers } from "./offers";
@@ -11,50 +11,63 @@ export const widgetTypeEnum = pgEnum("widget_type", [
   "checkout_upsell", "fbt", "thank_you_upsell", "volume_discount",
 ]);
 
-export const widgets = pgTable("widgets", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  shopId: uuid("shop_id")
-    .notNull()
-    .references(() => shops.id, { onDelete: "cascade" }),
-  offerId: uuid("offer_id").references(() => offers.id, { onDelete: "cascade" }),
-  type: widgetTypeEnum("type").notNull(),
-  internalName: text("internal_name").notNull(),
-  title: text("title"),
-  subtitle: text("subtitle"),
-  /** Widget-specific config (colors, copy, layout). */
-  config: jsonb("config").notNull().default({}),
-  /** Theme overrides (CSS variables, class names). */
-  theme: jsonb("theme").notNull().default({}),
-  isEnabled: boolean("is_enabled").notNull().default(true),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const widgets = pgTable(
+  "widgets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    shopId: uuid("shop_id")
+      .notNull()
+      .references(() => shops.id, { onDelete: "cascade" }),
+    offerId: uuid("offer_id").references(() => offers.id, { onDelete: "cascade" }),
+    type: widgetTypeEnum("type").notNull(),
+    internalName: text("internal_name").notNull(),
+    title: text("title"),
+    subtitle: text("subtitle"),
+    /** Widget-specific config (colors, copy, layout). */
+    config: jsonb("config").notNull().default({}),
+    /** Theme overrides (CSS variables, class names). */
+    theme: jsonb("theme").notNull().default({}),
+    isEnabled: boolean("is_enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("widgets_shop_id_idx").on(t.shopId),
+    index("widgets_offer_id_idx").on(t.offerId),
+  ],
+);
 
 export type Widget = typeof widgets.$inferSelect;
 export type NewWidget = typeof widgets.$inferInsert;
 
-export const widgetPlacements = pgTable("widget_placements", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  shopId: uuid("shop_id")
-    .notNull()
-    .references(() => shops.id, { onDelete: "cascade" }),
-  widgetId: uuid("widget_id")
-    .notNull()
-    .references(() => widgets.id, { onDelete: "cascade" }),
-  /**
-   * Placement type:
-   * "theme_app_block" | "app_embed" | "css_selector_injection" |
-   * "checkout_extension" | "thank_you_extension" | "headless_mount" | "pos"
-   */
-  placementType: text("placement_type").notNull(),
-  /** CSS selector for injection-based placement. */
-  selector: text("selector"),
-  /** Page rules — JSONB: { pageType: "product" | "cart" | "all" | "custom", urlPattern?: string } */
-  pageRule: jsonb("page_rule"),
-  sortOrder: integer("sort_order").notNull().default(0),
-  isEnabled: boolean("is_enabled").notNull().default(true),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const widgetPlacements = pgTable(
+  "widget_placements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    shopId: uuid("shop_id")
+      .notNull()
+      .references(() => shops.id, { onDelete: "cascade" }),
+    widgetId: uuid("widget_id")
+      .notNull()
+      .references(() => widgets.id, { onDelete: "cascade" }),
+    /**
+     * Placement type:
+     * "theme_app_block" | "app_embed" | "css_selector_injection" |
+     * "checkout_extension" | "thank_you_extension" | "headless_mount" | "pos"
+     */
+    placementType: text("placement_type").notNull(),
+    /** CSS selector for injection-based placement. */
+    selector: text("selector"),
+    /** Page rules — JSONB: { pageType: "product" | "cart" | "all" | "custom", urlPattern?: string } */
+    pageRule: jsonb("page_rule"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    isEnabled: boolean("is_enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("widget_placements_widget_id_idx").on(t.widgetId),
+  ],
+);
 
 export type WidgetPlacement = typeof widgetPlacements.$inferSelect;

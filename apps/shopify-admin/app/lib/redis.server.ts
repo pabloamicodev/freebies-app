@@ -5,6 +5,22 @@ let restRedis: RestRedisClient | null = null;
 let connection: Promise<SharedRedisClient | null> | null = null;
 let lastConnectionError: Error | null = null;
 
+// Circuit breaker: after any Redis failure, skip Redis entirely for a cool-off
+// window and fall straight to the DB-backed fallback. Without this, an outage
+// meant every request paid Redis's timeout cost (up to REST_TIMEOUT_MS or
+// ioredis's connectTimeout) before falling back, on every single request.
+const CIRCUIT_BREAKER_MS = 30_000;
+const REST_TIMEOUT_MS = 500;
+let circuitOpenUntil = 0;
+
+export function recordRedisFailure(): void {
+  circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_MS;
+}
+
+function isCircuitOpen(): boolean {
+  return Date.now() < circuitOpenUntil;
+}
+
 export interface SharedRedisClient {
   ping(): Promise<unknown>;
   eval(script: string, numberOfKeys: number, ...args: Array<string | number>): Promise<unknown>;
@@ -43,7 +59,7 @@ class RestRedisClient implements SharedRedisClient {
       },
       body: JSON.stringify(command),
       cache: "no-store",
-      signal: AbortSignal.timeout(3_000),
+      signal: AbortSignal.timeout(REST_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -87,6 +103,8 @@ export function isRedisConfigured(): boolean {
 }
 
 export async function getSharedRedis(): Promise<SharedRedisClient | null> {
+  if (isCircuitOpen()) return null;
+
   const restConfig = getRestConfig();
   if (restConfig) {
     restRedis ??= new RestRedisClient(restConfig.url, restConfig.token);
@@ -108,6 +126,7 @@ export async function getSharedRedis(): Promise<SharedRedisClient | null> {
       enableOfflineQueue: false,
       lazyConnect: true,
       connectTimeout: 3_000,
+      commandTimeout: REST_TIMEOUT_MS,
     });
     redis.on("error", (error) => {
       // Command callers own fallback behavior; avoid unhandled error events.
@@ -124,6 +143,7 @@ export async function getSharedRedis(): Promise<SharedRedisClient | null> {
     })
     .catch((error: unknown) => {
       lastConnectionError = sanitizeRedisConnectionError(error);
+      recordRedisFailure();
       client.disconnect(false);
       if (redis === client) redis = null;
       return null;

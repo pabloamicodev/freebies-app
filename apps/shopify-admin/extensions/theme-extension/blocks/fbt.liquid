@@ -7,7 +7,7 @@
 <div
   id="pe-fbt-{{ block.id }}"
   data-promo-widget="fbt"
-  data-offer-id="{{ block.settings.offer_id }}"
+  data-offer-id="{{ block.settings.offer_id | escape }}"
   data-currency="{{ cart.currency.iso_code }}"
   {{ block.shopify_attributes }}
 ></div>
@@ -16,9 +16,11 @@
   document.addEventListener('DOMContentLoaded', function() {
     var container = document.getElementById('pe-fbt-{{ block.id }}');
     if (!container) return;
+    var attempts = 0;
 
     // Wait for promo engine runtime to load, then init FBT
     function tryInit() {
+      attempts += 1;
       if (window.PromoEngine && window.initFbtWidget) {
         var offerId = container.dataset.offerId;
         var currency = container.dataset.currency || 'USD';
@@ -69,8 +71,11 @@
           container.setAttribute('data-promo-engine-error', 'true');
           console.warn('[Promo Engine] FBT block could not load:', error);
         });
-      } else {
+      } else if (attempts < 50) {
         setTimeout(tryInit, 200);
+      } else {
+        container.setAttribute('data-promo-engine-error', 'true');
+        console.warn('[Promo Engine] FBT block could not load: app embed is not enabled.');
       }
     }
     tryInit();

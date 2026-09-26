@@ -11,6 +11,8 @@ vi.mock("./shopify-fetch.server.js", () => ({
 import {
   createCyclePricingPlan,
   deleteCyclePricingPlan,
+  getCyclePricingPlan,
+  listCyclePricingPlans,
   parseCyclePricingFormData,
   updateCyclePricingPlan,
 } from "./subscription-cycle-pricing.server.js";
@@ -132,6 +134,61 @@ describe("subscription cycle pricing server", () => {
     shopifyGraphQLMock.mockResolvedValueOnce({ sellingPlanGroup: null });
     const result = await updateCyclePricingPlan(client, existing, input);
     expect(result.userErrors[0]?.message).toContain("no result");
+    expect(shopifyGraphQLMock).toHaveBeenCalledTimes(1);
+  });
+
+  function rawSellingPlanGroupNode(id: string, merchantCode: string) {
+    return {
+      id,
+      name: "Plan",
+      merchantCode,
+      sellingPlans: {
+        nodes: [
+          {
+            id: `${id.replace("SellingPlanGroup", "SellingPlan")}`,
+            name: "Plan",
+            billingPolicy: { interval: "MONTH", intervalCount: 1, maxCycles: 1 },
+            pricingPolicies: [
+              { adjustmentType: "PERCENTAGE", adjustmentValue: { percentage: 0 } },
+              { afterCycle: 1, adjustmentType: "FIXED_AMOUNT", adjustmentValue: { amount: "2" } },
+            ],
+          },
+        ],
+      },
+      products: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+    };
+  }
+
+  it("lists both this app's and the legacy hpn-cycle-pricing plans, excluding other apps' plans", async () => {
+    const legacyNode = rawSellingPlanGroupNode(
+      "gid://shopify/SellingPlanGroup/10",
+      "hpn-cycle-pricing-abc",
+    );
+    const foreignNode = rawSellingPlanGroupNode(
+      "gid://shopify/SellingPlanGroup/20",
+      "some-other-app-plan",
+    );
+    shopifyGraphQLMock.mockResolvedValueOnce({
+      sellingPlanGroups: {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [legacyNode, foreignNode],
+      },
+    });
+    const plans = await listCyclePricingPlans(client);
+    expect(plans.map((plan) => plan.id)).toEqual([legacyNode.id]);
+  });
+
+  it("getCyclePricingPlan returns null for a Selling Plan Group this app doesn't own", async () => {
+    const foreignNode = rawSellingPlanGroupNode(
+      "gid://shopify/SellingPlanGroup/20",
+      "some-other-app-plan",
+    );
+    shopifyGraphQLMock.mockResolvedValueOnce({
+      sellingPlanGroups: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [foreignNode] },
+    });
+    const plan = await getCyclePricingPlan(client, foreignNode.id);
+    expect(plan).toBeNull();
+    // Never fetches product associations for an id it doesn't own.
     expect(shopifyGraphQLMock).toHaveBeenCalledTimes(1);
   });
 

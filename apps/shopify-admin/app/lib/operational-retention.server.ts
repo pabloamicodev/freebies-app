@@ -10,6 +10,7 @@ export type OperationalRetentionSettings = {
   rateLimitHours?: number;
   processedWebhookDays?: number;
   failedWebhookDays?: number;
+  stuckProcessingWebhookDays?: number;
 };
 
 export function operationalRetentionCutoffs(
@@ -28,6 +29,14 @@ export function operationalRetentionCutoffs(
     failedWebhooks: new Date(
       now.getTime() - (settings.failedWebhookDays ?? 30) * day,
     ),
+    // A "processing" row this old means the request that claimed it died
+    // without ever reaching the success/failure update (e.g. the function was
+    // killed mid-request) — Shopify has almost certainly stopped retrying
+    // that webhook_id by now, so the row is just dead weight, not a claim
+    // anything will ever come back to finish.
+    stuckProcessingWebhooks: new Date(
+      now.getTime() - (settings.stuckProcessingWebhookDays ?? 1) * day,
+    ),
   };
 }
 
@@ -39,6 +48,7 @@ export async function cleanupOperationalState(
   rateLimits: number;
   processedWebhooks: number;
   failedWebhooks: number;
+  stuckProcessingWebhooks: number;
 }> {
   const cutoffs = operationalRetentionCutoffs(now, settings);
   const staleRateLimits = await db
@@ -63,10 +73,20 @@ export async function cleanupOperationalState(
       ),
     )
     .returning({ webhookId: webhookDeliveries.webhookId });
+  const stuckProcessingWebhooks = await db
+    .delete(webhookDeliveries)
+    .where(
+      and(
+        eq(webhookDeliveries.status, "processing"),
+        lt(webhookDeliveries.lastAttemptAt, cutoffs.stuckProcessingWebhooks),
+      ),
+    )
+    .returning({ webhookId: webhookDeliveries.webhookId });
 
   return {
     rateLimits: staleRateLimits.length,
     processedWebhooks: processedWebhooks.length,
     failedWebhooks: failedWebhooks.length,
+    stuckProcessingWebhooks: stuckProcessingWebhooks.length,
   };
 }

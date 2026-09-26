@@ -51,7 +51,7 @@ class PromoTodayOfferBlock extends HTMLElement {
   connectedCallback() {
     const ids = this.getAttribute("offer-ids");
     this.filterOfferIds = ids ? ids.split(",").map((s) => s.trim()) : [];
-    this.attachShadow({ mode: "open" });
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this.render([]);
 
     this.unsubscribe = on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
@@ -116,6 +116,8 @@ class PromoTodayOfferBlock extends HTMLElement {
   }
 }
 
-customElements.define("promo-today-offer-block", PromoTodayOfferBlock);
+if (!customElements.get("promo-today-offer-block")) {
+  customElements.define("promo-today-offer-block", PromoTodayOfferBlock);
+}
 
 export {};

@@ -1,5 +1,7 @@
-import { getDb, analyticsEvents } from "@promo/db";
-import { lt } from "drizzle-orm";
+import { getDb, analyticsEvents, type Db } from "@promo/db";
+import { inArray, lt } from "drizzle-orm";
+
+const CLEANUP_BATCH_SIZE = 5_000;
 
 export interface ReconcileOrderData {
   shopId: string;
@@ -39,9 +41,23 @@ export async function reconcileOrderAttribution(data: ReconcileOrderData): Promi
   }
 }
 
-export async function cleanupOldAnalyticsEvents(retentionDays = 90): Promise<number> {
-  const db = getDb();
+export async function cleanupOldAnalyticsEvents(retentionDays = 90, db: Db = getDb()): Promise<number> {
   const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
-  const deleted = await db.delete(analyticsEvents).where(lt(analyticsEvents.occurredAt, cutoff)).returning({ id: analyticsEvents.id });
-  return deleted.length;
+
+  // A single unbounded DELETE ... RETURNING here could try to delete and hand
+  // back millions of rows/ids after being off for a while — batch it instead,
+  // deleting by id so no batch ever RETURNINGs more than CLEANUP_BATCH_SIZE.
+  let totalDeleted = 0;
+  for (;;) {
+    const batch = await db
+      .select({ id: analyticsEvents.id })
+      .from(analyticsEvents)
+      .where(lt(analyticsEvents.occurredAt, cutoff))
+      .limit(CLEANUP_BATCH_SIZE);
+    if (batch.length === 0) break;
+    await db.delete(analyticsEvents).where(inArray(analyticsEvents.id, batch.map((row) => row.id)));
+    totalDeleted += batch.length;
+    if (batch.length < CLEANUP_BATCH_SIZE) break;
+  }
+  return totalDeleted;
 }

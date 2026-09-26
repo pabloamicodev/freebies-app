@@ -188,6 +188,7 @@ export async function evaluate(
       const existingOfferGifts = extractGiftLines(input.cart).filter((gift) => gift.offerId === offer.id);
       const giftRewards = offer.rewards.filter((reward) => reward.rewardType === "product_gift");
       const giftRewardById = new Map(giftRewards.map((reward) => [reward.id, reward]));
+      const declinedGiftRewards = new Set(input.declinedGiftRewards ?? []);
 
       // Remove stale/tampered lines even while the offer still qualifies. A
       // gift remains valid only for the current offer version, reward id and
@@ -217,6 +218,9 @@ export async function evaluate(
       // Generate cart actions for rewards
       for (const reward of offer.rewards.sort((a, b) => a.sortOrder - b.sortOrder)) {
         if (reward.rewardType === "product_gift" && reward.isAutoAdd) {
+          // Customer explicitly declined this reward (removed the gift line or
+          // dismissed the slider without picking) — don't force it back in.
+          if (declinedGiftRewards.has(`${offer.id}:${reward.id}`)) continue;
           const target = reward.target as { variantId?: string; variantIds?: string[]; fallbackVariantIds?: string[] };
           const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
           const qty = reward.quantity ?? 1;

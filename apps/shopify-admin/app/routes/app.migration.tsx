@@ -20,14 +20,68 @@ import { getLegacyStorePreset, importLegacyPreset, inspectLegacyPreset } from ".
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { shopId, shopDomain, db } = await getShopContext(request);
-  const legacyPreset = getLegacyStorePreset(shopDomain);
+// hpn-scripts-migration (the app this replaces) automatic discount titles —
+// see its app/lib/presets/index.ts DISCOUNT_TITLES. Both apps' discounts
+// would stack if the old one is left active through cutover.
+const OLD_APP_DISCOUNT_TITLES: Record<string, string> = {
+  "hpn-supplements.myshopify.com": "HPN Scripts Migration Discounts",
+  "gettrusupps.myshopify.com": "GetTru Scripts Migration Discounts",
+  "onesolsupps.myshopify.com": "One Sol Scripts Migration Discounts",
+  "ambrosia-nutraceuticals.myshopify.com": "Ambrosia Scripts Migration Discounts",
+};
 
-  const [shadowMode, activeOffers, draftOffers] = await Promise.all([
+interface LegacyDiscountNodeResult {
+  data?: {
+    discountNodes?: {
+      nodes?: Array<{
+        discount?: { __typename?: string; title?: string; status?: string } | null;
+      }>;
+    };
+  };
+  errors?: Array<{ message?: string }>;
+}
+
+async function findActiveOldAppDiscount(
+  admin: { graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response> },
+  title: string,
+): Promise<boolean> {
+  try {
+    const response = await admin.graphql(
+      `#graphql
+      query FindOldAppDiscount($query: String!) {
+        discountNodes(first: 10, query: $query) {
+          nodes {
+            discount {
+              __typename
+              ... on DiscountAutomaticApp { title status }
+            }
+          }
+        }
+      }`,
+      { variables: { query: `title:${JSON.stringify(title)} AND type:app` } },
+    );
+    const data = (await response.json()) as LegacyDiscountNodeResult;
+    if (data.errors?.length) return false;
+    return (data.data?.discountNodes?.nodes ?? []).some(
+      (node) => node.discount?.__typename === "DiscountAutomaticApp" && node.discount.status === "ACTIVE",
+    );
+  } catch {
+    // Fail closed on the warning (don't block the page), but never claim
+    // parity checks passed if we couldn't actually verify them.
+    return false;
+  }
+}
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { shopId, shopDomain, db, admin } = await getShopContext(request);
+  const legacyPreset = getLegacyStorePreset(shopDomain);
+  const oldAppDiscountTitle = OLD_APP_DISCOUNT_TITLES[shopDomain.toLowerCase()] ?? null;
+
+  const [shadowMode, activeOffers, draftOffers, oldAppDiscountActive] = await Promise.all([
     isShadowModeEnabled(shopId),
     db.select({ count: count() }).from(offers).where(and(eq(offers.shopId, shopId), eq(offers.status, "active"))),
     db.select({ count: count() }).from(offers).where(and(eq(offers.shopId, shopId), eq(offers.status, "draft"))),
+    oldAppDiscountTitle ? findActiveOldAppDiscount(admin, oldAppDiscountTitle) : Promise.resolve(false),
   ]);
 
   return {
@@ -35,6 +89,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     shadowMode,
     activeOffers: activeOffers[0]?.count ?? 0,
     draftOffers: draftOffers[0]?.count ?? 0,
+    oldAppDiscountTitle,
+    oldAppDiscountActive,
     legacyPreset: legacyPreset ? {
       sourceName: legacyPreset.sourceName,
       notes: legacyPreset.notes,
@@ -72,6 +128,29 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return { success: null };
 };
 
+const CUTOVER_CHECKLIST = [
+  {
+    id: "deactivate-old-discount",
+    label: "Deactivate the old app's automatic discount",
+    description: "In Shopify Admin → Discounts, deactivate the legacy Scripts Migration Discounts entry so the two apps' discounts never stack.",
+  },
+  {
+    id: "remove-old-embed",
+    label: "Remove the old gift widget app embed",
+    description: 'Open the theme editor → App embeds and disable the legacy "cart-gift-tiers" app embed block.',
+  },
+  {
+    id: "uninstall-old-app",
+    label: "Uninstall the old app",
+    description: "Remove the legacy hpn-scripts-migration app from installed apps once its discount and embed are off.",
+  },
+  {
+    id: "disable-shadow-mode",
+    label: "Disable shadow mode",
+    description: "Only after the three steps above are done — turn off shadow mode so Promo Engine is the sole promotion system.",
+  },
+];
+
 const MIGRATION_STEPS = [
   { id: "audit",     label: "Phase 0 — Audit current BOGOS offers",        description: "Export and document all BOGOS offers, settings, and Scripts before any changes." },
   { id: "scripts",   label: "Scripts sunset check",                          description: "Verify no legacy Shopify Scripts are active. Scripts stop executing June 30, 2026." },
@@ -102,14 +181,27 @@ function StatusBadge({ status }: { status: StepStatus }) {
 }
 
 export default function MigrationPage() {
-  const { shadowMode, activeOffers, draftOffers, legacyPreset } = useLoaderData<typeof loader>();
+  const { shadowMode, activeOffers, draftOffers, legacyPreset, oldAppDiscountTitle, oldAppDiscountActive } =
+    useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const [stepStatuses, setStepStatuses] = useState<Record<string, StepStatus>>(
     () => Object.fromEntries(MIGRATION_STEPS.map((s) => [s.id, "pending" as StepStatus]))
   );
+  const [cutoverStatuses, setCutoverStatuses] = useState<Record<string, StepStatus>>(
+    () => Object.fromEntries(CUTOVER_CHECKLIST.map((s) => [s.id, "pending" as StepStatus]))
+  );
 
   const doneCount  = Object.values(stepStatuses).filter((v) => v === "done").length;
   const progress   = Math.round((doneCount / MIGRATION_STEPS.length) * 100);
+
+  function cycleCutoverStatus(id: string) {
+    const order: StepStatus[] = ["pending", "running", "done", "error"];
+    setCutoverStatuses((prev) => {
+      const cur = prev[id] ?? "pending";
+      const next = order[(order.indexOf(cur) + 1) % order.length];
+      return { ...prev, [id]: next } as Record<string, StepStatus>;
+    });
+  }
 
   function cycleStatus(id: string) {
     const order: StepStatus[] = ["pending", "running", "done", "error"];
@@ -166,6 +258,19 @@ export default function MigrationPage() {
           </p>
         </div>
       </div>
+
+      {oldAppDiscountActive && (
+        <div className="b-banner b-banner-red" role="alert" style={{ marginBottom: 16 }}>
+          <div className="b-banner-body">
+            <div className="b-banner-title">The old app's automatic discount is still active</div>
+            <p className="b-banner-text">
+              &quot;{oldAppDiscountTitle}&quot; is active in Shopify Discounts. If Promo Engine goes live
+              while it's still on, both apps' discounts will stack. Deactivate it in Shopify Admin →
+              Discounts before disabling shadow mode.
+            </p>
+          </div>
+        </div>
+      )}
 
       {actionData && "success" in actionData && actionData.success && <div className="b-banner b-banner-green" role="status">{actionData.success}</div>}
       {actionData && "error" in actionData && <div className="b-banner b-banner-red" role="alert">{actionData.error}</div>}
@@ -278,6 +383,57 @@ export default function MigrationPage() {
                     style={{ cursor: "pointer" }}
                   >
                     <StatusBadge status={stepStatuses[step.id] ?? "pending"} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Cutover checklist */}
+      <div className="b-table-wrap" style={{ marginTop: 16 }}>
+        <div className="b-card-header" style={{ borderBottom: "1px solid var(--border)" }}>
+          Cutover Checklist
+        </div>
+        <table className="b-table">
+          <thead>
+            <tr>
+              <th style={{ width: 32 }}>#</th>
+              <th>Step</th>
+              <th>Description</th>
+              <th style={{ width: 110 }}>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {CUTOVER_CHECKLIST.map((step, i) => (
+              <tr key={step.id}>
+                <td>
+                  <span className="b-text-sm b-text-muted">{i + 1}</span>
+                </td>
+                <td>
+                  <span
+                    className="b-text-sm b-text-bold"
+                    style={{
+                      textDecoration: cutoverStatuses[step.id] === "done" ? "line-through" : "none",
+                      color: cutoverStatuses[step.id] === "done" ? "var(--text-muted)" : "var(--text)",
+                    }}
+                  >
+                    {step.label}
+                  </span>
+                </td>
+                <td>
+                  <span className="b-text-xs b-text-sub">{step.description}</span>
+                </td>
+                <td>
+                  <button
+                    className="b-btn-plain"
+                    type="button"
+                    title="Click to advance status"
+                    onClick={() => cycleCutoverStatus(step.id)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    <StatusBadge status={cutoverStatuses[step.id] ?? "pending"} />
                   </button>
                 </td>
               </tr>

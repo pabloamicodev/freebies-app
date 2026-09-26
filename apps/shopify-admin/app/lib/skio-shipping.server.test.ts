@@ -50,13 +50,71 @@ describe("Skio shipping configuration", () => {
   beforeEach(() => shopifyGraphQLMock.mockReset());
 
   it("reads app-owned JSON and falls back safely when it is missing or invalid", async () => {
-    shopifyGraphQLMock.mockResolvedValueOnce({ shop: { id: "gid://shopify/Shop/1", config: null } });
-    await expect(loadSkioShippingConfig(client)).resolves.toEqual({ config: { tiers: [] }, configValid: true, configError: null });
+    shopifyGraphQLMock.mockResolvedValueOnce({
+      shop: { id: "gid://shopify/Shop/1", config: null, legacyConfig: null },
+    });
+    await expect(loadSkioShippingConfig(client)).resolves.toEqual({
+      config: { tiers: [] },
+      configValid: true,
+      configError: null,
+      importedFromLegacy: false,
+    });
 
-    shopifyGraphQLMock.mockResolvedValueOnce({ shop: { id: "gid://shopify/Shop/1", config: { jsonValue: { tiers: [{ id: "bad" }] } } } });
+    shopifyGraphQLMock.mockResolvedValueOnce({
+      shop: {
+        id: "gid://shopify/Shop/1",
+        config: { jsonValue: { tiers: [{ id: "bad" }] } },
+        legacyConfig: null,
+      },
+    });
     const invalid = await loadSkioShippingConfig(client);
     expect(invalid.configValid).toBe(false);
     expect(invalid.config.tiers).toEqual([]);
+  });
+
+  it("imports the legacy hpn_scripts shop metafield as a one-time fallback when $app is empty", async () => {
+    shopifyGraphQLMock.mockResolvedValueOnce({
+      shop: { id: "gid://shopify/Shop/1", config: null, legacyConfig: { jsonValue: config } },
+    });
+    await expect(loadSkioShippingConfig(client)).resolves.toEqual({
+      config,
+      configValid: true,
+      configError: null,
+      importedFromLegacy: true,
+    });
+  });
+
+  it("ignores an empty or invalid legacy metafield and stays on the empty $app config", async () => {
+    shopifyGraphQLMock.mockResolvedValueOnce({
+      shop: { id: "gid://shopify/Shop/1", config: null, legacyConfig: { jsonValue: { tiers: [] } } },
+    });
+    await expect(loadSkioShippingConfig(client)).resolves.toEqual({
+      config: { tiers: [] },
+      configValid: true,
+      configError: null,
+      importedFromLegacy: false,
+    });
+
+    shopifyGraphQLMock.mockResolvedValueOnce({
+      shop: { id: "gid://shopify/Shop/1", config: null, legacyConfig: { jsonValue: { tiers: [{ id: "bad" }] } } },
+    });
+    await expect(loadSkioShippingConfig(client)).resolves.toMatchObject({ importedFromLegacy: false });
+  });
+
+  it("never falls back to legacy once $app already has its own config", async () => {
+    shopifyGraphQLMock.mockResolvedValueOnce({
+      shop: {
+        id: "gid://shopify/Shop/1",
+        config: { jsonValue: config },
+        legacyConfig: { jsonValue: { tiers: [] } },
+      },
+    });
+    await expect(loadSkioShippingConfig(client)).resolves.toEqual({
+      config,
+      configValid: true,
+      configError: null,
+      importedFromLegacy: false,
+    });
   });
 
   it("writes a validated value through metafieldsSet", async () => {

@@ -52,6 +52,32 @@ export function isConditionEnforcedByFunction(conditionType: string): boolean {
   return FUNCTION_CONDITION_TYPES.has(conditionType);
 }
 
+const PRODUCT_DISCOUNT_REWARD_TYPES = new Set([
+  "product_discount",
+  "bundle_discount",
+  "upsell_discount",
+]);
+
+/**
+ * "tagged_offer" and "quiz_bundle" rewards apply to whatever line carries a
+ * client-set attribute (a required offer id / quiz bundle id) — there's no
+ * server-verified anchor like `specific_product` gives other scope modes. If
+ * such a reward has no product/variant allowlist, a shopper could set that
+ * attribute on an arbitrary line and unlock the discount on it. (Landing
+ * rewards are intentionally excluded — those anchors are enforced elsewhere.)
+ */
+export function isUnscopedTaggedReward(rewardType: string, target: unknown): boolean {
+  if (!PRODUCT_DISCOUNT_REWARD_TYPES.has(rewardType)) return false;
+  const t = (target && typeof target === "object" ? target : {}) as Record<string, unknown>;
+  if (t.scopeMode !== "tagged_offer" && t.scopeMode !== "quiz_bundle") return false;
+  const hasAllowlist =
+    Boolean(t.productId) ||
+    Boolean((t.productIds as unknown[] | undefined)?.length) ||
+    Boolean(t.variantId) ||
+    Boolean((t.variantIds as unknown[] | undefined)?.length);
+  return !hasAllowlist;
+}
+
 export async function validateOffersPublishable(
   db: Db,
   shopId: string,
@@ -181,6 +207,13 @@ export async function validateOffersPublishable(
           error: `Cannot publish "${offer.internalName}": reward quantity must be at least 1.`,
         };
       }
+      if (isUnscopedTaggedReward(reward.rewardType, reward.target)) {
+        const scopeMode = (reward.target as { scopeMode?: string })?.scopeMode;
+        return {
+          ok: false,
+          error: `Cannot publish "${offer.internalName}": a ${scopeMode} reward needs a product or variant allowlist — without one, any line tagged with the matching attribute could unlock this discount.`,
+        };
+      }
     }
   }
 
@@ -211,9 +244,22 @@ export async function republishIfActive(
     invalidateOfferDefinitions(shopId);
     return null;
   }
+  // The edit is already saved; an active offer whose new state can't be validated or pushed
+  // would otherwise ride along with the next unrelated publish. Pause it instead.
   const validation = await validateOffersPublishable(db, shopId, [offerId]);
-  if (!validation.ok) return validation.error ?? "Offer is not publishable.";
-  return publishShopConfig(shopId, shopDomain);
+  const publishError = validation.ok
+    ? await publishShopConfig(shopId, shopDomain)
+    : (validation.error ?? "Offer is not publishable.");
+  if (!publishError) return null;
+
+  await db
+    .update(offers)
+    .set({ status: "paused", updatedAt: new Date() })
+    .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+  const rollbackError = await publishShopConfig(shopId, shopDomain);
+  return rollbackError
+    ? `${publishError} The offer was paused, but re-publishing the Shopify configuration also failed: ${rollbackError}`
+    : `${publishError} The offer was paused so the change can't go live; fix it and activate it again.`;
 }
 
 /**

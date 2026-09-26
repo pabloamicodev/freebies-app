@@ -43,6 +43,24 @@ export interface LegacyStorePreset {
   notes: string[];
 }
 
+/**
+ * Most imported legacy drafts have no main condition (the source app enforced
+ * eligibility entirely through line attributes / anchor variants, which the
+ * Function can't securely trust as a *main* condition). offer-publish-flow's
+ * validateOffersPublishable refuses to publish any offer without an enabled
+ * main condition, so a threshold-0 cart_value condition — always true, since
+ * cart value can never be negative — is substituted in as a faithful no-op.
+ */
+export const DEFAULT_MAIN_CONDITION: ConditionPreset = {
+  conditionType: "cart_value",
+  operator: "gte",
+  value: { thresholdCents: 0, currencyCode: "USD", includeGiftValues: false },
+};
+
+export function ensureMainCondition(conditions: ConditionPreset[]): ConditionPreset[] {
+  return conditions.length > 0 ? conditions : [DEFAULT_MAIN_CONDITION];
+}
+
 const landingTarget = (
   target: Record<string, unknown>,
   source: string,
@@ -147,7 +165,10 @@ const HPN_PRESET: LegacyStorePreset = {
               "gid://shopify/ProductVariant/40608348438665",
               "gid://shopify/ProductVariant/40608348373129",
             ],
-            maxUnitsTotal: 2,
+            // Source frees min(1, qty) on only the FIRST cart line per free
+            // variant (required_variants_free_variants) — a per-variant cap,
+            // not a shared pool across lines.
+            maxUnitsPerVariant: 1,
             subscriptionMode: "any",
           },
           label: "Free Planta samples",
@@ -197,7 +218,9 @@ const HPN_PRESET: LegacyStorePreset = {
               "gid://shopify/ProductVariant/44633124995209",
               "gid://shopify/ProductVariant/44633124864137",
             ],
-            maxUnitsTotal: 2,
+            // Source frees min(1, qty) on EVERY cart line of each free variant
+            // (required_product_with_free_variants) — a per-line cap.
+            maxUnitsPerLine: 1,
             subscriptionMode: "any",
           },
           label: "Free one-week pouches",
@@ -235,6 +258,9 @@ const ONE_SOL_PRESET: LegacyStorePreset = {
           target: {
             scopeMode: "sitewide",
             variantIds: ONE_SOL_VARIANTS,
+            // Source discounts only 1 unit per cart line (applyOneTimePurchaseDiscountRule),
+            // regardless of the line's quantity — see "discounts only 1 of 3 units" test.
+            maxUnitsPerLine: 1,
             subscriptionMode: "one_time_only",
           },
           label: "One-time purchase discount",
@@ -562,7 +588,9 @@ function truLandingGift(
         discountType: "free",
         value: { amount: 100, currencyCode: "USD" },
         target: landingTarget(
-          { productIds: [productId], subscriptionMode: "any" },
+          // Source frees 1 unit per gift product (landing_scoped_product_discount,
+          // discountPercentage: 100 applied to the single gift line).
+          { productIds: [productId], subscriptionMode: "any", maxUnitsPerProduct: 1 },
           TRU_SOURCE,
           TRU_VARIANTS,
           minimumQuantity,
@@ -687,7 +715,11 @@ const GETTRU_PRESET: LegacyStorePreset = {
       key: "quiz-bundle-price-match",
       internalName: "[HPN preset] Quiz bundle price match",
       publicTitle: "Product Quiz Bundle",
-      description: "Imported from hpn-scripts-migration. Created as a draft for review.",
+      // The source rule (quiz_bundle_price_match) has no product IDs — it matches
+      // purely on the client-set _quiz_bundle_id line attribute. It needs a
+      // product allowlist before activation is possible here.
+      description:
+        "Imported from hpn-scripts-migration. Created as a draft for review. Needs product allowlist before activation.",
       type: "discount",
       priority: 130,
       conditions: [],
@@ -705,7 +737,8 @@ const GETTRU_PRESET: LegacyStorePreset = {
       key: "quiz-bundle-free-shipping",
       internalName: "[HPN preset] Quiz bundle free shipping",
       publicTitle: "Product Quiz Bundle",
-      description: "Imported from hpn-scripts-migration. Created as a draft for review.",
+      description:
+        "Disabled in the hpn-scripts-migration source configuration. Imported as a draft for parity and future review.",
       type: "discount",
       priority: 131,
       conditions: [],
@@ -802,19 +835,18 @@ export async function importLegacyPreset(db: Db, shopId: string, preset: LegacyS
         .returning({ id: offers.id });
       if (!createdOffer) throw new Error(`Failed to create ${presetOffer.internalName}.`);
 
-      if (presetOffer.conditions.length > 0)
-        await tx.insert(offerConditions).values(
-          presetOffer.conditions.map((condition, index) => ({
-            shopId,
-            offerId: createdOffer.id,
-            scope: "main" as const,
-            conditionType: condition.conditionType,
-            operator: condition.operator,
-            value: condition.value,
-            sortOrder: index,
-            isEnabled: true,
-          })),
-        );
+      await tx.insert(offerConditions).values(
+        ensureMainCondition(presetOffer.conditions).map((condition, index) => ({
+          shopId,
+          offerId: createdOffer.id,
+          scope: "main" as const,
+          conditionType: condition.conditionType,
+          operator: condition.operator,
+          value: condition.value,
+          sortOrder: index,
+          isEnabled: true,
+        })),
+      );
       await tx.insert(offerRewards).values(
         presetOffer.rewards.map((reward, index) => ({
           shopId,

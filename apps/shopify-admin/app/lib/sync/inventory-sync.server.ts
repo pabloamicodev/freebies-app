@@ -64,7 +64,6 @@ export async function syncInventoryFromWebhook(
   shopDomain: string,
   accessToken: string,
   inventoryItemId: number,
-  availableQuantity: number,
   db: Db = getDb(),
 ): Promise<void> {
   const gid = `gid://shopify/InventoryItem/${inventoryItemId}`;
@@ -76,7 +75,11 @@ export async function syncInventoryFromWebhook(
       await tx
         .update(variantCache)
         .set({
-          inventoryQuantity: availableQuantity,
+          // The webhook's `available` is one location's quantity; the variant's
+          // total inventoryQuantity (already fetched above, across all locations)
+          // is the correct cache value — using the per-location number here
+          // undercounted stock for any variant tracked at multiple locations.
+          inventoryQuantity: variant.inventoryQuantity,
           inventoryPolicy: variant.inventoryPolicy,
           availableForSale: variant.availableForSale,
           syncedAt: new Date(),

@@ -5,25 +5,29 @@
 {% endcomment %}
 
 <promo-volume-discount
-  offer-id="{{ block.settings.offer_id }}"
+  offer-id="{{ block.settings.offer_id | escape }}"
   variant-id="{{ product.selected_or_first_available_variant.id | prepend: 'gid://shopify/ProductVariant/' }}"
   currency="{{ cart.currency.iso_code }}"
   {{ block.shopify_attributes }}
 ></promo-volume-discount>
 
 <script>
-  // Update variant-id when variant selection changes (product page)
+  // Update variant-id on every promo-volume-discount element when the variant
+  // selection changes (product page). Registered once globally (not once per
+  // block instance) so N blocks on one page don't add N duplicate listeners.
   document.addEventListener('DOMContentLoaded', function() {
-    document.querySelectorAll('promo-volume-discount').forEach(function(el) {
-      document.addEventListener('variant:changed', function(e) {
-        var variantId = e.detail && e.detail.variant && e.detail.variant.id;
-        if (variantId) {
-          el.setAttribute('variant-id', 'gid://shopify/ProductVariant/' + variantId);
-          window.dispatchEvent(new CustomEvent('promo-engine:product-changed', {
-            detail: { variantId: 'gid://shopify/ProductVariant/' + variantId }
-          }));
-        }
+    if (window.__promoVolumeDiscountListenerInstalled) return;
+    window.__promoVolumeDiscountListenerInstalled = true;
+    document.addEventListener('variant:changed', function(e) {
+      var variantId = e.detail && e.detail.variant && e.detail.variant.id;
+      if (!variantId) return;
+      var gid = 'gid://shopify/ProductVariant/' + variantId;
+      document.querySelectorAll('promo-volume-discount').forEach(function(el) {
+        el.setAttribute('variant-id', gid);
       });
+      window.dispatchEvent(new CustomEvent('promo-engine:product-changed', {
+        detail: { variantId: gid }
+      }));
     });
   });
 </script>

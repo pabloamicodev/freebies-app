@@ -6,9 +6,12 @@ import {
 } from "./product-sync.server.js";
 
 describe("catalog sync GraphQL queries", () => {
-  it("keeps the product page query free of nested high-cardinality connections", () => {
+  it("fetches variants inline with the product page, but not collections", () => {
     expect(PRODUCTS_QUERY).toContain("products(first: $first, after: $after)");
-    expect(PRODUCTS_QUERY).not.toContain("variants(first:");
+    // Variants ride along in the same round trip as the product page now —
+    // almost no product has more than the inline page size, so this avoids a
+    // per-product follow-up call for the overwhelming majority of the catalog.
+    expect(PRODUCTS_QUERY).toContain("variants(first: $variantsFirst)");
     expect(PRODUCTS_QUERY).not.toContain("collections(first:");
   });
 

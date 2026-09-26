@@ -1,5 +1,4 @@
 import type { LoaderFunctionArgs } from "react-router";
-import * as Sentry from "@sentry/node";
 import { isCronRequestAuthorized } from "../lib/cron-auth.server.js";
 import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
 import { drainProductSyncQueue } from "../lib/sync/product-sync.server.js";
@@ -12,7 +11,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const result = await drainProductSyncQueue({ maxSteps: 6, maxRuntimeMs: 45_000 });
     return apiJson(request, { ok: true, processedSteps: result.steps });
   } catch (error) {
-    Sentry.captureException(error, { tags: { cron: "catalog-sync" } });
+    // handleApiError already captures + flushes to Sentry — capturing here too
+    // just doubled every catalog-sync failure into two issues.
     return handleApiError(request, error, "cron.catalog-sync");
   }
 }

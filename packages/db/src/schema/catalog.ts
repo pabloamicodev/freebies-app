@@ -107,25 +107,31 @@ export const catalogSyncJobs = pgTable(
 export type CatalogSyncJob = typeof catalogSyncJobs.$inferSelect;
 
 /** Gift clone products created by the app in clone_product mode. */
-export const giftCloneProducts = pgTable("gift_clone_products", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  shopId: uuid("shop_id")
-    .notNull()
-    .references(() => shops.id, { onDelete: "cascade" }),
-  offerId: uuid("offer_id")
-    .notNull()
-    .references(() => offers.id, { onDelete: "cascade" }),
-  rewardId: uuid("reward_id").notNull(),
-  /** Source product GID (the actual product being gifted). */
-  sourceProductGid: text("source_product_gid").notNull(),
-  sourceVariantGid: text("source_variant_gid").notNull(),
-  /** Clone product GID (price=0 or discounted, hidden from search). */
-  cloneProductGid: text("clone_product_gid").notNull(),
-  cloneVariantGid: text("clone_variant_gid").notNull(),
-  cloneHandle: text("clone_handle").notNull(),
-  isActive: boolean("is_active").notNull().default(true),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const giftCloneProducts = pgTable(
+  "gift_clone_products",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    shopId: uuid("shop_id")
+      .notNull()
+      .references(() => shops.id, { onDelete: "cascade" }),
+    offerId: uuid("offer_id")
+      .notNull()
+      .references(() => offers.id, { onDelete: "cascade" }),
+    rewardId: uuid("reward_id").notNull(),
+    /** Source product GID (the actual product being gifted). */
+    sourceProductGid: text("source_product_gid").notNull(),
+    sourceVariantGid: text("source_variant_gid").notNull(),
+    /** Clone product GID (price=0 or discounted, hidden from search). */
+    cloneProductGid: text("clone_product_gid").notNull(),
+    cloneVariantGid: text("clone_variant_gid").notNull(),
+    cloneHandle: text("clone_handle").notNull(),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("gift_clone_products_offer_id_idx").on(t.offerId),
+  ],
+);
 
 export type GiftCloneProduct = typeof giftCloneProducts.$inferSelect;

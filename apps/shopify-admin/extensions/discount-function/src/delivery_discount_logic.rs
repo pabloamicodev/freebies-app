@@ -60,14 +60,24 @@ pub fn run(input: Input) -> Result<schema::CartDeliveryOptionsDiscountsGenerateR
         if !shipping_offer_qualifies(offer, input.cart().lines()) {
             continue;
         }
-        let Some(value) =
-            tiered_delivery_discount_value(offer, subtotal_cents, has_subscription_line)
-        else {
+        let is_scoped = offer.scope_mode != "sitewide";
+        let value = tiered_delivery_discount_value(offer, subtotal_cents, has_subscription_line);
+        let Some(value) = value else {
+            // A scoped (landing/quiz) offer that qualifies wins outright —
+            // no falling through to a lower-priority or sitewide offer when
+            // it simply has no matching tier (source: shippingDiscountResult
+            // returns immediately once a scoped rule's gate passes).
+            if is_scoped {
+                return Ok(empty_result());
+            }
             continue;
         };
 
         let eligible_groups = targeted_delivery_groups(offer, delivery_groups);
         if eligible_groups.is_empty() {
+            if is_scoped {
+                return Ok(empty_result());
+            }
             continue;
         }
 
@@ -77,7 +87,7 @@ pub fn run(input: Input) -> Result<schema::CartDeliveryOptionsDiscountsGenerateR
                     selection_strategy: schema::DeliveryDiscountSelectionStrategy::All,
                     candidates: vec![schema::DeliveryDiscountCandidate {
                         associated_discount_code: None,
-                        message: None,
+                        message: offer.title.clone(),
                         targets: eligible_groups
                             .iter()
                             .map(|group| {
@@ -241,9 +251,14 @@ fn tiered_delivery_discount_value(
                 && tier
                     .maximum_subtotal_cents
                     .is_none_or(|maximum| subtotal_cents <= maximum)
-                && tier.discount_value > 0.0
         })
         .max_by_key(|tier| tier.minimum_subtotal_cents)?;
+
+    // The highest qualifying tier is selected first; only then do we check its
+    // own value. A 0% tier must not fall through to a lower, non-zero tier.
+    if matching_tier.discount_value <= 0.0 {
+        return None;
+    }
 
     match matching_tier.discount_type.as_str() {
         "percentage" => Some(schema::DeliveryDiscountCandidateValue::Percentage(
@@ -866,6 +881,90 @@ mod tests {
         assert_eq!(percentage(&plain_cart), 100.0, "carts without the landing source get the sitewide rule");
 
         let below_landing_tier = run_with_lines(r#"["SHIPPING"]"#, "10.00", &config, &groups, &line("lp", "10.00"));
-        assert_eq!(percentage(&below_landing_tier), 100.0, "a landing cart below its tier falls back to sitewide");
+        assert!(
+            below_landing_tier.operations.is_empty(),
+            "a qualifying landing cart with no matching tier gets no discount, not a sitewide fallback"
+        );
+    }
+
+    #[test]
+    fn zero_percent_highest_tier_wins_and_yields_no_discount() {
+        let offer = r#"{
+            "id":"ship-1","priority":100,"targetGroupTypes":null,
+            "tiers":[
+                {"minimumSubtotalCents":0,"discountType":"percentage","discountValue":50.0,"appliesWhen":null},
+                {"minimumSubtotalCents":5000,"discountType":"percentage","discountValue":0.0,"appliesWhen":null}
+            ]
+        }"#;
+        let config = shipping_config(&format!("[{offer}]"));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
+        let result = run_with(r#"["SHIPPING"]"#, "80.00", &config, &groups);
+        assert!(
+            result.operations.is_empty(),
+            "the highest qualifying tier is 0% — it must win, not fall through to the 50% tier"
+        );
+    }
+
+    #[test]
+    fn shipping_candidate_message_is_the_offer_title() {
+        let offer = one_tier_offer(0, "percentage", 100.0, "").replace(
+            "\"id\":\"ship-1\"",
+            "\"id\":\"ship-1\",\"title\":\"Free shipping over $50\"",
+        );
+        let config = shipping_config(&format!("[{offer}]"));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
+        let result = run_with(r#"["SHIPPING"]"#, "10.00", &config, &groups);
+        match &result.operations[0] {
+            schema::DeliveryOperation::DeliveryDiscountsAdd(op) => {
+                assert_eq!(
+                    op.candidates[0].message.as_deref(),
+                    Some("Free shipping over $50")
+                );
+            }
+            other => panic!("expected DeliveryDiscountsAdd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scoped_offer_qualifying_with_no_matching_tier_returns_no_discount() {
+        let sitewide = r#"{
+            "id":"sitewide","priority":1,"scopeMode":"sitewide","targetGroupTypes":null,
+            "tiers":[{"minimumSubtotalCents":0,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}]
+        }"#;
+        let quiz = r#"{
+            "id":"quiz","priority":999,"scopeMode":"quiz_bundle","targetGroupTypes":null,
+            "tiers":[{"minimumSubtotalCents":999999,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}]
+        }"#;
+        let config = shipping_config(&format!("[{sitewide},{quiz}]"));
+        let groups = format!(
+            "[{}]",
+            group(
+                "gid://shopify/CartDeliveryGroup/1",
+                "ONE_TIME_PURCHASE",
+                false
+            )
+        );
+        let complete_bundle = r#"[
+          {"quantity":1,"cost":{"subtotalAmount":{"amount":"4.00","currencyCode":"USD"}},"lineTypeAttribute":null,"cartGiftTierAttribute":null,"landingSourceAttribute":null,"quizBundleIdAttribute":{"value":"quiz-1"},"quizFreeGiftAttribute":{"value":"false"},"quizExpectedPaidCountAttribute":{"value":"1"},"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/1"}}
+        ]"#;
+        let result = run_with_lines(r#"["SHIPPING"]"#, "10.00", &config, &groups, complete_bundle);
+        assert!(
+            result.operations.is_empty(),
+            "the qualifying quiz-bundle offer has no matching tier, so it must not fall back to sitewide"
+        );
     }
 }

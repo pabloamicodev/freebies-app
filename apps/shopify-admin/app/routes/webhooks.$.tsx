@@ -13,6 +13,7 @@ import { syncMarketsForShop } from "../lib/sync/market-sync.server.js";
 import { reconcileOrderAttribution } from "../lib/sync/analytics-reconcile.server.js";
 import { dispatchIntegrationEvents, PermanentIntegrationError } from "../lib/integration-dispatcher.server.js";
 import * as Sentry from "@sentry/node";
+import { waitUntil } from "@vercel/functions";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -22,6 +23,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
  */
 export const action = async ({ request }: ActionFunctionArgs) => {
   const webhookId = request.headers.get("x-shopify-webhook-id");
+  const triggeredAt = request.headers.get("x-shopify-triggered-at");
   const { topic, shop, payload } = await authenticate.webhook(request);
   let deliveryClaimed = false;
 
@@ -126,7 +128,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         break;
 
       case "APP_UNINSTALLED":
-        await handleAppUninstalled(shop);
+        await handleAppUninstalled(shop, triggeredAt);
         break;
 
       case "CUSTOMERS_DATA_REQUEST":
@@ -175,6 +177,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         Sentry.captureException(stateErr, { tags: { topic, shop, context: "webhook-state" } });
       }
     }
+    // Vercel can freeze the function the instant this response is sent — flush
+    // before returning or the captured exceptions above may never be sent.
+    waitUntil(Sentry.flush(2000));
     return new Response("Temporary error", { status: 503, headers: { "Retry-After": "30" } });
   }
 
@@ -398,7 +403,7 @@ async function handleInventoryUpdate(shop: string, payload: InventoryWebhookPayl
   const shopRecord = await getShopForWebhook(shop);
   if (!shopRecord) return;
   const accessToken = await decryptToken(shopRecord.accessTokenEncrypted);
-  await syncInventoryFromWebhook(shopRecord.id, shop, accessToken, payload.inventory_item_id, payload.available);
+  await syncInventoryFromWebhook(shopRecord.id, shop, accessToken, payload.inventory_item_id);
 }
 
 async function handleMarketChange(shop: string) {
@@ -506,11 +511,39 @@ async function handleOrderCancelled(shop: string, order: OrderWebhookPayload) {
 // Admin API calls are possible here: gift clone products and the discount's
 // function_config metafield stay in the store. Only local state is cleaned up.
 // Every step is idempotent so Shopify retries (on 503) are safe.
-async function handleAppUninstalled(shop: string) {
+async function handleAppUninstalled(shop: string, triggeredAt: string | null) {
   const db = getDb();
+
+  // Shopify can deliver/retry this webhook after a faster reinstall already
+  // happened (afterAuth sets installedAt=now()). Trust the reinstall over a
+  // stale uninstall: otherwise the reinstalled shop loses its discount ids
+  // and gets archived offers moments after coming back up.
+  if (triggeredAt) {
+    const triggeredDate = new Date(triggeredAt);
+    if (!Number.isNaN(triggeredDate.getTime())) {
+      const [current] = await db
+        .select({ installedAt: shops.installedAt })
+        .from(shops)
+        .where(eq(shops.myshopifyDomain, shop))
+        .limit(1);
+      if (current && current.installedAt > triggeredDate) {
+        console.info(`[webhooks] APP_UNINSTALLED skipped: shop reinstalled after trigger — shop=${shop}`);
+        return;
+      }
+    }
+  }
+
   const [shopRecord] = await db
     .update(shops)
-    .set({ isActive: false, uninstalledAt: new Date() })
+    .set({
+      isActive: false,
+      uninstalledAt: new Date(),
+      // Cleared so a reinstall can't inherit a discount node Shopify may have
+      // deleted (or that a slow ensureDiscountNodes call would otherwise
+      // trust without verifying — see discount-node.server.ts).
+      discountId: null,
+      deliveryDiscountId: null,
+    })
     .where(eq(shops.myshopifyDomain, shop))
     .returning({ id: shops.id });
 
@@ -558,10 +591,19 @@ async function handleCustomersDataRequest(shop: string, payload: CustomerGdprPay
   if (!shopId || !customerId) return;
 
   const db = getDb();
+  // The web pixel historically sent the numeric customer id (or its GID) as
+  // sessionId rather than customerId — match both columns or that older data
+  // is silently missing from the compliance export.
   const events = await db
     .select()
     .from(analyticsEvents)
-    .where(and(eq(analyticsEvents.shopId, shopId), inArray(analyticsEvents.customerId, customerIds)));
+    .where(and(
+      eq(analyticsEvents.shopId, shopId),
+      or(
+        inArray(analyticsEvents.customerId, customerIds),
+        inArray(analyticsEvents.sessionId, customerIds),
+      ),
+    ));
 
   const cartTokens = Array.from(new Set(events.flatMap((event) => event.cartToken ? [event.cartToken] : [])));
   const mutationLogs = cartTokens.length > 0
@@ -618,10 +660,16 @@ async function handleCustomersRedact(shop: string, payload: CustomerGdprPayload)
 
   // Collect session/cart identifiers linked to this customer before deletion,
   // so we can also purge cartMutationLogs (which has no customerId column).
+  // Same historical sessionId-as-customer-id quirk as the data request handler —
+  // match both columns so redaction actually erases that older data too.
+  const customerEventMatch = or(
+    inArray(analyticsEvents.customerId, customerIds),
+    inArray(analyticsEvents.sessionId, customerIds),
+  );
   const customerEvents = await db
     .select({ sessionId: analyticsEvents.sessionId, cartToken: analyticsEvents.cartToken })
     .from(analyticsEvents)
-    .where(and(eq(analyticsEvents.shopId, shopId), inArray(analyticsEvents.customerId, customerIds)));
+    .where(and(eq(analyticsEvents.shopId, shopId), customerEventMatch));
 
   const sessionIds = [...new Set(customerEvents.map((e) => e.sessionId).filter(Boolean) as string[])];
   const cartTokens = [...new Set(customerEvents.map((e) => e.cartToken).filter(Boolean) as string[])];
@@ -629,7 +677,7 @@ async function handleCustomersRedact(shop: string, payload: CustomerGdprPayload)
   await db.transaction(async (tx) => {
     const deleted = await tx
       .delete(analyticsEvents)
-      .where(and(eq(analyticsEvents.shopId, shopId), inArray(analyticsEvents.customerId, customerIds)))
+      .where(and(eq(analyticsEvents.shopId, shopId), customerEventMatch))
       .returning({ id: analyticsEvents.id });
 
     await tx
@@ -675,6 +723,11 @@ async function handleShopRedact(shop: string) {
   } catch (err) {
     console.error("GDPR SHOP_REDACT: failed to purge sessions", err instanceof Error ? err.message : err);
   }
+
+  // webhookDeliveries has no shopId FK (only shopDomain, kept for dedup
+  // lookups that run before a shop row necessarily exists) — it isn't reached
+  // by the shops.id cascade below, so it needs its own explicit purge.
+  await db.delete(webhookDeliveries).where(eq(webhookDeliveries.shopDomain, shop));
 
   // Deleting the shop row cascades to every table that references it
   // (offers, product/variant cache, analytics, audit logs, gift clones, ...) —

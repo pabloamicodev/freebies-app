@@ -17,7 +17,7 @@ export const subscriptionCyclePricingPlanInputSchema = z.object({
   name: z.string().trim().min(1, "Name is required"),
   intervalUnit: sellingPlanIntervalSchema,
   intervalCount: z.number().int().positive(),
-  totalCycles: z.number().int().min(2, "A cycle-pricing plan needs at least two billing cycles"),
+  totalCycles: z.number().int().positive(),
   firstCycleDiscount: cycleDiscountValueSchema,
   recurringDiscount: cycleDiscountValueSchema,
   productIds: z.array(productGidSchema).min(1, "Choose at least one product").refine(

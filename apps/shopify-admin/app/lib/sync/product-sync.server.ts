@@ -8,7 +8,8 @@ import { and, asc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { shopifyGraphQL } from "../shopify-fetch.server.js";
 import { decryptToken } from "../token-crypto.server.js";
 
-const PRODUCTS_PER_PAGE = 10;
+const PRODUCTS_PER_PAGE = 50;
+const VARIANTS_PER_PRODUCT_PAGE = 100;
 const DB_VARIANT_BATCH_SIZE = 500;
 const JOB_LEASE_MS = 5 * 60_000;
 const MAX_JOB_ATTEMPTS = 5;
@@ -42,7 +43,10 @@ interface ShopifyProduct {
   variants: { nodes: ShopifyVariant[]; pageInfo: PageInfo };
 }
 
-type ShopifyProductSummary = Omit<ShopifyProduct, "collections" | "variants">;
+// Variants come inline with the products page now (paged further only for
+// the rare product with more than VARIANTS_PER_PRODUCT_PAGE variants) —
+// only collections still need a separate per-product round trip.
+type ShopifyProductSummary = Omit<ShopifyProduct, "collections">;
 interface ProductVariantsPage {
   product: { variants: { pageInfo: PageInfo; nodes: ShopifyVariant[] } } | null;
 }
@@ -51,12 +55,19 @@ interface ProductCollectionsPage {
 }
 
 export const PRODUCTS_QUERY = `
-  query GetProducts($first: Int!, $after: String) {
+  query GetProducts($first: Int!, $after: String, $variantsFirst: Int!) {
     products(first: $first, after: $after) {
       pageInfo { hasNextPage endCursor }
       nodes {
         id title handle vendor productType tags status
         featuredMedia { ... on MediaImage { image { url } } }
+        variants(first: $variantsFirst) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id sku title price compareAtPrice
+            inventoryQuantity inventoryPolicy availableForSale
+          }
+        }
       }
     }
   }
@@ -94,14 +105,13 @@ async function fetchPage(shopDomain: string, accessToken: string, cursor: string
     shopDomain,
     accessToken,
     query: PRODUCTS_QUERY,
-    variables: { first: PRODUCTS_PER_PAGE, after: cursor },
+    variables: { first: PRODUCTS_PER_PAGE, after: cursor, variantsFirst: VARIANTS_PER_PRODUCT_PAGE },
   });
   return {
     pageInfo: data.products.pageInfo,
     nodes: data.products.nodes.map((product) => ({
       ...product,
       collections: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-      variants: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
     })),
   };
 }
@@ -111,10 +121,17 @@ async function hydrateProductRelations(
   accessToken: string,
   product: ShopifyProduct,
 ): Promise<ShopifyProduct> {
-  const variants: ShopifyVariant[] = [];
-  let variantCursor: string | null = null;
-  let hasMoreVariants = true;
+  // The inline variants(first: VARIANTS_PER_PRODUCT_PAGE) page fetched in
+  // PRODUCTS_QUERY already covers the overwhelming majority of products in
+  // the same round trip as the product itself — only page further for the
+  // rare product with more variants than that.
+  const variants: ShopifyVariant[] = [...product.variants.nodes];
+  let hasMoreVariants = product.variants.pageInfo.hasNextPage;
+  let variantCursor: string | null = product.variants.pageInfo.endCursor;
   while (hasMoreVariants) {
+    if (!variantCursor) {
+      throw new Error(`Variant pagination omitted endCursor for ${product.id}`);
+    }
     const data: ProductVariantsPage = await shopifyGraphQL<ProductVariantsPage>({
       shopDomain,
       accessToken,
@@ -125,9 +142,6 @@ async function hydrateProductRelations(
     variants.push(...data.product.variants.nodes);
     hasMoreVariants = data.product.variants.pageInfo.hasNextPage;
     variantCursor = hasMoreVariants ? data.product.variants.pageInfo.endCursor : null;
-    if (hasMoreVariants && !variantCursor) {
-      throw new Error(`Variant pagination omitted endCursor for ${product.id}`);
-    }
   }
 
   const collections: Array<{ id: string }> = [];

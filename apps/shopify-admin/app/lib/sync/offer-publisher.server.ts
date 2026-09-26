@@ -1,5 +1,6 @@
 import {
   getDb,
+  reserveConnection,
   shops,
   offers,
   offerConditions,
@@ -12,6 +13,7 @@ import {
   type OfferCombinationPolicy,
 } from "@promo/db";
 import { eq, and, inArray } from "drizzle-orm";
+import * as Sentry from "@sentry/node";
 import { decryptToken } from "../token-crypto.server.js";
 import { shopifyGraphQL } from "../shopify-fetch.server.js";
 import {
@@ -38,7 +40,31 @@ const METAFIELD_NAMESPACE = "promo_engine";
 const METAFIELD_KEY = "function_config";
 const MAX_METAFIELD_BYTES = 9500;
 
+/**
+ * Concurrent publishes for the same shop (e.g. a cron reconciliation run
+ * overlapping a merchant save) must not interleave: each does read-compile-push
+ * as one unit, so a per-shop Postgres advisory lock serializes them. Locking
+ * requires holding one dedicated connection across the whole operation, since
+ * lock/unlock must happen on the same session.
+ */
 export async function publishOffersForShop(shopId: string, shopDomain: string): Promise<void> {
+  const reserved = await reserveConnection();
+  try {
+    await reserved`select pg_advisory_lock(hashtext(${shopId}))`;
+    await publishOffersForShopLocked(shopId, shopDomain);
+  } finally {
+    try {
+      await reserved`select pg_advisory_unlock(hashtext(${shopId}))`;
+    } catch (unlockErr) {
+      Sentry.captureException(unlockErr, { extra: { shopId, context: "publish-offers-unlock" } });
+    }
+    reserved.release();
+  }
+}
+
+async function publishOffersForShopLocked(shopId: string, shopDomain: string): Promise<void> {
+  // Re-read everything after acquiring the lock — a concurrent publish that
+  // held the lock before us may have changed offers/discount nodes.
   const db = getDb();
 
   const [shopRow] = await db
@@ -249,8 +275,6 @@ async function resolveLegacyGiftVariants(
       productGid: variantCache.productGid,
       variantGid: variantCache.variantGid,
       availableForSale: variantCache.availableForSale,
-      inventoryQuantity: variantCache.inventoryQuantity,
-      inventoryPolicy: variantCache.inventoryPolicy,
       requiresSellingPlan: variantCache.requiresSellingPlan,
     })
     .from(variantCache)
@@ -259,37 +283,41 @@ async function resolveLegacyGiftVariants(
     );
   const eligibleByProduct = new Map<string, string[]>();
   for (const variant of variants) {
-    if (
-      !variant.availableForSale ||
-      variant.requiresSellingPlan ||
-      (variant.inventoryPolicy !== "CONTINUE" && (variant.inventoryQuantity ?? 0) <= 0)
-    )
-      continue;
+    // availableForSale already accounts for untracked inventory and "continue
+    // selling when out of stock" — a raw qty of 0 + DENY can still be sellable.
+    if (!variant.availableForSale || variant.requiresSellingPlan) continue;
     const ids = eligibleByProduct.get(variant.productGid) ?? [];
     ids.push(variant.variantGid);
     eligibleByProduct.set(variant.productGid, ids);
   }
 
-  return compiledOffers.map((offer) => {
-    const giftRewards = offer.giftRewards.map((reward) => {
-      if (reward.targetVariantIds.length > 0) return reward;
+  return compiledOffers.flatMap((offer) => {
+    const giftRewards = offer.giftRewards.flatMap((reward) => {
+      if (reward.targetVariantIds.length > 0) return [reward];
       const targetVariantIds = [
         ...new Set(
           reward.targetProductIds.flatMap((productId) => eligibleByProduct.get(productId) ?? []),
         ),
       ].sort();
       if (targetVariantIds.length === 0) {
-        throw new Error(
-          `Gift reward ${reward.id} in offer ${offer.id} has no eligible one-time-purchase variants. Refresh the product catalog or update the reward before publishing.`,
+        // Don't fail the whole shop's publish over one stale reward — skip it
+        // and keep publishing every other offer/reward that's still valid.
+        console.error(
+          `[offer-publisher] Skipping gift reward ${reward.id} in offer ${offer.id}: no eligible one-time-purchase variants.`,
         );
+        Sentry.captureMessage("Gift reward skipped: no eligible variants", {
+          level: "warning",
+          tags: { offerId: offer.id, rewardId: reward.id },
+        });
+        return [];
       }
-      return { ...reward, targetVariantIds };
+      return [{ ...reward, targetVariantIds }];
     });
-    return {
+    return [{
       ...offer,
       giftRewards,
       giftVariantIds: [...new Set(giftRewards.flatMap((reward) => reward.targetVariantIds))],
-    };
+    }];
   });
 }
 

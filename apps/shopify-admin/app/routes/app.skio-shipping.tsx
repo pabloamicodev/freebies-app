@@ -31,6 +31,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     tiers: loaded.config.tiers,
     configValid: loaded.configValid,
     configError: loaded.configError,
+    importedFromLegacy: loaded.importedFromLegacy,
     apiKeyConnected: Boolean(apiKey),
   };
 }
@@ -107,6 +108,12 @@ export default function SkioShippingPage() {
       {actionData?.error && <div className="b-banner b-banner-red" role="alert">{actionData.error}</div>}
       {actionData?.success && <div className="b-banner b-banner-green" role="status">{actionData.success}</div>}
       {!data.configValid && <div className="b-banner b-banner-red" role="alert">Stored configuration is invalid. {data.configError}</div>}
+      {data.importedFromLegacy && (
+        <div className="b-banner b-banner-orange" role="status">
+          Imported {data.tiers.length} shipping tier{data.tiers.length === 1 ? "" : "s"} from the legacy
+          hpn-scripts-migration app. Review them below — saving any tier persists this list here.
+        </div>
+      )}
 
       <section className="b-card b-p-5 b-mb-5">
         <div className="b-row b-justify-between b-gap-4">

@@ -7,6 +7,7 @@ import {
   timestamp,
   jsonb,
   unique,
+  index,
 } from "drizzle-orm/pg-core";
 import { shops } from "./shops";
 import { offers } from "./offers";
@@ -47,52 +48,64 @@ export const bundleDefinitions = pgTable(
 
 export type BundleDefinition = typeof bundleDefinitions.$inferSelect;
 
-export const bundleSteps = pgTable("bundle_steps", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  shopId: uuid("shop_id")
-    .notNull()
-    .references(() => shops.id, { onDelete: "cascade" }),
-  bundleId: uuid("bundle_id")
-    .notNull()
-    .references(() => bundleDefinitions.id, { onDelete: "cascade" }),
-  title: text("title").notNull(),
-  subtitle: text("subtitle"),
-  /** "products" | "collection" | "vendor" | "product_type" */
-  sourceType: text("source_type").notNull(),
-  /** Source IDs / config — JSONB: { productGids: [...], collectionGid: "..." } */
-  sourceConfig: jsonb("source_config").notNull(),
-  minQuantity: integer("min_quantity"),
-  maxQuantity: integer("max_quantity"),
-  searchEnabled: boolean("search_enabled").notNull().default(false),
-  /** Sort options: [{ value: "name_asc" | "name_desc" | "price_asc" | ... }] */
-  sortOptions: jsonb("sort_options").notNull().default([]),
-  /** Filter options: [{ type: "category" | "collection" | "tag" | "price_range", ... }] */
-  filterOptions: jsonb("filter_options").notNull().default([]),
-  sortOrder: integer("sort_order").notNull().default(0),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const bundleSteps = pgTable(
+  "bundle_steps",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    shopId: uuid("shop_id")
+      .notNull()
+      .references(() => shops.id, { onDelete: "cascade" }),
+    bundleId: uuid("bundle_id")
+      .notNull()
+      .references(() => bundleDefinitions.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    subtitle: text("subtitle"),
+    /** "products" | "collection" | "vendor" | "product_type" */
+    sourceType: text("source_type").notNull(),
+    /** Source IDs / config — JSONB: { productGids: [...], collectionGid: "..." } */
+    sourceConfig: jsonb("source_config").notNull(),
+    minQuantity: integer("min_quantity"),
+    maxQuantity: integer("max_quantity"),
+    searchEnabled: boolean("search_enabled").notNull().default(false),
+    /** Sort options: [{ value: "name_asc" | "name_desc" | "price_asc" | ... }] */
+    sortOptions: jsonb("sort_options").notNull().default([]),
+    /** Filter options: [{ type: "category" | "collection" | "tag" | "price_range", ... }] */
+    filterOptions: jsonb("filter_options").notNull().default([]),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("bundle_steps_bundle_id_idx").on(t.bundleId),
+  ],
+);
 
 export type BundleStep = typeof bundleSteps.$inferSelect;
 
-export const bundleTiers = pgTable("bundle_tiers", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  shopId: uuid("shop_id")
-    .notNull()
-    .references(() => shops.id, { onDelete: "cascade" }),
-  bundleId: uuid("bundle_id")
-    .notNull()
-    .references(() => bundleDefinitions.id, { onDelete: "cascade" }),
-  minQuantity: integer("min_quantity").notNull(),
-  /** Optional inclusive upper bound for this tier. */
-  maxQuantity: integer("max_quantity"),
-  label: text("label").notNull(),
-  discountType: discountTypeEnum("discount_type").notNull(),
-  /** Discount value — JSONB for multi-currency: { default: 10, USD: 10, EUR: 9 } */
-  value: jsonb("value").notNull(),
-  sortOrder: integer("sort_order").notNull().default(0),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const bundleTiers = pgTable(
+  "bundle_tiers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    shopId: uuid("shop_id")
+      .notNull()
+      .references(() => shops.id, { onDelete: "cascade" }),
+    bundleId: uuid("bundle_id")
+      .notNull()
+      .references(() => bundleDefinitions.id, { onDelete: "cascade" }),
+    minQuantity: integer("min_quantity").notNull(),
+    /** Optional inclusive upper bound for this tier. */
+    maxQuantity: integer("max_quantity"),
+    label: text("label").notNull(),
+    discountType: discountTypeEnum("discount_type").notNull(),
+    /** Discount value — JSONB for multi-currency: { default: 10, USD: 10, EUR: 9 } */
+    value: jsonb("value").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("bundle_tiers_bundle_id_idx").on(t.bundleId),
+  ],
+);
 
 export type BundleTier = typeof bundleTiers.$inferSelect;

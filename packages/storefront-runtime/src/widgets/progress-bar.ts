@@ -16,7 +16,7 @@ class PromoProgressBar extends HTMLElement {
     this.offerId = this.getAttribute("offer-id") ?? "";
     this.widgetId = this.getAttribute("widget-id") ?? "";
 
-    this.attachShadow({ mode: "open" });
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this.renderSkeleton();
 
     this.unsubscribe = on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
@@ -81,13 +81,15 @@ class PromoProgressBar extends HTMLElement {
       new Intl.NumberFormat(navigator.language, { style: "currency", currency }).format(cents / 100);
 
     return template
-      .replace("{{remaining_amount}}", formatMoney(Math.max(0, remainingCents)))
-      .replace("{{remaining_quantity}}", String(Math.max(0, remainingQty)))
-      .replace("{{current_amount}}", formatMoney(payload.currentCents))
-      .replace("{{target_amount}}", formatMoney(payload.targetCents));
+      .replaceAll("{{remaining_amount}}", formatMoney(Math.max(0, remainingCents)))
+      .replaceAll("{{remaining_quantity}}", String(Math.max(0, remainingQty)))
+      .replaceAll("{{current_amount}}", formatMoney(payload.currentCents))
+      .replaceAll("{{target_amount}}", formatMoney(payload.targetCents));
   }
 }
 
-customElements.define("promo-progress-bar", PromoProgressBar);
+if (!customElements.get("promo-progress-bar")) {
+  customElements.define("promo-progress-bar", PromoProgressBar);
+}
 
 export {};

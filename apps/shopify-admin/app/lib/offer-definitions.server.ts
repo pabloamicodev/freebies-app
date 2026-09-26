@@ -25,8 +25,30 @@ export async function getOfferDefinitions(shopId: string, db: Db): Promise<Offer
   type RewardRow = typeof offerRewards.$inferSelect;
   type PolicyRow = typeof offerCombinationPolicies.$inferSelect;
 
-  const activeOffers: OfferRow[] = await db
-    .select()
+  // Skip compiledConfig (this query runs on every evaluate request, and
+  // compiledConfig duplicates this whole function's output — easily the
+  // heaviest column on the row) plus the other columns offer-version.server's
+  // VOLATILE_KEYS already excludes from computeOfferVersion's hash, so
+  // dropping them here can't desync the version from offer-publisher.server.ts
+  // (which hashes the full row). `description` stays: it isn't in
+  // VOLATILE_KEYS, so omitting it here would change the version computed on
+  // this path without changing the one computed at publish time.
+  const activeOffers: Array<Omit<OfferRow, "shopId" | "compiledConfig" | "functionMetafieldGid" | "createdAt" | "updatedAt" | "updatedBy">> = await db
+    .select({
+      id: offers.id,
+      type: offers.type,
+      status: offers.status,
+      internalName: offers.internalName,
+      publicTitle: offers.publicTitle,
+      description: offers.description,
+      priority: offers.priority,
+      startsAt: offers.startsAt,
+      endsAt: offers.endsAt,
+      timezone: offers.timezone,
+      discountTags: offers.discountTags,
+      createdBy: offers.createdBy,
+      archivedAt: offers.archivedAt,
+    })
     .from(offers)
     .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")))
     .orderBy(offers.priority);

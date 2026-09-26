@@ -5,7 +5,7 @@
 {% endcomment %}
 
 <promo-progress-bar
-  offer-id="{{ block.settings.offer_id }}"
+  offer-id="{{ block.settings.offer_id | escape }}"
   widget-id="{{ block.id }}"
   currency="{{ cart.currency.iso_code }}"
   {{ block.shopify_attributes }}

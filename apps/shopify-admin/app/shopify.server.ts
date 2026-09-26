@@ -49,8 +49,7 @@ import { waitUntil } from "@vercel/functions";
 import { drainProductSyncQueue, queueProductSync } from "./lib/sync/product-sync.server.js";
 import { publishOffersForShop } from "./lib/sync/offer-publisher.server.js";
 import { ensureCartTransform } from "./lib/cart-transform.server.js";
-import { productCache } from "@promo/db";
-import { count, eq as drizzleEq } from "drizzle-orm";
+import { eq as drizzleEq } from "drizzle-orm";
 
 const sessionStorage = new PostgresSessionStorage();
 
@@ -70,7 +69,7 @@ const shopify = shopifyApp({
       try {
         await retryWebhookRegistration(() => shopify.registerWebhooks({ session }));
       } catch (e) {
-        Sentry.captureException(e, { extra: { shop: session.shop, context: "webhook-registration" } });
+        Sentry.captureException(e, { tags: { shop: session.shop }, extra: { context: "webhook-registration" } });
         console.error("Webhook registration failed:", e);
         // Compliance and lifecycle webhooks are part of a valid installation.
         // Failing authentication is safer than silently installing an app that
@@ -107,12 +106,17 @@ const shopify = shopifyApp({
           timezone = shopData.shop.ianaTimezone;
           locale = shopData.shop.primaryDomain?.localization?.language?.isoCode ?? null;
         } catch (shopFetchErr) {
-          Sentry.captureException(shopFetchErr, { extra: { shop: shopDomain, context: "afterAuth-shop-fetch" } });
+          Sentry.captureException(shopFetchErr, { tags: { shop: shopDomain }, extra: { context: "afterAuth-shop-fetch" } });
           console.error("[afterAuth] Could not fetch shop locale, using defaults:", shopFetchErr instanceof Error ? shopFetchErr.message : shopFetchErr);
         }
 
         // Atomic upsert — no TOCTOU race on concurrent installs / reinstalls.
         // On reinstall: token + isActive refreshed; locale fields updated.
+        // installedAt/uninstalledAt are reset here so a stale APP_UNINSTALLED
+        // webhook delivered after this reinstall can detect it's stale (it
+        // compares its own trigger time against installedAt) instead of
+        // clobbering the freshly reinstalled shop.
+        const installedAt = new Date();
         await db
           .insert(shops)
           .values({
@@ -122,6 +126,8 @@ const shopify = shopifyApp({
             currencyCode,
             timezone,
             locale,
+            installedAt,
+            uninstalledAt: null,
           })
           .onConflictDoUpdate({
             target: shops.myshopifyDomain,
@@ -131,6 +137,8 @@ const shopify = shopifyApp({
               currencyCode,
               timezone,
               locale,
+              installedAt,
+              uninstalledAt: null,
               updatedAt: new Date(),
             },
           });
@@ -139,8 +147,12 @@ const shopify = shopifyApp({
         throw dbError;
       }
 
-      // Trigger initial product catalog sync for new shops (no products cached yet).
-      // Fire-and-forget — don't block the auth response; sync runs in the background.
+      // Trigger a product catalog sync on every auth, not just first install —
+      // queueProductSync is idempotent (no-ops if a resumable job already
+      // exists) so this also re-syncs a reinstalled shop whose cache is stale
+      // rather than waiting on the empty-cache case that a reinstall may not
+      // even hit if rows survived. Fire-and-forget — don't block the auth
+      // response; sync runs in the background.
       try {
         const db2 = getDb();
         const shopRows2 = await db2
@@ -150,23 +162,17 @@ const shopify = shopifyApp({
           .limit(1);
         const shopRow2 = shopRows2[0];
         if (shopRow2) {
-          const [countRow] = await db2
-            .select({ n: count() })
-            .from(productCache)
-            .where(drizzleEq(productCache.shopId, shopRow2.id));
-          if ((countRow?.n ?? 0) === 0) {
-            // waitUntil, not a bare un-awaited promise: Vercel can freeze/kill
-            // the function as soon as the auth response is sent, which would
-            // otherwise cut this sync off mid-run.
-            waitUntil(
-              queueProductSync(shopRow2.id)
-                .then(() => drainProductSyncQueue({ shopId: shopRow2.id, maxSteps: 3, maxRuntimeMs: 25_000 }))
-                .catch((e: unknown) => {
-                Sentry.captureException(e, { extra: { shop: session.shop, context: "afterAuth-product-sync" } });
-                console.error("[afterAuth] Initial product sync failed:", e instanceof Error ? e.message : e);
-              }),
-            );
-          }
+          // waitUntil, not a bare un-awaited promise: Vercel can freeze/kill
+          // the function as soon as the auth response is sent, which would
+          // otherwise cut this sync off mid-run.
+          waitUntil(
+            queueProductSync(shopRow2.id)
+              .then(() => drainProductSyncQueue({ shopId: shopRow2.id, maxSteps: 3, maxRuntimeMs: 25_000 }))
+              .catch((e: unknown) => {
+              Sentry.captureException(e, { tags: { shop: session.shop }, extra: { context: "afterAuth-product-sync" } });
+              console.error("[afterAuth] Initial product sync failed:", e instanceof Error ? e.message : e);
+            }),
+          );
         }
       } catch (syncErr) {
         // Non-fatal — sync can be re-triggered from the UI
@@ -183,14 +189,14 @@ const shopify = shopifyApp({
           await publishOffersForShop(shopRow3.id, session.shop);
         }
       } catch (discountErr) {
-        Sentry.captureException(discountErr, { extra: { shop: session.shop, context: "afterAuth-ensure-promotion-functions" } });
+        Sentry.captureException(discountErr, { tags: { shop: session.shop }, extra: { context: "afterAuth-ensure-promotion-functions" } });
         console.error("[afterAuth] Could not register promotion functions:", discountErr instanceof Error ? discountErr.message : discountErr);
       }
 
       try {
         if (session.accessToken) await ensureCartTransform(session.shop, session.accessToken);
       } catch (cartTransformErr) {
-        Sentry.captureException(cartTransformErr, { extra: { shop: session.shop, context: "afterAuth-ensure-cart-transform" } });
+        Sentry.captureException(cartTransformErr, { tags: { shop: session.shop }, extra: { context: "afterAuth-ensure-cart-transform" } });
         console.error("[afterAuth] Could not register cart transform:", cartTransformErr instanceof Error ? cartTransformErr.message : cartTransformErr);
       }
     },

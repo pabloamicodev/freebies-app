@@ -203,6 +203,26 @@ describe("compileShippingOfferConfigs", () => {
     });
   });
 
+  it("emits the offer's public title as the shipping candidate title", () => {
+    const result = compileShippingOfferConfigs(
+      offer({ publicTitle: "Free shipping over $50" }),
+      [condition("cart_value", { thresholdCents: 5000 })],
+      [shippingReward({ discountType: "free" })],
+    );
+
+    expect(result[0]).toMatchObject({ title: "Free shipping over $50" });
+  });
+
+  it("omits the shipping candidate title when there is no public title", () => {
+    const result = compileShippingOfferConfigs(
+      offer(),
+      [condition("cart_value", { thresholdCents: 5000 })],
+      [shippingReward({ discountType: "free" })],
+    );
+
+    expect(result[0]?.title).toBeUndefined();
+  });
+
   it("does not emit shipping config for other reward types", () => {
     const result = compileShippingOfferConfigs(
       offer(),
@@ -455,6 +475,35 @@ describe("compileOfferConfig", () => {
     ]);
     expect(result.customerOrderCountMin).toBe(3);
     expect(result.customerAmountSpentMaxCents).toBe(9_999);
+  });
+
+  it("compiles maxUnitsPerLine and maxUnitsPerVariant product reward caps", () => {
+    const result = compileOfferConfig(
+      offer(),
+      [],
+      [
+        shippingReward({
+          rewardType: "product_discount",
+          discountType: "free",
+          value: { amount: 100, currencyCode: "USD" },
+          target: {
+            variantIds: ["gid://shopify/ProductVariant/target"],
+            maxUnitsPerLine: 1,
+            maxUnitsPerVariant: 2,
+            scopeMode: "sitewide",
+          },
+        }),
+      ] as CompileArgs[2],
+      null,
+      1,
+    );
+
+    expect(result.productRewards).toEqual([
+      expect.objectContaining({
+        maxUnitsPerLine: 1,
+        maxUnitsPerVariant: 2,
+      }),
+    ]);
   });
 
   it("compiles customer tags and country guards for checkout enforcement", () => {

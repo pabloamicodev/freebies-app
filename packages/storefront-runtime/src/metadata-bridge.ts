@@ -169,15 +169,21 @@ export async function packCartAddRequest(
   return [new Request(request, { body, headers }), undefined];
 }
 
-function installPromoMetadataBridge(): void {
+export function installPromoMetadataBridge(): void {
   const state = window as Window & { __promoEngineMetadataBridgeInstalled?: boolean };
   if (state.__promoEngineMetadataBridgeInstalled) return;
   state.__promoEngineMetadataBridgeInstalled = true;
 
   const nativeFetch = window.fetch.bind(window);
-  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const [packedInput, packedInit] = await packCartAddRequest(input, init);
-    return nativeFetch(packedInput, packedInit);
+  window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    // Only the packing step is guarded — never retry the network call itself,
+    // that would double-submit a POST /cart/add on failure.
+    return packCartAddRequest(input, init)
+      .catch((e): [RequestInfo | URL, RequestInit | undefined] => {
+        console.warn("[PromoEngine] Cart line metadata packing failed, using request as-is", e);
+        return [input, init];
+      })
+      .then(([packedInput, packedInit]) => nativeFetch(packedInput, packedInit));
   }) as typeof window.fetch;
 
   document.addEventListener(

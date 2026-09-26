@@ -13,6 +13,8 @@ pub struct CompiledConfig {
 #[serde(rename_all = "camelCase")]
 pub struct CompiledShippingOffer {
     pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
     pub priority: i32,
     pub tiers: Vec<ShippingTier>,
     pub target_group_types: Option<Vec<String>>,

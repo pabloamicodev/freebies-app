@@ -6,7 +6,7 @@
 
 {%- if block.settings.offer_id != blank -%}
   <promo-cart-message
-    offer-id="{{ block.settings.offer_id }}"
+    offer-id="{{ block.settings.offer_id | escape }}"
     widget-id="{{ block.id }}"
     {{ block.shopify_attributes }}
   ></promo-cart-message>

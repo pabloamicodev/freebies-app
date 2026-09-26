@@ -47,10 +47,6 @@ pub struct CompiledOffer {
     pub required_variant_ids: Vec<String>,
     #[serde(default)]
     pub excluded_product_ids: Vec<String>,
-    #[serde(default)]
-    pub gift_variant_ids: Vec<String>,
-    #[serde(default)]
-    pub gift_product_ids: Vec<String>,
     pub cart_value_threshold_cents: Option<i64>,
     pub cart_value_max_cents: Option<i64>,
     pub cart_quantity_threshold: Option<i64>,
@@ -70,7 +66,6 @@ pub struct CompiledOffer {
     pub include_country_codes: Vec<String>,
     #[serde(default)]
     pub exclude_country_codes: Vec<String>,
-    pub max_gift_quantity: Option<i64>,
     #[serde(default = "default_discount_type")]
     pub discount_type: String,
     #[serde(default = "default_discount_value")]
@@ -166,6 +161,10 @@ pub struct CompiledProductReward {
     pub max_units_total: Option<i64>,
     #[serde(default)]
     pub max_units_per_product: Option<i64>,
+    #[serde(default)]
+    pub max_units_per_line: Option<i64>,
+    #[serde(default)]
+    pub max_units_per_variant: Option<i64>,
     #[serde(default = "default_subscription_mode")]
     pub subscription_mode: String,
     #[serde(default = "default_shipping_scope")]

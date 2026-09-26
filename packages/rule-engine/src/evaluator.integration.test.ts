@@ -152,6 +152,34 @@ describe("evaluate — cart value condition", () => {
     }
   });
 
+  it("does not auto-add a gift reward the customer explicitly declined", async () => {
+    const ctx: EvaluatorContext = {
+      offers: [makeGiftOffer("offer-1", 5000)],
+      oneUseStates: [],
+      now: NOW,
+    };
+    const result = await evaluate(
+      makeInput(makeCart(6000), { declinedGiftRewards: ["offer-1:reward-offer-1"] }),
+      ctx,
+    );
+    expect(result.qualifiedOffers).toHaveLength(1);
+    expect(result.cartActions).toEqual([]);
+  });
+
+  it("still auto-adds a gift reward declined for a different offer", async () => {
+    const ctx: EvaluatorContext = {
+      offers: [makeGiftOffer("offer-1", 5000)],
+      oneUseStates: [],
+      now: NOW,
+    };
+    const result = await evaluate(
+      makeInput(makeCart(6000), { declinedGiftRewards: ["offer-2:reward-offer-2"] }),
+      ctx,
+    );
+    expect(result.cartActions).toHaveLength(1);
+    expect(result.cartActions[0]?.action).toBe("add_line");
+  });
+
   it("treats a merchant-configured fallback already in the cart as the fulfilled gift", async () => {
     const offer = makeGiftOffer("offer-1", 5000);
     offer.rewards[0] = {

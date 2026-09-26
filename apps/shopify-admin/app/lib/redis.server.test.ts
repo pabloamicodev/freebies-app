@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getSharedRedis,
   isRedisConfigured,
+  recordRedisFailure,
   resetSharedRedis,
   sanitizeRedisConnectionError,
 } from "./redis.server.js";
@@ -87,5 +88,41 @@ describe.sequential("REST Redis client", () => {
       code: "UPSTASH_HTTP_401",
     });
     await expect(client?.ping()).rejects.not.toThrow(/must-not-leak/);
+  });
+});
+
+describe.sequential("circuit breaker", () => {
+  it("skips Redis entirely for a cool-off window after a recorded failure", async () => {
+    process.env["UPSTASH_KV_REST_API_URL"] = "https://redis.example.test";
+    process.env["UPSTASH_KV_REST_API_TOKEN"] = "test-token";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ result: 1 }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    recordRedisFailure();
+    const client = await getSharedRedis();
+
+    expect(client).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("resumes trying Redis once the cool-off window elapses", async () => {
+    vi.useFakeTimers();
+    try {
+      process.env["UPSTASH_KV_REST_API_URL"] = "https://redis.example.test";
+      process.env["UPSTASH_KV_REST_API_TOKEN"] = "test-token";
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ result: 1 }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      ));
+
+      recordRedisFailure();
+      vi.advanceTimersByTime(30_001);
+
+      const client = await getSharedRedis();
+      expect(client).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

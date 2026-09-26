@@ -3,7 +3,7 @@ import { useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
 import { analyticsEvents, offers } from "@promo/db";
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { LoaderFunctionArgs } from "react-router";
 import {
   IconChevronDown, IconChevronLeft, IconChevronRight,
@@ -35,7 +35,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
   }
 
-  const [recentOrderEvents, offerRows] = await timer.time("analytics.parallel_queries", () =>
+  // "order_placed_attributed" is the event reconcileOrderAttribution actually
+  // writes (webhooks.$.tsx handleOrderPaid) — this previously read a
+  // different, never-written event name, so the page always showed zeros.
+  const ORDER_EVENT_NAME = "order_placed_attributed";
+
+  const [recentOrderEvents, offerRows, dailyTotals] = await timer.time("analytics.parallel_queries", () =>
     Promise.all([
       db
         .select({
@@ -49,7 +54,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         .where(
           and(
             eq(analyticsEvents.shopId, shopId),
-            eq(analyticsEvents.eventName, "promo_engine:order_paid"),
+            eq(analyticsEvents.eventName, ORDER_EVENT_NAME),
             gte(analyticsEvents.occurredAt, since),
           ),
         )
@@ -59,35 +64,60 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         .select({ id: offers.id, internalName: offers.internalName })
         .from(offers)
         .where(eq(offers.shopId, shopId)),
+      // Totals/chart come from a SQL aggregate over the whole window, not the
+      // 50-row page above — an order with several attributed offers writes
+      // one row per offer, so this dedupes to one row per order before
+      // summing (otherwise a multi-offer order inflates its own total).
+      db.execute<{ day: string; sales_cents: string | null; order_count: number }>(sql`
+        WITH deduped_orders AS (
+          SELECT DISTINCT ON (order_id)
+            order_id,
+            to_char(occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+            COALESCE((properties->>'subtotalCents')::bigint, 0) AS subtotal_cents
+          FROM analytics_events
+          WHERE shop_id = ${shopId}
+            AND event_name = ${ORDER_EVENT_NAME}
+            AND occurred_at >= ${since}
+            AND order_id IS NOT NULL
+          ORDER BY order_id, occurred_at DESC
+        )
+        SELECT day, SUM(subtotal_cents)::bigint AS sales_cents, COUNT(*)::int AS order_count
+        FROM deduped_orders
+        GROUP BY day
+      `),
     ]),
   );
   const offerNames: Record<string, string> = {};
   offerRows.forEach((o) => { offerNames[o.id] = o.internalName; });
 
-  // Build per-day chart data
+  // Pre-seed every calendar day in the window (UTC) so the chart shows zeros
+  // instead of gaps, keyed by plain ISO date — matches to_char(..., 'UTC',
+  // 'YYYY-MM-DD') above exactly, with no locale/timezone parsing involved.
   const dayBuckets: Record<string, { sales: number; orders: number }> = {};
   for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(Date.now() - i * 86400000);
-    const key = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    dayBuckets[key] = { sales: 0, orders: 0 };
+    const isoDay = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+    dayBuckets[isoDay] = { sales: 0, orders: 0 };
   }
 
   let totalSalesCents = 0;
+  let orderCount = 0;
+  for (const row of dailyTotals) {
+    const salesCents = Number(row.sales_cents ?? 0);
+    const rowOrderCount = Number(row.order_count ?? 0);
+    totalSalesCents += salesCents;
+    orderCount += rowOrderCount;
+    if (dayBuckets[row.day]) {
+      dayBuckets[row.day]!.sales += salesCents;
+      dayBuckets[row.day]!.orders += rowOrderCount;
+    }
+  }
+  const avgOrderCents = orderCount > 0 ? Math.round(totalSalesCents / orderCount) : 0;
+
   const orders = recentOrderEvents.flatMap((ev) => {
     if (!ev.orderId) return [];
-
     const props = ev.properties as Record<string, unknown> | null;
     const subtotalCents = typeof props?.subtotalCents === "number" ? props.subtotalCents : 0;
     const giftName = ev.offerId ? (offerNames[ev.offerId] ?? "Gift Offer") : "Gift Offer";
-
-    totalSalesCents += subtotalCents;
-
-    const dayKey = new Date(ev.occurredAt).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    if (dayBuckets[dayKey]) {
-      dayBuckets[dayKey]!.sales += subtotalCents;
-      dayBuckets[dayKey]!.orders += 1;
-    }
-
     return [{
         id: ev.id,
         orderId: ev.orderId!,
@@ -97,11 +127,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }];
   });
 
-  const orderCount = orders.length;
-  const avgOrderCents = orderCount > 0 ? Math.round(totalSalesCents / orderCount) : 0;
-
-  const salesChartData = Object.entries(dayBuckets).map(([x, v]) => ({ x, y: v.sales / 100 }));
-  const ordersChartData = Object.entries(dayBuckets).map(([x, v]) => ({ x, y: v.orders }));
+  const salesChartData = Object.entries(dayBuckets).map(([iso, v]) => ({ x: formatIsoDayLabel(iso), y: v.sales / 100 }));
+  const ordersChartData = Object.entries(dayBuckets).map(([iso, v]) => ({ x: formatIsoDayLabel(iso), y: v.orders }));
 
   timer.done({
     shopFound: true,
@@ -120,6 +147,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     days,
   };
 };
+
+const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Formats a plain 'YYYY-MM-DD' string without going through Date/timezone
+ * parsing, so the label always matches the UTC calendar day it was grouped by. */
+function formatIsoDayLabel(iso: string): string {
+  const [, month, day] = iso.split("-").map(Number);
+  return `${MONTH_ABBR[(month ?? 1) - 1]} ${day}`;
+}
 
 const LINE_CHART_PAD = { top: 20, right: 16, bottom: 32, left: 44 };
 

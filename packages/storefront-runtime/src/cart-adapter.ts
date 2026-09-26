@@ -71,6 +71,33 @@ export interface CartItem {
 
 let mutationQueue = Promise.resolve();
 
+// ─── Legacy metadata migration bookkeeping ─────────────────────────────────────
+// migrateLegacyMetadata mutates the cart as a side effect of a read (getCart).
+// Track which line keys we've already migrated this session so a page that
+// calls getCart() repeatedly doesn't re-issue the same cart/change.js write
+// every time, and cap how many lines one pass will touch.
+const MIGRATED_LINE_KEYS_STORAGE_KEY = "promo_engine_migrated_line_keys";
+const MAX_MIGRATIONS_PER_READ = 10;
+
+function loadMigratedLineKeys(): Set<string> {
+  try {
+    const raw = sessionStorage.getItem(MIGRATED_LINE_KEYS_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed.filter((v) => typeof v === "string")) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveMigratedLineKeys(keys: Set<string>): void {
+  try {
+    sessionStorage.setItem(MIGRATED_LINE_KEYS_STORAGE_KEY, JSON.stringify([...keys].slice(-500)));
+  } catch {
+    // Storage unavailable — worst case we re-attempt migration next read.
+  }
+}
+
 function toLegacyVariantId(variantId: string): number {
   const candidate = variantId.split("/").pop() ?? variantId;
   if (!/^\d+$/.test(candidate)) throw new Error("Invalid Shopify variant ID.");
@@ -104,15 +131,22 @@ export const AjaxCartAdapter = {
   },
 
   async migrateLegacyMetadata(cart: CartData): Promise<CartData> {
+    const migrated = loadMigratedLineKeys();
     let current = cart;
+    let migratedCount = 0;
     for (const item of cart.items) {
+      if (migratedCount >= MAX_MIGRATIONS_PER_READ) break;
+      if (migrated.has(item.key)) continue;
       if (!needsPromoMetadataPacking(item.properties ?? undefined)) continue;
       current = await this.updateLine({
         key: item.key,
         quantity: item.quantity,
         properties: item.properties ?? {},
       });
+      migrated.add(item.key);
+      migratedCount++;
     }
+    if (migratedCount > 0) saveMigratedLineKeys(migrated);
     return current;
   },
 

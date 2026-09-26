@@ -2,7 +2,7 @@
   "offers": [
     {
       "id": "00000001-0000-4000-8000-000000000000",
-      "version": 1146837048,
+      "version": 510371777,
       "offerType": "discount",
       "priority": 100,
       "stopLowerPriority": false,
@@ -47,11 +47,12 @@
       "orderRewards": [],
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
-      "pageUrlConditions": []
+      "pageUrlConditions": [],
+      "cartValueThresholdCents": 0
     },
     {
       "id": "00000001-0000-4000-8000-000000000001",
-      "version": 487225516,
+      "version": 117155987,
       "offerType": "discount",
       "priority": 101,
       "stopLowerPriority": false,
@@ -96,7 +97,8 @@
       "orderRewards": [],
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
-      "pageUrlConditions": []
+      "pageUrlConditions": [],
+      "cartValueThresholdCents": 0
     },
     {
       "id": "00000001-0000-4000-8000-000000000002",
@@ -146,7 +148,7 @@
     },
     {
       "id": "00000001-0000-4000-8000-000000000003",
-      "version": 824261988,
+      "version": 1439338715,
       "offerType": "discount",
       "priority": 103,
       "stopLowerPriority": false,
@@ -167,11 +169,12 @@
       "orderRewards": [],
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
-      "pageUrlConditions": []
+      "pageUrlConditions": [],
+      "cartValueThresholdCents": 0
     },
     {
       "id": "00000001-0000-4000-8000-000000000004",
-      "version": 1069175488,
+      "version": 2073448797,
       "offerType": "discount",
       "priority": 104,
       "stopLowerPriority": false,
@@ -192,11 +195,12 @@
       "orderRewards": [],
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
-      "pageUrlConditions": []
+      "pageUrlConditions": [],
+      "cartValueThresholdCents": 0
     },
     {
       "id": "00000001-0000-4000-8000-000000000005",
-      "version": 1453757298,
+      "version": 1269432277,
       "offerType": "discount",
       "priority": 105,
       "stopLowerPriority": false,
@@ -242,11 +246,12 @@
       "orderRewards": [],
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
-      "pageUrlConditions": []
+      "pageUrlConditions": [],
+      "cartValueThresholdCents": 0
     },
     {
       "id": "00000001-0000-4000-8000-000000000006",
-      "version": 992259402,
+      "version": 813526497,
       "offerType": "discount",
       "priority": 106,
       "stopLowerPriority": false,
@@ -291,11 +296,12 @@
       "orderRewards": [],
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
-      "pageUrlConditions": []
+      "pageUrlConditions": [],
+      "cartValueThresholdCents": 0
     },
     {
       "id": "00000001-0000-4000-8000-000000000007",
-      "version": 1558632362,
+      "version": 783358251,
       "offerType": "discount",
       "priority": 107,
       "stopLowerPriority": false,
@@ -340,11 +346,12 @@
       "orderRewards": [],
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
-      "pageUrlConditions": []
+      "pageUrlConditions": [],
+      "cartValueThresholdCents": 0
     },
     {
       "id": "00000001-0000-4000-8000-000000000008",
-      "version": 809619233,
+      "version": 1302851700,
       "offerType": "discount",
       "priority": 108,
       "stopLowerPriority": false,
@@ -389,11 +396,12 @@
       "orderRewards": [],
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
-      "pageUrlConditions": []
+      "pageUrlConditions": [],
+      "cartValueThresholdCents": 0
     },
     {
       "id": "00000001-0000-4000-8000-000000000009",
-      "version": 338967210,
+      "version": 264178467,
       "offerType": "discount",
       "priority": 109,
       "stopLowerPriority": false,
@@ -439,11 +447,12 @@
       "orderRewards": [],
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
-      "pageUrlConditions": []
+      "pageUrlConditions": [],
+      "cartValueThresholdCents": 0
     },
     {
       "id": "00000001-0000-4000-8000-000000000010",
-      "version": 1119375775,
+      "version": 1556036918,
       "offerType": "discount",
       "priority": 110,
       "stopLowerPriority": false,
@@ -488,7 +497,8 @@
       "orderRewards": [],
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
-      "pageUrlConditions": []
+      "pageUrlConditions": [],
+      "cartValueThresholdCents": 0
     },
     {
       "id": "00000001-0000-4000-8000-000000000011",

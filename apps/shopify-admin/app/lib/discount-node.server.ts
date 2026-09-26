@@ -61,11 +61,23 @@ export async function ensureDiscountNodes(
     .from(shops)
     .where(eq(shops.id, shopId))
     .limit(1);
+
+  // A stored id doesn't mean the node still exists — a reinstall can leave a
+  // stale id from a discount the merchant (or a previous uninstall) removed.
+  // Verify before trusting it, so a deleted node self-heals instead of every
+  // publish silently writing metafields onto a discount that's gone.
+  let verifiedCartId: string | null = null;
+  let verifiedDeliveryId: string | null = null;
   if (existing?.discountId && existing.deliveryDiscountId) {
-    return {
-      cartLinesDiscountId: existing.discountId,
-      deliveryDiscountId: existing.deliveryDiscountId,
-    };
+    const [cartExists, deliveryExists] = await Promise.all([
+      discountNodeExists(shopDomain, accessToken, existing.discountId),
+      discountNodeExists(shopDomain, accessToken, existing.deliveryDiscountId),
+    ]);
+    verifiedCartId = cartExists ? existing.discountId : null;
+    verifiedDeliveryId = deliveryExists ? existing.deliveryDiscountId : null;
+    if (verifiedCartId && verifiedDeliveryId) {
+      return { cartLinesDiscountId: verifiedCartId, deliveryDiscountId: verifiedDeliveryId };
+    }
   }
 
   const functions = await findDiscountFunctions(shopDomain, accessToken);
@@ -78,7 +90,7 @@ export async function ensureDiscountNodes(
   }
 
   const cartLinesDiscountId =
-    existing?.discountId ??
+    verifiedCartId ??
     (await createOrFindAutomaticDiscount(
       shopDomain,
       accessToken,
@@ -87,7 +99,7 @@ export async function ensureDiscountNodes(
       CART_DISCOUNT_CLASSES,
     ));
   const deliveryDiscountId =
-    existing?.deliveryDiscountId ??
+    verifiedDeliveryId ??
     (await createOrFindAutomaticDiscount(
       shopDomain,
       accessToken,
@@ -290,23 +302,48 @@ async function createOrFindAutomaticDiscount(
   return recoveredId;
 }
 
-async function findExistingAutomaticDiscount(
+/** Verifies a stored discount node id still resolves to a live discount —
+ * `discountNode` returns null instead of erroring for a deleted node, unlike
+ * most other Shopify Admin API GID lookups. */
+async function discountNodeExists(
   shopDomain: string,
   accessToken: string,
-  functionId: string,
-): Promise<string | null> {
-  const data = await shopifyGraphQL<{
-    discountNodes: {
-      nodes: Array<{
-        id: string;
-        discount: { __typename: string; appDiscountType?: { functionId: string } };
-      }>;
-    };
-  }>({
+  id: string,
+): Promise<boolean> {
+  const data = await shopifyGraphQL<{ discountNode: { id: string } | null }>({
     shopDomain,
     accessToken,
-    query: `query FindExistingAutomaticDiscount {
-      discountNodes(first: 50) {
+    query: `query CheckDiscountNode($id: ID!) {
+      discountNode(id: $id) { id }
+    }`,
+    variables: { id },
+  });
+  return data.discountNode != null;
+}
+
+const DISCOUNT_NODES_PAGE_SIZE = 50;
+const DISCOUNT_NODES_MAX_PAGES = 10;
+
+interface DiscountNodesPage {
+  discountNodes: {
+    nodes: Array<{
+      id: string;
+      discount: { __typename: string; appDiscountType?: { functionId: string } };
+    }>;
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+  };
+}
+
+async function fetchDiscountNodesPage(
+  shopDomain: string,
+  accessToken: string,
+  cursor: string | null,
+): Promise<DiscountNodesPage> {
+  return shopifyGraphQL<DiscountNodesPage>({
+    shopDomain,
+    accessToken,
+    query: `query FindExistingAutomaticDiscount($first: Int!, $after: String) {
+      discountNodes(first: $first, after: $after) {
         nodes {
           id
           discount {
@@ -314,14 +351,35 @@ async function findExistingAutomaticDiscount(
             ... on DiscountAutomaticApp { appDiscountType { functionId } }
           }
         }
+        pageInfo { hasNextPage endCursor }
       }
     }`,
+    variables: { first: DISCOUNT_NODES_PAGE_SIZE, after: cursor },
   });
+}
 
-  const match = data.discountNodes.nodes.find(
-    (node) =>
-      node.discount.__typename === "DiscountAutomaticApp" &&
-      node.discount.appDiscountType?.functionId === functionId,
-  );
-  return match?.id ?? null;
+async function findExistingAutomaticDiscount(
+  shopDomain: string,
+  accessToken: string,
+  functionId: string,
+): Promise<string | null> {
+  // Paginate instead of trusting the first 50 — a shop with many discounts
+  // (legacy or from other apps) could push the Promo Engine one past that
+  // window, which meant a second afterAuth run would create a duplicate.
+  let cursor: string | null = null;
+  for (let page = 0; page < DISCOUNT_NODES_MAX_PAGES; page += 1) {
+    const data: DiscountNodesPage = await fetchDiscountNodesPage(shopDomain, accessToken, cursor);
+
+    const match = data.discountNodes.nodes.find(
+      (node) =>
+        node.discount.__typename === "DiscountAutomaticApp" &&
+        node.discount.appDiscountType?.functionId === functionId,
+    );
+    if (match) return match.id;
+
+    const pageInfo = data.discountNodes.pageInfo;
+    if (!pageInfo.hasNextPage || !pageInfo.endCursor) break;
+    cursor = pageInfo.endCursor;
+  }
+  return null;
 }

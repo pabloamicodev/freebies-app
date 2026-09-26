@@ -30,7 +30,7 @@ function formatRelative(iso: string): string {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
 
   const authToken = process.env["SENTRY_AUTH_TOKEN"];
   const org = process.env["SENTRY_ORG"];
@@ -41,8 +41,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   try {
+    // Sentry aggregates issues per-project across every installed shop — most
+    // capture sites tag events with `shop` (webhooks, sync/cron routes), so
+    // scoping the query to this shop's tag keeps one merchant from seeing
+    // every other merchant's errors. An event that predates shop-tagging (or
+    // whose capture site doesn't set it) just won't surface here.
+    const query = `is:unresolved shop:${session.shop}`;
     const res = await fetch(
-      `https://sentry.io/api/0/projects/${org}/${project}/issues/?query=is:unresolved&limit=50&sort=date`,
+      `https://sentry.io/api/0/projects/${org}/${project}/issues/?query=${encodeURIComponent(query)}&limit=50&sort=date`,
       { headers: { Authorization: `Bearer ${authToken}` }, signal: AbortSignal.timeout(8000) },
     );
 

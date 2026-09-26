@@ -10,7 +10,8 @@
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "tsx scripts/migrate-with-lock.ts",
+    "db:check": "drizzle-kit check",
     "db:studio": "drizzle-kit studio",
     "db:push": "drizzle-kit push",
     "typecheck": "tsc --noEmit"
@@ -23,6 +24,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "drizzle-kit": "^0.31.10",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.0"
   }
 }

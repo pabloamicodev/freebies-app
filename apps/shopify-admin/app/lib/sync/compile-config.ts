@@ -34,6 +34,8 @@ export interface CompiledShippingTier {
 
 export interface CompiledShippingOffer {
   id: string;
+  /** Customer-facing shipping discount name, emitted as the candidate message. */
+  title?: string;
   priority: number;
   tiers: CompiledShippingTier[];
   targetGroupTypes: Array<"ONE_TIME_PURCHASE" | "SUBSCRIPTION">;
@@ -132,6 +134,10 @@ export interface CompiledProductReward {
   maxUnitsTotal?: number;
   /** Caps discounted units of each target product (e.g. one free unit per gift product). */
   maxUnitsPerProduct?: number;
+  /** Caps discounted units within a single cart line, independent of other lines. */
+  maxUnitsPerLine?: number;
+  /** Caps discounted units of each target variant, accumulated across lines. */
+  maxUnitsPerVariant?: number;
   subscriptionMode: "any" | "subscription_only" | "one_time_only";
   scopeMode: "sitewide" | "landing" | "quiz_bundle" | "tagged_offer";
   requiredOfferId?: string;
@@ -478,6 +484,12 @@ export function compileOfferConfig(
         ...(Number.isInteger(target["maxUnitsPerProduct"])
           ? { maxUnitsPerProduct: Number(target["maxUnitsPerProduct"]) }
           : {}),
+        ...(Number.isInteger(target["maxUnitsPerLine"])
+          ? { maxUnitsPerLine: Number(target["maxUnitsPerLine"]) }
+          : {}),
+        ...(Number.isInteger(target["maxUnitsPerVariant"])
+          ? { maxUnitsPerVariant: Number(target["maxUnitsPerVariant"]) }
+          : {}),
         subscriptionMode:
           target["subscriptionMode"] === "subscription_only" ||
           target["subscriptionMode"] === "one_time_only"
@@ -802,6 +814,7 @@ export function compileShippingOfferConfigs(
       return [
         {
           id: `${offer.id}:${reward.id}`,
+          title: offer.publicTitle?.trim() || undefined,
           priority: offer.priority * 1000 + rewardIndex,
           tiers,
           targetGroupTypes,

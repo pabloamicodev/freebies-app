@@ -27,7 +27,8 @@
     countryCode: {{ localization.country.iso_code | json }},
     debug:      {{ pe_debug | json }},
     debounceMs: {{ pe_debounce }},
-    evalEndpoint: "/apps/promo-engine/evaluate"
+    evalEndpoint: "/apps/promo-engine/evaluate",
+    cartItemCount: {{ cart.item_count | json }}
   };
 </script>
 

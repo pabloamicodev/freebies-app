@@ -45,6 +45,12 @@ export async function resolveCustomer(
         }
       }`,
       variables: { id: customerGid },
+      // This runs inline on the evaluate hot path — a slow/throttled Admin API
+      // call here must fail fast (falling back to `null`) rather than making
+      // every add-to-cart on the storefront wait on retries/backoff.
+      maxRetries: 0,
+      timeoutMs: 1_500,
+      skipThrottleBackoff: true,
     });
 
     const customer = data.customer;

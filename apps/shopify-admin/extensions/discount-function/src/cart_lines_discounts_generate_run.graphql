@@ -67,6 +67,27 @@ query Input(
       cartGiftTier: attribute(key: "__cart_gift_tier") {
         value
       }
+      landingSource: attribute(key: "__landing_source") {
+        value
+      }
+      quizBundleId: attribute(key: "_quiz_bundle_id") {
+        value
+      }
+      quizTargetCents: attribute(key: "_quiz_target_cents") {
+        value
+      }
+      quizExpectedPaidCount: attribute(key: "_quiz_expected_paid_count") {
+        value
+      }
+      quizFreeGift: attribute(key: "_quiz_free_gift") {
+        value
+      }
+      volumeDiscountBundleItem: attribute(key: "_bundle_item") {
+        value
+      }
+      volumeDiscountNektarGlp1: attribute(key: "_nektar_glp1") {
+        value
+      }
       promoMetadata: attribute(key: "_promo_engine_metadata") {
         value
       }

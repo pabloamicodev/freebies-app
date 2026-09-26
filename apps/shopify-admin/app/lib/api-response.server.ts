@@ -130,14 +130,32 @@ export async function readJsonBody<T>(
     });
   }
 
-  const rawBody = await request.text();
-  if (new TextEncoder().encode(rawBody).byteLength > options.maxBytes) {
-    throw new ApiError({
-      status: 413,
-      code: "PAYLOAD_TOO_LARGE",
-      message: options.tooLargeMessage ?? "Request payload is too large.",
-    });
+  // Content-Length can be absent (chunked) or lie, so stop reading once the limit is crossed
+  // instead of buffering the whole body first.
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  const reader = request.body?.getReader();
+  while (reader) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > options.maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new ApiError({
+        status: 413,
+        code: "PAYLOAD_TOO_LARGE",
+        message: options.tooLargeMessage ?? "Request payload is too large.",
+      });
+    }
+    chunks.push(value);
   }
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const rawBody = new TextDecoder().decode(bytes);
 
   try {
     return JSON.parse(rawBody) as T;

@@ -98,5 +98,8 @@ export const EvaluationInputSchema = z.object({
   salesChannel: SalesChannelSchema,
   requestedUrl: z.string().url().nullable(),
   sessionId: z.string().min(1).max(128),
+  /** `offerId:rewardId` pairs the customer explicitly declined (removed or
+   * dismissed the slider without picking) — evaluator must not auto-add these. */
+  declinedGiftRewards: z.array(z.string().max(256)).max(200).optional(),
 });
 export type EvaluationInput = z.infer<typeof EvaluationInputSchema>;
