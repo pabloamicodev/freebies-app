@@ -2,7 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate, sessionStorage } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { productCache, variantCache, shops, analyticsEvents, cartMutationLogs, auditLogs, offers, webhookDeliveries } from "@promo/db";
-import { eq, and, inArray, lt, or, sql } from "drizzle-orm";
+import { eq, and, inArray, lt, notInArray, or, sql } from "drizzle-orm";
 import { decryptToken } from "../lib/token-crypto.server.js";
 import { syncInventoryFromWebhook } from "../lib/sync/inventory-sync.server.js";
 import {
@@ -210,8 +210,10 @@ interface ProductWebhookPayload {
     compare_at_price: string | null;
     inventory_quantity: number;
     inventory_policy: string;
-    available: boolean;
-    requires_selling_plan: boolean;
+    inventory_management?: string | null;
+    // Not present in the products/* webhook payload (only in Storefront /products.json).
+    available?: boolean;
+    requires_selling_plan?: boolean;
   }>;
   images?: Array<{ src: string }>;
 }
@@ -333,8 +335,14 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
         currencyCode,
         inventoryQuantity: variant.inventory_quantity,
         inventoryPolicy: (variant.inventory_policy ?? "DENY").toUpperCase(),
-        availableForSale: variant.available,
-        requiresSellingPlan: variant.requires_selling_plan,
+        // The product webhook has no `available` field (only /products.json does); derive it
+        // the way Shopify does: untracked, oversell allowed, or stock on hand.
+        availableForSale:
+          variant.available ??
+          (variant.inventory_management == null ||
+            (variant.inventory_policy ?? "deny").toLowerCase() === "continue" ||
+            (variant.inventory_quantity ?? 0) > 0),
+        requiresSellingPlan: variant.requires_selling_plan ?? false,
         raw: variant as unknown,
         syncedAt: now,
       })))
@@ -352,6 +360,17 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
           syncedAt: sql`excluded.synced_at`,
         },
       });
+
+    // Variants removed from the product must not linger as sellable cache rows.
+    await db
+      .delete(variantCache)
+      .where(
+        and(
+          eq(variantCache.shopId, shopId),
+          eq(variantCache.productGid, productGid),
+          notInArray(variantCache.variantGid, product.variants.map((variant) => variant.admin_graphql_api_id)),
+        ),
+      );
   }
 }
 
@@ -368,8 +387,10 @@ async function handleProductDelete(shop: string, legacyProductId: number) {
   const productGid = productRows[0]?.productGid;
   if (!productGid) return;
 
+  // Keep the rows marked unsellable: a missing row is treated as "unknown, assume in stock".
   await db
-    .delete(variantCache)
+    .update(variantCache)
+    .set({ availableForSale: false, syncedAt: new Date() })
     .where(and(eq(variantCache.shopId, shopId), eq(variantCache.productGid, productGid)));
 }
 
