@@ -42,6 +42,7 @@ vi.mock("@promo/rule-engine", () => ({
 
 const { handleEvaluationRequest } = await import("./promo-evaluation.server.js");
 const { checkRateLimit, getClientIp } = await import("./rate-limit.server.js");
+const { getOfferDefinitions } = await import("./offer-definitions.server.js");
 
 function makeRequest(cartToken: string | null) {
   const body = {
@@ -79,6 +80,7 @@ const shop = {
 describe("handleEvaluationRequest rate limit key", () => {
   beforeEach(() => {
     vi.mocked(checkRateLimit).mockClear().mockResolvedValue({ ok: true });
+    vi.mocked(getOfferDefinitions).mockClear();
     vi.mocked(getClientIp).mockClear().mockReturnValue("203.0.113.1");
   });
 
@@ -111,10 +113,12 @@ describe("handleEvaluationRequest rate limit key", () => {
     );
   });
 
-  it("returns 429 without reaching the per-caller check when the shop ceiling is hit", async () => {
+  it("returns 429 when the shop ceiling is hit, checking both limits in parallel", async () => {
     vi.mocked(checkRateLimit).mockResolvedValueOnce({ ok: false, retryAfterSeconds: 10 });
     const response = await handleEvaluationRequest(makeRequest("cart-tok-1"), shop, null);
     expect(response.status).toBe(429);
-    expect(checkRateLimit).toHaveBeenCalledTimes(1);
+    expect(await response.json()).toMatchObject({ error: "Too many evaluation requests for this shop." });
+    expect(checkRateLimit).toHaveBeenCalledTimes(2);
+    expect(getOfferDefinitions).not.toHaveBeenCalled();
   });
 });

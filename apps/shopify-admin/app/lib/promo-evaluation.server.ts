@@ -61,20 +61,6 @@ export async function handleEvaluationRequest(
   shop: EvaluationShop,
   loggedInCustomerId: string | null,
 ): Promise<Response> {
-  // Shop-wide ceiling first — cheap (keyed only by shop, no body parsing
-  // needed) so a flood against one shop is throttled before it can cost a
-  // body read for every request.
-  const shopRateLimit = await checkRateLimit(`evaluate:shop:${shop.id}`, { limit: 3_000, windowMs: 60_000 });
-  if (!shopRateLimit.ok) {
-    return apiError(request, {
-      status: 429,
-      code: "RATE_LIMITED",
-      message: "Too many evaluation requests for this shop.",
-      retryable: true,
-      retryAfterSeconds: shopRateLimit.retryAfterSeconds,
-    });
-  }
-
   const body = await readJsonBody<unknown>(request, {
     maxBytes: MAX_EVALUATION_BODY_BYTES,
     tooLargeMessage: "Evaluation payload is too large.",
@@ -94,12 +80,25 @@ export async function handleEvaluationRequest(
     });
   }
 
-  // Keyed by the caller's actual identity, not IP: behind the app proxy the IP
-  // can be Shopify's own, which would otherwise merge every anonymous visitor
-  // into one shared bucket. Falls back to the cart token, then IP as a last
-  // resort (e.g. no cart yet).
+  // Identity limit is keyed by the caller's actual identity, not IP: behind
+  // the app proxy the IP can be Shopify's own, which would otherwise merge
+  // every anonymous visitor into one shared bucket. Falls back to the cart
+  // token, then IP as a last resort (e.g. no cart yet). Both limits run in
+  // parallel — each is a Redis round trip on the hot path.
   const identity = loggedInCustomerId ?? parsed.data.cart.token ?? getClientIp(request);
-  const rateLimit = await checkRateLimit(`evaluate:${shop.id}:${identity}`, { limit: 120, windowMs: 60_000 });
+  const [shopRateLimit, rateLimit] = await Promise.all([
+    checkRateLimit(`evaluate:shop:${shop.id}`, { limit: 3_000, windowMs: 60_000 }),
+    checkRateLimit(`evaluate:${shop.id}:${identity}`, { limit: 120, windowMs: 60_000 }),
+  ]);
+  if (!shopRateLimit.ok) {
+    return apiError(request, {
+      status: 429,
+      code: "RATE_LIMITED",
+      message: "Too many evaluation requests for this shop.",
+      retryable: true,
+      retryAfterSeconds: shopRateLimit.retryAfterSeconds,
+    });
+  }
   if (!rateLimit.ok) {
     return apiError(request, {
       status: 429,
