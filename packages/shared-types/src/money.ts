@@ -32,7 +32,7 @@ export function capDiscount(discountCents: number, priceCents: number): number {
 
 /** Currency decimal places (zero-decimal currencies like JPY = 0). */
 export const ZERO_DECIMAL_CURRENCIES = new Set([
-  "BIF", "CLP", "GNF", "ISK", "JPY", "KMF", "KRW", "MGA", "PYG", "RWF",
+  "BIF", "CLP", "GNF", "ISK", "JPY", "KMF", "KRW", "MGA", "DJF", "PYG", "RWF",
   "UGX", "VND", "VUV", "XAF", "XOF", "XPF",
 ]);
 

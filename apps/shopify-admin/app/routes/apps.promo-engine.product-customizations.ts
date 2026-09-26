@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { and, eq } from "drizzle-orm";
 import { offerRewards, offers, variantCache } from "@promo/db";
 import { getSignedShop } from "../lib/app-proxy-auth.server.js";
+import { proxyRateLimitResponse } from "../lib/proxy-rate-limit.server.js";
 import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -30,6 +31,8 @@ function discountedCents(originalCents: number, discountType: string, discountVa
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const { id: shopId, currencyCode, db } = await getSignedShop(request);
+    const limited = await proxyRateLimitResponse(request, "product-customizations", shopId, 240);
+    if (limited) return limited;
     const url = new URL(request.url);
     const offerId = url.searchParams.get("offer_id");
     const variantId = url.searchParams.get("variant_id");

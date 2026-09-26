@@ -721,6 +721,7 @@ function functionDiscountValue(
     "ISK",
     "KMF",
     "MGA",
+    "DJF",
     "PYG",
     "RWF",
     "UGX",

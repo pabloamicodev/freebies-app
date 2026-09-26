@@ -60,6 +60,7 @@ pub fn is_zero_decimal(currency_code: &str) -> bool {
             | "ISK"
             | "KMF"
             | "MGA"
+            | "DJF"
             | "PYG"
             | "RWF"
             | "UGX"

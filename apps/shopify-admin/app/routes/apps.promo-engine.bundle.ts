@@ -10,6 +10,7 @@ import {
   variantCache,
 } from "@promo/db";
 import { getSignedShop } from "../lib/app-proxy-auth.server.js";
+import { proxyRateLimitResponse } from "../lib/proxy-rate-limit.server.js";
 import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
 import { isEligibleBundlePage } from "../lib/bundle-page-eligibility.js";
 
@@ -30,6 +31,8 @@ function sourceIds(value: unknown): string[] {
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const { id: shopId, currencyCode, db } = await getSignedShop(request);
+    const limited = await proxyRateLimitResponse(request, "bundle", shopId, 120);
+    if (limited) return limited;
     const requestUrl = new URL(request.url);
     const requestedOfferId = requestUrl.searchParams.get("offer_id")?.trim() || null;
     const requestedPageUrl = requestUrl.searchParams.get("page_url")?.trim() || null;
