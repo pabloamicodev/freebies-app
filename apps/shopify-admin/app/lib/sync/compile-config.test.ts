@@ -477,6 +477,70 @@ describe("compileOfferConfig", () => {
     expect(result.customerAmountSpentMaxCents).toBe(9_999);
   });
 
+  it("routes specific_product operator 'any' into the any-of sets, not the all-of requirements", () => {
+    const result = compileOfferConfig(
+      offer(),
+      [
+        condition(
+          "specific_product",
+          {
+            requirements: [
+              { productId: "gid://shopify/Product/trigger-a", trackMode: "product", minQuantity: 1 },
+              { variantId: "gid://shopify/ProductVariant/trigger-b", trackMode: "variant", minQuantity: 1 },
+            ],
+          },
+          "any",
+        ),
+      ],
+      [],
+      null,
+      1,
+    );
+    expect(result.requirements).toEqual([]);
+    expect(result.requiredProductIds).toEqual([]);
+    expect(result.requiredVariantIds).toEqual([]);
+    expect(result.anyRequiredProductIds).toEqual(["gid://shopify/Product/trigger-a"]);
+    expect(result.anyRequiredVariantIds).toEqual(["gid://shopify/ProductVariant/trigger-b"]);
+  });
+
+  it("compiles a cart_attribute condition in 'exists' matchMode without a value", () => {
+    const result = compileOfferConfig(
+      offer(),
+      [condition("cart_attribute", { key: "source", matchMode: "exists" })],
+      [],
+      null,
+      1,
+    );
+    expect(result.cartAttributeConditions).toEqual([
+      { key: "source", matchMode: "exists", minMatchingQuantity: 1 },
+    ]);
+  });
+
+  it("compiles a requiredLineAttribute filter onto a product reward target", () => {
+    const result = compileOfferConfig(
+      offer(),
+      [],
+      [
+        shippingReward({
+          rewardType: "product_discount",
+          discountType: "percentage",
+          value: { amount: 25, currencyCode: "USD" },
+          target: {
+            productIds: ["gid://shopify/Product/subscription-bundle"],
+            requiredLineAttribute: { key: "__bundle_type", value: "two" },
+          },
+        }),
+      ] as CompileArgs[2],
+      null,
+      1,
+    );
+    expect(result.productRewards).toEqual([
+      expect.objectContaining({
+        requiredLineAttribute: { key: "__bundle_type", value: "two" },
+      }),
+    ]);
+  });
+
   it("compiles maxUnitsPerLine and maxUnitsPerVariant product reward caps", () => {
     const result = compileOfferConfig(
       offer(),

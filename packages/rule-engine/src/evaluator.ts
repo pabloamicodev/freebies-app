@@ -6,7 +6,7 @@ import type {
   EligibilityReason,
 } from "@promo/shared-types";
 import { err, type Result } from "@promo/shared-types";
-import { buildCartHash, extractGiftLines } from "./cart-parser.js";
+import { buildCartHash, extractGiftLines, extractQualifyingLines } from "./cart-parser.js";
 import { evaluateCartValue, type CartValueConditionValue } from "./conditions/cart-value.js";
 import { evaluateCartQuantity, type CartQuantityConditionValue } from "./conditions/cart-quantity.js";
 import { evaluateSpecificProduct, type SpecificProductConditionValue } from "./conditions/specific-product.js";
@@ -537,7 +537,7 @@ function evaluateCondition(
       return evaluateCartQuantity(input.cart, cond.value as CartQuantityConditionValue);
 
     case "specific_product":
-      return evaluateSpecificProduct(input.cart, cond.value as SpecificProductConditionValue);
+      return evaluateSpecificProduct(input.cart, cond.value as SpecificProductConditionValue, cond.operator);
 
     case "customer_tags":
       return evaluateCustomerTags(input.customer, cond.value as CustomerTagsConditionValue);
@@ -569,10 +569,10 @@ function evaluateCondition(
       return evaluateSubscriptionCondition(input.cart, cond.value as SubscriptionConditionValue);
 
     case "specific_link":
-      return evaluateUrlParam(input.requestedUrl, cond.value as UrlParamConditionValue);
+      return evaluateSourcePages(input, (url) => evaluateUrlParam(url, cond.value as UrlParamConditionValue));
 
     case "page_url":
-      return evaluatePageUrl(input.requestedUrl, cond.value as PageUrlConditionValue);
+      return evaluateSourcePages(input, (url) => evaluatePageUrl(url, cond.value as PageUrlConditionValue));
 
     case "customer_location":
       return evaluateCountry(
@@ -593,4 +593,24 @@ function evaluateCondition(
         message: `Condition type '${cond.conditionType}' is not supported by this evaluator version`,
       });
   }
+}
+
+/**
+ * Checkout only sees the page each line was added from (`_promo_page_url`,
+ * stamped by the metadata bridge), not where the shopper is now — evaluate
+ * the same thing so the storefront never promises what checkout rejects.
+ */
+function evaluateSourcePages(
+  input: EvaluationInput,
+  check: (url: string | null) => Result<EligibilityReason, EligibilityReason>,
+): Result<EligibilityReason, EligibilityReason> {
+  const pages = extractQualifyingLines(input.cart)
+    .map((line) => line.properties["_promo_page_url"])
+    .filter((url): url is string => typeof url === "string" && url.length > 0);
+  let result = check(null);
+  for (const url of pages) {
+    result = check(url);
+    if (result.ok) return result;
+  }
+  return result;
 }

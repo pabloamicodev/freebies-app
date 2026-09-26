@@ -8,7 +8,19 @@ export interface ShopContext {
   shopDomain: string;
   shopId: string;
   currencyCode: string;
+  /** IANA timezone (e.g. "America/New_York") — fetched from Admin API at install, used to
+   * interpret wizard/schedule "local time" inputs as wall-clock in the shop's own zone. */
+  timezone: string;
   db: ReturnType<typeof getDb>;
+}
+
+function isValidTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function getShopContext(request: Request): Promise<ShopContext> {
@@ -17,7 +29,7 @@ export async function getShopContext(request: Request): Promise<ShopContext> {
   const db = getDb();
 
   const shopRows = await db
-    .select({ id: shops.id, currencyCode: shops.currencyCode })
+    .select({ id: shops.id, currencyCode: shops.currencyCode, timezone: shops.timezone })
     .from(shops)
     .where(eq(shops.myshopifyDomain, session.shop))
     .limit(1);
@@ -31,6 +43,7 @@ export async function getShopContext(request: Request): Promise<ShopContext> {
     shopDomain: session.shop,
     shopId: shopRow.id,
     currencyCode: shopRow.currencyCode ?? "USD",
+    timezone: shopRow.timezone && isValidTimeZone(shopRow.timezone) ? shopRow.timezone : "UTC",
     db,
   };
 }

@@ -12,6 +12,7 @@ import {
   useCartLines,
   useSettings,
   useTotalAmount,
+  useTranslate,
 } from "@shopify/ui-extensions/checkout/preact";
 import { APP_URL } from "./app-url.js";
 
@@ -48,12 +49,14 @@ function CheckoutUpsell() {
   const cartLines = useCartLines();
   const totalAmount = useTotalAmount();
   const settings = useSettings<{ offer_id?: string }>();
+  const translate = useTranslate();
 
   const [config, setConfig] = useState<UpsellConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const [addError, setAddError] = useState(false);
 
   const offerId = typeof settings.offer_id === "string" ? settings.offer_id : "";
   const shopDomain = api.shop.myshopifyDomain;
@@ -152,6 +155,7 @@ function CheckoutUpsell() {
   const handleAdd = useCallback(async () => {
     if (!config?.product) return;
     setAdding(true);
+    setAddError(false);
     const metadata = JSON.stringify({
       _promo_engine_line_type: "upsell",
       _promo_engine_offer_id: offerId,
@@ -167,7 +171,11 @@ function CheckoutUpsell() {
           { key: "_promo_engine_offer_id", value: offerId },
         ],
       });
-      if (result.type === "success") setAdded(true);
+      if (result.type === "success") {
+        setAdded(true);
+      } else {
+        setAddError(true);
+      }
     } finally {
       setAdding(false);
     }
@@ -185,7 +193,7 @@ function CheckoutUpsell() {
     }).format(amount);
 
   return (
-    <s-section heading={config.message || "You might also like"}>
+    <s-section heading={config.message || translate("upsell.heading")}>
       <s-stack direction="block" gap="base">
         <s-divider />
         <s-stack direction="inline" gap="base" alignItems="center">
@@ -213,17 +221,20 @@ function CheckoutUpsell() {
             onClick={handleAdd}
             loading={adding}
             disabled={!product.isAvailable}
-            accessibilityLabel={`Add ${product.title} to cart`}
+            accessibilityLabel={translate("upsell.addAccessibilityLabel", { title: product.title })}
           >
-            {product.isAvailable ? config.buttonText || "Add" : "Sold out"}
+            {product.isAvailable ? config.buttonText || translate("upsell.add") : translate("upsell.soldOut")}
           </s-button>
         </s-stack>
+        {addError ? (
+          <s-text tone="critical">{translate("upsell.addError")}</s-text>
+        ) : null}
         <s-button
           variant="secondary"
           onClick={() => setDismissed(true)}
-          accessibilityLabel="Dismiss offer"
+          accessibilityLabel={translate("upsell.dismissAccessibilityLabel")}
         >
-          No thanks
+          {translate("upsell.noThanks")}
         </s-button>
       </s-stack>
     </s-section>

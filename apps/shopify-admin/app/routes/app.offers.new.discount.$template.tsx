@@ -5,11 +5,10 @@
  *         /app/offers/new/discount/cart     → Cart discount wizard
  */
 
-import { Form, useActionData, useNavigate, useNavigation, redirect, useParams } from "react-router";
+import { Form, useActionData, useLoaderData, useNavigate, useNavigation, redirect, useParams } from "react-router";
 import { useCallback, useEffect } from "react";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { Toast } from "../components/Toast.js";
-import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
 import { statusForSubmit } from "../lib/offer-scheduling.server.js";
@@ -18,6 +17,7 @@ import {
   parseJsonRecord,
   parseJsonStringArray,
   requiredText,
+  nowInZone,
 } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
@@ -41,15 +41,15 @@ const SLUG_TO_TEMPLATE: Record<string, string> = {
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  return {};
+  const { timezone } = await getShopContext(request);
+  return { timezone, nowLocal: nowInZone(timezone) };
 };
 
 // ─── Action ──────────────────────────────────────────────────────────────────
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
-  const { shopId, db, session } = context;
+  const { shopId, db, session, timezone } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
@@ -60,7 +60,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const internalName = internalNameResult.data!;
   const publicTitle = publicTitleResult.data!;
   const description = (formData.get("description") as string)?.trim() || null;
-  const dateRange = parseDateRange(formData);
+  const dateRange = parseDateRange(formData, timezone);
   if (dateRange.error) return { error: dateRange.error };
   const { startsAt, endsAt } = dateRange.data!;
   const discountTemplate = formData.get("discountTemplate") as string;
@@ -258,6 +258,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           priority: 100,
           startsAt: startsAt ?? new Date(),
           endsAt,
+          timezone,
         })
         .returning({ id: offers.id });
       if (!offer) throw new Error("Failed to create offer");
@@ -423,6 +424,7 @@ function createCartTier(values: Omit<CartTier, "id">): CartTier {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function NewDiscountOfferPage() {
+  const { nowLocal } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const { state } = useNavigation();
@@ -446,7 +448,7 @@ export default function NewDiscountOfferPage() {
     internalName: defaults.internalName,
     publicTitle: defaults.publicTitle,
     description: "",
-    startsAt: new Date().toISOString().slice(0, 16),
+    startsAt: nowLocal,
     endsAt: "",
     applyTo: templateId === "volume" ? "selected_products" : "any_product",
     productPickerOpen: false,

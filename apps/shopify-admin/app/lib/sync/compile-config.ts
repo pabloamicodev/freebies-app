@@ -56,6 +56,8 @@ export interface CompiledOffer {
   stopLowerPriority: boolean;
   requiredProductIds: string[];
   requiredVariantIds: string[];
+  anyRequiredProductIds: string[];
+  anyRequiredVariantIds: string[];
   excludedProductIds: string[];
   giftVariantIds: string[];
   giftProductIds: string[];
@@ -93,8 +95,8 @@ export interface CompiledOffer {
 
 export interface CompiledAttributeCondition {
   key: string;
-  value: string;
-  matchMode: "equals" | "not_equals";
+  value?: string;
+  matchMode: "equals" | "not_equals" | "exists";
   minMatchingQuantity: number;
 }
 
@@ -150,6 +152,8 @@ export interface CompiledProductReward {
   selectionMode: "all" | "cheapest" | "most_expensive";
   countRule: "all" | "unique";
   discountPercentageOnGifts: number;
+  /** Only lines whose packed metadata carries this key/value qualify (e.g. __bundle_type). */
+  requiredLineAttribute?: { key: string; value: string };
 }
 
 export interface CompiledProductDiscountTier {
@@ -218,6 +222,8 @@ export function compileOfferConfig(
     stopLowerPriority: policy?.stopLowerPriority ?? false,
     requiredProductIds: [],
     requiredVariantIds: [],
+    anyRequiredProductIds: [],
+    anyRequiredVariantIds: [],
     excludedProductIds: [],
     giftVariantIds: [],
     giftProductIds: [],
@@ -260,6 +266,8 @@ export function compileOfferConfig(
         config.cartQuantityThreshold = Number(value["minQuantity"] ?? 0);
         if (Number(value["maxQuantity"] ?? 0) > 0)
           config.cartQuantityMax = Number(value["maxQuantity"]);
+        const quantityFilter = value["scopeFilter"] as Record<string, string[]> | undefined;
+        if (quantityFilter?.excludeProductIds) config.excludedProductIds.push(...quantityFilter.excludeProductIds);
         break;
       case "subscription_product_type":
         if (
@@ -301,6 +309,17 @@ export function compileOfferConfig(
             minQuantity?: number;
             maxQuantity?: number;
           }>) ?? [];
+        // "any" qualifies on the mere presence of any one trigger product/variant (no
+        // quantity threshold), matching the HPN product_trigger_free_gift semantics —
+        // kept in a separate any-of set so it never gets AND-ed with "all" requirements.
+        if (cond.operator === "any") {
+          for (const req of reqs) {
+            if (req.trackMode === "variant" && req.variantId)
+              config.anyRequiredVariantIds.push(req.variantId);
+            else if (req.productId) config.anyRequiredProductIds.push(req.productId);
+          }
+          break;
+        }
         for (const req of reqs) {
           if (req.trackMode === "variant" && req.variantId)
             config.requiredVariantIds.push(req.variantId);
@@ -347,14 +366,21 @@ export function compileOfferConfig(
           minMatchingQuantity: Math.max(1, Number(value["minMatchingQuantity"] ?? 1)),
         });
         break;
-      case "cart_attribute":
+      case "cart_attribute": {
+        const matchMode =
+          value["matchMode"] === "exists"
+            ? "exists"
+            : value["matchMode"] === "not_equals"
+              ? "not_equals"
+              : "equals";
         config.cartAttributeConditions!.push({
           key: String(value["key"] ?? ""),
-          value: String(value["value"] ?? ""),
-          matchMode: value["matchMode"] === "not_equals" ? "not_equals" : "equals",
+          ...(matchMode === "exists" ? {} : { value: String(value["value"] ?? "") }),
+          matchMode,
           minMatchingQuantity: 1,
         });
         break;
+      }
       case "customer_tags":
         config.requiredCustomerTags = Array.isArray(value["includeTags"])
           ? value["includeTags"].filter((tag): tag is string => typeof tag === "string")
@@ -585,6 +611,16 @@ export function compileOfferConfig(
           100,
           Math.max(0, Number(target["discountPercentageOnGifts"] ?? 100)),
         ),
+        ...(() => {
+          const attribute = target["requiredLineAttribute"];
+          if (!attribute || typeof attribute !== "object") return {};
+          const candidate = attribute as Record<string, unknown>;
+          return typeof candidate["key"] === "string" &&
+            typeof candidate["value"] === "string" &&
+            candidate["value"].length > 0
+            ? { requiredLineAttribute: { key: candidate["key"], value: candidate["value"] } }
+            : {};
+        })(),
       });
     }
     if (reward.rewardType === "order_discount") {
@@ -678,6 +714,8 @@ export function compileOfferConfig(
 
   config.requiredProductIds = [...new Set(config.requiredProductIds)];
   config.requiredVariantIds = [...new Set(config.requiredVariantIds)];
+  config.anyRequiredProductIds = [...new Set(config.anyRequiredProductIds)];
+  config.anyRequiredVariantIds = [...new Set(config.anyRequiredVariantIds)];
   config.excludedProductIds = [...new Set(config.excludedProductIds)];
   config.giftVariantIds = [...new Set(config.giftVariantIds)];
   config.giftProductIds = [...new Set(config.giftProductIds)];
@@ -852,6 +890,8 @@ const OFFER_DEFAULTS: FieldDefaults = {
   stopLowerPriority: false,
   requiredProductIds: [],
   requiredVariantIds: [],
+  anyRequiredProductIds: [],
+  anyRequiredVariantIds: [],
   excludedProductIds: [],
   giftVariantIds: [],
   giftProductIds: [],

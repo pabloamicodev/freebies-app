@@ -7,6 +7,7 @@ import {
   getDb,
   offers,
   offerRewards,
+  offerCombinationPolicies,
   productCache,
   appSettings,
   variantCache,
@@ -129,6 +130,47 @@ export async function getDashboardWarnings(
         });
         warnedOfferIds.add(reward.offerId);
       }
+    }
+  }
+
+  // ── 3b. Active offer restricts combination shop-wide ─────────────────────────
+  // Shopify's combinesWith lives on the app's discount node, not per-offer — so
+  // compile-config ANDs every active offer's flags together (see compile-config.ts).
+  // One offer turning a class off silences that class for ALL Promo Engine offers.
+  if (activeOffers.length > 0) {
+    const activeOfferIds = activeOffers.map((o) => o.id);
+    const policies = await db
+      .select({
+        offerId: offerCombinationPolicies.offerId,
+        combinesWithOrderDiscounts: offerCombinationPolicies.combinesWithOrderDiscounts,
+        combinesWithProductDiscounts: offerCombinationPolicies.combinesWithProductDiscounts,
+        combinesWithShippingDiscounts: offerCombinationPolicies.combinesWithShippingDiscounts,
+      })
+      .from(offerCombinationPolicies)
+      .where(
+        and(
+          eq(offerCombinationPolicies.shopId, shopId),
+          inArray(offerCombinationPolicies.offerId, activeOfferIds),
+        ),
+      );
+
+    const restricting = policies.filter(
+      (policy) =>
+        !policy.combinesWithOrderDiscounts ||
+        !policy.combinesWithProductDiscounts ||
+        !policy.combinesWithShippingDiscounts,
+    );
+    if (restricting.length > 0) {
+      const names = restricting
+        .map((policy) => activeOfferById.get(policy.offerId)?.internalName ?? policy.offerId.slice(0, 8))
+        .join(", ");
+      warnings.push({
+        code: "combination_policy_restricts_shop_wide",
+        severity: "warning",
+        title: "An offer limits combinations for all active offers",
+        message: `Shopify applies combination settings per app discount, so the restriction on "${names}" applies to every active Promo Engine offer, not just that one. Review combination policies if offers aren't stacking as expected.`,
+        action: { label: "Review Offers", url: "/app/offers" },
+      });
     }
   }
 

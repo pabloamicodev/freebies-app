@@ -78,6 +78,16 @@ export function isUnscopedTaggedReward(rewardType: string, target: unknown): boo
   return !hasAllowlist;
 }
 
+/** The Function computes cart value/quantity over every non-excluded line;
+ * only `excludeProductIds` of a scopeFilter compiles through. */
+export function hasUnenforcedScopeFilter(value: unknown): boolean {
+  const filter = (value as { scopeFilter?: Record<string, unknown> } | null)?.scopeFilter;
+  if (!filter || typeof filter !== "object") return false;
+  return Object.entries(filter).some(
+    ([key, list]) => key !== "excludeProductIds" && Array.isArray(list) && list.length > 0,
+  );
+}
+
 export async function validateOffersPublishable(
   db: Db,
   shopId: string,
@@ -184,6 +194,12 @@ export async function validateOffersPublishable(
         return {
           ok: false,
           error: `Cannot publish "${offer.internalName}": ${condition.conditionType} is invalid. ${firstIssueMessage(valueResult)}`,
+        };
+      }
+      if (hasUnenforcedScopeFilter(condition.value)) {
+        return {
+          ok: false,
+          error: `Cannot publish "${offer.internalName}": ${condition.conditionType} counts only some products, but checkout can only exclude specific products. Remove the product/collection/vendor/type scope or use product exclusions.`,
         };
       }
     }

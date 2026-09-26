@@ -137,6 +137,22 @@ function parseLocalDateTimeInZone(raw: string, timeZone: string): Date | null {
   return new Date(utcGuess.getTime() - offset);
 }
 
+/** Formats "now" as a wall-clock "YYYY-MM-DDTHH:mm" string in the given zone —
+ * for pre-filling datetime-local inputs so they read as local time, not UTC. */
+export function nowInZone(timeZone: string): string {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = Object.fromEntries(formatter.formatToParts(new Date()).map((part) => [part.type, part.value]));
+  return `${parts["year"]}-${parts["month"]}-${parts["day"]}T${parts["hour"]}:${parts["minute"]}`;
+}
+
 export function parseDateRange(formData: FormData, timeZone = "UTC"): ValidationResult<{ startsAt: Date | null; endsAt: Date | null }> {
   const startsAtRaw = (formData.get("startsAt") as string | null) ?? "";
   const endsAtRaw = (formData.get("endsAt") as string | null) ?? "";

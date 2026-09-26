@@ -493,3 +493,41 @@ describe("evaluate — one-use-per-customer", () => {
     expect(result.qualifiedOffers).toHaveLength(0);
   });
 });
+
+describe("evaluate — page_url matches the page lines were added from", () => {
+  const offer = () => {
+    const base = makeGiftOffer("landing", 1000);
+    base.conditions.push({
+      id: "cond-page",
+      scope: "sub",
+      conditionType: "page_url",
+      operator: "eq",
+      value: { patterns: ["/pages/landing"], matchMode: "contains", caseSensitive: false },
+      isEnabled: true,
+      sortOrder: 1,
+    });
+    return base;
+  };
+  const cartFrom = (page: string | null) => {
+    const cart = makeCart(5000);
+    if (page) cart.lines[0]!.properties = { _promo_page_url: page };
+    return cart;
+  };
+  const ctx = (): EvaluatorContext => ({ offers: [offer()], oneUseStates: [], now: NOW });
+
+  it("qualifies when a line was added from the landing, even after browsing away", async () => {
+    const result = await evaluate(
+      makeInput(cartFrom("https://shop.test/pages/landing"), { requestedUrl: "https://shop.test/cart" }),
+      ctx(),
+    );
+    expect(result.qualifiedOffers).toHaveLength(1);
+  });
+
+  it("does not qualify just because the shopper is on the landing now", async () => {
+    const result = await evaluate(
+      makeInput(cartFrom(null), { requestedUrl: "https://shop.test/pages/landing" }),
+      ctx(),
+    );
+    expect(result.qualifiedOffers).toHaveLength(0);
+  });
+});

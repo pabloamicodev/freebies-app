@@ -39,11 +39,16 @@ pub fn run(input: Input) -> Result<schema::CartDeliveryOptionsDiscountsGenerateR
         .subtotal_amount()
         .currency_code()
         .to_string();
-    let subtotal_cents = qualifying_subtotal_cents(
+    // Tier thresholds and fixed amounts are in the shop currency; the cart is
+    // in the presentment currency.
+    let rate = input.presentment_currency_rate().as_f64();
+    let subtotal_cents = (qualifying_subtotal_cents(
         input.cart().lines(),
         input.cart().cost().subtotal_amount().amount().as_f64(),
         &subtotal_currency,
-    );
+    ) as f64
+        / rate)
+        .floor() as i64;
 
     let mut offers = config.shipping_offers.clone();
     offers.sort_by(|left, right| {
@@ -61,7 +66,7 @@ pub fn run(input: Input) -> Result<schema::CartDeliveryOptionsDiscountsGenerateR
             continue;
         }
         let is_scoped = offer.scope_mode != "sitewide";
-        let value = tiered_delivery_discount_value(offer, subtotal_cents, has_subscription_line);
+        let value = tiered_delivery_discount_value(offer, subtotal_cents, has_subscription_line, rate);
         let Some(value) = value else {
             // A scoped (landing/quiz) offer that qualifies wins outright —
             // no falling through to a lower-priority or sitewide offer when
@@ -230,6 +235,7 @@ fn tiered_delivery_discount_value(
     offer: &CompiledShippingOffer,
     subtotal_cents: i64,
     has_subscription_line: bool,
+    rate: f64,
 ) -> Option<schema::DeliveryDiscountCandidateValue> {
     let active_condition = if has_subscription_line {
         "has_subscription"
@@ -268,7 +274,7 @@ fn tiered_delivery_discount_value(
         )),
         "fixed_amount" => Some(schema::DeliveryDiscountCandidateValue::FixedAmount(
             schema::FixedAmount {
-                amount: shopify_function::scalars::Decimal(matching_tier.discount_value),
+                amount: shopify_function::scalars::Decimal(matching_tier.discount_value * rate),
             },
         )),
         _ => None,
@@ -353,6 +359,7 @@ mod tests {
     ) -> String {
         format!(
             r#"{{
+                "presentmentCurrencyRate": "1.0",
                 "discount": {{
                     "discountClasses": {discount_classes},
                     "metafield": {{ "value": {config} }}

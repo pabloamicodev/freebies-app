@@ -50,6 +50,32 @@ function parseShippingTiers(
   }
 }
 
+function parsePositiveIntOrUnset(raw: FormDataEntryValue | null): { value?: number; error?: true } {
+  if (typeof raw !== "string" || raw.trim() === "") return {};
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) return { error: true };
+  return { value: n };
+}
+
+function targetSummaryParts(target: unknown): string[] {
+  if (!target || typeof target !== "object") return [];
+  const t = target as Record<string, unknown>;
+  const parts: string[] = [];
+  if (Array.isArray(t["productIds"]) && t["productIds"].length)
+    parts.push(`${t["productIds"].length} product${t["productIds"].length === 1 ? "" : "s"}`);
+  if (Array.isArray(t["variantIds"]) && t["variantIds"].length)
+    parts.push(`${t["variantIds"].length} variant${t["variantIds"].length === 1 ? "" : "s"}`);
+  if (t["scope"] === "cart") parts.push("entire cart");
+  if (typeof t["scopeMode"] === "string" && t["scopeMode"] !== "sitewide")
+    parts.push(`scope: ${t["scopeMode"]}`);
+  if (typeof t["lineQuantityEquals"] === "number") parts.push(`qty = ${t["lineQuantityEquals"]}`);
+  if (typeof t["maxUnitsTotal"] === "number") parts.push(`max ${t["maxUnitsTotal"]} total`);
+  if (typeof t["maxUnitsPerProduct"] === "number") parts.push(`max ${t["maxUnitsPerProduct"]}/product`);
+  if (typeof t["maxUnitsPerLine"] === "number") parts.push(`max ${t["maxUnitsPerLine"]}/line`);
+  if (typeof t["maxUnitsPerVariant"] === "number") parts.push(`max ${t["maxUnitsPerVariant"]}/variant`);
+  return parts;
+}
+
 function escapeHtmlAttribute(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -280,7 +306,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       }
       if (rewardType === "product_discount") {
         const lineQuantityEqualsRaw = Number(formData.get("lineQuantityEquals") ?? 0);
-        const maxUnitsTotalRaw = Number(formData.get("maxUnitsTotal") ?? 0);
         const subscriptionMode = formData.get("subscriptionMode");
         const productScopeMode = formData.get("productScopeMode");
         if (
@@ -290,6 +315,25 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         ) {
           return { error: "Product discount scope is invalid." };
         }
+        const productTargetType = formData.get("productTargetType") === "products" ? "products" : "variants";
+        if (variantGids.length > 0) {
+          target = productTargetType === "products" ? { productIds: variantGids } : { variantIds: variantGids };
+        }
+        if (productScopeMode === "landing" && variantGids.length === 0) {
+          return { error: "Choose the products this landing discount applies to." };
+        }
+        const maxUnitsTotalField = parsePositiveIntOrUnset(formData.get("maxUnitsTotal"));
+        if (maxUnitsTotalField.error)
+          return { error: "Maximum discounted units in total must be a positive whole number." };
+        const maxUnitsPerProductField = parsePositiveIntOrUnset(formData.get("maxUnitsPerProduct"));
+        if (maxUnitsPerProductField.error)
+          return { error: "Maximum discounted units per product must be a positive whole number." };
+        const maxUnitsPerLineField = parsePositiveIntOrUnset(formData.get("maxUnitsPerLine"));
+        if (maxUnitsPerLineField.error)
+          return { error: "Maximum discounted units per line must be a positive whole number." };
+        const maxUnitsPerVariantField = parsePositiveIntOrUnset(formData.get("maxUnitsPerVariant"));
+        if (maxUnitsPerVariantField.error)
+          return { error: "Maximum discounted units per variant must be a positive whole number." };
         let priceTiers: Array<{ quantity: number; targetPricePerUnit: number }> = [];
         const priceTiersRaw = formData.get("productPriceTiers");
         if (typeof priceTiersRaw === "string" && priceTiersRaw) {
@@ -317,8 +361,15 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           ...(Number.isInteger(lineQuantityEqualsRaw) && lineQuantityEqualsRaw > 0
             ? { lineQuantityEquals: lineQuantityEqualsRaw }
             : {}),
-          ...(Number.isInteger(maxUnitsTotalRaw) && maxUnitsTotalRaw > 0
-            ? { maxUnitsTotal: maxUnitsTotalRaw }
+          ...(maxUnitsTotalField.value !== undefined ? { maxUnitsTotal: maxUnitsTotalField.value } : {}),
+          ...(maxUnitsPerProductField.value !== undefined
+            ? { maxUnitsPerProduct: maxUnitsPerProductField.value }
+            : {}),
+          ...(maxUnitsPerLineField.value !== undefined
+            ? { maxUnitsPerLine: maxUnitsPerLineField.value }
+            : {}),
+          ...(maxUnitsPerVariantField.value !== undefined
+            ? { maxUnitsPerVariant: maxUnitsPerVariantField.value }
             : {}),
           subscriptionMode:
             subscriptionMode === "subscription_only" || subscriptionMode === "one_time_only"
@@ -527,6 +578,7 @@ export default function OfferRewardsPage() {
     requiredAnchorMinQuantity: "1",
     requiresAnchorSubscription: false,
     productScopeMode: "sitewide" as "sitewide" | "landing" | "quiz_bundle",
+    productTargetType: "variants" as "products" | "variants",
     productPriceTiers: [
       { key: "product-tier-1", quantity: "1", targetPricePerUnit: "" },
     ] as ProductPriceTierDraft[],
@@ -549,6 +601,7 @@ export default function OfferRewardsPage() {
     requiredAnchorMinQuantity,
     requiresAnchorSubscription,
     productScopeMode,
+    productTargetType,
     productPriceTiers,
   } = rewardState;
   const setAdding = createFieldSetter(setRewardField, "adding");
@@ -577,6 +630,7 @@ export default function OfferRewardsPage() {
     "requiresAnchorSubscription",
   );
   const setProductScopeMode = createFieldSetter(setRewardField, "productScopeMode");
+  const setProductTargetType = createFieldSetter(setRewardField, "productTargetType");
   const setProductPriceTiers = createFieldSetter(setRewardField, "productPriceTiers");
 
   if (!offer) return <NotFound message="Offer not found." />;
@@ -634,9 +688,17 @@ export default function OfferRewardsPage() {
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
         title={
-          rewardType === "product_discount" ? "Select Discounted Variants" : "Select Gift Products"
+          rewardType === "product_discount"
+            ? productTargetType === "products"
+              ? "Select Discounted Products"
+              : "Select Discounted Variants"
+            : "Select Gift Products"
         }
-        mode={rewardType === "product_gift" ? "products" : "variants"}
+        mode={
+          rewardType === "product_gift" || (rewardType === "product_discount" && productTargetType === "products")
+            ? "products"
+            : "variants"
+        }
         allowMultiple={rewardType !== "product_gift"}
         selectedIds={selectedGiftGids}
         onSelect={setSelectedGiftGids}
@@ -730,6 +792,11 @@ export default function OfferRewardsPage() {
                     {r.isCustomerSelectable && (
                       <span className="b-badge b-badge-orange">Customer selects</span>
                     )}
+                    {targetSummaryParts(r.target).map((part) => (
+                      <span key={part} className="b-text-sm b-text-sub">
+                        {part}
+                      </span>
+                    ))}
                   </div>
 
                   {/* Right: delete button */}
@@ -1204,11 +1271,34 @@ export default function OfferRewardsPage() {
                     <>
                       <hr className="b-divider" />
 
+                      {rewardType === "product_discount" && (
+                        <div>
+                          <label className="b-label" htmlFor="productTargetType">
+                            Target type
+                          </label>
+                          <select
+                            id="productTargetType"
+                            name="productTargetType"
+                            className="b-select"
+                            value={productTargetType}
+                            onChange={(event) => {
+                              setProductTargetType(event.target.value as "products" | "variants");
+                              setSelectedGiftGids([]);
+                            }}
+                          >
+                            <option value="variants">Specific variants</option>
+                            <option value="products">Whole products (all variants)</option>
+                          </select>
+                        </div>
+                      )}
+
                       {/* Product picker */}
                       <div>
                         <p className="b-label" style={{ marginBottom: 8 }}>
                           {rewardType === "product_discount"
-                            ? "Discounted Variants"
+                            ? productTargetType === "products"
+                              ? "Discounted Products"
+                              : "Discounted Variants"
                             : "Gift Product"}
                         </p>
 
@@ -1254,7 +1344,9 @@ export default function OfferRewardsPage() {
                           onClick={() => setPickerOpen(true)}
                         >
                           {rewardType === "product_discount"
-                            ? "Select Discounted Variants"
+                            ? productTargetType === "products"
+                              ? "Select Discounted Products"
+                              : "Select Discounted Variants"
                             : "🎁 Select Gift Product"}
                         </button>
                         <input
@@ -1298,12 +1390,17 @@ export default function OfferRewardsPage() {
                             Or paste GIDs manually (one per line)
                           </label>
                           <textarea
+                            key={productTargetType}
                             id="variantGidsManual"
                             name="variantGidsManual"
                             className="b-input"
                             rows={2}
                             autoComplete="off"
-                            placeholder="gid://shopify/ProductVariant/12345"
+                            placeholder={
+                              productTargetType === "products"
+                                ? "gid://shopify/Product/12345"
+                                : "gid://shopify/ProductVariant/12345"
+                            }
                             style={{ resize: "vertical" }}
                           />
                           <p className="b-help">Optional: paste GIDs directly if you know them.</p>
@@ -1382,7 +1479,7 @@ export default function OfferRewardsPage() {
                               </div>
                               <div>
                                 <label className="b-label" htmlFor="maxUnitsTotal">
-                                  Maximum discounted units
+                                  Max discounted units in total
                                 </label>
                                 <input
                                   id="maxUnitsTotal"
@@ -1394,6 +1491,59 @@ export default function OfferRewardsPage() {
                                   placeholder="Optional"
                                   autoComplete="off"
                                 />
+                                <p className="b-help">Caps units discounted across the whole cart.</p>
+                              </div>
+                              <div>
+                                <label className="b-label" htmlFor="maxUnitsPerProduct">
+                                  Max discounted units per product
+                                </label>
+                                <input
+                                  key={`maxUnitsPerProduct-${productScopeMode}-${discountType}`}
+                                  id="maxUnitsPerProduct"
+                                  name="maxUnitsPerProduct"
+                                  type="number"
+                                  className="b-input"
+                                  min="1"
+                                  step="1"
+                                  defaultValue={
+                                    productScopeMode === "landing" && discountType === "free" ? "1" : ""
+                                  }
+                                  placeholder="Optional"
+                                  autoComplete="off"
+                                />
+                                <p className="b-help">Caps units discounted per distinct product.</p>
+                              </div>
+                              <div>
+                                <label className="b-label" htmlFor="maxUnitsPerLine">
+                                  Max discounted units per line
+                                </label>
+                                <input
+                                  id="maxUnitsPerLine"
+                                  name="maxUnitsPerLine"
+                                  type="number"
+                                  className="b-input"
+                                  min="1"
+                                  step="1"
+                                  placeholder="Optional"
+                                  autoComplete="off"
+                                />
+                                <p className="b-help">Caps units discounted per cart line.</p>
+                              </div>
+                              <div>
+                                <label className="b-label" htmlFor="maxUnitsPerVariant">
+                                  Max discounted units per variant
+                                </label>
+                                <input
+                                  id="maxUnitsPerVariant"
+                                  name="maxUnitsPerVariant"
+                                  type="number"
+                                  className="b-input"
+                                  min="1"
+                                  step="1"
+                                  placeholder="Optional"
+                                  autoComplete="off"
+                                />
+                                <p className="b-help">Caps units discounted per distinct variant.</p>
                               </div>
                               <div>
                                 <label className="b-label" htmlFor="subscriptionMode">

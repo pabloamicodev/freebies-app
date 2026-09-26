@@ -322,7 +322,7 @@ function GiftSlider({
                   {gift.variantTitle && <p class="pe-gift-variant">{gift.variantTitle}</p>}
                   <p class="pe-gift-price">
                     {gift.discountedPriceCents === 0 ? (
-                      <span class="pe-gift-free">Free</span>
+                      <span class="pe-gift-free">{payload.labels?.free ?? "Free"}</span>
                     ) : (
                       <>
                         <s>{formatMoney(gift.originalPriceCents, payload.currencyCode)}</s>{" "}
@@ -333,9 +333,16 @@ function GiftSlider({
                     )}
                   </p>
                   {gift.replacesTitle && (
-                    <p class="pe-gift-variant">Replaces {gift.replacesTitle} (out of stock)</p>
+                    <p class="pe-gift-variant">
+                      {(payload.labels?.replaces ?? "Replaces {{title}} (out of stock)").replace(
+                        "{{title}}",
+                        gift.replacesTitle,
+                      )}
+                    </p>
                   )}
-                  {unavailable && <p class="pe-gift-unavailable">Out of stock</p>}
+                  {unavailable && (
+                    <p class="pe-gift-unavailable">{payload.labels?.outOfStock ?? "Out of stock"}</p>
+                  )}
                 </button>
               );
             })}
@@ -365,10 +372,11 @@ function GiftSlider({
                 <span class="pe-sr-only">Updating gifts</span>
               </>
             ) : selected.size === 0 && initiallySelectedCount.current === 0 ? (
-              "Select a gift"
+              payload.labels?.selectPrompt ?? "Select a gift"
             ) : selected.size === 0 ? (
-              "Remove Gifts from Cart"
+              payload.labels?.remove ?? "Remove Gifts from Cart"
             ) : (
+              payload.labels?.confirm ??
               `Add ${selected.size > 0 ? selected.size : ""} Gift${selected.size !== 1 ? "s" : ""} to Cart`
             )}
           </button>

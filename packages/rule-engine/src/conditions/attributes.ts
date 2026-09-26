@@ -11,8 +11,8 @@ export interface LineAttributeConditionValue {
 
 export interface CartAttributeConditionValue {
   key: string;
-  value: string;
-  matchMode: "equals" | "not_equals";
+  value?: string;
+  matchMode: "equals" | "not_equals" | "exists";
 }
 
 export function evaluateLineAttribute(cart: NormalizedCart, condition: LineAttributeConditionValue): Result<EligibilityReason, EligibilityReason> {
@@ -34,14 +34,18 @@ export function evaluateLineAttribute(cart: NormalizedCart, condition: LineAttri
 
 export function evaluateCartAttribute(cart: NormalizedCart, condition: CartAttributeConditionValue): Result<EligibilityReason, EligibilityReason> {
   const actual = cart.attributes?.[condition.key] ?? null;
-  const equals = actual === condition.value;
-  const passed = condition.matchMode === "not_equals" ? !equals : equals;
+  const passed =
+    condition.matchMode === "exists"
+      ? actual !== null
+      : condition.matchMode === "not_equals"
+        ? actual !== condition.value
+        : actual === condition.value;
   const reason = {
     conditionType: "cart_attribute",
     passed,
     message: passed ? "Cart attribute matched." : "Cart attribute did not match.",
     actual,
-    required: condition.value,
+    required: condition.matchMode === "exists" ? "(any value)" : condition.value,
   };
   return passed ? ok(reason) : err(reason);
 }

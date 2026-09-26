@@ -79,6 +79,7 @@ query Input(
       }
     }
   }
+  presentmentCurrencyRate
   localization {
     country {
       isoCode

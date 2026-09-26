@@ -1,0 +1,11 @@
+{
+  "upsell": {
+    "heading": "También te puede interesar",
+    "add": "Añadir",
+    "soldOut": "Agotado",
+    "addAccessibilityLabel": "Añadir {title} al carrito",
+    "noThanks": "No, gracias",
+    "dismissAccessibilityLabel": "Descartar oferta",
+    "addError": "No se pudo añadir este producto. Inténtalo de nuevo."
+  }
+}

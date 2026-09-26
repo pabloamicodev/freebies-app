@@ -336,7 +336,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
  * on Shopify's bounce-page redirect instead of the file, since embedded-app
  * auth expects the session token as a header, not just cookies. Fetching in
  * JS (where App Bridge attaches that header) and saving the blob avoids it. */
-async function downloadOffersCsv() {
+async function downloadOffersCsv(onError: (message: string) => void) {
   try {
     const response = await fetch("/api/offers/export");
     if (!response.ok) throw new Error(`Export failed: ${response.status}`);
@@ -351,6 +351,7 @@ async function downloadOffersCsv() {
     URL.revokeObjectURL(url);
   } catch (err) {
     console.error("[offers-export] download failed", err);
+    onError("Couldn't export offers to CSV. Please try again.");
   }
 }
 
@@ -514,10 +515,11 @@ export default function OffersPage() {
   const [confirmAction, setConfirmAction] = useState<ConfirmActionState | null>(null);
   const [searchOpen, setSearchOpen] = useState(loaderSearch.length > 0);
   const [searchInput, setSearchInput] = useState(loaderSearch);
-  const deleteFetcher = useFetcher();
-  const archiveFetcher = useFetcher();
-  const bulkFetcher = useFetcher();
-  const duplicateFetcher = useFetcher();
+  const deleteFetcher = useFetcher<{ error?: string }>();
+  const archiveFetcher = useFetcher<{ error?: string }>();
+  const bulkFetcher = useFetcher<{ error?: string }>();
+  const duplicateFetcher = useFetcher<{ error?: string }>();
+  const [csvError, setCsvError] = useState<string | null>(null);
 
   // Modal state
   const [modal, setModal] = useState<OfferCreateModalType | null>(
@@ -670,6 +672,14 @@ export default function OffersPage() {
     [bulkFetcher, checkedIds],
   );
 
+  const actionError =
+    (deleteFetcher.state === "idle" ? deleteFetcher.data?.error : null) ||
+    (archiveFetcher.state === "idle" ? archiveFetcher.data?.error : null) ||
+    (bulkFetcher.state === "idle" ? bulkFetcher.data?.error : null) ||
+    (duplicateFetcher.state === "idle" ? duplicateFetcher.data?.error : null) ||
+    csvError ||
+    null;
+
   return (
     <div className="b-page">
       {/* ── Modals ──────────────────────────────────────────── */}
@@ -685,7 +695,10 @@ export default function OffersPage() {
           <button
             type="button"
             className="b-btn b-btn-secondary"
-            onClick={() => void downloadOffersCsv()}
+            onClick={() => {
+              setCsvError(null);
+              void downloadOffersCsv(setCsvError);
+            }}
           >
             Export CSV
           </button>
@@ -694,6 +707,15 @@ export default function OffersPage() {
           </button>
         </div>
       </div>
+
+      {/* ── Action error banner ─────────────────────────────── */}
+      {actionError && (
+        <div className="b-banner b-banner-red" role="alert">
+          <div className="b-banner-body">
+            <p className="b-banner-text">{actionError}</p>
+          </div>
+        </div>
+      )}
 
       {/* ── Cart integration banner ─────────────────────────── */}
       {bannerVisible && (

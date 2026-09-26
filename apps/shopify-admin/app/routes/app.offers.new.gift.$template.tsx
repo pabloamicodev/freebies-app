@@ -3,11 +3,10 @@
  * Routes: /app/offers/new/gift/bxgy  /bogo  /free-sample  /cart-value  /tiered  /scratch
  */
 
-import { Form, useActionData, useNavigate, useNavigation, redirect, useParams } from "react-router";
+import { Form, useActionData, useLoaderData, useNavigate, useNavigation, redirect, useParams } from "react-router";
 import { useCallback, useEffect } from "react";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { Toast } from "../components/Toast.js";
-import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
 import { statusForSubmit } from "../lib/offer-scheduling.server.js";
@@ -18,6 +17,7 @@ import {
   parseJsonStringArray,
   parseMoneyAmount,
   requiredText,
+  nowInZone,
 } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
@@ -163,14 +163,14 @@ function IInfo() {
 
 // ─── Loader ──────────────────────────────────────────────────────────────────
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  return {};
+  const { timezone } = await getShopContext(request);
+  return { timezone, nowLocal: nowInZone(timezone) };
 };
 
 // ─── Action ──────────────────────────────────────────────────────────────────
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
-  const { shopId, db, session } = context;
+  const { shopId, db, session, timezone } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
@@ -188,7 +188,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (publicTitleResult.error) return { error: publicTitleResult.error };
   const internalName = internalNameResult.data!;
   const publicTitle = publicTitleResult.data!;
-  const dateRange = parseDateRange(formData);
+  const dateRange = parseDateRange(formData, timezone);
   if (dateRange.error) return { error: dateRange.error };
   const { startsAt, endsAt } = dateRange.data!;
   const priorityResult = parseInteger(formData, "priority", 1, { min: 1, label: "Priority" });
@@ -304,6 +304,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           priority,
           startsAt: startsAt ?? new Date(),
           endsAt,
+          timezone,
         })
         .returning({ id: offers.id });
       if (!offer) throw new Error("Failed to create offer");
@@ -386,6 +387,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function NewGiftOfferPage() {
+  const { nowLocal } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const { state } = useNavigation();
@@ -408,7 +410,7 @@ export default function NewGiftOfferPage() {
     toastMsg: "",
     internalName: preset?.internalName ?? "",
     publicTitle: preset?.publicTitle ?? "",
-    startsAt: new Date().toISOString().slice(0, 16),
+    startsAt: nowLocal,
     endsAt: "",
     minAmount: "500",
     maxAmount: "0.00",

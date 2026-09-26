@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Form, redirect, useActionData, useNavigate, useNavigation, useParams } from "react-router";
+import { Form, redirect, useActionData, useLoaderData, useNavigate, useNavigation, useParams } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   ShippingDiscountRewardPayloadSchema,
@@ -7,10 +7,9 @@ import {
 } from "@promo/shared-types";
 import { offerCombinationPolicies, offerConditions, offerRewards, offers } from "@promo/db";
 import { Toast } from "../components/Toast.js";
-import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
-import { parseDateRange, requiredText } from "../lib/offer-validation.server.js";
+import { nowInZone, parseDateRange, requiredText } from "../lib/offer-validation.server.js";
 import { statusForSubmit } from "../lib/offer-scheduling.server.js";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
@@ -75,19 +74,19 @@ function parseTierPayload(raw: FormDataEntryValue | null) {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  return {};
+  const { timezone } = await getShopContext(request);
+  return { timezone, nowLocal: nowInZone(timezone) };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   if (!context.shopId) return { error: "Shop not found." };
-  const { db, shopId, session } = context;
+  const { db, shopId, session, timezone } = context;
   const internalNameResult = requiredText(formData, "internalName", "Internal name");
   if (internalNameResult.error) return { error: internalNameResult.error };
   const publicTitleResult = requiredText(formData, "publicTitle", "Public title");
   if (publicTitleResult.error) return { error: publicTitleResult.error };
-  const dateRange = parseDateRange(formData);
+  const dateRange = parseDateRange(formData, timezone);
   if (dateRange.error) return { error: dateRange.error };
 
   const template = (formData.get("template") as ShippingTemplate) || "global";
@@ -157,6 +156,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           priority: 100,
           startsAt: dateRange.data!.startsAt ?? new Date(),
           endsAt: dateRange.data!.endsAt,
+          timezone,
         })
         .returning({ id: offers.id });
       if (!offer) throw new Error("Failed to create shipping offer.");
@@ -215,6 +215,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function NewShippingOfferPage() {
+  const { nowLocal } = useLoaderData<typeof loader>();
   const { template: rawTemplate = "global" } = useParams();
   const template = (rawTemplate in TEMPLATE_SCOPE ? rawTemplate : "global") as ShippingTemplate;
   const actionData = useActionData<typeof action>();
@@ -332,14 +333,17 @@ export default function NewShippingOfferPage() {
               <div className="b-grid-2">
                 <div>
                   <label className="b-label" htmlFor="shipping-start">
-                    Starts at
+                    Starts at{" "}
+                    <span style={{ fontWeight: 400, color: "var(--text-sub)", fontSize: 11 }}>
+                      (your local timezone)
+                    </span>
                   </label>
                   <input
                     id="shipping-start"
                     className="b-input"
                     type="datetime-local"
                     name="startsAt"
-                    defaultValue={new Date().toISOString().slice(0, 16)}
+                    defaultValue={nowLocal}
                   />
                 </div>
                 <div>

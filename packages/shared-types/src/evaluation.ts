@@ -61,6 +61,17 @@ export const GiftSliderPayloadSchema = z.object({
   })),
   maxSelectableCount: z.number().int().positive(),
   alreadySelectedCount: z.number().int().nonnegative(),
+  /** Merchant-translated widget strings, resolved server-side with English
+   * defaults. `confirm` is omitted unless the merchant configured
+   * gift_slider.confirm_button — the client keeps its own pluralized default. */
+  labels: z.object({
+    free: z.string(),
+    outOfStock: z.string(),
+    confirm: z.string().optional(),
+    selectPrompt: z.string(),
+    remove: z.string(),
+    replaces: z.string(),
+  }).optional(),
 });
 export type GiftSliderPayload = z.infer<typeof GiftSliderPayloadSchema>;
 

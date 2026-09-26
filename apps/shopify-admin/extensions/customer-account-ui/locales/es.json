@@ -1,0 +1,7 @@
+{
+  "orderAttribution": {
+    "heading": "Promociones aplicadas",
+    "savedMessage": "Ahorraste {amount} con promociones en este pedido.",
+    "freeGiftSuffix": "(regalo gratis)"
+  }
+}

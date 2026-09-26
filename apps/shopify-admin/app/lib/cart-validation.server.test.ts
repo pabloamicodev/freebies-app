@@ -11,6 +11,8 @@ function compiledOffer(overrides: Partial<CompiledOffer> = {}): CompiledOffer {
     stopLowerPriority: false,
     requiredProductIds: [],
     requiredVariantIds: [],
+    anyRequiredProductIds: [],
+    anyRequiredVariantIds: [],
     excludedProductIds: [],
     giftVariantIds: [],
     giftProductIds: [],

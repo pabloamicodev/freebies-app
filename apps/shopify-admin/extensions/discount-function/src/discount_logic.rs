@@ -1,5 +1,5 @@
 use crate::config::{
-    resolve_threshold, to_cents, CompiledConfig, CompiledOffer, CompiledOrderReward,
+    to_cents, CompiledConfig, CompiledOffer, CompiledOrderReward,
     CompiledPageUrlCondition, CompiledProductReward,
 };
 use crate::schema;
@@ -38,10 +38,14 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
         return Ok(schema::CartLinesDiscountsGenerateRunResult { operations: vec![] });
     }
 
-    let config = match parse_config(&input) {
+    let mut config = match parse_config(&input) {
         Some(c) => c,
         None => return Ok(schema::CartLinesDiscountsGenerateRunResult { operations: vec![] }),
     };
+    config.localize(
+        input.presentment_currency_rate().as_f64(),
+        &input.cart().cost().subtotal_amount().currency_code().to_string(),
+    );
 
     let mut offers = config.offers.clone();
     offers.sort_by_key(|o| o.priority);
@@ -203,6 +207,11 @@ fn evaluate_product_reward(
             "subscription_only" => line.selling_plan_allocation().is_some(),
             "one_time_only" => line.selling_plan_allocation().is_none(),
             _ => true,
+        })
+        .filter(|line| {
+            reward.required_line_attribute.as_ref().is_none_or(|attribute| {
+                metadata_value(line, &attribute.key).as_deref() == Some(attribute.value.as_str())
+            })
         })
         .collect();
 
@@ -828,7 +837,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
             .iter()
             .filter(|line| {
                 line_attribute_value(line, &condition.key, config).as_deref()
-                    == Some(condition.value.as_str())
+                    == condition.value.as_deref()
             })
             .map(|line| i64::from(*line.quantity()))
             .sum();
@@ -844,10 +853,12 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
 
     for condition in &offer.cart_attribute_conditions {
         let actual = cart_attribute_value(input, &condition.key, config);
-        let equals = actual.as_deref() == Some(condition.value.as_str());
-        if (condition.match_mode == "not_equals" && equals)
-            || (condition.match_mode != "not_equals" && !equals)
-        {
+        let passes = match condition.match_mode.as_str() {
+            "exists" => actual.is_some(),
+            "not_equals" => actual.as_deref() != condition.value.as_deref(),
+            _ => actual.as_deref() == condition.value.as_deref(),
+        };
+        if !passes {
             return false;
         }
     }
@@ -868,15 +879,11 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
             - projected_volume_discount_cents(&non_gift_lines, &active_currency))
         .max(0);
 
-        let effective_threshold =
-            resolve_threshold(threshold_cents, &offer.currency_overrides, &active_currency);
-        if cart_value_cents < effective_threshold {
+        if cart_value_cents < threshold_cents {
             return false;
         }
         if let Some(maximum) = offer.cart_value_max_cents {
-            let effective_maximum =
-                resolve_threshold(maximum, &offer.max_currency_overrides, &active_currency);
-            if cart_value_cents > effective_maximum {
+            if cart_value_cents > maximum {
                 return false;
             }
         }
@@ -1039,6 +1046,32 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
                 .unwrap_or(false)
         });
         if !has_required {
+            return false;
+        }
+    }
+
+    // Any-of trigger products/variants: qualifies on mere presence of any one of them,
+    // independent of (and AND-ed with) the all-of `requirements` check above.
+    if !offer.any_required_product_ids.is_empty() || !offer.any_required_variant_ids.is_empty() {
+        let any_products: HashSet<&str> = offer
+            .any_required_product_ids
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let any_variants: HashSet<&str> = offer
+            .any_required_variant_ids
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let has_any = input.cart().lines().iter().any(|line| {
+            variant_and_product_id(line)
+                .map(|(variant_id, product_id)| {
+                    any_products.contains(product_id.as_str())
+                        || any_variants.contains(variant_id.as_str())
+                })
+                .unwrap_or(false)
+        });
+        if !has_any {
             return false;
         }
     }
@@ -1461,6 +1494,7 @@ mod tests {
                     "lines": {lines},
                     "cost": {{ "subtotalAmount": {{ "amount": "{subtotal}", "currencyCode": "USD" }} }}
                 }},
+                "presentmentCurrencyRate": "1.0",
                 "localization": {{ "country": {{ "isoCode": "US" }} }}
             }}"#,
             config = serde_json::to_string(config_json).unwrap(),
@@ -1494,6 +1528,7 @@ mod tests {
                     "lines": {lines},
                     "cost": {{ "subtotalAmount": {{ "amount": "{subtotal}", "currencyCode": "USD" }} }}
                 }},
+                "presentmentCurrencyRate": "1.0",
                 "localization": {{ "country": {{ "isoCode": "US" }} }}
             }}"#,
             config = serde_json::to_string(config_json).unwrap(),
@@ -1948,6 +1983,27 @@ mod tests {
             .replace("\"currencyCode\": \"USD\"", "\"currencyCode\": \"EUR\"");
         let result = run_function_with_input(run, &payload).expect("should not error");
         assert!(result.operations.is_empty());
+    }
+
+    #[test]
+    fn cart_value_threshold_converts_with_presentment_rate_without_override() {
+        let lines = |amount: &str| {
+            format!(
+                "[{},{}]",
+                regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", amount, 1),
+                gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+            )
+        };
+        // $50 USD threshold at 0.9 EUR/USD = €45.
+        let eur = |amount: &str| {
+            cart_json(&lines(amount), amount, &gift_offer_config(5000, 1))
+                .replace("\"currencyCode\": \"USD\"", "\"currencyCode\": \"EUR\"")
+                .replace("\"presentmentCurrencyRate\": \"1.0\"", "\"presentmentCurrencyRate\": \"0.9\"")
+        };
+        let payload = eur("46.00");
+        assert!(payload.contains("\"presentmentCurrencyRate\": \"0.9\""));
+        assert!(!run_function_with_input(run, &payload).unwrap().operations.is_empty());
+        assert!(run_function_with_input(run, &eur("44.00")).unwrap().operations.is_empty());
     }
 
     #[test]
@@ -3485,4 +3541,76 @@ mod tests {
         let result = run_function_with_input(run, &cart_json(&format!("[{paid}]"), "50.00", config)).unwrap();
         assert!(result.operations.is_empty(), "a target of 0 must not make the paid lines free");
     }
+
+    #[test]
+    fn any_of_trigger_products_qualifies_on_presence_of_any_one() {
+        let reward = r#"{"id":"r","targetProductIds":["gid://shopify/Product/a"],"discountType":"percentage","discountValue":10,"scopeMode":"sitewide"}"#;
+        let offer = product_offer("o1", 1, "", reward).replace(
+            "\"productRewards\":",
+            "\"anyRequiredProductIds\":[\"gid://shopify/Product/trigger\"],\"productRewards\":",
+        );
+        assert!(
+            product_candidates(&[offer.clone()], &[line_a(1)], "20.00").is_empty(),
+            "no trigger product present — offer must not qualify"
+        );
+        let trigger = regular_line(
+            "gid://shopify/CartLine/trigger",
+            "gid://shopify/ProductVariant/trigger",
+            "gid://shopify/Product/trigger",
+            "5.00",
+            1,
+        );
+        let found = product_candidates(&[offer], &[line_a(1), trigger], "25.00");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "gid://shopify/CartLine/a");
+    }
+
+    #[test]
+    fn cart_attribute_exists_mode_ignores_value_and_requires_only_presence() {
+        let lines = format!(
+            "[{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            )
+        );
+        let config = gift_offer_config(5000, 1).replace(
+            "\"combinesWithOrderDiscounts\":true",
+            "\"cartAttributeConditions\":[{\"key\":\"source\",\"matchMode\":\"exists\",\"minMatchingQuantity\":1}],\"combinesWithOrderDiscounts\":true",
+        );
+        let present = cart_json(&lines, "80.00", &config).replace(
+            "\"cart\": {",
+            "\"cart\": { \"sourceAttribute\": { \"value\": \"anything-at-all\" },",
+        );
+        let result = run_function_with_input(run, &present).expect("should not error");
+        assert_eq!(result.operations.len(), 1, "any attribute value must satisfy 'exists'");
+
+        let absent = run_function_with_input(run, &cart_json(&lines, "80.00", &config)).expect("should not error");
+        assert!(absent.operations.is_empty(), "a missing attribute must not satisfy 'exists'");
+    }
+
+    #[test]
+    fn required_line_attribute_filters_product_reward_to_matching_lines() {
+        let reward = r#"{"id":"r","discountType":"percentage","discountValue":10,"scopeMode":"sitewide","requiredLineAttribute":{"key":"__bundle_type","value":"two"}}"#;
+        let offers = [product_offer("o1", 1, "", reward)];
+        let tagged = line_a(1).replace(
+            "\"volumeDiscountNektarGlp1\": null",
+            "\"volumeDiscountNektarGlp1\": null, \"bundleType\": { \"value\": \"two\" }",
+        );
+        let found = product_candidates(&offers, &[tagged, line_b()], "45.00");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "gid://shopify/CartLine/a");
+    }
+
 }

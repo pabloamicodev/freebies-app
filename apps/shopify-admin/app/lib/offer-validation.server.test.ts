@@ -9,6 +9,7 @@ import {
   parseMoneyAmount,
   parseJsonStringArray,
   ensureOneOf,
+  nowInZone,
 } from "./offer-validation.server.js";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -85,6 +86,32 @@ describe("parseDateRange", () => {
     // Should not error and should produce a valid Date (Intl handles DST)
     expect(result.error).toBeNull();
     expect(Number.isNaN(result.data?.startsAt?.getTime())).toBe(false);
+  });
+});
+
+// ─── nowInZone ────────────────────────────────────────────────────────────────
+
+describe("nowInZone", () => {
+  it("returns a wall-clock string in datetime-local format", () => {
+    const result = nowInZone("UTC");
+    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+  });
+
+  it("differs between zones at the same instant when they're on different wall-clock hours", () => {
+    const utc = nowInZone("UTC");
+    const tokyo = nowInZone("Asia/Tokyo");
+    // Tokyo is always ahead of UTC by a fixed 9h offset (no DST) — the minute
+    // could coincidentally match, but the strings as a whole should not.
+    expect(utc).not.toBe(tokyo);
+  });
+
+  it("never produces an out-of-range hour (Node's Intl 'en-US' midnight bug)", () => {
+    // hourCycle: "h23" must be honored — some Intl implementations otherwise
+    // render midnight as "24:00" under a plain hour12:false + en-US locale.
+    const result = nowInZone("America/New_York");
+    const hour = Number(result.slice(11, 13));
+    expect(hour).toBeGreaterThanOrEqual(0);
+    expect(hour).toBeLessThanOrEqual(23);
   });
 });
 

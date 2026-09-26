@@ -4,9 +4,9 @@
  * configured variants and rewards; this layer supplies current title, image,
  * price and availability before the payload reaches the storefront.
  */
-import { getDb, productCache, variantCache } from "@promo/db";
+import { appSettings, getDb, productCache, variantCache } from "@promo/db";
 import { and, eq, inArray } from "drizzle-orm";
-import type { GiftSliderPayload } from "@promo/shared-types";
+import type { GiftSliderPayload, WidgetTranslations } from "@promo/shared-types";
 import type { OfferDefinition } from "@promo/rule-engine";
 
 export interface GiftCatalogRow {
@@ -126,6 +126,60 @@ export function resolveSoldOutGiftAdds<T extends { action: string; variantId?: s
   });
 }
 
+const GIFT_SLIDER_LABEL_DEFAULTS = {
+  free: "Free",
+  outOfStock: "Out of stock",
+  selectPrompt: "Select a gift",
+  remove: "Remove Gifts from Cart",
+  replaces: "Replaces {{title}} (out of stock)",
+} as const;
+
+/** Builds the gift slider's `labels`, layering merchant overrides (from the
+ * same "translations.strings" store as app.translation.tsx) onto the English
+ * defaults. selectPrompt/remove/replaces have no merchant-editable key yet, so
+ * they always use the default; `confirm` is left out unless overridden — the
+ * client keeps its own pluralized default for the add-gift button. */
+export function resolveGiftSliderLabels(
+  overrides?: Partial<WidgetTranslations> | null,
+): NonNullable<GiftSliderPayload["labels"]> {
+  const free = overrides?.["gift_slider.free_label"]?.trim();
+  const outOfStock = overrides?.["gift_slider.out_of_stock"]?.trim();
+  const confirm = overrides?.["gift_slider.confirm_button"]?.trim();
+  return {
+    free: free || GIFT_SLIDER_LABEL_DEFAULTS.free,
+    outOfStock: outOfStock || GIFT_SLIDER_LABEL_DEFAULTS.outOfStock,
+    ...(confirm ? { confirm } : {}),
+    selectPrompt: GIFT_SLIDER_LABEL_DEFAULTS.selectPrompt,
+    remove: GIFT_SLIDER_LABEL_DEFAULTS.remove,
+    replaces: GIFT_SLIDER_LABEL_DEFAULTS.replaces,
+  };
+}
+
+/** Loads this shop's merchant-configured widget strings for a locale (same
+ * appSettings row app.translation.tsx writes to), with language-prefix and
+ * English fallback. */
+export async function loadGiftSliderTranslations(
+  shopId: string,
+  locale = "en",
+): Promise<Partial<WidgetTranslations> | null> {
+  const rows = await getDb()
+    .select({ value: appSettings.value })
+    .from(appSettings)
+    .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, "translations.strings")))
+    .limit(1);
+  if (!rows[0]) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rows[0].value);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const byLocale = parsed as Record<string, Partial<WidgetTranslations> | undefined>;
+  const prefix = locale.split("-")[0];
+  return byLocale[locale] ?? (prefix ? byLocale[prefix] : undefined) ?? byLocale["en"] ?? null;
+}
+
 function priceAfterReward(
   reward: { discountType?: string; value?: unknown } | undefined,
   originalPriceCents: number,
@@ -145,6 +199,7 @@ export function enrichGiftSlider(
   payload: GiftSliderPayload | null,
   offerDefinitions: OfferDefinition[],
   cartLines: Array<{ variantId: string; properties: Record<string, string> }> = [],
+  labelOverrides?: Partial<WidgetTranslations> | null,
 ): GiftSliderPayload | null {
   if (!payload || payload.selectableGifts.length === 0) return payload;
 
@@ -154,6 +209,7 @@ export function enrichGiftSlider(
 
   const enriched = {
     ...payload,
+    labels: resolveGiftSliderLabels(labelOverrides),
     selectableGifts: payload.selectableGifts.map((gift) => {
       const variant = catalog.get(gift.variantId);
       const reward = rewardById.get(gift.rewardId);

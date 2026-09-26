@@ -9,22 +9,57 @@ import { NotFound } from "../components/NotFound.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
-import { offerCombinationPolicies } from "@promo/db";
-import { and, eq } from "drizzle-orm";
+import { offerCombinationPolicies, offers } from "@promo/db";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
+interface RestrictingOffer {
+  id: string;
+  internalName: string;
+}
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
-  const [policyRows] = await Promise.all([
+  const [policyRows, activeOffers] = await Promise.all([
     db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId))).limit(1),
+    db.select({ id: offers.id, internalName: offers.internalName }).from(offers).where(and(eq(offers.shopId, shopId), eq(offers.status, "active"), ne(offers.id, offerId))),
   ]);
 
-  return { offer, policy: policyRows[0] ?? null };
+  // Shopify's combinesWith lives on the app's single discount node, so
+  // compile-config ANDs every active offer's flags together shop-wide — one
+  // other active offer disabling a class silences it for every offer, this one
+  // included. Surface which other active offers currently do that.
+  const otherActiveIds = activeOffers.map((o) => o.id);
+  const otherPolicies = otherActiveIds.length
+    ? await db
+        .select({
+          offerId: offerCombinationPolicies.offerId,
+          combinesWithOrderDiscounts: offerCombinationPolicies.combinesWithOrderDiscounts,
+          combinesWithProductDiscounts: offerCombinationPolicies.combinesWithProductDiscounts,
+          combinesWithShippingDiscounts: offerCombinationPolicies.combinesWithShippingDiscounts,
+        })
+        .from(offerCombinationPolicies)
+        .where(and(eq(offerCombinationPolicies.shopId, shopId), inArray(offerCombinationPolicies.offerId, otherActiveIds)))
+    : [];
+  const offerNameById = new Map(activeOffers.map((o) => [o.id, o.internalName]));
+  const restricting = {
+    orderDiscounts: [] as RestrictingOffer[],
+    productDiscounts: [] as RestrictingOffer[],
+    shippingDiscounts: [] as RestrictingOffer[],
+  };
+  for (const policy of otherPolicies) {
+    const entry = { id: policy.offerId, internalName: offerNameById.get(policy.offerId) ?? policy.offerId.slice(0, 8) };
+    if (!policy.combinesWithOrderDiscounts) restricting.orderDiscounts.push(entry);
+    if (!policy.combinesWithProductDiscounts) restricting.productDiscounts.push(entry);
+    if (!policy.combinesWithShippingDiscounts) restricting.shippingDiscounts.push(entry);
+  }
+
+  return { offer, policy: policyRows[0] ?? null, restricting };
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
@@ -70,17 +105,51 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   return { success: true };
 };
 
+const RESTRICTION_LABELS = {
+  orderDiscounts: "order discounts",
+  productDiscounts: "product discounts",
+  shippingDiscounts: "shipping discounts",
+} as const;
+
 export default function OfferCombinationPage() {
-  const { offer, policy } = useLoaderData<typeof loader>();
+  const { offer, policy, restricting } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
   if (!offer) return <NotFound message="Not found." />;
 
+  const restrictionEntries = (Object.keys(RESTRICTION_LABELS) as Array<keyof typeof RESTRICTION_LABELS>)
+    .map((key) => ({ key, label: RESTRICTION_LABELS[key], offers: restricting[key] }))
+    .filter((entry) => entry.offers.length > 0);
+
   return (
     <div className="b-page">
       {/* Header */}
       <PageHeader title="Combination Policy" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
+
+      {restrictionEntries.length > 0 && (
+        <div className="b-banner b-banner-orange b-mb-4">
+          <span className="b-banner-icon">⚠</span>
+          <div className="b-banner-body">
+            <p className="b-banner-text" style={{ margin: 0, fontWeight: 600 }}>
+              Because Shopify applies combinations per app discount, these offers limit combination for all Promo Engine offers:
+            </p>
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+              {restrictionEntries.map((entry) => (
+                <li key={entry.key} className="b-text-sm">
+                  <strong>{entry.label}:</strong>{" "}
+                  {entry.offers.map((o, i) => (
+                    <span key={o.id}>
+                      {i > 0 && ", "}
+                      <a href={`/app/offers/${o.id}/combination`}>{o.internalName}</a>
+                    </span>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
 
       {/* Two-column editor layout */}
       <div className="b-editor-layout">
@@ -237,6 +306,9 @@ export default function OfferCombinationPage() {
               <div className="b-stack b-stack-3">
                 <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
                   Combination policies control whether this offer can be active at the same time as other discounts and offers in the cart.
+                </p>
+                <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
+                  <strong className="b-text-bold" style={{ color: "var(--text)" }}>Important:</strong> Shopify stores combinesWith settings on the app&apos;s single discount node, not per offer. Promo Engine works around this by requiring every active offer to agree — a class (order/product/shipping) is only combinable shop-wide when ALL active offers allow it. If any one active offer turns a class off, it&apos;s off for every offer, not just that one.
                 </p>
                 <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>
                   <strong className="b-text-bold" style={{ color: "var(--text)" }}>Order discounts</strong> include coupon codes and automatic order-level discounts applied by Shopify.

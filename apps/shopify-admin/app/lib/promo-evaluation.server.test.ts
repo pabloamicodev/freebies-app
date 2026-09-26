@@ -17,6 +17,7 @@ vi.mock("./gift-enrichment.server.js", () => ({
   collectGiftCatalogVariantIds: vi.fn().mockReturnValue([]),
   loadGiftCatalogData: vi.fn().mockResolvedValue(new Map()),
   enrichGiftSlider: vi.fn().mockReturnValue(null),
+  loadGiftSliderTranslations: vi.fn().mockResolvedValue(null),
   resolveSoldOutGiftAdds: vi.fn().mockReturnValue([]),
 }));
 vi.mock("./shadow-mode.server.js", () => ({

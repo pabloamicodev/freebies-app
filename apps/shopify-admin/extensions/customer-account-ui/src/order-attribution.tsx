@@ -9,6 +9,7 @@ import { useEffect, useState } from "preact/hooks";
 import {
   useApi,
   useOrder,
+  useTranslate,
 } from "@shopify/ui-extensions/customer-account/preact";
 import { APP_URL } from "./app-url.js";
 
@@ -32,6 +33,7 @@ export default function extension() {
 function OrderAttribution() {
   const api = useApi<"customer-account.order-status.block.render">();
   const order = useOrder();
+  const translate = useTranslate();
   const [attributions, setAttributions] = useState<OfferAttribution[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -80,11 +82,11 @@ function OrderAttribution() {
     new Intl.NumberFormat(undefined, { style: "currency", currency: currencyCode }).format(cents / 100);
 
   return (
-    <s-section heading="Promotions applied">
+    <s-section heading={translate("orderAttribution.heading")}>
       <s-stack direction="block" gap="base">
         {totalSavedCents > 0 ? (
           <s-text tone="success">
-            You saved {formatMoney(totalSavedCents)} with promotions on this order.
+            {translate("orderAttribution.savedMessage", { amount: formatMoney(totalSavedCents) })}
           </s-text>
         ) : null}
         {attributions.map((attribution) => (
@@ -95,7 +97,9 @@ function OrderAttribution() {
               <s-text tone="success">-{formatMoney(attribution.savedCents)}</s-text>
             ) : null}
             {attribution.giftProductTitle ? (
-              <s-text type="small">+ {attribution.giftProductTitle} (free gift)</s-text>
+              <s-text type="small">
+                + {attribution.giftProductTitle} {translate("orderAttribution.freeGiftSuffix")}
+              </s-text>
             ) : null}
           </s-stack>
         ))}

@@ -271,11 +271,16 @@ export const LineAttributeConditionValueSchema = z.object({
   matchMode: z.enum(["equals", "not_equals"]).default("equals"),
   minMatchingQuantity: z.number().int().positive().default(1),
 });
-export const CartAttributeConditionValueSchema = z.object({
-  key: CartAttributeKeySchema,
-  value: z.string().min(1).max(255),
-  matchMode: z.enum(["equals", "not_equals"]).default("equals"),
-});
+export const CartAttributeConditionValueSchema = z
+  .object({
+    key: CartAttributeKeySchema,
+    value: z.string().min(1).max(255).optional(),
+    matchMode: z.enum(["equals", "not_equals", "exists"]).default("equals"),
+  })
+  .refine((value) => value.matchMode === "exists" || value.value !== undefined, {
+    message: "A value is required unless matchMode is 'exists'.",
+    path: ["value"],
+  });
 
 export function validateConditionValue(
   conditionType: string,
@@ -414,6 +419,11 @@ export const OrderDiscountTargetSchema = z
   })
   .strict();
 
+const RequiredLineAttributeSchema = z.object({
+  key: LineAttributeKeySchema,
+  value: z.string().min(1),
+});
+
 const ProductTargetIdsSchema = z.object({
   scope: z.enum(["cart", "all_products"]).optional(),
   variantId: z.string().optional(),
@@ -429,6 +439,8 @@ const ProductTargetIdsSchema = z.object({
   selectionMode: z.enum(["all", "cheapest", "most_expensive"]).default("all"),
   countRule: z.enum(["all", "unique"]).default("all"),
   displayType: z.enum(["quantity_options", "discount_table"]).optional(),
+  /** Only lines whose packed metadata carries this key/value qualify (e.g. __bundle_type). */
+  requiredLineAttribute: RequiredLineAttributeSchema.optional(),
 });
 
 export const ProductDiscountTargetSchema = z.discriminatedUnion("scopeMode", [
@@ -788,6 +800,9 @@ export const CompiledOfferSchema = z.object({
   /** Product/variant ID sets precompiled for fast lookup. */
   requiredProductIds: z.array(z.string()),
   requiredVariantIds: z.array(z.string()),
+  /** Any-of trigger products/variants: qualifies if at least one is present in the cart. */
+  anyRequiredProductIds: z.array(z.string()).default([]),
+  anyRequiredVariantIds: z.array(z.string()).default([]),
   excludedProductIds: z.array(z.string()),
   giftVariantIds: z.array(z.string()),
   giftProductIds: z.array(z.string()),
@@ -863,6 +878,7 @@ export const CompiledOfferSchema = z.object({
         selectionMode: z.enum(["all", "cheapest", "most_expensive"]).default("all"),
         countRule: z.enum(["all", "unique"]).default("all"),
         discountPercentageOnGifts: z.number().min(0).max(100).default(100),
+        requiredLineAttribute: RequiredLineAttributeSchema.optional(),
       }),
     )
     .default([]),
@@ -890,8 +906,8 @@ export const CompiledOfferSchema = z.object({
     .array(
       z.object({
         key: CartAttributeKeySchema,
-        value: z.string().min(1),
-        matchMode: z.enum(["equals", "not_equals"]),
+        value: z.string().min(1).optional(),
+        matchMode: z.enum(["equals", "not_equals", "exists"]),
         minMatchingQuantity: z.number().int().positive(),
       }),
     )

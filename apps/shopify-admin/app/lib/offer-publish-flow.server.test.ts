@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isConditionEnforcedByFunction, isUnscopedTaggedReward } from "./offer-publish-flow.server.js";
+import { hasUnenforcedScopeFilter, isConditionEnforcedByFunction, isUnscopedTaggedReward } from "./offer-publish-flow.server.js";
 
 describe("isConditionEnforcedByFunction", () => {
   it.each([
@@ -64,5 +64,16 @@ describe("isUnscopedTaggedReward", () => {
     expect(isUnscopedTaggedReward("product_discount", { scopeMode: "landing" })).toBe(false);
     expect(isUnscopedTaggedReward("product_gift", { scopeMode: "quiz_bundle" })).toBe(false);
     expect(isUnscopedTaggedReward("shipping_discount", { scopeMode: "quiz_bundle" })).toBe(false);
+  });
+});
+
+describe("hasUnenforcedScopeFilter", () => {
+  it("allows no filter or product exclusions only", () => {
+    expect(hasUnenforcedScopeFilter({ thresholdCents: 5000 })).toBe(false);
+    expect(hasUnenforcedScopeFilter({ scopeFilter: { excludeProductIds: ["p1"], productIds: [] } })).toBe(false);
+  });
+  it("rejects inclusion or collection/vendor scopes checkout cannot enforce", () => {
+    expect(hasUnenforcedScopeFilter({ scopeFilter: { collectionIds: ["c1"] } })).toBe(true);
+    expect(hasUnenforcedScopeFilter({ scopeFilter: { vendors: ["Acme"] } })).toBe(true);
   });
 });

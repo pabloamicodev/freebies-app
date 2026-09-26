@@ -94,6 +94,36 @@ describe("condition contracts", () => {
       }).success,
     ).toBe(true);
   });
+
+  it("accepts a cart_attribute condition in 'exists' matchMode without a value", () => {
+    expect(
+      validateConditionValue("cart_attribute", { key: "source", matchMode: "exists" }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a cart_attribute condition missing a value unless matchMode is 'exists'", () => {
+    expect(validateConditionValue("cart_attribute", { key: "source", matchMode: "equals" }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe("product reward targets", () => {
+  it("accepts a requiredLineAttribute filter using a known line attribute key", () => {
+    const result = validateRewardPayload("product_discount", "percentage", value, {
+      productIds: ["gid://shopify/Product/1"],
+      requiredLineAttribute: { key: "__bundle_type", value: "two" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a requiredLineAttribute filter with an empty value", () => {
+    const result = validateRewardPayload("product_discount", "percentage", value, {
+      productIds: ["gid://shopify/Product/1"],
+      requiredLineAttribute: { key: "__bundle_type", value: "" },
+    });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("tier contracts", () => {

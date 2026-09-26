@@ -36,6 +36,16 @@ export interface EvaluatedOffer {
   discountCodesToRemove: string[];
 }
 
+export interface GiftSliderLabels {
+  free: string;
+  outOfStock: string;
+  /** Omitted unless the merchant configured gift_slider.confirm_button. */
+  confirm?: string;
+  selectPrompt: string;
+  remove: string;
+  replaces: string;
+}
+
 export interface GiftSliderPayload {
   offerId: string;
   title: string;
@@ -44,6 +54,8 @@ export interface GiftSliderPayload {
   selectableGifts: SelectableGift[];
   maxSelectableCount: number;
   alreadySelectedCount: number;
+  /** Merchant-translated widget strings, resolved server-side with English defaults. */
+  labels?: GiftSliderLabels;
 }
 
 export interface UpsellProduct {

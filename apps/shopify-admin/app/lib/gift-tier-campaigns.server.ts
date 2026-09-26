@@ -10,7 +10,7 @@ export type GiftTierCampaignResult =
   | { campaign: GiftTierCampaign; created: number; skipped: number };
 
 export async function createGiftTierCampaignOffers(
-  { db, shopId, currencyCode }: Pick<ShopContext, "db" | "shopId" | "currencyCode">,
+  { db, shopId, currencyCode, timezone }: Pick<ShopContext, "db" | "shopId" | "currencyCode" | "timezone">,
   formData: FormData,
 ): Promise<GiftTierCampaignResult> {
   try {
@@ -22,23 +22,28 @@ export async function createGiftTierCampaignOffers(
     const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!);
     if (!normalizedSubconditions.success) return { error: normalizedSubconditions.error };
     const drafts = buildGiftTierOfferDrafts(campaign, currencyCode);
-    const existing = await db
-      .select({ internalName: offers.internalName })
-      .from(offers)
-      .where(
-        and(
-          eq(offers.shopId, shopId),
-          inArray(
-            offers.internalName,
-            drafts.map((draft) => draft.internalName),
-          ),
-        ),
-      );
-    const existingNames = new Set(existing.map((offer) => offer.internalName));
-    const pending = drafts.filter((draft) => !existingNames.has(draft.internalName));
 
-    for (const draft of pending)
-      await db.transaction(async (tx) => {
+    // Existence check + every tier insert run in ONE transaction — all-or-nothing.
+    // Previously each tier committed in its own transaction, so a failure partway
+    // through left earlier tiers created with no way to tell the caller "some of
+    // this campaign exists, some doesn't."
+    return await db.transaction(async (tx) => {
+      const existing = await tx
+        .select({ internalName: offers.internalName })
+        .from(offers)
+        .where(
+          and(
+            eq(offers.shopId, shopId),
+            inArray(
+              offers.internalName,
+              drafts.map((draft) => draft.internalName),
+            ),
+          ),
+        );
+      const existingNames = new Set(existing.map((offer) => offer.internalName));
+      const pending = drafts.filter((draft) => !existingNames.has(draft.internalName));
+
+      for (const draft of pending) {
         const [offer] = await tx
           .insert(offers)
           .values({
@@ -49,6 +54,7 @@ export async function createGiftTierCampaignOffers(
             publicTitle: draft.publicTitle,
             description: `Generated ${campaign.stackingMode.replaceAll("_", " ")} gift tier.`,
             priority: draft.priority,
+            timezone,
             createdBy: "gift-tier-builder",
             updatedBy: "gift-tier-builder",
           })
@@ -91,8 +97,9 @@ export async function createGiftTierCampaignOffers(
           label: draft.reward.label,
         });
         await tx.insert(offerCombinationPolicies).values({ shopId, offerId: offer.id });
-      });
-    return { campaign, created: pending.length, skipped: drafts.length - pending.length };
+      }
+      return { campaign, created: pending.length, skipped: drafts.length - pending.length };
+    });
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Gift tier campaign is invalid." };
   }

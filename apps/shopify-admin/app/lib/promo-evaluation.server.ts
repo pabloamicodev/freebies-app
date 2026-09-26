@@ -7,7 +7,13 @@ import { checkRateLimit, getClientIp } from "./rate-limit.server.js";
 import { getOfferDefinitions } from "./offer-definitions.server.js";
 import { resolveCustomer } from "./resolve-customer.server.js";
 import { buildUpsells } from "./upsell-enrichment.server.js";
-import { collectGiftCatalogVariantIds, enrichGiftSlider, loadGiftCatalogData, resolveSoldOutGiftAdds } from "./gift-enrichment.server.js";
+import {
+  collectGiftCatalogVariantIds,
+  enrichGiftSlider,
+  loadGiftCatalogData,
+  loadGiftSliderTranslations,
+  resolveSoldOutGiftAdds,
+} from "./gift-enrichment.server.js";
 import { isShadowModeEnabled } from "./shadow-mode.server.js";
 import { apiError, apiJson, readJsonBody } from "./api-response.server.js";
 
@@ -139,12 +145,15 @@ export async function handleEvaluationRequest(
   // enrichGiftSlider and resolveSoldOutGiftAdds both need pricing/stock for
   // largely the same gift + fallback variants — one shared query instead of
   // each hitting the database on its own.
-  const [giftCatalog, upsells] = await Promise.all([
+  const rawLocale = (body as { locale?: unknown } | null)?.locale;
+  const locale = typeof rawLocale === "string" && /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})?$/.test(rawLocale) ? rawLocale : "en";
+  const [giftCatalog, upsells, giftLabels] = await Promise.all([
     loadGiftCatalogData(shop.id, collectGiftCatalogVariantIds(result.giftSlider, result.cartActions, offerDefinitions)),
     buildUpsells(shop.id, result.qualifiedOffers, offerDefinitions),
+    result.giftSlider ? loadGiftSliderTranslations(shop.id, locale).catch(() => null) : Promise.resolve(null),
   ]);
   result.upsells = upsells;
-  result.giftSlider = enrichGiftSlider(giftCatalog, result.giftSlider, offerDefinitions, input.cart.lines);
+  result.giftSlider = enrichGiftSlider(giftCatalog, result.giftSlider, offerDefinitions, input.cart.lines, giftLabels);
   result.cartActions = resolveSoldOutGiftAdds(giftCatalog, result.cartActions, offerDefinitions);
 
   // Shadow mode: log what WOULD have happened during the BOGOS migration

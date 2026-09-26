@@ -1,0 +1,11 @@
+{
+  "upsell": {
+    "heading": "You might also like",
+    "add": "Add",
+    "soldOut": "Sold out",
+    "addAccessibilityLabel": "Add {title} to cart",
+    "noThanks": "No thanks",
+    "dismissAccessibilityLabel": "Dismiss offer",
+    "addError": "Couldn't add this item. Please try again."
+  }
+}

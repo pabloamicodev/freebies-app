@@ -12,7 +12,8 @@ export interface PageUrlConditionValue {
  * Page URL condition.
  * The offer only activates when the buyer is on a storefront page whose
  * pathname matches at least one of the configured patterns.
- * `requestedUrl` comes from `window.location.href` via the storefront runtime.
+ * The evaluator passes each line's `_promo_page_url` (the page it was added
+ * from), matching what checkout sees.
  */
 export function evaluatePageUrl(
   requestedUrl: string | null,

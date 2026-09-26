@@ -27,6 +27,7 @@ export interface SpecificProductResult {
 export function evaluateSpecificProduct(
   cart: NormalizedCart,
   condition: SpecificProductConditionValue,
+  operator = "all",
 ): Result<EligibilityReason & { qualifiedGroups: number }, EligibilityReason> {
   const qualifyingLines = extractQualifyingLines(cart, { includeGiftValues: false });
 
@@ -54,9 +55,15 @@ export function evaluateSpecificProduct(
   }
 
   const requirements = condition.requirements ?? [];
+  const isAny = operator === "any";
 
+  // "all": every requirement must pass, qualified groups = the tightest one.
+  // "any": passes if at least one trigger requirement is met (presence-based,
+  // like the legacy any-of format above), qualified groups = the loosest one.
   let allPassed = true;
+  let anyPassed = false;
   let minGroups = Infinity;
+  let maxGroups = 0;
   const details: string[] = [];
 
   for (const req of requirements) {
@@ -77,21 +84,24 @@ export function evaluateSpecificProduct(
     } else {
       const groups = Math.floor(totalQty / req.minQuantity);
       minGroups = Math.min(minGroups, groups);
+      anyPassed = true;
+      maxGroups = Math.max(maxGroups, groups);
     }
   }
 
-  const qualifiedGroups = allPassed ? (isFinite(minGroups) ? minGroups : 1) : 0;
+  const passed = isAny ? anyPassed : allPassed;
+  const qualifiedGroups = passed ? (isAny ? maxGroups : isFinite(minGroups) ? minGroups : 1) : 0;
 
   const reason = {
     conditionType: "specific_product",
-    passed: allPassed,
-    message: allPassed
-      ? `All product requirements met (${qualifiedGroups} group(s))`
+    passed,
+    message: passed
+      ? `${isAny ? "At least one" : "All"} product requirement(s) met (${qualifiedGroups} group(s))`
       : `Product requirements not met: ${details.join("; ")}`,
     actual: qualifiedGroups,
     required: requirements.length,
     qualifiedGroups,
   };
 
-  return allPassed ? ok(reason) : err(reason);
+  return passed ? ok(reason) : err(reason);
 }

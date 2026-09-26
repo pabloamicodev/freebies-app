@@ -10,10 +10,6 @@ use std::collections::HashMap;
 pub struct CompiledConfig {
     pub offers: Vec<CompiledOffer>,
     #[serde(default)]
-    pub l1: Option<String>,
-    #[serde(default)]
-    pub l2: Option<String>,
-    #[serde(default)]
     pub c1: Option<String>,
     #[serde(default)]
     pub c2: Option<String>,
@@ -45,6 +41,10 @@ pub struct CompiledOffer {
     pub required_product_ids: Vec<String>,
     #[serde(default)]
     pub required_variant_ids: Vec<String>,
+    #[serde(default)]
+    pub any_required_product_ids: Vec<String>,
+    #[serde(default)]
+    pub any_required_variant_ids: Vec<String>,
     #[serde(default)]
     pub excluded_product_ids: Vec<String>,
     pub cart_value_threshold_cents: Option<i64>,
@@ -90,6 +90,59 @@ pub struct CompiledOffer {
     pub page_url_conditions: Vec<CompiledPageUrlCondition>,
 }
 
+fn scale_cents(cents: &mut Option<i64>, rate: f64) {
+    if let Some(value) = cents {
+        *value = (*value as f64 * rate).ceil() as i64;
+    }
+}
+
+fn scale_money(discount_type: &str, value: &mut f64, rate: f64) {
+    if discount_type.starts_with("fixed") {
+        *value *= rate;
+    }
+}
+
+impl CompiledConfig {
+    /// Config money is in the shop currency; checkout amounts (and the fixed
+    /// discount amounts Shopify expects back) are in the cart's presentment
+    /// currency. Explicit per-currency overrides win over the converted value.
+    pub fn localize(&mut self, rate: f64, active_currency: &str) {
+        let minor_units = |code: &str| if is_zero_decimal(code) { 1.0 } else { 100.0 };
+        let localize_threshold =
+            |cents: &mut Option<i64>, overrides: &Option<HashMap<String, i64>>, cents_rate: f64| {
+                match overrides.as_ref().and_then(|map| map.get(active_currency)) {
+                    Some(&value) if cents.is_some() => *cents = Some(value),
+                    _ => scale_cents(cents, cents_rate),
+                }
+            };
+        for offer in &mut self.offers {
+            let cents_rate = rate * minor_units(active_currency) / minor_units(&offer.currency_code);
+            localize_threshold(&mut offer.cart_value_threshold_cents, &offer.currency_overrides, cents_rate);
+            localize_threshold(&mut offer.cart_value_max_cents, &offer.max_currency_overrides, cents_rate);
+            for reward in &mut offer.gift_rewards {
+                scale_money(&reward.discount_type, &mut reward.discount_value, rate);
+            }
+            for reward in &mut offer.product_rewards {
+                scale_money(&reward.discount_type, &mut reward.discount_value, rate);
+                for tier in &mut reward.price_tiers {
+                    tier.target_price_per_unit *= rate;
+                }
+                for tier in &mut reward.quantity_tiers {
+                    scale_money(&tier.discount_type, &mut tier.discount_value, rate);
+                }
+            }
+            for reward in &mut offer.order_rewards {
+                scale_money(&reward.discount_type, &mut reward.discount_value, rate);
+                for tier in &mut reward.subtotal_tiers {
+                    scale_cents(&mut tier.minimum_subtotal_cents, cents_rate);
+                    scale_cents(&mut tier.maximum_subtotal_cents, cents_rate);
+                    scale_money(&tier.discount_type, &mut tier.discount_value, rate);
+                }
+            }
+        }
+    }
+}
+
 fn default_treat_guest_as_no_tags() -> bool {
     true
 }
@@ -115,7 +168,8 @@ fn default_subscription_mode() -> String {
 #[serde(rename_all = "camelCase")]
 pub struct CompiledAttributeCondition {
     pub key: String,
-    pub value: String,
+    #[serde(default)]
+    pub value: Option<String>,
     pub match_mode: String,
     pub min_matching_quantity: i64,
 }
@@ -187,10 +241,20 @@ pub struct CompiledProductReward {
     pub count_rule: String,
     #[serde(default = "default_gift_percentage")]
     pub discount_percentage_on_gifts: f64,
+    #[serde(default)]
+    pub required_line_attribute: Option<RequiredLineAttribute>,
 }
 
 fn default_gift_percentage() -> f64 {
     100.0
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
+#[serde(rename_all = "camelCase")]
+pub struct RequiredLineAttribute {
+    pub key: String,
+    pub value: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -287,19 +351,6 @@ pub fn to_cents(amount: f64, currency_code: &str) -> i64 {
     }
 }
 
-pub fn resolve_threshold(
-    base_cents: i64,
-    overrides: &Option<HashMap<String, i64>>,
-    active_currency: &str,
-) -> i64 {
-    if let Some(map) = overrides {
-        if let Some(&override_cents) = map.get(active_currency) {
-            return override_cents;
-        }
-    }
-    base_cents
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,7 +363,7 @@ mod tests {
         let full: CompiledConfig = serde_json::from_str(FULL_FIXTURE).unwrap();
         let mut compact: CompiledConfig = serde_json::from_str(COMPACT_FIXTURE).unwrap();
         // Query-variable placeholders never equal a real attribute key, so they behave like None.
-        for slot in [&mut compact.l1, &mut compact.l2, &mut compact.c1, &mut compact.c2, &mut compact.c3] {
+        for slot in [&mut compact.c1, &mut compact.c2, &mut compact.c3] {
             if slot.as_deref() == Some("_promo_engine_unused") {
                 *slot = None;
             }

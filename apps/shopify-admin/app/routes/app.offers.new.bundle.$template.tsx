@@ -6,10 +6,9 @@
  */
 
 import { useEffect } from "react";
-import { Form, useActionData, useNavigate, useNavigation, redirect, useParams } from "react-router";
+import { Form, useActionData, useLoaderData, useNavigate, useNavigation, redirect, useParams } from "react-router";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { Toast } from "../components/Toast.js";
-import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
 import { statusForSubmit } from "../lib/offer-scheduling.server.js";
@@ -20,6 +19,7 @@ import {
   parseJsonStringArray,
   parseMoneyAmount,
   requiredText,
+  nowInZone,
 } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import {
@@ -93,15 +93,15 @@ function createBundleTier(): BundleTier {
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  return {};
+  const { timezone } = await getShopContext(request);
+  return { timezone, nowLocal: nowInZone(timezone) };
 };
 
 // ─── Action ──────────────────────────────────────────────────────────────────
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
-  const { shopId, db, session } = context;
+  const { shopId, db, session, timezone } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
@@ -112,7 +112,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const internalName = internalNameResult.data!;
   const publicTitle = publicTitleResult.data!;
   const description = (formData.get("description") as string)?.trim() || null;
-  const dateRange = parseDateRange(formData);
+  const dateRange = parseDateRange(formData, timezone);
   if (dateRange.error) return { error: dateRange.error };
   const { startsAt, endsAt } = dateRange.data!;
   const bundleType = String(formData.get("bundleType") ?? "");
@@ -289,6 +289,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           priority: 100,
           startsAt: startsAt ?? new Date(),
           endsAt,
+          timezone,
         })
         .returning({ id: offers.id });
       if (!offer) throw new Error("Failed to create offer");
@@ -479,6 +480,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function NewBundleOfferPage() {
+  const { nowLocal } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const { state } = useNavigation();
@@ -501,7 +503,7 @@ export default function NewBundleOfferPage() {
     internalName: "",
     publicTitle: "",
     description: "",
-    startsAt: new Date().toISOString().slice(0, 16),
+    startsAt: nowLocal,
     endsAt: "",
     discountType: "percentage",
     discountValue: "0",
