@@ -14,6 +14,14 @@ describe("isCronRequestAuthorized", () => {
     expect(isCronRequestAuthorized(new Request("https://example.com"))).toBe(false);
   });
 
+  it("refuses every request when crons are disabled for this deployment", () => {
+    process.env["CRON_SECRET"] = "expected-secret";
+    process.env["DISABLE_CRONS"] = "1";
+    const request = new Request("https://example.com", { headers: { authorization: "Bearer expected-secret" } });
+    expect(isCronRequestAuthorized(request)).toBe(false);
+    delete process.env["DISABLE_CRONS"];
+  });
+
   it("accepts a matching bearer token", () => {
     process.env["CRON_SECRET"] = "expected-secret";
     const request = new Request("https://example.com", {

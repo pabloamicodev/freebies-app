@@ -1,6 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 
 export function isCronRequestAuthorized(request: Request): boolean {
+  // Secondary deployments (one per merchant org's Shopify app) share the
+  // database; only the primary one runs the crons.
+  if (process.env["DISABLE_CRONS"] === "1") return false;
   const expected = process.env["CRON_SECRET"];
   if (!expected) return false;
 

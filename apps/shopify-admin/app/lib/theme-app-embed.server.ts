@@ -35,7 +35,8 @@ export function detectPromoEngineEmbedStatus(content: string): AppEmbedStatus {
     const type = block.type?.toLowerCase() ?? "";
     return (
       type.includes("/blocks/app_embed/") &&
-      (type.includes("/apps/promo-engine/") || type.includes("/apps/promo-engine-hpn/"))
+      // One app per merchant org: promo-engine, promo-engine-hpn, promo-engine-ambrosia, ...
+      /\/apps\/promo-engine(-[a-z0-9-]+)?\//.test(type)
     );
   });
 
