@@ -28,17 +28,6 @@ export function getDb() {
   return _client;
 }
 
-/**
- * Reserves a single dedicated connection from the pool. `pg_advisory_lock` /
- * `pg_advisory_unlock` must run on the same connection, which the normal
- * pooled `getDb()` client can't guarantee across awaits — callers must
- * release the reservation (and unlock) themselves, in a `finally`.
- */
-export async function reserveConnection() {
-  getDb(); // ensures _sql is initialized
-  return _sql!.reserve();
-}
-
 export async function closeDb(): Promise<void> {
   if (_sql) {
     await _sql.end();

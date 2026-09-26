@@ -1,6 +1,5 @@
 import {
   getDb,
-  reserveConnection,
   shops,
   offers,
   offerConditions,
@@ -12,7 +11,7 @@ import {
   type OfferReward,
   type OfferCombinationPolicy,
 } from "@promo/db";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { decryptToken } from "../token-crypto.server.js";
 import { shopifyGraphQL } from "../shopify-fetch.server.js";
@@ -43,23 +42,19 @@ const MAX_METAFIELD_BYTES = 9500;
 /**
  * Concurrent publishes for the same shop (e.g. a cron reconciliation run
  * overlapping a merchant save) must not interleave: each does read-compile-push
- * as one unit, so a per-shop Postgres advisory lock serializes them. Locking
- * requires holding one dedicated connection across the whole operation, since
- * lock/unlock must happen on the same session.
+ * as one unit, so a per-shop advisory lock serializes them. It is
+ * transaction-scoped on purpose: behind Neon's transaction-mode pooler a
+ * session lock and its unlock can land on different server connections, which
+ * leaked the lock and hung every later publish for the shop. An xact lock is
+ * pinned to the transaction's backend and released on commit, rollback or
+ * disconnect.
  */
 export async function publishOffersForShop(shopId: string, shopDomain: string): Promise<void> {
-  const reserved = await reserveConnection();
-  try {
-    await reserved`select pg_advisory_lock(hashtext(${shopId}))`;
+  await getDb().transaction(async (tx) => {
+    await tx.execute(sql`set local lock_timeout = '60s'`);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${shopId}))`);
     await publishOffersForShopLocked(shopId, shopDomain);
-  } finally {
-    try {
-      await reserved`select pg_advisory_unlock(hashtext(${shopId}))`;
-    } catch (unlockErr) {
-      Sentry.captureException(unlockErr, { extra: { shopId, context: "publish-offers-unlock" } });
-    }
-    reserved.release();
-  }
+  });
 }
 
 async function publishOffersForShopLocked(shopId: string, shopDomain: string): Promise<void> {
