@@ -7,6 +7,7 @@
 import { useLoaderData, Form, Link, useActionData, useNavigation } from "react-router";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
+import { OfferStepTabs } from "../components/OfferStepTabs.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
@@ -34,6 +35,60 @@ function splitCsvList(value: string | null): string[] {
   });
 }
 
+function conditionSummary(conditionType: string, value: unknown): string {
+  const v = (value ?? {}) as Record<string, unknown>;
+  switch (conditionType) {
+    case "cart_value":
+    case "cart_value_multiplier": {
+      const amount = typeof v["thresholdCents"] === "number" ? (v["thresholdCents"] / 100).toFixed(2) : "?";
+      return `≥ ${v["currencyCode"] ?? "USD"} ${amount}`;
+    }
+    case "cart_quantity":
+      return `${v["minQuantity"] ?? "?"}${v["maxQuantity"] ? `–${v["maxQuantity"]}` : "+"} items`;
+    case "customer_tags": {
+      const include = Array.isArray(v["includeTags"]) ? v["includeTags"] as string[] : [];
+      const exclude = Array.isArray(v["excludeTags"]) ? v["excludeTags"] as string[] : [];
+      return [include.length ? `include: ${include.join(", ")}` : null, exclude.length ? `exclude: ${exclude.join(", ")}` : null].filter(Boolean).join(" · ") || "no tags set";
+    }
+    case "line_attribute":
+    case "cart_attribute":
+      return `${v["key"] ?? "?"} ${v["matchMode"] === "not_equals" ? "≠" : "="} "${v["value"] ?? ""}"`;
+    case "specific_product":
+    case "pack_of_products": {
+      const requirements = Array.isArray(v["requirements"]) ? v["requirements"] as unknown[] : [];
+      return `${requirements.length} product${requirements.length === 1 ? "" : "s"} required`;
+    }
+    case "page_url": {
+      const patterns = Array.isArray(v["patterns"]) ? v["patterns"] as string[] : [];
+      return patterns.join(", ") || "no patterns set";
+    }
+    case "markets": {
+      const include = Array.isArray(v["includeMarketIds"]) ? v["includeMarketIds"].length : 0;
+      const exclude = Array.isArray(v["excludeMarketIds"]) ? v["excludeMarketIds"].length : 0;
+      return `${include} included, ${exclude} excluded`;
+    }
+    case "customer_location": {
+      const include = Array.isArray(v["includeCountryCodes"]) ? v["includeCountryCodes"] as string[] : [];
+      const exclude = Array.isArray(v["excludeCountryCodes"]) ? v["excludeCountryCodes"] as string[] : [];
+      return [include.length ? `include: ${include.join(", ")}` : null, exclude.length ? `exclude: ${exclude.join(", ")}` : null].filter(Boolean).join(" · ") || "no countries set";
+    }
+    case "sales_channels":
+      return Array.isArray(v["channels"]) ? (v["channels"] as string[]).join(", ") : "";
+    case "subscription_product_type":
+      return String(v["mode"] ?? "");
+    case "specific_link":
+      return String(v["requiredUrl"] ?? "");
+    case "one_use_per_customer":
+      return "One redemption per customer";
+    default: {
+      if (typeof v["type"] === "string") {
+        return `${v["type"]} ${v["operator"] ?? ""} ${v["value"] ?? (typeof v["valueCents"] === "number" ? (v["valueCents"] / 100).toFixed(2) : "")}`.trim();
+      }
+      return JSON.stringify(value);
+    }
+  }
+}
+
 function splitCountryCsv(value: string | null): string[] {
   return (value ?? "").split(",").flatMap((item) => {
     const code = item.trim().toUpperCase();
@@ -56,21 +111,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   };
 };
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session, shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
-  const formData = await request.formData();
-  const intent = formData.get("intent") as string;
-  const offer = await loadOwnedOffer(db, shopId, offerId);
-
-  if (intent === "add_condition") {
-    const conditionType = formData.get("conditionType") as string;
-    const conditionTypeResult = ConditionTypeSchema.safeParse(conditionType);
-    if (!conditionTypeResult.success) return { error: "Condition type is invalid." };
-    const scopeRaw = formData.get("scope") as string | null;
-    const scope = scopeRaw === "sub" ? "sub" : "main";
-
-    // Build value object based on condition type
+function buildConditionValue(
+  conditionType: string,
+  formData: FormData,
+): { value: Record<string, unknown>; operator: ConditionOperator; error?: never } | { error: string; value?: never; operator?: never } {
     let value: Record<string, unknown> = {};
     let conditionOperator: ConditionOperator = "gte";
     switch (conditionType) {
@@ -227,18 +271,47 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const valueResult = validateConditionValue(conditionType, value);
     if (!valueResult.success) return { error: valueResult.error.issues[0]?.message ?? "Condition value is invalid." };
 
-    const existingCount = await db.select({ id: offerConditions.id })
-      .from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
+    return { value, operator: conditionOperator };
+}
 
-    await db.insert(offerConditions).values({
-      shopId, offerId,
-      scope,
-      conditionType,
-      operator: conditionOperator,
-      value,
-      sortOrder: existingCount.length,
-      isEnabled: true,
-    });
+export const action = async ({ request, params }: ActionFunctionArgs) => {
+  const { session, shopId, db } = await getShopContext(request);
+  const offerId = params["id"]!;
+  const formData = await request.formData();
+  const intent = formData.get("intent") as string;
+  const offer = await loadOwnedOffer(db, shopId, offerId);
+
+  if (intent === "add_condition" || intent === "update_condition") {
+    const conditionType = formData.get("conditionType") as string;
+    const conditionTypeResult = ConditionTypeSchema.safeParse(conditionType);
+    if (!conditionTypeResult.success) return { error: "Condition type is invalid." };
+    const scopeRaw = formData.get("scope") as string | null;
+    const scope = scopeRaw === "sub" ? "sub" : "main";
+
+    const built = buildConditionValue(conditionType, formData);
+    if ("error" in built) return { error: built.error };
+    const { value, operator: conditionOperator } = built;
+
+    if (intent === "add_condition") {
+      const existingCount = await db.select({ id: offerConditions.id })
+        .from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
+
+      await db.insert(offerConditions).values({
+        shopId, offerId,
+        scope,
+        conditionType,
+        operator: conditionOperator,
+        value,
+        sortOrder: existingCount.length,
+        isEnabled: true,
+      });
+    } else {
+      const conditionId = formData.get("conditionId") as string;
+      if (!conditionId) return { error: "Condition ID missing." };
+      await db.update(offerConditions)
+        .set({ scope, conditionType, operator: conditionOperator, value })
+        .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)));
+    }
     const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
     if (publishError) return { error: publishError };
   }
@@ -298,6 +371,7 @@ export default function OfferConditionsPage() {
   const isSubmitting = navigation.state !== "idle";
   const [conditionState, setConditionField] = useObjectState({
     addingScope: null as "main" | "sub" | null,
+    editingId: null as string | null,
     selectedType: "",
     pickerOpen: false,
     pickerTarget: "required" as "required" | "exclude" | "gift",
@@ -310,6 +384,7 @@ export default function OfferConditionsPage() {
   });
   const {
     addingScope,
+    editingId,
     selectedType,
     pickerOpen,
     pickerTarget,
@@ -321,6 +396,7 @@ export default function OfferConditionsPage() {
     excludeMarketIds,
   } = conditionState;
   const setAddingScope = createFieldSetter(setConditionField, "addingScope");
+  const setEditingId = createFieldSetter(setConditionField, "editingId");
   const setSelectedType = createFieldSetter(setConditionField, "selectedType");
   const setPickerOpen = createFieldSetter(setConditionField, "pickerOpen");
   const setPickerTarget = createFieldSetter(setConditionField, "pickerTarget");
@@ -339,6 +415,38 @@ export default function OfferConditionsPage() {
       ? [...new Set([...current, marketId])]
       : current.filter((id) => id !== marketId));
   }
+
+  function closeConditionForm() {
+    setAddingScope(null);
+    setEditingId(null);
+    setSelectedType("");
+  }
+
+  function startEditCondition(c: (typeof conditions)[number]) {
+    if (editingId === c.id) {
+      closeConditionForm();
+      return;
+    }
+    const value = (c.value ?? {}) as Record<string, unknown>;
+    setAddingScope(c.scope as "main" | "sub");
+    setSelectedType(c.conditionType);
+    setEditingId(c.id);
+    setCurrencyCode(typeof value["currencyCode"] === "string" ? (value["currencyCode"] as string) : "USD");
+    setIncludeMarketIds(Array.isArray(value["includeMarketIds"]) ? (value["includeMarketIds"] as string[]) : []);
+    setExcludeMarketIds(Array.isArray(value["excludeMarketIds"]) ? (value["excludeMarketIds"] as string[]) : []);
+    if (Array.isArray(value["requirements"])) {
+      const requirements = value["requirements"] as Array<Record<string, unknown>>;
+      setRequiredVariantGids(requirements.map((r) => String(r["variantId"] ?? "")).filter(Boolean));
+      const firstQty = requirements[0]?.["quantityPerPack"] ?? requirements[0]?.["minQuantity"];
+      setMinQtyPerProduct(typeof firstQty === "number" ? String(firstQty) : "1");
+    } else {
+      setRequiredVariantGids([]);
+      setMinQtyPerProduct("1");
+    }
+  }
+
+  const editingCondition = editingId ? conditions.find((c) => c.id === editingId) : undefined;
+  const editingValue = (editingCondition?.value ?? {}) as Record<string, unknown>;
 
   if (!offer) return <NotFound message="Offer not found." />;
 
@@ -384,6 +492,10 @@ export default function OfferConditionsPage() {
           actions={<Link to={`/app/offers/${offer.id}/rewards`} className="b-btn b-btn-primary">Rewards →</Link>}
         />
 
+        <div className="b-mb-4">
+          <OfferStepTabs offerId={offer.id} active="conditions" />
+        </div>
+
         {/* No-conditions warning */}
         {conditions.length === 0 && (
           <div className="b-banner b-banner-orange b-mb-4">
@@ -400,60 +512,81 @@ export default function OfferConditionsPage() {
           <div className="b-card-header">Conditions</div>
           <div className="b-card-body">
             <div className="b-stack b-stack-3">
-              {conditions.map((c) => (
-                <div
-                  key={c.id}
-                  className="b-row-between"
-                  style={{
-                    padding: "12px 16px",
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--r)",
-                    background: "var(--bg-card)",
-                  }}
-                >
-                  <div className="b-row b-gap-3">
-                    <span
-                      className={
-                        c.scope === "main"
-                          ? "b-badge b-badge-blue"
-                          : "b-badge b-badge-orange"
-                      }
-                    >
-                      {c.scope}
-                    </span>
-                    <span className="b-text-bold">{c.conditionType}</span>
-                    <span className="b-text-sm b-text-sub">
-                      {JSON.stringify(c.value)}
-                    </span>
+              {conditions.map((c) => {
+                const isEditingThis = editingId === c.id;
+                return (
+                  <div
+                    key={c.id}
+                    className="b-row-between"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => startEditCondition(c)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startEditCondition(c); } }}
+                    style={{
+                      padding: "12px 16px",
+                      border: isEditingThis ? "1px solid var(--text)" : "1px solid var(--border)",
+                      borderRadius: "var(--r)",
+                      background: isEditingThis ? "var(--bg-active)" : "var(--bg-card)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div className="b-row b-gap-3" style={{ flexWrap: "wrap" }}>
+                      <span
+                        className={
+                          c.scope === "main"
+                            ? "b-badge b-badge-blue"
+                            : "b-badge b-badge-orange"
+                        }
+                      >
+                        {c.scope}
+                      </span>
+                      <span className="b-text-bold">{c.conditionType}</span>
+                      <span className="b-text-sm b-text-sub">
+                        {conditionSummary(c.conditionType, c.value)}
+                      </span>
+                      <span className="b-text-sm b-text-muted">{isEditingThis ? "▲ editing" : "Click to edit ▾"}</span>
+                    </div>
+                    <Form method="POST"
+                      onClick={(e) => e.stopPropagation()}
+                      onSubmit={(e: React.FormEvent<HTMLFormElement>) => { if (!window.confirm("Remove this condition?")) e.preventDefault(); }}>
+                      <input type="hidden" name="intent" value="delete_condition" />
+                      <input type="hidden" name="conditionId" value={c.id} />
+                      <button
+                        type="submit"
+                        className="b-btn b-btn-danger b-btn-sm"
+                        disabled={isSubmitting}
+                      >
+                        {isSubmitting ? "…" : "Remove"}
+                      </button>
+                    </Form>
                   </div>
-                  <Form method="POST"
-                    onSubmit={(e: React.FormEvent<HTMLFormElement>) => { if (!window.confirm("Remove this condition?")) e.preventDefault(); }}>
-                    <input type="hidden" name="intent" value="delete_condition" />
-                    <input type="hidden" name="conditionId" value={c.id} />
-                    <button
-                      type="submit"
-                      className="b-btn b-btn-danger b-btn-sm"
-                      disabled={isSubmitting}
-                    >
-                      {isSubmitting ? "…" : "Remove"}
-                    </button>
-                  </Form>
+                );
+              })}
+
+              <div className="b-banner b-banner-blue" role="status">
+                <span className="b-banner-icon">&#9432;</span>
+                <div className="b-banner-body">
+                  <p className="b-banner-text" style={{ margin: 0 }}>
+                    Main conditions must ALL be true for the offer to trigger (AND logic).
+                    Sub-conditions add extra requirements on top and are only checked once
+                    every main condition has already passed.
+                  </p>
                 </div>
-              ))}
+              </div>
 
               {/* Add buttons */}
               <div className="b-row b-gap-3" style={{ marginTop: 4 }}>
                 <button
                   type="button"
                   className="b-btn b-btn-secondary"
-                  onClick={() => { setAddingScope("main"); setSelectedType(""); }}
+                  onClick={() => { setEditingId(null); setAddingScope("main"); setSelectedType(""); }}
                 >
                   + Add Main Condition
                 </button>
                 <button
                   type="button"
                   className="b-btn b-btn-secondary"
-                  onClick={() => { setAddingScope("sub"); setSelectedType(""); }}
+                  onClick={() => { setEditingId(null); setAddingScope("sub"); setSelectedType(""); }}
                 >
                   + Add Sub-Condition
                 </button>
@@ -462,15 +595,16 @@ export default function OfferConditionsPage() {
           </div>
         </div>
 
-        {/* Add condition form card */}
+        {/* Add/edit condition form card */}
         {addingScope && (
           <div className="b-card b-mt-4">
             <div className="b-card-header">
-              Add {addingScope === "main" ? "Main" : "Sub"} Condition
+              {editingId ? "Edit Condition" : `Add ${addingScope === "main" ? "Main" : "Sub"} Condition`}
             </div>
             <div className="b-card-body">
-              <Form method="POST">
-                <input type="hidden" name="intent" value="add_condition" />
+              <Form method="POST" key={editingId ?? "new"}>
+                <input type="hidden" name="intent" value={editingId ? "update_condition" : "add_condition"} />
+                {editingId && <input type="hidden" name="conditionId" value={editingId} />}
                 <input type="hidden" name="scope" value={addingScope} />
 
                 <div className="b-stack b-stack-3">
@@ -511,6 +645,7 @@ export default function OfferConditionsPage() {
                           step="0.01"
                           required
                           autoComplete="off"
+                          defaultValue={typeof editingValue["thresholdCents"] === "number" ? (editingValue["thresholdCents"] / 100).toFixed(2) : undefined}
                         />
                       </div>
                       <div>
@@ -534,6 +669,7 @@ export default function OfferConditionsPage() {
                             name="maxMultiplier"
                             className="b-input"
                             autoComplete="off"
+                            defaultValue={typeof editingValue["maxMultiplier"] === "number" ? editingValue["maxMultiplier"] : undefined}
                           />
                         </div>
                       )}
@@ -553,6 +689,7 @@ export default function OfferConditionsPage() {
                           min="1"
                           required
                           autoComplete="off"
+                          defaultValue={typeof editingValue["minQuantity"] === "number" ? editingValue["minQuantity"] : undefined}
                         />
                       </div>
                       <div>
@@ -563,6 +700,7 @@ export default function OfferConditionsPage() {
                           name="maxQty"
                           className="b-input"
                           autoComplete="off"
+                          defaultValue={typeof editingValue["maxQuantity"] === "number" ? editingValue["maxQuantity"] : undefined}
                         />
                       </div>
                     </>
@@ -572,7 +710,7 @@ export default function OfferConditionsPage() {
                     <div className="b-stack b-stack-3">
                       <div>
                         <label className="b-label" htmlFor="attributeKey">Attribute key</label>
-                        <input id="attributeKey" name="attributeKey" className="b-input" list="attribute-key-suggestions" required autoComplete="off" placeholder={selectedType === "cart_attribute" ? "affiliate_campaign" : "engraving_message"} />
+                        <input id="attributeKey" name="attributeKey" className="b-input" list="attribute-key-suggestions" required autoComplete="off" placeholder={selectedType === "cart_attribute" ? "affiliate_campaign" : "engraving_message"} defaultValue={typeof editingValue["key"] === "string" ? editingValue["key"] : undefined} />
                         <datalist id="attribute-key-suggestions">
                           {(selectedType === "cart_attribute" ? CART_ATTRIBUTE_KEYS : LINE_ATTRIBUTE_KEYS).map((key) => (
                             <option key={key} value={key} />
@@ -580,9 +718,9 @@ export default function OfferConditionsPage() {
                         </datalist>
                         <p className="b-help">Enter this store's own Shopify attribute key. Existing HPN keys remain available only as migration suggestions.</p>
                       </div>
-                      <div><label className="b-label" htmlFor="attributeValue">Required value</label><input id="attributeValue" name="attributeValue" className="b-input" required autoComplete="off" /></div>
-                      <div><label className="b-label" htmlFor="attributeMatchMode">Match</label><select id="attributeMatchMode" name="attributeMatchMode" className="b-select"><option value="equals">Equals</option><option value="not_equals">Does not equal</option></select></div>
-                      {selectedType === "line_attribute" && <div><label className="b-label" htmlFor="attributeMinQuantity">Minimum matching quantity</label><input id="attributeMinQuantity" name="attributeMinQuantity" className="b-input" type="number" min="1" step="1" defaultValue="1" /></div>}
+                      <div><label className="b-label" htmlFor="attributeValue">Required value</label><input id="attributeValue" name="attributeValue" className="b-input" required autoComplete="off" defaultValue={typeof editingValue["value"] === "string" ? editingValue["value"] : undefined} /></div>
+                      <div><label className="b-label" htmlFor="attributeMatchMode">Match</label><select id="attributeMatchMode" name="attributeMatchMode" className="b-select" defaultValue={typeof editingValue["matchMode"] === "string" ? editingValue["matchMode"] : "equals"}><option value="equals">Equals</option><option value="not_equals">Does not equal</option></select></div>
+                      {selectedType === "line_attribute" && <div><label className="b-label" htmlFor="attributeMinQuantity">Minimum matching quantity</label><input id="attributeMinQuantity" name="attributeMinQuantity" className="b-input" type="number" min="1" step="1" defaultValue={typeof editingValue["minMatchingQuantity"] === "number" ? editingValue["minMatchingQuantity"] : 1} /></div>}
                     </div>
                   )}
 
@@ -702,6 +840,7 @@ export default function OfferConditionsPage() {
                           className="b-input"
                           autoComplete="off"
                           placeholder="vip, wholesale"
+                          defaultValue={Array.isArray(editingValue["includeTags"]) ? (editingValue["includeTags"] as string[]).join(", ") : undefined}
                         />
                       </div>
                       <div>
@@ -712,10 +851,11 @@ export default function OfferConditionsPage() {
                           name="excludeTags"
                           className="b-input"
                           autoComplete="off"
+                          defaultValue={Array.isArray(editingValue["excludeTags"]) ? (editingValue["excludeTags"] as string[]).join(", ") : undefined}
                         />
                       </div>
                       <label className="b-checkbox-row">
-                        <input type="checkbox" name="treatGuestAsNoTags" defaultChecked />
+                        <input type="checkbox" name="treatGuestAsNoTags" defaultChecked={editingCondition ? editingValue["treatGuestAsNoTags"] !== false : true} />
                         <span>Treat guest customers as having no tags</span>
                       </label>
                     </>
@@ -733,6 +873,7 @@ export default function OfferConditionsPage() {
                           className="b-input"
                           autoComplete="off"
                           placeholder="US, CA, GB"
+                          defaultValue={Array.isArray(editingValue["includeCountryCodes"]) ? (editingValue["includeCountryCodes"] as string[]).join(", ") : undefined}
                         />
                       </div>
                       <div>
@@ -743,6 +884,7 @@ export default function OfferConditionsPage() {
                           name="excludeCountries"
                           className="b-input"
                           autoComplete="off"
+                          defaultValue={Array.isArray(editingValue["excludeCountryCodes"]) ? (editingValue["excludeCountryCodes"] as string[]).join(", ") : undefined}
                         />
                       </div>
                     </>
@@ -797,12 +939,13 @@ export default function OfferConditionsPage() {
                           autoComplete="off"
                           placeholder="/collections/sale, /pages/promo"
                           required
+                          defaultValue={Array.isArray(editingValue["patterns"]) ? (editingValue["patterns"] as string[]).join(", ") : undefined}
                         />
                         <div className="b-help">Enter path patterns. The offer activates when the current page matches any pattern.</div>
                       </div>
                       <div>
                         <label className="b-label" htmlFor="matchMode">Match mode</label>
-                        <select id="matchMode" name="matchMode" className="b-select">
+                        <select id="matchMode" name="matchMode" className="b-select" defaultValue={typeof editingValue["matchMode"] === "string" ? editingValue["matchMode"] : "starts_with"}>
                           <option value="starts_with">Starts with</option>
                           <option value="exact">Exact match</option>
                           <option value="contains">Contains</option>
@@ -827,11 +970,18 @@ export default function OfferConditionsPage() {
                         min="0"
                         step={selectedType === "order_history_total_orders" ? "1" : "0.01"}
                         required
+                        defaultValue={
+                          typeof editingValue["value"] === "number"
+                            ? editingValue["value"]
+                            : typeof editingValue["valueCents"] === "number"
+                              ? (editingValue["valueCents"] / 100).toFixed(2)
+                              : undefined
+                        }
                       />
                     </div>
                     <div>
                       <label className="b-label" htmlFor="operator">Comparison</label>
-                      <select id="operator" name="operator" className="b-select" defaultValue="gte">
+                      <select id="operator" name="operator" className="b-select" defaultValue={typeof editingValue["operator"] === "string" ? editingValue["operator"] : "gte"}>
                         <option value="gte">At least</option>
                         <option value="gt">Greater than</option>
                         <option value="eq">Exactly</option>
@@ -845,7 +995,7 @@ export default function OfferConditionsPage() {
                   {selectedType === "subscription_product_type" && (
                     <div>
                       <label className="b-label" htmlFor="subscriptionMode">Purchase type</label>
-                      <select id="subscriptionMode" name="subscriptionMode" className="b-select" defaultValue="subscription_only">
+                      <select id="subscriptionMode" name="subscriptionMode" className="b-select" defaultValue={typeof editingValue["mode"] === "string" ? editingValue["mode"] : "subscription_only"}>
                         <option value="subscription_only">Subscription products</option>
                         <option value="one_time_only">One-time purchase products</option>
                         <option value="any">Any purchase type</option>
@@ -856,12 +1006,15 @@ export default function OfferConditionsPage() {
                   {selectedType === "sales_channels" && (
                     <fieldset className="b-stack b-stack-2" style={{ border: 0, padding: 0, margin: 0 }}>
                       <legend className="b-label">Allowed sales channels</legend>
-                      {[["online_store", "Online store"], ["mobile_app", "Mobile app"], ["pos", "Point of sale"]].map(([value, label]) => (
-                        <label key={value} className="b-checkbox-row">
-                          <input type="checkbox" name="channels[]" value={value} defaultChecked={value === "online_store"} />
-                          <span>{label}</span>
-                        </label>
-                      ))}
+                      {[["online_store", "Online store"], ["mobile_app", "Mobile app"], ["pos", "Point of sale"]].map(([value, label]) => {
+                        const editingChannels = Array.isArray(editingValue["channels"]) ? editingValue["channels"] as string[] : null;
+                        return (
+                          <label key={value} className="b-checkbox-row">
+                            <input type="checkbox" name="channels[]" value={value} defaultChecked={editingChannels ? editingChannels.includes(value!) : value === "online_store"} />
+                            <span>{label}</span>
+                          </label>
+                        );
+                      })}
                     </fieldset>
                   )}
 
@@ -869,15 +1022,15 @@ export default function OfferConditionsPage() {
                     <div className="b-stack b-stack-3">
                       <div>
                         <label className="b-label" htmlFor="requiredUrl">Required storefront URL or path</label>
-                        <input id="requiredUrl" name="requiredUrl" className="b-input" placeholder="/pages/vip" autoComplete="off" />
+                        <input id="requiredUrl" name="requiredUrl" className="b-input" placeholder="/pages/vip" autoComplete="off" defaultValue={typeof editingValue["requiredUrl"] === "string" ? editingValue["requiredUrl"] : undefined} />
                       </div>
                       <div>
                         <label className="b-label" htmlFor="paramName">Query parameter (optional)</label>
-                        <input id="paramName" name="paramName" className="b-input" placeholder="code" autoComplete="off" />
+                        <input id="paramName" name="paramName" className="b-input" placeholder="code" autoComplete="off" defaultValue={typeof editingValue["paramName"] === "string" ? editingValue["paramName"] : undefined} />
                       </div>
                       <div>
                         <label className="b-label" htmlFor="paramValue">Expected parameter value (optional)</label>
-                        <input id="paramValue" name="paramValue" className="b-input" placeholder="summer" autoComplete="off" />
+                        <input id="paramValue" name="paramValue" className="b-input" placeholder="summer" autoComplete="off" defaultValue={typeof editingValue["paramValue"] === "string" ? editingValue["paramValue"] : undefined} />
                       </div>
                       <p className="b-help">The storefront runtime evaluates the current browser URL. Shopify Functions cannot read a browser URL directly.</p>
                     </div>
@@ -891,12 +1044,12 @@ export default function OfferConditionsPage() {
                         className="b-btn b-btn-primary"
                         disabled={isSubmitting}
                       >
-                        {isSubmitting ? "Adding…" : "Add Condition"}
+                        {isSubmitting ? (editingId ? "Saving…" : "Adding…") : editingId ? "Save Changes" : "Add Condition"}
                       </button>
                       <button
                         type="button"
                         className="b-btn b-btn-secondary"
-                        onClick={() => setAddingScope(null)}
+                        onClick={closeConditionForm}
                         disabled={isSubmitting}
                       >
                         Cancel

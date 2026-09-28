@@ -12,10 +12,11 @@ import { offers, offerConditions, offerRewards, offerCombinationPolicies, offerV
 import { and, eq, desc, sql } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
-  IconChevronLeft, IconChevronDown, IconInfo, IconRefresh,
+  IconChevronLeft, IconChevronRight, IconChevronDown, IconInfo, IconRefresh,
   IconPlus, IconCheck, IconBot, IconLink, IconCondition,
 } from "../components/Icons.js";
 import { ProductPicker } from "../components/ProductPicker.js";
+import { OfferStepTabs } from "../components/OfferStepTabs.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
@@ -1090,17 +1091,21 @@ export default function OfferDetailPage() {
             <div className="b-editor-section">
               <p className="b-editor-section-title">{offer.type[0]?.toUpperCase()}{offer.type.slice(1)} configuration</p>
               <div className="b-editor-section-body">
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
-                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => navigate(`/app/offers/${offer.id}/conditions`)}>Conditions</button>
-                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => navigate(`/app/offers/${offer.id}/rewards`)}>Rewards</button>
-                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => navigate(`/app/offers/${offer.id}/combination`)}>Combination</button>
-                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => navigate(`/app/offers/${offer.id}/schedule`)}>Schedule</button>
-                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => navigate(`/app/offers/${offer.id}/widget`)}>Widgets</button>
-                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => navigate(`/app/offers/${offer.id}/preview`)}>Preview</button>
+                <div className="b-mb-4">
+                  <OfferStepTabs offerId={offer.id} />
                 </div>
                 <div className="b-stack b-stack-3">
-                  <div className="b-card">
-                    <div className="b-card-header">Conditions</div>
+                  <Link
+                    to={`/app/offers/${offer.id}/conditions`}
+                    className="b-card"
+                    style={{ display: "block", color: "inherit", textDecoration: "none", cursor: "pointer" }}
+                  >
+                    <div className="b-card-header" style={{ justifyContent: "space-between" }}>
+                      <span>Conditions</span>
+                      <span className="b-row b-gap-2" style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+                        Edit <IconChevronRight />
+                      </span>
+                    </div>
                     <div className="b-card-body">
                       {conditions.length > 0 ? conditions.map((condition) => (
                         <p key={condition.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>
@@ -1108,9 +1113,18 @@ export default function OfferDetailPage() {
                         </p>
                       )) : <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>No conditions configured.</p>}
                     </div>
-                  </div>
-                  <div className="b-card">
-                    <div className="b-card-header">Rewards</div>
+                  </Link>
+                  <Link
+                    to={`/app/offers/${offer.id}/rewards`}
+                    className="b-card"
+                    style={{ display: "block", color: "inherit", textDecoration: "none", cursor: "pointer" }}
+                  >
+                    <div className="b-card-header" style={{ justifyContent: "space-between" }}>
+                      <span>Rewards</span>
+                      <span className="b-row b-gap-2" style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+                        Edit <IconChevronRight />
+                      </span>
+                    </div>
                     <div className="b-card-body">
                       {rewards.length > 0 ? rewards.map((reward) => (
                         <p key={reward.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>
@@ -1118,7 +1132,7 @@ export default function OfferDetailPage() {
                         </p>
                       )) : <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>No rewards configured.</p>}
                     </div>
-                  </div>
+                  </Link>
                 </div>
               </div>
             </div>

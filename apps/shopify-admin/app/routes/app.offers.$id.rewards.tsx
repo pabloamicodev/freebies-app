@@ -7,6 +7,7 @@ import { useLoaderData, useNavigate, useNavigation, useActionData, Form } from "
 import { NotFound } from "../components/NotFound.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
 import { PageHeader } from "../components/PageHeader.js";
+import { OfferStepTabs } from "../components/OfferStepTabs.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
@@ -148,20 +149,35 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   };
 };
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session, shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
-  const formData = await request.formData();
-  const intent = formData.get("intent") as string;
-  const offer = await loadOwnedOffer(db, shopId, offerId);
+type ShopDb = Awaited<ReturnType<typeof getShopContext>>["db"];
 
-  if (intent === "add_reward") {
+async function buildRewardRecord(
+  formData: FormData,
+  db: ShopDb,
+  shopId: string,
+): Promise<
+  | {
+      data: {
+        rewardType: ReturnType<typeof RewardTypeSchema.parse>;
+        discountType: ReturnType<typeof DiscountTypeSchema.parse>;
+        value: Record<string, unknown>;
+        target: Record<string, unknown>;
+        quantity: number | null;
+        isAutoAdd: boolean;
+        isCustomerSelectable: boolean;
+        trackMode: "product" | "variant";
+        label: string | null;
+      };
+      error?: never;
+    }
+  | { error: string; data?: never }
+> {
     const rewardType = formData.get("rewardType") as string;
     let discountType = formData.get("discountType") as string;
     let shippingTiers: ShippingDiscountTier[] | null = null;
     if (rewardType === "shipping_discount") {
       const parsedTiers = parseShippingTiers(formData.get("shippingTiers"));
-      if ("error" in parsedTiers) return { error: parsedTiers.error };
+      if ("error" in parsedTiers) return { error: parsedTiers.error ?? "Shipping tiers are invalid." };
       shippingTiers = parsedTiers.tiers;
       discountType = shippingTiers[0]!.discountType;
     }
@@ -417,25 +433,61 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         error: payloadResult.error.issues[0]?.message ?? "Reward configuration is invalid.",
       };
 
-    const existing = await db
-      .select({ id: offerRewards.id })
-      .from(offerRewards)
-      .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
+    return {
+      data: {
+        rewardType: rewardTypeResult.data,
+        discountType: discountTypeResult.data,
+        value,
+        target,
+        quantity,
+        isAutoAdd,
+        isCustomerSelectable,
+        trackMode,
+        label,
+      },
+    };
+}
 
-    await db.insert(offerRewards).values({
-      shopId,
-      offerId,
-      rewardType: rewardTypeResult.data,
-      discountType: discountTypeResult.data,
-      value,
-      target,
-      quantity,
-      isAutoAdd,
-      isCustomerSelectable,
-      trackMode,
-      sortOrder: existing.length,
-      label,
-    });
+export const action = async ({ request, params }: ActionFunctionArgs) => {
+  const { session, shopId, db } = await getShopContext(request);
+  const offerId = params["id"]!;
+  const formData = await request.formData();
+  const intent = formData.get("intent") as string;
+  const offer = await loadOwnedOffer(db, shopId, offerId);
+
+  if (intent === "add_reward" || intent === "update_reward") {
+    const built = await buildRewardRecord(formData, db, shopId);
+    if ("error" in built) return { error: built.error };
+    const { rewardType, discountType, value, target, quantity, isAutoAdd, isCustomerSelectable, trackMode, label } = built.data;
+
+    if (intent === "add_reward") {
+      const existing = await db
+        .select({ id: offerRewards.id })
+        .from(offerRewards)
+        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
+
+      await db.insert(offerRewards).values({
+        shopId,
+        offerId,
+        rewardType,
+        discountType,
+        value,
+        target,
+        quantity,
+        isAutoAdd,
+        isCustomerSelectable,
+        trackMode,
+        sortOrder: existing.length,
+        label,
+      });
+    } else {
+      const rewardId = formData.get("rewardId") as string;
+      if (!rewardId) return { error: "Reward ID missing." };
+      await db
+        .update(offerRewards)
+        .set({ rewardType, discountType, value, target, quantity, isAutoAdd, isCustomerSelectable, trackMode, label })
+        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId)));
+    }
     const publishError = await republishIfActive(
       db,
       shopId,
@@ -448,7 +500,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       shopId,
       entityType: "offer_reward",
       entityId: offerId,
-      action: "add_reward",
+      action: intent,
       after: { rewardType, discountType },
       performedBy: session.shop,
     });
@@ -562,6 +614,7 @@ export default function OfferRewardsPage() {
   const isSubmitting = navigation.state !== "idle";
   const [rewardState, setRewardField] = useObjectState({
     adding: false,
+    editingId: null as string | null,
     rewardType: "product_gift",
     discountType: "free",
     pickerOpen: false,
@@ -585,6 +638,7 @@ export default function OfferRewardsPage() {
   });
   const {
     adding,
+    editingId,
     rewardType,
     discountType,
     pickerOpen,
@@ -605,6 +659,7 @@ export default function OfferRewardsPage() {
     productPriceTiers,
   } = rewardState;
   const setAdding = createFieldSetter(setRewardField, "adding");
+  const setEditingId = createFieldSetter(setRewardField, "editingId");
   const setRewardType = createFieldSetter(setRewardField, "rewardType");
   const setDiscountType = createFieldSetter(setRewardField, "discountType");
   const setPickerOpen = createFieldSetter(setRewardField, "pickerOpen");
@@ -633,7 +688,79 @@ export default function OfferRewardsPage() {
   const setProductTargetType = createFieldSetter(setRewardField, "productTargetType");
   const setProductPriceTiers = createFieldSetter(setRewardField, "productPriceTiers");
 
+  function closeRewardForm() {
+    setAdding(false);
+    setEditingId(null);
+  }
+
+  function startEditReward(r: (typeof rewards)[number]) {
+    if (editingId === r.id) {
+      closeRewardForm();
+      return;
+    }
+    const value = (r.value ?? {}) as Record<string, unknown>;
+    const target = (r.target ?? {}) as Record<string, unknown>;
+
+    setEditingId(r.id);
+    setAdding(true);
+    setRewardType(r.rewardType);
+    setDiscountType(r.discountType);
+    setCurrencyCode(typeof value["currencyCode"] === "string" ? (value["currencyCode"] as string) : "USD");
+    setGiftQuantity(r.quantity != null ? String(r.quantity) : "1");
+
+    const targetVariantIds = Array.isArray(target["variantIds"]) ? target["variantIds"] as string[] : [];
+    const targetProductIds = Array.isArray(target["productIds"]) ? target["productIds"] as string[] : [];
+    setSelectedGiftGids(
+      r.rewardType === "product_gift"
+        ? (typeof target["productId"] === "string" ? [target["productId"] as string] : [])
+        : targetProductIds.length > 0 ? targetProductIds : targetVariantIds,
+    );
+    setFallbackGids(Array.isArray(target["fallbackVariantIds"]) ? target["fallbackVariantIds"] as string[] : []);
+    setProductTargetType(targetProductIds.length > 0 ? "products" : "variants");
+
+    const scopeMode = target["scopeMode"];
+    const resolvedScopeMode = scopeMode === "landing" || scopeMode === "quiz_bundle" ? scopeMode : "sitewide";
+    setProductScopeMode(resolvedScopeMode);
+    setRequiredLineAttributeValue(typeof target["requiredLineAttributeValue"] === "string" ? target["requiredLineAttributeValue"] as string : "");
+    setRequiredAnchorVariantIds(Array.isArray(target["requiredAnchorVariantIds"]) ? (target["requiredAnchorVariantIds"] as string[]).join("\n") : "");
+    setRequiredAnchorMinQuantity(typeof target["requiredAnchorMinQuantity"] === "number" ? String(target["requiredAnchorMinQuantity"]) : "1");
+    setRequiresAnchorSubscription(target["requiresAnchorSubscription"] === true);
+
+    const priceTiers = Array.isArray(target["priceTiers"]) ? target["priceTiers"] as Array<Record<string, unknown>> : [];
+    setProductPriceTiers(
+      priceTiers.length > 0
+        ? priceTiers.map((tier, index) => ({
+            key: `edit-price-tier-${index}`,
+            quantity: String(tier["quantity"] ?? ""),
+            targetPricePerUnit: String(tier["targetPricePerUnit"] ?? ""),
+          }))
+        : [{ key: "product-tier-1", quantity: "1", targetPricePerUnit: "" }],
+    );
+
+    if (r.rewardType === "shipping_discount") {
+      const tiers = Array.isArray(value["tiers"]) ? value["tiers"] as Array<Record<string, unknown>> : [];
+      setShippingTiers(
+        tiers.length > 0
+          ? tiers.map((tier, index) => ({
+              key: `edit-shipping-tier-${index}`,
+              minimumSubtotal: typeof tier["minimumSubtotalCents"] === "number" ? (tier["minimumSubtotalCents"] / 100).toString() : "0",
+              maximumSubtotal: typeof tier["maximumSubtotalCents"] === "number" ? (tier["maximumSubtotalCents"] / 100).toString() : "",
+              discountType: tier["discountType"] === "fixed_amount" ? "fixed_amount" : "percentage",
+              discountValue: String(tier["discountValue"] ?? 0),
+              appliesWhen: tier["appliesWhen"] === "has_subscription" || tier["appliesWhen"] === "one_time_only" ? tier["appliesWhen"] : "",
+            }))
+          : [{ ...DEFAULT_SHIPPING_TIER }],
+      );
+      setDeliveryGroupTypes(Array.isArray(target["deliveryGroupTypes"]) ? target["deliveryGroupTypes"] as DeliveryGroupType[] : ["ONE_TIME_PURCHASE", "SUBSCRIPTION"]);
+      setShippingScopeMode(resolvedScopeMode);
+    }
+  }
+
   if (!offer) return <NotFound message="Offer not found." />;
+
+  const editingReward = editingId ? rewards.find((r) => r.id === editingId) : undefined;
+  const editingTarget = (editingReward?.target ?? {}) as Record<string, unknown>;
+  const editingRewardValue = (editingReward?.value ?? {}) as Record<string, unknown>;
 
   const needsValue =
     rewardType !== "shipping_discount" &&
@@ -730,6 +857,10 @@ export default function OfferRewardsPage() {
           }
         />
 
+        <div className="b-mb-4">
+          <OfferStepTabs offerId={offer.id} active="rewards" />
+        </div>
+
         {/* ── Action feedback banners ─────────────────────── */}
         {"error" in (actionData ?? {}) && (actionData as { error: string }).error && (
           <div className="b-banner b-banner-red b-mb-4">
@@ -768,57 +899,67 @@ export default function OfferRewardsPage() {
           <div className="b-card-header">Rewards</div>
           <div className="b-card-body">
             <div className="b-stack b-stack-3">
-              {rewards.map((r) => (
-                <div
-                  key={r.id}
-                  className="b-row-between"
-                  style={{
-                    padding: "14px 16px",
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--r)",
-                    background: "var(--bg-hover)",
-                  }}
-                >
-                  {/* Left: badges + info */}
-                  <div className="b-row b-gap-3" style={{ flexWrap: "wrap" }}>
-                    <span className="b-badge b-badge-green">
-                      {REWARD_TYPE_LABELS[r.rewardType] ?? r.rewardType}
-                    </span>
-                    <span className="b-text-sm b-text-bold">{r.discountType}</span>
-                    {r.quantity != null && (
-                      <span className="b-text-sm b-text-sub">Qty: {r.quantity}</span>
-                    )}
-                    {r.isAutoAdd && <span className="b-badge b-badge-blue">Auto-add</span>}
-                    {r.isCustomerSelectable && (
-                      <span className="b-badge b-badge-orange">Customer selects</span>
-                    )}
-                    {targetSummaryParts(r.target).map((part) => (
-                      <span key={part} className="b-text-sm b-text-sub">
-                        {part}
-                      </span>
-                    ))}
-                  </div>
-
-                  {/* Right: delete button */}
-                  <Form
-                    method="POST"
-                    style={{ flexShrink: 0, marginLeft: 16 }}
-                    onSubmit={(e: React.FormEvent<HTMLFormElement>) => {
-                      if (!window.confirm("Remove this reward?")) e.preventDefault();
+              {rewards.map((r) => {
+                const isEditingThis = editingId === r.id;
+                return (
+                  <div
+                    key={r.id}
+                    className="b-row-between"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => startEditReward(r)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startEditReward(r); } }}
+                    style={{
+                      padding: "14px 16px",
+                      border: isEditingThis ? "1px solid var(--text)" : "1px solid var(--border)",
+                      borderRadius: "var(--r)",
+                      background: isEditingThis ? "var(--bg-active)" : "var(--bg-hover)",
+                      cursor: "pointer",
                     }}
                   >
-                    <input type="hidden" name="intent" value="delete_reward" />
-                    <input type="hidden" name="rewardId" value={r.id} />
-                    <button
-                      type="submit"
-                      className="b-btn-icon b-btn-icon-red"
-                      title="Remove reward"
+                    {/* Left: badges + info */}
+                    <div className="b-row b-gap-3" style={{ flexWrap: "wrap" }}>
+                      <span className="b-badge b-badge-green">
+                        {REWARD_TYPE_LABELS[r.rewardType] ?? r.rewardType}
+                      </span>
+                      <span className="b-text-sm b-text-bold">{r.discountType}</span>
+                      {r.quantity != null && (
+                        <span className="b-text-sm b-text-sub">Qty: {r.quantity}</span>
+                      )}
+                      {r.isAutoAdd && <span className="b-badge b-badge-blue">Auto-add</span>}
+                      {r.isCustomerSelectable && (
+                        <span className="b-badge b-badge-orange">Customer selects</span>
+                      )}
+                      {targetSummaryParts(r.target).map((part) => (
+                        <span key={part} className="b-text-sm b-text-sub">
+                          {part}
+                        </span>
+                      ))}
+                      <span className="b-text-sm b-text-muted">{isEditingThis ? "▲ editing" : "Click to edit ▾"}</span>
+                    </div>
+
+                    {/* Right: delete button */}
+                    <Form
+                      method="POST"
+                      style={{ flexShrink: 0, marginLeft: 16 }}
+                      onClick={(e) => e.stopPropagation()}
+                      onSubmit={(e: React.FormEvent<HTMLFormElement>) => {
+                        if (!window.confirm("Remove this reward?")) e.preventDefault();
+                      }}
                     >
-                      ✕
-                    </button>
-                  </Form>
-                </div>
-              ))}
+                      <input type="hidden" name="intent" value="delete_reward" />
+                      <input type="hidden" name="rewardId" value={r.id} />
+                      <button
+                        type="submit"
+                        className="b-btn-icon b-btn-icon-red"
+                        title="Remove reward"
+                      >
+                        ✕
+                      </button>
+                    </Form>
+                  </div>
+                );
+              })}
 
               {rewards.length === 0 && (
                 <p className="b-text-sm b-text-muted" style={{ margin: 0 }}>
@@ -831,7 +972,7 @@ export default function OfferRewardsPage() {
               <button
                 type="button"
                 className="b-btn b-btn-secondary b-mt-4"
-                onClick={() => setAdding(true)}
+                onClick={() => { setEditingId(null); setAdding(true); }}
               >
                 + Add Reward
               </button>
@@ -839,13 +980,14 @@ export default function OfferRewardsPage() {
           </div>
         </div>
 
-        {/* ── Add reward form ──────────────────────────────── */}
+        {/* ── Add/edit reward form ──────────────────────────── */}
         {adding && (
           <div className="b-card b-mt-4">
-            <div className="b-card-header">Add Reward</div>
+            <div className="b-card-header">{editingId ? "Edit Reward" : "Add Reward"}</div>
             <div className="b-card-body">
-              <Form method="POST">
-                <input type="hidden" name="intent" value="add_reward" />
+              <Form method="POST" key={editingId ?? "new"}>
+                <input type="hidden" name="intent" value={editingId ? "update_reward" : "add_reward"} />
+                {editingId && <input type="hidden" name="rewardId" value={editingId} />}
 
                 <div className="b-stack b-stack-3">
                   {/* Reward type */}
@@ -930,6 +1072,13 @@ export default function OfferRewardsPage() {
                           step="0.01"
                           required
                           autoComplete="off"
+                          defaultValue={
+                            typeof editingRewardValue["amount"] === "number"
+                              ? (discountType === "percentage" || discountType === "most_expensive_item_discount"
+                                  ? editingRewardValue["amount"]
+                                  : (editingRewardValue["amount"] as number) / 100)
+                              : undefined
+                          }
                         />
                       </div>
                       <div>
@@ -1475,6 +1624,7 @@ export default function OfferRewardsPage() {
                                   step="1"
                                   placeholder="Optional"
                                   autoComplete="off"
+                                  defaultValue={typeof editingTarget["lineQuantityEquals"] === "number" ? editingTarget["lineQuantityEquals"] : undefined}
                                 />
                               </div>
                               <div>
@@ -1490,6 +1640,7 @@ export default function OfferRewardsPage() {
                                   step="1"
                                   placeholder="Optional"
                                   autoComplete="off"
+                                  defaultValue={typeof editingTarget["maxUnitsTotal"] === "number" ? editingTarget["maxUnitsTotal"] : undefined}
                                 />
                                 <p className="b-help">Caps units discounted across the whole cart.</p>
                               </div>
@@ -1498,7 +1649,7 @@ export default function OfferRewardsPage() {
                                   Max discounted units per product
                                 </label>
                                 <input
-                                  key={`maxUnitsPerProduct-${productScopeMode}-${discountType}`}
+                                  key={`maxUnitsPerProduct-${productScopeMode}-${discountType}-${editingId ?? "new"}`}
                                   id="maxUnitsPerProduct"
                                   name="maxUnitsPerProduct"
                                   type="number"
@@ -1506,7 +1657,9 @@ export default function OfferRewardsPage() {
                                   min="1"
                                   step="1"
                                   defaultValue={
-                                    productScopeMode === "landing" && discountType === "free" ? "1" : ""
+                                    typeof editingTarget["maxUnitsPerProduct"] === "number"
+                                      ? editingTarget["maxUnitsPerProduct"]
+                                      : productScopeMode === "landing" && discountType === "free" ? "1" : ""
                                   }
                                   placeholder="Optional"
                                   autoComplete="off"
@@ -1526,6 +1679,7 @@ export default function OfferRewardsPage() {
                                   step="1"
                                   placeholder="Optional"
                                   autoComplete="off"
+                                  defaultValue={typeof editingTarget["maxUnitsPerLine"] === "number" ? editingTarget["maxUnitsPerLine"] : undefined}
                                 />
                                 <p className="b-help">Caps units discounted per cart line.</p>
                               </div>
@@ -1542,6 +1696,7 @@ export default function OfferRewardsPage() {
                                   step="1"
                                   placeholder="Optional"
                                   autoComplete="off"
+                                  defaultValue={typeof editingTarget["maxUnitsPerVariant"] === "number" ? editingTarget["maxUnitsPerVariant"] : undefined}
                                 />
                                 <p className="b-help">Caps units discounted per distinct variant.</p>
                               </div>
@@ -1553,7 +1708,7 @@ export default function OfferRewardsPage() {
                                   id="subscriptionMode"
                                   name="subscriptionMode"
                                   className="b-select"
-                                  defaultValue="any"
+                                  defaultValue={typeof editingTarget["subscriptionMode"] === "string" ? editingTarget["subscriptionMode"] : "any"}
                                 >
                                   <option value="any">Any purchase type</option>
                                   <option value="one_time_only">One-time purchase only</option>
@@ -1737,6 +1892,16 @@ export default function OfferRewardsPage() {
 
                           {productScopeMode === "quiz_bundle" && (
                             <div>
+                              <div className="b-banner b-banner-blue" role="status" style={{ marginBottom: 14 }}>
+                                <span className="b-banner-icon">&#9432;</span>
+                                <div className="b-banner-body">
+                                  <p className="b-banner-text" style={{ margin: 0 }}>
+                                    Quiz bundle scope ignores any products or variants selected
+                                    above — the target is resolved entirely from the quiz's own
+                                    cart line properties at runtime, using the percentage below.
+                                  </p>
+                                </div>
+                              </div>
                               <label className="b-label" htmlFor="discountPercentageOnGifts">
                                 Quiz gift discount percentage
                               </label>
@@ -1748,7 +1913,7 @@ export default function OfferRewardsPage() {
                                 min="0"
                                 max="100"
                                 step="0.01"
-                                defaultValue="100"
+                                defaultValue={typeof editingTarget["discountPercentageOnGifts"] === "number" ? editingTarget["discountPercentageOnGifts"] : "100"}
                               />
                               <p className="b-help">
                                 Paid components reach _quiz_target_cents only when every expected
@@ -1773,18 +1938,19 @@ export default function OfferRewardsPage() {
                       className="b-input"
                       autoComplete="off"
                       placeholder="e.g. 'Choose your gift'"
+                      defaultValue={editingReward?.label ?? undefined}
                     />
                   </div>
 
                   {/* Form actions */}
                   <div className="b-row b-gap-3 b-mt-2">
                     <button type="submit" className="b-btn b-btn-primary" disabled={isSubmitting}>
-                      {isSubmitting ? "Adding…" : "Add Reward"}
+                      {isSubmitting ? (editingId ? "Saving…" : "Adding…") : editingId ? "Save Changes" : "Add Reward"}
                     </button>
                     <button
                       type="button"
                       className="b-btn b-btn-secondary"
-                      onClick={() => setAdding(false)}
+                      onClick={closeRewardForm}
                       disabled={isSubmitting}
                     >
                       Cancel
