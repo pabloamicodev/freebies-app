@@ -78,36 +78,36 @@ export function LinkForm({ value, onChange }: SubFormProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <label className="b-label" htmlFor={`${idPrefix}-url`}>URL o ruta de destino</label>
-        <input id={`${idPrefix}-url`} aria-label="URL o ruta de destino" className="b-input" value={requiredUrl}
+        <label className="b-label" htmlFor={`${idPrefix}-url`}>Destination URL or path</label>
+        <input id={`${idPrefix}-url`} aria-label="Destination URL or path" className="b-input" value={requiredUrl}
           onChange={(e) => emit({ requiredUrl: e.target.value })} placeholder="/pages/vip" autoComplete="off" />
       </div>
 
       <div>
-        <label className="b-label" htmlFor={`${idPrefix}-param-name`}>Parámetro (opcional)</label>
-        <input id={`${idPrefix}-param-name`} aria-label="Parámetro" className="b-input" value={paramName}
+        <label className="b-label" htmlFor={`${idPrefix}-param-name`}>Query parameter (optional)</label>
+        <input id={`${idPrefix}-param-name`} aria-label="Query parameter" className="b-input" value={paramName}
           onChange={(e) => emit({ paramName: e.target.value })} placeholder="freegifts_code" autoComplete="off" />
       </div>
 
       <div>
-        <label className="b-label" htmlFor={`${idPrefix}-param-value`}>Valor esperado (opcional)</label>
-        <input id={`${idPrefix}-param-value`} aria-label="Valor esperado" className="b-input" value={paramValue}
+        <label className="b-label" htmlFor={`${idPrefix}-param-value`}>Expected value (optional)</label>
+        <input id={`${idPrefix}-param-value`} aria-label="Expected value" className="b-input" value={paramValue}
           onChange={(e) => emit({ paramValue: e.target.value })} placeholder="summer2024" autoComplete="off" />
       </div>
 
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-          <label className="b-label" htmlFor={`${idPrefix}-generated`} style={{ margin: 0 }}>Enlace generado</label>
+          <label className="b-label" htmlFor={`${idPrefix}-generated`} style={{ margin: 0 }}>Generated link</label>
           <button type="button" onClick={() => void navigator.clipboard.writeText(generated)}
             style={{ fontSize: 12, color: "var(--blue)", background: "none", border: "none", cursor: "pointer" }}>
-            Copiar link
+            Copy link
           </button>
         </div>
-        <input id={`${idPrefix}-generated`} aria-label="Enlace generado" className="b-input" readOnly value={generated}
+        <input id={`${idPrefix}-generated`} aria-label="Generated link" className="b-input" readOnly value={generated}
           style={{ background: "var(--bg)", color: "var(--text-sub)" }} />
       </div>
 
-      <div className="b-help">Se evalúa la URL real del navegador. No se inserta ni ejecuta código remoto.</div>
+      <div className="b-help">Evaluates the browser's actual URL. No remote code is inserted or executed.</div>
     </div>
   );
 }
@@ -126,27 +126,27 @@ export function OrderHistoryForm({ value, onChange }: SubFormProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
-        <label className="b-label" htmlFor={`${idPrefix}-metric`}>Métrica</label>
+        <label className="b-label" htmlFor={`${idPrefix}-metric`}>Metric</label>
         <select id={`${idPrefix}-metric`} className="b-select" value={metric} onChange={(e) => emit({ metric: e.target.value })}>
-          <option value="total_spent">Total gastado</option>
-          <option value="last_order_spent">Total gastado en el último pedido</option>
-          <option value="total_orders">Número total de pedidos</option>
-          <option value="one_use_per_customer">Un uso por cliente</option>
+          <option value="total_spent">Total spent</option>
+          <option value="last_order_spent">Total spent on last order</option>
+          <option value="total_orders">Total number of orders</option>
+          <option value="one_use_per_customer">One use per customer</option>
         </select>
       </div>
       {metric !== "one_use_per_customer" && <>
         <div>
-          <label className="b-label" htmlFor={`${idPrefix}-operator`}>Comparación</label>
+          <label className="b-label" htmlFor={`${idPrefix}-operator`}>Comparison</label>
           <select id={`${idPrefix}-operator`} className="b-select" value={operator} onChange={(e) => emit({ operator: e.target.value })}>
-            <option value="gte">Al menos</option>
-            <option value="gt">Mayor que</option>
-            <option value="eq">Exactamente</option>
-            <option value="lte">Como máximo</option>
-            <option value="lt">Menor que</option>
+            <option value="gte">At least</option>
+            <option value="gt">Greater than</option>
+            <option value="eq">Exactly</option>
+            <option value="lte">At most</option>
+            <option value="lt">Less than</option>
           </select>
         </div>
         <div>
-          <label className="b-label" htmlFor={`${idPrefix}-threshold`}>{metric === "total_orders" ? "Cantidad" : "Monto"}</label>
+          <label className="b-label" htmlFor={`${idPrefix}-threshold`}>{metric === "total_orders" ? "Quantity" : "Amount"}</label>
           <input id={`${idPrefix}-threshold`} className="b-input" type="number" min="0" step={metric === "total_orders" ? "1" : "0.01"}
             value={threshold} onChange={(e) => emit({ threshold: Number(e.target.value) })} />
         </div>
@@ -226,7 +226,7 @@ export function LocationForm({ value, onChange }: SubFormProps) {
       <label className="b-checkbox-row" htmlFor={`${idPrefix}-exclude-countries`} style={{ cursor: "pointer", gap: 10 }}>
         <input id={`${idPrefix}-exclude-countries`} type="checkbox" checked={exclude}
           onChange={(e) => emit(countries, e.target.checked)} />
-        <span style={{ fontSize: 13, color: "var(--text)" }}>Excluir estos países</span>
+        <span style={{ fontSize: 13, color: "var(--text)" }}>Exclude these countries</span>
       </label>
     </div>
   );

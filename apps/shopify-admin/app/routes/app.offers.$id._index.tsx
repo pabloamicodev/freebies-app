@@ -948,13 +948,22 @@ function SummaryItem({
   label,
   done,
   details,
+  onClick,
 }: {
   label: string;
   done: boolean;
   details?: string[];
+  onClick?: () => void;
 }) {
   return (
-    <div className="b-summary-item">
+    <div
+      className="b-summary-item"
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
+      style={onClick ? { cursor: "pointer" } : undefined}
+    >
       <div
         className={`b-summary-circle${done ? " b-summary-circle-done" : ""}`}
         style={{ flexShrink: 0, marginTop: 2 }}
@@ -986,6 +995,10 @@ function SummaryItem({
       </div>
     </div>
   );
+}
+
+function scrollToSection(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 /* ── Condition summary text from DB value ────────────────── */
@@ -1377,7 +1390,7 @@ export default function OfferDetailPage() {
         <div className="b-editor-main">
 
           {/* Offer info ──────────────────────────────────── */}
-          <div className="b-editor-section">
+          <div className="b-editor-section" id="section-offer-info">
             <p className="b-editor-section-title">Offer information</p>
             <div className="b-editor-section-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <div>
@@ -1437,7 +1450,7 @@ export default function OfferDetailPage() {
           </div>
 
           {/* Main condition ──────────────────────────────── */}
-          <div className="b-editor-section">
+          <div className="b-editor-section" id="section-main-condition">
             <p className="b-editor-section-title">Offer main condition</p>
             <div className="b-editor-section-body">
               {mainConditions.map((c) => (
@@ -1551,7 +1564,7 @@ export default function OfferDetailPage() {
           />
 
           {/* Select gifts ────────────────────────────────── */}
-          <div className="b-editor-section">
+          <div className="b-editor-section" id="section-gift-reward">
             <p className="b-editor-section-title">Select gifts</p>
             <div className="b-editor-section-body">
               <p className="b-text-sm b-text-bold" style={{ marginBottom: 10 }}>Gift discount type</p>
@@ -1604,7 +1617,7 @@ export default function OfferDetailPage() {
                     Automatically all gifts
                   </label>
                 </div>
-                <div className="b-checkbox-row" style={{ alignItems: "flex-start" }}>
+                <div className="b-checkbox-row" style={{ alignItems: "center" }}>
                   <input
                     type="radio"
                     id="num-gifts"
@@ -1621,13 +1634,13 @@ export default function OfferDetailPage() {
                     {!receivesAll && (
                       <input
                         aria-label="Gift count"
-                        className="b-input b-mt-2"
+                        className="b-input"
                         type="number"
                         value={giftCount}
                         onChange={(e) => setGiftCount(e.target.value)}
                         onBlur={() => saveReward()}
                         min="1"
-                        style={{ maxWidth: 120 }}
+                        style={{ maxWidth: 120, marginLeft: 8, height: 30 }}
                       />
                     )}
                   </div>
@@ -1787,6 +1800,7 @@ export default function OfferDetailPage() {
                 publicTitle || internalName,
                 formatStartDate(offer.startsAt),
               ].filter(Boolean) as string[] : undefined}
+              onClick={() => scrollToSection("section-offer-info")}
             />
             <SummaryItem
               label="Main condition"
@@ -1794,15 +1808,18 @@ export default function OfferDetailPage() {
               details={hasConditions
                 ? mainConditions.flatMap((c) => conditionSummary(c.conditionType, c.value as ConditionValue, shopCurrencyCode))
                 : undefined}
+              onClick={() => { scrollToSection("section-main-condition"); if (!hasConditions) setAddingCondition(true); }}
             />
             <SummaryItem
               label="Subcondition (optional)"
               done={subConditions.length > 0}
+              onClick={() => setSubModalOpen(true)}
             />
             <SummaryItem
               label="Gift"
               done={hasRewards}
               details={hasRewards ? [`${rewards.length} reward(s) configured`] : undefined}
+              onClick={() => scrollToSection("section-gift-reward")}
             />
           </div>
 
