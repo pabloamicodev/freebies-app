@@ -1,5 +1,17 @@
 import { z } from "zod";
 
+/** Some storefront scripts (analytics snippets, tracking pixels) write cart/line
+ * attributes as numbers or booleans through the Ajax Cart API instead of strings
+ * (e.g. Heatmap.com's `_heatIdSite`/`_heatDevice`). Shopify's own attributes are
+ * always strings, but we can't control third-party scripts, so coerce rather
+ * than reject the whole evaluation — mirrors MarketContextSchema.id below. */
+function coercedStringValue(maxLength: number) {
+  return z.preprocess(
+    (value) => (typeof value === "number" || typeof value === "boolean" ? String(value) : value),
+    z.string().max(maxLength),
+  );
+}
+
 /** Normalized cart line — abstraction over Ajax Cart API and Storefront API. */
 export const NormalizedCartLineSchema = z.object({
   /** Line key from Ajax Cart API, or Storefront API cart line ID. */
@@ -13,7 +25,7 @@ export const NormalizedCartLineSchema = z.object({
   lineSubtotalCents: z.number().int().nonnegative().optional(),
   compareAtPriceCents: z.number().int().nonnegative().nullable(),
   /** All line item properties / attributes. */
-  properties: z.record(z.string().max(128), z.string().max(2_048)).superRefine((properties, ctx) => {
+  properties: z.record(z.string().max(128), coercedStringValue(2_048)).superRefine((properties, ctx) => {
     if (Object.keys(properties).length > 100) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Cart lines cannot contain more than 100 properties." });
     }
@@ -48,7 +60,7 @@ export const NormalizedCartSchema = z.object({
   id: z.string().max(512).nullable(),
   lines: z.array(NormalizedCartLineSchema).max(250),
   /** Cart-level attributes exposed by Shopify's Ajax Cart and Functions APIs. */
-  attributes: z.record(z.string().max(128), z.string().max(2_048)).optional(),
+  attributes: z.record(z.string().max(128), coercedStringValue(2_048)).optional(),
   /** Subtotal in store currency cents (before discounts). */
   subtotalCents: z.number().int().nonnegative(),
   discountCodes: z.array(z.string().min(1).max(255)).max(100),

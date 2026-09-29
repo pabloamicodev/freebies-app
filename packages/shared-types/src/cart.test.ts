@@ -61,4 +61,56 @@ describe("EvaluationInputSchema limits", () => {
 
     expect(EvaluationInputSchema.safeParse(payload).success).toBe(false);
   });
+
+  it("coerces numeric/boolean cart attributes instead of rejecting the payload (Heatmap.com writes _heatIdSite/_heatDevice as numbers)", () => {
+    const payload = input();
+    (payload.cart as { attributes?: Record<string, unknown> }).attributes = {
+      _heatIdSite: 4594,
+      _heatDevice: 1,
+      isGuest: true,
+    };
+
+    const result = EvaluationInputSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.cart.attributes).toEqual({
+        _heatIdSite: "4594",
+        _heatDevice: "1",
+        isGuest: "true",
+      });
+    }
+  });
+
+  it("coerces numeric/boolean line properties the same way", () => {
+    const payload = input();
+    payload.cart.lines = [
+      {
+        key: "line-1",
+        variantId: "1",
+        productId: "1",
+        quantity: 1,
+        priceCents: 100,
+        compareAtPriceCents: null,
+        properties: { _customNumericProp: 42 } as unknown as Record<string, string>,
+        requiresSellingPlan: false,
+        sellingPlanId: null,
+        productHandle: "product",
+        productTitle: "Product",
+        variantTitle: null,
+        vendor: "Vendor",
+        productType: "Type",
+        tags: [],
+        collections: [],
+        availableForSale: true,
+        inventoryPolicy: "DENY",
+        inventoryQuantity: 10,
+      },
+    ];
+
+    const result = EvaluationInputSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.cart.lines[0]?.properties).toEqual({ _customNumericProp: "42" });
+    }
+  });
 });
