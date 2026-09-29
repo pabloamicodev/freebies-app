@@ -17,6 +17,13 @@ import {
 } from "../components/Icons.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { OfferStepTabs } from "../components/OfferStepTabs.js";
+import { SelectedProductsList } from "../components/SelectedProductsList.js";
+import { SubconditionModal } from "../components/SubconditionModal.js";
+import { SubconditionCard } from "../components/SubconditionCard.js";
+import { SUB_FORMS } from "../components/subconditions/registry.js";
+import { GIFT_SUBCONDITIONS } from "../components/subconditions/types.js";
+import type { SubconditionId } from "../components/subconditions/types.js";
+import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
@@ -166,7 +173,18 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         const variantIdsResult = parseJsonStringArray(targetForm, "targetVariantIds");
         if (variantIdsResult.error) return { error: variantIdsResult.error };
         const variantIds = variantIdsResult.data!;
-        set["target"] = { scope: "cart", variantIds };
+
+        const fallbackRaw = formData.get("targetFallbackVariantIds");
+        let fallbackVariantIds: string[] = [];
+        if (typeof fallbackRaw === "string") {
+          const fallbackForm = new FormData();
+          fallbackForm.set("targetFallbackVariantIds", fallbackRaw);
+          const fallbackResult = parseJsonStringArray(fallbackForm, "targetFallbackVariantIds");
+          if (fallbackResult.error) return { error: fallbackResult.error };
+          // A fallback that is also a primary gift would never act as a replacement.
+          fallbackVariantIds = fallbackResult.data!.filter((id) => !variantIds.includes(id)).slice(0, 5);
+        }
+        set["target"] = { scope: "cart", variantIds, ...(fallbackVariantIds.length > 0 ? { fallbackVariantIds } : {}) };
       }
       if (offer.status === "active") {
         const [reward] = await db.select({ rewardType: offerRewards.rewardType, target: offerRewards.target })
@@ -183,6 +201,36 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         if (!rewardResult.success) return { error: rewardResult.error.issues[0]?.message ?? "Reward configuration is invalid." };
       }
       await db.update(offerRewards).set(set).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId)));
+      if (offer.status === "active") {
+        const publishError = await publishShopConfig(shopId, session.shop);
+        if (publishError) return { error: publishError };
+      }
+      break;
+    }
+    case "save_subconditions": {
+      const subResult = parseJsonRecord(formData, "subconditions");
+      if (subResult.error) return { error: subResult.error };
+      const normalized = normalizeOfferSubconditions(subResult.data!);
+      if (!normalized.success) return { error: normalized.error };
+
+      // Replace every sub-condition atomically: this editor manages the whole
+      // set as one unit (mirrors the offer-creation wizard), so a partial
+      // write here would silently drop conditions if the request failed midway.
+      await db.transaction(async (tx) => {
+        await tx.delete(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.scope, "sub")));
+        if (normalized.data.length > 0) {
+          await tx.insert(offerConditions).values(normalized.data.map((c, index) => ({
+            shopId,
+            offerId,
+            scope: "sub" as const,
+            conditionType: c.conditionType,
+            operator: c.operator,
+            value: c.value,
+            sortOrder: index,
+            isEnabled: true,
+          })));
+        }
+      });
       if (offer.status === "active") {
         const publishError = await publishShopConfig(shopId, session.shop);
         if (publishError) return { error: publishError };
@@ -300,6 +348,88 @@ const CONDITION_TYPE_NAMES: Record<string, string> = {
   sales_channels:        "Sales Channels",
   page_url:              "Page URL",
 };
+
+/* ── Sub-condition rows (scope="sub") → subcondition-picker form state ──────
+ * Reverses normalizeOfferSubconditions() so existing sub-conditions reopen
+ * pre-filled instead of forcing the merchant to reconfigure them. Most forms
+ * already read the same canonical field names the DB stores, so this is
+ * mostly a conditionType → SubconditionId relabel; "quantity_limit" is the
+ * one type whose stored shape (cart_quantity/specific_product rows) doesn't
+ * map cleanly back to the picker's `rules` array, so it's left to the
+ * merchant to reconfigure if already present. */
+function subconditionsFromRows(
+  rows: Array<{ conditionType: string; value: Record<string, unknown> }>,
+): { activeSubs: SubconditionId[]; subValues: Record<string, unknown> } {
+  const activeSubs: SubconditionId[] = [];
+  const subValues: Record<string, unknown> = {};
+
+  for (const row of rows) {
+    const v = row.value;
+    switch (row.conditionType) {
+      case "specific_link":
+        activeSubs.push("link");
+        subValues["link"] = v;
+        break;
+      case "customer_tags":
+        activeSubs.push("customer_tags");
+        subValues["customer_tags"] = v;
+        break;
+      case "customer_location":
+        activeSubs.push("location");
+        subValues["location"] = v;
+        break;
+      case "subscription_product_type":
+        activeSubs.push("subscription");
+        subValues["subscription"] = v;
+        break;
+      case "sales_channels":
+        activeSubs.push("sales_channel");
+        subValues["sales_channel"] = v;
+        break;
+      case "markets":
+        activeSubs.push("markets");
+        subValues["markets"] = v;
+        break;
+      case "cart_attribute":
+        activeSubs.push("custom_attribute");
+        subValues["custom_attribute"] = { ...v, scope: "cart" };
+        break;
+      case "line_attribute":
+        activeSubs.push("custom_attribute");
+        subValues["custom_attribute"] = { ...v, scope: "line" };
+        break;
+      case "one_use_per_customer":
+        activeSubs.push("order_history");
+        subValues["order_history"] = { metric: "one_use_per_customer" };
+        break;
+      case "order_history_total_spent":
+      case "order_history_last_order_spent":
+      case "order_history_total_orders": {
+        activeSubs.push("order_history");
+        const metric = row.conditionType === "order_history_total_orders"
+          ? "total_orders"
+          : row.conditionType === "order_history_last_order_spent"
+            ? "last_order_spent"
+            : "total_spent";
+        const threshold = metric === "total_orders"
+          ? Number(v["value"] ?? 0)
+          : Number(v["valueCents"] ?? 0) / 100;
+        subValues["order_history"] = { metric, operator: v["operator"] ?? "gte", threshold };
+        break;
+      }
+      case "cart_quantity":
+      case "specific_product":
+        // Sub-scope quantity limits: mark as active so the card shows up,
+        // but leave the value for the merchant to re-enter (see doc comment).
+        if (!activeSubs.includes("quantity_limit")) activeSubs.push("quantity_limit");
+        break;
+      default:
+        break;
+    }
+  }
+
+  return { activeSubs, subValues };
+}
 
 /* ── Currency chips shown on monetary conditions ────────── */
 const CURRENCIES = SUPPORTED_CURRENCIES;
@@ -788,12 +918,11 @@ function ConditionCard({
               <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setProductPickerOpen(true)}>
                 Select products
               </button>
-              <span className="b-gift-count-text">
-                {selectedVariantIds.length > 0
-                  ? `${selectedVariantIds.length} product(s) selected`
-                  : "0 products selected"}
-              </span>
             </div>
+            <SelectedProductsList
+              gids={selectedVariantIds}
+              onRemove={(gid) => { const next = { ...val, variantIds: selectedVariantIds.filter((id) => id !== gid) }; setVal(next); save(next); }}
+            />
 
             <ProductPicker
               open={productPickerOpen}
@@ -961,6 +1090,10 @@ export default function OfferDetailPage() {
   const [giftProductIds, setGiftProductIds] = useState<string[]>(initialGiftIds);
   const [giftPickerOpen, setGiftPickerOpen] = useState(false);
 
+  const initialFallbackIds = (firstReward?.target as { fallbackVariantIds?: string[] } | null)?.fallbackVariantIds ?? [];
+  const [fallbackProductIds, setFallbackProductIds] = useState<string[]>(initialFallbackIds);
+  const [fallbackPickerOpen, setFallbackPickerOpen] = useState(false);
+
   // Persist the reward (discount type/value/qty/auto-add + product target).
   // The editor previously never submitted update_reward, so gift edits were lost.
   // Accepts explicit overrides so callers that also setState don't read a stale closure.
@@ -970,6 +1103,7 @@ export default function OfferDetailPage() {
     giftCount?: string;
     receivesAll?: boolean;
     variantIds?: string[];
+    fallbackVariantIds?: string[];
   }) {
     if (!firstReward) return;
     const fd = new FormData();
@@ -980,6 +1114,7 @@ export default function OfferDetailPage() {
     fd.append("quantity", overrides?.giftCount ?? giftCount);
     if (overrides?.receivesAll ?? receivesAll) fd.append("isAutoAdd", "on");
     fd.append("targetVariantIds", JSON.stringify(overrides?.variantIds ?? giftProductIds));
+    fd.append("targetFallbackVariantIds", JSON.stringify(overrides?.fallbackVariantIds ?? fallbackProductIds));
     void fetcher.submit(fd, { method: "POST" });
   }
 
@@ -990,6 +1125,49 @@ export default function OfferDetailPage() {
 
   const mainConditions = conditions.filter((c) => c.scope === "main");
   const subConditions = conditions.filter((c) => c.scope === "sub");
+
+  const initialSubs = subconditionsFromRows(subConditions);
+  const [subState, setSubField] = useObjectState(() => ({
+    subModalOpen: false,
+    activeSubs: initialSubs.activeSubs,
+    subValues: initialSubs.subValues,
+    collapsedSubs: {} as Record<string, boolean>,
+  }));
+  const { subModalOpen, activeSubs, subValues, collapsedSubs } = subState;
+  const setSubModalOpen = createFieldSetter(setSubField, "subModalOpen");
+  const setActiveSubs = createFieldSetter(setSubField, "activeSubs");
+  const setSubValues = createFieldSetter(setSubField, "subValues");
+  const setCollapsedSubs = createFieldSetter(setSubField, "collapsedSubs");
+
+  // Sub-conditions are managed as one unit (mirrors the creation wizard): every
+  // change — toggling a type on/off in the modal, or editing an active one's
+  // fields — resubmits the whole set so the server can validate and replace
+  // it atomically.
+  function saveSubconditions(nextActiveSubs: SubconditionId[], nextSubValues: Record<string, unknown>) {
+    const payload: Record<string, unknown> = {};
+    for (const id of nextActiveSubs) payload[id] = nextSubValues[id] ?? {};
+    const fd = new FormData();
+    fd.append("intent", "save_subconditions");
+    fd.append("subconditions", JSON.stringify(payload));
+    void fetcher.submit(fd, { method: "POST" });
+  }
+
+  function handleSubconditionsConfirm(ids: SubconditionId[]) {
+    setActiveSubs(ids);
+    saveSubconditions(ids, subValues);
+  }
+
+  function removeSubcondition(id: SubconditionId) {
+    const nextActive = activeSubs.filter((x) => x !== id);
+    setActiveSubs(nextActive);
+    saveSubconditions(nextActive, subValues);
+  }
+
+  function updateSubconditionValue(id: SubconditionId, value: Record<string, unknown>) {
+    const nextValues = { ...subValues, [id]: value };
+    setSubValues(nextValues);
+    saveSubconditions(activeSubs, nextValues);
+  }
 
   function saveInfo() {
     const fd = new FormData();
@@ -1326,17 +1504,51 @@ export default function OfferDetailPage() {
           </div>
 
           {/* Subcondition ────────────────────────────────── */}
-          <div
-            className="b-subcondition-row"
-            style={{ cursor: "default" }}
-          >
-            <IconRefresh />
-            <span style={{ fontSize: 14, color: "var(--text-sub)" }}>
-              {subConditions.length > 0
-                ? `${subConditions.length} subcondition(s) configured`
-                : "Add subcondition (optional)"}
-            </span>
+          <div>
+            {activeSubs.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                {activeSubs.map((id) => {
+                  const def = GIFT_SUBCONDITIONS.find((s) => s.id === id)!;
+                  const SubForm = SUB_FORMS[id];
+                  return (
+                    <SubconditionCard
+                      key={id}
+                      def={def}
+                      collapsed={!!collapsedSubs[id]}
+                      onToggleCollapse={() => setCollapsedSubs({ ...collapsedSubs, [id]: !collapsedSubs[id] })}
+                      onRemove={() => removeSubcondition(id)}
+                    >
+                      <SubForm
+                        value={subValues[id] as Record<string, unknown> | undefined}
+                        onChange={(v) => updateSubconditionValue(id, v)}
+                      />
+                    </SubconditionCard>
+                  );
+                })}
+              </div>
+            )}
+            <button
+              type="button"
+              className="b-subcondition-row"
+              style={{ width: "100%", textAlign: "left", font: "inherit" }}
+              onClick={() => setSubModalOpen(true)}
+            >
+              <IconRefresh />
+              <span style={{ fontSize: 14, color: "var(--text-sub)" }}>
+                {activeSubs.length > 0
+                  ? `${activeSubs.length} subcondition(s) configured — click to edit`
+                  : "Add subcondition (optional)"}
+              </span>
+            </button>
           </div>
+
+          <SubconditionModal
+            open={subModalOpen}
+            active={activeSubs}
+            types={GIFT_SUBCONDITIONS}
+            onClose={() => setSubModalOpen(false)}
+            onConfirm={handleSubconditionsConfirm}
+          />
 
           {/* Select gifts ────────────────────────────────── */}
           <div className="b-editor-section">
@@ -1424,10 +1636,15 @@ export default function OfferDetailPage() {
 
               <div className="b-gift-selector-row">
                 <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setGiftPickerOpen(true)} disabled={!firstReward}>Select gifts</button>
-                <span className="b-gift-count-text">
-                  {giftProductIds.length > 0 ? `${giftProductIds.length} product(s) selected` : "0 products selected"}
-                </span>
               </div>
+              <SelectedProductsList
+                gids={giftProductIds}
+                onRemove={(gid) => {
+                  const next = giftProductIds.filter((id) => id !== gid);
+                  setGiftProductIds(next);
+                  saveReward({ variantIds: next });
+                }}
+              />
 
               <ProductPicker
                 open={giftPickerOpen}
@@ -1436,6 +1653,41 @@ export default function OfferDetailPage() {
                 selectedIds={giftProductIds}
                 onSelect={(gids) => { setGiftProductIds(gids); saveReward({ variantIds: gids }); }}
               />
+
+              <div className="b-fieldset" style={{ marginTop: 16 }}>
+                <p className="b-form-title">Fallback gift if out of stock (optional)</p>
+                <p className="b-form-desc">
+                  If a gift above sells out, customers get the first fallback that is in stock
+                  instead — added automatically for auto-add gifts, or shown in its place in the
+                  gift selector. Without a fallback, a sold-out gift is simply not given: no popup
+                  appears and no other product is offered.
+                </p>
+                <div className="b-gift-selector-row" style={{ marginTop: 10 }}>
+                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setFallbackPickerOpen(true)} disabled={!firstReward}>
+                    Select fallback gifts
+                  </button>
+                </div>
+                <SelectedProductsList
+                  gids={fallbackProductIds}
+                  onRemove={(gid) => {
+                    const next = fallbackProductIds.filter((id) => id !== gid);
+                    setFallbackProductIds(next);
+                    saveReward({ fallbackVariantIds: next });
+                  }}
+                />
+                <ProductPicker
+                  open={fallbackPickerOpen}
+                  onClose={() => setFallbackPickerOpen(false)}
+                  title="Select fallback gifts (used in order)"
+                  allowMultiple
+                  selectedIds={fallbackProductIds}
+                  onSelect={(gids) => {
+                    const next = gids.slice(0, 5);
+                    setFallbackProductIds(next);
+                    saveReward({ fallbackVariantIds: next });
+                  }}
+                />
+              </div>
             </div>
           </div>
 
