@@ -13,7 +13,7 @@ import { and, eq, desc, sql } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
   IconChevronLeft, IconChevronRight, IconChevronDown, IconInfo, IconRefresh,
-  IconPlus, IconCheck, IconBot, IconLink, IconCondition,
+  IconPlus, IconCheck, IconLink, IconCondition,
 } from "../components/Icons.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { OfferStepTabs } from "../components/OfferStepTabs.js";
@@ -1781,14 +1781,6 @@ export default function OfferDetailPage() {
 
         {/* ── RIGHT SIDEBAR ───────────────────────────────── */}
         <div className="b-editor-sidebar">
-
-          {/* Support card */}
-          <div className="b-card b-card-body" style={{ textAlign: "center" }}>
-            <div className="b-support-bot-icon" style={{ margin: "0 auto 10px" }}><IconBot /></div>
-            <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 6px" }}>Need help creating offers?</p>
-            <p style={{ fontSize: 13, color: "var(--text-sub)", margin: "0 0 14px" }}>Chat with us to get help</p>
-            <button type="button" className="b-btn b-btn-secondary b-w-full" onClick={() => window.open("mailto:support@secomapp.com", "_blank")}>Chat with us</button>
-          </div>
 
           {/* Summary card */}
           <div className="b-card b-card-body">

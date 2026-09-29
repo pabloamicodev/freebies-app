@@ -96,15 +96,15 @@ const shopify = shopifyApp({
         let locale: string | null = null;
         try {
           const shopData = await shopifyGraphQL<{
-            shop: { currencyCode: string; ianaTimezone: string; primaryDomain: { localization: { language: { isoCode: string } } } };
+            shop: { currencyCode: string; ianaTimezone: string; primaryDomain: { localization: { defaultLocale: string } } };
           }>({
             shopDomain,
             accessToken: rawToken,
-            query: `{ shop { currencyCode ianaTimezone primaryDomain { localization { language { isoCode } } } } }`,
+            query: `{ shop { currencyCode ianaTimezone primaryDomain { localization { defaultLocale } } } }`,
           });
           currencyCode = shopData.shop.currencyCode;
           timezone = shopData.shop.ianaTimezone;
-          locale = shopData.shop.primaryDomain?.localization?.language?.isoCode ?? null;
+          locale = shopData.shop.primaryDomain?.localization?.defaultLocale ?? null;
         } catch (shopFetchErr) {
           Sentry.captureException(shopFetchErr, { tags: { shop: shopDomain }, extra: { context: "afterAuth-shop-fetch" } });
           console.error("[afterAuth] Could not fetch shop locale, using defaults:", shopFetchErr instanceof Error ? shopFetchErr.message : shopFetchErr);
