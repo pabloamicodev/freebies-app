@@ -106,6 +106,23 @@ describe("condition contracts", () => {
       false,
     );
   });
+
+  it("accepts a discount_code condition and trims the code", () => {
+    const result = validateConditionValue("discount_code", { code: "  PRIME2026  " });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toEqual({ code: "PRIME2026" });
+  });
+
+  it("rejects a discount_code condition with an empty or missing code", () => {
+    expect(validateConditionValue("discount_code", { code: "" }).success).toBe(false);
+    expect(validateConditionValue("discount_code", { code: "   " }).success).toBe(false);
+    expect(validateConditionValue("discount_code", {}).success).toBe(false);
+  });
+
+  it("rejects a discount_code longer than 255 characters", () => {
+    expect(validateConditionValue("discount_code", { code: "A".repeat(256) }).success).toBe(false);
+    expect(validateConditionValue("discount_code", { code: "A".repeat(255) }).success).toBe(true);
+  });
 });
 
 describe("product reward targets", () => {

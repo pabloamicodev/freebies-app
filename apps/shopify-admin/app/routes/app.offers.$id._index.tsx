@@ -386,6 +386,10 @@ function subconditionsFromRows(
         activeSubs.push("sales_channel");
         subValues["sales_channel"] = v;
         break;
+      case "discount_code":
+        activeSubs.push("discount_code");
+        subValues["discount_code"] = v;
+        break;
       case "markets":
         activeSubs.push("markets");
         subValues["markets"] = v;

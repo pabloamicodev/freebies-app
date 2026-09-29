@@ -37,6 +37,7 @@ const FUNCTION_CONDITION_TYPES = new Set([
   "markets",
   "specific_link",
   "page_url",
+  "discount_code",
 ]);
 
 const FUNCTION_NUMERIC_OPERATORS = new Set(["eq", "gt", "gte", "lt", "lte"]);

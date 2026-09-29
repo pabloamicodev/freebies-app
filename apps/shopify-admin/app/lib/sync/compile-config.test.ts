@@ -516,6 +516,17 @@ describe("compileOfferConfig", () => {
     ]);
   });
 
+  it("compiles a discount_code condition, trimming whitespace", () => {
+    const result = compileOfferConfig(
+      offer(),
+      [condition("discount_code", { code: "  PRIME2026  " })],
+      [],
+      null,
+      1,
+    );
+    expect(result.discountCodeConditions).toEqual([{ code: "PRIME2026" }]);
+  });
+
   it("compiles a requiredLineAttribute filter onto a product reward target", () => {
     const result = compileOfferConfig(
       offer(),

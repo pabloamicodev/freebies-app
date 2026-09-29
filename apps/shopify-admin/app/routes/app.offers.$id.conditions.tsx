@@ -53,6 +53,8 @@ function conditionSummary(conditionType: string, value: unknown): string {
     case "line_attribute":
     case "cart_attribute":
       return `${v["key"] ?? "?"} ${v["matchMode"] === "not_equals" ? "≠" : "="} "${v["value"] ?? ""}"`;
+    case "discount_code":
+      return `code: ${v["code"] ?? "?"}`;
     case "specific_product":
     case "pack_of_products": {
       const requirements = Array.isArray(v["requirements"]) ? v["requirements"] as unknown[] : [];
@@ -266,6 +268,9 @@ function buildConditionValue(
           matchMode: formData.get("attributeMatchMode") === "not_equals" ? "not_equals" : "equals",
         };
         break;
+      case "discount_code":
+        value = { code: String(formData.get("discountCode") ?? "").trim() };
+        break;
     }
 
     const valueResult = validateConditionValue(conditionType, value);
@@ -362,6 +367,7 @@ const SUB_CONDITION_TYPES = [
   { label: "Sales Channel", value: "sales_channels" },
   { label: "Subscription Products Only", value: "subscription_product_type" },
   { label: "Specific Link / Magic URL", value: "specific_link" },
+  { label: "Requires a discount code", value: "discount_code" },
 ];
 
 export default function OfferConditionsPage() {
@@ -1033,6 +1039,29 @@ export default function OfferConditionsPage() {
                         <input id="paramValue" name="paramValue" className="b-input" placeholder="summer" autoComplete="off" defaultValue={typeof editingValue["paramValue"] === "string" ? editingValue["paramValue"] : undefined} />
                       </div>
                       <p className="b-help">The storefront runtime evaluates the current browser URL. Shopify Functions cannot read a browser URL directly.</p>
+                    </div>
+                  )}
+
+                  {selectedType === "discount_code" && (
+                    <div className="b-stack b-stack-3">
+                      <div>
+                        <label className="b-label" htmlFor="discountCode">Discount code</label>
+                        <input
+                          id="discountCode"
+                          name="discountCode"
+                          className="b-input"
+                          placeholder="PRIME2026"
+                          required
+                          autoComplete="off"
+                          style={{ textTransform: "uppercase" }}
+                          defaultValue={typeof editingValue["code"] === "string" ? editingValue["code"] : undefined}
+                        />
+                        <p className="b-help">
+                          Create this exact code in Shopify (Discounts → Create discount) so checkout
+                          accepts it — this condition only decides whether this automatic offer applies
+                          once the code is on the cart. Matching is case-insensitive.
+                        </p>
+                      </div>
                     </div>
                   )}
 

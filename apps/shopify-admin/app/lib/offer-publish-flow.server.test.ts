@@ -18,6 +18,7 @@ describe("isConditionEnforcedByFunction", () => {
     "markets",
     "specific_link",
     "page_url",
+    "discount_code",
   ])("allows Function-enforced condition %s", (conditionType) => {
     expect(isConditionEnforcedByFunction(conditionType)).toBe(true);
   });

@@ -91,6 +91,7 @@ export interface CompiledOffer {
   lineAttributeConditions?: CompiledAttributeCondition[];
   cartAttributeConditions?: CompiledAttributeCondition[];
   pageUrlConditions?: CompiledPageUrlCondition[];
+  discountCodeConditions?: CompiledDiscountCodeCondition[];
 }
 
 export interface CompiledAttributeCondition {
@@ -98,6 +99,13 @@ export interface CompiledAttributeCondition {
   value?: string;
   matchMode: "equals" | "not_equals" | "exists";
   minMatchingQuantity: number;
+}
+
+/** Gates the offer on a specific discount code being present in
+ * `cart.discountCodes` — Shopify only surfaces codes it has already
+ * validated as active and applicable to this cart. */
+export interface CompiledDiscountCodeCondition {
+  code: string;
 }
 
 export interface CompiledPageUrlCondition {
@@ -240,6 +248,7 @@ export function compileOfferConfig(
     lineAttributeConditions: [],
     cartAttributeConditions: [],
     pageUrlConditions: [],
+    discountCodeConditions: [],
   };
 
   for (const cond of conditions.filter(
@@ -381,6 +390,11 @@ export function compileOfferConfig(
         });
         break;
       }
+      case "discount_code":
+        config.discountCodeConditions!.push({
+          code: String(value["code"] ?? "").trim(),
+        });
+        break;
       case "customer_tags":
         config.requiredCustomerTags = Array.isArray(value["includeTags"])
           ? value["includeTags"].filter((tag): tag is string => typeof tag === "string")
@@ -910,6 +924,7 @@ const OFFER_DEFAULTS: FieldDefaults = {
   lineAttributeConditions: [],
   cartAttributeConditions: [],
   pageUrlConditions: [],
+  discountCodeConditions: [],
 };
 // Combination policy is applied to the discount node, never read by a Function.
 const OFFER_UNREAD_KEYS = [

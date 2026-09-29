@@ -531,3 +531,50 @@ describe("evaluate — page_url matches the page lines were added from", () => {
     expect(result.qualifiedOffers).toHaveLength(0);
   });
 });
+
+describe("evaluate — discount code condition (gate an automatic offer behind a real Shopify code)", () => {
+  function offerWithDiscountCode(code: string): OfferDefinition {
+    return makeGiftOffer("offer-1", 0, 100, {
+      conditions: [
+        {
+          id: "cond-cart-value",
+          scope: "main",
+          conditionType: "cart_value",
+          operator: "gte",
+          value: { thresholdCents: 0, currencyCode: "USD", includeGiftValues: false },
+          isEnabled: true,
+          sortOrder: 0,
+        },
+        {
+          id: "cond-discount-code",
+          scope: "sub",
+          conditionType: "discount_code",
+          operator: "eq",
+          value: { code },
+          isEnabled: true,
+          sortOrder: 1,
+        },
+      ],
+    });
+  }
+
+  it("qualifies once the customer enters the configured code (case-insensitive)", async () => {
+    const ctx: EvaluatorContext = { offers: [offerWithDiscountCode("PRIME2026")], oneUseStates: [], now: NOW };
+    const cart = makeCart(1000, { discountCodes: ["prime2026"] });
+    const result = await evaluate(makeInput(cart), ctx);
+    expect(result.qualifiedOffers).toHaveLength(1);
+  });
+
+  it("does not qualify without the code, even if every other condition passes", async () => {
+    const ctx: EvaluatorContext = { offers: [offerWithDiscountCode("PRIME2026")], oneUseStates: [], now: NOW };
+    const result = await evaluate(makeInput(makeCart(1000)), ctx);
+    expect(result.qualifiedOffers).toHaveLength(0);
+  });
+
+  it("does not qualify for an unrelated code — copying it onto another offer/page doesn't help", async () => {
+    const ctx: EvaluatorContext = { offers: [offerWithDiscountCode("PRIME2026")], oneUseStates: [], now: NOW };
+    const cart = makeCart(1000, { discountCodes: ["SUMMER2026"] });
+    const result = await evaluate(makeInput(cart), ctx);
+    expect(result.qualifiedOffers).toHaveLength(0);
+  });
+});

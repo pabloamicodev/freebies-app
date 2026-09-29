@@ -375,6 +375,34 @@ export function MarketsForm({ value, onChange }: SubFormProps) {
   );
 }
 
+// ─── Discount code gate ────────────────────────────────────────────────────────
+export function DiscountCodeForm({ value, onChange }: SubFormProps) {
+  const idPrefix = useId();
+  const code = getv(value, "code", "") as string;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-code`}>Discount code</label>
+        <input
+          id={`${idPrefix}-code`}
+          className="b-input"
+          value={code}
+          onChange={(event) => onChange?.({ code: event.target.value })}
+          placeholder="PRIME2026"
+          autoComplete="off"
+          style={{ textTransform: "uppercase" }}
+        />
+        <div className="b-help">
+          Create this exact code in Shopify (Discounts → Create discount) so checkout accepts it —
+          this condition only decides whether the automatic offer applies once the code is on the
+          cart. Matching is case-insensitive.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Store-specific line/cart attribute ──────────────────────────────────────
 export function CustomAttributeForm({ value, onChange }: SubFormProps) {
   const idPrefix = useId();

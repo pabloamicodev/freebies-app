@@ -63,6 +63,7 @@ export const ConditionTypeSchema = z.enum([
   "page_url",
   "line_attribute",
   "cart_attribute",
+  "discount_code",
 ]);
 export type ConditionType = z.infer<typeof ConditionTypeSchema>;
 
@@ -282,6 +283,18 @@ export const CartAttributeConditionValueSchema = z
     path: ["value"],
   });
 
+/** Gates an offer on a specific discount code being entered and Shopify-accepted
+ * on the cart (`cart.discountCodes`). Matching is case-insensitive, mirroring
+ * Shopify's own case-insensitive code lookup. */
+export const DiscountCodeConditionValueSchema = z.object({
+  code: z
+    .string()
+    .trim()
+    .min(1, "A discount code is required.")
+    .max(255, "Discount code must be 255 characters or fewer."),
+});
+export type DiscountCodeConditionValue = z.infer<typeof DiscountCodeConditionValueSchema>;
+
 export function validateConditionValue(
   conditionType: string,
   value: unknown,
@@ -318,6 +331,8 @@ export function validateConditionValue(
       return LineAttributeConditionValueSchema.safeParse(value);
     case "cart_attribute":
       return CartAttributeConditionValueSchema.safeParse(value);
+    case "discount_code":
+      return DiscountCodeConditionValueSchema.safeParse(value);
     case "one_use_per_customer":
       return z.record(z.string(), z.unknown()).safeParse(value);
     default:

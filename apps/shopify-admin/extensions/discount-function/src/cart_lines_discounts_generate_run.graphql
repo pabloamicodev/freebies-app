@@ -10,6 +10,9 @@ query Input(
       value
     }
   }
+  enteredDiscountCodes {
+    code
+  }
   cart {
     customCart1: attribute(key: $c1) { value }
     customCart2: attribute(key: $c2) { value }

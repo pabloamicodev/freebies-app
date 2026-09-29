@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { NormalizedCart } from "@promo/shared-types";
-import { evaluateCartAttribute, evaluateLineAttribute } from "./attributes.js";
+import { evaluateCartAttribute, evaluateDiscountCode, evaluateLineAttribute } from "./attributes.js";
 
 const cart = {
   token: null, id: null, attributes: { source: "vip-landing" }, subtotalCents: 1000,
-  discountCodes: [], currencyCode: "USD", totalQuantity: 2,
+  discountCodes: ["PRIME2026"], currencyCode: "USD", totalQuantity: 2,
   lines: [{ key: "1", variantId: "v", productId: "p", quantity: 2, priceCents: 500, compareAtPriceCents: null, properties: { __bundle_type: "starter" }, requiresSellingPlan: false, sellingPlanId: null, productHandle: "p", productTitle: "P", variantTitle: null, vendor: "V", productType: "T", tags: [], collections: [], availableForSale: true, inventoryPolicy: "DENY", inventoryQuantity: 1 }],
 } satisfies NormalizedCart;
 
@@ -37,5 +37,17 @@ describe("attribute conditions", () => {
       matchMode: "equals",
       minMatchingQuantity: 1,
     }).ok).toBe(false);
+  });
+
+  it("matches a discount code case-insensitively", () => {
+    expect(evaluateDiscountCode(cart, { code: "prime2026" }).ok).toBe(true);
+    expect(evaluateDiscountCode(cart, { code: "  PRIME2026  " }).ok).toBe(true);
+  });
+  it("fails when the discount code was not entered", () => {
+    expect(evaluateDiscountCode(cart, { code: "SUMMER2026" }).ok).toBe(false);
+  });
+  it("fails when no discount codes are on the cart at all", () => {
+    const noCodes = { ...cart, discountCodes: [] } satisfies NormalizedCart;
+    expect(evaluateDiscountCode(noCodes, { code: "PRIME2026" }).ok).toBe(false);
   });
 });

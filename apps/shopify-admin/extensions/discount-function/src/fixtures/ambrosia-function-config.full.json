@@ -50,6 +50,7 @@
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
+      "discountCodeConditions": [],
       "cartValueThresholdCents": 0
     },
     {
@@ -102,6 +103,7 @@
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
+      "discountCodeConditions": [],
       "cartValueThresholdCents": 0
     },
     {
@@ -149,6 +151,7 @@
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
+      "discountCodeConditions": [],
       "cartValueThresholdCents": 8500,
       "maxGiftQuantity": 1
     },
@@ -178,6 +181,7 @@
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
+      "discountCodeConditions": [],
       "cartValueThresholdCents": 0
     },
     {
@@ -206,6 +210,7 @@
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
+      "discountCodeConditions": [],
       "cartValueThresholdCents": 0
     },
     {
@@ -259,6 +264,7 @@
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
+      "discountCodeConditions": [],
       "cartValueThresholdCents": 0
     },
     {
@@ -311,6 +317,7 @@
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
+      "discountCodeConditions": [],
       "cartValueThresholdCents": 0
     },
     {
@@ -363,6 +370,7 @@
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
+      "discountCodeConditions": [],
       "cartValueThresholdCents": 0
     },
     {
@@ -415,6 +423,7 @@
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
+      "discountCodeConditions": [],
       "cartValueThresholdCents": 0
     },
     {
@@ -468,6 +477,7 @@
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
+      "discountCodeConditions": [],
       "cartValueThresholdCents": 0
     },
     {
@@ -520,6 +530,7 @@
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
+      "discountCodeConditions": [],
       "cartValueThresholdCents": 0
     },
     {
@@ -582,6 +593,7 @@
           "caseSensitive": false
         }
       ],
+      "discountCodeConditions": [],
       "requiredCustomerTags": [
         "vip"
       ],
@@ -627,6 +639,7 @@
       "lineAttributeConditions": [],
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
+      "discountCodeConditions": [],
       "requiredCustomerTags": [],
       "excludedCustomerTags": [
         "wholesale"

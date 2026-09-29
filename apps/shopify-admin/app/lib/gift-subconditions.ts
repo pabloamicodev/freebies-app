@@ -185,6 +185,12 @@ export function normalizeOfferSubconditions(input: Record<string, unknown>): Nor
         });
         break;
       }
+      case "discount_code": {
+        const code = String(value["code"] ?? "").trim();
+        if (!code) return { success: false, error: "Enter the discount code this offer requires." };
+        conditions.push({ conditionType: "discount_code", operator: "eq", value: { code } });
+        break;
+      }
       case "custom_attribute": {
         const scope = value["scope"] === "cart" ? "cart" : "line";
         conditions.push({

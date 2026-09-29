@@ -863,6 +863,26 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         }
     }
 
+    if !offer.discount_code_conditions.is_empty() {
+        // Shopify only ever surfaces codes it has already validated as active
+        // and applicable to this cart — no separate "is this code real" check
+        // is needed here, and matching is case-insensitive like Shopify's own
+        // code lookup. Each configured condition is required independently
+        // (AND), matching every other condition type here and in the
+        // TypeScript evaluator: two discount_code conditions mean the
+        // customer must have entered both codes, not either one.
+        let entered_codes: HashSet<String> = input
+            .entered_discount_codes()
+            .iter()
+            .map(|entered| entered.code().trim().to_uppercase())
+            .collect();
+        for condition in &offer.discount_code_conditions {
+            if !entered_codes.contains(&condition.code.trim().to_uppercase()) {
+                return false;
+            }
+        }
+    }
+
     if let Some(threshold_cents) = offer.cart_value_threshold_cents {
         let raw_cart_value_cents: i64 = non_gift_lines
             .iter()
@@ -1482,6 +1502,7 @@ mod tests {
                     "discountClasses": {discount_classes},
                     "metafield": {{ "value": {config} }}
                 }},
+                "enteredDiscountCodes": [],
                 "cart": {{
                     "lines": {lines},
                     "cost": {{ "subtotalAmount": {{ "amount": "{subtotal}", "currencyCode": "USD" }} }}
@@ -1509,6 +1530,7 @@ mod tests {
                     "discountClasses": ["PRODUCT"],
                     "metafield": {{ "value": {config} }}
                 }},
+                "enteredDiscountCodes": [],
                 "cart": {{
                     "buyerIdentity": {{
                         "customer": {{
@@ -1589,6 +1611,15 @@ mod tests {
     fn with_country(payload: &str, country_code: &str) -> String {
         let mut value: serde_json::Value = serde_json::from_str(payload).unwrap();
         value["localization"]["country"]["isoCode"] = serde_json::json!(country_code);
+        serde_json::to_string(&value).unwrap()
+    }
+
+    fn with_entered_discount_codes(payload: &str, codes: &[&str]) -> String {
+        let mut value: serde_json::Value = serde_json::from_str(payload).unwrap();
+        value["enteredDiscountCodes"] = serde_json::json!(codes
+            .iter()
+            .map(|code| serde_json::json!({ "code": code }))
+            .collect::<Vec<_>>());
         serde_json::to_string(&value).unwrap()
     }
 
@@ -1839,6 +1870,109 @@ mod tests {
             "\"cart\": { \"customCart1\": { \"value\": \"vip-landing\" },",
         );
         let result = run_function_with_input(run, &payload).expect("should not error");
+        assert_eq!(result.operations.len(), 1);
+    }
+
+    #[test]
+    fn registered_discount_code_guards_gift_offer() {
+        let lines = format!(
+            "[{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            )
+        );
+        let config = gift_offer_config(5000, 1).replace(
+            "\"combinesWithOrderDiscounts\":true",
+            "\"discountCodeConditions\":[{\"code\":\"PRIME2026\"}],\"combinesWithOrderDiscounts\":true",
+        );
+        let payload = with_entered_discount_codes(
+            &cart_json(&lines, "80.00", &config),
+            &["prime2026"], // case-insensitive match against the configured "PRIME2026"
+        );
+        let result = run_function_with_input(run, &payload).expect("should not error");
+        assert_eq!(result.operations.len(), 1);
+    }
+
+    #[test]
+    fn missing_discount_code_blocks_gift_offer() {
+        let lines = format!(
+            "[{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            )
+        );
+        let config = gift_offer_config(5000, 1).replace(
+            "\"combinesWithOrderDiscounts\":true",
+            "\"discountCodeConditions\":[{\"code\":\"PRIME2026\"}],\"combinesWithOrderDiscounts\":true",
+        );
+        // No entered codes at all — the offer must not apply.
+        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &config))
+            .expect("should not error");
+        assert_eq!(result.operations.len(), 0);
+
+        // A different, unrelated code also must not satisfy the condition.
+        let payload = with_entered_discount_codes(&cart_json(&lines, "80.00", &config), &["SUMMER2026"]);
+        let result = run_function_with_input(run, &payload).expect("should not error");
+        assert_eq!(result.operations.len(), 0);
+    }
+
+    #[test]
+    fn multiple_discount_code_conditions_require_every_code_like_every_other_condition_type() {
+        let lines = format!(
+            "[{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/v1",
+                "gid://shopify/Product/p1",
+                "60.00",
+                1
+            ),
+            gift_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                "offer-1",
+                "20.00",
+                1
+            )
+        );
+        let config = gift_offer_config(5000, 1).replace(
+            "\"combinesWithOrderDiscounts\":true",
+            "\"discountCodeConditions\":[{\"code\":\"PRIME2026\"},{\"code\":\"VIP\"}],\"combinesWithOrderDiscounts\":true",
+        );
+
+        // Only one of the two required codes entered — must not apply.
+        let only_one = with_entered_discount_codes(&cart_json(&lines, "80.00", &config), &["PRIME2026"]);
+        let result = run_function_with_input(run, &only_one).expect("should not error");
+        assert_eq!(result.operations.len(), 0);
+
+        // Both required codes entered (order and case shouldn't matter) — applies.
+        let both = with_entered_discount_codes(&cart_json(&lines, "80.00", &config), &["vip", "prime2026"]);
+        let result = run_function_with_input(run, &both).expect("should not error");
         assert_eq!(result.operations.len(), 1);
     }
 

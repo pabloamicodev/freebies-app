@@ -10,7 +10,8 @@ export type SubconditionId =
   | "sales_channel"
   | "markets"
   | "custom_attribute"
-  | "quantity_limit";
+  | "quantity_limit"
+  | "discount_code";
 
 export interface SubconditionDef {
   id: SubconditionId;
@@ -75,6 +76,12 @@ const ALL_SUBCONDITIONS: SubconditionDef[] = [
     id: "quantity_limit",
     name: "Product quantity limits",
     desc: "Limits the gift based on the quantity of specific products in the cart.",
+    plus: false,
+  },
+  {
+    id: "discount_code",
+    name: "Requires a discount code",
+    desc: "Only applies when the customer has entered a specific discount code — lets you gate an automatic offer behind a code without building a code-redemption system.",
     plus: false,
   },
 ];

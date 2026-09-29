@@ -141,6 +141,22 @@ describe("normalizeGiftSubconditions", () => {
     });
   });
 
+  it("normalizes a discount_code subcondition, trimming whitespace", () => {
+    const result = normalizeOfferSubconditions({ discount_code: { code: "  PRIME2026  " } });
+
+    expect(result).toEqual({
+      success: true,
+      data: [{ conditionType: "discount_code", operator: "eq", value: { code: "PRIME2026" } }],
+    });
+  });
+
+  it("rejects a discount_code subcondition with no code entered", () => {
+    expect(normalizeOfferSubconditions({ discount_code: { code: "   " } })).toEqual({
+      success: false,
+      error: "Enter the discount code this offer requires.",
+    });
+  });
+
   it("fails visibly instead of persisting unsupported ambiguous quantity rules", () => {
     const result = normalizeGiftSubconditions({
       quantity_limit: {
