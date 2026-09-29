@@ -677,7 +677,6 @@ function Modal2GiftWizard({ onClose, onBack }: { onClose: () => void; onBack: ()
             void navigate(
               `/app/offers/new/gift/${GIFT_SLUG_MAP[selected ?? "scratch"] ?? selected ?? "scratch"}`,
             );
-            onClose();
           }}
         >
           Create offer
@@ -950,7 +949,6 @@ function Modal2BundleWizard({ onClose, onBack }: { onClose: () => void; onBack: 
           className="b-btn b-btn-dark"
           onClick={() => {
             void navigate(`/app/offers/new/bundle/${BUNDLE_SLUG_MAP[selected] ?? selected}`);
-            onClose();
           }}
         >
           Create bundle
@@ -1224,7 +1222,6 @@ function Modal2UpsellWizard({ onClose, onBack }: { onClose: () => void; onBack: 
           className="b-btn b-btn-dark"
           onClick={() => {
             void navigate(`/app/offers/new/upsell/${UPSELL_SLUG_MAP[selected] ?? selected}`);
-            onClose();
           }}
         >
           Create upsell
@@ -1494,7 +1491,6 @@ function Modal2DiscountWizard({ onClose, onBack }: { onClose: () => void; onBack
           className="b-btn b-btn-dark"
           onClick={() => {
             void navigate(`/app/offers/new/discount/${DISCOUNT_SLUG_MAP[selected] ?? selected}`);
-            onClose();
           }}
         >
           Create discount
@@ -1587,7 +1583,6 @@ function Modal2ShippingWizard({ onClose, onBack }: { onClose: () => void; onBack
           className="b-btn b-btn-dark"
           onClick={() => {
             void navigate(`/app/offers/new/shipping/${selected}`);
-            onClose();
           }}
         >
           Configure shipping
@@ -1669,7 +1664,6 @@ function Modal2SubscriptionWizard({
           className="b-btn b-btn-dark"
           onClick={() => {
             void navigate(`/app/offers/new/subscription/${selected}`);
-            onClose();
           }}
         >
           Create subscription offer
