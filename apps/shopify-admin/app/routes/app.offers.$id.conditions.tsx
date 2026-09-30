@@ -19,9 +19,11 @@ import {
   CART_ATTRIBUTE_KEYS,
   ConditionTypeSchema,
   LINE_ATTRIBUTE_KEYS,
+  resolveOnlyMatchedLines,
   validateConditionValue,
   type ConditionOperator,
 } from "@promo/shared-types";
+import { OnlyMatchedLinesCheckbox } from "../components/subconditions/forms.js";
 import { and, eq } from "drizzle-orm";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { getMarketsForShop } from "../lib/markets.server.js";
@@ -172,7 +174,7 @@ function buildConditionValue(
         const patterns = splitCsvList(patternsRaw).filter((p) => p.length > 0);
         if (patterns.length === 0) return { error: "Enter at least one URL pattern." };
         const matchMode = (formData.get("matchMode") as string | null) ?? "starts_with";
-        value = { patterns, matchMode, caseSensitive: false };
+        value = { patterns, matchMode, caseSensitive: false, onlyMatchedLines: formData.get("onlyMatchedLines") === "on" };
         break;
       }
       case "specific_product":
@@ -228,6 +230,7 @@ function buildConditionValue(
           utmCampaign: String(formData.get("utmCampaign") ?? "").trim(),
           utmTerm: String(formData.get("utmTerm") ?? "").trim(),
           utmContent: String(formData.get("utmContent") ?? "").trim(),
+          onlyMatchedLines: formData.get("onlyMatchedLines") === "on",
         };
         break;
     }
@@ -435,6 +438,7 @@ export default function OfferConditionsPage() {
 
   const editingCondition = editingId ? conditions.find((c) => c.id === editingId) : undefined;
   const editingValue = (editingCondition?.value ?? {}) as Record<string, unknown>;
+  const defaultOnlyMatchedLines = resolveOnlyMatchedLines(editingValue["onlyMatchedLines"], Boolean(offer.requiredDiscountCode));
 
   if (!offer) return <NotFound message="Offer not found." />;
 
@@ -948,6 +952,7 @@ export default function OfferConditionsPage() {
                           <option value="ends_with">Ends with</option>
                         </select>
                       </div>
+                      <OnlyMatchedLinesCheckbox id="onlyMatchedLines" name="onlyMatchedLines" defaultChecked={defaultOnlyMatchedLines} />
                     </>
                   )}
 
@@ -1112,6 +1117,7 @@ export default function OfferConditionsPage() {
                         <label className="b-label" htmlFor="utmContent">UTM Content</label>
                         <input id="utmContent" name="utmContent" className="b-input" placeholder="banner-a" autoComplete="off" defaultValue={typeof editingValue["utmContent"] === "string" ? editingValue["utmContent"] : undefined} />
                       </div>
+                      <OnlyMatchedLinesCheckbox id="onlyMatchedLines" name="onlyMatchedLines" defaultChecked={defaultOnlyMatchedLines} />
                       <div className="b-banner b-banner-blue" role="status">
                         <div className="b-banner-body" style={{ width: "100%" }}>
                           <p className="b-banner-title">What this does</p>

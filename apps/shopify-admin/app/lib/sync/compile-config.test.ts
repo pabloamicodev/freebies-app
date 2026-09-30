@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validateRewardPayload, FUNCTION_ENFORCED_CONDITION_TYPES } from "@promo/shared-types";
 import {
   compileOfferConfig,
+  compactCompiledOffer,
   compileDiscountCombinationPolicy,
   compileShippingOfferConfigs,
   type CompiledShippingOffer,
@@ -617,6 +618,42 @@ describe("compileOfferConfig", () => {
         paramValue: "prime%20day%20sale",
       },
     ]);
+  });
+
+  describe("restrictToMatchedLines", () => {
+    const compile = (offerOverrides: Record<string, unknown>, value: Record<string, unknown>, type = "utm_parameters") =>
+      compileOfferConfig(offer(offerOverrides), [condition(type, value)], [], null, 1);
+
+    it("defaults on for checkout-code promos and off otherwise", () => {
+      expect(compile({ requiredDiscountCode: "PRIME" }, { utmSource: "amazon" }).restrictToMatchedLines).toBe(true);
+      expect(compile({}, { utmSource: "amazon" }).restrictToMatchedLines).toBeUndefined();
+    });
+
+    it("honors an explicit onlyMatchedLines on utm_parameters and page_url", () => {
+      expect(compile({}, { utmSource: "amazon", onlyMatchedLines: true }).restrictToMatchedLines).toBe(true);
+      expect(
+        compile({ requiredDiscountCode: "PRIME" }, { utmSource: "amazon", onlyMatchedLines: false })
+          .restrictToMatchedLines,
+      ).toBeUndefined();
+      const pageUrl = { patterns: ["/pages/prime"], matchMode: "starts_with" };
+      expect(compile({}, { ...pageUrl, onlyMatchedLines: true }, "page_url").restrictToMatchedLines).toBe(true);
+      expect(compile({ requiredDiscountCode: "PRIME" }, pageUrl, "page_url").restrictToMatchedLines).toBe(true);
+    });
+
+    it("never appears in the compact metafield when off, and does when on", () => {
+      expect("restrictToMatchedLines" in compactCompiledOffer(compile({}, { utmSource: "amazon" }))).toBe(false);
+      expect(
+        compactCompiledOffer(compile({ requiredDiscountCode: "PRIME" }, { utmSource: "amazon" }))[
+          "restrictToMatchedLines"
+        ],
+      ).toBe(true);
+    });
+
+    it("is not set by conditions that are not page-based", () => {
+      expect(
+        compile({ requiredDiscountCode: "PRIME" }, { thresholdCents: 1000 }, "cart_value").restrictToMatchedLines,
+      ).toBeUndefined();
+    });
   });
 
   it("compiles a requiredLineAttribute filter onto a product reward target", () => {

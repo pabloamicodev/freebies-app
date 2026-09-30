@@ -88,6 +88,10 @@ pub struct CompiledOffer {
     pub cart_attribute_conditions: Vec<CompiledAttributeCondition>,
     #[serde(default)]
     pub page_url_conditions: Vec<CompiledPageUrlCondition>,
+    /// Product/order rewards only touch lines whose `_promo_page_url` matches
+    /// every page URL condition (the lines added from the campaign page).
+    #[serde(default)]
+    pub restrict_to_matched_lines: bool,
 }
 
 fn scale_cents(cents: &mut Option<i64>, rate: f64) {

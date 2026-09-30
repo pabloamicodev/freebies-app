@@ -241,8 +241,21 @@ export const PageUrlConditionValueSchema = z.object({
     .min(1, "At least one URL pattern is required"),
   matchMode: z.enum(["exact", "contains", "starts_with", "ends_with"]),
   caseSensitive: z.boolean().default(false),
+  onlyMatchedLines: z.boolean().optional(),
 });
 export type PageUrlConditionValue = z.infer<typeof PageUrlConditionValueSchema>;
+
+/**
+ * `onlyMatchedLines` on a page_url / utm_parameters condition: discount only
+ * the cart lines added while on the matching page. Unset means "the default",
+ * which is on for checkout-code promos and off for everything else.
+ */
+export function resolveOnlyMatchedLines(
+  onlyMatchedLines: unknown,
+  isCheckoutCodePromo: boolean,
+): boolean {
+  return typeof onlyMatchedLines === "boolean" ? onlyMatchedLines : isCheckoutCodePromo;
+}
 
 export const LINE_ATTRIBUTE_KEYS = [
   "__landing_source",
@@ -333,6 +346,7 @@ export const UtmParametersConditionValueSchema = z
       .optional(),
     utmTerm: z.string().trim().max(255, "UTM term must be 255 characters or fewer.").optional(),
     utmContent: z.string().trim().max(255, "UTM content must be 255 characters or fewer.").optional(),
+    onlyMatchedLines: z.boolean().optional(),
   })
   .refine(
     (value) =>

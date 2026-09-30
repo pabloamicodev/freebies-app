@@ -133,7 +133,7 @@ fn evaluate_offer(
         return offer
             .product_rewards
             .iter()
-            .flat_map(|reward| evaluate_product_reward(reward, input, &offer.excluded_product_ids))
+            .flat_map(|reward| evaluate_product_reward(reward, input, offer))
             .collect();
     }
     if offer.offer_type == "discount" {
@@ -145,7 +145,7 @@ fn evaluate_offer(
 fn evaluate_product_reward(
     reward: &CompiledProductReward,
     input: &Input,
-    excluded_product_ids: &[String],
+    offer: &CompiledOffer,
 ) -> Vec<schema::ProductDiscountCandidate> {
     if reward.scope_mode == "quiz_bundle" {
         return evaluate_quiz_bundle_reward(reward, input);
@@ -176,7 +176,7 @@ fn evaluate_product_reward(
         .cart()
         .lines()
         .iter()
-        .filter(|line| !is_gift_line(line))
+        .filter(|line| !is_gift_line(line) && !outside_matched_lines(offer, line))
         .filter(|line| {
             reward.scope_mode != "landing"
                 || landing_source(line).as_deref()
@@ -191,7 +191,7 @@ fn evaluate_product_reward(
                 return false;
             };
             // Offer-level exclusions apply to the reward too, not only to the qualifying subtotal.
-            if excluded_product_ids.iter().any(|id| id == &product_id) {
+            if offer.excluded_product_ids.iter().any(|id| id == &product_id) {
                 return false;
             }
             (product_ids.is_empty() && variant_ids.is_empty())
@@ -508,25 +508,21 @@ fn evaluate_order_offer(
     if offer.order_rewards.is_empty() || !check_main_condition(offer, input, config) {
         return vec![];
     }
-    let excluded_gift_line_ids: Vec<String> = input
+    // Excluded lines leave the orderSubtotal target, so percentage/fixed values
+    // and tier thresholds all work off the same (eligible) subtotal.
+    let (eligible_lines, excluded_lines): (Vec<&Lines>, Vec<&Lines>) = input
         .cart()
         .lines()
         .iter()
-        .filter(|line| is_gift_line(line))
-        .map(|line| line.id().clone())
-        .collect();
+        .partition(|line| !is_gift_line(line) && !outside_matched_lines(offer, line));
+    let excluded_line_ids: Vec<String> =
+        excluded_lines.iter().map(|line| line.id().clone()).collect();
     let active_currency = input
         .cart()
         .cost()
         .subtotal_amount()
         .currency_code()
         .to_string();
-    let eligible_lines: Vec<_> = input
-        .cart()
-        .lines()
-        .iter()
-        .filter(|line| !is_gift_line(line))
-        .collect();
     let qualifying_subtotal_cents: i64 = eligible_lines
         .iter()
         .map(|line| {
@@ -547,7 +543,7 @@ fn evaluate_order_offer(
         .filter_map(|reward| {
             make_order_candidate(
                 reward,
-                excluded_gift_line_ids.clone(),
+                excluded_line_ids.clone(),
                 qualifying_subtotal_cents,
                 qualifying_quantity,
             )
@@ -715,7 +711,9 @@ fn evaluate_discount_offer(
         .cart()
         .lines()
         .iter()
-        .filter(|line| is_eligible_line(line, &required_set, &excluded_set))
+        .filter(|line| {
+            is_eligible_line(line, &required_set, &excluded_set) && !outside_matched_lines(offer, line)
+        })
         .collect();
 
     if eligible.is_empty() {
@@ -819,15 +817,12 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         })
         .collect();
 
+    // Offer-level thresholds below still count the whole cart even when
+    // restrict_to_matched_lines narrows which lines the rewards touch.
     if !offer.page_url_conditions.is_empty()
-        && !non_gift_lines.iter().any(|line| {
-            metadata_value(line, "_promo_page_url").is_some_and(|page_url| {
-                offer
-                    .page_url_conditions
-                    .iter()
-                    .all(|condition| page_url_condition_matches(&page_url, condition))
-            })
-        })
+        && !non_gift_lines
+            .iter()
+            .any(|line| added_from_matching_page(line, &offer.page_url_conditions))
     {
         return false;
     }
@@ -1336,6 +1331,19 @@ fn nektar_glp1(line: &Lines) -> Option<String> {
         line,
         "_nektar_glp1",
     )
+}
+
+/// The storefront stamps each line with the page it was added from.
+fn added_from_matching_page(line: &Lines, conditions: &[CompiledPageUrlCondition]) -> bool {
+    metadata_value(line, "_promo_page_url").is_some_and(|page_url| {
+        conditions
+            .iter()
+            .all(|condition| page_url_condition_matches(&page_url, condition))
+    })
+}
+
+fn outside_matched_lines(offer: &CompiledOffer, line: &Lines) -> bool {
+    offer.restrict_to_matched_lines && !added_from_matching_page(line, &offer.page_url_conditions)
 }
 
 fn page_url_condition_matches(page_url: &str, condition: &CompiledPageUrlCondition) -> bool {
@@ -3166,6 +3174,132 @@ mod tests {
         let missing_metadata =
             run_function_with_input(run, &base).expect("missing URL metadata input");
         assert!(missing_metadata.operations.is_empty());
+    }
+
+    /// Landing line (added from ?utm_source=amazon) + a line added from another page.
+    fn landing_and_other_page_payload(offer_fields: &str, classes: &str) -> String {
+        let config = format!(
+            r#"{{"offers":[{{
+                "id":"offer-1","version":1,"offerType":"discount","priority":100,
+                "currencyCode":"USD","discountType":"percentage","discountValue":10,
+                "pageUrlConditions":[{{"matchMode":"contains","paramName":"utm_source","paramValue":"amazon"}}],
+                {offer_fields}
+            }}]}}"#
+        );
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/a", "gid://shopify/Product/a", "40.00", 1),
+            regular_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/b", "gid://shopify/Product/b", "60.00", 1),
+        );
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&cart_json_with_classes(&lines, "100.00", &config, classes)).unwrap();
+        for (index, url) in [(0, "/pages/prime?utm_source=amazon"), (1, "/collections/all")] {
+            payload["cart"]["lines"][index]["promoMetadata"] = serde_json::json!({
+                "value": serde_json::to_string(&serde_json::json!({ "_promo_page_url": url })).unwrap(),
+            });
+        }
+        serde_json::to_string(&payload).unwrap()
+    }
+
+    fn product_target_ids(result: &schema::CartLinesDiscountsGenerateRunResult) -> Vec<String> {
+        result
+            .operations
+            .iter()
+            .flat_map(|operation| match operation {
+                schema::CartOperation::ProductDiscountsAdd(op) => op
+                    .candidates
+                    .iter()
+                    .flat_map(|candidate| candidate.targets.iter())
+                    .filter_map(|target| match target {
+                        schema::ProductDiscountCandidateTarget::CartLine(line) => Some(line.id.clone()),
+                        #[allow(unreachable_patterns)]
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                _ => vec![],
+            })
+            .collect()
+    }
+
+    const PRODUCT_REWARD: &str = r#""productRewards":[{"id":"r1","discountType":"percentage","discountValue":20,
+        "maxQuantity":null,"lineQuantityEquals":null,"maxUnitsTotal":null,"requiredOfferId":null,"requiredLineAttributeValue":null}]"#;
+
+    #[test]
+    fn restrict_to_matched_lines_discounts_only_lines_added_from_the_landing_page() {
+        let restricted = landing_and_other_page_payload(
+            &format!(r#"{PRODUCT_REWARD},"restrictToMatchedLines":true"#),
+            r#"["PRODUCT"]"#,
+        );
+        let result = run_function_with_input(run, &restricted).expect("restricted");
+        assert_eq!(product_target_ids(&result), vec!["gid://shopify/CartLine/1"]);
+
+        let unrestricted = landing_and_other_page_payload(PRODUCT_REWARD, r#"["PRODUCT"]"#);
+        let result = run_function_with_input(run, &unrestricted).expect("unrestricted");
+        assert_eq!(
+            product_target_ids(&result),
+            vec!["gid://shopify/CartLine/1", "gid://shopify/CartLine/2"]
+        );
+    }
+
+    #[test]
+    fn restrict_to_matched_lines_applies_to_plain_discount_offers() {
+        let restricted =
+            landing_and_other_page_payload(r#""restrictToMatchedLines":true"#, r#"["PRODUCT"]"#);
+        let result = run_function_with_input(run, &restricted).expect("restricted");
+        assert_eq!(product_target_ids(&result), vec!["gid://shopify/CartLine/1"]);
+
+        let unrestricted = landing_and_other_page_payload(r#""restrictToMatchedLines":false"#, r#"["PRODUCT"]"#);
+        let result = run_function_with_input(run, &unrestricted).expect("unrestricted");
+        assert_eq!(product_target_ids(&result).len(), 2);
+    }
+
+    #[test]
+    fn restrict_to_matched_lines_nothing_applies_without_a_landing_line() {
+        let mut payload: serde_json::Value = serde_json::from_str(&landing_and_other_page_payload(
+            &format!(r#"{PRODUCT_REWARD},"restrictToMatchedLines":true"#),
+            r#"["PRODUCT"]"#,
+        ))
+        .unwrap();
+        payload["cart"]["lines"][0]["promoMetadata"] = serde_json::json!({
+            "value": serde_json::to_string(&serde_json::json!({ "_promo_page_url": "/" })).unwrap(),
+        });
+        let result = run_function_with_input(run, &serde_json::to_string(&payload).unwrap())
+            .expect("no landing line");
+        assert!(result.operations.is_empty());
+    }
+
+    #[test]
+    fn restrict_to_matched_lines_excludes_other_lines_from_order_discounts() {
+        let order_reward = r#""orderRewards":[{"id":"o1","discountType":"percentage","discountValue":0,
+            "subtotalTiers":[{"minimumSubtotalCents":5000,"discountType":"percentage","discountValue":50},
+                             {"minimumSubtotalCents":0,"discountType":"percentage","discountValue":10}]}]"#;
+        // (excluded line ids, percentage)
+        let order_candidate = |fields: &str| -> (Vec<String>, f64) {
+            let result = run_function_with_input(
+                run,
+                &landing_and_other_page_payload(fields, r#"["ORDER"]"#),
+            )
+            .expect("order");
+            let schema::CartOperation::OrderDiscountsAdd(op) = &result.operations[0] else {
+                panic!("expected OrderDiscountsAdd");
+            };
+            let candidate = &op.candidates[0];
+            let schema::OrderDiscountCandidateValue::Percentage(pct) = &candidate.value else {
+                panic!("expected percentage");
+            };
+            #[allow(irrefutable_let_patterns)]
+            let schema::OrderDiscountCandidateTarget::OrderSubtotal(target) = &candidate.targets[0] else {
+                panic!("expected order subtotal target");
+            };
+            (target.excluded_cart_line_ids.clone(), pct.value.0)
+        };
+
+        // Restricted: only the $40 landing line counts, so the $50 tier is out of reach.
+        let restricted = order_candidate(&format!(r#"{order_reward},"restrictToMatchedLines":true"#));
+        assert_eq!(restricted, (vec!["gid://shopify/CartLine/2".to_string()], 10.0));
+
+        let unrestricted = order_candidate(order_reward);
+        assert_eq!(unrestricted, (vec![], 50.0));
     }
 
     #[test]

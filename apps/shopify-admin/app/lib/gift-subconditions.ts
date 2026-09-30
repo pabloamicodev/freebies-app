@@ -191,6 +191,24 @@ export function normalizeOfferSubconditions(input: Record<string, unknown>): Nor
         conditions.push({ conditionType: "discount_code", operator: "eq", value: { code } });
         break;
       }
+      case "utm_parameters": {
+        const field = (key: string) => String(value[key] ?? "").trim();
+        conditions.push({
+          conditionType: "utm_parameters",
+          operator: "eq",
+          value: {
+            utmSource: field("utmSource"),
+            utmMedium: field("utmMedium"),
+            utmCampaign: field("utmCampaign"),
+            utmTerm: field("utmTerm"),
+            utmContent: field("utmContent"),
+            ...(typeof value["onlyMatchedLines"] === "boolean"
+              ? { onlyMatchedLines: value["onlyMatchedLines"] }
+              : {}),
+          },
+        });
+        break;
+      }
       case "custom_attribute": {
         const scope = value["scope"] === "cart" ? "cart" : "line";
         conditions.push({

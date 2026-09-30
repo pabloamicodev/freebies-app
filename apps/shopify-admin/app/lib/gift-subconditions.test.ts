@@ -1,6 +1,35 @@
 import { describe, expect, it } from "vitest";
 import { normalizeGiftSubconditions, normalizeOfferSubconditions } from "./gift-subconditions.js";
 
+describe("normalizeOfferSubconditions utm_parameters", () => {
+  it("persists the UTM fields and the onlyMatchedLines flag", () => {
+    const result = normalizeOfferSubconditions({
+      utm_parameters: { utmSource: " amazon ", utmCampaign: "prime", onlyMatchedLines: false },
+    });
+    expect(result).toEqual({
+      success: true,
+      data: [
+        {
+          conditionType: "utm_parameters",
+          operator: "eq",
+          value: {
+            utmSource: "amazon",
+            utmMedium: "",
+            utmCampaign: "prime",
+            utmTerm: "",
+            utmContent: "",
+            onlyMatchedLines: false,
+          },
+        },
+      ],
+    });
+  });
+
+  it("rejects a UTM subcondition with no parameters filled in", () => {
+    expect(normalizeOfferSubconditions({ utm_parameters: { utmSource: "" } }).success).toBe(false);
+  });
+});
+
 describe("normalizeGiftSubconditions", () => {
   it("translates every quick-builder id to canonical engine condition types", () => {
     const result = normalizeGiftSubconditions({

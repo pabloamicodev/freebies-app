@@ -9,8 +9,16 @@ import type {
   offerRewards as RewardsTable,
   offerCombinationPolicies as PoliciesTable,
 } from "@promo/db";
-import type { ConditionType, TypedOfferCondition } from "@promo/shared-types";
+import {
+  resolveOnlyMatchedLines,
+  type ConditionType,
+  type TypedOfferCondition,
+} from "@promo/shared-types";
 import { normalizeConditionValue } from "../offer-config-normalization.server.js";
+
+function onlyMatchedLines(flag: unknown, offer: { requiredDiscountCode?: string | null }): boolean {
+  return resolveOnlyMatchedLines(flag, Boolean(offer.requiredDiscountCode));
+}
 
 export interface CompiledFunctionConfig {
   offers: CompiledOffer[];
@@ -93,6 +101,9 @@ export interface CompiledOffer {
   cartAttributeConditions?: CompiledAttributeCondition[];
   pageUrlConditions?: CompiledPageUrlCondition[];
   discountCodeConditions?: CompiledDiscountCodeCondition[];
+  /** Product/order rewards only touch lines added from a page matching every
+   * pageUrlConditions entry. Only ever set to true, so it is absent otherwise. */
+  restrictToMatchedLines?: true;
 }
 
 export interface CompiledAttributeCondition {
@@ -471,6 +482,7 @@ export function compileOfferConfig(
               : "contains",
           caseSensitive: value.caseSensitive === true,
         });
+        if (onlyMatchedLines(value.onlyMatchedLines, offer)) config.restrictToMatchedLines = true;
         break;
       }
       case "utm_parameters": {
@@ -497,6 +509,7 @@ export function compileOfferConfig(
             paramValue: encodeURIComponent(paramValue),
           });
         }
+        if (onlyMatchedLines(value.onlyMatchedLines, offer)) config.restrictToMatchedLines = true;
         break;
       }
       default:

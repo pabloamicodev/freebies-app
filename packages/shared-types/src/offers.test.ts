@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   LineAttributeKeySchema,
   ProductDiscountTierSchema,
+  resolveOnlyMatchedLines,
   ShippingDiscountTierSchema,
   SubtotalDiscountTierSchema,
   validateConditionValue,
@@ -156,6 +157,29 @@ describe("condition contracts", () => {
     expect(
       validateConditionValue("utm_parameters", { utmSource: "A".repeat(255) }).success,
     ).toBe(true);
+  });
+
+  it("accepts an optional boolean onlyMatchedLines on utm_parameters and page_url", () => {
+    const pageUrl = { patterns: ["/pages/prime"], matchMode: "starts_with" };
+    for (const onlyMatchedLines of [true, false, undefined]) {
+      expect(
+        validateConditionValue("utm_parameters", { utmSource: "amazon", onlyMatchedLines }).success,
+      ).toBe(true);
+      expect(validateConditionValue("page_url", { ...pageUrl, onlyMatchedLines }).success).toBe(true);
+    }
+    expect(
+      validateConditionValue("utm_parameters", { utmSource: "amazon", onlyMatchedLines: "yes" }).success,
+    ).toBe(false);
+    expect(validateConditionValue("page_url", { ...pageUrl, onlyMatchedLines: 1 }).success).toBe(false);
+  });
+});
+
+describe("resolveOnlyMatchedLines", () => {
+  it("uses an explicit boolean, else defaults on only for checkout-code promos", () => {
+    expect(resolveOnlyMatchedLines(true, false)).toBe(true);
+    expect(resolveOnlyMatchedLines(false, true)).toBe(false);
+    expect(resolveOnlyMatchedLines(undefined, true)).toBe(true);
+    expect(resolveOnlyMatchedLines(undefined, false)).toBe(false);
   });
 });
 

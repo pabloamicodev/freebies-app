@@ -1,6 +1,6 @@
 import { useLoaderData, useNavigate, useFetcher, useActionData, redirect, Link } from "react-router";
 import { useState } from "react";
-import { SUPPORTED_CURRENCIES, validateConditionValue, validateRewardPayload, ConditionTypeSchema, ConditionScopeSchema } from "@promo/shared-types";
+import { SUPPORTED_CURRENCIES, validateConditionValue, validateRewardPayload, ConditionTypeSchema, ConditionScopeSchema, resolveOnlyMatchedLines } from "@promo/shared-types";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
@@ -21,6 +21,7 @@ import { SelectedProductsList } from "../components/SelectedProductsList.js";
 import { SubconditionModal } from "../components/SubconditionModal.js";
 import { SubconditionCard } from "../components/SubconditionCard.js";
 import { SUB_FORMS } from "../components/subconditions/registry.js";
+import { OnlyMatchedLinesCheckbox } from "../components/subconditions/forms.js";
 import { GIFT_SUBCONDITIONS } from "../components/subconditions/types.js";
 import type { SubconditionId } from "../components/subconditions/types.js";
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
@@ -396,6 +397,10 @@ function subconditionsFromRows(
         activeSubs.push("discount_code");
         subValues["discount_code"] = v;
         break;
+      case "utm_parameters":
+        activeSubs.push("utm_parameters");
+        subValues["utm_parameters"] = v;
+        break;
       case "markets":
         activeSubs.push("markets");
         subValues["markets"] = v;
@@ -520,15 +525,18 @@ function PageUrlConditionEditor({
   val,
   update,
   save,
+  isCheckoutCodePromo,
 }: {
   conditionId: string;
   val: ConditionValue;
   update: (patch: Partial<ConditionValue>) => void;
   save: (overrideVal?: ConditionValue) => void;
+  isCheckoutCodePromo: boolean;
 }) {
   const patterns = Array.isArray(val.patterns) ? (val.patterns as string[]) : [""];
   const matchMode = (val.matchMode as string | undefined) ?? "starts_with";
   const caseSensitive = Boolean(val.caseSensitive);
+  const onlyMatchedLines = resolveOnlyMatchedLines(val.onlyMatchedLines, isCheckoutCodePromo);
 
   function setPatterns(next: string[]) {
     const nextVal = { ...val, patterns: next };
@@ -640,6 +648,15 @@ function PageUrlConditionEditor({
           </div>
         </div>
       </div>
+
+      <OnlyMatchedLinesCheckbox
+        id={`condition-${conditionId}-only-matched-lines`}
+        checked={onlyMatchedLines}
+        onChange={(checked) => {
+          update({ onlyMatchedLines: checked });
+          save({ ...val, onlyMatchedLines: checked });
+        }}
+      />
     </div>
   );
 }
@@ -649,11 +666,13 @@ function ConditionCard({
   conditionType,
   initialValue,
   onDelete,
+  isCheckoutCodePromo,
 }: {
   conditionId: string;
   conditionType: string;
   initialValue: ConditionValue;
   onDelete: () => void;
+  isCheckoutCodePromo: boolean;
 }) {
   const fetcher = useFetcher();
   const isSaving = fetcher.state !== "idle";
@@ -946,7 +965,7 @@ function ConditionCard({
 
         {/* ── Page URL ───────────────────────────────────────── */}
         {conditionType === "page_url" && (
-          <PageUrlConditionEditor conditionId={conditionId} val={val} update={update} save={save} />
+          <PageUrlConditionEditor conditionId={conditionId} val={val} update={update} save={save} isCheckoutCodePromo={isCheckoutCodePromo} />
         )}
       </div>
     </div>
@@ -1470,6 +1489,7 @@ export default function OfferDetailPage() {
                   conditionType={c.conditionType}
                   initialValue={c.value as ConditionValue}
                   onDelete={() => deleteCondition(c.id)}
+                  isCheckoutCodePromo={Boolean(offer.requiredDiscountCode)}
                 />
               ))}
 
@@ -1544,6 +1564,7 @@ export default function OfferDetailPage() {
                       <SubForm
                         value={subValues[id] as Record<string, unknown> | undefined}
                         onChange={(v) => updateSubconditionValue(id, v)}
+                        isCheckoutCodePromo={Boolean(offer.requiredDiscountCode)}
                       />
                     </SubconditionCard>
                   );

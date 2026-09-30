@@ -3,7 +3,7 @@
 // The parent serializes their values via hidden inputs on form submit.
 
 import { useState, useId, useEffect } from "react";
-import { CART_ATTRIBUTE_KEYS, LINE_ATTRIBUTE_KEYS } from "@promo/shared-types";
+import { CART_ATTRIBUTE_KEYS, LINE_ATTRIBUTE_KEYS, resolveOnlyMatchedLines } from "@promo/shared-types";
 import { ProductPicker } from "../ProductPicker.js";
 
 // ─── Shared props ─────────────────────────────────────────────────────────────
@@ -12,6 +12,48 @@ export interface SubFormProps {
   value?: Record<string, unknown>;
   /** Called whenever the form value changes, with the full serialised object. */
   onChange?: (value: Record<string, unknown>) => void;
+  /** The offer only runs when a checkout code is entered (changes some defaults). */
+  isCheckoutCodePromo?: boolean;
+}
+
+// ─── "Only discount items added from this page" (page_url / utm_parameters) ───
+export function OnlyMatchedLinesCheckbox({
+  id,
+  name,
+  checked,
+  defaultChecked,
+  onChange,
+}: {
+  id: string;
+  name?: string;
+  checked?: boolean;
+  defaultChecked?: boolean;
+  onChange?: (checked: boolean) => void;
+}) {
+  return (
+    <div className="b-checkbox-row">
+      <input
+        type="checkbox"
+        id={id}
+        name={name}
+        checked={checked}
+        defaultChecked={defaultChecked}
+        onChange={onChange ? (event) => onChange(event.target.checked) : undefined}
+        style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
+      />
+      <div>
+        <label htmlFor={id} className="b-checkbox-label">
+          Apply the discount only to products added from this page
+        </label>
+        <div className="b-checkbox-help">
+          Only the items a customer adds to their cart while on the matching page get the discount.
+          Anything they add later from other pages of your store stays at full price, even if it's in
+          the same cart. Leave this unchecked to discount the whole cart once the customer has visited
+          the page.
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── Helper: typed input value from value prop ─────────────────────────────────
@@ -446,16 +488,18 @@ export function DiscountCodeForm({ value, onChange }: SubFormProps) {
 }
 
 // ─── UTM parameters ────────────────────────────────────────────────────────────
-export function UtmParametersForm({ value, onChange }: SubFormProps) {
+export function UtmParametersForm({ value, onChange, isCheckoutCodePromo = false }: SubFormProps) {
   const idPrefix = useId();
   const utmSource = getv(value, "utmSource", "") as string;
   const utmMedium = getv(value, "utmMedium", "") as string;
   const utmCampaign = getv(value, "utmCampaign", "") as string;
   const utmTerm = getv(value, "utmTerm", "") as string;
   const utmContent = getv(value, "utmContent", "") as string;
+  const onlyMatchedLines = resolveOnlyMatchedLines(value?.["onlyMatchedLines"], isCheckoutCodePromo);
 
+  // Always emit an explicit onlyMatchedLines so what's saved matches what's shown.
   function emit(patch: Partial<Record<string, unknown>>) {
-    onChange?.({ utmSource, utmMedium, utmCampaign, utmTerm, utmContent, ...patch });
+    onChange?.({ utmSource, utmMedium, utmCampaign, utmTerm, utmContent, onlyMatchedLines, ...patch });
   }
 
   return (
@@ -480,6 +524,11 @@ export function UtmParametersForm({ value, onChange }: SubFormProps) {
         <label className="b-label" htmlFor={`${idPrefix}-utm-content`}>UTM Content</label>
         <input id={`${idPrefix}-utm-content`} className="b-input" value={utmContent} onChange={(event) => emit({ utmContent: event.target.value })} placeholder="banner-a" autoComplete="off" />
       </div>
+      <OnlyMatchedLinesCheckbox
+        id={`${idPrefix}-only-matched-lines`}
+        checked={onlyMatchedLines}
+        onChange={(checked) => emit({ onlyMatchedLines: checked })}
+      />
       <div className="b-banner b-banner-blue" role="status">
         <div className="b-banner-body" style={{ width: "100%" }}>
           <p className="b-banner-title">What this does</p>
