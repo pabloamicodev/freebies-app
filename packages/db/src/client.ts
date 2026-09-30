@@ -21,6 +21,13 @@ export function getDb() {
       idle_timeout: 20,
       connect_timeout: 10,
       ssl: isLocalDatabaseUrl(normalizedUrl) ? false : { rejectUnauthorized: true },
+      // Neon's runtime endpoint is a transaction-mode (PgBouncer-style) pooler:
+      // a server-side prepared statement created on one backend connection can
+      // be handed to a different logical session by the pooler, causing
+      // intermittent "prepared statement already exists"/"does not exist"
+      // errors under concurrency. Disable postgres.js's default server-side
+      // prepare so every query is sent as a plain, one-shot statement instead.
+      prepare: false,
     });
 
     _client = drizzle(_sql, { schema });
