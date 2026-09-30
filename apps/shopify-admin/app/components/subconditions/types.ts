@@ -80,12 +80,6 @@ const ALL_SUBCONDITIONS: SubconditionDef[] = [
     plus: false,
   },
   {
-    id: "discount_code",
-    name: "Requires a discount code",
-    desc: "Only applies when the customer has entered a specific discount code — lets you gate an automatic offer behind a code without building a code-redemption system.",
-    plus: false,
-  },
-  {
     id: "utm_parameters",
     name: "UTM Parameters",
     desc: "Only applies to customers who arrived via specific UTM tracking parameters (utm_source, utm_medium, etc.) — captured automatically from their landing URL, no landing-page snippet needed.",

@@ -326,7 +326,6 @@ const SUB_CONDITION_TYPES = [
   { label: "Sales Channel", value: "sales_channels" },
   { label: "Subscription Products Only", value: "subscription_product_type" },
   { label: "Specific Link / Magic URL", value: "specific_link" },
-  { label: "Requires a discount code", value: "discount_code" },
   { label: "UTM Parameters", value: "utm_parameters" },
 ];
 

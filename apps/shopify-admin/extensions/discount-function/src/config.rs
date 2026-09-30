@@ -88,8 +88,6 @@ pub struct CompiledOffer {
     pub cart_attribute_conditions: Vec<CompiledAttributeCondition>,
     #[serde(default)]
     pub page_url_conditions: Vec<CompiledPageUrlCondition>,
-    #[serde(default)]
-    pub discount_code_conditions: Vec<CompiledDiscountCodeCondition>,
 }
 
 fn scale_cents(cents: &mut Option<i64>, rate: f64) {
@@ -269,17 +267,6 @@ pub struct CompiledPageUrlCondition {
     pub case_sensitive: bool,
     pub param_name: Option<String>,
     pub param_value: Option<String>,
-}
-
-/// Gates the offer on a specific discount code being present in
-/// `input.entered_discount_codes()` — Shopify only surfaces codes it has
-/// already validated as active and applicable to this cart, so no separate
-/// "is this code real" check is needed here.
-#[derive(Debug, Deserialize, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
-#[serde(rename_all = "camelCase")]
-pub struct CompiledDiscountCodeCondition {
-    pub code: String,
 }
 
 fn default_count_rule() -> String {
