@@ -24,6 +24,7 @@
     "typecheck": "pnpm -r typecheck",
     "setup:rust": "bash scripts/setup-rust.sh",
     "check:bundles": "node scripts/check-bundle-sizes.mjs",
+    "validate:shopify-configs": "node scripts/check-shopify-configs.mjs",
     "ci": "pnpm typecheck && pnpm test && pnpm check:bundles",
     "deploy:migrate": "pnpm db:migrate",
     "db:generate": "pnpm --filter @promo/db db:generate",
