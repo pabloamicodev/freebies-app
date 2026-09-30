@@ -9,6 +9,7 @@ import {
 } from "@promo/db";
 import {
   ConditionTypeSchema,
+  FUNCTION_ENFORCED_CONDITION_TYPES,
   validateConditionValue,
   validateRewardPayload,
 } from "@promo/shared-types";
@@ -21,25 +22,6 @@ export interface PublishValidationResult {
   error?: string;
 }
 
-const FUNCTION_CONDITION_TYPES = new Set([
-  "cart_value",
-  "cart_quantity",
-  "specific_product",
-  "pack_of_products",
-  "subscription_product_type",
-  "order_history_total_orders",
-  "order_history_total_spent",
-  "line_attribute",
-  "cart_attribute",
-  "exclude_products",
-  "customer_tags",
-  "customer_location",
-  "markets",
-  "specific_link",
-  "page_url",
-  "discount_code",
-]);
-
 const FUNCTION_NUMERIC_OPERATORS = new Set(["eq", "gt", "gte", "lt", "lte"]);
 
 function firstIssueMessage(result: {
@@ -50,7 +32,7 @@ function firstIssueMessage(result: {
 }
 
 export function isConditionEnforcedByFunction(conditionType: string): boolean {
-  return FUNCTION_CONDITION_TYPES.has(conditionType);
+  return (FUNCTION_ENFORCED_CONDITION_TYPES as ReadonlySet<string>).has(conditionType);
 }
 
 const PRODUCT_DISCOUNT_REWARD_TYPES = new Set([

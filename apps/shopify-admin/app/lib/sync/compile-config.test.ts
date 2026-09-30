@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateRewardPayload } from "@promo/shared-types";
+import { validateRewardPayload, FUNCTION_ENFORCED_CONDITION_TYPES } from "@promo/shared-types";
 import {
   compileOfferConfig,
   compileDiscountCombinationPolicy,
@@ -232,6 +232,24 @@ describe("compileShippingOfferConfigs", () => {
 
     expect(result).toEqual([]);
   });
+});
+
+describe("compileOfferConfig — condition-type coverage", () => {
+  // Guards against the exact bug class this session found twice: a condition
+  // type gets added to FUNCTION_ENFORCED_CONDITION_TYPES (so publish allows
+  // it) but compileOfferConfig never learns how to represent it, silently
+  // dropping enforcement at checkout. "markets" is excluded here because it's
+  // rewritten to "customer_location" before compilation ever sees it
+  // (market-condition-resolution.server.ts) — see compile-config.ts's
+  // condition-type switch default case for the runtime half of this guard.
+  for (const conditionType of FUNCTION_ENFORCED_CONDITION_TYPES) {
+    if (conditionType === "markets") continue;
+    it(`has a compiled representation for "${conditionType}"`, () => {
+      expect(() =>
+        compileOfferConfig(offer({ type: "discount" }), [condition(conditionType, {})], [], null, 1),
+      ).not.toThrow();
+    });
+  }
 });
 
 describe("compileOfferConfig", () => {

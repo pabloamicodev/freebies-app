@@ -451,6 +451,18 @@ export function compileOfferConfig(
           caseSensitive: value["caseSensitive"] === true,
         });
         break;
+      default:
+        // Only conditions the publish flow already validated as Function-enforced
+        // (see FUNCTION_ENFORCED_CONDITION_TYPES / offer-publish-flow.server.ts)
+        // reach this loop — "markets" is rewritten to "customer_location" before
+        // compilation (market-condition-resolution.server.ts), so it never appears
+        // here either. Reaching this branch means a condition type is allowed to
+        // publish but has no compiled representation, which would silently drop
+        // enforcement at checkout — fail loudly instead.
+        throw new Error(
+          `compileOfferConfig has no case for condition type "${cond.conditionType}". ` +
+            `Add one before this condition type can be safely published.`,
+        );
     }
   }
 
