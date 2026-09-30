@@ -1,5 +1,5 @@
 import { Link, useLoaderData, useNavigate, useSearchParams, useFetcher, redirect } from "react-router";
-import { lazy, Suspense, useCallback, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import {
   analyticsEvents,
   appSettings,
@@ -535,6 +535,7 @@ function OfferTableRow({
   onDelete: () => void;
 }) {
   const preview = useFetcher<typeof rowPreviewLoader>();
+  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const prefetch = useCallback(() => {
     if (preview.state === "idle" && preview.data === undefined) {
@@ -542,9 +543,19 @@ function OfferTableRow({
     }
   }, [preview, offer.id]);
 
+  // Debounce so scanning quickly down a full page of rows doesn't fire a
+  // prefetch request for every row the cursor passes over.
+  const debouncedPrefetch = useCallback(() => {
+    if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
+    prefetchTimer.current = setTimeout(prefetch, 150);
+  }, [prefetch]);
+  const cancelPrefetch = useCallback(() => {
+    if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
+  }, []);
+
   return (
     <>
-      <tr onMouseEnter={prefetch}>
+      <tr onMouseEnter={debouncedPrefetch} onMouseLeave={cancelPrefetch}>
         <td>
           <input
             aria-label={`Select offer ${offer.internalName}`}
