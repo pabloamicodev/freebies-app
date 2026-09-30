@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectGids, urlsFromCondition } from "./offer-summaries.js";
+import { collectGids, rewardHeadline, urlsFromCondition } from "./offer-summaries.js";
 
 describe("collectGids", () => {
   it("collects variant and product GIDs from every target shape", () => {
@@ -38,5 +38,36 @@ describe("urlsFromCondition", () => {
   it("returns an empty array for condition types with no URL", () => {
     expect(urlsFromCondition("cart_value", { thresholdCents: 5000 })).toEqual([]);
     expect(urlsFromCondition("discount_code", { code: "PRIME2026" })).toEqual([]);
+  });
+});
+
+describe("rewardHeadline", () => {
+  it("labels free rewards by reward type", () => {
+    expect(rewardHeadline({ rewardType: "product_gift", discountType: "free", value: {} })).toBe("Free gift");
+    expect(rewardHeadline({ rewardType: "shipping_discount", discountType: "free", value: {} })).toBe("Free shipping");
+    expect(rewardHeadline({ rewardType: "order_discount", discountType: "free", value: {} })).toBe("Free (100% off)");
+  });
+
+  it("formats percentage and cheapest/most-expensive-item rewards", () => {
+    expect(rewardHeadline({ rewardType: "order_discount", discountType: "percentage", value: { amount: 20 } })).toBe("20% off");
+    expect(rewardHeadline({ rewardType: "order_discount", discountType: "cheapest_item_free", value: {} })).toBe("Cheapest item free");
+    expect(
+      rewardHeadline({ rewardType: "product_discount", discountType: "most_expensive_item_discount", value: { amount: 50 } }),
+    ).toBe("50% off most expensive item");
+  });
+
+  it("converts fixed_amount/fixed_price from cents for ordinary rewards", () => {
+    expect(
+      rewardHeadline({ rewardType: "order_discount", discountType: "fixed_amount", value: { amount: 1000, currencyCode: "USD" } }),
+    ).toBe("USD 10.00 off");
+    expect(
+      rewardHeadline({ rewardType: "product_discount", discountType: "fixed_price", value: { amount: 500, currencyCode: "USD" } }),
+    ).toBe("Fixed price USD 5.00");
+  });
+
+  it("treats shipping_discount fixed_amount as already-dollar, not cents", () => {
+    expect(
+      rewardHeadline({ rewardType: "shipping_discount", discountType: "fixed_amount", value: { amount: 10, currencyCode: "USD" } }),
+    ).toBe("USD 10.00 off");
   });
 });

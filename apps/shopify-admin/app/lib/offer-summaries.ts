@@ -103,3 +103,31 @@ export function urlsFromCondition(conditionType: string, value: unknown): string
   }
   return [];
 }
+
+/** A short customer-facing headline for a reward, e.g. "20% off", "Free gift",
+ * "$10 off". `value.amount` is a raw percentage for discountType "percentage",
+ * cents for every other discount type (matches how compile-config.ts and the
+ * add/update_reward actions store it). Used as the row-preview's title. */
+export function rewardHeadline(reward: { rewardType: string; discountType: string; value: unknown }): string {
+  const v = (reward.value ?? {}) as Record<string, unknown>;
+  const amount = typeof v["amount"] === "number" ? v["amount"] : 0;
+  const currency = typeof v["currencyCode"] === "string" ? v["currencyCode"] : "USD";
+
+  if (reward.discountType === "cheapest_item_free") return "Cheapest item free";
+  if (reward.discountType === "free") {
+    if (reward.rewardType === "shipping_discount") return "Free shipping";
+    if (reward.rewardType === "product_gift") return "Free gift";
+    return "Free (100% off)";
+  }
+  if (reward.discountType === "percentage") return `${amount}% off`;
+  if (reward.discountType === "most_expensive_item_discount") return `${amount}% off most expensive item`;
+  if (reward.discountType === "fixed_price") return `Fixed price ${currency} ${(amount / 100).toFixed(2)}`;
+  if (reward.discountType === "fixed_amount") {
+    // Shipping rewards store this raw (dollars), not in cents like every
+    // other reward type — see the shipping vs. generic value-building
+    // branches in app.offers.$id.rewards.tsx's action.
+    const dollars = reward.rewardType === "shipping_discount" ? amount : amount / 100;
+    return `${currency} ${dollars.toFixed(2)} off`;
+  }
+  return reward.discountType;
+}

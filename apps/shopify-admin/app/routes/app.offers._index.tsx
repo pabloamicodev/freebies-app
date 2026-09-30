@@ -690,11 +690,23 @@ function OfferRowPreviewContent({
   data: Awaited<ReturnType<typeof rowPreviewLoader>>;
   onOpenFull: () => void;
 }) {
-  const { conditions, rewards, urls, combinationPolicy } = data;
+  const { offer, headline, conditions, rewards, urls, widgets: widgetSummaries, redemptionCount, combinationPolicy } = data;
   const productThumbs = rewards.flatMap((r) => r.products).slice(0, 6);
 
   return (
-    <div style={{ display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        {headline && <span className="b-text-bold" style={{ fontSize: 15 }}>{headline}</span>}
+        <span className="b-text-sm b-text-sub">Priority {offer.priority}</span>
+        <span className="b-text-sm b-text-sub">
+          {formatDate(offer.startsAt)}{offer.endsAt ? ` – ${formatDate(offer.endsAt)}` : " – no end date"}
+        </span>
+        <span className="b-text-sm b-text-sub">
+          {redemptionCount === 0 ? "Never redeemed" : `Redeemed ${redemptionCount} time${redemptionCount === 1 ? "" : "s"}`}
+        </span>
+      </div>
+
+      <div style={{ display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
       {productThumbs.length > 0 && (
         <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
           {productThumbs.map((p, i) => (
@@ -752,14 +764,26 @@ function OfferRowPreviewContent({
         </div>
       )}
 
-      <button
-        type="button"
-        className="b-btn b-btn-secondary b-btn-sm"
-        style={{ flexShrink: 0, marginLeft: "auto" }}
-        onClick={onOpenFull}
-      >
-        Edit offer →
-      </button>
+      {widgetSummaries.length > 0 && (
+        <div style={{ flex: "1 1 180px", minWidth: 160 }}>
+          <div className="b-text-sm b-text-bold" style={{ marginBottom: 4 }}>Shows in</div>
+          {widgetSummaries.map((w) => (
+            <div key={w.type} className="b-text-sm b-text-sub" style={{ opacity: w.isEnabled ? 1 : 0.5 }}>
+              {w.label}{!w.isEnabled && " (disabled)"}
+            </div>
+          ))}
+        </div>
+      )}
+
+        <button
+          type="button"
+          className="b-btn b-btn-secondary b-btn-sm"
+          style={{ flexShrink: 0, marginLeft: "auto" }}
+          onClick={onOpenFull}
+        >
+          Edit offer →
+        </button>
+      </div>
     </div>
   );
 }
