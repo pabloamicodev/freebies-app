@@ -628,34 +628,36 @@ function OfferTableRow({
           </div>
         </td>
 
-        {/* Actions — duplicate + archive + delete */}
+        {/* Actions — duplicate + archive grouped, delete set apart to reduce misclicks */}
         <td>
-          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-            <button
-              type="button"
-              className="bogos-action-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDuplicate();
-              }}
-              aria-label="Duplicate offer"
-              title="Duplicate"
-            >
-              <IconCopy />
-            </button>
-            <button
-              type="button"
-              className="bogos-action-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                onArchive();
-              }}
-              aria-label="Archive offer"
-              title="Archive"
-              style={{ color: "var(--text-sub)" }}
-            >
-              <IconArchive />
-            </button>
+          <div style={{ display: "flex", alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+              <button
+                type="button"
+                className="bogos-action-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDuplicate();
+                }}
+                aria-label="Duplicate offer"
+                title="Duplicate"
+              >
+                <IconCopy />
+              </button>
+              <button
+                type="button"
+                className="bogos-action-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onArchive();
+                }}
+                aria-label="Archive offer"
+                title="Archive"
+                style={{ color: "var(--text-sub)" }}
+              >
+                <IconArchive />
+              </button>
+            </div>
             <button
               type="button"
               className="bogos-action-btn red"
@@ -663,6 +665,7 @@ function OfferTableRow({
                 e.stopPropagation();
                 onDelete();
               }}
+              style={{ marginLeft: 14, paddingLeft: 10, borderLeft: "1px solid var(--border)" }}
               aria-label="Delete offer permanently"
               title="Delete permanently"
             >
