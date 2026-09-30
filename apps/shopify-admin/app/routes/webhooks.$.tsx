@@ -2,7 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate, sessionStorage } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { productCache, variantCache, shops, analyticsEvents, offers, offerConditions, webhookDeliveries } from "@promo/db";
-import { eq, and, inArray, lt, notInArray, or, sql } from "drizzle-orm";
+import { eq, and, lt, notInArray, or, sql } from "drizzle-orm";
 import { decryptToken } from "../lib/token-crypto.server.js";
 import { syncInventoryFromWebhook } from "../lib/sync/inventory-sync.server.js";
 import {
