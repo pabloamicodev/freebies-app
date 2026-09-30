@@ -16,6 +16,7 @@ import {
   IconTrash,
   IconArchive,
   IconEye,
+  IconEdit,
   IconSearch,
   IconChevronDown,
   SortIcon,
@@ -640,10 +641,22 @@ function OfferTableRow({
           </div>
         </td>
 
-        {/* Actions — duplicate + archive grouped, delete set apart to reduce misclicks */}
+        {/* Actions — edit + duplicate + archive grouped, delete set apart to reduce misclicks */}
         <td>
           <div style={{ display: "flex", alignItems: "center" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+              <button
+                type="button"
+                className="b-action-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenFull();
+                }}
+                aria-label="Edit offer"
+                title="Edit offer (opens the full editor)"
+              >
+                <IconEdit />
+              </button>
               <button
                 type="button"
                 className="b-action-btn"
