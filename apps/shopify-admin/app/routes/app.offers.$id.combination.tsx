@@ -5,7 +5,6 @@
 
 import { useLoaderData, useActionData, useNavigation, Form, Link } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
-import { OfferStepTabs } from "../components/OfferStepTabs.js";
 import { NotFound } from "../components/NotFound.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
@@ -127,10 +126,6 @@ export default function OfferCombinationPage() {
     <div className="b-page">
       {/* Header */}
       <PageHeader title="Combination Policy" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
-
-      <div className="b-mb-4">
-        <OfferStepTabs offerId={offer.id} active="combination" />
-      </div>
 
       {restrictionEntries.length > 0 && (
         <div className="b-banner b-banner-orange b-mb-4">

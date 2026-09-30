@@ -6,7 +6,6 @@
 import { useLoaderData, useActionData, useNavigation, useSubmit, Form } from "react-router";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
-import { OfferStepTabs } from "../components/OfferStepTabs.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -183,10 +182,6 @@ export default function OfferWidgetPage() {
     <div className="b-page">
       {/* ── Header ── */}
       <PageHeader title="Widget Settings" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
-
-      <div className="b-mb-4">
-        <OfferStepTabs offerId={offer.id} active="widget" />
-      </div>
 
       {/* ── Action feedback banners ── */}
       {actionData && "success" in actionData && actionData.success && (

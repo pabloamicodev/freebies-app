@@ -7,7 +7,6 @@ import { useLoaderData, useNavigate, useNavigation, useActionData, useSubmit, Fo
 import { NotFound } from "../components/NotFound.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
 import { PageHeader } from "../components/PageHeader.js";
-import { OfferStepTabs } from "../components/OfferStepTabs.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -843,10 +842,6 @@ export default function OfferRewardsPage() {
             </button>
           }
         />
-
-        <div className="b-mb-4">
-          <OfferStepTabs offerId={offer.id} active="rewards" />
-        </div>
 
         {/* ── Action feedback banners ─────────────────────── */}
         {"error" in (actionData ?? {}) && (actionData as { error: string }).error && (

@@ -4,7 +4,6 @@
 
 import { useLoaderData, Form, useActionData, useNavigation } from "react-router";
 import { BackButton } from "../components/BackButton.js";
-import { OfferStepTabs } from "../components/OfferStepTabs.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { parseDateRange } from "../lib/offer-validation.server.js";
@@ -96,9 +95,6 @@ export default function OfferSchedulePage() {
         </span>
       </div>
 
-      <div className="b-mb-4">
-        <OfferStepTabs offerId={offer.id} active="schedule" />
-      </div>
 
       {/* Action feedback */}
       {actionData && "error" in actionData && actionData.error && (

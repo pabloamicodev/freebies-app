@@ -6,7 +6,6 @@
 
 import { useLoaderData, Form, useActionData } from "react-router";
 import { BackButton } from "../components/BackButton.js";
-import { OfferStepTabs } from "../components/OfferStepTabs.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
@@ -222,10 +221,6 @@ export default function OfferPreviewPage() {
           </div>
           <p style={{ margin: 0, fontSize: 13, color: "var(--text-sub)" }}>{offer.internalName}</p>
         </div>
-      </div>
-
-      <div className="b-mb-4">
-        <OfferStepTabs offerId={offer.id} active="preview" />
       </div>
 
       {actionData && "error" in actionData && <div className="b-banner b-banner-red" role="alert">{actionData.error}</div>}

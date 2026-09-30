@@ -187,6 +187,13 @@
 .b-page > *:nth-child(5) {
   animation-delay: 160ms;
 }
+/* Wraps the offer step tabs when rendered by the shared offer-detail layout
+   (outside each step's own .b-page), matching .b-page's horizontal gutter
+   and top spacing without its min-height/background — avoids nesting two
+   full-height .b-page containers. */
+.b-page-tabs-bar {
+  padding: 28px 32px 0;
+}
 
 .b-page-header {
   display: flex;
