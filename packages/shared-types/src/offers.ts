@@ -295,6 +295,71 @@ export const DiscountCodeConditionValueSchema = z.object({
 });
 export type DiscountCodeConditionValue = z.infer<typeof DiscountCodeConditionValueSchema>;
 
+/**
+ * Per-condition-type Zod schema, keyed by `ConditionType`. This is the
+ * type-level counterpart to `validateConditionValue`'s runtime dispatch
+ * below — previously the mapping from `conditionType` string to its
+ * value's actual shape existed only in that switch statement, so a field
+ * rename in one of these schemas would compile cleanly everywhere a
+ * consumer read `value as Record<string, unknown>` and only fail silently
+ * at runtime.
+ *
+ * Condition types that have never had a dedicated schema (they've always
+ * validated against the generic `z.record(...)` fallback in
+ * `validateConditionValue`) map to that same catch-all here, so
+ * `ConditionValueByType` for them stays `Record<string, unknown>` — exactly
+ * as loose as before. Giving one of these a real schema is a separate,
+ * follow-up change: it would tighten runtime validation, which this map
+ * intentionally does not do.
+ */
+const GENERIC_CONDITION_VALUE_SCHEMA = z.record(z.string(), z.unknown());
+
+export const CONDITION_VALUE_SCHEMAS = {
+  cart_value: CartValueConditionValueSchema,
+  cart_value_multiplier: CartValueConditionValueSchema,
+  cart_quantity: CartQuantityConditionValueSchema,
+  specific_product: SpecificProductConditionValueSchema,
+  pack_of_products: PackConditionValueSchema,
+  specific_link: UrlParamConditionValueSchema,
+  order_history_total_spent: OrderHistoryConditionValueSchema,
+  order_history_last_order_spent: OrderHistoryConditionValueSchema,
+  order_history_total_orders: OrderHistoryConditionValueSchema,
+  one_use_per_customer: GENERIC_CONDITION_VALUE_SCHEMA,
+  customer_tags: CustomerTagsConditionValueSchema,
+  customer_location: CountryConditionValueSchema,
+  markets: MarketConditionValueSchema,
+  subscription_product_type: SubscriptionConditionValueSchema,
+  sales_channels: SalesChannelsConditionValueSchema,
+  product_quantity_limits: GENERIC_CONDITION_VALUE_SCHEMA,
+  collection_quantity_limits: GENERIC_CONDITION_VALUE_SCHEMA,
+  vendor_quantity_limits: GENERIC_CONDITION_VALUE_SCHEMA,
+  product_type_quantity_limits: GENERIC_CONDITION_VALUE_SCHEMA,
+  exclude_products: GENERIC_CONDITION_VALUE_SCHEMA,
+  exclude_collections: GENERIC_CONDITION_VALUE_SCHEMA,
+  exclude_vendors: GENERIC_CONDITION_VALUE_SCHEMA,
+  exclude_types: GENERIC_CONDITION_VALUE_SCHEMA,
+  page_url: PageUrlConditionValueSchema,
+  line_attribute: LineAttributeConditionValueSchema,
+  cart_attribute: CartAttributeConditionValueSchema,
+  discount_code: DiscountCodeConditionValueSchema,
+} satisfies Record<ConditionType, z.ZodTypeAny>;
+
+/** Value shape for each condition type, derived from `CONDITION_VALUE_SCHEMAS`. */
+export type ConditionValueByType = {
+  [K in ConditionType]: z.infer<(typeof CONDITION_VALUE_SCHEMAS)[K]>;
+};
+
+/**
+ * A condition's `conditionType` tagged together with its properly-typed
+ * `value` — a true discriminated union. Switching on `.conditionType` lets
+ * TypeScript narrow `.value` to the matching schema's inferred type in each
+ * branch, instead of consumers re-casting `value as Record<string,
+ * unknown>` and indexing it with string keys.
+ */
+export type TypedOfferCondition = {
+  [K in ConditionType]: { conditionType: K; value: ConditionValueByType[K] };
+}[ConditionType];
+
 export function validateConditionValue(
   conditionType: string,
   value: unknown,

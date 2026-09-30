@@ -9,6 +9,7 @@ import type {
   offerRewards as RewardsTable,
   offerCombinationPolicies as PoliciesTable,
 } from "@promo/db";
+import type { ConditionType, TypedOfferCondition } from "@promo/shared-types";
 import { normalizeConditionValue } from "../offer-config-normalization.server.js";
 
 export interface CompiledFunctionConfig {
@@ -254,41 +255,55 @@ export function compileOfferConfig(
   for (const cond of conditions.filter(
     (candidate) => candidate.isEnabled && (candidate.scope === "main" || candidate.scope === "sub"),
   )) {
-    const value = normalizeConditionValue(
-      cond.conditionType,
-      cond.value as Record<string, unknown>,
-    );
-    switch (cond.conditionType) {
+    // Every condition reaching this loop was already restricted to
+    // FUNCTION_ENFORCED_CONDITION_TYPES (a subset of ConditionType) by the
+    // publish flow, so this cast is the one place that assumption is made
+    // explicit — everything below it is real, narrowed typing rather than
+    // `Record<string, unknown>` casts re-done at each field access.
+    const conditionType = cond.conditionType as ConditionType;
+    const typedCondition = {
+      conditionType,
+      value: normalizeConditionValue(conditionType, cond.value as Record<string, unknown>),
+    } as TypedOfferCondition;
+    switch (typedCondition.conditionType) {
       case "cart_value": {
-        config.cartValueThresholdCents = Number(value["thresholdCents"] ?? 0);
-        if (Number(value["maxCents"] ?? 0) > 0)
-          config.cartValueMaxCents = Number(value["maxCents"]);
-        if (value["currencyOverrides"])
-          config.currencyOverrides = value["currencyOverrides"] as Record<string, number>;
-        if (value["maxCurrencyOverrides"])
-          config.maxCurrencyOverrides = value["maxCurrencyOverrides"] as Record<string, number>;
-        const filter = value["scopeFilter"] as Record<string, string[]> | undefined;
-        if (filter?.excludeProductIds) config.excludedProductIds.push(...filter.excludeProductIds);
+        const { value } = typedCondition;
+        config.cartValueThresholdCents = Number(value.thresholdCents ?? 0);
+        if (Number(value.maxCents ?? 0) > 0) config.cartValueMaxCents = Number(value.maxCents);
+        if (value.currencyOverrides) config.currencyOverrides = value.currencyOverrides;
+        if (value.maxCurrencyOverrides) config.maxCurrencyOverrides = value.maxCurrencyOverrides;
+        if (value.scopeFilter?.excludeProductIds)
+          config.excludedProductIds.push(...value.scopeFilter.excludeProductIds);
         break;
       }
-      case "cart_quantity":
-        config.cartQuantityThreshold = Number(value["minQuantity"] ?? 0);
-        if (Number(value["maxQuantity"] ?? 0) > 0)
-          config.cartQuantityMax = Number(value["maxQuantity"]);
-        const quantityFilter = value["scopeFilter"] as Record<string, string[]> | undefined;
-        if (quantityFilter?.excludeProductIds) config.excludedProductIds.push(...quantityFilter.excludeProductIds);
+      case "cart_quantity": {
+        const { value } = typedCondition;
+        config.cartQuantityThreshold = Number(value.minQuantity ?? 0);
+        if (Number(value.maxQuantity ?? 0) > 0) config.cartQuantityMax = Number(value.maxQuantity);
+        // scopeFilter isn't part of CartQuantityConditionValueSchema (pre-existing
+        // gap — see cart_value's, which does declare it), so it's read defensively
+        // as unknown here rather than widening the schema as part of a types-only change.
+        const quantityFilter = (value as Record<string, unknown>)["scopeFilter"] as
+          | Record<string, string[]>
+          | undefined;
+        if (quantityFilter?.excludeProductIds)
+          config.excludedProductIds.push(...quantityFilter.excludeProductIds);
         break;
-      case "subscription_product_type":
+      }
+      case "subscription_product_type": {
+        const { value } = typedCondition;
         if (
-          value["mode"] === "any" ||
-          value["mode"] === "subscription_only" ||
-          value["mode"] === "one_time_only"
+          value.mode === "any" ||
+          value.mode === "subscription_only" ||
+          value.mode === "one_time_only"
         ) {
-          config.subscriptionMode = value["mode"];
+          config.subscriptionMode = value.mode;
         }
         break;
+      }
       case "order_history_total_orders": {
-        const threshold = Math.max(0, Number(value["value"] ?? 0));
+        const { value } = typedCondition;
+        const threshold = Math.max(0, Number(value.value ?? 0));
         applyIntegerBounds(
           config,
           "customerOrderCountMin",
@@ -299,7 +314,8 @@ export function compileOfferConfig(
         break;
       }
       case "order_history_total_spent": {
-        const threshold = Math.max(0, Number(value["valueCents"] ?? 0));
+        const { value } = typedCondition;
+        const threshold = Math.max(0, Number(value.valueCents ?? 0));
         applyIntegerBounds(
           config,
           "customerAmountSpentMinCents",
@@ -310,14 +326,8 @@ export function compileOfferConfig(
         break;
       }
       case "specific_product": {
-        const reqs =
-          (value["requirements"] as Array<{
-            productId?: string;
-            variantId?: string;
-            trackMode?: string;
-            minQuantity?: number;
-            maxQuantity?: number;
-          }>) ?? [];
+        const { value } = typedCondition;
+        const reqs = value.requirements ?? [];
         // "any" qualifies on the mere presence of any one trigger product/variant (no
         // quantity threshold), matching the HPN product_trigger_free_gift semantics —
         // kept in a separate any-of set so it never gets AND-ed with "all" requirements.
@@ -344,13 +354,8 @@ export function compileOfferConfig(
         break;
       }
       case "pack_of_products": {
-        const reqs =
-          (value["requirements"] as Array<{
-            productId?: string;
-            variantId?: string;
-            trackMode?: string;
-            quantityPerPack?: number;
-          }>) ?? [];
+        const { value } = typedCondition;
+        const reqs = value.requirements ?? [];
         for (const req of reqs) {
           if (req.trackMode === "variant" && req.variantId)
             config.requiredVariantIds.push(req.variantId);
@@ -364,60 +369,75 @@ export function compileOfferConfig(
         }
         break;
       }
-      case "exclude_products":
+      case "exclude_products": {
+        // No dedicated Zod schema exists for this condition type yet (see
+        // CONDITION_VALUE_SCHEMAS in shared-types), so `value` is still
+        // Record<string, unknown> here — same as before this refactor.
+        const { value } = typedCondition;
         config.excludedProductIds.push(...((value["productIds"] as string[]) ?? []));
         break;
-      case "line_attribute":
+      }
+      case "line_attribute": {
+        const { value } = typedCondition;
         config.lineAttributeConditions!.push({
-          key: String(value["key"] ?? ""),
-          value: String(value["value"] ?? ""),
-          matchMode: value["matchMode"] === "not_equals" ? "not_equals" : "equals",
-          minMatchingQuantity: Math.max(1, Number(value["minMatchingQuantity"] ?? 1)),
+          key: String(value.key ?? ""),
+          value: String(value.value ?? ""),
+          matchMode: value.matchMode === "not_equals" ? "not_equals" : "equals",
+          minMatchingQuantity: Math.max(1, Number(value.minMatchingQuantity ?? 1)),
         });
         break;
+      }
       case "cart_attribute": {
+        const { value } = typedCondition;
         const matchMode =
-          value["matchMode"] === "exists"
+          value.matchMode === "exists"
             ? "exists"
-            : value["matchMode"] === "not_equals"
+            : value.matchMode === "not_equals"
               ? "not_equals"
               : "equals";
         config.cartAttributeConditions!.push({
-          key: String(value["key"] ?? ""),
-          ...(matchMode === "exists" ? {} : { value: String(value["value"] ?? "") }),
+          key: String(value.key ?? ""),
+          ...(matchMode === "exists" ? {} : { value: String(value.value ?? "") }),
           matchMode,
           minMatchingQuantity: 1,
         });
         break;
       }
-      case "discount_code":
+      case "discount_code": {
+        const { value } = typedCondition;
         config.discountCodeConditions!.push({
-          code: String(value["code"] ?? "").trim(),
+          code: String(value.code ?? "").trim(),
         });
         break;
-      case "customer_tags":
-        config.requiredCustomerTags = Array.isArray(value["includeTags"])
-          ? value["includeTags"].filter((tag): tag is string => typeof tag === "string")
+      }
+      case "customer_tags": {
+        const { value } = typedCondition;
+        config.requiredCustomerTags = Array.isArray(value.includeTags)
+          ? value.includeTags.filter((tag): tag is string => typeof tag === "string")
           : [];
-        config.excludedCustomerTags = Array.isArray(value["excludeTags"])
-          ? value["excludeTags"].filter((tag): tag is string => typeof tag === "string")
+        config.excludedCustomerTags = Array.isArray(value.excludeTags)
+          ? value.excludeTags.filter((tag): tag is string => typeof tag === "string")
           : [];
-        config.treatGuestAsNoTags = value["treatGuestAsNoTags"] !== false;
+        config.treatGuestAsNoTags = value.treatGuestAsNoTags !== false;
         break;
-      case "customer_location":
-        config.includeCountryCodes = Array.isArray(value["includeCountryCodes"])
-          ? value["includeCountryCodes"]
+      }
+      case "customer_location": {
+        const { value } = typedCondition;
+        config.includeCountryCodes = Array.isArray(value.includeCountryCodes)
+          ? value.includeCountryCodes
               .filter((code): code is string => typeof code === "string")
               .map((code) => code.toUpperCase())
           : [];
-        config.excludeCountryCodes = Array.isArray(value["excludeCountryCodes"])
-          ? value["excludeCountryCodes"]
+        config.excludeCountryCodes = Array.isArray(value.excludeCountryCodes)
+          ? value.excludeCountryCodes
               .filter((code): code is string => typeof code === "string")
               .map((code) => code.toUpperCase())
           : [];
         break;
+      }
       case "specific_link": {
-        const requiredUrl = String(value["requiredUrl"] ?? "").trim();
+        const { value } = typedCondition;
+        const requiredUrl = String(value.requiredUrl ?? "").trim();
         let requiredPath = requiredUrl.split("?")[0] ?? "";
         try {
           requiredPath = new URL(requiredUrl).pathname;
@@ -428,29 +448,31 @@ export function compileOfferConfig(
           patterns: requiredPath ? [requiredPath] : [],
           matchMode: "contains",
           caseSensitive: false,
-          ...(typeof value["paramName"] === "string"
-            ? { paramName: encodeURIComponent(value["paramName"]) }
+          ...(typeof value.paramName === "string"
+            ? { paramName: encodeURIComponent(value.paramName) }
             : {}),
-          ...(typeof value["paramValue"] === "string"
-            ? { paramValue: encodeURIComponent(value["paramValue"]) }
+          ...(typeof value.paramValue === "string"
+            ? { paramValue: encodeURIComponent(value.paramValue) }
             : {}),
         });
         break;
       }
-      case "page_url":
+      case "page_url": {
+        const { value } = typedCondition;
         config.pageUrlConditions!.push({
-          patterns: Array.isArray(value["patterns"])
-            ? value["patterns"].filter((pattern): pattern is string => typeof pattern === "string")
+          patterns: Array.isArray(value.patterns)
+            ? value.patterns.filter((pattern): pattern is string => typeof pattern === "string")
             : [],
           matchMode:
-            value["matchMode"] === "exact" ||
-            value["matchMode"] === "starts_with" ||
-            value["matchMode"] === "ends_with"
-              ? value["matchMode"]
+            value.matchMode === "exact" ||
+            value.matchMode === "starts_with" ||
+            value.matchMode === "ends_with"
+              ? value.matchMode
               : "contains",
-          caseSensitive: value["caseSensitive"] === true,
+          caseSensitive: value.caseSensitive === true,
         });
         break;
+      }
       default:
         // Only conditions the publish flow already validated as Function-enforced
         // (see FUNCTION_ENFORCED_CONDITION_TYPES / offer-publish-flow.server.ts)
