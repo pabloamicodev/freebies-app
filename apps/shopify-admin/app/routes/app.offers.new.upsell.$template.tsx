@@ -520,7 +520,7 @@ export default function NewUpsellOfferPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {/* ── Left column ── */}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {/* ── Card: Información de venta adicional ── */}
+            {/* ── Card: Upsell information ── */}
             <div className="b-card" style={{ borderTop: "3px solid var(--upsell-color)" }}>
               <div
                 className="b-card-header"
@@ -1166,7 +1166,7 @@ export default function NewUpsellOfferPage() {
               description="Limit this upsell by URL, customer tags, Markets/country, subscription status, cart attributes, or usage history."
             />
 
-            {/* ── Checkout/Thank-You: Configuración avanzada (collapsible) ── */}
+            {/* ── Checkout/Thank-You: Advanced settings (collapsible) ── */}
             {(isCheckout || isThankYou) && (
               <div className="b-card">
                 <button

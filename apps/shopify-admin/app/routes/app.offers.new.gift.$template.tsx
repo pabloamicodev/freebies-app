@@ -400,7 +400,7 @@ export default function NewGiftOfferPage() {
   const templateId = SLUG_TO_TEMPLATE[slug] ?? "scratch";
   const preset = TEMPLATE_PRESETS[templateId];
   const isScratch = templateId === "scratch";
-  // Scratch: sin condición predefinida ni preset
+  // Scratch: no predefined condition or preset
   const effectivePreset = isScratch ? null : preset;
   const conditionType: ConditionType = effectivePreset?.conditionType ?? "cart_value";
 
@@ -1198,7 +1198,7 @@ export default function NewGiftOfferPage() {
               </div>
             )}
 
-            {/* Scratch: botón para abrir el modal de condición principal */}
+            {/* Scratch: button to open the main condition modal */}
             {isScratch && (
               <div className="b-card" style={{ borderTop: "3px solid var(--gift-color)" }}>
                 <div
@@ -1701,7 +1701,7 @@ export default function NewGiftOfferPage() {
               </div>
             </div>
 
-            {/* ── Block 5: Configuración avanzada ── */}
+            {/* ── Block 5: Advanced settings ── */}
             <div className="b-card">
               <button
                 type="button"
@@ -1739,7 +1739,7 @@ export default function NewGiftOfferPage() {
                   className="b-card-body"
                   style={{ display: "flex", flexDirection: "column", gap: 18 }}
                 >
-                  {/* Funciona con otras ofertas */}
+                  {/* Works with other offers */}
                   <div style={{ position: "relative" }}>
                     <div style={{ position: "absolute", top: 0, right: 0, zIndex: 1 }}>
                       <img
@@ -1822,7 +1822,7 @@ export default function NewGiftOfferPage() {
                     </div>
                   </div>
 
-                  {/* Mensaje del carrito */}
+                  {/* Cart message */}
                   <div>
                     <div
                       style={{
@@ -1847,7 +1847,7 @@ export default function NewGiftOfferPage() {
                     </label>
                   </div>
 
-                  {/* Oferta de hoy */}
+                  {/* Today's offer */}
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                       <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>

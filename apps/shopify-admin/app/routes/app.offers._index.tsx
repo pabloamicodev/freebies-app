@@ -628,12 +628,12 @@ function OfferTableRow({
           <span className="b-mono">{formatDate(offer.startsAt ?? offer.updatedAt)}</span>
         </td>
 
-        {/* Estado badge */}
+        {/* Status badge */}
         <td>
           <StatusBadge status={offer.status} />
         </td>
 
-        {/* Encendido apagado toggle */}
+        {/* On/off toggle */}
         <td>
           <div style={{ display: "flex", width: "fit-content" }}>
             <OfferToggle offerId={offer.id} status={offer.status} />

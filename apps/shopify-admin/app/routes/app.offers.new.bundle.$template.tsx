@@ -1860,7 +1860,7 @@ export default function NewBundleOfferPage() {
                   description="Limit this bundle page by URL, customer tags, Markets/country, subscription status, cart attributes, or usage history."
                 />
 
-                {/* Configuración avanzada */}
+                {/* Advanced settings */}
                 <details className="b-card">
                   <summary
                     className="b-card-header"

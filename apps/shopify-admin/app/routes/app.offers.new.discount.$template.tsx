@@ -1091,7 +1091,7 @@ export default function NewDiscountOfferPage() {
                   className="b-card-body"
                   style={{ display: "flex", flexDirection: "column", gap: 14 }}
                 >
-                  {/* Regla de cantidad */}
+                  {/* Quantity rule */}
                   <div
                     style={{
                       display: "flex",
@@ -1966,7 +1966,7 @@ export default function NewDiscountOfferPage() {
             )}
 
             {/* ────────────────────────────────────────────────
-                VOLUME — Suscripción card
+                VOLUME — Subscription card
             ──────────────────────────────────────────────── */}
             {templateId === "volume" && (
               <div className="b-card">
@@ -1998,7 +1998,7 @@ export default function NewDiscountOfferPage() {
               </div>
             )}
 
-            {/* ── Código de descuento (all templates) ── */}
+            {/* ── Discount code (all templates) ── */}
             <div className="b-card">
               <div className="b-card-header">Discount code</div>
               <div className="b-card-body">
@@ -2011,7 +2011,7 @@ export default function NewDiscountOfferPage() {
               </div>
             </div>
 
-            {/* ── Este descuento se puede combinar con ── */}
+            {/* ── This discount can be combined with ── */}
             <div className="b-card">
               <div className="b-card-header">This discount can be combined with</div>
               <div
