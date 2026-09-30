@@ -17,8 +17,10 @@ import {
   IconArchive,
   IconEye,
   IconSearch,
+  IconChevronDown,
   SortIcon,
 } from "../components/Icons.js";
+import type { loader as rowPreviewLoader } from "./app.offers.$id.row-preview.js";
 import { AccessibleModal } from "../components/AccessibleModal.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { OfferToggle } from "../components/BogosSwitch.js";
@@ -498,6 +500,270 @@ function OfferCreateModalFallback({ onClose }: { onClose: () => void }) {
   );
 }
 
+/* ══════════════════════════════════════════════════════════
+   OFFER ROW — click the name to expand an in-place preview
+   (conditions, rewards, product thumbnails, URLs) instead of
+   navigating away. Preview data is fetched on hover so it's
+   already in hand by the time the click lands.
+   ══════════════════════════════════════════════════════════ */
+function OfferTableRow({
+  offer,
+  checked,
+  onToggleCheck,
+  expanded,
+  onToggleExpand,
+  onOpenFull,
+  onDuplicate,
+  onArchive,
+  onDelete,
+}: {
+  offer: OfferRow;
+  checked: boolean;
+  onToggleCheck: () => void;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onOpenFull: () => void;
+  onDuplicate: () => void;
+  onArchive: () => void;
+  onDelete: () => void;
+}) {
+  const preview = useFetcher<typeof rowPreviewLoader>();
+
+  const prefetch = useCallback(() => {
+    if (preview.state === "idle" && preview.data === undefined) {
+      void preview.load(`/app/offers/${offer.id}/row-preview`);
+    }
+  }, [preview, offer.id]);
+
+  return (
+    <>
+      <tr onMouseEnter={prefetch}>
+        <td>
+          <input
+            aria-label={`Select offer ${offer.internalName}`}
+            type="checkbox"
+            style={{ accentColor: "var(--blue)", width: 15, height: 15, cursor: "pointer" }}
+            checked={checked}
+            onChange={onToggleCheck}
+          />
+        </td>
+        {/* Offer name with colored type icon */}
+        <td>
+          <div className="b-table-offer-cell">
+            <TypeIcon type={offer.type} />
+            <div style={{ minWidth: 0 }}>
+              <button
+                type="button"
+                className="bogos-offer-title-text"
+                data-primary-link="true"
+                onClick={() => {
+                  prefetch();
+                  onToggleExpand();
+                }}
+              >
+                {offer.internalName}
+              </button>
+              {offer.publicTitle && <div className="b-offer-subtitle">{offer.publicTitle}</div>}
+            </div>
+            <button
+              type="button"
+              className="bogos-row-reveal"
+              title={expanded ? "Hide preview" : "Preview"}
+              aria-label={expanded ? "Hide preview" : "Preview"}
+              aria-expanded={expanded}
+              onClick={(e) => {
+                e.stopPropagation();
+                prefetch();
+                onToggleExpand();
+              }}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: 4,
+                visibility: expanded ? "visible" : undefined,
+              }}
+            >
+              <span
+                style={{
+                  color: "var(--text-muted)",
+                  display: "flex",
+                  transform: expanded ? "rotate(180deg)" : "none",
+                  transition: "transform var(--t-fast)",
+                }}
+              >
+                {expanded ? <IconChevronDown /> : <IconEye />}
+              </span>
+            </button>
+          </div>
+        </td>
+
+        {/* Offer type chip — colored by type */}
+        <td>
+          <span className={`b-type-chip b-type-chip-${offer.type}`}>
+            {TYPE_LABEL[offer.type] ?? offer.type}
+          </span>
+        </td>
+
+        {/* Start date in mono */}
+        <td>
+          <span className="b-mono">{formatDate(offer.startsAt ?? offer.updatedAt)}</span>
+        </td>
+
+        {/* Estado badge */}
+        <td>
+          <StatusBadge status={offer.status} />
+        </td>
+
+        {/* Encendido apagado toggle */}
+        <td>
+          <div style={{ display: "flex", width: "fit-content" }}>
+            <OfferToggle offerId={offer.id} status={offer.status} />
+          </div>
+        </td>
+
+        {/* Actions — duplicate + archive + delete */}
+        <td>
+          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <button
+              type="button"
+              className="bogos-action-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDuplicate();
+              }}
+              aria-label="Duplicate offer"
+              title="Duplicate"
+            >
+              <IconCopy />
+            </button>
+            <button
+              type="button"
+              className="bogos-action-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onArchive();
+              }}
+              aria-label="Archive offer"
+              title="Archive"
+              style={{ color: "var(--text-sub)" }}
+            >
+              <IconArchive />
+            </button>
+            <button
+              type="button"
+              className="bogos-action-btn red"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+              }}
+              aria-label="Delete offer permanently"
+              title="Delete permanently"
+            >
+              <IconTrash />
+            </button>
+          </div>
+        </td>
+      </tr>
+
+      <tr className="b-row-preview-tr">
+        <td colSpan={7} style={{ padding: 0 }}>
+          <div className={`b-row-preview-wrap${expanded ? " is-open" : ""}`}>
+            <div className="b-row-preview-inner">
+              {preview.data ? (
+                <OfferRowPreviewContent data={preview.data} onOpenFull={onOpenFull} />
+              ) : (
+                <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>Loading preview…</p>
+              )}
+            </div>
+          </div>
+        </td>
+      </tr>
+    </>
+  );
+}
+
+function OfferRowPreviewContent({
+  data,
+  onOpenFull,
+}: {
+  data: Awaited<ReturnType<typeof rowPreviewLoader>>;
+  onOpenFull: () => void;
+}) {
+  const { conditions, rewards, urls, combinationPolicy } = data;
+  const productThumbs = rewards.flatMap((r) => r.products).slice(0, 6);
+
+  return (
+    <div style={{ display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
+      {productThumbs.length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+          {productThumbs.map((p, i) => (
+            <img
+              key={`${p.title}-${i}`}
+              src={p.imageUrl ?? ""}
+              alt={p.title}
+              title={p.title}
+              style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 6, background: "var(--border)" }}
+              onError={(e) => { (e.target as HTMLImageElement).style.visibility = "hidden"; }}
+            />
+          ))}
+        </div>
+      )}
+
+      <div style={{ flex: "1 1 220px", minWidth: 200 }}>
+        <div className="b-text-sm b-text-bold" style={{ marginBottom: 4 }}>
+          Conditions {conditions.length === 0 && <span className="b-text-sub" style={{ fontWeight: 400 }}>— none</span>}
+        </div>
+        {conditions.map((c) => (
+          <div key={c.id} className="b-text-sm b-text-sub" style={{ opacity: c.isEnabled ? 1 : 0.5 }}>
+            <span className="b-badge b-badge-gray" style={{ marginRight: 6 }}>{c.scope}</span>
+            {c.conditionType}: {c.summary}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ flex: "1 1 220px", minWidth: 200 }}>
+        <div className="b-text-sm b-text-bold" style={{ marginBottom: 4 }}>
+          Rewards {rewards.length === 0 && <span className="b-text-sub" style={{ fontWeight: 400 }}>— none</span>}
+        </div>
+        {rewards.map((r) => (
+          <div key={r.id} className="b-text-sm b-text-sub">
+            {r.rewardType} · {r.discountType}{r.summary ? ` · ${r.summary}` : ""}
+          </div>
+        ))}
+        {combinationPolicy && (
+          <div className="b-text-sm b-text-sub" style={{ marginTop: 4 }}>
+            Combines with:{" "}
+            {[
+              combinationPolicy.combinesWithOrderDiscounts && "order",
+              combinationPolicy.combinesWithProductDiscounts && "product",
+              combinationPolicy.combinesWithShippingDiscounts && "shipping",
+            ].filter(Boolean).join(", ") || "nothing"}
+          </div>
+        )}
+      </div>
+
+      {urls.length > 0 && (
+        <div style={{ flex: "1 1 200px", minWidth: 180 }}>
+          <div className="b-text-sm b-text-bold" style={{ marginBottom: 4 }}>URLs</div>
+          {urls.map((u) => (
+            <div key={u} className="b-text-sm b-text-sub b-mono" style={{ wordBreak: "break-all" }}>{u}</div>
+          ))}
+        </div>
+      )}
+
+      <button
+        type="button"
+        className="b-btn b-btn-secondary b-btn-sm"
+        style={{ flexShrink: 0, marginLeft: "auto" }}
+        onClick={onOpenFull}
+      >
+        Edit offer →
+      </button>
+    </div>
+  );
+}
+
 export default function OffersPage() {
   const {
     offers: offerRows,
@@ -512,6 +778,7 @@ export default function OffersPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [bannerVisible, setBannerVisible] = useState(true);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmActionState | null>(null);
   const [searchOpen, setSearchOpen] = useState(loaderSearch.length > 0);
   const [searchInput, setSearchInput] = useState(loaderSearch);
@@ -1036,116 +1303,25 @@ export default function OffersPage() {
               </tr>
             ) : (
               visibleOffers.map((offer: OfferRow) => (
-                <tr key={offer.id}>
-                  <td>
-                    <input
-                      aria-label={`Select offer ${offer.internalName}`}
-                      type="checkbox"
-                      style={{
-                        accentColor: "var(--blue)",
-                        width: 15,
-                        height: 15,
-                        cursor: "pointer",
-                      }}
-                      checked={checkedIds.has(offer.id)}
-                      onChange={() => toggleCheck(offer.id)}
-                    />
-                  </td>
-                  {/* Offer name with colored type icon */}
-                  <td>
-                    <div className="b-table-offer-cell">
-                      <TypeIcon type={offer.type} />
-                      <div style={{ minWidth: 0 }}>
-                        <button
-                          type="button"
-                          className="bogos-offer-title-text"
-                          data-primary-link="true"
-                          onClick={() => navigate(`/app/offers/${offer.id}`)}
-                        >
-                          {offer.internalName}
-                        </button>
-                        {offer.publicTitle && (
-                          <div className="b-offer-subtitle">{offer.publicTitle}</div>
-                        )}
-                      </div>
-                      <div className="bogos-row-reveal" title="Preview">
-                        <span style={{ color: "var(--text-muted)", display: "flex" }}>
-                          <IconEye />
-                        </span>
-                      </div>
-                    </div>
-                  </td>
-
-                  {/* Offer type chip — colored by type */}
-                  <td>
-                    <span className={`b-type-chip b-type-chip-${offer.type}`}>
-                      {TYPE_LABEL[offer.type] ?? offer.type}
-                    </span>
-                  </td>
-
-                  {/* Start date in mono */}
-                  <td>
-                    <span className="b-mono">{formatDate(offer.startsAt ?? offer.updatedAt)}</span>
-                  </td>
-
-                  {/* Estado badge */}
-                  <td>
-                    <StatusBadge status={offer.status} />
-                  </td>
-
-                  {/* Encendido apagado toggle */}
-                  <td>
-                    <div style={{ display: "flex", width: "fit-content" }}>
-                      <OfferToggle offerId={offer.id} status={offer.status} />
-                    </div>
-                  </td>
-
-                  {/* Actions — duplicate + archive + delete */}
-                  <td>
-                    <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-                      <button
-                        type="button"
-                        className="bogos-action-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const fd = new FormData();
-                          fd.append("intent", "duplicate");
-                          fd.append("offerId", offer.id);
-                          void duplicateFetcher.submit(fd, { method: "POST" });
-                        }}
-                        aria-label="Duplicate offer"
-                        title="Duplicate"
-                      >
-                        <IconCopy />
-                      </button>
-                      <button
-                        type="button"
-                        className="bogos-action-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          confirmArchive(offer);
-                        }}
-                        aria-label="Archive offer"
-                        title="Archive"
-                        style={{ color: "var(--text-sub)" }}
-                      >
-                        <IconArchive />
-                      </button>
-                      <button
-                        type="button"
-                        className="bogos-action-btn red"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          confirmDelete(offer);
-                        }}
-                        aria-label="Delete offer permanently"
-                        title="Delete permanently"
-                      >
-                        <IconTrash />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
+                <OfferTableRow
+                  key={offer.id}
+                  offer={offer}
+                  checked={checkedIds.has(offer.id)}
+                  onToggleCheck={() => toggleCheck(offer.id)}
+                  expanded={expandedId === offer.id}
+                  onToggleExpand={() =>
+                    setExpandedId((current) => (current === offer.id ? null : offer.id))
+                  }
+                  onOpenFull={() => navigate(`/app/offers/${offer.id}`)}
+                  onDuplicate={() => {
+                    const fd = new FormData();
+                    fd.append("intent", "duplicate");
+                    fd.append("offerId", offer.id);
+                    void duplicateFetcher.submit(fd, { method: "POST" });
+                  }}
+                  onArchive={() => confirmArchive(offer)}
+                  onDelete={() => confirmDelete(offer)}
+                />
               ))
             )}
           </tbody>

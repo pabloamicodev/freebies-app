@@ -25,6 +25,7 @@ import {
 } from "@promo/shared-types";
 import { and, eq } from "drizzle-orm";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { targetSummaryParts } from "../lib/offer-summaries.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -56,25 +57,6 @@ function parsePositiveIntOrUnset(raw: FormDataEntryValue | null): { value?: numb
   const n = Number(raw);
   if (!Number.isInteger(n) || n <= 0) return { error: true };
   return { value: n };
-}
-
-function targetSummaryParts(target: unknown): string[] {
-  if (!target || typeof target !== "object") return [];
-  const t = target as Record<string, unknown>;
-  const parts: string[] = [];
-  if (Array.isArray(t["productIds"]) && t["productIds"].length)
-    parts.push(`${t["productIds"].length} product${t["productIds"].length === 1 ? "" : "s"}`);
-  if (Array.isArray(t["variantIds"]) && t["variantIds"].length)
-    parts.push(`${t["variantIds"].length} variant${t["variantIds"].length === 1 ? "" : "s"}`);
-  if (t["scope"] === "cart") parts.push("entire cart");
-  if (typeof t["scopeMode"] === "string" && t["scopeMode"] !== "sitewide")
-    parts.push(`scope: ${t["scopeMode"]}`);
-  if (typeof t["lineQuantityEquals"] === "number") parts.push(`qty = ${t["lineQuantityEquals"]}`);
-  if (typeof t["maxUnitsTotal"] === "number") parts.push(`max ${t["maxUnitsTotal"]} total`);
-  if (typeof t["maxUnitsPerProduct"] === "number") parts.push(`max ${t["maxUnitsPerProduct"]}/product`);
-  if (typeof t["maxUnitsPerLine"] === "number") parts.push(`max ${t["maxUnitsPerLine"]}/line`);
-  if (typeof t["maxUnitsPerVariant"] === "number") parts.push(`max ${t["maxUnitsPerVariant"]}/variant`);
-  return parts;
 }
 
 function escapeHtmlAttribute(value: string): string {

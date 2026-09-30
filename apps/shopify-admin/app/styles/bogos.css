@@ -609,6 +609,27 @@
 tr:hover .bogos-row-reveal {
   visibility: visible;
 }
+
+/* ── Offers list row preview (expand-in-place on name click) ────────── */
+.b-row-preview-tr td {
+  border-top: none;
+}
+.b-row-preview-wrap {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 220ms ease, opacity var(--t-fast);
+}
+.b-row-preview-wrap.is-open {
+  max-height: 160px;
+  opacity: 1;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--border);
+}
+.b-row-preview-inner {
+  padding: 14px 20px;
+  background: var(--bg-hover);
+}
 .bogos-type-cell {
   display: inline-flex;
   align-items: center;
