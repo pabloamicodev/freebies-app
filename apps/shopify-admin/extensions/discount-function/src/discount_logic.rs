@@ -871,13 +871,12 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         // (AND), matching every other condition type here and in the
         // TypeScript evaluator: two discount_code conditions mean the
         // customer must have entered both codes, not either one.
-        let entered_codes: HashSet<String> = input
-            .entered_discount_codes()
-            .iter()
-            .map(|entered| entered.code().trim().to_uppercase())
-            .collect();
+        // ASCII-only case folding: to_uppercase() pulls Unicode case tables
+        // (~20KB) into a wasm that is already at its size budget.
+        let entered = input.entered_discount_codes();
         for condition in &offer.discount_code_conditions {
-            if !entered_codes.contains(&condition.code.trim().to_uppercase()) {
+            let wanted = condition.code.trim_ascii();
+            if !entered.iter().any(|e| e.code().trim_ascii().eq_ignore_ascii_case(wanted)) {
                 return false;
             }
         }

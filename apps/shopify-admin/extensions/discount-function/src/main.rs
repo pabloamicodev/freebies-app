@@ -13,6 +13,6 @@ pub mod schema {
 }
 
 fn main() {
-    eprintln!("Please invoke a named export.");
+    // Only reached if invoked without a named export; no message to keep wasm small.
     process::exit(1);
 }

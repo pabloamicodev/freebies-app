@@ -205,7 +205,6 @@ pub struct CompiledRequirement {
 #[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledProductReward {
-    pub id: String,
     #[serde(default)]
     pub target_product_ids: Vec<String>,
     #[serde(default)]
@@ -314,7 +313,6 @@ pub struct ProductDiscountTier {
 #[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledOrderReward {
-    pub id: String,
     pub discount_type: String,
     pub discount_value: f64,
     #[serde(default)]

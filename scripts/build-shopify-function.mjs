@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 const [wasmPath, maximumBytes = "262143"] = process.argv.slice(2);
@@ -8,7 +10,10 @@ if (!wasmPath) {
   );
 }
 
-const cargo = process.platform === "win32" ? "cargo.exe" : "cargo";
+// Prefer rustup's cargo: a standalone Rust install earlier on PATH may lack the wasm32-wasip1 target.
+const cargoName = process.platform === "win32" ? "cargo.exe" : "cargo";
+const rustupCargo = join(process.env.CARGO_HOME ?? join(homedir(), ".cargo"), "bin", cargoName);
+const cargo = existsSync(rustupCargo) ? rustupCargo : cargoName;
 const build = spawnSync(
   cargo,
   ["build", "--target=wasm32-wasip1", "--target-dir=target", "--release"],
