@@ -362,6 +362,12 @@ function formatDate(iso: string | null) {
   const d = new Date(iso);
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
+
+/** "specific_link" -> "Specific link" — for displaying raw condition/reward
+ * type identifiers in the row preview without exposing snake_case. */
+function humanize(s: string) {
+  return s.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
 type OfferRow = {
   id: string;
   type: string;
@@ -692,97 +698,92 @@ function OfferRowPreviewContent({
 }) {
   const { offer, headline, conditions, rewards, urls, widgets: widgetSummaries, redemptionCount, combinationPolicy } = data;
   const productThumbs = rewards.flatMap((r) => r.products).slice(0, 6);
+  const combinedWith = combinationPolicy
+    ? [
+        combinationPolicy.combinesWithOrderDiscounts && "order",
+        combinationPolicy.combinesWithProductDiscounts && "product",
+        combinationPolicy.combinesWithShippingDiscounts && "shipping",
+      ].filter(Boolean).join(", ") || "nothing"
+    : null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-        {headline && <span className="b-text-bold" style={{ fontSize: 15 }}>{headline}</span>}
-        <span className="b-text-sm b-text-sub">Priority {offer.priority}</span>
-        <span className="b-text-sm b-text-sub">
+    <div className="b-preview">
+      <div className="b-preview-header">
+        {headline && <span className="b-preview-headline">{headline}</span>}
+        <span className="b-preview-meta">Priority {offer.priority}</span>
+        <span className="b-preview-meta">
           {formatDate(offer.startsAt)}{offer.endsAt ? ` – ${formatDate(offer.endsAt)}` : " – no end date"}
         </span>
-        <span className="b-text-sm b-text-sub">
+        <span className="b-preview-meta">
           {redemptionCount === 0 ? "Never redeemed" : `Redeemed ${redemptionCount} time${redemptionCount === 1 ? "" : "s"}`}
         </span>
-      </div>
-
-      <div style={{ display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
-      {productThumbs.length > 0 && (
-        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-          {productThumbs.map((p, i) => (
-            <img
-              key={`${p.title}-${i}`}
-              src={p.imageUrl ?? ""}
-              alt={p.title}
-              title={p.title}
-              style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 6, background: "var(--border)" }}
-              onError={(e) => { (e.target as HTMLImageElement).style.visibility = "hidden"; }}
-            />
-          ))}
-        </div>
-      )}
-
-      <div style={{ flex: "1 1 220px", minWidth: 200 }}>
-        <div className="b-text-sm b-text-bold" style={{ marginBottom: 4 }}>
-          Conditions {conditions.length === 0 && <span className="b-text-sub" style={{ fontWeight: 400 }}>— none</span>}
-        </div>
-        {conditions.map((c) => (
-          <div key={c.id} className="b-text-sm b-text-sub" style={{ opacity: c.isEnabled ? 1 : 0.5 }}>
-            <span className="b-badge b-badge-gray" style={{ marginRight: 6 }}>{c.scope}</span>
-            {c.conditionType}: {c.summary}
-          </div>
-        ))}
-      </div>
-
-      <div style={{ flex: "1 1 220px", minWidth: 200 }}>
-        <div className="b-text-sm b-text-bold" style={{ marginBottom: 4 }}>
-          Rewards {rewards.length === 0 && <span className="b-text-sub" style={{ fontWeight: 400 }}>— none</span>}
-        </div>
-        {rewards.map((r) => (
-          <div key={r.id} className="b-text-sm b-text-sub">
-            {r.rewardType} · {r.discountType}{r.summary ? ` · ${r.summary}` : ""}
-          </div>
-        ))}
-        {combinationPolicy && (
-          <div className="b-text-sm b-text-sub" style={{ marginTop: 4 }}>
-            Combines with:{" "}
-            {[
-              combinationPolicy.combinesWithOrderDiscounts && "order",
-              combinationPolicy.combinesWithProductDiscounts && "product",
-              combinationPolicy.combinesWithShippingDiscounts && "shipping",
-            ].filter(Boolean).join(", ") || "nothing"}
-          </div>
-        )}
-      </div>
-
-      {urls.length > 0 && (
-        <div style={{ flex: "1 1 200px", minWidth: 180 }}>
-          <div className="b-text-sm b-text-bold" style={{ marginBottom: 4 }}>URLs</div>
-          {urls.map((u) => (
-            <div key={u} className="b-text-sm b-text-sub b-mono" style={{ wordBreak: "break-all" }}>{u}</div>
-          ))}
-        </div>
-      )}
-
-      {widgetSummaries.length > 0 && (
-        <div style={{ flex: "1 1 180px", minWidth: 160 }}>
-          <div className="b-text-sm b-text-bold" style={{ marginBottom: 4 }}>Shows in</div>
-          {widgetSummaries.map((w) => (
-            <div key={w.type} className="b-text-sm b-text-sub" style={{ opacity: w.isEnabled ? 1 : 0.5 }}>
-              {w.label}{!w.isEnabled && " (disabled)"}
-            </div>
-          ))}
-        </div>
-      )}
-
-        <button
-          type="button"
-          className="b-btn b-btn-secondary b-btn-sm"
-          style={{ flexShrink: 0, marginLeft: "auto" }}
-          onClick={onOpenFull}
-        >
+        <button type="button" className="b-btn b-btn-secondary b-btn-sm" style={{ marginLeft: "auto" }} onClick={onOpenFull}>
           Edit offer →
         </button>
+      </div>
+
+      <div className="b-preview-body">
+        {productThumbs.length > 0 && (
+          <div className="b-preview-thumbs">
+            {productThumbs.map((p, i) => (
+              <img
+                key={`${p.title}-${i}`}
+                src={p.imageUrl ?? ""}
+                alt={p.title}
+                title={p.title}
+                className="b-preview-thumb"
+                onError={(e) => { (e.target as HTMLImageElement).style.visibility = "hidden"; }}
+              />
+            ))}
+          </div>
+        )}
+
+        <div className="b-preview-grid">
+          <div className="b-preview-col">
+            <div className="b-preview-col-label">Conditions</div>
+            {conditions.length === 0 && <div className="b-preview-row b-preview-row-muted">None</div>}
+            {conditions.map((c) => (
+              <div key={c.id} className="b-preview-row" style={{ opacity: c.isEnabled ? 1 : 0.5 }}>
+                <span className={`b-badge ${c.scope === "main" ? "b-badge-blue" : "b-badge-gray"}`} style={{ marginRight: 6 }}>
+                  {c.scope}
+                </span>
+                <span className="b-text-bold">{humanize(c.conditionType)}:</span> {c.summary}
+              </div>
+            ))}
+          </div>
+
+          <div className="b-preview-col">
+            <div className="b-preview-col-label">Rewards</div>
+            {rewards.length === 0 && <div className="b-preview-row b-preview-row-muted">None</div>}
+            {rewards.map((r) => (
+              <div key={r.id} className="b-preview-row">
+                <span className="b-text-bold">{humanize(r.rewardType)}</span> · {humanize(r.discountType)}
+                {r.summary ? ` · ${r.summary}` : ""}
+              </div>
+            ))}
+            {combinedWith && <div className="b-preview-row b-preview-row-muted">Combines with: {combinedWith}</div>}
+          </div>
+
+          {urls.length > 0 && (
+            <div className="b-preview-col">
+              <div className="b-preview-col-label">URLs</div>
+              {urls.map((u) => (
+                <div key={u} className="b-preview-row b-mono" style={{ wordBreak: "break-all" }}>{u}</div>
+              ))}
+            </div>
+          )}
+
+          {widgetSummaries.length > 0 && (
+            <div className="b-preview-col">
+              <div className="b-preview-col-label">Shows in</div>
+              {widgetSummaries.map((w) => (
+                <div key={w.type} className="b-preview-row" style={{ opacity: w.isEnabled ? 1 : 0.5 }}>
+                  {w.label}{!w.isEnabled && " (disabled)"}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
