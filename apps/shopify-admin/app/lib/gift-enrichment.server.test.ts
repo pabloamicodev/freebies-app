@@ -135,7 +135,7 @@ describe("resolveSoldOutGiftAdds", () => {
 
 describe("enrichGiftSlider", () => {
   it("marks a sold-out gift unavailable when no fallback is configured", () => {
-    const catalog = new Map([["gift-1", row({ variantGid: "gift-1", availableForSale: false })]]);
+    const catalog = new Map([["gift-1", row({ variantGid: "gift-1", availableForSale: false, productHandle: "tee" })]]);
     const payload: GiftSliderPayload = {
       offerId: "offer-1",
       title: "t",
@@ -161,6 +161,8 @@ describe("enrichGiftSlider", () => {
     const result = enrichGiftSlider(catalog, payload, []);
     expect(result?.selectableGifts[0]?.isAvailable).toBe(false);
     expect(result?.selectableGifts[0]?.variantId).toBe("gift-1");
+    // The storefront re-checks live stock via /products/{handle}.js.
+    expect(result?.selectableGifts[0]?.productHandle).toBe("tee");
   });
 
   it("replaces a sold-out gift with its configured in-stock fallback", () => {

@@ -52,6 +52,7 @@ export const GiftSliderPayloadSchema = z.object({
     title: z.string(),
     variantTitle: z.string().nullable(),
     imageUrl: z.string().nullable(),
+    productHandle: z.string().nullable().optional(),
     originalPriceCents: z.number().int(),
     discountedPriceCents: z.number().int(),
     isAvailable: z.boolean(),

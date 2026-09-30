@@ -177,21 +177,103 @@ function giftKey(gift: Pick<SelectableGift, "rewardId" | "variantId">): string {
 // the client already refuses to select or submit a known-unavailable
 // variant, but stock can still change in that window.
 const RAW_CART_API_ERROR = /^Cart API error \d+: (.*)$/s;
+const SOLD_OUT_TEXT = /sold out|out of stock|not enough (inventory|stock)|no longer available/i;
+const SOLD_OUT_MESSAGE = "That size just sold out — pick another.";
 
-export function friendlyGiftError(error: unknown, fallback: string): string {
-  if (!(error instanceof Error)) return fallback;
+/** An error whose message was written for customers and may be shown as-is. */
+export class GiftSliderError extends Error {}
+
+/** One or more gift variants turned out to be sold out; the slider dims and
+ * deselects `variantIds` (may be empty when the culprit can't be identified). */
+export class GiftSoldOutError extends GiftSliderError {
+  constructor(public readonly variantIds: string[], message = SOLD_OUT_MESSAGE) {
+    super(message);
+  }
+}
+
+/** Shopify's own error text from a failed cart mutation (Ajax Cart API JSON
+ * body or Storefront API userErrors), or null when there isn't any. */
+function cartErrorText(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
   const match = RAW_CART_API_ERROR.exec(error.message);
-  if (!match) return error.message; // already one of our own friendly messages
+  if (!match) return error.message;
   try {
     const body: unknown = JSON.parse(match[1] ?? "");
-    const message = body && typeof body === "object" ? (body as { message?: unknown }).message : undefined;
-    if (typeof message === "string" && /sold out/i.test(message)) {
-      return "That size just sold out — pick another.";
+    if (body && typeof body === "object") {
+      const { message, description } = body as { message?: unknown; description?: unknown };
+      return [message, description].filter((part) => typeof part === "string").join(" ") || null;
     }
   } catch {
-    // fall through to the generic message below
+    // not JSON
   }
+  return null;
+}
+
+export function isSoldOutCartError(error: unknown): boolean {
+  if (error instanceof GiftSoldOutError) return true;
+  const text = cartErrorText(error);
+  return text !== null && SOLD_OUT_TEXT.test(text);
+}
+
+/** Every customer-visible gift error goes through here: only our own
+ * GiftSliderError messages are shown verbatim, a stock failure becomes a short
+ * sold-out message, and anything else (raw Cart API bodies, network errors,
+ * Storefront API userErrors) becomes `fallback`. */
+export function friendlyGiftError(error: unknown, fallback: string): string {
+  if (error instanceof GiftSliderError) return error.message;
+  if (isSoldOutCartError(error)) return SOLD_OUT_MESSAGE;
   return fallback;
+}
+
+/** Which of the gifts just sent to the Cart API the sold-out error names —
+ * Shopify's message quotes "<product> - <variant>". */
+export function soldOutVariantIdsFromError(
+  error: unknown,
+  attempted: Array<Pick<SelectableGift, "variantId" | "title" | "variantTitle">>,
+): string[] {
+  if (attempted.length === 1) return [attempted[0]!.variantId];
+  const text = cartErrorText(error)?.toLowerCase() ?? "";
+  const fullName = (gift: (typeof attempted)[number]) =>
+    (gift.variantTitle ? `${gift.title} - ${gift.variantTitle}` : gift.title).toLowerCase();
+  const byFullName = attempted.filter((gift) => text.includes(`'${fullName(gift)}'`));
+  return byFullName.map((gift) => gift.variantId);
+}
+
+type LiveStockGift = Pick<SelectableGift, "variantId" | "productHandle">;
+
+/** Live stock from the storefront's own product JSON — the server payload's
+ * isAvailable comes from a webhook-fed cache that can lag real sales. Returns
+ * the variant GIDs Shopify currently reports as unavailable; anything it
+ * can't confirm (no handle, product unpublished, network error) is left out. */
+export async function fetchSoldOutVariantIds(
+  gifts: LiveStockGift[],
+  fetchImpl: typeof fetch = fetch,
+): Promise<Set<string>> {
+  const soldOut = new Set<string>();
+  const byHandle = new Map<string, LiveStockGift[]>();
+  for (const gift of gifts) {
+    if (!gift.productHandle) continue;
+    byHandle.set(gift.productHandle, [...(byHandle.get(gift.productHandle) ?? []), gift]);
+  }
+  const root = (typeof window !== "undefined" && window.Shopify?.routes?.root) || "/";
+  await Promise.all(
+    [...byHandle].map(async ([handle, handleGifts]) => {
+      try {
+        const response = await fetchImpl(`${root}products/${encodeURIComponent(handle)}.js`, {
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) return;
+        const product = (await response.json()) as { variants?: Array<{ id: number; available: boolean }> };
+        const availableById = new Map((product.variants ?? []).map((v) => [String(v.id), v.available]));
+        for (const gift of handleGifts) {
+          if (availableById.get(gift.variantId.split("/").pop() ?? "") === false) soldOut.add(gift.variantId);
+        }
+      } catch {
+        // Unknown stock — keep the server's answer.
+      }
+    }),
+  );
+  return soldOut;
 }
 
 function GiftSlider({
@@ -206,12 +288,43 @@ function GiftSlider({
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Variants found sold out after the payload was built (live stock check or a
+  // Cart API rejection) — overrides the payload's isAvailable.
+  const [soldOut, setSoldOut] = useState<Set<string>>(new Set());
   const dialogRef = useRef<HTMLDialogElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const submittingRef = useRef(false);
   const initiallySelectedCount = useRef(selected.size);
 
   const maxSelectable = payload.maxSelectableCount;
+  const isAvailable = (gift: SelectableGift) => gift.isAvailable && !soldOut.has(gift.variantId);
+
+  function markSoldOut(variantIds: Iterable<string>) {
+    const ids = new Set(variantIds);
+    if (ids.size === 0) return;
+    setSoldOut((prev) => new Set([...prev, ...ids]));
+    // Gifts already in the cart stay selected (removing them is the customer's
+    // call, and the confirm button explains why it's blocked); new picks go.
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const gift of payload.selectableGifts) {
+        if (ids.has(gift.variantId) && !gift.isSelected) next.delete(giftKey(gift));
+      }
+      return next;
+    });
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchSoldOutVariantIds(payload.selectableGifts.filter((gift) => gift.isAvailable)).then(
+      (ids) => {
+        if (!cancelled) markSoldOut(ids);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [payload]);
 
   function toggleGift(gift: SelectableGift) {
     const key = giftKey(gift);
@@ -219,7 +332,7 @@ function GiftSlider({
     if (next.has(key)) {
       next.delete(key);
     } else {
-      if (!gift.isAvailable) return;
+      if (!isAvailable(gift)) return;
       const rewardSelectedCount = payload.selectableGifts.filter(
         (candidate) => candidate.rewardId === gift.rewardId && next.has(giftKey(candidate)),
       ).length;
@@ -236,7 +349,7 @@ function GiftSlider({
     // The customer can only reach an unavailable selection by having it
     // already in their cart when the popup opened (toggleGift refuses to
     // select an unavailable variant) — never send that to the Cart API.
-    if (selectedGifts.some((gift) => !gift.isAvailable)) {
+    if (selectedGifts.some((gift) => !isAvailable(gift))) {
       setError("One of your selected items just sold out. Please choose another.");
       return;
     }
@@ -252,6 +365,7 @@ function GiftSlider({
       });
       onClose();
     } catch (caught) {
+      if (caught instanceof GiftSoldOutError) markSoldOut(caught.variantIds);
       setError(friendlyGiftError(caught, "We couldn't update your gifts. Please try again."));
     } finally {
       submittingRef.current = false;
@@ -260,7 +374,7 @@ function GiftSlider({
   }
 
   const hasUnavailableSelection = payload.selectableGifts.some(
-    (gift) => selected.has(giftKey(gift)) && !gift.isAvailable,
+    (gift) => selected.has(giftKey(gift)) && !isAvailable(gift),
   );
 
   // Dismiss without confirming (X button, backdrop click, Escape) — as
@@ -331,7 +445,7 @@ function GiftSlider({
             {payload.selectableGifts.map((gift) => {
               const key = giftKey(gift);
               const isSelected = selected.has(key);
-              const unavailable = !gift.isAvailable;
+              const unavailable = !isAvailable(gift);
               return (
                 <button
                   key={key}
@@ -468,26 +582,30 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string) {
   const handleConfirm = async (selectedGifts: SelectableGift[]) => {
     const freshPayload = await window.PromoEngine?.validateGiftOffer(payload.offerId);
     if (!freshPayload) {
-      throw new Error("This gift offer is no longer available. Your cart was not changed.");
+      throw new GiftSliderError("This gift offer is no longer available. Your cart was not changed.");
     }
     const freshGiftByKey = new Map(
       freshPayload.selectableGifts.map((gift) => [giftKey(gift), gift]),
     );
     const validatedSelected = selectedGifts.map((gift) => freshGiftByKey.get(giftKey(gift)));
-    if (validatedSelected.some((gift) => !gift?.isAvailable)) {
-      throw new Error("One of the selected gifts is no longer available. Please choose again.");
+    const goneOrSoldOut = selectedGifts.filter((_, index) => !validatedSelected[index]?.isAvailable);
+    if (goneOrSoldOut.length > 0) {
+      throw new GiftSoldOutError(
+        goneOrSoldOut.map((gift) => gift.variantId),
+        "One of the selected gifts is no longer available. Please choose again.",
+      );
     }
     const selectedByReward = new Map<string, number>();
     for (const gift of validatedSelected) {
       if (!gift) continue;
       const nextCount = (selectedByReward.get(gift.rewardId) ?? 0) + 1;
       if (nextCount > gift.rewardMaxQuantity) {
-        throw new Error("Too many gifts were selected for this reward.");
+        throw new GiftSliderError("Too many gifts were selected for this reward.");
       }
       selectedByReward.set(gift.rewardId, nextCount);
     }
     if (validatedSelected.length > freshPayload.maxSelectableCount) {
-      throw new Error("Too many gifts were selected for this offer.");
+      throw new GiftSliderError("Too many gifts were selected for this offer.");
     }
 
     // Remove previously selected gifts for this offer that are no longer selected
@@ -510,7 +628,7 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string) {
 
     // Add the new selection first so a failed add never destroys the buyer's
     // current gift, then remove stale lines in one cart update request.
-    const giftsToAdd = validatedSelected.flatMap((giftInfo) => {
+    const newGifts = validatedSelected.flatMap((giftInfo) => {
       if (!giftInfo) return [];
       const legacyVariantId = giftInfo.variantId.split("/").pop() ?? giftInfo.variantId;
       const alreadyInCart = existingGifts.some(
@@ -519,18 +637,28 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string) {
           gift.properties?.["_promo_engine_reward_id"] === giftInfo.rewardId &&
           gift.properties?.["_promo_engine_offer_version"] === String(giftInfo.offerVersion),
       );
-      return alreadyInCart ? [] : [{
-        variantId: giftInfo.variantId,
-        quantity: 1,
-        properties: {
-          _promo_engine_line_type: "gift",
-          _promo_engine_offer_id: payload.offerId,
-          _promo_engine_reward_id: giftInfo.rewardId,
-          _promo_engine_offer_version: String(giftInfo.offerVersion),
-        },
-      }];
+      return alreadyInCart ? [] : [giftInfo];
     });
-    if (giftsToAdd.length > 0) await AjaxCartAdapter.addLines(giftsToAdd);
+    const giftsToAdd = newGifts.map((giftInfo) => ({
+      variantId: giftInfo.variantId,
+      quantity: 1,
+      properties: {
+        _promo_engine_line_type: "gift",
+        _promo_engine_offer_id: payload.offerId,
+        _promo_engine_reward_id: giftInfo.rewardId,
+        _promo_engine_offer_version: String(giftInfo.offerVersion),
+      },
+    }));
+    if (giftsToAdd.length > 0) {
+      try {
+        await AjaxCartAdapter.addLines(giftsToAdd);
+      } catch (caught) {
+        if (!isSoldOutCartError(caught)) throw caught;
+        let ids = soldOutVariantIdsFromError(caught, newGifts);
+        if (ids.length === 0) ids = [...(await fetchSoldOutVariantIds(newGifts))];
+        throw new GiftSoldOutError(ids);
+      }
+    }
     if (giftsToRemove.length > 0) {
       await AjaxCartAdapter.removeLines(giftsToRemove.map((gift) => ({ key: gift.key })));
     }

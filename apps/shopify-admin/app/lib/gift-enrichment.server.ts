@@ -21,6 +21,7 @@ export interface GiftCatalogRow {
   productTitle: string | null;
   imageUrl: string | null;
   productStatus: string | null;
+  productHandle?: string | null;
 }
 
 // Shopify's availableForSale already accounts for untracked inventory and the
@@ -84,6 +85,7 @@ export async function loadGiftCatalogData(shopId: string, variantIds: string[]):
       productTitle: productCache.title,
       imageUrl: productCache.imageUrl,
       productStatus: productCache.status,
+      productHandle: productCache.handle,
     })
     .from(variantCache)
     .leftJoin(
@@ -226,6 +228,9 @@ export function enrichGiftSlider(
             ? null
             : (variant?.variantTitle ?? gift.variantTitle),
         imageUrl: variant?.imageUrl ?? gift.imageUrl,
+        // Lets the storefront re-check live stock via /products/{handle}.js —
+        // the variant cache is webhook-fed and can lag a sale by minutes.
+        productHandle: variant?.productHandle ?? null,
         originalPriceCents,
         discountedPriceCents,
         isAvailable,
@@ -252,6 +257,7 @@ export function enrichGiftSlider(
       title: fallback.productTitle ?? gift.title,
       variantTitle: fallback.variantTitle === "Default Title" ? null : fallback.variantTitle,
       imageUrl: fallback.imageUrl ?? null,
+      productHandle: fallback.productHandle ?? null,
       originalPriceCents,
       discountedPriceCents: priceAfterReward(rewardById.get(gift.rewardId), originalPriceCents),
       isAvailable: true,

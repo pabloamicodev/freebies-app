@@ -90,6 +90,8 @@ export interface SelectableGift {
   discountedPriceCents: number;
   isAvailable: boolean;
   isSelected: boolean;
+  /** Online Store handle, for a live stock re-check via /products/{handle}.js. */
+  productHandle?: string | null;
   /** Title of the sold-out gift this merchant-configured fallback replaces. */
   replacesTitle?: string;
 }
