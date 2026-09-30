@@ -83,10 +83,19 @@ const SLIDER_STYLES = `
 }
 .pe-gift-card.pe-selected { border-color: #111; background: #f9f9f9; }
 .pe-gift-card.pe-unavailable { opacity: .5; cursor: not-allowed; }
+.pe-gift-card.pe-unavailable .pe-gift-img,
+.pe-gift-card.pe-unavailable .pe-gift-img-placeholder { filter: grayscale(1); }
 .pe-gift-check {
   position: absolute; top: 8px; right: 8px; width: 20px; height: 20px;
   background: #111; border-radius: 50%; display: flex; align-items: center;
   justify-content: center; color: #fff; font-size: 12px;
+}
+.pe-gift-badge {
+  position: absolute; top: 8px; left: 8px; z-index: 1;
+  display: inline-flex; align-items: center; padding: 2px 8px;
+  border-radius: 999px; font-size: 10px; font-weight: 700;
+  letter-spacing: .3px; text-transform: uppercase; line-height: 1.4;
+  background: #fef2f2; color: #b42318; border: 1px solid #fecaca;
 }
 .pe-gift-img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; background: #f3f4f6; }
 .pe-gift-img-placeholder { width: 100%; aspect-ratio: 1; background: #f3f4f6; border-radius: 4px; }
@@ -161,6 +170,30 @@ function giftKey(gift: Pick<SelectableGift, "rewardId" | "variantId">): string {
   return `${gift.rewardId}:${gift.variantId}`;
 }
 
+// The Ajax Cart API's error responses (cart-adapter.ts's fetchJson) are raw
+// `Cart API error 422: {"status":422,"message":"...already sold out.",...}`
+// text meant for logs, never customers. This is the last line of defense
+// against a race between the popup loading and the customer confirming —
+// the client already refuses to select or submit a known-unavailable
+// variant, but stock can still change in that window.
+const RAW_CART_API_ERROR = /^Cart API error \d+: (.*)$/s;
+
+export function friendlyGiftError(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  const match = RAW_CART_API_ERROR.exec(error.message);
+  if (!match) return error.message; // already one of our own friendly messages
+  try {
+    const body: unknown = JSON.parse(match[1] ?? "");
+    const message = body && typeof body === "object" ? (body as { message?: unknown }).message : undefined;
+    if (typeof message === "string" && /sold out/i.test(message)) {
+      return "That size just sold out — pick another.";
+    }
+  } catch {
+    // fall through to the generic message below
+  }
+  return fallback;
+}
+
 function GiftSlider({
   payload,
   sessionId,
@@ -199,11 +232,18 @@ function GiftSlider({
 
   async function handleConfirm() {
     if (submittingRef.current) return;
+    const selectedGifts = payload.selectableGifts.filter((gift) => selected.has(giftKey(gift)));
+    // The customer can only reach an unavailable selection by having it
+    // already in their cart when the popup opened (toggleGift refuses to
+    // select an unavailable variant) — never send that to the Cart API.
+    if (selectedGifts.some((gift) => !gift.isAvailable)) {
+      setError("One of your selected items just sold out. Please choose another.");
+      return;
+    }
     submittingRef.current = true;
     setLoading(true);
     setError(null);
     try {
-      const selectedGifts = payload.selectableGifts.filter((gift) => selected.has(giftKey(gift)));
       await onConfirm(selectedGifts);
       publishAnalytics("promo_engine:gift_selected", {
         offer_id: payload.offerId,
@@ -212,16 +252,16 @@ function GiftSlider({
       });
       onClose();
     } catch (caught) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "We couldn't update your gifts. Please try again.",
-      );
+      setError(friendlyGiftError(caught, "We couldn't update your gifts. Please try again."));
     } finally {
       submittingRef.current = false;
       setLoading(false);
     }
   }
+
+  const hasUnavailableSelection = payload.selectableGifts.some(
+    (gift) => selected.has(giftKey(gift)) && !gift.isAvailable,
+  );
 
   // Dismiss without confirming (X button, backdrop click, Escape) — as
   // opposed to onClose, which is also called after a successful confirm.
@@ -306,6 +346,11 @@ function GiftSlider({
                       ✓
                     </span>
                   )}
+                  {unavailable && (
+                    <span class="pe-gift-badge" aria-hidden="true">
+                      {payload.labels?.outOfStock ?? "Sold out"}
+                    </span>
+                  )}
                   {gift.imageUrl ? (
                     <img
                       class="pe-gift-img"
@@ -349,9 +394,9 @@ function GiftSlider({
           </div>
         </div>
 
-        {error && (
+        {(error || hasUnavailableSelection) && (
           <p class="pe-slider-error" role="alert" aria-live="assertive">
-            {error}
+            {error ?? "One of your selected items is sold out — remove it to continue."}
           </p>
         )}
 
@@ -363,7 +408,11 @@ function GiftSlider({
             class="pe-btn-confirm"
             type="button"
             onClick={handleConfirm}
-            disabled={(selected.size === 0 && initiallySelectedCount.current === 0) || loading}
+            disabled={
+              (selected.size === 0 && initiallySelectedCount.current === 0) ||
+              loading ||
+              hasUnavailableSelection
+            }
             aria-label={loading ? "Updating gifts" : undefined}
           >
             {loading ? (
