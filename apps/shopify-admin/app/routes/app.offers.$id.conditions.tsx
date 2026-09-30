@@ -8,7 +8,6 @@ import { useLoaderData, Form, Link, useActionData, useNavigation, useSubmit } fr
 import * as Sentry from "@sentry/node";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
-import { OfferStepTabs } from "../components/OfferStepTabs.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -320,25 +319,50 @@ const SUB_CONDITION_TYPES = [
   { label: "Requires a discount code", value: "discount_code" },
 ];
 
+/** Pulls the edit-form-relevant fields out of a condition's stored value —
+ * shared by startEditCondition and the initial state below, so the first
+ * condition can open pre-filled exactly like a real click would produce. */
+function deriveConditionEditFields(value: Record<string, unknown>) {
+  const currencyCode = typeof value["currencyCode"] === "string" ? (value["currencyCode"] as string) : "USD";
+  const includeMarketIds = Array.isArray(value["includeMarketIds"]) ? (value["includeMarketIds"] as string[]) : [];
+  const excludeMarketIds = Array.isArray(value["excludeMarketIds"]) ? (value["excludeMarketIds"] as string[]) : [];
+  let requiredVariantGids: string[] = [];
+  let minQtyPerProduct = "1";
+  if (Array.isArray(value["requirements"])) {
+    const requirements = value["requirements"] as Array<Record<string, unknown>>;
+    requiredVariantGids = requirements.map((r) => String(r["variantId"] ?? "")).filter(Boolean);
+    const firstQty = requirements[0]?.["quantityPerPack"] ?? requirements[0]?.["minQuantity"];
+    minQtyPerProduct = typeof firstQty === "number" ? String(firstQty) : "1";
+  }
+  return { currencyCode, includeMarketIds, excludeMarketIds, requiredVariantGids, minQtyPerProduct };
+}
+
 export default function OfferConditionsPage() {
   const { offer, conditions, markets } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const submit = useSubmit();
   const isSubmitting = navigation.state !== "idle";
-  const [conditionState, setConditionField] = useObjectState({
-    addingScope: null as "main" | "sub" | null,
-    editingId: null as string | null,
-    selectedType: "",
-    pickerOpen: false,
-    pickerTarget: "required" as "required" | "exclude" | "gift",
-    requiredVariantGids: [] as string[],
-    excludeVariantGids: [] as string[],
-    currencyCode: "USD",
-    minQtyPerProduct: "1",
-    includeMarketIds: [] as string[],
-    excludeMarketIds: [] as string[],
-    confirmDeleteConditionId: null as string | null,
+  const [conditionState, setConditionField] = useObjectState(() => {
+    // Open the first condition's edit form by default, so it's immediately
+    // obvious these rows are clickable and what clicking one reveals —
+    // instead of a wall of collapsed summaries with no visible affordance.
+    const first = conditions[0];
+    const fields = first ? deriveConditionEditFields((first.value ?? {}) as Record<string, unknown>) : null;
+    return {
+      addingScope: (first?.scope as "main" | "sub" | undefined) ?? null,
+      editingId: first?.id ?? null,
+      selectedType: first?.conditionType ?? "",
+      pickerOpen: false,
+      pickerTarget: "required" as "required" | "exclude" | "gift",
+      requiredVariantGids: fields?.requiredVariantGids ?? [],
+      excludeVariantGids: [] as string[],
+      currencyCode: fields?.currencyCode ?? "USD",
+      minQtyPerProduct: fields?.minQtyPerProduct ?? "1",
+      includeMarketIds: fields?.includeMarketIds ?? [],
+      excludeMarketIds: fields?.excludeMarketIds ?? [],
+      confirmDeleteConditionId: null as string | null,
+    };
   });
   const {
     addingScope,
@@ -388,21 +412,15 @@ export default function OfferConditionsPage() {
       return;
     }
     const value = (c.value ?? {}) as Record<string, unknown>;
+    const fields = deriveConditionEditFields(value);
     setAddingScope(c.scope as "main" | "sub");
     setSelectedType(c.conditionType);
     setEditingId(c.id);
-    setCurrencyCode(typeof value["currencyCode"] === "string" ? (value["currencyCode"] as string) : "USD");
-    setIncludeMarketIds(Array.isArray(value["includeMarketIds"]) ? (value["includeMarketIds"] as string[]) : []);
-    setExcludeMarketIds(Array.isArray(value["excludeMarketIds"]) ? (value["excludeMarketIds"] as string[]) : []);
-    if (Array.isArray(value["requirements"])) {
-      const requirements = value["requirements"] as Array<Record<string, unknown>>;
-      setRequiredVariantGids(requirements.map((r) => String(r["variantId"] ?? "")).filter(Boolean));
-      const firstQty = requirements[0]?.["quantityPerPack"] ?? requirements[0]?.["minQuantity"];
-      setMinQtyPerProduct(typeof firstQty === "number" ? String(firstQty) : "1");
-    } else {
-      setRequiredVariantGids([]);
-      setMinQtyPerProduct("1");
-    }
+    setCurrencyCode(fields.currencyCode);
+    setIncludeMarketIds(fields.includeMarketIds);
+    setExcludeMarketIds(fields.excludeMarketIds);
+    setRequiredVariantGids(fields.requiredVariantGids);
+    setMinQtyPerProduct(fields.minQtyPerProduct);
   }
 
   const editingCondition = editingId ? conditions.find((c) => c.id === editingId) : undefined;
@@ -452,10 +470,6 @@ export default function OfferConditionsPage() {
           actions={<Link to={`/app/offers/${offer.id}/rewards`} className="b-btn b-btn-primary">Rewards →</Link>}
         />
 
-        <div className="b-mb-4">
-          <OfferStepTabs offerId={offer.id} active="conditions" />
-        </div>
-
         {/* No-conditions warning */}
         {conditions.length === 0 && (
           <div className="b-banner b-banner-orange b-mb-4">
@@ -471,6 +485,11 @@ export default function OfferConditionsPage() {
         <div className="b-card">
           <div className="b-card-header">Conditions</div>
           <div className="b-card-body">
+            {conditions.length > 0 && (
+              <p className="b-text-sm b-text-sub" style={{ marginTop: 0, marginBottom: 12 }}>
+                Click any condition below to view or edit its details.
+              </p>
+            )}
             <div className="b-stack b-stack-3">
               {conditions.map((c) => {
                 const isEditingThis = editingId === c.id;
@@ -480,6 +499,7 @@ export default function OfferConditionsPage() {
                     className="b-row-between"
                     role="button"
                     tabIndex={0}
+                    aria-expanded={isEditingThis}
                     onClick={() => startEditCondition(c)}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startEditCondition(c); } }}
                     style={{
@@ -504,7 +524,9 @@ export default function OfferConditionsPage() {
                       <span className="b-text-sm b-text-sub">
                         {conditionSummary(c.conditionType, c.value)}
                       </span>
-                      <span className="b-text-sm b-text-muted">{isEditingThis ? "▲ editing" : "Click to edit ▾"}</span>
+                      <span className="b-text-sm b-text-sub" style={{ fontWeight: 600 }}>
+                        {isEditingThis ? "▲ Hide details" : "Click to view details ▾"}
+                      </span>
                     </div>
                     <button
                       type="button"
