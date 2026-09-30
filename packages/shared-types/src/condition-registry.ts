@@ -45,6 +45,7 @@ export const CONDITION_REGISTRY: Record<ConditionType, { enforcedByFunction: boo
   line_attribute: { enforcedByFunction: true },
   cart_attribute: { enforcedByFunction: true },
   discount_code: { enforcedByFunction: true },
+  utm_parameters: { enforcedByFunction: true },
 };
 
 export const FUNCTION_ENFORCED_CONDITION_TYPES: ReadonlySet<ConditionType> = new Set(

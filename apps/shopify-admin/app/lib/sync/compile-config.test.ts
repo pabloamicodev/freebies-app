@@ -252,6 +252,47 @@ describe("compileOfferConfig — condition-type coverage", () => {
   }
 });
 
+describe("compileOfferConfig — shipping_discount reward handling", () => {
+  // EDGE CASE (code-gated offers, see offer-publisher.server.ts publishCodeOffers):
+  // compileOfferConfig's reward loop has no branch for "shipping_discount" —
+  // only compileShippingOfferConfigs knows how to represent it, into the
+  // separate `shippingOffers` array. The regular (shared automatic-discount)
+  // publish path calls both functions and merges their output. The code-offer
+  // path calls ONLY compileOfferConfig and hardcodes `shippingOffers: []` on
+  // the pushed config (offer-publisher.server.ts ~line 375) — so a code-gated
+  // offer with a shipping_discount reward publishes successfully (validation
+  // doesn't block it either) but the reward is silently dropped: no error,
+  // no shipping discount ever applied at checkout.
+  it("silently drops a shipping_discount reward instead of compiling or erroring", () => {
+    const result = compileOfferConfig(
+      offer({ type: "discount" }),
+      [condition("cart_value", { thresholdCents: 1000 })],
+      [
+        {
+          id: REWARD_ID,
+          rewardType: "shipping_discount",
+          discountType: "percentage",
+          value: { amount: 100, currencyCode: "USD" },
+          target: { deliveryGroupTypes: ["ONE_TIME_PURCHASE", "SUBSCRIPTION"] },
+          quantity: null,
+        } as Parameters<typeof compileOfferConfig>[2][number],
+      ],
+      null,
+      1,
+    );
+
+    // Nothing in the compiled offer reflects the shipping reward at all.
+    expect(result.giftRewards).toEqual([]);
+    expect(result.productRewards).toEqual([]);
+    expect(result.orderRewards).toEqual([]);
+    // discountType/discountValue stay at compileOfferConfig's unrelated
+    // "free gift" defaults — not representative of the configured shipping
+    // discount, confirming this reward left no trace in the compiled offer.
+    expect(result.discountType).toBe("free");
+    expect(result.discountValue).toBe(100);
+  });
+});
+
 describe("compileOfferConfig", () => {
   it("compiles URL paths and query parameters for checkout enforcement", () => {
     const result = compileOfferConfig(
@@ -543,6 +584,39 @@ describe("compileOfferConfig", () => {
       1,
     );
     expect(result.discountCodeConditions).toEqual([{ code: "PRIME2026" }]);
+  });
+
+  it("compiles a utm_parameters condition into one pageUrlConditions entry per filled-in field", () => {
+    const result = compileOfferConfig(
+      offer(),
+      [condition("utm_parameters", { utmSource: "amazon", utmCampaign: "primeday" })],
+      [],
+      null,
+      1,
+    );
+    expect(result.pageUrlConditions).toEqual([
+      { patterns: [], matchMode: "contains", caseSensitive: false, paramName: "utm_source", paramValue: "amazon" },
+      { patterns: [], matchMode: "contains", caseSensitive: false, paramName: "utm_campaign", paramValue: "primeday" },
+    ]);
+  });
+
+  it("encodes a utm_parameters value with reserved characters, matching how it'll appear in the raw landing URL", () => {
+    const result = compileOfferConfig(
+      offer(),
+      [condition("utm_parameters", { utmCampaign: "prime day sale" })],
+      [],
+      null,
+      1,
+    );
+    expect(result.pageUrlConditions).toEqual([
+      {
+        patterns: [],
+        matchMode: "contains",
+        caseSensitive: false,
+        paramName: "utm_campaign",
+        paramValue: "prime%20day%20sale",
+      },
+    ]);
   });
 
   it("compiles a requiredLineAttribute filter onto a product reward target", () => {

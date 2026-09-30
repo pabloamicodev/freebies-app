@@ -1,5 +1,51 @@
 import { describe, expect, it } from "vitest";
-import { hasUnenforcedScopeFilter, isConditionEnforcedByFunction, isUnscopedTaggedReward } from "./offer-publish-flow.server.js";
+import { offers, offerConditions, offerRewards, type Db } from "@promo/db";
+import {
+  hasUnenforcedScopeFilter,
+  isConditionEnforcedByFunction,
+  isUnscopedTaggedReward,
+  validateOffersPublishable,
+} from "./offer-publish-flow.server.js";
+
+interface FakeOfferRow {
+  id: string;
+  internalName: string;
+  requiredDiscountCode: string | null;
+}
+
+function fakeDb(rows: {
+  offerRows: FakeOfferRow[];
+  conditionRows?: unknown[];
+  rewardRows?: unknown[];
+}): Db {
+  const db = {
+    select: () => ({
+      from: (table: unknown) => ({
+        where: () => {
+          if (table === offers) return Promise.resolve(rows.offerRows);
+          if (table === offerConditions) return Promise.resolve(rows.conditionRows ?? []);
+          if (table === offerRewards) return Promise.resolve(rows.rewardRows ?? []);
+          return Promise.resolve([]);
+        },
+      }),
+    }),
+  };
+  return db as unknown as Db;
+}
+
+const validGiftReward = {
+  id: "r1",
+  offerId: "offer-1",
+  rewardType: "product_gift",
+  discountType: "percentage",
+  value: { amount: 10 },
+  target: { productId: "gid://shopify/Product/1" },
+  quantity: 1,
+  isAutoAdd: false,
+  isCustomerSelectable: false,
+  sortOrder: 0,
+  label: null,
+};
 
 describe("isConditionEnforcedByFunction", () => {
   it.each([
@@ -65,6 +111,68 @@ describe("isUnscopedTaggedReward", () => {
     expect(isUnscopedTaggedReward("product_discount", { scopeMode: "landing" })).toBe(false);
     expect(isUnscopedTaggedReward("product_gift", { scopeMode: "quiz_bundle" })).toBe(false);
     expect(isUnscopedTaggedReward("shipping_discount", { scopeMode: "quiz_bundle" })).toBe(false);
+  });
+});
+
+describe("validateOffersPublishable — required discount code", () => {
+  it("still requires an enabled main condition for a regular offer", async () => {
+    const db = fakeDb({
+      offerRows: [{ id: "offer-1", internalName: "Regular Offer", requiredDiscountCode: null }],
+      rewardRows: [validGiftReward],
+    });
+
+    const result = await validateOffersPublishable(db, "shop-1", ["offer-1"]);
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Cannot publish "Regular Offer": add at least one enabled main condition.',
+    });
+  });
+
+  it("allows a code-gated offer to publish with zero enabled main conditions", async () => {
+    const db = fakeDb({
+      offerRows: [
+        { id: "offer-1", internalName: "Prime Day", requiredDiscountCode: "PRIMEDAY2026" },
+      ],
+      rewardRows: [validGiftReward],
+    });
+
+    const result = await validateOffersPublishable(db, "shop-1", ["offer-1"]);
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("still requires a reward even for a code-gated offer", async () => {
+    const db = fakeDb({
+      offerRows: [
+        { id: "offer-1", internalName: "Prime Day", requiredDiscountCode: "PRIMEDAY2026" },
+      ],
+      rewardRows: [],
+    });
+
+    const result = await validateOffersPublishable(db, "shop-1", ["offer-1"]);
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Cannot publish "Prime Day": add at least one reward.',
+    });
+  });
+
+  it("rejects a shipping_discount reward on a code-gated offer — its dedicated node never references the delivery Function", async () => {
+    const db = fakeDb({
+      offerRows: [
+        { id: "offer-1", internalName: "Prime Day", requiredDiscountCode: "PRIMEDAY2026" },
+      ],
+      rewardRows: [{ ...validGiftReward, rewardType: "shipping_discount" }],
+    });
+
+    const result = await validateOffersPublishable(db, "shop-1", ["offer-1"]);
+
+    expect(result).toEqual({
+      ok: false,
+      error:
+        'Cannot publish "Prime Day": checkout-code-gated offers don\'t support shipping discount rewards yet — use a regular offer for shipping discounts.',
+    });
   });
 });
 

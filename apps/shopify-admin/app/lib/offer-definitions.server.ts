@@ -33,7 +33,10 @@ export async function getOfferDefinitions(shopId: string, db: Db): Promise<Offer
   // (which hashes the full row). `description` stays: it isn't in
   // VOLATILE_KEYS, so omitting it here would change the version computed on
   // this path without changing the one computed at publish time.
-  const activeOffers: Array<Omit<OfferRow, "shopId" | "compiledConfig" | "functionMetafieldGid" | "createdAt" | "updatedAt" | "updatedBy">> = await db
+  // requiredDiscountCode/codeDiscountId only matter for publish-time discount
+  // routing (offer-publisher.server.ts) — evaluate never reads them, so they're
+  // excluded here for the same reason compiledConfig is.
+  const activeOffers: Array<Omit<OfferRow, "shopId" | "compiledConfig" | "functionMetafieldGid" | "createdAt" | "updatedAt" | "updatedBy" | "requiredDiscountCode" | "codeDiscountId">> = await db
     .select({
       id: offers.id,
       type: offers.type,

@@ -323,6 +323,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const [newOffer] = await db.insert(offers).values({
         ...offer, id: undefined as unknown as string, internalName: `${offer.internalName}-copy`,
         status: "draft", createdAt: new Date(), updatedAt: new Date(),
+        // A copy must not inherit the source's checkout code or its Shopify
+        // discount node id — both are 1:1 with the original offer (the DB's
+        // partial unique index would reject a second non-archived offer
+        // reusing the same code anyway), and reusing the discount node id
+        // would let two different offers silently share one live discount.
+        requiredDiscountCode: null, codeDiscountId: null,
       }).returning({ id: offers.id });
       if (newOffer) return redirect(`/app/offers/${newOffer.id}`);
       break;

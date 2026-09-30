@@ -1,8 +1,8 @@
 import {
   pgTable, pgEnum, uuid, text, integer, boolean,
-  timestamp, jsonb, unique, index,
+  timestamp, jsonb, unique, index, uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import { shops } from "./shops";
 
 export const offerTypeEnum = pgEnum("offer_type", [
@@ -54,6 +54,14 @@ export const offers = pgTable(
     functionMetafieldGid: text("function_metafield_gid"),
     /** Discount tags for campaign attribution (Shopify Admin API 2026-04). */
     discountTags: text("discount_tags").array().notNull().default([]),
+    /** Checkout code (trimmed, uppercased) gating a dedicated code-based app
+     * discount for this offer. Null means the offer publishes through the
+     * shared automatic-discount config, as every offer did before this
+     * column existed. */
+    requiredDiscountCode: text("required_discount_code"),
+    /** GID of this offer's own discountCodeAppCreate node, once created.
+     * Only set for offers with `requiredDiscountCode`. */
+    codeDiscountId: text("code_discount_id"),
     createdBy: text("created_by"),
     updatedBy: text("updated_by"),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
@@ -66,6 +74,18 @@ export const offers = pgTable(
     index("offers_shop_status_idx").on(t.shopId, t.status),
     // Hot path: evaluator sorts by priority to pick winning offer
     index("offers_shop_priority_idx").on(t.shopId, t.priority),
+    // Two non-archived offers in the same shop can't require the same
+    // checkout code. Partial (excludes archived + null codes) so archiving
+    // an offer frees its code for reuse. Tradeoff: this does NOT exclude
+    // other terminal-ish statuses (paused/expired/draft) from the
+    // uniqueness check, only "archived" — a paused code offer still holds
+    // its code exclusively. That's intentional (a paused offer's code
+    // should still be recognizable/reusable-by-the-same-offer, not silently
+    // handed to a new offer while the old one could be reactivated), but
+    // worth a second look in review.
+    uniqueIndex("offers_shop_required_discount_code_idx")
+      .on(t.shopId, t.requiredDiscountCode)
+      .where(sql`${t.requiredDiscountCode} is not null and ${t.status} != 'archived'`),
   ],
 );
 

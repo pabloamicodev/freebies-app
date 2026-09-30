@@ -81,6 +81,15 @@ function ITicket() {
   );
 }
 
+function ITag() {
+  return (
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#5c6ac4" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.59 13.41 11 3.83A2 2 0 0 0 9.59 3.24H4a1 1 0 0 0-1 1v5.59a2 2 0 0 0 .59 1.41l9.58 9.59a2 2 0 0 0 2.83 0l4.59-4.59a2 2 0 0 0 0-2.83z"/>
+      <circle cx="7.5" cy="7.5" r="1.2" fill="#5c6ac4" stroke="none"/>
+    </svg>
+  );
+}
+
 export function ICrown() {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" strokeWidth="1">
@@ -100,4 +109,5 @@ export const SUB_ICONS: Record<SubconditionId, () => JSX.Element> = {
   custom_attribute: IQty,
   quantity_limit: IQty,
   discount_code: ITicket,
+  utm_parameters: ITag,
 };

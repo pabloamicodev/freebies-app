@@ -28,6 +28,7 @@ interface ShopifyFunctionSummary {
   handle: string;
   title: string;
 }
+export type { ShopifyFunctionSummary };
 
 export interface DiscountNodeIds {
   cartLinesDiscountId: string;
@@ -302,10 +303,29 @@ async function createOrFindAutomaticDiscount(
   return recoveredId;
 }
 
+/** Looks up the deployed cart-lines discount Function summary (same lookup
+ * `ensureDiscountNodes` does internally) — exported so callers that need a
+ * dedicated code discount pointed at the SAME Function (e.g. the
+ * offer-publisher, for code-gated offers) don't have to re-implement the
+ * `shopifyFunctions` query + title match. */
+export async function findCartDiscountFunction(
+  shopDomain: string,
+  accessToken: string,
+): Promise<ShopifyFunctionSummary> {
+  const functions = await findDiscountFunctions(shopDomain, accessToken);
+  const cartFunction = selectFunction(functions, CART_FUNCTION_TITLE);
+  if (!cartFunction) {
+    throw new Error(
+      "Could not find the Promo Engine Discount Function. Deploy the current Shopify app version before publishing offers.",
+    );
+  }
+  return cartFunction;
+}
+
 /** Verifies a stored discount node id still resolves to a live discount —
  * `discountNode` returns null instead of erroring for a deleted node, unlike
  * most other Shopify Admin API GID lookups. */
-async function discountNodeExists(
+export async function discountNodeExists(
   shopDomain: string,
   accessToken: string,
   id: string,
@@ -328,7 +348,11 @@ interface DiscountNodesPage {
   discountNodes: {
     nodes: Array<{
       id: string;
-      discount: { __typename: string; appDiscountType?: { functionId: string } };
+      discount: {
+        __typename: string;
+        appDiscountType?: { functionId: string };
+        codes?: { nodes: Array<{ code: string }> };
+      };
     }>;
     pageInfo: { hasNextPage: boolean; endCursor: string | null };
   };
@@ -342,13 +366,17 @@ async function fetchDiscountNodesPage(
   return shopifyGraphQL<DiscountNodesPage>({
     shopDomain,
     accessToken,
-    query: `query FindExistingAutomaticDiscount($first: Int!, $after: String) {
+    query: `query FindExistingAppDiscount($first: Int!, $after: String) {
       discountNodes(first: $first, after: $after) {
         nodes {
           id
           discount {
             __typename
             ... on DiscountAutomaticApp { appDiscountType { functionId } }
+            ... on DiscountCodeApp {
+              appDiscountType { functionId }
+              codes(first: 1) { nodes { code } }
+            }
           }
         }
         pageInfo { hasNextPage endCursor }
@@ -382,4 +410,184 @@ async function findExistingAutomaticDiscount(
     cursor = pageInfo.endCursor;
   }
   return null;
+}
+
+/** Reuses an existing "DiscountCodeApp" node for this Function + code if one
+ * is already registered — the code-discount analogue of
+ * `findExistingAutomaticDiscount`, used to recover from a create that
+ * reported "already exists" (e.g. a previous publish created the node but
+ * failed before `offers.codeDiscountId` could be persisted). Codes are
+ * matched case-insensitively since Shopify itself treats them that way, and
+ * `code` here is already the normalized (trimmed, uppercased) value stored
+ * on the offer. */
+async function findExistingCodeDiscount(
+  shopDomain: string,
+  accessToken: string,
+  functionId: string,
+  code: string,
+): Promise<string | null> {
+  const normalizedCode = code.trim().toUpperCase();
+  let cursor: string | null = null;
+  for (let page = 0; page < DISCOUNT_NODES_MAX_PAGES; page += 1) {
+    const data: DiscountNodesPage = await fetchDiscountNodesPage(shopDomain, accessToken, cursor);
+
+    const match = data.discountNodes.nodes.find(
+      (node) =>
+        node.discount.__typename === "DiscountCodeApp" &&
+        node.discount.appDiscountType?.functionId === functionId &&
+        (node.discount.codes?.nodes ?? []).some(
+          (c) => c.code.trim().toUpperCase() === normalizedCode,
+        ),
+    );
+    if (match) return match.id;
+
+    const pageInfo = data.discountNodes.pageInfo;
+    if (!pageInfo.hasNextPage || !pageInfo.endCursor) break;
+    cursor = pageInfo.endCursor;
+  }
+  return null;
+}
+
+export function buildCodeDiscountCreateInput(
+  functionHandle: string,
+  code: string,
+  title: string,
+  discountClasses: readonly DiscountClass[],
+  startsAt = new Date().toISOString(),
+) {
+  const combinesWith = normalizeDiscountCombinationPolicy(
+    {
+      orderDiscounts: true,
+      productDiscounts: true,
+      shippingDiscounts: true,
+    },
+    discountClasses,
+  );
+
+  return {
+    title,
+    code,
+    functionHandle,
+    discountClasses: [...discountClasses],
+    startsAt,
+    combinesWith,
+  };
+}
+
+export function buildCodeDiscountUpdateInput(
+  combinesWith: DiscountCombinationPolicyInput,
+  discountClasses: readonly DiscountClass[],
+) {
+  return {
+    combinesWith: normalizeDiscountCombinationPolicy(combinesWith, discountClasses),
+    discountClasses: [...discountClasses],
+  };
+}
+
+/**
+ * Creates a dedicated `discountCodeAppCreate` node for a code-gated offer,
+ * pointed at the same already-deployed cart-lines Function the shared
+ * automatic "Promo Engine" discount uses — Shopify only invokes the
+ * Function for a code discount when that exact code is present on the cart,
+ * so no Function/rule-engine change is needed to support this.
+ *
+ * This does NOT check for a pre-existing node by itself (unlike
+ * `createOrFindAutomaticDiscount`, which is a per-shop singleton lookup):
+ * callers here already track the discount id on `offers.codeDiscountId` and
+ * verify it with `discountNodeExists` before calling this, so the only
+ * "existing" case this needs to recover is Shopify reporting a duplicate on
+ * create (e.g. a previous publish created the node but crashed before the
+ * id could be persisted).
+ */
+export async function createOrFindCodeDiscount(
+  shopDomain: string,
+  accessToken: string,
+  shopifyFunction: ShopifyFunctionSummary,
+  code: string,
+  title: string,
+  discountClasses: readonly DiscountClass[],
+): Promise<string> {
+  const created = await shopifyGraphQL<{
+    discountCodeAppCreate: {
+      codeAppDiscount: { discountId: string } | null;
+      userErrors: DiscountUserError[];
+    };
+  }>({
+    shopDomain,
+    accessToken,
+    query: `mutation CreatePromoEngineCodeDiscount($discount: DiscountCodeAppInput!) {
+      discountCodeAppCreate(codeAppDiscount: $discount) {
+        codeAppDiscount { discountId }
+        userErrors { field message code }
+      }
+    }`,
+    variables: {
+      discount: buildCodeDiscountCreateInput(shopifyFunction.handle, code, title, discountClasses),
+    },
+  });
+
+  const result = created.discountCodeAppCreate;
+  if (result.codeAppDiscount) return result.codeAppDiscount.discountId;
+
+  // Shopify's actual wording/code for "this code is taken" isn't fully
+  // pinned down (verify on a real store before relying on either match) —
+  // check both a message match and the documented TAKEN error code so a
+  // wording-only match failing doesn't throw for the whole shop's publish.
+  const alreadyExists = result.userErrors.some(
+    (e) => e.message.toLowerCase().includes("already") || e.code === "TAKEN",
+  );
+  if (!alreadyExists) {
+    throw new Error(
+      `discountCodeAppCreate failed: ${formatDiscountUserErrors(result.userErrors) || "Shopify returned no created discount"}`,
+    );
+  }
+
+  const recoveredId = await findExistingCodeDiscount(
+    shopDomain,
+    accessToken,
+    shopifyFunction.id,
+    code,
+  );
+  if (!recoveredId) {
+    throw new Error(
+      `discountCodeAppCreate reported a duplicate but no matching discount was found: ${formatDiscountUserErrors(result.userErrors)}`,
+    );
+  }
+  return recoveredId;
+}
+
+export async function updateCodeDiscountCombination(
+  shopDomain: string,
+  accessToken: string,
+  discountId: string,
+  combinesWith: DiscountCombinationPolicyInput,
+  discountClasses: readonly DiscountClass[],
+): Promise<void> {
+  const data = await shopifyGraphQL<{
+    discountCodeAppUpdate: {
+      codeAppDiscount: { discountId: string } | null;
+      userErrors: DiscountUserError[];
+    };
+  }>({
+    shopDomain,
+    accessToken,
+    query: `mutation UpdatePromoEngineCodeDiscountCombination($id: ID!, $discount: DiscountCodeAppInput!) {
+      discountCodeAppUpdate(id: $id, codeAppDiscount: $discount) {
+        codeAppDiscount { discountId }
+        userErrors { field message code }
+      }
+    }`,
+    variables: {
+      id: discountId,
+      discount: buildCodeDiscountUpdateInput(combinesWith, discountClasses),
+    },
+  });
+
+  const result = data.discountCodeAppUpdate;
+  if (result.userErrors.length > 0 || !result.codeAppDiscount) {
+    const messages = formatDiscountUserErrors(result.userErrors);
+    throw new Error(
+      `discountCodeAppUpdate failed: ${messages || "Shopify returned no updated discount"}`,
+    );
+  }
 }

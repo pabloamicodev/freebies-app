@@ -2,10 +2,11 @@ import { useActionData, useNavigate, useLoaderData, Form, redirect } from "react
 import { Toast } from "../components/Toast.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
-import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
+import { isConstraintViolation, isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
 import { ensureOneOf, parseInteger, requiredText } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerCombinationPolicies, offerConditions, offerRewards } from "@promo/db";
+import { validateRequiredDiscountCode as validateRequiredDiscountCodeShared } from "@promo/shared-types";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -75,6 +76,25 @@ const TEMPLATE_PRESETS: Record<string, {
 };
 
 const VALID_TYPES = ["gift", "bundle", "upsell", "discount", "booster"] as const;
+
+// Extra selectable card that isn't a real DB offer type — it stores as
+// "discount" underneath (see `dbOfferTypeFor`) plus `requiredDiscountCode`.
+const SELECTABLE_TYPES = [...VALID_TYPES, "checkout_code_promo"] as const;
+
+/** Trim/uppercase/length-check a checkout-gating discount code — thin
+ * wrapper preserving this route's {data, error} shape around the shared
+ * `@promo/shared-types` validator, so this route and the compiled offer
+ * schema can never silently disagree on what a valid code looks like. */
+function validateRequiredDiscountCode(raw: string | null): { data: string | null; error?: string } {
+  if (!(raw ?? "").trim()) return { data: null, error: "Enter the discount code customers will use at checkout." };
+  const result = validateRequiredDiscountCodeShared(raw);
+  if (!result.success) return { data: null, error: result.error.issues[0]?.message ?? "Invalid discount code." };
+  return { data: result.data };
+}
+
+function dbOfferTypeFor(selectedType: string): (typeof VALID_TYPES)[number] {
+  return selectedType === "checkout_code_promo" ? "discount" : (selectedType as (typeof VALID_TYPES)[number]);
+}
 
 function IllusGift() {
   return (
@@ -164,11 +184,28 @@ function IllusBooster() {
   );
 }
 
+function IllusCheckoutCode() {
+  return (
+    <svg width="110" height="92" viewBox="0 0 110 92" fill="none">
+      <rect x="10" y="20" width="90" height="52" rx="8" fill="rgba(255,255,255,0.20)"/>
+      <rect x="10" y="20" width="90" height="14" rx="8" fill="rgba(255,255,255,0.34)"/>
+      <circle cx="20" cy="27" r="2.5" fill="rgba(255,255,255,0.6)"/>
+      <circle cx="28" cy="27" r="2.5" fill="rgba(255,255,255,0.6)"/>
+      <rect x="20" y="44" width="46" height="9" rx="2.5" fill="rgba(255,255,255,0.5)"/>
+      <rect x="20" y="58" width="30" height="7" rx="2.5" fill="rgba(255,255,255,0.28)"/>
+      <circle cx="82" cy="52" r="15" fill="none" stroke="rgba(255,255,255,0.75)" strokeWidth="3"/>
+      <path d="M76 52l4 4 8-9" stroke="rgba(255,255,255,0.9)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+      <circle cx="14" cy="80" r="3" fill="rgba(255,255,255,0.25)"/>
+      <circle cx="98" cy="16" r="3.5" fill="rgba(255,255,255,0.22)"/>
+    </svg>
+  );
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const typeParam = url.searchParams.get("type") ?? "gift";
-  const initialType = (VALID_TYPES as readonly string[]).includes(typeParam) ? typeParam : "gift";
+  const initialType = (SELECTABLE_TYPES as readonly string[]).includes(typeParam) ? typeParam : "gift";
   return { shopDomain: session.shop, initialType };
 };
 
@@ -177,11 +214,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { shopId, db } = context;
   if (!shopId) return { error: "Shop not found" };
 
-  const offerTypeResult = ensureOneOf(formData.get("offerType") as string | null, VALID_TYPES, "gift", "Offer type");
+  const offerTypeResult = ensureOneOf(formData.get("offerType") as string | null, SELECTABLE_TYPES, "gift", "Offer type");
   if (offerTypeResult.error) return { error: offerTypeResult.error };
-  const offerType = offerTypeResult.data!;
+  const selectedType = offerTypeResult.data!;
+  const offerType = dbOfferTypeFor(selectedType);
   const template = (formData.get("template") as string) ?? "scratch";
   const preset = TEMPLATE_PRESETS[template];
+
+  let requiredDiscountCode: string | null = null;
+  if (selectedType === "checkout_code_promo") {
+    const codeResult = validateRequiredDiscountCode(formData.get("requiredDiscountCode") as string | null);
+    if (codeResult.error) return { error: codeResult.error };
+    requiredDiscountCode = codeResult.data;
+  }
 
   // Names: form values take priority; preset provides fallback defaults
   const formName = (formData.get("internalName") as string)?.trim();
@@ -201,7 +246,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return db.transaction(async (tx) => {
       const [offer] = await tx
         .insert(offers)
-        .values({ shopId, type: offerType as "gift" | "bundle" | "upsell" | "discount" | "booster", status: "draft", internalName: candidateName, publicTitle, priority })
+        .values({
+          shopId,
+          type: offerType,
+          status: "draft",
+          internalName: candidateName,
+          publicTitle,
+          priority,
+          requiredDiscountCode,
+        })
         .returning({ id: offers.id });
       if (!offer) throw new Error("Failed to create offer");
 
@@ -256,6 +309,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     newOffer = await createOfferWithChildren(internalName);
   } catch (err) {
+    // The internal-name and discount-code uniqueness checks share the same
+    // Postgres error code (23505) — only retry-with-a-different-name when
+    // the name index is really what failed. A discount-code collision needs
+    // a friendly error instead: retrying with a suffixed name would resubmit
+    // the SAME already-taken code and fail again, uncaught.
+    if (isConstraintViolation(err, "offers_shop_required_discount_code_idx")) {
+      return { error: "That discount code is already used by another offer. Choose a different code." };
+    }
     if (!isUniqueViolation(err)) throw err;
     newOffer = await createOfferWithChildren(withUniqueOfferSuffix(internalName));
   }
@@ -311,6 +372,15 @@ const OFFER_TYPES = [
     illus: <IllusBooster />,
     wide: true,
   },
+  {
+    value: "checkout_code_promo",
+    label: "Checkout Code Promo",
+    desc: "Gate an offer behind a real Shopify discount code — no manual $0-value code setup.",
+    color: "#0369a1",
+    gradient: "linear-gradient(135deg, #38bdf8 0%, #0369a1 100%)",
+    illus: <IllusCheckoutCode />,
+    wide: false,
+  },
 ];
 
 export default function NewOfferPage() {
@@ -322,24 +392,28 @@ export default function NewOfferPage() {
     internalName: "",
     publicTitle: "",
     priority: "100",
-    fieldErrors: {} as { internalName?: string; publicTitle?: string; priority?: string },
+    requiredDiscountCode: "",
+    fieldErrors: {} as { internalName?: string; publicTitle?: string; priority?: string; requiredDiscountCode?: string },
     showToast: false,
     toastMsg: "",
   }));
-  const { offerType, internalName, publicTitle, priority, fieldErrors, showToast, toastMsg } = formState;
+  const { offerType, internalName, publicTitle, priority, requiredDiscountCode, fieldErrors, showToast, toastMsg } = formState;
   const setOfferType = createFieldSetter(setFormField, "offerType");
   const setInternalName = createFieldSetter(setFormField, "internalName");
   const setPublicTitle = createFieldSetter(setFormField, "publicTitle");
   const setPriority = createFieldSetter(setFormField, "priority");
+  const setRequiredDiscountCode = createFieldSetter(setFormField, "requiredDiscountCode");
   const setFieldErrors = createFieldSetter(setFormField, "fieldErrors");
   const setShowToast = createFieldSetter(setFormField, "showToast");
   const setToastMsg = createFieldSetter(setFormField, "toastMsg");
+  const isCheckoutCodePromo = offerType === "checkout_code_promo";
 
   function validate() {
-    const errs: { internalName?: string; publicTitle?: string; priority?: string } = {};
+    const errs: { internalName?: string; publicTitle?: string; priority?: string; requiredDiscountCode?: string } = {};
     if (!internalName.trim()) errs.internalName = "Internal name is required";
     if (!publicTitle.trim()) errs.publicTitle = "Public title is required";
     if (isNaN(parseInt(priority, 10))) errs.priority = "Priority must be a number";
+    if (isCheckoutCodePromo && !requiredDiscountCode.trim()) errs.requiredDiscountCode = "Discount code is required";
     setFieldErrors(errs);
     if (Object.keys(errs).length > 0) {
       setToastMsg(Object.values(errs)[0]!);
@@ -470,6 +544,48 @@ export default function NewOfferPage() {
             </div>
           </div>
         </div>
+
+        {/* ── Checkout code promo — extra field for this type only ── */}
+        {isCheckoutCodePromo && (
+          <div className="b-card" style={{ marginBottom: 20 }}>
+            <div className="b-card-header">Checkout code</div>
+            <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div className="b-banner b-banner-blue" role="status">
+                <span className="b-banner-icon">&#9432;</span>
+                <div className="b-banner-body">
+                  <p className="b-banner-text" style={{ margin: 0 }}>
+                    We&apos;ll create a real Shopify discount code and link it to this offer
+                    automatically — no manual $0-value code setup needed. Once created, you can still
+                    add any other conditions on the next step, such as requiring the customer came
+                    from a specific landing page.
+                  </p>
+                </div>
+              </div>
+              <div>
+                <label className="b-label" htmlFor="requiredDiscountCode">
+                  Discount code customers will enter at checkout <span style={{ color: "var(--red, #e53e3e)" }}>*</span>
+                </label>
+                <input
+                  id="requiredDiscountCode"
+                  className={`b-input${fieldErrors.requiredDiscountCode ? " b-input-error" : ""}`}
+                  name="requiredDiscountCode"
+                  value={requiredDiscountCode}
+                  onChange={(e) => {
+                    setRequiredDiscountCode(e.target.value.toUpperCase());
+                    setFieldErrors((p) => ({ ...p, requiredDiscountCode: undefined }));
+                  }}
+                  placeholder="PRIME2026"
+                  style={{ textTransform: "uppercase" }}
+                  autoComplete="off"
+                />
+                {fieldErrors.requiredDiscountCode
+                  ? <div className="b-help-error">{fieldErrors.requiredDiscountCode}</div>
+                  : <div className="b-help">Case-insensitive. This is the exact code Shopify will accept at checkout.</div>
+                }
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Footer ── */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

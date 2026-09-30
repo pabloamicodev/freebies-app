@@ -5,6 +5,7 @@ import {
   ShippingDiscountTierSchema,
   SubtotalDiscountTierSchema,
   validateConditionValue,
+  validateRequiredDiscountCode,
   validateRewardPayload,
 } from "./offers.js";
 
@@ -122,6 +123,60 @@ describe("condition contracts", () => {
   it("rejects a discount_code longer than 255 characters", () => {
     expect(validateConditionValue("discount_code", { code: "A".repeat(256) }).success).toBe(false);
     expect(validateConditionValue("discount_code", { code: "A".repeat(255) }).success).toBe(true);
+  });
+
+  it("accepts a utm_parameters condition with at least one field set", () => {
+    const result = validateConditionValue("utm_parameters", {
+      utmSource: "amazon",
+      utmCampaign: "primeday",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({ utmSource: "amazon", utmCampaign: "primeday" });
+    }
+  });
+
+  it("rejects a utm_parameters condition with every field blank", () => {
+    expect(
+      validateConditionValue("utm_parameters", {
+        utmSource: "",
+        utmMedium: "",
+        utmCampaign: "",
+        utmTerm: "",
+        utmContent: "",
+      }).success,
+    ).toBe(false);
+    expect(validateConditionValue("utm_parameters", {}).success).toBe(false);
+  });
+
+  it("rejects a utm_parameters field longer than 255 characters", () => {
+    expect(
+      validateConditionValue("utm_parameters", { utmSource: "A".repeat(256) }).success,
+    ).toBe(false);
+    expect(
+      validateConditionValue("utm_parameters", { utmSource: "A".repeat(255) }).success,
+    ).toBe(true);
+  });
+});
+
+describe("validateRequiredDiscountCode", () => {
+  it("trims and uppercases a valid code", () => {
+    const result = validateRequiredDiscountCode("  primeday2026  ");
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toBe("PRIMEDAY2026");
+  });
+
+  it("rejects an empty string", () => {
+    expect(validateRequiredDiscountCode("").success).toBe(false);
+  });
+
+  it("rejects a whitespace-only string", () => {
+    expect(validateRequiredDiscountCode("   ").success).toBe(false);
+  });
+
+  it("accepts exactly 255 characters and rejects 256", () => {
+    expect(validateRequiredDiscountCode("A".repeat(255)).success).toBe(true);
+    expect(validateRequiredDiscountCode("A".repeat(256)).success).toBe(false);
   });
 });
 

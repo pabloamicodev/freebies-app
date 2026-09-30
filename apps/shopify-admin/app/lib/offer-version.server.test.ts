@@ -42,4 +42,32 @@ describe("computeOfferVersion", () => {
 
     expect(second).not.toBe(first);
   });
+
+  // Regression test: getOfferDefinitions (the storefront-evaluate hot path)
+  // and offer-publisher.server.ts both hash the same offer row through this
+  // function, but they select different column subsets — offer-definitions
+  // omits requiredDiscountCode/codeDiscountId entirely, while the publisher
+  // selects every column including those two. If either field weren't in
+  // VOLATILE_KEYS, the two hashes would diverge the moment a code offer's
+  // codeDiscountId gets set, and cart validation would reject every gift in
+  // the shop as "outdated" (it compares this hash against what got stamped
+  // on the cart at evaluate time).
+  it("is unaffected by requiredDiscountCode/codeDiscountId, so the publisher's full-row hash matches getOfferDefinitions' narrower one", () => {
+    const withoutCodeFields = computeOfferVersion(offer, conditions, rewards, null);
+    const withCodeFields = computeOfferVersion(
+      { ...offer, requiredDiscountCode: "PRIMEDAY2026", codeDiscountId: null },
+      conditions,
+      rewards,
+      null,
+    );
+    const afterCodeDiscountCreated = computeOfferVersion(
+      { ...offer, requiredDiscountCode: "PRIMEDAY2026", codeDiscountId: "gid://shopify/DiscountCodeNode/1" },
+      conditions,
+      rewards,
+      null,
+    );
+
+    expect(withCodeFields).toBe(withoutCodeFields);
+    expect(afterCodeDiscountCreated).toBe(withoutCodeFields);
+  });
 });

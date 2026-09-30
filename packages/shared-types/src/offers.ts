@@ -64,6 +64,7 @@ export const ConditionTypeSchema = z.enum([
   "line_attribute",
   "cart_attribute",
   "discount_code",
+  "utm_parameters",
 ]);
 export type ConditionType = z.infer<typeof ConditionTypeSchema>;
 
@@ -295,6 +296,53 @@ export const DiscountCodeConditionValueSchema = z.object({
 });
 export type DiscountCodeConditionValue = z.infer<typeof DiscountCodeConditionValueSchema>;
 
+/** Validates `offers.requiredDiscountCode` — the checkout code that gates a
+ * genuine Shopify code-based app discount for the offer (distinct from the
+ * `discount_code` condition type above, which gates an *automatic* offer on
+ * a code already present in `cart.discountCodes`). Normalizes the same way
+ * it's stored: trimmed and uppercased, so lookups/comparisons are
+ * case-insensitive without relying on every caller doing it consistently. */
+export const RequiredDiscountCodeSchema = z
+  .string()
+  .trim()
+  .min(1, "A discount code is required.")
+  .max(255, "Discount code must be 255 characters or fewer.")
+  .transform((code) => code.toUpperCase());
+export type RequiredDiscountCode = z.infer<typeof RequiredDiscountCodeSchema>;
+
+export function validateRequiredDiscountCode(
+  code: unknown,
+): z.SafeParseReturnType<unknown, string> {
+  return RequiredDiscountCodeSchema.safeParse(code);
+}
+
+/** Gates an offer on UTM parameters captured from the customer's original
+ * landing URL (auto-stamped as `_promo_page_url` by the storefront runtime —
+ * see `packages/storefront-runtime/src/metadata-bridge.ts` — no landing-page
+ * snippet required, unlike the `__landing_source` line-attribute mechanism).
+ * Compiles to one `pageUrlConditions` entry per filled-in field, all AND'd
+ * together by the Function. At least one field must be set. */
+export const UtmParametersConditionValueSchema = z
+  .object({
+    utmSource: z.string().trim().max(255, "UTM source must be 255 characters or fewer.").optional(),
+    utmMedium: z.string().trim().max(255, "UTM medium must be 255 characters or fewer.").optional(),
+    utmCampaign: z
+      .string()
+      .trim()
+      .max(255, "UTM campaign must be 255 characters or fewer.")
+      .optional(),
+    utmTerm: z.string().trim().max(255, "UTM term must be 255 characters or fewer.").optional(),
+    utmContent: z.string().trim().max(255, "UTM content must be 255 characters or fewer.").optional(),
+  })
+  .refine(
+    (value) =>
+      Boolean(
+        value.utmSource || value.utmMedium || value.utmCampaign || value.utmTerm || value.utmContent,
+      ),
+    { message: "Enter at least one UTM parameter to match." },
+  );
+export type UtmParametersConditionValue = z.infer<typeof UtmParametersConditionValueSchema>;
+
 /**
  * Per-condition-type Zod schema, keyed by `ConditionType`. This is the
  * type-level counterpart to `validateConditionValue`'s runtime dispatch
@@ -342,6 +390,7 @@ export const CONDITION_VALUE_SCHEMAS = {
   line_attribute: LineAttributeConditionValueSchema,
   cart_attribute: CartAttributeConditionValueSchema,
   discount_code: DiscountCodeConditionValueSchema,
+  utm_parameters: UtmParametersConditionValueSchema,
 } satisfies Record<ConditionType, z.ZodTypeAny>;
 
 /** Value shape for each condition type, derived from `CONDITION_VALUE_SCHEMAS`. */
@@ -398,6 +447,8 @@ export function validateConditionValue(
       return CartAttributeConditionValueSchema.safeParse(value);
     case "discount_code":
       return DiscountCodeConditionValueSchema.safeParse(value);
+    case "utm_parameters":
+      return UtmParametersConditionValueSchema.safeParse(value);
     case "one_use_per_customer":
       return z.record(z.string(), z.unknown()).safeParse(value);
     default:

@@ -445,6 +445,66 @@ export function DiscountCodeForm({ value, onChange }: SubFormProps) {
   );
 }
 
+// ─── UTM parameters ────────────────────────────────────────────────────────────
+export function UtmParametersForm({ value, onChange }: SubFormProps) {
+  const idPrefix = useId();
+  const utmSource = getv(value, "utmSource", "") as string;
+  const utmMedium = getv(value, "utmMedium", "") as string;
+  const utmCampaign = getv(value, "utmCampaign", "") as string;
+  const utmTerm = getv(value, "utmTerm", "") as string;
+  const utmContent = getv(value, "utmContent", "") as string;
+
+  function emit(patch: Partial<Record<string, unknown>>) {
+    onChange?.({ utmSource, utmMedium, utmCampaign, utmTerm, utmContent, ...patch });
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-utm-source`}>UTM Source</label>
+        <input id={`${idPrefix}-utm-source`} className="b-input" value={utmSource} onChange={(event) => emit({ utmSource: event.target.value })} placeholder="amazon" autoComplete="off" />
+      </div>
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-utm-medium`}>UTM Medium</label>
+        <input id={`${idPrefix}-utm-medium`} className="b-input" value={utmMedium} onChange={(event) => emit({ utmMedium: event.target.value })} placeholder="cpc" autoComplete="off" />
+      </div>
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-utm-campaign`}>UTM Campaign</label>
+        <input id={`${idPrefix}-utm-campaign`} className="b-input" value={utmCampaign} onChange={(event) => emit({ utmCampaign: event.target.value })} placeholder="primeday2026" autoComplete="off" />
+      </div>
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-utm-term`}>UTM Term</label>
+        <input id={`${idPrefix}-utm-term`} className="b-input" value={utmTerm} onChange={(event) => emit({ utmTerm: event.target.value })} placeholder="running-shoes" autoComplete="off" />
+      </div>
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-utm-content`}>UTM Content</label>
+        <input id={`${idPrefix}-utm-content`} className="b-input" value={utmContent} onChange={(event) => emit({ utmContent: event.target.value })} placeholder="banner-a" autoComplete="off" />
+      </div>
+      <div className="b-banner b-banner-blue" role="status">
+        <div className="b-banner-body" style={{ width: "100%" }}>
+          <p className="b-banner-title">What this does</p>
+          <p className="b-banner-text">
+            UTM parameters are the tags marketers add to a link (like <code>?utm_source=amazon</code>) to
+            track where traffic came from. This condition only lets the offer apply if the customer's
+            original landing URL carried the values you fill in below — for example, set UTM Source to
+            "amazon-primeday" to gate an offer to customers who clicked through from that campaign.
+          </p>
+          <p className="b-banner-text" style={{ marginTop: 8 }}>
+            <strong>No setup required:</strong> these values are captured automatically from the
+            customer's landing page on every visit — unlike the <code>__landing_source</code> line
+            property elsewhere in this app, there's no snippet to add to a landing page.
+          </p>
+          <p className="b-banner-text" style={{ marginTop: 8 }}>
+            <strong>Combining it:</strong> add it alongside any other condition here — they all apply
+            together (AND). Leave a field blank to skip checking that parameter — only the fields you
+            fill in are required to match.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Store-specific line/cart attribute ──────────────────────────────────────
 export function CustomAttributeForm({ value, onChange }: SubFormProps) {
   const idPrefix = useId();

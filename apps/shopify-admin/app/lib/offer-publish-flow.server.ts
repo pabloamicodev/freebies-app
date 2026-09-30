@@ -79,12 +79,16 @@ export async function validateOffersPublishable(
   if (offerIds.length === 0) return { ok: true };
 
   const [offerRows, conditionRows, rewardRows]: [
-    { id: string; internalName: string }[],
+    { id: string; internalName: string; requiredDiscountCode: string | null }[],
     OfferCondition[],
     OfferReward[],
   ] = await Promise.all([
     db
-      .select({ id: offers.id, internalName: offers.internalName })
+      .select({
+        id: offers.id,
+        internalName: offers.internalName,
+        requiredDiscountCode: offers.requiredDiscountCode,
+      })
       .from(offers)
       .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds))),
     db
@@ -112,7 +116,11 @@ export async function validateOffersPublishable(
       (condition) => condition.scope === "main" && condition.isEnabled,
     );
 
-    if (mainConditions.length === 0) {
+    // A code-gated offer is already gated by its real Shopify checkout
+    // code — Shopify only invokes the Function when that code is present on
+    // the cart — so it doesn't need an additional enabled main condition to
+    // be safely publishable, unlike every other offer.
+    if (mainConditions.length === 0 && !offer.requiredDiscountCode) {
       return {
         ok: false,
         error: `Cannot publish "${offer.internalName}": add at least one enabled main condition.`,
@@ -126,6 +134,17 @@ export async function validateOffersPublishable(
     }
 
     if (rewards.some((reward) => reward.rewardType === "shipping_discount")) {
+      // Code-gated offers only ever compile through the cart-lines Function
+      // (their dedicated discount node never references the delivery
+      // Function a shipping_discount reward needs) — without this check the
+      // offer publishes successfully and the real Shopify code goes live,
+      // but the shipping reward silently never applies.
+      if (offer.requiredDiscountCode) {
+        return {
+          ok: false,
+          error: `Cannot publish "${offer.internalName}": checkout-code-gated offers don't support shipping discount rewards yet — use a regular offer for shipping discounts.`,
+        };
+      }
       const unsupportedShippingCondition = eligibilityConditions.find(
         (condition) => condition.isEnabled && condition.conditionType !== "cart_value",
       );

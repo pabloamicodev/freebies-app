@@ -120,6 +120,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       priority: offer.priority,
       startsAt: offer.startsAt?.toISOString() ?? null,
       endsAt: offer.endsAt?.toISOString() ?? null,
+      requiredDiscountCode: offer.requiredDiscountCode,
     },
     headline: rewardRows[0] ? rewardHeadline(rewardRows[0]) : null,
     conditions,

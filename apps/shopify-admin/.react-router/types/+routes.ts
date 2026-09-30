@@ -171,6 +171,11 @@ type Pages = {
       "id": string;
     };
   };
+  "/app/offers/:id/row-preview": {
+    params: {
+      "id": string;
+    };
+  };
   "/app/offers/:id/conditions": {
     params: {
       "id": string;
@@ -252,7 +257,7 @@ type Pages = {
 type RouteFiles = {
   "root.tsx": {
     id: "root";
-    page: "/" | "/apps/promo-engine/customer/order-attribution" | "/apps/promo-engine/product-customizations" | "/api/customer-account/order-attribution" | "/apps/promo-engine/analytics" | "/api/cron/analytics-cleanup" | "/apps/promo-engine/evaluate" | "/apps/promo-engine/bundle" | "/api/cron/skio-shipping" | "/api/checkout/evaluate" | "/api/cron/catalog-sync" | "/api/offers/:id/export" | "/api/products/search" | "/api/products/search/collections" | "/api/offers/export" | "/api/products/sync" | "/api/report-error" | "/api/cron/offers" | "/api/markets" | "/api/health" | "/auth/login" | "/webhooks/*" | "/api/sync" | "/auth/*" | "/app" | "/app/subscription-pricing" | "/app/subscription-pricing/:id" | "/app/subscription-pricing/new" | "/app/skio-shipping" | "/app/integrations" | "/app/diagnostics" | "/app/translation" | "/app/gift-tiers" | "/app/analytics" | "/app/analytics/offer/:id" | "/app/customize" | "/app/migration" | "/app/boosters" | "/app/settings" | "/app/settings/installation" | "/app/settings/inventory" | "/app/settings/pos" | "/app/graphql" | "/app/offers" | "/app/offers/import" | "/app/offers/:id" | "/app/offers/:id/multicurrency" | "/app/offers/:id/combination" | "/app/offers/:id/conditions" | "/app/offers/:id/priority" | "/app/offers/:id/schedule" | "/app/offers/:id/preview" | "/app/offers/:id/rewards" | "/app/offers/:id/widget" | "/app/offers/:id/widget/market" | "/app/offers/:id/debug" | "/app/offers/new" | "/app/offers/new/subscription/:template" | "/app/offers/new/discount/:template" | "/app/offers/new/shipping/:template" | "/app/offers/new/bundle/:template" | "/app/offers/new/upsell/:template" | "/app/offers/new/gift/:template" | "/app/logs";
+    page: "/" | "/apps/promo-engine/customer/order-attribution" | "/apps/promo-engine/product-customizations" | "/api/customer-account/order-attribution" | "/apps/promo-engine/analytics" | "/api/cron/analytics-cleanup" | "/apps/promo-engine/evaluate" | "/apps/promo-engine/bundle" | "/api/cron/skio-shipping" | "/api/checkout/evaluate" | "/api/cron/catalog-sync" | "/api/offers/:id/export" | "/api/products/search" | "/api/products/search/collections" | "/api/offers/export" | "/api/products/sync" | "/api/report-error" | "/api/cron/offers" | "/api/markets" | "/api/health" | "/auth/login" | "/webhooks/*" | "/api/sync" | "/auth/*" | "/app" | "/app/subscription-pricing" | "/app/subscription-pricing/:id" | "/app/subscription-pricing/new" | "/app/skio-shipping" | "/app/integrations" | "/app/diagnostics" | "/app/translation" | "/app/gift-tiers" | "/app/analytics" | "/app/analytics/offer/:id" | "/app/customize" | "/app/migration" | "/app/boosters" | "/app/settings" | "/app/settings/installation" | "/app/settings/inventory" | "/app/settings/pos" | "/app/graphql" | "/app/offers" | "/app/offers/import" | "/app/offers/:id" | "/app/offers/:id/multicurrency" | "/app/offers/:id/combination" | "/app/offers/:id/row-preview" | "/app/offers/:id/conditions" | "/app/offers/:id/priority" | "/app/offers/:id/schedule" | "/app/offers/:id/preview" | "/app/offers/:id/rewards" | "/app/offers/:id/widget" | "/app/offers/:id/widget/market" | "/app/offers/:id/debug" | "/app/offers/new" | "/app/offers/new/subscription/:template" | "/app/offers/new/discount/:template" | "/app/offers/new/shipping/:template" | "/app/offers/new/bundle/:template" | "/app/offers/new/upsell/:template" | "/app/offers/new/gift/:template" | "/app/logs";
   };
   "routes/apps.promo-engine.customer.order-attribution.ts": {
     id: "routes/apps.promo-engine.customer.order-attribution";
@@ -352,7 +357,7 @@ type RouteFiles = {
   };
   "routes/app.tsx": {
     id: "routes/app";
-    page: "/app" | "/app/subscription-pricing" | "/app/subscription-pricing/:id" | "/app/subscription-pricing/new" | "/app/skio-shipping" | "/app/integrations" | "/app/diagnostics" | "/app/translation" | "/app/gift-tiers" | "/app/analytics" | "/app/analytics/offer/:id" | "/app/customize" | "/app/migration" | "/app/boosters" | "/app/settings" | "/app/settings/installation" | "/app/settings/inventory" | "/app/settings/pos" | "/app/graphql" | "/app/offers" | "/app/offers/import" | "/app/offers/:id" | "/app/offers/:id/multicurrency" | "/app/offers/:id/combination" | "/app/offers/:id/conditions" | "/app/offers/:id/priority" | "/app/offers/:id/schedule" | "/app/offers/:id/preview" | "/app/offers/:id/rewards" | "/app/offers/:id/widget" | "/app/offers/:id/widget/market" | "/app/offers/:id/debug" | "/app/offers/new" | "/app/offers/new/subscription/:template" | "/app/offers/new/discount/:template" | "/app/offers/new/shipping/:template" | "/app/offers/new/bundle/:template" | "/app/offers/new/upsell/:template" | "/app/offers/new/gift/:template" | "/app/logs";
+    page: "/app" | "/app/subscription-pricing" | "/app/subscription-pricing/:id" | "/app/subscription-pricing/new" | "/app/skio-shipping" | "/app/integrations" | "/app/diagnostics" | "/app/translation" | "/app/gift-tiers" | "/app/analytics" | "/app/analytics/offer/:id" | "/app/customize" | "/app/migration" | "/app/boosters" | "/app/settings" | "/app/settings/installation" | "/app/settings/inventory" | "/app/settings/pos" | "/app/graphql" | "/app/offers" | "/app/offers/import" | "/app/offers/:id" | "/app/offers/:id/multicurrency" | "/app/offers/:id/combination" | "/app/offers/:id/row-preview" | "/app/offers/:id/conditions" | "/app/offers/:id/priority" | "/app/offers/:id/schedule" | "/app/offers/:id/preview" | "/app/offers/:id/rewards" | "/app/offers/:id/widget" | "/app/offers/:id/widget/market" | "/app/offers/:id/debug" | "/app/offers/new" | "/app/offers/new/subscription/:template" | "/app/offers/new/discount/:template" | "/app/offers/new/shipping/:template" | "/app/offers/new/bundle/:template" | "/app/offers/new/upsell/:template" | "/app/offers/new/gift/:template" | "/app/logs";
   };
   "routes/app.subscription-pricing._index.tsx": {
     id: "routes/app.subscription-pricing._index";
@@ -436,7 +441,7 @@ type RouteFiles = {
   };
   "routes/app.offers.tsx": {
     id: "routes/app.offers";
-    page: "/app/offers" | "/app/offers/import" | "/app/offers/:id" | "/app/offers/:id/multicurrency" | "/app/offers/:id/combination" | "/app/offers/:id/conditions" | "/app/offers/:id/priority" | "/app/offers/:id/schedule" | "/app/offers/:id/preview" | "/app/offers/:id/rewards" | "/app/offers/:id/widget" | "/app/offers/:id/widget/market" | "/app/offers/:id/debug" | "/app/offers/new" | "/app/offers/new/subscription/:template" | "/app/offers/new/discount/:template" | "/app/offers/new/shipping/:template" | "/app/offers/new/bundle/:template" | "/app/offers/new/upsell/:template" | "/app/offers/new/gift/:template";
+    page: "/app/offers" | "/app/offers/import" | "/app/offers/:id" | "/app/offers/:id/multicurrency" | "/app/offers/:id/combination" | "/app/offers/:id/row-preview" | "/app/offers/:id/conditions" | "/app/offers/:id/priority" | "/app/offers/:id/schedule" | "/app/offers/:id/preview" | "/app/offers/:id/rewards" | "/app/offers/:id/widget" | "/app/offers/:id/widget/market" | "/app/offers/:id/debug" | "/app/offers/new" | "/app/offers/new/subscription/:template" | "/app/offers/new/discount/:template" | "/app/offers/new/shipping/:template" | "/app/offers/new/bundle/:template" | "/app/offers/new/upsell/:template" | "/app/offers/new/gift/:template";
   };
   "routes/app.offers.import.tsx": {
     id: "routes/app.offers.import";
@@ -448,7 +453,7 @@ type RouteFiles = {
   };
   "routes/app.offers.$id.tsx": {
     id: "routes/app.offers.$id";
-    page: "/app/offers/:id" | "/app/offers/:id/multicurrency" | "/app/offers/:id/combination" | "/app/offers/:id/conditions" | "/app/offers/:id/priority" | "/app/offers/:id/schedule" | "/app/offers/:id/preview" | "/app/offers/:id/rewards" | "/app/offers/:id/widget" | "/app/offers/:id/widget/market" | "/app/offers/:id/debug";
+    page: "/app/offers/:id" | "/app/offers/:id/multicurrency" | "/app/offers/:id/combination" | "/app/offers/:id/row-preview" | "/app/offers/:id/conditions" | "/app/offers/:id/priority" | "/app/offers/:id/schedule" | "/app/offers/:id/preview" | "/app/offers/:id/rewards" | "/app/offers/:id/widget" | "/app/offers/:id/widget/market" | "/app/offers/:id/debug";
   };
   "routes/app.offers.$id.multicurrency.tsx": {
     id: "routes/app.offers.$id.multicurrency";
@@ -457,6 +462,10 @@ type RouteFiles = {
   "routes/app.offers.$id.combination.tsx": {
     id: "routes/app.offers.$id.combination";
     page: "/app/offers/:id/combination";
+  };
+  "routes/app.offers.$id.row-preview.tsx": {
+    id: "routes/app.offers.$id.row-preview";
+    page: "/app/offers/:id/row-preview";
   };
   "routes/app.offers.$id.conditions.tsx": {
     id: "routes/app.offers.$id.conditions";
@@ -589,6 +598,7 @@ type RouteModules = {
   "routes/app.offers.$id": typeof import("./app/routes/app.offers.$id.tsx");
   "routes/app.offers.$id.multicurrency": typeof import("./app/routes/app.offers.$id.multicurrency.tsx");
   "routes/app.offers.$id.combination": typeof import("./app/routes/app.offers.$id.combination.tsx");
+  "routes/app.offers.$id.row-preview": typeof import("./app/routes/app.offers.$id.row-preview.tsx");
   "routes/app.offers.$id.conditions": typeof import("./app/routes/app.offers.$id.conditions.tsx");
   "routes/app.offers.$id.priority": typeof import("./app/routes/app.offers.$id.priority.tsx");
   "routes/app.offers.$id.schedule": typeof import("./app/routes/app.offers.$id.schedule.tsx");

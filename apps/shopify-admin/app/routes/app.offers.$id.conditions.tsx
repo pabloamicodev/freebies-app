@@ -221,6 +221,15 @@ function buildConditionValue(
       case "discount_code":
         value = { code: String(formData.get("discountCode") ?? "").trim() };
         break;
+      case "utm_parameters":
+        value = {
+          utmSource: String(formData.get("utmSource") ?? "").trim(),
+          utmMedium: String(formData.get("utmMedium") ?? "").trim(),
+          utmCampaign: String(formData.get("utmCampaign") ?? "").trim(),
+          utmTerm: String(formData.get("utmTerm") ?? "").trim(),
+          utmContent: String(formData.get("utmContent") ?? "").trim(),
+        };
+        break;
     }
 
     const valueResult = validateConditionValue(conditionType, value);
@@ -318,6 +327,7 @@ const SUB_CONDITION_TYPES = [
   { label: "Subscription Products Only", value: "subscription_product_type" },
   { label: "Specific Link / Magic URL", value: "specific_link" },
   { label: "Requires a discount code", value: "discount_code" },
+  { label: "UTM Parameters", value: "utm_parameters" },
 ];
 
 /** Pulls the edit-form-relevant fields out of a condition's stored value —
@@ -470,6 +480,21 @@ export default function OfferConditionsPage() {
           backTo={`/app/offers/${offer.id}`}
           actions={<Link to={`/app/offers/${offer.id}/rewards`} className="b-btn b-btn-primary">Rewards →</Link>}
         />
+
+        {/* Checkout-code-gated offer explainer */}
+        {offer.requiredDiscountCode && (
+          <div className="b-banner b-banner-blue b-mb-4" role="status">
+            <span className="b-banner-icon">&#9432;</span>
+            <div className="b-banner-body">
+              <p className="b-banner-text" style={{ margin: 0 }}>
+                This offer only activates when the customer enters the code{" "}
+                <strong>{offer.requiredDiscountCode}</strong> at checkout. Any conditions you add
+                below apply IN ADDITION to that — for example, add a landing-page condition here to
+                also require the customer came from a specific page.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* No-conditions warning */}
         {conditions.length === 0 && (
@@ -1060,6 +1085,56 @@ export default function OfferConditionsPage() {
                             on <code>__landing_source</code> with match "not equal" — landing-page lines
                             carry that property, so the code has no effect there even if it's copied onto
                             a landing-page offer.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedType === "utm_parameters" && (
+                    <div className="b-stack b-stack-3">
+                      <div>
+                        <label className="b-label" htmlFor="utmSource">UTM Source</label>
+                        <input id="utmSource" name="utmSource" className="b-input" placeholder="amazon" autoComplete="off" defaultValue={typeof editingValue["utmSource"] === "string" ? editingValue["utmSource"] : undefined} />
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="utmMedium">UTM Medium</label>
+                        <input id="utmMedium" name="utmMedium" className="b-input" placeholder="cpc" autoComplete="off" defaultValue={typeof editingValue["utmMedium"] === "string" ? editingValue["utmMedium"] : undefined} />
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="utmCampaign">UTM Campaign</label>
+                        <input id="utmCampaign" name="utmCampaign" className="b-input" placeholder="primeday2026" autoComplete="off" defaultValue={typeof editingValue["utmCampaign"] === "string" ? editingValue["utmCampaign"] : undefined} />
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="utmTerm">UTM Term</label>
+                        <input id="utmTerm" name="utmTerm" className="b-input" placeholder="running-shoes" autoComplete="off" defaultValue={typeof editingValue["utmTerm"] === "string" ? editingValue["utmTerm"] : undefined} />
+                      </div>
+                      <div>
+                        <label className="b-label" htmlFor="utmContent">UTM Content</label>
+                        <input id="utmContent" name="utmContent" className="b-input" placeholder="banner-a" autoComplete="off" defaultValue={typeof editingValue["utmContent"] === "string" ? editingValue["utmContent"] : undefined} />
+                      </div>
+                      <div className="b-banner b-banner-blue" role="status">
+                        <div className="b-banner-body" style={{ width: "100%" }}>
+                          <p className="b-banner-title">What this does</p>
+                          <p className="b-banner-text">
+                            UTM parameters are the tags marketers add to a link (like
+                            <code> ?utm_source=amazon</code>) to track where traffic came from. This
+                            condition only lets the offer apply if the customer's original landing URL
+                            carried the values you fill in below — for example, set UTM Source to
+                            "amazon-primeday" to gate an offer to customers who clicked through from that
+                            campaign.
+                          </p>
+                          <p className="b-banner-text" style={{ marginTop: 8 }}>
+                            <strong>No setup required:</strong> these values are captured automatically
+                            from the customer's landing page on every visit — unlike the
+                            <code> __landing_source</code> line property elsewhere in this app, there's no
+                            snippet to add to a landing page.
+                          </p>
+                          <p className="b-banner-text" style={{ marginTop: 8 }}>
+                            <strong>Combining it:</strong> add another main or sub-condition below — every
+                            enabled condition on this offer applies together (AND). Leave a field blank to
+                            skip checking that parameter — only the fields you fill in are required to
+                            match.
                           </p>
                         </div>
                       </div>

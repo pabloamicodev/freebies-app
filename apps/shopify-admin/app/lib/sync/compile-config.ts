@@ -473,6 +473,32 @@ export function compileOfferConfig(
         });
         break;
       }
+      case "utm_parameters": {
+        const { value } = typedCondition;
+        const utmFields: Array<[string, string | undefined]> = [
+          ["utm_source", value.utmSource],
+          ["utm_medium", value.utmMedium],
+          ["utm_campaign", value.utmCampaign],
+          ["utm_term", value.utmTerm],
+          ["utm_content", value.utmContent],
+        ];
+        for (const [paramName, paramValue] of utmFields) {
+          if (!paramValue) continue;
+          // Match specific_link's encoding: the Function compares this
+          // against the raw, un-decoded query string captured off the
+          // customer's real landing URL, so a value containing a space or
+          // other reserved character must be encoded the same way a real
+          // campaign URL would already have it, or the comparison never matches.
+          config.pageUrlConditions!.push({
+            patterns: [],
+            matchMode: "contains",
+            caseSensitive: false,
+            paramName,
+            paramValue: encodeURIComponent(paramValue),
+          });
+        }
+        break;
+      }
       default:
         // Only conditions the publish flow already validated as Function-enforced
         // (see FUNCTION_ENFORCED_CONDITION_TYPES / offer-publish-flow.server.ts)

@@ -5,6 +5,13 @@ const VOLATILE_KEYS = new Set([
   "updatedBy",
   "compiledConfig",
   "functionMetafieldGid",
+  // Set by publish-time plumbing (codeDiscountId only after a code offer's
+  // Shopify node is created), never by the merchant editing the offer — must
+  // stay out of the hash or it diverges from getOfferDefinitions' hash of the
+  // same row (offer-definitions.server.ts already omits both), and every gift
+  // fails cart validation as "outdated" the moment either value changes.
+  "requiredDiscountCode",
+  "codeDiscountId",
 ]);
 
 /**

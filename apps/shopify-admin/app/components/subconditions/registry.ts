@@ -12,6 +12,7 @@ import {
   QuantityLimitForm,
   SalesChannelForm,
   SubscriptionForm,
+  UtmParametersForm,
 } from "./forms.js";
 
 export const SUB_FORMS: Record<SubconditionId, ComponentType<SubFormProps>> = {
@@ -25,4 +26,5 @@ export const SUB_FORMS: Record<SubconditionId, ComponentType<SubFormProps>> = {
   custom_attribute: CustomAttributeForm,
   quantity_limit: QuantityLimitForm,
   discount_code: DiscountCodeForm,
+  utm_parameters: UtmParametersForm,
 };

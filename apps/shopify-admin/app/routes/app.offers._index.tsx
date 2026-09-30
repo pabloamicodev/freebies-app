@@ -33,6 +33,8 @@ import {
   publishShopConfig as publishShopConfigToShopify,
   validateOffersPublishable,
 } from "../lib/offer-publish-flow.server.js";
+import { neutralizeCodeDiscountNode } from "../lib/sync/offer-publisher.server.js";
+import * as Sentry from "@sentry/node";
 import type { OfferCreateModalType } from "../components/offers/OfferCreateModalFlow.js";
 import { SUBSCRIPTION_OFFER_TEMPLATES } from "../lib/subscription-offer-templates.js";
 
@@ -154,6 +156,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const offerId = formData.get("offerId") as string | null;
     if (!offerId) throw new Response("Missing offerId", { status: 400 });
 
+    const [toDelete] = await db
+      .select({ codeDiscountId: offers.codeDiscountId })
+      .from(offers)
+      .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
+      .limit(1);
+
     await db.transaction(async (tx) => {
       await Promise.all([
         tx
@@ -180,6 +188,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       ]);
       await tx.delete(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
     });
+
+    // Once the row is gone, the regular publish below can never find this
+    // offer again to neutralize its dedicated node — do it explicitly here,
+    // best-effort, so a deleted checkout-code promo doesn't keep discounting
+    // real orders forever with its last-known config.
+    if (toDelete?.codeDiscountId) {
+      try {
+        await neutralizeCodeDiscountNode(shopId, session.shop, toDelete.codeDiscountId);
+      } catch (err) {
+        Sentry.captureException(err, {
+          tags: { route: "app.offers._index", action: "delete-neutralize-code-discount", offerId },
+        });
+      }
+    }
 
     const publishError = await publishShopConfig();
     if (publishError) return { error: publishError };
@@ -326,6 +348,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           archivedAt: null,
           createdAt: new Date(),
           updatedAt: new Date(),
+          // A copy must not inherit the source's checkout code or Shopify
+          // discount node id — see app.offers.$id._index.tsx's duplicate
+          // action for why (1:1 with the source, unique-index enforced,
+          // and sharing a discount node between two offers is unsafe).
+          requiredDiscountCode: null,
+          codeDiscountId: null,
         })
         .returning({ id: offers.id });
       if (newOffer) return redirect(`/app/offers/${newOffer.id}`);
@@ -738,6 +766,11 @@ function OfferRowPreviewContent({
     <div className="b-preview">
       <div className="b-preview-header">
         {headline && <span className="b-preview-headline">{headline}</span>}
+        {offer.requiredDiscountCode && (
+          <span className="b-badge b-badge-blue" title="This offer only activates with this checkout discount code">
+            Requires code: {offer.requiredDiscountCode}
+          </span>
+        )}
         <span className="b-preview-meta">Priority {offer.priority}</span>
         <span className="b-preview-meta">
           {formatDate(offer.startsAt)}{offer.endsAt ? ` – ${formatDate(offer.endsAt)}` : " – no end date"}

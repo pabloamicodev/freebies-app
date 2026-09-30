@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectGids, rewardHeadline, urlsFromCondition } from "./offer-summaries.js";
+import { collectGids, conditionSummary, rewardHeadline, urlsFromCondition } from "./offer-summaries.js";
 
 describe("collectGids", () => {
   it("collects variant and product GIDs from every target shape", () => {
@@ -38,6 +38,18 @@ describe("urlsFromCondition", () => {
   it("returns an empty array for condition types with no URL", () => {
     expect(urlsFromCondition("cart_value", { thresholdCents: 5000 })).toEqual([]);
     expect(urlsFromCondition("discount_code", { code: "PRIME2026" })).toEqual([]);
+  });
+});
+
+describe("conditionSummary", () => {
+  it("renders only the UTM fields that are set, using real query-string keys", () => {
+    expect(conditionSummary("utm_parameters", { utmSource: "amazon", utmCampaign: "primeday" })).toBe(
+      "utm_source=amazon, utm_campaign=primeday",
+    );
+  });
+
+  it("falls back to a no-parameters message when utm_parameters has nothing set", () => {
+    expect(conditionSummary("utm_parameters", {})).toBe("no UTM parameters set");
   });
 });
 

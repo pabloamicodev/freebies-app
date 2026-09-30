@@ -22,6 +22,17 @@ export function conditionSummary(conditionType: string, value: unknown): string 
       return `${v["key"] ?? "?"} ${v["matchMode"] === "not_equals" ? "≠" : "="} "${v["value"] ?? ""}"`;
     case "discount_code":
       return `code: ${v["code"] ?? "?"}`;
+    case "utm_parameters": {
+      const fields: Array<[string, unknown]> = [
+        ["utm_source", v["utmSource"]],
+        ["utm_medium", v["utmMedium"]],
+        ["utm_campaign", v["utmCampaign"]],
+        ["utm_term", v["utmTerm"]],
+        ["utm_content", v["utmContent"]],
+      ];
+      const set = fields.filter(([, value]) => typeof value === "string" && value.length > 0);
+      return set.length ? set.map(([key, value]) => `${key}=${value}`).join(", ") : "no UTM parameters set";
+    }
     case "specific_product":
     case "pack_of_products": {
       const requirements = Array.isArray(v["requirements"]) ? v["requirements"] as unknown[] : [];
