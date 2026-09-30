@@ -41,14 +41,23 @@ export async function reconcileOrderAttribution(data: ReconcileOrderData): Promi
   }
 }
 
-export async function cleanupOldAnalyticsEvents(retentionDays = 90, db: Db = getDb()): Promise<number> {
+export async function cleanupOldAnalyticsEvents(
+  retentionDays = 90,
+  db: Db = getDb(),
+  maxRuntimeMs = 45_000,
+): Promise<number> {
   const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  const startedAt = Date.now();
 
   // A single unbounded DELETE ... RETURNING here could try to delete and hand
   // back millions of rows/ids after being off for a while — batch it instead,
   // deleting by id so no batch ever RETURNINGs more than CLEANUP_BATCH_SIZE.
+  // Also cap total runtime (matching drainProductSyncQueue's pattern) so a
+  // large backlog can't run past the cron's own function timeout — it just
+  // picks up where it left off on the next scheduled run.
   let totalDeleted = 0;
   for (;;) {
+    if (Date.now() - startedAt >= maxRuntimeMs) break;
     const batch = await db
       .select({ id: analyticsEvents.id })
       .from(analyticsEvents)

@@ -12,7 +12,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const retentionDays = Number(process.env["ANALYTICS_RETENTION_DAYS"] ?? 90);
     const [analyticsDeleted, operational] = await Promise.all([
-      cleanupOldAnalyticsEvents(Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays : 90),
+      cleanupOldAnalyticsEvents(
+        Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays : 90,
+        undefined,
+        45_000,
+      ),
       cleanupOperationalState(),
     ]);
     return apiJson(request, { ok: true, analyticsDeleted, operational });

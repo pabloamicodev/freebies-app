@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@promo/db";
+import type * as PromoDb from "@promo/db";
 import type * as DrizzleOrm from "drizzle-orm";
 import { cleanupOldAnalyticsEvents, reconcileOrderAttribution } from "./analytics-reconcile.server.js";
 
@@ -53,7 +54,7 @@ const { insertCalls, getDbMock } = vi.hoisted(() => {
 });
 
 vi.mock("@promo/db", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@promo/db")>();
+  const actual = await importOriginal<typeof PromoDb>();
   return {
     ...actual,
     getDb: getDbMock,
@@ -77,6 +78,16 @@ describe("cleanupOldAnalyticsEvents", () => {
   it("does nothing when there's nothing past the retention window", async () => {
     const { db, deleteCalls } = fakeDb([[]]);
     const count = await cleanupOldAnalyticsEvents(90, db);
+    expect(count).toBe(0);
+    expect(deleteCalls).toHaveLength(0);
+  });
+
+  it("stops picking up new batches once maxRuntimeMs has elapsed, to resume on the next cron run", async () => {
+    const fullBatch = Array.from({ length: 5_000 }, (_, i) => ({ id: `id-${i}` }));
+    const { db, deleteCalls } = fakeDb([fullBatch, fullBatch, fullBatch]);
+
+    const count = await cleanupOldAnalyticsEvents(90, db, 0);
+
     expect(count).toBe(0);
     expect(deleteCalls).toHaveLength(0);
   });
