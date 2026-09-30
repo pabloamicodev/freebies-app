@@ -5,6 +5,7 @@
  */
 
 import { useLoaderData, Form, Link, useActionData, useNavigation } from "react-router";
+import * as Sentry from "@sentry/node";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { OfferStepTabs } from "../components/OfferStepTabs.js";
@@ -49,7 +50,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const conditionRows = await db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
-  const markets = await getMarketsForShop(shopId).catch(() => []);
+  const markets = await getMarketsForShop(shopId).catch((error) => {
+    Sentry.captureException(error, { tags: { route: "app.offers.$id.conditions", query: "getMarketsForShop" } });
+    return [];
+  });
 
   return {
     offer,

@@ -1,5 +1,6 @@
 import { useLoaderData, Link } from "react-router";
 import { useMemo, useCallback, useState } from "react";
+import * as Sentry from "@sentry/node";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { offers, analyticsEvents } from "@promo/db";
 import { and, count, eq, gte, sql } from "drizzle-orm";
@@ -38,7 +39,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         .select({ count: count() })
         .from(offers)
         .where(and(eq(offers.shopId, shopId), eq(offers.status, "active")))
-        .catch(() => [{ count: 0 }]),
+        .catch((error) => {
+          Sentry.captureException(error, { tags: { route: "app._index", query: "activeOffersCount" } });
+          return [{ count: 0 }];
+        }),
       // A SQL aggregate, not a capped row scan: the previous `.limit(2000)`
       // JS-side sum silently undercounted once a shop passed 2000 attributed
       // events in the window. One row is written per attributed offer, so an
@@ -58,10 +62,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         )
         SELECT COALESCE(SUM(subtotal_cents), 0)::bigint AS total_sales_cents, COUNT(*)::int AS order_count
         FROM deduped_orders
-      `).catch(() => [{ total_sales_cents: "0", order_count: 0 }]),
+      `).catch((error) => {
+        Sentry.captureException(error, { tags: { route: "app._index", query: "salesTotals" } });
+        return [{ total_sales_cents: "0", order_count: 0 }];
+      }),
     ]);
 
-    const warnings = await getDashboardWarnings(shopId, shopDomain).catch(() => []);
+    const warnings = await getDashboardWarnings(shopId, shopDomain).catch((error) => {
+      Sentry.captureException(error, { tags: { route: "app._index", query: "dashboardWarnings" } });
+      return [];
+    });
 
     const totalSalesCents = Number(totals?.total_sales_cents ?? 0);
     const orderCount = Number(totals?.order_count ?? 0);
@@ -78,7 +88,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       avgOrderCents,
       warnings,
     };
-  } catch {
+  } catch (error) {
+    Sentry.captureException(error, { tags: { route: "app._index" } });
     return {
       shopDomain,
       shopDisplayName: shopDomain.replace(/\.myshopify\.com$/, ""),
