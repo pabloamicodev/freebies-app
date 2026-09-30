@@ -8,6 +8,7 @@ import { NotFound } from "../components/NotFound.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
+import { SelectedProductsList } from "../components/SelectedProductsList.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
@@ -1156,7 +1157,16 @@ export default function OfferRewardsPage() {
                                   setRequiredAnchorVariantIds(event.target.value)
                                 }
                                 placeholder="Optional, one ProductVariant GID per line"
-                                style={{ resize: "vertical" }}
+                                style={{ resize: "vertical", marginBottom: 8 }}
+                              />
+                              {/* Preview so pasted GIDs show real product/variant names, not just raw ids */}
+                              <SelectedProductsList
+                                gids={splitTextareaList(requiredAnchorVariantIds)}
+                                onRemove={(gid) =>
+                                  setRequiredAnchorVariantIds(
+                                    splitTextareaList(requiredAnchorVariantIds).filter((g) => g !== gid).join("\n"),
+                                  )
+                                }
                               />
                             </div>
                             <div>
@@ -1427,42 +1437,6 @@ export default function OfferRewardsPage() {
                             : "Gift Product"}
                         </p>
 
-                        {/* Selected GID tags */}
-                        {selectedGiftGids.length > 0 && (
-                          <div
-                            className="b-row b-gap-2"
-                            style={{ flexWrap: "wrap", marginBottom: 10 }}
-                          >
-                            {selectedGiftGids.map((gid) => (
-                              <span
-                                key={gid}
-                                className="b-badge b-badge-gray b-row b-gap-2"
-                                style={{ gap: 6 }}
-                              >
-                                {gid.split("/").pop()}
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setSelectedGiftGids((prev) => prev.filter((g) => g !== gid))
-                                  }
-                                  style={{
-                                    background: "none",
-                                    border: "none",
-                                    cursor: "pointer",
-                                    padding: 0,
-                                    lineHeight: 1,
-                                    color: "var(--text-sub)",
-                                    fontSize: 12,
-                                  }}
-                                  title="Remove"
-                                >
-                                  ✕
-                                </button>
-                              </span>
-                            ))}
-                          </div>
-                        )}
-
                         <button
                           type="button"
                           className="b-btn b-btn-secondary b-btn-sm"
@@ -1474,6 +1448,14 @@ export default function OfferRewardsPage() {
                               : "Select Discounted Variants"
                             : "🎁 Select Gift Product"}
                         </button>
+                        {/* Resolves real titles/thumbnails instead of showing raw GIDs */}
+                        <SelectedProductsList
+                          gids={selectedGiftGids}
+                          onRemove={(gid) => setSelectedGiftGids((prev) => prev.filter((g) => g !== gid))}
+                          variantMode={
+                            !(rewardType === "product_gift" || (rewardType === "product_discount" && productTargetType === "products"))
+                          }
+                        />
                         <input
                           type="hidden"
                           name="variantGids"
@@ -1502,6 +1484,10 @@ export default function OfferRewardsPage() {
                               {fallbackGids.length === 0 ? "None — a sold-out gift is skipped" : `${fallbackGids.length} selected`}
                             </span>
                           </div>
+                          <SelectedProductsList
+                            gids={fallbackGids}
+                            onRemove={(gid) => setFallbackGids((prev) => prev.filter((g) => g !== gid))}
+                          />
                           <input type="hidden" name="fallbackVariantGids" value={fallbackGids.join("\n")} />
                         </div>
                       )}
@@ -1727,6 +1713,16 @@ export default function OfferRewardsPage() {
                                     value={requiredAnchorVariantIds}
                                     onChange={(event) =>
                                       setRequiredAnchorVariantIds(event.target.value)
+                                    }
+                                    style={{ marginBottom: 8 }}
+                                  />
+                                  {/* Preview so pasted GIDs show real product/variant names, not just raw ids */}
+                                  <SelectedProductsList
+                                    gids={splitTextareaList(requiredAnchorVariantIds)}
+                                    onRemove={(gid) =>
+                                      setRequiredAnchorVariantIds(
+                                        splitTextareaList(requiredAnchorVariantIds).filter((g) => g !== gid).join("\n"),
+                                      )
                                     }
                                   />
                                 </div>

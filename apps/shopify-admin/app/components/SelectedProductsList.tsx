@@ -55,7 +55,7 @@ export function SelectedProductsList({ gids, onRemove, variantMode = true, label
       {loading ? (
         <div style={{ fontSize: 13, color: "var(--text-sub)", padding: "8px 0" }}>Loading…</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={gridStyle}>
           {variantMode
             ? renderVariantRows(gids, products, onRemove)
             : renderProductRows(products, onRemove)}
@@ -141,6 +141,15 @@ function renderVariantRows(gids: string[], products: SelectedProduct[], onRemove
   });
 }
 
+// Wraps into columns once there's more than one card, instead of a single
+// vertical list — each card stays a fixed min-width so it reads as a row of
+// horizontal cards rather than a table.
+const gridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+  gap: 6,
+};
+
 const rowStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -149,6 +158,7 @@ const rowStyle: React.CSSProperties = {
   borderRadius: 6,
   background: "var(--bg)",
   border: "1px solid var(--border)",
+  minWidth: 0,
 };
 
 const thumbStyle: React.CSSProperties = {

@@ -9,6 +9,7 @@ import * as Sentry from "@sentry/node";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
+import { SelectedProductsList } from "../components/SelectedProductsList.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
@@ -732,35 +733,6 @@ export default function OfferConditionsPage() {
                           ? "Required products"
                           : "Pack products (all must be present)"}
                       </p>
-                      <div className="b-row b-gap-2" style={{ flexWrap: "wrap" }}>
-                        {requiredVariantGids.map((gid) => (
-                          <span
-                            key={gid}
-                            className="b-badge b-badge-gray"
-                            style={{ gap: 6 }}
-                          >
-                            {gid.split("/").pop()}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setRequiredVariantGids((prev) => prev.filter((g) => g !== gid))
-                              }
-                              style={{
-                                background: "none",
-                                border: "none",
-                                cursor: "pointer",
-                                padding: 0,
-                                lineHeight: 1,
-                                color: "var(--text-sub)",
-                                fontSize: 14,
-                              }}
-                              aria-label="Remove"
-                            >
-                              &times;
-                            </button>
-                          </span>
-                        ))}
-                      </div>
                       <button
                         type="button"
                         className="b-btn b-btn-secondary b-btn-sm"
@@ -768,6 +740,11 @@ export default function OfferConditionsPage() {
                       >
                         + Select Products
                       </button>
+                      {/* Resolves real titles/thumbnails instead of showing raw GIDs */}
+                      <SelectedProductsList
+                        gids={requiredVariantGids}
+                        onRemove={(gid) => setRequiredVariantGids((prev) => prev.filter((g) => g !== gid))}
+                      />
                       <input type="hidden" name="requiredVariantGids" value={requiredVariantGids.join(",")} />
                       <div>
                         <label className="b-label" htmlFor="minQtyPerProduct">Min quantity per product</label>
@@ -794,35 +771,6 @@ export default function OfferConditionsPage() {
                   {selectedType === "exclude_products" && (
                     <div className="b-stack b-stack-3">
                       <p className="b-text-bold" style={{ margin: 0 }}>Excluded products</p>
-                      <div className="b-row b-gap-2" style={{ flexWrap: "wrap" }}>
-                        {excludeVariantGids.map((gid) => (
-                          <span
-                            key={gid}
-                            className="b-badge b-badge-gray"
-                            style={{ gap: 6 }}
-                          >
-                            {gid.split("/").pop()}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setExcludeVariantGids((prev) => prev.filter((g) => g !== gid))
-                              }
-                              style={{
-                                background: "none",
-                                border: "none",
-                                cursor: "pointer",
-                                padding: 0,
-                                lineHeight: 1,
-                                color: "var(--text-sub)",
-                                fontSize: 14,
-                              }}
-                              aria-label="Remove"
-                            >
-                              &times;
-                            </button>
-                          </span>
-                        ))}
-                      </div>
                       <button
                         type="button"
                         className="b-btn b-btn-secondary b-btn-sm"
@@ -830,6 +778,11 @@ export default function OfferConditionsPage() {
                       >
                         + Select Products to Exclude
                       </button>
+                      {/* Resolves real titles/thumbnails instead of showing raw GIDs */}
+                      <SelectedProductsList
+                        gids={excludeVariantGids}
+                        onRemove={(gid) => setExcludeVariantGids((prev) => prev.filter((g) => g !== gid))}
+                      />
                       <input type="hidden" name="excludeVariantGids" value={excludeVariantGids.join(",")} />
                     </div>
                   )}

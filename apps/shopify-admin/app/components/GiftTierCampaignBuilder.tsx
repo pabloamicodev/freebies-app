@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Form } from "react-router";
 import { ProductPicker } from "./ProductPicker.js";
+import { SelectedProductsList } from "./SelectedProductsList.js";
 import { OfferConditionsBuilder } from "./OfferConditionsBuilder.js";
 
 interface TierDraft {
@@ -197,24 +198,14 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
                   {tier.variantIds.length ? `${tier.variantIds.length} selected` : "Required"}
                 </span>
               </div>
-              {tier.variantIds.length > 0 && (
-                <div className="b-chip-list">
-                  {tier.variantIds.map((id) => (
-                    <button
-                      type="button"
-                      className="b-chip"
-                      key={id}
-                      onClick={() =>
-                        updateTier(index, {
-                          variantIds: tier.variantIds.filter((candidate) => candidate !== id),
-                        })
-                      }
-                    >
-                      {id.split("/").pop()} ×
-                    </button>
-                  ))}
-                </div>
-              )}
+              <SelectedProductsList
+                gids={tier.variantIds}
+                onRemove={(id) =>
+                  updateTier(index, {
+                    variantIds: tier.variantIds.filter((candidate) => candidate !== id),
+                  })
+                }
+              />
               <div className="b-fieldset b-mt-4">
                 <p className="b-form-title">Fallback gift if out of stock (optional)</p>
                 <p className="b-form-desc">

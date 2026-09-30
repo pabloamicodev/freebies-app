@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Form, useSubmit } from "react-router";
 import { ProductPicker } from "./ProductPicker.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
+import { SelectedProductsList } from "./SelectedProductsList.js";
 import type { CycleOverride, SkioShippingTier } from "../lib/skio-shipping-tiers.js";
 
 interface Props {
@@ -186,7 +187,10 @@ export function SkioShippingManager({ tiers, disabled = false, createOnly = fals
             <legend className="b-label">Product targeting</legend>
             <p className="b-help b-m-0">Leave empty to match every product in a qualifying subscription.</p>
             <div className="b-row b-gap-3 b-wrap"><button type="button" className="b-btn b-btn-secondary" onClick={() => setPickerOpen(true)}>Select variants</button><span className="b-text-muted">{draft.productVariantIds.length || "All products"}</span></div>
-            {draft.productVariantIds.length > 0 && <div className="b-chip-list">{draft.productVariantIds.map((id) => <button key={id} type="button" className="b-chip" onClick={() => update("productVariantIds", draft.productVariantIds.filter((value) => value !== id))}>{id.split("/").pop()} ×</button>)}</div>}
+            <SelectedProductsList
+              gids={draft.productVariantIds}
+              onRemove={(id) => update("productVariantIds", draft.productVariantIds.filter((value) => value !== id))}
+            />
           </fieldset>
 
           <div className="b-form-actions"><button type="submit" className="b-btn b-btn-primary">Save tier</button><button type="button" className="b-btn b-btn-secondary" onClick={closeDraft}>Cancel</button></div>
