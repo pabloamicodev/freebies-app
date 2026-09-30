@@ -561,7 +561,7 @@ function OfferTableRow({
             <div style={{ minWidth: 0 }}>
               <button
                 type="button"
-                className="bogos-offer-title-text"
+                className="b-offer-title-text"
                 data-primary-link="true"
                 onClick={() => {
                   prefetch();
@@ -574,7 +574,7 @@ function OfferTableRow({
             </div>
             <button
               type="button"
-              className="bogos-row-reveal"
+              className="b-row-reveal"
               title={expanded ? "Hide preview" : "Preview"}
               aria-label={expanded ? "Hide preview" : "Preview"}
               aria-expanded={expanded}
@@ -635,7 +635,7 @@ function OfferTableRow({
             <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
               <button
                 type="button"
-                className="bogos-action-btn"
+                className="b-action-btn"
                 onClick={(e) => {
                   e.stopPropagation();
                   onDuplicate();
@@ -647,7 +647,7 @@ function OfferTableRow({
               </button>
               <button
                 type="button"
-                className="bogos-action-btn"
+                className="b-action-btn"
                 onClick={(e) => {
                   e.stopPropagation();
                   onArchive();
@@ -661,7 +661,7 @@ function OfferTableRow({
             </div>
             <button
               type="button"
-              className="bogos-action-btn red"
+              className="b-action-btn red"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete();
@@ -1219,7 +1219,7 @@ export default function OffersPage() {
               </th>
               <th>
                 <button
-                  className="bogos-sort-btn"
+                  className="b-sort-btn"
                   type="button"
                   onClick={() => handleSort("internalName")}
                 >
@@ -1228,14 +1228,14 @@ export default function OffersPage() {
                 </button>
               </th>
               <th>
-                <button className="bogos-sort-btn" type="button" onClick={() => handleSort("type")}>
+                <button className="b-sort-btn" type="button" onClick={() => handleSort("type")}>
                   <SortIcon active={sortBy === "type" ? sortDir : undefined} />
                   <span>Offer type</span>
                 </button>
               </th>
               <th>
                 <button
-                  className="bogos-sort-btn"
+                  className="b-sort-btn"
                   type="button"
                   onClick={() => handleSort("startsAt")}
                 >
@@ -1245,7 +1245,7 @@ export default function OffersPage() {
               </th>
               <th>
                 <button
-                  className="bogos-sort-btn"
+                  className="b-sort-btn"
                   type="button"
                   onClick={() => handleSort("status")}
                 >

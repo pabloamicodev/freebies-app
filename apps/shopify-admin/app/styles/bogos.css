@@ -388,8 +388,8 @@
   color: var(--text);
 }
 .b-btn-icon:focus-visible,
-.bogos-action-btn:focus-visible,
-.bogos-sort-btn:focus-visible,
+.b-action-btn:focus-visible,
+.b-sort-btn:focus-visible,
 .b-modal-close:focus-visible,
 .b-tab:focus-visible,
 .b-banner-close:focus-visible,
@@ -580,13 +580,7 @@
 }
 
 /* ── Table offer title hover ─────────────────────────────── */
-.bogos-offer-title-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-}
-.bogos-offer-title-text {
+.b-offer-title-text {
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
@@ -598,15 +592,15 @@
   font-family: inherit;
   transition: color var(--t-fast);
 }
-.bogos-offer-title-text:hover {
+.b-offer-title-text:hover {
   color: var(--blue);
 }
-.bogos-row-reveal {
+.b-row-reveal {
   visibility: hidden;
   display: flex;
   align-items: center;
 }
-tr:hover .bogos-row-reveal {
+tr:hover .b-row-reveal {
   visibility: visible;
 }
 
@@ -705,14 +699,7 @@ tr:hover .bogos-row-reveal {
 .b-preview-row-muted {
   color: var(--text-muted);
 }
-.bogos-type-cell {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 13px;
-  color: var(--text-sub);
-}
-.bogos-sort-btn {
+.b-sort-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -728,10 +715,10 @@ tr:hover .bogos-row-reveal {
   text-transform: uppercase;
   transition: color var(--t-fast);
 }
-.bogos-sort-btn:hover {
+.b-sort-btn:hover {
   color: var(--text);
 }
-.bogos-action-btn {
+.b-action-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -748,17 +735,17 @@ tr:hover .bogos-row-reveal {
     color var(--t-fast),
     transform var(--t-spring);
 }
-.bogos-action-btn:hover {
+.b-action-btn:hover {
   background: var(--bg-active);
   color: var(--text);
 }
-.bogos-action-btn:active {
+.b-action-btn:active {
   transform: scale(0.88);
 }
-.bogos-action-btn.red {
+.b-action-btn.red {
   color: #dc2626;
 }
-.bogos-action-btn.red:hover {
+.b-action-btn.red:hover {
   background: var(--red-bg);
   color: #b91c1c;
 }
@@ -1836,6 +1823,134 @@ fieldset.b-stack > legend {
   color: white;
   border-color: var(--text);
   box-shadow: var(--shadow-sm);
+}
+
+/* ── Product picker ─────────────────────────────────────── */
+.b-picker-search-bar {
+  padding: 16px 26px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+.b-picker-search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.b-picker-search-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.b-picker-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.b-picker-row {
+  border-bottom: 1px solid var(--border-light);
+}
+.b-picker-row:last-child {
+  border-bottom: none;
+}
+.b-picker-row-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 26px;
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+.b-picker-row-main:hover {
+  background: var(--bg-hover);
+}
+.b-picker-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-sm);
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--border-light);
+  background: var(--bg-hover);
+}
+.b-picker-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.b-picker-row-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.b-picker-row-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.b-picker-variant-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.b-picker-variant-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.b-picker-variant-title {
+  font-size: 13px;
+  color: var(--text-sub);
+}
+.b-picker-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 48px 26px;
+  text-align: center;
+}
+.b-picker-empty-heading {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+.b-picker-empty-text {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+}
+.b-badge-red {
+  background: var(--red-bg);
+  color: var(--red-hover);
+  border: 1px solid var(--red-border);
+}
+.b-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--border-light);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: b-spin 700ms linear infinite;
+}
+@keyframes b-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ── Status pill ─────────────────────────────────────────── */
