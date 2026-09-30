@@ -6,13 +6,8 @@
  */
 
 import { useEffect, useCallback, useRef } from "react";
-import {
-  Modal, TextField, ResourceList, ResourceItem, Thumbnail,
-  Text, Badge, InlineStack, BlockStack, Spinner, Button,
-  EmptyState, Checkbox,
-} from "@shopify/polaris";
-import { SearchIcon } from "@shopify/polaris-icons";
 import { useDebouncedCallback } from "use-debounce";
+import { AccessibleModal } from "./AccessibleModal.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 
 interface ProductVariant {
@@ -215,52 +210,81 @@ function ProductPickerContent({
   }, [selected, onSelect, onClose]);
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={title}
-      primaryAction={{ content: `Select ${selected.size > 0 ? `(${selected.size})` : ""}`, onAction: handleConfirm, disabled: selected.size === 0 }}
-      secondaryActions={[{ content: "Cancel", onAction: onClose }]}
-    >
-      <Modal.Section>
-        <TextField
-          label="Search products"
-          labelHidden
-          placeholder="Search by title, handle, or vendor…"
-          value={query}
-          onChange={setQuery}
-          prefix={<SearchIcon />}
-          autoComplete="off"
-          clearButton
-          onClearButtonClick={() => setQuery("")}
-        />
-      </Modal.Section>
+    <AccessibleModal ariaLabel={title} className="b-modal-lg" onClose={onClose}>
+      <div className="b-modal-header">
+        <h2 className="b-modal-title">{title}</h2>
+        <button type="button" className="b-modal-close" onClick={onClose} aria-label="Close">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+          >
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
 
-      <Modal.Section flush>
+      <div className="b-picker-search-bar">
+        <div className="b-search-wrap">
+          <span className="b-search-icon" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <circle cx="11" cy="11" r="7" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </span>
+          <label htmlFor="product-picker-search" className="visually-hidden">Search products</label>
+          <input
+            id="product-picker-search"
+            type="text"
+            className="b-search-input"
+            placeholder="Search by title, handle, or vendor…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            autoComplete="off"
+          />
+          {query && (
+            <button
+              type="button"
+              className="b-picker-search-clear"
+              aria-label="Clear search"
+              onClick={() => setQuery("")}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="b-picker-list">
         {loading || syncing ? (
-          <div style={{ padding: "40px", textAlign: "center" }}>
-            <BlockStack gap="300" inlineAlign="center">
-              <Spinner size="large" />
-              {syncing && (
-                <Text as="p" tone="subdued">
-                  Syncing your product catalog… this only happens once.
-                </Text>
-              )}
-            </BlockStack>
+          <div className="b-picker-empty" role="status" aria-live="polite">
+            <span className="b-spinner" aria-hidden="true" />
+            <span className="visually-hidden">Loading products…</span>
+            {syncing && (
+              <p className="b-picker-empty-text">Syncing your product catalog… this only happens once.</p>
+            )}
           </div>
         ) : error ? (
-          <EmptyState heading="Could not load products" image="">
-            <p>{error}</p>
-          </EmptyState>
+          <div className="b-picker-empty">
+            <p className="b-picker-empty-heading">Could not load products</p>
+            <p className="b-picker-empty-text">{error}</p>
+          </div>
         ) : products.length === 0 ? (
-          <EmptyState heading="No products found" image="">
-            <p>Try a different search term.</p>
-          </EmptyState>
+          <div className="b-picker-empty">
+            <p className="b-picker-empty-heading">No products found</p>
+            <p className="b-picker-empty-text">Try a different search term.</p>
+          </div>
         ) : (
-          <ResourceList
-            resourceName={{ singular: "product", plural: "products" }}
-            items={products}
-            renderItem={(product) => {
+          <ul className="b-list-reset">
+            {products.map((product) => {
               const isExpanded = expandedProducts.has(product.id);
               // availableForSale already covers untracked inventory and oversell policy.
               const selectableVariants = product.variants?.filter((variant) =>
@@ -272,111 +296,140 @@ function ProductPickerContent({
                 mode === "products"
                   ? selected.has(product.id)
                   : variantGids.length > 0 && variantGids.every((v) => selected.has(v));
+
+              // The product-level checkbox always toggles the whole product/all its
+              // variants; clicking elsewhere on the row instead expands/collapses
+              // the variant list when there's more than one variant (in "variants" mode).
+              const toggleAction = () => {
+                if (!productSelectable) return;
+                if (product.variants?.length === 1 && mode === "variants") {
+                  toggleVariant(product.variants[0]!.id);
+                } else {
+                  toggleProduct(product.id, variantGids);
+                }
+              };
+
+              const rowOnClick = () => {
+                if (!productSelectable) return;
+                if (mode === "products" || !product.variants?.length || product.variants.length === 1) {
+                  toggleAction();
+                } else {
+                  const next = new Set(expandedProducts);
+                  isExpanded ? next.delete(product.id) : next.add(product.id);
+                  setExpandedProducts(next);
+                }
+              };
+
               return (
-                <ResourceItem
-                  id={product.id}
-                  onClick={() => {
-                    if (!productSelectable) return;
-                    if (mode === "products" || !product.variants?.length || product.variants.length === 1) {
-                      if (product.variants?.length === 1 && mode === "variants") {
-                        toggleVariant(product.variants[0]!.id);
-                      } else {
-                        toggleProduct(product.id, variantGids);
-                      }
-                    } else {
-                      // Expand to show variants
-                      const next = new Set(expandedProducts);
-                      isExpanded ? next.delete(product.id) : next.add(product.id);
-                      setExpandedProducts(next);
-                    }
-                  }}
-                  media={
-                    <Thumbnail
-                      source={product.imageUrl ?? ""}
-                      alt={product.title}
-                      size="medium"
-                    />
-                  }
-                >
-                  <BlockStack gap="100">
-                    <InlineStack gap="300" align="space-between">
-                      <InlineStack gap="200">
-                        <Checkbox
-                          label={`Select ${product.title}`}
-                          labelHidden
-                          checked={productSelected}
-                          disabled={!productSelectable}
-                          onChange={() => {
-                            if (!productSelectable) return;
-                            if (product.variants?.length === 1 && mode === "variants") {
-                              toggleVariant(product.variants[0]!.id);
-                            } else {
-                              toggleProduct(product.id, variantGids);
-                            }
+                <li key={product.id} className="b-picker-row">
+                  <div className="b-picker-row-main" onClick={rowOnClick}>
+                    <span className="b-checkbox-row" onClick={(event) => event.stopPropagation()}>
+                      <label className="visually-hidden" htmlFor={`picker-check-${product.id}`}>
+                        Select {product.title}
+                      </label>
+                      <input
+                        id={`picker-check-${product.id}`}
+                        type="checkbox"
+                        checked={productSelected}
+                        disabled={!productSelectable}
+                        onChange={toggleAction}
+                      />
+                    </span>
+
+                    {product.imageUrl ? (
+                      <img src={product.imageUrl} alt="" className="b-picker-thumb" />
+                    ) : (
+                      <span className="b-picker-thumb" aria-hidden="true" />
+                    )}
+
+                    <div className="b-picker-row-body">
+                      <div className="b-row-between b-gap-2">
+                        <span className="b-picker-row-title">{product.title}</span>
+                        <span className="b-flex b-items-center b-gap-2">
+                          {product.status !== "ACTIVE" && <span className="b-badge b-badge-red">Not active</span>}
+                          {!productSelectable && product.status === "ACTIVE" && (
+                            <span className="b-badge b-badge-red">No eligible variants</span>
+                          )}
+                          {product.vendor && <span className="b-picker-row-sub">{product.vendor}</span>}
+                        </span>
+                      </div>
+
+                      {/* Variant list — shown when expanded or when product has multiple variants */}
+                      {mode === "variants" && product.variants && product.variants.length > 1 && isExpanded && (
+                        <ul className="b-list-reset b-picker-variant-list">
+                          {product.variants.map((variant) => (
+                            <li
+                              key={variant.id}
+                              className="b-picker-variant-row"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <span className="b-checkbox-row">
+                                <label className="visually-hidden" htmlFor={`picker-variant-${variant.id}`}>
+                                  Select {product.title} - {variant.title}
+                                </label>
+                                <input
+                                  id={`picker-variant-${variant.id}`}
+                                  type="checkbox"
+                                  checked={selected.has(variant.id)}
+                                  disabled={!selectableVariants.some((candidate) => candidate.id === variant.id)}
+                                  onChange={() => toggleVariant(variant.id)}
+                                />
+                              </span>
+                              <span className="b-picker-variant-title">{variant.title}</span>
+                              <span className="b-picker-row-sub">${variant.price}</span>
+                              {variant.sku && <span className="b-picker-row-sub">SKU: {variant.sku}</span>}
+                              {!variant.availableForSale && <span className="b-badge b-badge-red">OOS</span>}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+
+                      {/* Single variant — show inline */}
+                      {mode === "variants" && product.variants?.length === 1 && (
+                        <p className="b-picker-row-sub b-m-0">
+                          ${product.variants[0]?.price}
+                          {product.variants[0]?.sku ? ` · SKU: ${product.variants[0].sku}` : ""}
+                          {!product.variants[0]?.availableForSale ? " · Out of stock" : ""}
+                        </p>
+                      )}
+
+                      {/* Expand button for multiple variants */}
+                      {mode === "variants" && product.variants && product.variants.length > 1 && (
+                        <button
+                          type="button"
+                          className="b-btn b-btn-plain"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            const next = new Set(expandedProducts);
+                            isExpanded ? next.delete(product.id) : next.add(product.id);
+                            setExpandedProducts(next);
                           }}
-                        />
-                        <Text as="p" fontWeight="semibold">{product.title}</Text>
-                      </InlineStack>
-                      <InlineStack gap="200">
-                        {product.status !== "ACTIVE" && <Badge tone="critical">Not active</Badge>}
-                        {!productSelectable && product.status === "ACTIVE" && (
-                          <Badge tone="critical">No eligible variants</Badge>
-                        )}
-                        {product.vendor && <Text as="span" tone="subdued">{product.vendor}</Text>}
-                      </InlineStack>
-                    </InlineStack>
-
-                    {/* Variant list — shown when expanded or when product has multiple variants */}
-                    {mode === "variants" && product.variants && product.variants.length > 1 && isExpanded && (
-                      <BlockStack gap="100">
-                        {product.variants.map((variant) => (
-                          <InlineStack key={variant.id} gap="200" align="start">
-                            <Checkbox
-                              label={`Select ${product.title} - ${variant.title}`}
-                              labelHidden
-                              checked={selected.has(variant.id)}
-                              disabled={!selectableVariants.some((candidate) => candidate.id === variant.id)}
-                              onChange={() => toggleVariant(variant.id)}
-                            />
-                            <Text as="span" variant="bodySm">{variant.title}</Text>
-                            <Text as="span" variant="bodySm" tone="subdued">${variant.price}</Text>
-                            {variant.sku && <Text as="span" variant="bodySm" tone="subdued">SKU: {variant.sku}</Text>}
-                            {!variant.availableForSale && <Badge tone="critical">OOS</Badge>}
-                          </InlineStack>
-                        ))}
-                      </BlockStack>
-                    )}
-
-                    {/* Single variant — show inline */}
-                    {mode === "variants" && product.variants?.length === 1 && (
-                      <Text as="p" variant="bodySm" tone="subdued">
-                        ${product.variants[0]?.price}
-                        {product.variants[0]?.sku ? ` · SKU: ${product.variants[0].sku}` : ""}
-                        {!product.variants[0]?.availableForSale ? " · Out of stock" : ""}
-                      </Text>
-                    )}
-
-                    {/* Expand button for multiple variants */}
-                    {mode === "variants" && product.variants && product.variants.length > 1 && (
-                      <Button
-                        variant="plain"
-                        size="micro"
-                        onClick={() => {
-                          const next = new Set(expandedProducts);
-                          isExpanded ? next.delete(product.id) : next.add(product.id);
-                          setExpandedProducts(next);
-                        }}
-                      >
-                        {isExpanded ? "▲ Hide variants" : `▼ ${product.variants.length} variants`}
-                      </Button>
-                    )}
-                  </BlockStack>
-                </ResourceItem>
+                        >
+                          {isExpanded ? "▲ Hide variants" : `▼ ${product.variants.length} variants`}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </li>
               );
-            }}
-          />
+            })}
+          </ul>
         )}
-      </Modal.Section>
-    </Modal>
+      </div>
+
+      <div className="b-modal-footer">
+        <button type="button" className="b-btn b-btn-secondary" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="b-btn b-btn-primary"
+          disabled={selected.size === 0}
+          onClick={handleConfirm}
+        >
+          {`Select ${selected.size > 0 ? `(${selected.size})` : ""}`}
+        </button>
+      </div>
+    </AccessibleModal>
   );
 }
