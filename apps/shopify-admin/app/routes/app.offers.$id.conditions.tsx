@@ -677,8 +677,16 @@ export default function OfferConditionsPage() {
                             autoComplete="off"
                             defaultValue={typeof editingValue["maxMultiplier"] === "number" ? editingValue["maxMultiplier"] : undefined}
                           />
+                          <p className="b-help">
+                            The reward multiplies: floor(cart value ÷ threshold), capped at this max if
+                            set. E.g. threshold $50, cart $130 → 2× the reward. Leave blank for no cap.
+                          </p>
                         </div>
                       )}
+                      <p className="b-help">
+                        Calculated from qualifying cart lines only — gift lines are always excluded
+                        from the total.
+                      </p>
                     </>
                   )}
 
@@ -709,6 +717,10 @@ export default function OfferConditionsPage() {
                           defaultValue={typeof editingValue["maxQuantity"] === "number" ? editingValue["maxQuantity"] : undefined}
                         />
                       </div>
+                      <p className="b-help">
+                        Counts total item quantity across qualifying cart lines (gift lines excluded),
+                        not the number of distinct products.
+                      </p>
                     </>
                   )}
 
@@ -725,7 +737,15 @@ export default function OfferConditionsPage() {
                         <p className="b-help">Enter this store's own Shopify attribute key. Existing HPN keys remain available only as migration suggestions.</p>
                       </div>
                       <div><label className="b-label" htmlFor="attributeValue">Required value</label><input id="attributeValue" name="attributeValue" className="b-input" required autoComplete="off" defaultValue={typeof editingValue["value"] === "string" ? editingValue["value"] : undefined} /></div>
-                      <div><label className="b-label" htmlFor="attributeMatchMode">Match</label><select id="attributeMatchMode" name="attributeMatchMode" className="b-select" defaultValue={typeof editingValue["matchMode"] === "string" ? editingValue["matchMode"] : "equals"}><option value="equals">Equals</option><option value="not_equals">Does not equal</option></select></div>
+                      <div>
+                        <label className="b-label" htmlFor="attributeMatchMode">Match</label>
+                        <select id="attributeMatchMode" name="attributeMatchMode" className="b-select" defaultValue={typeof editingValue["matchMode"] === "string" ? editingValue["matchMode"] : "equals"}><option value="equals">Equals</option><option value="not_equals">Does not equal</option></select>
+                        <p className="b-help">
+                          "Does not equal" also passes when the {selectedType === "cart_attribute" ? "attribute" : "line property"} is
+                          missing entirely — use this to exclude carts/lines tagged a certain way, e.g.
+                          requiring <code>__landing_source</code> to not equal a landing page's value.
+                        </p>
+                      </div>
                       {selectedType === "line_attribute" && <div><label className="b-label" htmlFor="attributeMinQuantity">Minimum matching quantity</label><input id="attributeMinQuantity" name="attributeMinQuantity" className="b-input" type="number" min="1" step="1" defaultValue={typeof editingValue["minMatchingQuantity"] === "number" ? editingValue["minMatchingQuantity"] : 1} /></div>}
                     </div>
                   )}
@@ -787,6 +807,12 @@ export default function OfferConditionsPage() {
                           autoComplete="off"
                         />
                       </div>
+                      <p className="b-help">
+                        Every selected product must independently reach this minimum quantity —
+                        {selectedType === "specific_product"
+                          ? " this is an \"all of these\" condition, not \"any one of these\"."
+                          : " missing even one product (a genuine \"pack\") fails the whole condition."}
+                      </p>
                     </div>
                   )}
 
@@ -864,6 +890,11 @@ export default function OfferConditionsPage() {
                         <input type="checkbox" name="treatGuestAsNoTags" defaultChecked={editingCondition ? editingValue["treatGuestAsNoTags"] !== false : true} />
                         <span>Treat guest customers as having no tags</span>
                       </label>
+                      <p className="b-help">
+                        Checked against the customer's real Shopify account tags at checkout, so it
+                        can't be spoofed from the browser. With the box above checked, a guest fails an
+                        "include" rule and passes an "exclude" rule, exactly as if they had no tags.
+                      </p>
                     </>
                   )}
 
@@ -893,6 +924,10 @@ export default function OfferConditionsPage() {
                           defaultValue={Array.isArray(editingValue["excludeCountryCodes"]) ? (editingValue["excludeCountryCodes"] as string[]).join(", ") : undefined}
                         />
                       </div>
+                      <p className="b-help">
+                        Two-letter country codes (US, CA, GB…). The country comes from the buyer's
+                        Shopify identity or resolved Market, not raw IP geolocation.
+                      </p>
                     </>
                   )}
 
@@ -929,6 +964,10 @@ export default function OfferConditionsPage() {
                           </div>
                         </div>
                       )}
+                      <p className="b-help">
+                        Restricts this offer to (or away from) the buyer's resolved Shopify Market —
+                        the same Markets configured under Settings → Markets.
+                      </p>
                     </>
                   )}
 
@@ -995,6 +1034,11 @@ export default function OfferConditionsPage() {
                         <option value="lt">Less than</option>
                       </select>
                     </div>
+                    <p className="b-help">
+                      Checked against the customer's real Shopify order history at checkout, so it
+                      can't be spoofed from the browser. Guests (no account) always fail — they have
+                      no order history to compare.
+                    </p>
                     </>
                   )}
 
@@ -1006,6 +1050,10 @@ export default function OfferConditionsPage() {
                         <option value="one_time_only">One-time purchase products</option>
                         <option value="any">Any purchase type</option>
                       </select>
+                      <p className="b-help">
+                        Passes as soon as at least one cart line matches — looks at what's actually in
+                        the cart right now, not the customer's account or purchase history.
+                      </p>
                     </div>
                   )}
 
@@ -1021,7 +1069,16 @@ export default function OfferConditionsPage() {
                           </label>
                         );
                       })}
+                      <p className="b-help">Passes if the order comes from any one of the checked channels (OR, not AND).</p>
                     </fieldset>
+                  )}
+
+                  {selectedType === "one_use_per_customer" && (
+                    <p className="b-help">
+                      No fields to set — this simply limits each logged-in customer to one
+                      redemption of this offer, checked against their real order history at
+                      checkout. Guests (no account) always fail, since there's no history to check.
+                    </p>
                   )}
 
                   {selectedType === "specific_link" && (
@@ -1056,11 +1113,28 @@ export default function OfferConditionsPage() {
                           style={{ textTransform: "uppercase" }}
                           defaultValue={typeof editingValue["code"] === "string" ? editingValue["code"] : undefined}
                         />
-                        <p className="b-help">
-                          Create this exact code in Shopify (Discounts → Create discount) so checkout
-                          accepts it — this condition only decides whether this automatic offer applies
-                          once the code is on the cart. Matching is case-insensitive.
-                        </p>
+                      </div>
+                      <div className="b-banner b-banner-blue" role="status">
+                        <div className="b-banner-body" style={{ width: "100%" }}>
+                          <p className="b-banner-title">This condition does not create the code — it only gates this offer</p>
+                          <p className="b-banner-text">
+                            <strong>Setup, in order:</strong> 1) In Shopify Admin, go to Discounts → Create
+                            discount and make a plain discount with exactly this code (use 0% / $0 if the
+                            code itself shouldn't carry a value — this offer applies the real discount).
+                            2) Save this condition with the same code. Once the customer enters it at
+                            checkout, Shopify validates it as usual and this offer applies automatically —
+                            no other code-redemption logic to build. Matching is case-insensitive.
+                          </p>
+                          <p className="b-banner-text" style={{ marginTop: 8 }}>
+                            <strong>Combining it:</strong> add another main or sub-condition below — every
+                            enabled condition on this offer applies together (AND). Example: to sell a
+                            "Prime Day" style code sitewide but keep it off your landing pages, add this
+                            condition <em>and</em> a "Line attribute — approved legacy property" condition
+                            on <code>__landing_source</code> with match "not equal" — landing-page lines
+                            carry that property, so the code has no effect there even if it's copied onto
+                            a landing-page offer.
+                          </p>
+                        </div>
                       </div>
                     </div>
                   )}

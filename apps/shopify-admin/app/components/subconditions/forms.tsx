@@ -151,6 +151,12 @@ export function OrderHistoryForm({ value, onChange }: SubFormProps) {
             value={threshold} onChange={(e) => emit({ threshold: Number(e.target.value) })} />
         </div>
       </>}
+      <div className="b-help">
+        Checked against the customer's real Shopify order history at checkout, so it can't be
+        spoofed from the browser. Guests (no account) always fail — they have no order history to
+        check. "One use per customer" is a separate mode: it limits each customer to one redemption
+        of this offer instead of comparing spend or order count.
+      </div>
     </div>
   );
 }
@@ -195,6 +201,11 @@ export function CustomerTagsForm({ value, onChange }: SubFormProps) {
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
         <span style={{ fontSize: 13, color: "var(--text)" }}>Treat guest customers as having no tags</span>
       </label>
+      <div className="b-help">
+        Checked against the customer's real Shopify account tags at checkout. With this box
+        checked, a guest (no account) fails an "include" rule and passes an "exclude" rule, exactly
+        as if they had no tags at all.
+      </div>
     </div>
   );
 }
@@ -228,6 +239,10 @@ export function LocationForm({ value, onChange }: SubFormProps) {
           onChange={(e) => emit(countries, e.target.checked)} />
         <span style={{ fontSize: 13, color: "var(--text)" }}>Exclude these countries</span>
       </label>
+      <div className="b-help">
+        Uses two-letter country codes (US, CA, GB…). The country comes from the buyer's Shopify
+        identity or resolved Market, not raw IP geolocation.
+      </div>
     </div>
   );
 }
@@ -253,6 +268,11 @@ export function SubscriptionForm({ value, onChange }: SubFormProps) {
           <span style={{ fontSize: 13, color: "var(--text)" }}>{opt.label}</span>
         </label>
       ))}
+      <div className="b-help">
+        Passes as soon as at least one cart line matches — it looks at what's actually in the cart
+        right now (a line with a selling plan attached), not the customer's account or purchase
+        history.
+      </div>
     </div>
   );
 }
@@ -298,6 +318,10 @@ export function SalesChannelForm({ value, onChange }: SubFormProps) {
         By default, BOGOS works with our mobile app builder partners:{" "}
         <strong>OneMobile</strong>, <strong>Superflux</strong>. If you use a custom mobile app,
         contact us for integration support.
+      </div>
+      <div className="b-help">
+        Passes if the order comes from any one of the checked channels (OR, not AND) — check every
+        channel this offer should be available on.
       </div>
     </div>
   );
@@ -371,6 +395,10 @@ export function MarketsForm({ value, onChange }: SubFormProps) {
           style={{ accentColor: "var(--blue)", width: 14, height: 14 }} />
         <span style={{ fontSize: 13, color: "var(--text)" }}>Exclude selected markets</span>
       </label>
+      <div className="b-help">
+        Restricts this offer to (or away from) the buyer's resolved Shopify Market — the same
+        Markets you configure under Settings → Markets, used for region-specific pricing/currency.
+      </div>
     </div>
   );
 }
@@ -393,10 +421,24 @@ export function DiscountCodeForm({ value, onChange }: SubFormProps) {
           autoComplete="off"
           style={{ textTransform: "uppercase" }}
         />
-        <div className="b-help">
-          Create this exact code in Shopify (Discounts → Create discount) so checkout accepts it —
-          this condition only decides whether the automatic offer applies once the code is on the
-          cart. Matching is case-insensitive.
+      </div>
+      <div className="b-banner b-banner-blue" role="status">
+        <div className="b-banner-body" style={{ width: "100%" }}>
+          <p className="b-banner-title">This condition does not create the code — it only gates this offer</p>
+          <p className="b-banner-text">
+            <strong>Setup, in order:</strong> 1) In Shopify Admin, go to Discounts → Create discount and
+            make a plain discount with exactly this code (use 0% / $0 if the code itself shouldn't carry
+            a value — this offer will apply the real discount). 2) Save this condition with the same code.
+            Once the customer enters it at checkout, Shopify validates it as usual and this offer applies
+            automatically — no other code-redemption logic to build. Matching is case-insensitive.
+          </p>
+          <p className="b-banner-text" style={{ marginTop: 8 }}>
+            <strong>Combining it:</strong> add it alongside any other condition here — they all apply
+            together (AND). Example: to sell a "Prime Day" style code sitewide but keep it off your
+            landing pages, add this condition <em>and</em> a "Store custom field" condition on the
+            <code> __landing_source</code> line property set to "not equal" — landing-page lines carry
+            that property, so the code has no effect there even if it's copied onto a landing-page offer.
+          </p>
         </div>
       </div>
     </div>
@@ -444,6 +486,11 @@ export function CustomAttributeForm({ value, onChange }: SubFormProps) {
           <option value="equals">Equals</option>
           <option value="not_equals">Does not equal</option>
         </select>
+        <div className="b-help">
+          "Does not equal" also passes when the attribute is missing entirely — use this to exclude
+          carts/lines tagged a certain way (e.g. requiring a landing-page attribute to be absent)
+          without a separate "attribute doesn't exist" option.
+        </div>
       </div>
       {scope === "line" && (
         <div>
@@ -492,6 +539,10 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
               <span style={{ fontSize: 13, color: "var(--text)" }}>{opt.l}</span>
             </label>
           ))}
+        </div>
+        <div className="b-help">
+          "All rules" requires every rule below to be satisfied at once; "Any rule" passes if at
+          least one is. Quantities are summed across every matching cart line, not checked per line.
         </div>
       </div>
 
