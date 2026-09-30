@@ -2260,7 +2260,7 @@ fieldset.b-stack > legend {
   width: 100%;
   max-width: 800px;
   max-height: 88vh;
-  overflow-y: auto;
+  overflow: hidden;
   box-shadow: var(--shadow-modal);
   position: relative;
   z-index: 1;
