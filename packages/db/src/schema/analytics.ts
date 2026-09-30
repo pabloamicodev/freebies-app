@@ -29,6 +29,15 @@ export const analyticsEvents = pgTable(
     index("analytics_events_shop_offer_time_idx").on(t.shopId, t.offerId, t.occurredAt),
     index("analytics_events_shop_session_idx").on(t.shopId, t.sessionId),
     index("analytics_events_shop_event_idx").on(t.shopId, t.eventName, t.occurredAt),
+    // Covers the DISTINCT ON (order_id) ... ORDER BY order_id, occurred_at DESC
+    // dedupe query used by the analytics dashboards — order_id isn't a prefix
+    // of the index above, so that query still needs a separate sort without this.
+    index("analytics_events_shop_event_order_time_idx").on(
+      t.shopId,
+      t.eventName,
+      t.orderId,
+      t.occurredAt,
+    ),
     index("analytics_events_order_idx").on(t.orderId),
     index("analytics_events_shop_customer_idx").on(t.shopId, t.customerId),
     // Retention cleanup (cleanupOldAnalyticsEvents) filters/orders by this
