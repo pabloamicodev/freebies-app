@@ -3,10 +3,11 @@
  * Configure widget type, placement, theme, and copy for each offer.
  */
 
-import { useLoaderData, useActionData, useNavigation, Form } from "react-router";
+import { useLoaderData, useActionData, useNavigation, useSubmit, Form } from "react-router";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { OfferStepTabs } from "../components/OfferStepTabs.js";
+import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
@@ -168,11 +169,13 @@ export default function OfferWidgetPage() {
   const { offer, widgets: existingWidgets } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
+  const submit = useSubmit();
   const isSubmitting = navigation.state !== "idle";
   const [adding, setAdding] = useState(false);
   const [widgetType, setWidgetType] = useState("gift_slider");
   const [placementType, setPlacementType] = useState("cart_drawer");
   const [primaryColor, setPrimaryColor] = useState("#111111");
+  const [confirmDeleteWidgetId, setConfirmDeleteWidgetId] = useState<string | null>(null);
 
   if (!offer) return <NotFound message="Offer not found." />;
 
@@ -249,18 +252,15 @@ export default function OfferWidgetPage() {
                               </label>
                             </Form>
                             {/* Remove */}
-                            <Form method="POST" style={{ display: "inline-flex" }}
-                              onSubmit={(e: React.FormEvent<HTMLFormElement>) => { if (!window.confirm("Remove this widget?")) e.preventDefault(); }}>
-                              <input type="hidden" name="intent" value="delete_widget" />
-                              <input type="hidden" name="widgetId" value={w.id} />
-                              <button
-                                type="submit"
-                                className="b-btn-icon b-btn-icon-red"
-                                title="Remove widget"
-                              >
-                                ✕
-                              </button>
-                            </Form>
+                            <button
+                              type="button"
+                              style={{ display: "inline-flex" }}
+                              className="b-btn-icon b-btn-icon-red"
+                              title="Remove widget"
+                              onClick={() => setConfirmDeleteWidgetId(w.id)}
+                            >
+                              ✕
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -483,6 +483,23 @@ export default function OfferWidgetPage() {
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmDeleteWidgetId !== null}
+        ariaLabel="Remove widget"
+        title="Remove this widget?"
+        message="Remove this widget?"
+        confirmLabel="Remove"
+        onConfirm={() => {
+          if (!confirmDeleteWidgetId) return;
+          const fd = new FormData();
+          fd.append("intent", "delete_widget");
+          fd.append("widgetId", confirmDeleteWidgetId);
+          void submit(fd, { method: "POST" });
+          setConfirmDeleteWidgetId(null);
+        }}
+        onCancel={() => setConfirmDeleteWidgetId(null)}
+      />
     </div>
   );
 }

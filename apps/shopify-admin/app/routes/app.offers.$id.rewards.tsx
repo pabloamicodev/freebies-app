@@ -3,12 +3,13 @@
  * Configure what the customer receives: gift products, discounts, shipping.
  */
 
-import { useLoaderData, useNavigate, useNavigation, useActionData, Form } from "react-router";
+import { useLoaderData, useNavigate, useNavigation, useActionData, useSubmit, Form } from "react-router";
 import { NotFound } from "../components/NotFound.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { OfferStepTabs } from "../components/OfferStepTabs.js";
 import { ProductPicker } from "../components/ProductPicker.js";
+import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
@@ -592,6 +593,7 @@ export default function OfferRewardsPage() {
   const { offer, rewards } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const navigation = useNavigation();
+  const submit = useSubmit();
   const actionData = useActionData<typeof action>();
   const isSubmitting = navigation.state !== "idle";
   const [rewardState, setRewardField] = useObjectState({
@@ -617,6 +619,7 @@ export default function OfferRewardsPage() {
     productPriceTiers: [
       { key: "product-tier-1", quantity: "1", targetPricePerUnit: "" },
     ] as ProductPriceTierDraft[],
+    confirmDeleteRewardId: null as string | null,
   });
   const {
     adding,
@@ -639,7 +642,9 @@ export default function OfferRewardsPage() {
     productScopeMode,
     productTargetType,
     productPriceTiers,
+    confirmDeleteRewardId,
   } = rewardState;
+  const setConfirmDeleteRewardId = createFieldSetter(setRewardField, "confirmDeleteRewardId");
   const setAdding = createFieldSetter(setRewardField, "adding");
   const setEditingId = createFieldSetter(setRewardField, "editingId");
   const setRewardType = createFieldSetter(setRewardField, "rewardType");
@@ -921,24 +926,18 @@ export default function OfferRewardsPage() {
                     </div>
 
                     {/* Right: delete button */}
-                    <Form
-                      method="POST"
+                    <button
+                      type="button"
                       style={{ flexShrink: 0, marginLeft: 16 }}
-                      onClick={(e) => e.stopPropagation()}
-                      onSubmit={(e: React.FormEvent<HTMLFormElement>) => {
-                        if (!window.confirm("Remove this reward?")) e.preventDefault();
+                      className="b-btn-icon b-btn-icon-red"
+                      title="Remove reward"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmDeleteRewardId(r.id);
                       }}
                     >
-                      <input type="hidden" name="intent" value="delete_reward" />
-                      <input type="hidden" name="rewardId" value={r.id} />
-                      <button
-                        type="submit"
-                        className="b-btn-icon b-btn-icon-red"
-                        title="Remove reward"
-                      >
-                        ✕
-                      </button>
-                    </Form>
+                      ✕
+                    </button>
                   </div>
                 );
               })}
@@ -1944,6 +1943,23 @@ export default function OfferRewardsPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmDeleteRewardId !== null}
+        ariaLabel="Remove reward"
+        title="Remove this reward?"
+        message="Remove this reward?"
+        confirmLabel="Remove"
+        onConfirm={() => {
+          if (!confirmDeleteRewardId) return;
+          const fd = new FormData();
+          fd.append("intent", "delete_reward");
+          fd.append("rewardId", confirmDeleteRewardId);
+          void submit(fd, { method: "POST" });
+          setConfirmDeleteRewardId(null);
+        }}
+        onCancel={() => setConfirmDeleteRewardId(null)}
+      />
     </>
   );
 }

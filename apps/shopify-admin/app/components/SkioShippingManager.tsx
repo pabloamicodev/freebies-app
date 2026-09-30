@@ -1,6 +1,7 @@
-import { useMemo, useState, type FormEvent } from "react";
-import { Form } from "react-router";
+import { useMemo, useState } from "react";
+import { Form, useSubmit } from "react-router";
 import { ProductPicker } from "./ProductPicker.js";
+import { ConfirmDialog } from "./ConfirmDialog.js";
 import type { CycleOverride, SkioShippingTier } from "../lib/skio-shipping-tiers.js";
 
 interface Props {
@@ -83,6 +84,8 @@ export function SkioShippingManager({ tiers, disabled = false, createOnly = fals
   const [draft, setDraft] = useState<Draft | null>(createOnly ? emptyDraft() : null);
   const closeDraft = () => (createOnly ? onCancel?.() : setDraft(null));
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [confirmDeleteTier, setConfirmDeleteTier] = useState<{ id: string; name: string } | null>(null);
+  const submit = useSubmit();
   const serialized = useMemo(() => draft ? JSON.stringify(serializeDraft(draft)) : "", [draft]);
 
   const update = <K extends keyof Draft>(key: K, value: Draft[K]) => {
@@ -132,11 +135,13 @@ export function SkioShippingManager({ tiers, disabled = false, createOnly = fals
                   <td>
                     <div className="b-row b-gap-2">
                       <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setDraft(tierToDraft(tier))}>Edit</button>
-                      <Form method="post" onSubmit={(event: FormEvent<HTMLFormElement>) => { if (!window.confirm(`Delete ${tier.name}?`)) event.preventDefault(); }}>
-                        <input type="hidden" name="intent" value="delete-tier" />
-                        <input type="hidden" name="tierId" value={tier.id} />
-                        <button type="submit" className="b-btn b-btn-secondary b-btn-sm">Delete</button>
-                      </Form>
+                      <button
+                        type="button"
+                        className="b-btn b-btn-secondary b-btn-sm"
+                        onClick={() => setConfirmDeleteTier({ id: tier.id, name: tier.name })}
+                      >
+                        Delete
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -187,6 +192,23 @@ export function SkioShippingManager({ tiers, disabled = false, createOnly = fals
           <div className="b-form-actions"><button type="submit" className="b-btn b-btn-primary">Save tier</button><button type="button" className="b-btn b-btn-secondary" onClick={closeDraft}>Cancel</button></div>
         </Form>
       )}
+
+      <ConfirmDialog
+        open={confirmDeleteTier !== null}
+        ariaLabel="Delete shipping tier"
+        title={confirmDeleteTier ? `Delete ${confirmDeleteTier.name}?` : ""}
+        message={confirmDeleteTier ? `Delete ${confirmDeleteTier.name}?` : ""}
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (!confirmDeleteTier) return;
+          const fd = new FormData();
+          fd.append("intent", "delete-tier");
+          fd.append("tierId", confirmDeleteTier.id);
+          void submit(fd, { method: "post" });
+          setConfirmDeleteTier(null);
+        }}
+        onCancel={() => setConfirmDeleteTier(null)}
+      />
     </section>
   );
 }

@@ -4,12 +4,13 @@
  * validated form for each condition type.
  */
 
-import { useLoaderData, Form, Link, useActionData, useNavigation } from "react-router";
+import { useLoaderData, Form, Link, useActionData, useNavigation, useSubmit } from "react-router";
 import * as Sentry from "@sentry/node";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { OfferStepTabs } from "../components/OfferStepTabs.js";
 import { ProductPicker } from "../components/ProductPicker.js";
+import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
@@ -323,6 +324,7 @@ export default function OfferConditionsPage() {
   const { offer, conditions, markets } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
+  const submit = useSubmit();
   const isSubmitting = navigation.state !== "idle";
   const [conditionState, setConditionField] = useObjectState({
     addingScope: null as "main" | "sub" | null,
@@ -336,6 +338,7 @@ export default function OfferConditionsPage() {
     minQtyPerProduct: "1",
     includeMarketIds: [] as string[],
     excludeMarketIds: [] as string[],
+    confirmDeleteConditionId: null as string | null,
   });
   const {
     addingScope,
@@ -349,7 +352,9 @@ export default function OfferConditionsPage() {
     minQtyPerProduct,
     includeMarketIds,
     excludeMarketIds,
+    confirmDeleteConditionId,
   } = conditionState;
+  const setConfirmDeleteConditionId = createFieldSetter(setConditionField, "confirmDeleteConditionId");
   const setAddingScope = createFieldSetter(setConditionField, "addingScope");
   const setEditingId = createFieldSetter(setConditionField, "editingId");
   const setSelectedType = createFieldSetter(setConditionField, "selectedType");
@@ -501,19 +506,17 @@ export default function OfferConditionsPage() {
                       </span>
                       <span className="b-text-sm b-text-muted">{isEditingThis ? "▲ editing" : "Click to edit ▾"}</span>
                     </div>
-                    <Form method="POST"
-                      onClick={(e) => e.stopPropagation()}
-                      onSubmit={(e: React.FormEvent<HTMLFormElement>) => { if (!window.confirm("Remove this condition?")) e.preventDefault(); }}>
-                      <input type="hidden" name="intent" value="delete_condition" />
-                      <input type="hidden" name="conditionId" value={c.id} />
-                      <button
-                        type="submit"
-                        className="b-btn b-btn-danger b-btn-sm"
-                        disabled={isSubmitting}
-                      >
-                        {isSubmitting ? "…" : "Remove"}
-                      </button>
-                    </Form>
+                    <button
+                      type="button"
+                      className="b-btn b-btn-danger b-btn-sm"
+                      disabled={isSubmitting}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmDeleteConditionId(c.id);
+                      }}
+                    >
+                      {isSubmitting ? "…" : "Remove"}
+                    </button>
                   </div>
                 );
               })}
@@ -1114,6 +1117,23 @@ export default function OfferConditionsPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmDeleteConditionId !== null}
+        ariaLabel="Remove condition"
+        title="Remove this condition?"
+        message="Remove this condition?"
+        confirmLabel="Remove"
+        onConfirm={() => {
+          if (!confirmDeleteConditionId) return;
+          const fd = new FormData();
+          fd.append("intent", "delete_condition");
+          fd.append("conditionId", confirmDeleteConditionId);
+          void submit(fd, { method: "POST" });
+          setConfirmDeleteConditionId(null);
+        }}
+        onCancel={() => setConfirmDeleteConditionId(null)}
+      />
     </>
   );
 }

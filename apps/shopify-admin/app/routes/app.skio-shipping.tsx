@@ -1,8 +1,9 @@
-import { Form, useActionData, useLoaderData } from "react-router";
-import type { FormEvent } from "react";
+import { Form, useActionData, useLoaderData, useSubmit } from "react-router";
+import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { SkioShippingManager } from "../components/SkioShippingManager.js";
+import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { deleteSkioApiKey, getSkioApiKey, saveSkioApiKey } from "../lib/skio-credentials.server.js";
 import { makeSkioGraphQLProxy, validateSkioApiKey } from "../lib/skio-api.server.js";
@@ -97,6 +98,8 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function SkioShippingPage() {
   const data = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
+  const submit = useSubmit();
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   return (
     <div className="b-page">
       <PageHeader
@@ -128,9 +131,7 @@ export default function SkioShippingPage() {
         {data.apiKeyConnected ? (
           <div className="b-row b-gap-3 b-wrap b-mt-4">
             <Form method="post"><input type="hidden" name="intent" value="sync" /><button className="b-btn b-btn-primary" type="submit">Sync now</button></Form>
-            <Form method="post" onSubmit={(event: FormEvent<HTMLFormElement>) => { if (!window.confirm("Disconnect Skio? Existing delivery overrides remain in Skio.")) event.preventDefault(); }}>
-              <input type="hidden" name="intent" value="disconnect" /><button className="b-btn b-btn-secondary" type="submit">Disconnect</button>
-            </Form>
+            <button type="button" className="b-btn b-btn-secondary" onClick={() => setConfirmDisconnect(true)}>Disconnect</button>
           </div>
         ) : (
           <Form method="post" className="b-row b-gap-3 b-mt-4">
@@ -143,6 +144,21 @@ export default function SkioShippingPage() {
       </section>
 
       <SkioShippingManager tiers={data.tiers} disabled={!data.configValid} />
+
+      <ConfirmDialog
+        open={confirmDisconnect}
+        ariaLabel="Disconnect Skio"
+        title="Disconnect Skio?"
+        message="Existing delivery overrides remain in Skio."
+        confirmLabel="Disconnect"
+        onConfirm={() => {
+          const fd = new FormData();
+          fd.append("intent", "disconnect");
+          void submit(fd, { method: "post" });
+          setConfirmDisconnect(false);
+        }}
+        onCancel={() => setConfirmDisconnect(false)}
+      />
     </div>
   );
 }

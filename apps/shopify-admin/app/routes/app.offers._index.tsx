@@ -22,6 +22,7 @@ import {
 } from "../components/Icons.js";
 import type { loader as rowPreviewLoader } from "./app.offers.$id.row-preview.js";
 import { AccessibleModal } from "../components/AccessibleModal.js";
+import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { OfferToggle } from "../components/BogosSwitch.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -1076,37 +1077,12 @@ export default function OffersPage() {
 
       {/* ── Action confirmation dialog ──────────────────────── */}
       {confirmAction && (
-        <AccessibleModal
+        <ConfirmDialog
+          open
           ariaLabel={confirmAction.type === "delete" ? "Delete offer permanently" : "Archive offer"}
-          className="b-modal-sm"
-          onClose={closeConfirmAction}
-        >
-          <div className="b-modal-header">
-            <h2 className="b-modal-title">
-              {confirmAction.type === "delete" ? "Delete offer permanently?" : "Archive offer?"}
-            </h2>
-            <button
-              type="button"
-              className="b-modal-close"
-              onClick={closeConfirmAction}
-              aria-label="Close"
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-              >
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
-          </div>
-          <div className="b-modal-body">
-            <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0, lineHeight: 1.6 }}>
+          title={confirmAction.type === "delete" ? "Delete offer permanently?" : "Archive offer?"}
+          message={
+            <>
               {confirmAction.type === "delete" ? (
                 <>
                   This will <strong style={{ color: "var(--text)" }}>permanently delete</strong> the
@@ -1116,32 +1092,17 @@ export default function OffersPage() {
                 "The offer will be archived and hidden from customers. You can restore it later from the archived view."
               )}{" "}
               Offer: {confirmAction.offer.internalName}.
-            </p>
-          </div>
-          <div className="b-modal-footer">
-            <button type="button" className="b-btn b-btn-secondary" onClick={closeConfirmAction}>
-              Cancel
-            </button>
-            {confirmAction.type === "delete" ? (
-              <button
-                type="button"
-                className="b-btn b-btn-danger"
-                onClick={() => executeDelete(confirmAction.offer.id)}
-              >
-                Delete permanently
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="b-btn b-btn-secondary"
-                onClick={() => executeArchive(confirmAction.offer.id)}
-                style={{ borderColor: "#9ca3af" }}
-              >
-                Archive offer
-              </button>
-            )}
-          </div>
-        </AccessibleModal>
+            </>
+          }
+          confirmLabel={confirmAction.type === "delete" ? "Delete permanently" : "Archive offer"}
+          destructive={confirmAction.type === "delete"}
+          onConfirm={() =>
+            confirmAction.type === "delete"
+              ? executeDelete(confirmAction.offer.id)
+              : executeArchive(confirmAction.offer.id)
+          }
+          onCancel={closeConfirmAction}
+        />
       )}
 
       {/* ── Bulk actions toolbar ─────────────────────────────── */}

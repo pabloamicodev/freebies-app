@@ -1,6 +1,8 @@
-import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
+import { Link, useActionData, useLoaderData, useNavigation, useSubmit } from "react-router";
+import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
+import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import {
   deleteCyclePricingPlan,
@@ -41,6 +43,8 @@ export default function SubscriptionPricingPage() {
   const { plans } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
+  const submit = useSubmit();
+  const [confirmDeletePlan, setConfirmDeletePlan] = useState<{ id: string; name: string } | null>(null);
   return (
     <div className="b-page">
       <PageHeader
@@ -67,11 +71,14 @@ export default function SubscriptionPricingPage() {
                   <td>
                     <div className="b-row b-gap-2">
                       <Link className="b-btn b-btn-secondary b-btn-sm" to={`/app/subscription-pricing/${encodeURIComponent(plan.id)}`}>Edit</Link>
-                      <Form method="post" onSubmit={(event: React.FormEvent<HTMLFormElement>) => { if (!window.confirm(`Delete ${plan.name}? Existing contracts remain, but new customers cannot select it.`)) event.preventDefault(); }}>
-                        <input type="hidden" name="intent" value="delete" />
-                        <input type="hidden" name="planId" value={plan.id} />
-                        <button type="submit" className="b-btn b-btn-secondary b-btn-sm" disabled={navigation.state !== "idle"}>Delete</button>
-                      </Form>
+                      <button
+                        type="button"
+                        className="b-btn b-btn-secondary b-btn-sm"
+                        disabled={navigation.state !== "idle"}
+                        onClick={() => setConfirmDeletePlan({ id: plan.id, name: plan.name })}
+                      >
+                        Delete
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -80,6 +87,23 @@ export default function SubscriptionPricingPage() {
           </table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDeletePlan !== null}
+        ariaLabel="Delete plan"
+        title={confirmDeletePlan ? `Delete ${confirmDeletePlan.name}?` : ""}
+        message="Existing contracts remain, but new customers cannot select it."
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (!confirmDeletePlan) return;
+          const fd = new FormData();
+          fd.append("intent", "delete");
+          fd.append("planId", confirmDeletePlan.id);
+          void submit(fd, { method: "post" });
+          setConfirmDeletePlan(null);
+        }}
+        onCancel={() => setConfirmDeletePlan(null)}
+      />
     </div>
   );
 }
