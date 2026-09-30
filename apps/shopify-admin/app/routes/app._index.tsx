@@ -52,7 +52,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           FROM analytics_events
           WHERE shop_id = ${shopId}
             AND event_name = 'order_placed_attributed'
-            AND occurred_at >= ${since30d}
+            AND occurred_at >= ${since30d.toISOString()}
             AND order_id IS NOT NULL
           ORDER BY order_id, occurred_at DESC
         )
