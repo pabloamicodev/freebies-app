@@ -9,7 +9,7 @@
     "build:shopify": "node ../../scripts/shopify-build.mjs",
     "start": "shopify app start",
     "test:e2e": "playwright test",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "react-router typegen && tsc --noEmit",
     "lint": "eslint app --ext .ts,.tsx"
   },
   "dependencies": {

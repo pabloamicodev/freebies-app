@@ -4,9 +4,9 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["@types/node", "vite/client"],
     "rootDir": "../..",
-    "outDir": "./.react-router/types",
+    "rootDirs": [".", "./.react-router/types"],
     "noEmit": true
   },
   "include": [".react-router/types/**/*", "app/**/*", "server.ts"],
-  "exclude": ["node_modules", "build", ".react-router"]
+  "exclude": ["node_modules", "build"]
 }
