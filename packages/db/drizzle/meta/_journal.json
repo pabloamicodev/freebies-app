@@ -120,6 +120,13 @@
       "when": 1790869895809,
       "tag": "0016_discount_codes",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790870829484,
+      "tag": "0017_variant_cache_inventory_tracked",
+      "breakpoints": true
     }
   ]
 }

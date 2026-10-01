@@ -15,7 +15,7 @@ import { debounce, AbortableRequest } from "./debounce.js";
 import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
 import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
 import { giftRewardKey, loadDeclinedGiftRewards, saveDeclinedGiftRewards } from "./declined-gifts.js";
-import { initGiftSlider } from "./widgets/gift-slider.js";
+import { initGiftSlider, isSoldOutCartError } from "./widgets/gift-slider.js";
 import { initFbtWidget } from "./widgets/fbt.js";
 import { initBundleBuilder } from "./widgets/bundle-builder.js";
 import { buildMarketContext } from "./market-context.js";
@@ -445,7 +445,7 @@ class PromoEngineRuntime {
     const qualifyingSubtotal = cart.items_subtotal_price ?? cart.total_price;
     this.log(
       "[PromoEngine] Evaluating cart —",
-      cart.items.map((i) => `${i.title} ×${i.quantity}`).join(", ") || "empty",
+      cart.items.map((i) => `${i.title} �-${i.quantity}`).join(", ") || "empty",
       `| subtotal: $${(qualifyingSubtotal / 100).toFixed(2)}`,
     );
 
@@ -489,7 +489,7 @@ class PromoEngineRuntime {
         this.log(
           "[PromoEngine] Cart actions to apply:",
           actions
-            .map((a) => `${a.action}(${a.variantId ?? a.lineKey ?? ""}×${a.quantity ?? 0})`)
+            .map((a) => `${a.action}(${a.variantId ?? a.lineKey ?? ""}�-${a.quantity ?? 0})`)
             .join(", "),
         );
       } else {
@@ -597,19 +597,32 @@ class PromoEngineRuntime {
             this.log(
               `[PromoEngine] → add_line variantId=${action.variantId} qty=${action.quantity ?? 1}`,
             );
-            await AjaxCartAdapter.addLines([
-              {
-                variantId: action.variantId,
-                quantity: action.quantity ?? 1,
-                properties: action.properties ?? {},
-              },
-            ]);
+            // The cache can lag a sale: on a sold-out rejection fall back to the merchant's
+            // fallback gifts in order, and give up quietly if they're all gone too.
+            let addedVariantId: string | null = null;
+            for (const variantId of [action.variantId, ...(action.fallbackVariantIds ?? [])]) {
+              try {
+                await AjaxCartAdapter.addLines([
+                  {
+                    variantId,
+                    quantity: action.quantity ?? 1,
+                    properties: action.properties ?? {},
+                  },
+                ]);
+                addedVariantId = variantId;
+                break;
+              } catch (e) {
+                if (!isSoldOutCartError(e)) throw e;
+                this.log(`[PromoEngine] gift ${variantId} sold out`);
+              }
+            }
+            if (!addedVariantId) break;
             emit(PromoEvents.GiftAutoAdded, {
-              variantId: action.variantId,
+              variantId: addedVariantId,
               quantity: action.quantity,
             });
             publishAnalytics("promo_engine:gift_auto_added", {
-              variant_id: action.variantId,
+              variant_id: addedVariantId,
               quantity: action.quantity,
               session_id: this.sessionId,
             });
@@ -764,7 +777,7 @@ class PromoEngineRuntime {
     evaluate: () => this.triggerEvaluation(),
     validateGiftOffer: async (offerId: string) => {
       const result = await this.triggerEvaluation({ force: true, emitResult: false });
-      return result?.giftSlider?.offerId === offerId ? result.giftSlider : null;
+      return [result?.giftSlider, ...(result?.additionalGiftSliders ?? [])].find((slider) => slider?.offerId === offerId) ?? null;
     },
     prepareCheckout: async () => {
       this.debouncedEvaluate.cancel();

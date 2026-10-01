@@ -1,0 +1,1 @@
+ALTER TABLE "variant_cache" ADD COLUMN IF NOT EXISTS "inventory_tracked" boolean;

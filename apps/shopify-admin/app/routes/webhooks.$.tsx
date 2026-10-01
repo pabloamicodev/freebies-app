@@ -5,6 +5,8 @@ import { productCache, variantCache, shops, analyticsEvents, offers, offerCondit
 import { eq, and, lt, notInArray, or, sql } from "drizzle-orm";
 import { decryptToken } from "../lib/token-crypto.server.js";
 import { syncInventoryFromWebhook } from "../lib/sync/inventory-sync.server.js";
+import { deriveWebhookAvailability, isStaleProductPayload } from "../lib/sync/variant-availability.js";
+import { refreshProductVariantsFromAdmin } from "../lib/sync/gift-stock-reconcile.server.js";
 import {
   removeCollectionFromCache,
   syncCollectionFromWebhook,
@@ -232,6 +234,7 @@ interface ProductWebhookPayload {
   tags: string;
   status: string;
   admin_graphql_api_id: string;
+  updated_at?: string;
   variants?: Array<{
     id: number;
     admin_graphql_api_id: string;
@@ -322,7 +325,13 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
     });
 
   // Sync variants — single batch upsert instead of N parallel inserts
-  if (product.variants && product.variants.length > 0) {
+  const [latest] = await db
+    .select({ at: sql<Date | null>`max(${variantCache.syncedAt})` })
+    .from(variantCache)
+    .where(and(eq(variantCache.shopId, shopId), eq(variantCache.productGid, productGid)));
+  // An older payload (delivered late/out of order) would overwrite fresher inventory data.
+  const stale = isStaleProductPayload(product.updated_at, latest?.at ? new Date(latest.at) : null);
+  if (!stale && product.variants && product.variants.length > 0) {
     const now = new Date();
     await db
       .insert(variantCache)
@@ -338,13 +347,8 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
         currencyCode,
         inventoryQuantity: variant.inventory_quantity,
         inventoryPolicy: (variant.inventory_policy ?? "DENY").toUpperCase(),
-        // The product webhook has no `available` field (only /products.json does); derive it
-        // the way Shopify does: untracked, oversell allowed, or stock on hand.
-        availableForSale:
-          variant.available ??
-          (variant.inventory_management == null ||
-            (variant.inventory_policy ?? "deny").toLowerCase() === "continue" ||
-            (variant.inventory_quantity ?? 0) > 0),
+        // See deriveWebhookAvailability; refreshProductVariantsFromAdmin below overwrites it with Shopify's answer.
+        ...deriveWebhookAvailability(variant),
         requiresSellingPlan: variant.requires_selling_plan ?? false,
         raw: variant as unknown,
         syncedAt: now,
@@ -359,6 +363,7 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
           inventoryQuantity: sql`excluded.inventory_quantity`,
           inventoryPolicy: sql`excluded.inventory_policy`,
           availableForSale: sql`excluded.available_for_sale`,
+          inventoryTracked: sql`coalesce(excluded.inventory_tracked, ${variantCache.inventoryTracked})`,
           raw: sql`excluded.raw`,
           syncedAt: sql`excluded.synced_at`,
         },
@@ -374,6 +379,21 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
           notInArray(variantCache.variantGid, product.variants.map((variant) => variant.admin_graphql_api_id)),
         ),
       );
+
+    // The payload can't tell tracked from untracked stock; replace the derived values with Shopify's.
+    try {
+      const withToken = await getShopForWebhook(shop);
+      if (withToken) {
+        await refreshProductVariantsFromAdmin(
+          shopId,
+          shop,
+          await decryptToken(withToken.accessTokenEncrypted),
+          productGid,
+        );
+      }
+    } catch (error) {
+      console.warn(`[webhooks] variant availability refresh failed for ${productGid}`, error);
+    }
   }
 }
 

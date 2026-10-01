@@ -63,6 +63,8 @@ export const variantCache = pgTable(
     /** "CONTINUE" | "DENY" */
     inventoryPolicy: text("inventory_policy"),
     availableForSale: boolean("available_for_sale").notNull().default(true),
+    /** inventoryItem.tracked; null = unknown (webhook payloads omit it). */
+    inventoryTracked: boolean("inventory_tracked"),
     requiresSellingPlan: boolean("requires_selling_plan").notNull().default(false),
     raw: jsonb("raw").notNull(),
     syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),

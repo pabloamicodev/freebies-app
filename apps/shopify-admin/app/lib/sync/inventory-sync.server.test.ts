@@ -95,4 +95,35 @@ describe("syncInventoryFromWebhook", () => {
     expect(captured).toHaveLength(1);
     expect(captured[0]!.values["inventoryQuantity"]).toBe(42);
   });
+
+  it("takes availability, policy and tracking from Shopify, so a sold-out variant flips to unavailable", async () => {
+    vi.mocked(shopifyGraphQL).mockResolvedValue({
+      inventoryItem: {
+        variants: {
+          nodes: [{
+            id: "gid://shopify/ProductVariant/1",
+            inventoryQuantity: 0,
+            inventoryPolicy: "DENY",
+            availableForSale: false,
+            inventoryItem: { tracked: true },
+          }],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      },
+    } as never);
+    const captured: Array<Record<string, unknown>> = [];
+    const fakeTx = {
+      update: () => ({ set: (values: Record<string, unknown>) => ({ where: () => (captured.push(values), Promise.resolve()) }) }),
+    };
+    const db = { transaction: async (fn: (tx: typeof fakeTx) => Promise<void>) => fn(fakeTx) } as unknown as Db;
+
+    await syncInventoryFromWebhook("shop-1", "store.myshopify.com", "token", 999, db);
+
+    expect(captured[0]).toMatchObject({
+      availableForSale: false,
+      inventoryQuantity: 0,
+      inventoryPolicy: "DENY",
+      inventoryTracked: true,
+    });
+  });
 });

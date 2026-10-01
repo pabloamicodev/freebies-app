@@ -6,6 +6,8 @@ export const CartLineAddActionSchema = z.object({
   variantId: z.string(),
   quantity: z.number().int().positive(),
   properties: z.record(z.string(), z.string()),
+  /** Merchant fallbacks the runtime tries in order when the live add is rejected as sold out. */
+  fallbackVariantIds: z.array(z.string()).optional(),
 });
 export type CartLineAddAction = z.infer<typeof CartLineAddActionSchema>;
 
@@ -38,28 +40,32 @@ export const CartActionSchema = z.discriminatedUnion("action", [
 ]);
 export type CartAction = z.infer<typeof CartActionSchema>;
 
+const SelectableGiftSchema = z.object({
+  rewardId: z.string().uuid(),
+  offerVersion: z.number().int().positive(),
+  rewardMaxQuantity: z.number().int().positive(),
+  variantId: z.string(),
+  productId: z.string(),
+  title: z.string(),
+  variantTitle: z.string().nullable(),
+  imageUrl: z.string().nullable(),
+  productHandle: z.string().nullable().optional(),
+  originalPriceCents: z.number().int(),
+  discountedPriceCents: z.number().int(),
+  isAvailable: z.boolean(),
+  isSelected: z.boolean(),
+  /** Title of the sold-out gift this fallback replaces. */
+  replacesTitle: z.string().optional(),
+  /** Merchant fallback: only offered once every primary gift of its reward is unavailable. */
+  isFallback: z.boolean().optional(),
+});
+
 export const GiftSliderPayloadSchema = z.object({
   offerId: z.string().uuid(),
   title: z.string(),
   subtitle: z.string().nullable(),
   currencyCode: z.string().length(3),
-  selectableGifts: z.array(z.object({
-    rewardId: z.string().uuid(),
-    offerVersion: z.number().int().positive(),
-    rewardMaxQuantity: z.number().int().positive(),
-    variantId: z.string(),
-    productId: z.string(),
-    title: z.string(),
-    variantTitle: z.string().nullable(),
-    imageUrl: z.string().nullable(),
-    productHandle: z.string().nullable().optional(),
-    originalPriceCents: z.number().int(),
-    discountedPriceCents: z.number().int(),
-    isAvailable: z.boolean(),
-    isSelected: z.boolean(),
-    /** Title of the sold-out gift this fallback replaces. */
-    replacesTitle: z.string().optional(),
-  })),
+  selectableGifts: z.array(SelectableGiftSchema),
   maxSelectableCount: z.number().int().positive(),
   alreadySelectedCount: z.number().int().nonnegative(),
   /** Merchant-translated widget strings, resolved server-side with English
@@ -156,6 +162,8 @@ export const EvaluationResultSchema = z.object({
     remove: z.array(z.string()),
   }),
   giftSlider: GiftSliderPayloadSchema.nullable(),
+  /** Other qualifying selectable-gift offers/tiers beyond `giftSlider`. */
+  additionalGiftSliders: z.array(GiftSliderPayloadSchema).optional(),
   cartMessages: z.array(CartMessagePayloadSchema),
   progressBars: z.array(ProgressBarPayloadSchema),
   upsells: z.array(UpsellPayloadSchema),

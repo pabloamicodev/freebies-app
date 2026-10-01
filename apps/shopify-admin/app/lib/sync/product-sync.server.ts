@@ -28,6 +28,7 @@ interface ShopifyVariant {
   inventoryQuantity: number;
   inventoryPolicy: string;
   availableForSale: boolean;
+  inventoryItem?: { tracked: boolean } | null;
 }
 
 interface ShopifyProduct {
@@ -66,6 +67,7 @@ export const PRODUCTS_QUERY = `
           nodes {
             id sku title price compareAtPrice
             inventoryQuantity inventoryPolicy availableForSale
+            inventoryItem { tracked }
           }
         }
       }
@@ -81,6 +83,7 @@ export const PRODUCT_VARIANTS_QUERY = `
         nodes {
           id sku title price compareAtPrice
           inventoryQuantity inventoryPolicy availableForSale
+          inventoryItem { tracked }
         }
       }
     }
@@ -223,6 +226,7 @@ async function upsertProductPage(shopId: string, products: ShopifyProduct[], cur
     inventoryQuantity: v.inventoryQuantity,
     inventoryPolicy: v.inventoryPolicy,
     availableForSale: v.availableForSale,
+    inventoryTracked: v.inventoryItem?.tracked ?? null,
     raw: v,
     syncedAt: now,
   })));
@@ -242,6 +246,7 @@ async function upsertProductPage(shopId: string, products: ShopifyProduct[], cur
           inventoryQuantity: sql`excluded.inventory_quantity`,
           inventoryPolicy: sql`excluded.inventory_policy`,
           availableForSale: sql`excluded.available_for_sale`,
+          inventoryTracked: sql`excluded.inventory_tracked`,
           raw: sql`excluded.raw`,
           syncedAt: sql`excluded.synced_at`,
         },
