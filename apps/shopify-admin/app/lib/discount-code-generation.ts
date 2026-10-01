@@ -1,4 +1,11 @@
-import { randomInt } from "node:crypto";
+// Web Crypto, not node:crypto: this module is also bundled into the Codes tab client.
+function randomInt(max: number): number {
+  const limit = Math.floor(0x1_0000_0000 / max) * max; // rejection sampling avoids modulo bias
+  const buf = new Uint32Array(1);
+  do globalThis.crypto.getRandomValues(buf);
+  while (buf[0]! >= limit);
+  return buf[0]! % max;
+}
 
 export const CODE_CHARSETS = {
   // No 0/O/1/I so codes survive being read aloud or typed from a printout.
