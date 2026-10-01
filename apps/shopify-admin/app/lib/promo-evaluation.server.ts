@@ -15,6 +15,7 @@ import {
   loadGiftSliderTranslations,
   resolveSoldOutGiftAdds,
 } from "./gift-enrichment.server.js";
+import { withVolumeDiscountTiers } from "./volume-discount-tiers.server.js";
 import { isShadowModeEnabled } from "./shadow-mode.server.js";
 import { apiError, apiJson, readJsonBody } from "./api-response.server.js";
 
@@ -157,8 +158,12 @@ export async function handleEvaluationRequest(
   ]);
   timer.mark("customer");
 
+  const needsVolumeTiers = offerDefinitions.some((offer) =>
+    offer.conditions.some((condition) => condition.isEnabled && condition.conditionType === "cart_value"),
+  );
   const input: EvaluationInput = {
     ...parsed.data,
+    cart: await withVolumeDiscountTiers(shop.db, shop.id, parsed.data.cart, needsVolumeTiers),
     shopDomain: shop.shopDomain,
     customer,
   };

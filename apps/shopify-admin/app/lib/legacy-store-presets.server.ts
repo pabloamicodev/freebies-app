@@ -235,18 +235,51 @@ const ONE_SOL_VARIANTS = [
   "gid://shopify/ProductVariant/44045687324911",
   "gid://shopify/ProductVariant/46171937145071",
   "gid://shopify/ProductVariant/46171936981231",
+  "gid://shopify/ProductVariant/43617035976943",
+  "gid://shopify/ProductVariant/44045688078575",
+  "gid://shopify/ProductVariant/43250744623343",
+  "gid://shopify/ProductVariant/44045687980271",
+  "gid://shopify/ProductVariant/43250743050479",
+  "gid://shopify/ProductVariant/44045687816431",
+  "gid://shopify/ProductVariant/43250731679983",
+  "gid://shopify/ProductVariant/44045687718127",
+  "gid://shopify/ProductVariant/44045688373487",
+  "gid://shopify/ProductVariant/44045688242415",
+  "gid://shopify/ProductVariant/46575892889839",
+  "gid://shopify/ProductVariant/46575892824303",
+];
+// Every product the live quiz (templates/page.quiz.json + sections/product-quiz.liquid)
+// can bulk-add with _quiz_bundle_id: the three results' bundle components, then their
+// free-gift handles. individual_products/freebies are empty in the template, so the
+// section's per-result fallback handle lists are what ships.
+const ONE_SOL_QUIZ_PRODUCTS = [
+  "gid://shopify/Product/7193611337967", // lean-plant-protein
+  "gid://shopify/Product/8787009175791", // hydration
+  "gid://shopify/Product/8924495872239", // one-sol-creatine
+  "gid://shopify/Product/8751617048815", // magnesium
+  "gid://shopify/Product/7193611763951", // burn-natural-fat-burner
+  "gid://shopify/Product/7714720448751", // greens
+  "gid://shopify/Product/8188402303215", // one-sol-12-week-booty-program (free)
+  "gid://shopify/Product/8936628420847", // one-sol-booty-bottle (free)
+  "gid://shopify/Product/8886723707119", // build-a-booty™-tropical-vibes-edition-resistance-bands (free)
+  "gid://shopify/Product/7197464232175", // lean-plant-protein-samples (free)
+  "gid://shopify/Product/9245356261615", // one-sol-sport-shaker-clear-black (free)
+  "gid://shopify/Product/9024727384303", // hourglass-8-week-workout-program (free)
 ];
 
 const ONE_SOL_PRESET: LegacyStorePreset = {
   shopDomain: "onesolsupps.myshopify.com",
   sourceName: "One Sol",
-  notes: [],
+  notes: [
+    "Snapshot verified against the live One Sol app discount on 2026-10-01: acai-unicorn-onetime-25-off is disabled in the source, quiz-bundle-price-match-msnpevd3 is the only enabled rule.",
+  ],
   offers: [
     {
       key: "acai-unicorn-onetime-25-off",
       internalName: "[HPN preset] Acai and Unicorn one-time 25% off",
       publicTitle: "25% off Acai Berry Blast / Unicorn Milkshake",
-      description: "Imported from hpn-scripts-migration. Created as a draft for review.",
+      description:
+        "Disabled in the hpn-scripts-migration source configuration. Imported as a draft for parity and future review.",
       type: "discount",
       priority: 100,
       conditions: [],
@@ -264,6 +297,31 @@ const ONE_SOL_PRESET: LegacyStorePreset = {
             subscriptionMode: "one_time_only",
           },
           label: "One-time purchase discount",
+        },
+      ],
+    },
+    {
+      key: "quiz-bundle-price-match-msnpevd3",
+      internalName: "[HPN preset] Quiz bundle price match",
+      publicTitle: "Product Quiz bundle",
+      // The source rule has no product IDs (it trusts the client-set
+      // _quiz_bundle_id); here it is restricted to the quiz's products.
+      description: "Imported from hpn-scripts-migration. Created as a draft for review.",
+      type: "discount",
+      priority: 101,
+      conditions: [],
+      rewards: [
+        {
+          rewardType: "product_discount",
+          discountType: "fixed_price",
+          value: { amount: 0, currencyCode: "USD" },
+          target: {
+            scopeMode: "quiz_bundle",
+            scope: "cart",
+            discountPercentageOnGifts: 100,
+            productIds: ONE_SOL_QUIZ_PRODUCTS,
+          },
+          label: "Quiz bundle price match",
         },
       ],
     },
@@ -301,6 +359,15 @@ const AMBROSIA_TARGET_OTG = "gid://shopify/Product/7416485609557";
 const AMBROSIA_TARGET_GIFT_CARD = "gid://shopify/Product/6564143956053";
 const AMBROSIA_TARGET_THIRD_GIFT = "gid://shopify/Product/6564118429781";
 
+// Source conditions.requiresSubscriptionInCart: ANY cart line has a selling plan
+// (not necessarily the anchor). A main subscription_product_type condition is the
+// closest equivalent; the Function ignores gift lines when evaluating it.
+const CART_HAS_SUBSCRIPTION: ConditionPreset = {
+  conditionType: "subscription_product_type",
+  operator: "eq",
+  value: { mode: "subscription_only" },
+};
+
 function ambrosiaLandingOffer(
   key: string,
   title: string,
@@ -319,7 +386,7 @@ function ambrosiaLandingOffer(
       "Imported from the verified active hpn-scripts-migration configuration. Created as a draft for review.",
     type: "discount",
     priority,
-    conditions: [],
+    conditions: requiresSubscription ? [CART_HAS_SUBSCRIPTION] : [],
     rewards: [
       {
         rewardType: "product_discount",
@@ -331,7 +398,6 @@ function ambrosiaLandingOffer(
           source,
           anchorVariantIds,
           anchorQuantity,
-          requiresSubscription,
         ),
         label: title,
       },
@@ -343,8 +409,10 @@ const AMBROSIA_PRESET: LegacyStorePreset = {
   shopDomain: "ambrosia-nutraceuticals.myshopify.com",
   sourceName: "Ambrosia",
   notes: [
-    "Snapshot verified against the active Ambrosia app discount on 2026-09-24.",
+    "Snapshot verified against the active Ambrosia app discount on 2026-10-01.",
     "The two shipping rules were disabled in the source and are imported as drafts with that fact recorded in their descriptions.",
+    "Source conditions.requiresSubscriptionInCart (any subscription line in the cart) maps to a main subscription_product_type=subscription_only condition; the Function ignores gift lines there, the source counted every line.",
+    "landing-atlas-sk-otg-freegifts has no anchor variants in the source, which counted every tagged line including the gift lines themselves; the Function excludes the reward's own targets so a customer cannot self-unlock the gifts.",
   ],
   offers: [
     ambrosiaLandingOffer(
@@ -477,7 +545,9 @@ const AMBROSIA_PRESET: LegacyStorePreset = {
             "nektar-glp1-sk",
             ["gid://shopify/ProductVariant/7623220887605"],
             1,
-            true,
+            // The legacy shipping Function never evaluates conditions.requiresSubscriptionInCart
+            // and its anchor count has no subscription filter; the has_subscription tier above
+            // already needs a subscription line, so no anchor-subscription flag here.
           ),
           label: "Congrats! 50% shipping discount",
         },
@@ -648,7 +718,9 @@ const GETTRU_PRESET: LegacyStorePreset = {
               ],
             },
             TRU_SOURCE,
-            [],
+            // The Function's no-anchor mode excludes the reward's own targets, which
+            // here are the tiered variants themselves, so the tiers could never unlock.
+            TRU_VARIANTS,
             1,
           ),
           label: "Subscription price tiers",
@@ -680,7 +752,7 @@ const GETTRU_PRESET: LegacyStorePreset = {
               ],
             },
             TRU_SOURCE,
-            [],
+            TRU_VARIANTS,
             1,
           ),
           label: "One-time price tiers",
@@ -831,55 +903,62 @@ export async function importLegacyPreset(db: Db, shopId: string, preset: LegacyS
   let created = 0;
 
   for (const presetOffer of pending) {
-    await db.transaction(async (tx) => {
-      const [createdOffer] = await tx
-        .insert(offers)
-        .values({
-          shopId,
-          type: presetOffer.type,
-          status: "draft",
-          internalName: presetOffer.internalName,
-          publicTitle: presetOffer.publicTitle,
-          description: presetOffer.description,
-          priority: presetOffer.priority,
-          createdBy: "legacy-preset-importer",
-          updatedBy: "legacy-preset-importer",
-        })
-        .returning({ id: offers.id });
-      if (!createdOffer) throw new Error(`Failed to create ${presetOffer.internalName}.`);
-
-      await tx.insert(offerConditions).values(
-        ensureMainCondition(presetOffer.conditions).map((condition, index) => ({
-          shopId,
-          offerId: createdOffer.id,
-          scope: "main" as const,
-          conditionType: condition.conditionType,
-          operator: condition.operator,
-          value: condition.value,
-          sortOrder: index,
-          isEnabled: true,
-        })),
-      );
-      await tx.insert(offerRewards).values(
-        presetOffer.rewards.map((reward, index) => ({
-          shopId,
-          offerId: createdOffer.id,
-          rewardType: reward.rewardType,
-          discountType: reward.discountType,
-          value: reward.value,
-          target: reward.target,
-          quantity: reward.quantity ?? null,
-          isAutoAdd: reward.isAutoAdd ?? false,
-          isCustomerSelectable: reward.isCustomerSelectable ?? false,
-          trackMode: "variant",
-          sortOrder: index,
-          label: reward.label,
-        })),
-      );
-      await tx.insert(offerCombinationPolicies).values({ shopId, offerId: createdOffer.id });
-    });
+    await db.transaction((tx) => insertPresetOffer(tx, shopId, presetOffer));
     created += 1;
   }
 
   return { created, skipped: inspected.length - created, total: inspected.length };
+}
+
+export const LEGACY_IMPORTER = "legacy-preset-importer";
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+export const presetConditionRows = (shopId: string, offerId: string, preset: LegacyOfferPreset) =>
+  ensureMainCondition(preset.conditions).map((condition, index) => ({
+    shopId,
+    offerId,
+    scope: "main" as const,
+    conditionType: condition.conditionType,
+    operator: condition.operator,
+    value: condition.value,
+    sortOrder: index,
+    isEnabled: true,
+  }));
+
+export const presetRewardRows = (shopId: string, offerId: string, preset: LegacyOfferPreset) =>
+  preset.rewards.map((reward, index) => ({
+    shopId,
+    offerId,
+    rewardType: reward.rewardType,
+    discountType: reward.discountType,
+    value: reward.value,
+    target: reward.target,
+    quantity: reward.quantity ?? null,
+    isAutoAdd: reward.isAutoAdd ?? false,
+    isCustomerSelectable: reward.isCustomerSelectable ?? false,
+    trackMode: "variant",
+    sortOrder: index,
+    label: reward.label,
+  }));
+
+export async function insertPresetOffer(tx: Tx, shopId: string, presetOffer: LegacyOfferPreset) {
+  const [createdOffer] = await tx
+    .insert(offers)
+    .values({
+      shopId,
+      type: presetOffer.type,
+      status: "draft",
+      internalName: presetOffer.internalName,
+      publicTitle: presetOffer.publicTitle,
+      description: presetOffer.description,
+      priority: presetOffer.priority,
+      createdBy: LEGACY_IMPORTER,
+      updatedBy: LEGACY_IMPORTER,
+    })
+    .returning({ id: offers.id });
+  if (!createdOffer) throw new Error(`Failed to create ${presetOffer.internalName}.`);
+
+  await tx.insert(offerConditions).values(presetConditionRows(shopId, createdOffer.id, presetOffer));
+  await tx.insert(offerRewards).values(presetRewardRows(shopId, createdOffer.id, presetOffer));
+  await tx.insert(offerCombinationPolicies).values({ shopId, offerId: createdOffer.id });
 }

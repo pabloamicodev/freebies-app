@@ -56,8 +56,12 @@ describe("Ambrosia E2E fixture mapping", () => {
       requiredLineAttributeValue: "atlas-sk-otg",
       requiredAnchorVariantIds: [],
       requiredAnchorMinQuantity: 1,
-      requiresAnchorSubscription: true,
+      // source conditions.requiresSubscriptionInCart is cart-level: a main condition, not the anchor flag
+      requiresAnchorSubscription: false,
     });
+    expect(atlas?.conditions).toEqual([
+      { conditionType: "subscription_product_type", operator: "eq", value: { mode: "subscription_only" } },
+    ]);
 
     const shirt = mapped.find((offer) => offer.key === "cart-subtotal-free-gift-mtrcmr6l");
     expect(shirt?.conditions[0]?.value).toMatchObject({

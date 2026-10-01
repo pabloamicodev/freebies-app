@@ -1,0 +1,38 @@
+{
+  "shop": "onesolsupps.myshopify.com",
+  "snapshot": "2026-10-01",
+  "rules": [
+    {
+      "id": "acai-unicorn-onetime-25-off",
+      "type": "one_time_purchase_discount",
+      "enabled": false,
+      "targetVariantIds": [
+        "gid://shopify/ProductVariant/42477833322735",
+        "gid://shopify/ProductVariant/44045687324911",
+        "gid://shopify/ProductVariant/46171937145071",
+        "gid://shopify/ProductVariant/46171936981231",
+        "gid://shopify/ProductVariant/43617035976943",
+        "gid://shopify/ProductVariant/44045688078575",
+        "gid://shopify/ProductVariant/43250744623343",
+        "gid://shopify/ProductVariant/44045687980271",
+        "gid://shopify/ProductVariant/43250743050479",
+        "gid://shopify/ProductVariant/44045687816431",
+        "gid://shopify/ProductVariant/43250731679983",
+        "gid://shopify/ProductVariant/44045687718127",
+        "gid://shopify/ProductVariant/44045688373487",
+        "gid://shopify/ProductVariant/44045688242415",
+        "gid://shopify/ProductVariant/46575892889839",
+        "gid://shopify/ProductVariant/46575892824303"
+      ],
+      "discountPercentage": 25,
+      "message": "25% off Acai Berry Blast / Unicorn Milkshake"
+    },
+    {
+      "id": "quiz-bundle-price-match-msnpevd3",
+      "type": "quiz_bundle_price_match",
+      "enabled": true,
+      "discountPercentageOnGifts": 100,
+      "message": "Product Quiz bundle"
+    }
+  ]
+}

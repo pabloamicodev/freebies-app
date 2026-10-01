@@ -1,0 +1,290 @@
+{
+  "shop": "ambrosia-nutraceuticals.myshopify.com",
+  "snapshot": "2026-10-01",
+  "rules": [
+    {
+      "id": "nektar-glp1-shaker-gift",
+      "type": "landing_scoped_product_discount",
+      "enabled": true,
+      "targetProductIds": [
+        "gid://shopify/Product/7533558595669"
+      ],
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "nektar-glp1-sk",
+      "requiredAnchorVariantIds": [
+        "gid://shopify/ProductVariant/39328106578005",
+        "gid://shopify/ProductVariant/7623220887605",
+        "gid://shopify/ProductVariant/41064870707285",
+        "gid://shopify/ProductVariant/40818314149973",
+        "gid://shopify/ProductVariant/22546471419989",
+        "gid://shopify/ProductVariant/40451298263125"
+      ],
+      "requiredAnchorMinQuantity": 1,
+      "discountPercentage": 100,
+      "message": "Nektar GLP-1 Starter Kit",
+      "conditions": {
+        "requiresSubscriptionInCart": true
+      }
+    },
+    {
+      "id": "landing-nektar-skin-v2",
+      "type": "landing_scoped_product_discount",
+      "enabled": true,
+      "targetProductIds": [
+        "gid://shopify/Product/7533558595669"
+      ],
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "nektar-skin-v2",
+      "requiredAnchorVariantIds": [
+        "gid://shopify/ProductVariant/39328106578005",
+        "gid://shopify/ProductVariant/7623220887605",
+        "gid://shopify/ProductVariant/41064870707285",
+        "gid://shopify/ProductVariant/40818314149973",
+        "gid://shopify/ProductVariant/22546471419989",
+        "gid://shopify/ProductVariant/40451298263125"
+      ],
+      "requiredAnchorMinQuantity": 1,
+      "discountPercentage": 100,
+      "message": "Frother and Gift Card unlocked!",
+      "conditions": {
+        "requiresSubscriptionInCart": true
+      }
+    },
+    {
+      "id": "cart-subtotal-free-gift-mtrcmr6l",
+      "type": "cart_subtotal_free_gift",
+      "enabled": true,
+      "tiers": [
+        {
+          "id": "tier-1",
+          "minimumSubtotal": 85,
+          "giftVariantIds": [
+            "gid://shopify/ProductVariant/42872167202901",
+            "gid://shopify/ProductVariant/42872167235669",
+            "gid://shopify/ProductVariant/42872167268437",
+            "gid://shopify/ProductVariant/42872167301205"
+          ],
+          "maxFreeUnits": 1,
+          "discountPercentage": 100
+        }
+      ],
+      "stackingMode": "highest_tier_only",
+      "message": "Labor Day Sale | FREE Ambrosia Athletic Club T-Shirt",
+      "conditions": {
+        "minimumCartSubtotal": 85
+      }
+    },
+    {
+      "id": "sitewide-free-shipping-mtt2zu2r",
+      "type": "sitewide_free_shipping",
+      "enabled": false,
+      "shippingTiers": [
+        {
+          "minimumSubtotal": 50,
+          "discountPercentage": 50,
+          "appliesWhen": "has_subscription"
+        },
+        {
+          "minimumSubtotal": 80,
+          "discountPercentage": 100,
+          "appliesWhen": "has_subscription"
+        },
+        {
+          "minimumSubtotal": 90,
+          "discountPercentage": 50,
+          "appliesWhen": "one_time_only"
+        }
+      ],
+      "deliveryDiscountType": "percentage",
+      "deliveryDiscountPercentage": 100,
+      "shippingDiscountAmount": 1,
+      "targetDeliveryGroupTypes": [
+        "ONE_TIME_PURCHASE",
+        "SUBSCRIPTION"
+      ],
+      "message": "Shipping discount!"
+    },
+    {
+      "id": "landing-free-shipping-mtt5s7nx",
+      "type": "landing_free_shipping",
+      "enabled": false,
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "nektar-glp1-sk",
+      "requiredAnchorVariantIds": [
+        "gid://shopify/ProductVariant/7623220887605"
+      ],
+      "requiredAnchorMinQuantity": 1,
+      "shippingTiers": [
+        {
+          "minimumSubtotal": 25,
+          "discountPercentage": 25,
+          "appliesWhen": "has_subscription"
+        }
+      ],
+      "deliveryDiscountType": "percentage",
+      "deliveryDiscountPercentage": 100,
+      "shippingDiscountAmount": 1,
+      "targetDeliveryGroupTypes": [
+        "ONE_TIME_PURCHASE",
+        "SUBSCRIPTION"
+      ],
+      "message": "Congrats! 50% shipping discount",
+      "conditions": {
+        "requiresSubscriptionInCart": true
+      }
+    },
+    {
+      "id": "landing-kinetic-sk-otg-freegifts",
+      "type": "landing_scoped_product_discount",
+      "enabled": true,
+      "targetProductIds": [
+        "gid://shopify/Product/6564143956053",
+        "gid://shopify/Product/7416485609557"
+      ],
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "kinetic-sk-otg",
+      "requiredAnchorVariantIds": [
+        "gid://shopify/ProductVariant/40818313003093",
+        "gid://shopify/ProductVariant/39575663738965",
+        "gid://shopify/ProductVariant/39500842565717",
+        "gid://shopify/ProductVariant/39500842532949"
+      ],
+      "requiredAnchorMinQuantity": 1,
+      "discountPercentage": 100,
+      "message": "Kinetic \"on the go\" Kit Gifts!",
+      "conditions": {
+        "requiresSubscriptionInCart": true
+      }
+    },
+    {
+      "id": "landing-atlas-sk-otg-freegifts",
+      "type": "landing_scoped_product_discount",
+      "enabled": true,
+      "targetProductIds": [
+        "gid://shopify/Product/6564143956053",
+        "gid://shopify/Product/7416485609557",
+        "gid://shopify/Product/6564118429781"
+      ],
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "atlas-sk-otg",
+      "requiredAnchorMinQuantity": 1,
+      "discountPercentage": 100,
+      "message": "Atlas \"on the go\" Kit Gifts!",
+      "conditions": {
+        "requiresSubscriptionInCart": true
+      }
+    },
+    {
+      "id": "landing-nektar-sk-otg-freegifts",
+      "type": "landing_scoped_product_discount",
+      "enabled": true,
+      "targetProductIds": [
+        "gid://shopify/Product/7416485609557"
+      ],
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "nektar-sk-otg",
+      "requiredAnchorVariantIds": [
+        "gid://shopify/ProductVariant/7623220887605",
+        "gid://shopify/ProductVariant/39328106578005",
+        "gid://shopify/ProductVariant/41064870707285",
+        "gid://shopify/ProductVariant/40818314149973",
+        "gid://shopify/ProductVariant/22546471419989",
+        "gid://shopify/ProductVariant/40451298263125"
+      ],
+      "requiredAnchorMinQuantity": 1,
+      "discountPercentage": 100,
+      "message": "Nektar \"on the go\" Kit Gifts!",
+      "conditions": {
+        "requiresSubscriptionInCart": true
+      }
+    },
+    {
+      "id": "landing-planta-sk-otg-freegifts",
+      "type": "landing_scoped_product_discount",
+      "enabled": true,
+      "targetProductIds": [
+        "gid://shopify/Product/7416485609557"
+      ],
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "planta-sk-otg",
+      "requiredAnchorVariantIds": [
+        "gid://shopify/ProductVariant/42536493613141",
+        "gid://shopify/ProductVariant/12796283650101",
+        "gid://shopify/ProductVariant/32940576014421",
+        "gid://shopify/ProductVariant/40815124316245",
+        "gid://shopify/ProductVariant/21053881581653",
+        "gid://shopify/ProductVariant/21240149803093",
+        "gid://shopify/ProductVariant/22546599379029",
+        "gid://shopify/ProductVariant/31701929885781",
+        "gid://shopify/ProductVariant/32444848275541",
+        "gid://shopify/ProductVariant/39908414029909",
+        "gid://shopify/ProductVariant/21236091813973",
+        "gid://shopify/ProductVariant/21240149770325",
+        "gid://shopify/ProductVariant/21281942110293",
+        "gid://shopify/ProductVariant/32900793827413"
+      ],
+      "requiredAnchorMinQuantity": 1,
+      "discountPercentage": 100,
+      "message": "Planta \"on the go\" Kit Gifts!",
+      "conditions": {
+        "requiresSubscriptionInCart": true
+      }
+    },
+    {
+      "id": "landing-scoped-product-mtvt54kq",
+      "type": "landing_scoped_product_discount",
+      "enabled": true,
+      "targetProductIds": [
+        "gid://shopify/Product/7416485609557",
+        "gid://shopify/Product/6564143956053"
+      ],
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "planta-atlas-combo-sk",
+      "requiredAnchorVariantIds": [
+        "gid://shopify/ProductVariant/42536493613141",
+        "gid://shopify/ProductVariant/42465588576341",
+        "gid://shopify/ProductVariant/42465588609109",
+        "gid://shopify/ProductVariant/12796283650101",
+        "gid://shopify/ProductVariant/32940576014421",
+        "gid://shopify/ProductVariant/40815124316245",
+        "gid://shopify/ProductVariant/21053881581653",
+        "gid://shopify/ProductVariant/21240149803093",
+        "gid://shopify/ProductVariant/22546599379029",
+        "gid://shopify/ProductVariant/31701929885781",
+        "gid://shopify/ProductVariant/32444848275541",
+        "gid://shopify/ProductVariant/39908414029909",
+        "gid://shopify/ProductVariant/21236091813973",
+        "gid://shopify/ProductVariant/21240149770325",
+        "gid://shopify/ProductVariant/21281942110293",
+        "gid://shopify/ProductVariant/32900793827413"
+      ],
+      "requiredAnchorMinQuantity": 2,
+      "discountPercentage": 100,
+      "message": "Planta+Atlas Combo Gifts!"
+    },
+    {
+      "id": "landing-nektar-sk-special-nfgc10kit",
+      "type": "landing_scoped_product_discount",
+      "enabled": true,
+      "targetProductIds": [
+        "gid://shopify/Product/7533558595669"
+      ],
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "nektar-sk-special-offer",
+      "requiredAnchorVariantIds": [
+        "gid://shopify/ProductVariant/7623220887605",
+        "gid://shopify/ProductVariant/39328106578005",
+        "gid://shopify/ProductVariant/41064870707285",
+        "gid://shopify/ProductVariant/40818314149973",
+        "gid://shopify/ProductVariant/22546471419989",
+        "gid://shopify/ProductVariant/40451298263125"
+      ],
+      "requiredAnchorMinQuantity": 1,
+      "discountPercentage": 100,
+      "message": "Congratulations! Free Gifts added",
+      "conditions": {
+        "requiresSubscriptionInCart": true
+      }
+    }
+  ]
+}

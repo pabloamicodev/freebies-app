@@ -1,6 +1,6 @@
 import type { NormalizedCart, EligibilityReason, CurrencyContext } from "@promo/shared-types";
 import { ok, err, type Result } from "@promo/shared-types";
-import { extractQualifyingLines, sumQualifyingValue } from "../cart-parser.js";
+import { extractQualifyingLines, sumQualifyingValueNet } from "../cart-parser.js";
 
 export interface CartValueConditionValue {
   thresholdCents: number;
@@ -48,7 +48,7 @@ export function evaluateCartValue(
     return true;
   });
 
-  const cartValueCents = sumQualifyingValue(qualifyingLines);
+  const cartValueCents = sumQualifyingValueNet(qualifyingLines);
 
   // Resolve threshold — prefer currency override, fallback to auto-conversion
   let thresholdCents = condition.thresholdCents;

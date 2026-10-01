@@ -1,7 +1,7 @@
 export { evaluate } from "./evaluator.js";
 export type { OfferDefinition, ConditionDefinition, RewardDefinition, EvaluatorContext } from "./evaluator.js";
 export { applyPriority, detectConflicts } from "./priority-resolver.js";
-export { buildCartHash, extractGiftLines, extractQualifyingLines, sumQualifyingValue, sumQualifyingQuantity } from "./cart-parser.js";
+export { buildCartHash, extractGiftLines, extractQualifyingLines, projectedVolumeDiscountCents, sumQualifyingValue, sumQualifyingValueNet, sumQualifyingQuantity } from "./cart-parser.js";
 export { evaluateCartValue } from "./conditions/cart-value.js";
 export { evaluateCartQuantity } from "./conditions/cart-quantity.js";
 export { evaluateSpecificProduct } from "./conditions/specific-product.js";
