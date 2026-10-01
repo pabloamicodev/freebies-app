@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import type { GiftSliderPayload } from "../types.js";
 import {
+  decideAutoOpen,
   fetchSoldOutVariantIds,
   friendlyGiftError,
   GiftSliderError,
@@ -121,5 +123,51 @@ describe("fetchSoldOutVariantIds", () => {
     );
     expect(result.size).toBe(0);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("decideAutoOpen", () => {
+  const slider = (over: Partial<GiftSliderPayload> = {}, avail = true): GiftSliderPayload =>
+    ({
+      offerId: "o1",
+      alreadySelectedCount: 0,
+      selectableGifts: [{ rewardId: "r1", offerVersion: 3, isAvailable: avail }],
+      ...over,
+    }) as unknown as GiftSliderPayload;
+  const none = new Set<string>();
+
+  it("opens on first qualification, not again while still qualified (dismiss / re-render)", () => {
+    const first = decideAutoOpen(none, slider(), none);
+    expect(first.open).toBe(true);
+    expect(decideAutoOpen(first.keys, slider(), new Set(["o1:r1"])).open).toBe(false);
+    expect(decideAutoOpen(first.keys, slider(), none).open).toBe(false);
+  });
+
+  it("reopens after dipping below the threshold and crossing again, even for an identical cart", () => {
+    const first = decideAutoOpen(none, slider(), none);
+    const dipped = decideAutoOpen(first.keys, null, none);
+    expect(dipped.keys.size).toBe(0);
+    expect(decideAutoOpen(dipped.keys, slider(), none).open).toBe(true);
+  });
+
+  it("reload keeps the persisted stretch (no reopen) until a real down-up transition", () => {
+    const persisted = decideAutoOpen(none, slider(), none).keys;
+    expect(decideAutoOpen(new Set(persisted), slider(), none).open).toBe(false);
+  });
+
+  it("does not open when the gift is already in the cart, and stays quiet afterwards", () => {
+    const r = decideAutoOpen(none, slider({ alreadySelectedCount: 1 }), none);
+    expect(r.open).toBe(false);
+    expect(decideAutoOpen(r.keys, slider(), none).open).toBe(false);
+  });
+
+  it("does not force-open a dead modal, but opens once stock returns", () => {
+    const r = decideAutoOpen(none, slider({}, false), none);
+    expect(r.open).toBe(false);
+    expect(decideAutoOpen(r.keys, slider(), none).open).toBe(true);
+  });
+
+  it("drops other offers' state", () => {
+    expect(decideAutoOpen(new Set(["o2:1"]), slider(), none).keys.has("o2:1")).toBe(false);
   });
 });

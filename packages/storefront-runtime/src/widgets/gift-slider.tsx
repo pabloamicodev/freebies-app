@@ -38,6 +38,30 @@ function saveAutoOpenedCartStates(states: Set<string>): void {
   }
 }
 
+/** One auto-open per qualified stretch of an offer. Keys are `offerId:versions`
+ * (no cart hash) and are dropped as soon as the offer stops producing a slider,
+ * so crossing the threshold again after dipping below re-opens the picker. */
+export function decideAutoOpen(
+  opened: ReadonlySet<string>,
+  slider: GiftSliderPayload | null,
+  declined: ReadonlySet<string>,
+): { open: boolean; keys: Set<string> } {
+  if (!slider || !Array.isArray(slider.selectableGifts)) return { open: false, keys: new Set() };
+  const key = `${slider.offerId}:${slider.selectableGifts.map((gift) => gift.offerVersion).join(",")}`;
+  const keys = new Set([...opened].filter((k) => k.startsWith(`${slider.offerId}:`)));
+  if (keys.has(key)) return { open: false, keys };
+  if (slider.alreadySelectedCount > 0) {
+    keys.add(key);
+    return { open: false, keys };
+  }
+  const canPick = slider.selectableGifts.some(
+    (gift) => gift.isAvailable && !declined.has(giftRewardKey(slider.offerId, gift.rewardId)),
+  );
+  if (!canPick) return { open: false, keys };
+  keys.add(key);
+  return { open: true, keys };
+}
+
 // ─── Styles — injected once ───────────────────────────────────────────────────
 
 const SLIDER_STYLES = `
@@ -689,8 +713,8 @@ export function initGiftSlider(sessionId: string) {
   const payloadByOfferId = new Map<string, GiftSliderPayload>();
   // Persisted (not just in-memory) — Shopify storefront navigation is a full
   // page reload, so an in-memory Set would let the slider auto-open again on
-  // every single page view for the same unchanged cart state.
-  const autoOpenedCartStates = loadAutoOpenedCartStates();
+  // every single page view while the offer stays qualified.
+  let autoOpenedCartStates =loadAutoOpenedCartStates();
   let latestPayload: GiftSliderPayload | null = null;
 
   on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
@@ -700,26 +724,12 @@ export function initGiftSlider(sessionId: string) {
       latestPayload = result.giftSlider;
       payloadByOfferId.set(result.giftSlider.offerId, result.giftSlider);
     }
-    const autoOpenKey = result.giftSlider
-      ? `${result.giftSlider.offerId}:${result.cartHash}:${result.giftSlider.selectableGifts.map((gift) => gift.offerVersion).join(",")}`
-      : null;
-    const declinedGiftRewards = loadDeclinedGiftRewards();
-    const hasNonDeclinedGift = (slider: GiftSliderPayload) =>
-      slider.selectableGifts.some(
-        (gift) => gift.isAvailable && !declinedGiftRewards.has(giftRewardKey(slider.offerId, gift.rewardId)),
-      );
-    if (
-      result.giftSlider &&
-      Array.isArray(result.giftSlider.selectableGifts) &&
-      result.giftSlider.alreadySelectedCount === 0 &&
-      hasNonDeclinedGift(result.giftSlider) &&
-      autoOpenKey &&
-      !autoOpenedCartStates.has(autoOpenKey)
-    ) {
-      autoOpenedCartStates.add(autoOpenKey);
-      saveAutoOpenedCartStates(autoOpenedCartStates);
-      mountSlider(result.giftSlider, sessionId);
+    const { open, keys } = decideAutoOpen(autoOpenedCartStates, result.giftSlider, loadDeclinedGiftRewards());
+    if (keys.size !== autoOpenedCartStates.size || [...keys].some((k) => !autoOpenedCartStates.has(k))) {
+      autoOpenedCartStates = keys;
+      saveAutoOpenedCartStates(keys);
     }
+    if (open && result.giftSlider) mountSlider(result.giftSlider, sessionId);
   });
 
   on<GiftSliderPayload | { offerId?: string }>(PromoEvents.GiftSliderRequested, (request) => {
