@@ -5,6 +5,7 @@ import { productCache, variantCache, shops, analyticsEvents, offers, offerCondit
 import { eq, and, lt, notInArray, or, sql } from "drizzle-orm";
 import { decryptToken } from "../lib/token-crypto.server.js";
 import { syncInventoryFromWebhook } from "../lib/sync/inventory-sync.server.js";
+import { deriveWebhookAvailability, isStaleProductPayload } from "../lib/sync/variant-availability.js";
 import { refreshProductVariantsFromAdmin } from "../lib/sync/gift-stock-reconcile.server.js";
 import {
   removeCollectionFromCache,
@@ -225,6 +226,7 @@ interface ProductWebhookPayload {
   tags: string;
   status: string;
   admin_graphql_api_id: string;
+  updated_at?: string;
   variants?: Array<{
     id: number;
     admin_graphql_api_id: string;
@@ -315,7 +317,13 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
     });
 
   // Sync variants â€” single batch upsert instead of N parallel inserts
-  if (product.variants && product.variants.length > 0) {
+  const [latest] = await db
+    .select({ at: sql<Date | null>`max(${variantCache.syncedAt})` })
+    .from(variantCache)
+    .where(and(eq(variantCache.shopId, shopId), eq(variantCache.productGid, productGid)));
+  // An older payload (delivered late/out of order) would overwrite fresher inventory data.
+  const stale = isStaleProductPayload(product.updated_at, latest?.at ? new Date(latest.at) : null);
+  if (!stale && product.variants && product.variants.length > 0) {
     const now = new Date();
     await db
       .insert(variantCache)
@@ -331,16 +339,8 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
         currencyCode,
         inventoryQuantity: variant.inventory_quantity,
         inventoryPolicy: (variant.inventory_policy ?? "DENY").toUpperCase(),
-        // The product webhook payload omits `available` and (on current API versions)
-        // `inventory_management`, so "untracked" cannot be inferred from it — treating a missing
-        // inventory_management as untracked cached every sold-out variant as in stock. Derive from
-        // stock/policy only; refreshProductVariantsFromAdmin below overwrites with Shopify's answer.
-        availableForSale:
-          variant.available ??
-          ((variant.inventory_policy ?? "deny").toLowerCase() === "continue" ||
-            (variant.inventory_quantity ?? 0) > 0 ||
-            variant.inventory_management === null),
-        inventoryTracked: variant.inventory_management === undefined ? null : variant.inventory_management !== null,
+        // See deriveWebhookAvailability; refreshProductVariantsFromAdmin below overwrites it with Shopify's answer.
+        ...deriveWebhookAvailability(variant),
         requiresSellingPlan: variant.requires_selling_plan ?? false,
         raw: variant as unknown,
         syncedAt: now,

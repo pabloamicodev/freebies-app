@@ -228,7 +228,7 @@ export function enrichGiftSlider(
       variantTitle:
         variant?.variantTitle === "Default Title" ? null : (variant?.variantTitle ?? gift.variantTitle),
       imageUrl: variant?.imageUrl ?? gift.imageUrl,
-      // Lets the storefront re-check live stock via /products/{handle}.js —
+      // Lets the storefront re-check live stock via /products/{handle}.js -
       // the variant cache is webhook-fed and can lag a sale by minutes.
       productHandle: variant?.productHandle ?? null,
       originalPriceCents,

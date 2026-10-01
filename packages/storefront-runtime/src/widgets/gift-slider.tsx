@@ -311,7 +311,7 @@ export async function fetchSoldOutVariantIds(
 /** The gifts the customer can actually be shown. A reward keeps its primary
  * gifts while any is purchasable (per the payload or `soldOut`); once every
  * primary is sold out its merchant fallbacks (`isFallback`) replace them, and
- * with no usable fallback the reward is dropped entirely — never a modal of
+ * with no usable fallback the reward is dropped entirely - never a modal of
  * dead cards. A gift already in the cart stays listed. */
 export function resolveGiftChoices(payload: GiftSliderPayload, soldOut: ReadonlySet<string> = new Set()): SelectableGift[] {
   const usable = (gift: SelectableGift) => gift.isAvailable && !soldOut.has(gift.variantId);
@@ -452,7 +452,7 @@ function GiftSlider({
     };
   }, [onClose]);
 
-  // Every gift (and fallback) turned out unavailable after opening — nothing to pick.
+  // Every gift (and fallback) turned out unavailable after opening - nothing to pick.
   const nothingToPick = gifts.length === 0;
   useEffect(() => {
     if (nothingToPick) onClose();

@@ -8,7 +8,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return apiError(request, { status: 401, code: "UNAUTHORIZED", message: "Unauthorized." });
   }
   try {
-    return apiJson(request, { ok: true, ...(await reconcileAllShopsGiftVariants()) });
+    const result = await reconcileAllShopsGiftVariants();
+    return apiJson(request, { ok: result.failed === 0, ...result });
   } catch (error) {
     return handleApiError(request, error, "cron.gift-stock");
   }

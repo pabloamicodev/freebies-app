@@ -445,7 +445,7 @@ class PromoEngineRuntime {
     const qualifyingSubtotal = cart.items_subtotal_price ?? cart.total_price;
     this.log(
       "[PromoEngine] Evaluating cart â€”",
-      cart.items.map((i) => `${i.title} Ã—${i.quantity}`).join(", ") || "empty",
+      cart.items.map((i) => `${i.title} Ã-${i.quantity}`).join(", ") || "empty",
       `| subtotal: $${(qualifyingSubtotal / 100).toFixed(2)}`,
     );
 
@@ -489,7 +489,7 @@ class PromoEngineRuntime {
         this.log(
           "[PromoEngine] Cart actions to apply:",
           actions
-            .map((a) => `${a.action}(${a.variantId ?? a.lineKey ?? ""}Ã—${a.quantity ?? 0})`)
+            .map((a) => `${a.action}(${a.variantId ?? a.lineKey ?? ""}Ã-${a.quantity ?? 0})`)
             .join(", "),
         );
       } else {
