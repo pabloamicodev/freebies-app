@@ -244,6 +244,7 @@ export async function evaluate(
               action: "add_line",
               variantId,
               quantity: qty - existingQty,
+              ...(target.fallbackVariantIds?.length ? { fallbackVariantIds: target.fallbackVariantIds } : {}),
               properties: {
                 _promo_engine_line_type: "gift",
                 _promo_engine_offer_id: offer.id,
@@ -383,7 +384,8 @@ export async function evaluate(
     ]),
   ];
 
-  const giftSlider = buildGiftSliderPayload(finalQualified, ctx.offers, input.cart);
+  const giftSliders = buildGiftSliderPayloads(finalQualified, ctx.offers, input.cart);
+  const giftSlider = giftSliders[0] ?? null;
   const progressBars = buildProgressBars([...finalQualified, ...disqualifiedOffers], ctx.offers, input.cart);
   const cartMessages = progressBars.map((bar) => ({
     offerId: bar.offerId,
@@ -401,6 +403,8 @@ export async function evaluate(
     cartActions: allCartActions,
     discountCodes: { add: codesToAdd, remove: codesToRemove },
     giftSlider,
+    // Every qualifying offer's picker, so the route can surface the first one that still has stock.
+    ...(giftSliders.length > 1 ? { giftSliders } : {}),
     cartMessages,
     progressBars,
     // Upsell offers need catalog pricing the pure evaluator doesn't have —
@@ -411,11 +415,12 @@ export async function evaluate(
   };
 }
 
-function buildGiftSliderPayload(
+function buildGiftSliderPayloads(
   qualifiedOffers: EvaluatedOffer[],
   offers: OfferDefinition[],
   cart: EvaluationInput["cart"],
-): EvaluationResult["giftSlider"] {
+): NonNullable<EvaluationResult["giftSlider"]>[] {
+  const payloads: NonNullable<EvaluationResult["giftSlider"]>[] = [];
   for (const evaluated of qualifiedOffers) {
     const offer = offers.find((item) => item.id === evaluated.offerId);
     const selectableRewards = offer?.rewards.filter((reward) => {
@@ -427,12 +432,18 @@ function buildGiftSliderPayload(
     if (!offer || selectableRewards.length === 0) continue;
 
     const selectableGifts = selectableRewards.flatMap((reward) => {
-      const target = reward.target as { variantId?: string; variantIds?: string[]; productId?: string; productIds?: string[] };
+      const target = reward.target as { variantId?: string; variantIds?: string[]; productId?: string; productIds?: string[]; fallbackVariantIds?: string[] };
       const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
       const productIds = target.productIds ?? (target.productId ? [target.productId] : []);
-      return variantIds.map((variantId, index) => {
+      // Fallbacks ride along as ordinary options flagged isFallback: the storefront shows them
+      // only once every primary is unavailable (cache or live stock), the enrichment layer
+      // promotes them when it already knows every primary is sold out.
+      const fallbackIds = (target.fallbackVariantIds ?? []).filter((id) => !variantIds.includes(id));
+      return [...variantIds, ...fallbackIds].map((variantId, index) => {
         const cartLine = cart.lines.find((line) => line.variantId === variantId);
+        const isFallback = index >= variantIds.length;
         return {
+          ...(isFallback ? { isFallback: true } : {}),
           rewardId: reward.id,
           offerVersion: offer.version,
           rewardMaxQuantity: Math.max(1, reward.quantity ?? 1),
@@ -456,7 +467,7 @@ function buildGiftSliderPayload(
     });
 
     if (selectableGifts.length > 0) {
-      return {
+      payloads.push({
         offerId: offer.id,
         title: selectableRewards[0]?.label ?? "Choose your gift",
         subtitle: null,
@@ -467,10 +478,10 @@ function buildGiftSliderPayload(
           0,
         ),
         alreadySelectedCount: selectableGifts.filter((gift) => gift.isSelected).length,
-      };
+      });
     }
   }
-  return null;
+  return payloads;
 }
 
 function formatMoney(cents: number, currencyCode: string): string {

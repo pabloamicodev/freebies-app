@@ -7,6 +7,7 @@ import {
   compileShippingOfferConfigs,
   type CompiledShippingOffer,
 } from "./compile-config.js";
+import { buildCartValidationConfig } from "../cart-validation.server.js";
 
 type CompileArgs = Parameters<typeof compileShippingOfferConfigs>;
 
@@ -412,6 +413,36 @@ describe("compileOfferConfig", () => {
       "gid://shopify/ProductVariant/99",
     ]);
     expect(result.giftRewards[0]?.maxQuantity).toBe(1);
+  });
+
+  it("Ambrosia T-shirt shape: Function and cart validation both allow the fallback gift variant", () => {
+    const primaries = ["201", "202", "203", "204"].map((id) => `gid://shopify/ProductVariant/${id}`);
+    const fallbacks = ["301", "302"].map((id) => `gid://shopify/ProductVariant/${id}`);
+    const result = compileOfferConfig(
+      offer({ type: "gift" }),
+      [condition("cart_value", { thresholdCents: 8500 })],
+      [
+        shippingReward({
+          id: "reward-1",
+          rewardType: "product_gift",
+          discountType: "free",
+          value: { amount: 100, currencyCode: "USD" },
+          target: { scope: "cart", variantIds: primaries, fallbackVariantIds: fallbacks },
+          quantity: 1,
+        }),
+      ],
+      null,
+      3,
+    );
+    // Discount Function: the gift allowlist and per-reward targets include the fallbacks.
+    expect(result.giftVariantIds).toEqual([...primaries, ...fallbacks]);
+    expect(result.giftRewards[0]?.targetVariantIds).toEqual([...primaries, ...fallbacks]);
+    // Cart validation: a fallback line is an allowed gift line for this reward.
+    const validation = buildCartValidationConfig([result]);
+    expect(validation.allowedGiftVariantIds).toEqual(expect.arrayContaining(fallbacks));
+    expect(Object.values(validation.offerRules)[0]?.rewards["reward-1"]?.variantIds).toEqual(
+      expect.arrayContaining(fallbacks),
+    );
   });
 
   it("compiles gift rules per reward instead of flattening their limits and discounts", () => {

@@ -133,73 +133,135 @@ describe("resolveSoldOutGiftAdds", () => {
   });
 });
 
+type Gift = GiftSliderPayload["selectableGifts"][number];
+const gift = (variantId: string, over: Partial<Gift> = {}): Gift => ({
+  rewardId: "reward-1",
+  offerVersion: 1,
+  rewardMaxQuantity: 1,
+  variantId,
+  productId: "p1",
+  title: "Tee",
+  variantTitle: null,
+  imageUrl: null,
+  originalPriceCents: 0,
+  discountedPriceCents: 0,
+  isAvailable: true,
+  isSelected: false,
+  ...over,
+});
+const sliderPayload = (selectableGifts: Gift[], offerId = "offer-1"): GiftSliderPayload => ({
+  offerId,
+  title: "t",
+  subtitle: null,
+  currencyCode: "USD",
+  selectableGifts,
+  maxSelectableCount: 1,
+  alreadySelectedCount: 0,
+});
+const fb = (variantId: string, over: Partial<Gift> = {}) => gift(variantId, { isFallback: true, ...over });
+const catalogOf = (...rows: GiftCatalogRow[]) => new Map(rows.map((r) => [r.variantGid, r]));
+
 describe("enrichGiftSlider", () => {
   it("marks a sold-out gift unavailable when no fallback is configured", () => {
-    const catalog = new Map([["gift-1", row({ variantGid: "gift-1", availableForSale: false, productHandle: "tee" })]]);
-    const payload: GiftSliderPayload = {
-      offerId: "offer-1",
-      title: "t",
-      subtitle: null,
-      currencyCode: "USD",
-      selectableGifts: [{
-        rewardId: "reward-1",
-        offerVersion: 1,
-        rewardMaxQuantity: 1,
-        variantId: "gift-1",
-        productId: "p1",
-        title: "t",
-        variantTitle: null,
-        imageUrl: null,
-        originalPriceCents: 0,
-        discountedPriceCents: 0,
-        isAvailable: false,
-        isSelected: false,
-      }],
-      maxSelectableCount: 1,
-      alreadySelectedCount: 0,
-    };
-    const result = enrichGiftSlider(catalog, payload, []);
+    const catalog = catalogOf(row({ variantGid: "gift-1", availableForSale: false, productHandle: "tee" }));
+    const result = enrichGiftSlider(catalog, sliderPayload([gift("gift-1", { isAvailable: false })]), []);
     expect(result?.selectableGifts[0]?.isAvailable).toBe(false);
     expect(result?.selectableGifts[0]?.variantId).toBe("gift-1");
     // The storefront re-checks live stock via /products/{handle}.js.
     expect(result?.selectableGifts[0]?.productHandle).toBe("tee");
   });
 
-  it("replaces a sold-out gift with its configured in-stock fallback", () => {
-    const offers = [offerWithFallback("offer-1", "reward-1", ["fallback-1"])];
-    const catalog = new Map([
-      ["gift-1", row({ variantGid: "gift-1", availableForSale: false })],
-      ["fallback-1", row({ variantGid: "fallback-1", availableForSale: true, price: "5.00" })],
+  it("T-shirt out of stock, fallback in stock: offers the fallback as a selectable gift", () => {
+    const catalog = catalogOf(
+      row({ variantGid: "gift-1", availableForSale: false }),
+      row({ variantGid: "fallback-1", availableForSale: true, price: "5.00", productTitle: "Backup Tee" }),
+    );
+    const result = enrichGiftSlider(catalog, sliderPayload([gift("gift-1"), fb("fallback-1")]), []);
+    expect(result?.selectableGifts).toHaveLength(1);
+    const offered = result!.selectableGifts[0]!;
+    expect(offered).toMatchObject({ variantId: "fallback-1", isAvailable: true, title: "Backup Tee", originalPriceCents: 500 });
+    expect(offered.replacesTitle).toBe("Product");
+  });
+
+  describe("multi-variant gift, every variant sold out", () => {
+    const primaries = () => ["a", "b", "c"].map((id) => gift(id));
+
+    it("offers only the in-stock fallbacks, not dead primary cards", () => {
+      const catalog = catalogOf(
+        ...["a", "b", "c"].map((id) => row({ variantGid: id, availableForSale: false })),
+        row({ variantGid: "f1" }),
+        row({ variantGid: "f2" }),
+        row({ variantGid: "f3", availableForSale: false }),
+      );
+      const result = enrichGiftSlider(catalog, sliderPayload([...primaries(), fb("f1"), fb("f2"), fb("f3")]), []);
+      expect(result?.selectableGifts.map((g) => [g.variantId, g.isAvailable])).toEqual([
+        ["f1", true],
+        ["f2", true],
+      ]);
+    });
+
+    it("keeps primaries and dormant fallbacks when the cache wrongly says in stock", () => {
+      const catalog = catalogOf(
+        ...["a", "b", "c"].map((id) => row({ variantGid: id })),
+        row({ variantGid: "f1", productHandle: "other" }),
+        row({ variantGid: "f2", availableForSale: false }),
+      );
+      const result = enrichGiftSlider(catalog, sliderPayload([...primaries(), fb("f1"), fb("f2")]), []);
+      expect(result?.selectableGifts.map((g) => [g.variantId, g.isAvailable, !!g.isFallback])).toEqual([
+        ["a", true, false],
+        ["b", true, false],
+        ["c", true, false],
+        ["f1", true, true],
+        ["f2", false, true],
+      ]);
+      expect(result?.selectableGifts[3]?.productHandle).toBe("other");
+    });
+
+    it("keeps everything flagged unavailable (storefront hides it) when no fallback is in stock", () => {
+      const catalog = catalogOf(
+        ...["a", "b", "c"].map((id) => row({ variantGid: id, availableForSale: false })),
+        row({ variantGid: "f1", availableForSale: false }),
+      );
+      const result = enrichGiftSlider(catalog, sliderPayload([...primaries(), fb("f1")]), []);
+      expect(result?.selectableGifts).toHaveLength(4);
+      expect(result?.selectableGifts.every((g) => !g.isAvailable)).toBe(true);
+    });
+  });
+
+  it("swaps a single sold-out size for a fallback while other sizes stay in stock", () => {
+    const catalog = catalogOf(
+      row({ variantGid: "a", availableForSale: false }),
+      row({ variantGid: "b" }),
+      row({ variantGid: "f1" }),
+    );
+    const result = enrichGiftSlider(catalog, sliderPayload([gift("a"), gift("b"), fb("f1")]), []);
+    expect(result?.selectableGifts.map((g) => [g.variantId, !!g.isFallback])).toEqual([
+      ["f1", false],
+      ["b", false],
     ]);
-    const payload: GiftSliderPayload = {
-      offerId: "offer-1",
-      title: "t",
-      subtitle: null,
-      currencyCode: "USD",
-      selectableGifts: [{
-        rewardId: "reward-1",
-        offerVersion: 1,
-        rewardMaxQuantity: 1,
-        variantId: "gift-1",
-        productId: "p1",
-        title: "Original",
-        variantTitle: null,
-        imageUrl: null,
-        originalPriceCents: 0,
-        discountedPriceCents: 0,
-        isAvailable: false,
-        isSelected: false,
-      }],
-      maxSelectableCount: 1,
-      alreadySelectedCount: 0,
-    };
-    const result = enrichGiftSlider(catalog, payload, offers);
-    const gift = result?.selectableGifts[0];
-    expect(gift?.isAvailable).toBe(true);
-    expect(gift?.variantId).toBe("fallback-1");
-    // replacesTitle captures the sold-out gift's *catalog* title (set by the
-    // enrichment pass just before the fallback swap), not the raw payload's
-    // pre-enrichment title — matches the pre-existing two-pass behavior.
-    expect(gift?.replacesTitle).toBe("Product");
+  });
+
+  it("resolves each reward (tier) of an offer independently", () => {
+    const catalog = catalogOf(
+      row({ variantGid: "a", availableForSale: false }),
+      row({ variantGid: "f1" }),
+      row({ variantGid: "b" }),
+      row({ variantGid: "g1" }),
+    );
+    const result = enrichGiftSlider(
+      catalog,
+      sliderPayload([
+        gift("a"),
+        fb("f1"),
+        gift("b", { rewardId: "reward-2" }),
+        fb("g1", { rewardId: "reward-2" }),
+      ]),
+      [],
+    );
+    expect(result?.selectableGifts.map((g) => [g.rewardId, g.variantId, !!g.isFallback])).toEqual([
+      ["reward-1", "f1", true],
+      ["reward-2", "b", false],
+      ["reward-2", "g1", true],
+    ]);
   });
 });

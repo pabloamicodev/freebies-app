@@ -8,6 +8,7 @@ export interface CartAction {
   lineKey?: string;
   offerId?: string;
   reason?: string;
+  fallbackVariantIds?: string[];
 }
 
 export interface EvaluationResult {
@@ -94,6 +95,8 @@ export interface SelectableGift {
   productHandle?: string | null;
   /** Title of the sold-out gift this merchant-configured fallback replaces. */
   replacesTitle?: string;
+  /** Merchant fallback: only offered once every primary gift of its reward is unavailable. */
+  isFallback?: boolean;
 }
 
 export interface CartMessagePayload {

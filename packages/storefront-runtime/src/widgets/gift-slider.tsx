@@ -164,6 +164,8 @@ interface GiftSliderProps {
    * without ever selecting a gift — as opposed to onClose, which also fires
    * after a successful confirm. */
   onDismissWithoutSelection: () => void;
+  /** Variants already live-checked as sold out before opening. */
+  initialSoldOut?: ReadonlySet<string>;
 }
 
 function giftKey(gift: Pick<SelectableGift, "rewardId" | "variantId">): string {
@@ -276,12 +278,28 @@ export async function fetchSoldOutVariantIds(
   return soldOut;
 }
 
+/** The gifts the customer can actually be shown. A reward keeps its primary
+ * gifts while any is purchasable (per the payload or `soldOut`); once every
+ * primary is sold out its merchant fallbacks (`isFallback`) replace them, and
+ * with no usable fallback the reward is dropped entirely � never a modal of
+ * dead cards. A gift already in the cart stays listed. */
+export function resolveGiftChoices(payload: GiftSliderPayload, soldOut: ReadonlySet<string> = new Set()): SelectableGift[] {
+  const usable = (gift: SelectableGift) => gift.isAvailable && !soldOut.has(gift.variantId);
+  return [...new Set(payload.selectableGifts.map((gift) => gift.rewardId))].flatMap((rewardId) => {
+    const own = payload.selectableGifts.filter((gift) => gift.rewardId === rewardId);
+    const primaries = own.filter((gift) => !gift.isFallback);
+    if (primaries.some((gift) => usable(gift) || gift.isSelected)) return primaries;
+    return own.filter((gift) => gift.isFallback && (usable(gift) || gift.isSelected));
+  });
+}
+
 function GiftSlider({
   payload,
   sessionId,
   onClose,
   onConfirm,
   onDismissWithoutSelection,
+  initialSoldOut,
 }: GiftSliderProps) {
   const [selected, setSelected] = useState<Set<string>>(
     new Set(payload.selectableGifts.filter((gift) => gift.isSelected).map(giftKey)),
@@ -290,7 +308,7 @@ function GiftSlider({
   const [error, setError] = useState<string | null>(null);
   // Variants found sold out after the payload was built (live stock check or a
   // Cart API rejection) — overrides the payload's isAvailable.
-  const [soldOut, setSoldOut] = useState<Set<string>>(new Set());
+  const [soldOut, setSoldOut] = useState<Set<string>>(new Set(initialSoldOut));
   const dialogRef = useRef<HTMLDialogElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const submittingRef = useRef(false);
@@ -298,6 +316,7 @@ function GiftSlider({
 
   const maxSelectable = payload.maxSelectableCount;
   const isAvailable = (gift: SelectableGift) => gift.isAvailable && !soldOut.has(gift.variantId);
+  const gifts = resolveGiftChoices(payload, soldOut);
 
   function markSoldOut(variantIds: Iterable<string>) {
     const ids = new Set(variantIds);
@@ -333,7 +352,7 @@ function GiftSlider({
       next.delete(key);
     } else {
       if (!isAvailable(gift)) return;
-      const rewardSelectedCount = payload.selectableGifts.filter(
+      const rewardSelectedCount = gifts.filter(
         (candidate) => candidate.rewardId === gift.rewardId && next.has(giftKey(candidate)),
       ).length;
       if (next.size >= maxSelectable || rewardSelectedCount >= gift.rewardMaxQuantity) return;
@@ -345,7 +364,7 @@ function GiftSlider({
 
   async function handleConfirm() {
     if (submittingRef.current) return;
-    const selectedGifts = payload.selectableGifts.filter((gift) => selected.has(giftKey(gift)));
+    const selectedGifts = gifts.filter((gift) => selected.has(giftKey(gift)));
     // The customer can only reach an unavailable selection by having it
     // already in their cart when the popup opened (toggleGift refuses to
     // select an unavailable variant) — never send that to the Cart API.
@@ -373,7 +392,7 @@ function GiftSlider({
     }
   }
 
-  const hasUnavailableSelection = payload.selectableGifts.some(
+  const hasUnavailableSelection = gifts.some(
     (gift) => selected.has(giftKey(gift)) && !isAvailable(gift),
   );
 
@@ -402,6 +421,13 @@ function GiftSlider({
       previouslyFocused?.focus();
     };
   }, [onClose]);
+
+  // Every gift (and fallback) turned out unavailable after opening � nothing to pick.
+  const nothingToPick = gifts.length === 0;
+  useEffect(() => {
+    if (nothingToPick) onClose();
+  }, [nothingToPick]);
+  if (nothingToPick) return null;
 
   return (
     <dialog
@@ -442,7 +468,7 @@ function GiftSlider({
 
         <div class="pe-slider-body">
           <div class="pe-gift-grid">
-            {payload.selectableGifts.map((gift) => {
+            {gifts.map((gift) => {
               const key = giftKey(gift);
               const isSelected = selected.has(key);
               const unavailable = !isAvailable(gift);
@@ -553,7 +579,7 @@ function GiftSlider({
 
 let sliderContainer: HTMLDivElement | null = null;
 
-function mountSlider(payload: GiftSliderPayload, sessionId: string) {
+function mountSlider(payload: GiftSliderPayload, sessionId: string, initialSoldOut?: ReadonlySet<string>) {
   injectStyles();
 
   if (!sliderContainer) {
@@ -674,6 +700,7 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string) {
       onClose: unmount,
       onConfirm: handleConfirm,
       onDismissWithoutSelection: handleDismissWithoutSelection,
+      initialSoldOut,
     }),
     sliderContainer,
   );
@@ -682,6 +709,16 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string) {
     offer_id: payload.offerId,
     session_id: sessionId,
   });
+}
+
+/** Opens the picker only if something in it can actually be chosen: re-checks
+ * live stock first (the payload's isAvailable comes from a lagging cache), so
+ * an all-sold-out gift with no usable fallback never shows a dead modal. */
+async function openSlider(payload: GiftSliderPayload, sessionId: string): Promise<void> {
+  const soldOut = await fetchSoldOutVariantIds(payload.selectableGifts.filter((gift) => gift.isAvailable));
+  const choices = resolveGiftChoices(payload, soldOut);
+  if (!choices.some((gift) => (gift.isAvailable && !soldOut.has(gift.variantId)) || gift.isSelected)) return;
+  mountSlider(payload, sessionId, soldOut);
 }
 
 /** Initialize the gift slider — listens for slider requests from runtime. */
@@ -718,7 +755,7 @@ export function initGiftSlider(sessionId: string) {
     ) {
       autoOpenedCartStates.add(autoOpenKey);
       saveAutoOpenedCartStates(autoOpenedCartStates);
-      mountSlider(result.giftSlider, sessionId);
+      void openSlider(result.giftSlider, sessionId);
     }
   });
 
@@ -731,14 +768,14 @@ export function initGiftSlider(sessionId: string) {
         latestPayload;
       if (!cachedPayload) return;
       if (directPayload || !window.PromoEngine?.validateGiftOffer) {
-        mountSlider(cachedPayload, sessionId);
+        await openSlider(cachedPayload, sessionId);
         return;
       }
       const freshPayload = await window.PromoEngine.validateGiftOffer(cachedPayload.offerId);
       if (!freshPayload) return;
       latestPayload = freshPayload;
       payloadByOfferId.set(freshPayload.offerId, freshPayload);
-      mountSlider(freshPayload, sessionId);
+      await openSlider(freshPayload, sessionId);
     })();
   });
 

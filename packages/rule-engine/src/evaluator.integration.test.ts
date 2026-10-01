@@ -241,6 +241,66 @@ describe("evaluate — cart value condition", () => {
     });
   });
 
+  it("lists merchant fallbacks as isFallback slider options after the primaries", async () => {
+    const offer = makeGiftOffer("offer-1", 5000);
+    offer.rewards[0] = {
+      ...offer.rewards[0]!,
+      target: {
+        variantIds: ["gid://shopify/ProductVariant/201", "gid://shopify/ProductVariant/202"],
+        // A fallback duplicating a primary is ignored.
+        fallbackVariantIds: ["gid://shopify/ProductVariant/301", "gid://shopify/ProductVariant/202"],
+      },
+      isAutoAdd: false,
+      isCustomerSelectable: true,
+    };
+    const result = await evaluate(makeInput(makeCart(6000)), { offers: [offer], oneUseStates: [], now: NOW });
+    expect(result.giftSlider?.selectableGifts.map((g) => [g.variantId, !!g.isFallback])).toEqual([
+      ["gid://shopify/ProductVariant/201", false],
+      ["gid://shopify/ProductVariant/202", false],
+      ["gid://shopify/ProductVariant/301", true],
+    ]);
+  });
+
+  it("builds a picker per qualifying gift offer, each with its own fallback", async () => {
+    const offers = ["offer-1", "offer-2"].map((id, i) => {
+      const offer = makeGiftOffer(id, 5000);
+      offer.rewards[0] = {
+        ...offer.rewards[0]!,
+        target: {
+          variantIds: [`gid://shopify/ProductVariant/${i}01`, `gid://shopify/ProductVariant/${i}02`],
+          fallbackVariantIds: [`gid://shopify/ProductVariant/${i}99`],
+        },
+        isAutoAdd: false,
+        isCustomerSelectable: true,
+      };
+      return offer;
+    });
+    const result = await evaluate(makeInput(makeCart(6000)), { offers: offers, oneUseStates: [], now: NOW });
+    expect(result.giftSliders?.map((s) => s.offerId)).toEqual(["offer-1", "offer-2"]);
+    expect(result.giftSliders?.[1]?.selectableGifts.at(-1)).toMatchObject({
+      variantId: "gid://shopify/ProductVariant/199",
+      isFallback: true,
+    });
+    expect(result.giftSlider?.offerId).toBe("offer-1");
+  });
+
+  it("passes fallback variants on an auto-add so the runtime can retry a live sold-out add", async () => {
+    const offer = makeGiftOffer("offer-1", 5000);
+    offer.rewards[0] = {
+      ...offer.rewards[0]!,
+      target: {
+        variantIds: ["gid://shopify/ProductVariant/gift-offer-1"],
+        fallbackVariantIds: ["gid://shopify/ProductVariant/backup"],
+      },
+    };
+    const result = await evaluate(makeInput(makeCart(6000)), { offers: [offer], oneUseStates: [], now: NOW });
+    expect(result.cartActions[0]).toMatchObject({
+      action: "add_line",
+      variantId: "gid://shopify/ProductVariant/gift-offer-1",
+      fallbackVariantIds: ["gid://shopify/ProductVariant/backup"],
+    });
+  });
+
   it("removes a stale-version gift and recreates the current reward line", async () => {
     const cart = makeCart(6000);
     cart.lines.push({

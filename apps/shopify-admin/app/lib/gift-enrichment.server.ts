@@ -200,77 +200,56 @@ export function enrichGiftSlider(
   catalog: Map<string, GiftCatalogRow>,
   payload: GiftSliderPayload | null,
   offerDefinitions: OfferDefinition[],
-  cartLines: Array<{ variantId: string; properties: Record<string, string> }> = [],
+  _cartLines: Array<{ variantId: string; properties: Record<string, string> }> = [],
   labelOverrides?: Partial<WidgetTranslations> | null,
 ): GiftSliderPayload | null {
   if (!payload || payload.selectableGifts.length === 0) return payload;
 
   const offer = offerDefinitions.find((definition) => definition.id === payload.offerId);
   const rewardById = new Map(offer?.rewards.map((reward) => [reward.id, reward]) ?? []);
-  const listed = new Set(payload.selectableGifts.map((gift) => gift.variantId));
 
-  const enriched = {
-    ...payload,
-    labels: resolveGiftSliderLabels(labelOverrides),
-    selectableGifts: payload.selectableGifts.map((gift) => {
-      const variant = catalog.get(gift.variantId);
-      const reward = rewardById.get(gift.rewardId);
-      const originalPriceCents = variant ? Math.max(0, Math.round(Number(variant.price) * 100)) : 0;
-      const discountedPriceCents = priceAfterReward(reward, originalPriceCents);
-      const isAvailable = isGiftVariantAvailable(variant);
-
-      return {
-        ...gift,
-        productId: variant?.productGid ?? gift.productId,
-        title: variant?.productTitle ?? gift.title,
-        variantTitle:
-          variant?.variantTitle === "Default Title"
-            ? null
-            : (variant?.variantTitle ?? gift.variantTitle),
-        imageUrl: variant?.imageUrl ?? gift.imageUrl,
-        // Lets the storefront re-check live stock via /products/{handle}.js â€”
-        // the variant cache is webhook-fed and can lag a sale by minutes.
-        productHandle: variant?.productHandle ?? null,
-        originalPriceCents,
-        discountedPriceCents,
-        isAvailable,
-      };
-    }),
-  };
-
-  // Sold-out gifts are replaced by the merchant's configured fallbacks; with none configured
-  // the sold-out gift stays listed as unavailable and nothing else is offered.
-  enriched.selectableGifts = enriched.selectableGifts.map((gift) => {
-    if (gift.isAvailable) return gift;
-    const fallbackId = fallbackVariantIdsFor(offerDefinitions, payload.offerId, gift.rewardId).find((variantId) => {
-      const stock = catalog.get(variantId);
-      return !listed.has(variantId) && stock && isGiftVariantAvailable(stock);
-    });
-    const fallback = fallbackId ? catalog.get(fallbackId) : undefined;
-    if (!fallbackId || !fallback) return gift;
-    listed.add(fallbackId);
-    const originalPriceCents = Math.max(0, Math.round(Number(fallback.price) * 100));
+  const enriched = payload.selectableGifts.map((gift) => {
+    const variant = catalog.get(gift.variantId);
+    const originalPriceCents = variant ? Math.max(0, Math.round(Number(variant.price) * 100)) : 0;
     return {
       ...gift,
-      variantId: fallbackId,
-      productId: fallback.productGid,
-      title: fallback.productTitle ?? gift.title,
-      variantTitle: fallback.variantTitle === "Default Title" ? null : fallback.variantTitle,
-      imageUrl: fallback.imageUrl ?? null,
-      productHandle: fallback.productHandle ?? null,
+      productId: variant?.productGid ?? gift.productId,
+      title: variant?.productTitle ?? gift.title,
+      variantTitle:
+        variant?.variantTitle === "Default Title" ? null : (variant?.variantTitle ?? gift.variantTitle),
+      imageUrl: variant?.imageUrl ?? gift.imageUrl,
+      // Lets the storefront re-check live stock via /products/{handle}.js —
+      // the variant cache is webhook-fed and can lag a sale by minutes.
+      productHandle: variant?.productHandle ?? null,
       originalPriceCents,
       discountedPriceCents: priceAfterReward(rewardById.get(gift.rewardId), originalPriceCents),
-      isAvailable: true,
-      isSelected: cartLines.some(
-        (line) =>
-          line.variantId === fallbackId &&
-          line.properties["_promo_engine_line_type"] === "gift" &&
-          line.properties["_promo_engine_offer_id"] === payload.offerId &&
-          line.properties["_promo_engine_reward_id"] === gift.rewardId &&
-          line.properties["_promo_engine_offer_version"] === String(gift.offerVersion),
-      ),
-      replacesTitle: gift.title,
+      isAvailable: isGiftVariantAvailable(variant),
     };
   });
-  return enriched;
+
+  // Per reward (tier): fallbacks are dormant while any primary can be chosen. A sold-out primary
+  // next to in-stock ones is replaced by the next in-stock fallback; when every primary is sold
+  // out the reward is offered as its in-stock fallbacks instead of dead cards. With no in-stock
+  // fallback the dead cards stay, flagged unavailable, and the storefront declines to open.
+  const selectableGifts = [...new Set(enriched.map((gift) => gift.rewardId))].flatMap((rewardId) => {
+    const own = enriched.filter((gift) => gift.rewardId === rewardId);
+    const primaries = own.filter((gift) => !gift.isFallback);
+    const fallbacks = own.filter((gift) => gift.isFallback);
+    const usableFallbacks = fallbacks.filter((gift) => gift.isAvailable);
+    const replaces = primaries[0]?.title;
+    if (primaries.some((gift) => gift.isAvailable || gift.isSelected)) {
+      const spare = [...usableFallbacks];
+      const shown = primaries.map((gift) => {
+        const fallback = gift.isAvailable || gift.isSelected ? undefined : spare.shift();
+        if (!fallback) return gift;
+        const { isFallback: _dormant, ...promoted } = fallback;
+        return { ...promoted, replacesTitle: gift.title };
+      });
+      return [...shown, ...fallbacks.filter((gift) => !shown.some((s) => s.variantId === gift.variantId))];
+    }
+    if (usableFallbacks.length === 0) return own;
+    return usableFallbacks.map((gift) => ({ ...gift, ...(replaces ? { replacesTitle: replaces } : {}) }));
+  });
+
+  return { ...payload, labels: resolveGiftSliderLabels(labelOverrides), selectableGifts };
 }
