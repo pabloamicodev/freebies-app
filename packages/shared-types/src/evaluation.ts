@@ -162,8 +162,8 @@ export const EvaluationResultSchema = z.object({
     remove: z.array(z.string()),
   }),
   giftSlider: GiftSliderPayloadSchema.nullable(),
-  /** Evaluator-internal: every qualifying offer's picker; the route keeps the first with stock in `giftSlider`. */
-  giftSliders: z.array(GiftSliderPayloadSchema).optional(),
+  /** Other qualifying selectable-gift offers/tiers beyond `giftSlider`. */
+  additionalGiftSliders: z.array(GiftSliderPayloadSchema).optional(),
   cartMessages: z.array(CartMessagePayloadSchema),
   progressBars: z.array(ProgressBarPayloadSchema),
   upsells: z.array(UpsellPayloadSchema),

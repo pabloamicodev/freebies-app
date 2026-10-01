@@ -241,6 +241,25 @@ describe("enrichGiftSlider", () => {
     ]);
   });
 
+  it("treats a tracked, zero-stock, no-oversell variant as sold out even if the cache says available", () => {
+    const catalog = catalogOf(
+      row({ variantGid: "a", availableForSale: true, inventoryTracked: true, inventoryQuantity: 0 }),
+      row({ variantGid: "f1" }),
+    );
+    const result = enrichGiftSlider(catalog, sliderPayload([gift("a"), fb("f1")]), []);
+    expect(result?.selectableGifts.map((g) => g.variantId)).toEqual(["f1"]);
+  });
+
+  it("keeps untracked and oversell-allowed zero-stock variants available", () => {
+    const catalog = catalogOf(
+      row({ variantGid: "u", inventoryTracked: false, inventoryQuantity: 0 }),
+      row({ variantGid: "c", inventoryTracked: true, inventoryQuantity: 0, inventoryPolicy: "CONTINUE" }),
+      row({ variantGid: "n", inventoryTracked: null, inventoryQuantity: 0 }),
+    );
+    const result = enrichGiftSlider(catalog, sliderPayload([gift("u"), gift("c"), gift("n")]), []);
+    expect(result?.selectableGifts.map((g) => g.isAvailable)).toEqual([true, true, true]);
+  });
+
   it("resolves each reward (tier) of an offer independently", () => {
     const catalog = catalogOf(
       row({ variantGid: "a", availableForSale: false }),

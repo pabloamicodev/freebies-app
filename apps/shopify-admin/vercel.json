@@ -19,6 +19,10 @@
       "schedule": "* * * * *"
     },
     {
+      "path": "/api/cron/gift-stock",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/cron/skio-shipping",
       "schedule": "*/15 * * * *"
     },

@@ -384,8 +384,7 @@ export async function evaluate(
     ]),
   ];
 
-  const giftSliders = buildGiftSliderPayloads(finalQualified, ctx.offers, input.cart);
-  const giftSlider = giftSliders[0] ?? null;
+  const [giftSlider = null, ...additionalGiftSliders] = buildGiftSliderPayloads(finalQualified, ctx.offers, input.cart);
   const progressBars = buildProgressBars([...finalQualified, ...disqualifiedOffers], ctx.offers, input.cart);
   const cartMessages = progressBars.map((bar) => ({
     offerId: bar.offerId,
@@ -403,8 +402,7 @@ export async function evaluate(
     cartActions: allCartActions,
     discountCodes: { add: codesToAdd, remove: codesToRemove },
     giftSlider,
-    // Every qualifying offer's picker, so the route can surface the first one that still has stock.
-    ...(giftSliders.length > 1 ? { giftSliders } : {}),
+    additionalGiftSliders,
     cartMessages,
     progressBars,
     // Upsell offers need catalog pricing the pure evaluator doesn't have —
@@ -415,6 +413,8 @@ export async function evaluate(
   };
 }
 
+/** One payload per qualifying selectable-gift offer (tiers are separate
+ * offers), in evaluation priority order. */
 function buildGiftSliderPayloads(
   qualifiedOffers: EvaluatedOffer[],
   offers: OfferDefinition[],

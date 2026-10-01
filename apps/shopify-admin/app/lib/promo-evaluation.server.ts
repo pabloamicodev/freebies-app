@@ -173,33 +173,21 @@ export async function handleEvaluationRequest(
   // each hitting the database on its own.
   const rawLocale = (body as { locale?: unknown } | null)?.locale;
   const locale = typeof rawLocale === "string" && /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})?$/.test(rawLocale) ? rawLocale : "en";
-  const giftSliders = result.giftSliders ?? (result.giftSlider ? [result.giftSlider] : []);
   const [giftCatalog, upsells, giftLabels] = await Promise.all([
-    loadGiftCatalogData(
-      shop.id,
-      [
-        ...new Set([
-          ...giftSliders.flatMap((slider) => collectGiftCatalogVariantIds(slider, [], offerDefinitions)),
-          ...collectGiftCatalogVariantIds(null, result.cartActions, offerDefinitions),
-        ]),
-      ],
-    ),
+    loadGiftCatalogData(shop.id, [
+      ...collectGiftCatalogVariantIds(result.giftSlider, result.cartActions, offerDefinitions),
+      ...(result.additionalGiftSliders ?? []).flatMap((slider) => collectGiftCatalogVariantIds(slider, [], offerDefinitions)),
+    ]),
     buildUpsells(shop.id, result.qualifiedOffers, offerDefinitions),
-    giftSliders.length > 0 ? loadGiftSliderTranslations(shop.id, locale).catch(() => null) : Promise.resolve(null),
+    result.giftSlider || result.additionalGiftSliders?.length ? loadGiftSliderTranslations(shop.id, locale).catch(() => null) : Promise.resolve(null),
   ]);
   timer.mark("enrich");
   result.upsells = upsells;
-  // Several gift offers/tiers can qualify at once: surface the first whose picker still has
-  // something choosable, so a sold-out tier never hides another tier's gift.
-  const enrichedSliders = giftSliders.flatMap((slider) => {
+  result.giftSlider = enrichGiftSlider(giftCatalog, result.giftSlider, offerDefinitions, input.cart.lines, giftLabels);
+  result.additionalGiftSliders = (result.additionalGiftSliders ?? []).flatMap((slider) => {
     const enriched = enrichGiftSlider(giftCatalog, slider, offerDefinitions, input.cart.lines, giftLabels);
     return enriched ? [enriched] : [];
   });
-  result.giftSlider =
-    enrichedSliders.find((slider) => slider.selectableGifts.some((gift) => gift.isAvailable || gift.isSelected)) ??
-    enrichedSliders[0] ??
-    null;
-  delete result.giftSliders;
   result.cartActions = resolveSoldOutGiftAdds(giftCatalog, result.cartActions, offerDefinitions);
 
   // Shadow mode: log what WOULD have happened during the BOGOS migration
@@ -208,6 +196,7 @@ export async function handleEvaluationRequest(
     result.cartActions = [];
     result.discountCodes = { add: [], remove: [] };
     result.giftSlider = null;
+    result.additionalGiftSliders = [];
   }
 
   // Targeting details (why an offer did/didn't qualify) are useful for the

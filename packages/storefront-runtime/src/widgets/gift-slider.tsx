@@ -38,6 +38,36 @@ function saveAutoOpenedCartStates(states: Set<string>): void {
   }
 }
 
+/** One auto-open per qualified stretch of an offer. Keys are `offerId:versions`
+ * (no cart hash) and are dropped as soon as the offer stops producing a slider,
+ * so crossing the threshold again after dipping below re-opens the picker. */
+export function decideAutoOpen(
+  opened: ReadonlySet<string>,
+  sliders: readonly GiftSliderPayload[],
+  qualifiedOfferIds: ReadonlySet<string>,
+  declined: ReadonlySet<string>,
+): { open: GiftSliderPayload[]; keys: Set<string> } {
+  const keys = new Set([...opened].filter((k) => qualifiedOfferIds.has(k.split(":")[0] ?? "")));
+  const open: GiftSliderPayload[] = [];
+  for (const slider of sliders) {
+    if (!Array.isArray(slider.selectableGifts)) continue;
+    const key = `${slider.offerId}:${slider.selectableGifts.map((gift) => gift.offerVersion).join(",")}`;
+    if (keys.has(key)) continue;
+    if (slider.alreadySelectedCount > 0) {
+      keys.add(key);
+      continue;
+    }
+    // resolveGiftChoices: fallbacks count only once every primary of their reward is out.
+    const canPick = resolveGiftChoices(slider).some(
+      (gift) => gift.isAvailable && !declined.has(giftRewardKey(slider.offerId, gift.rewardId)),
+    );
+    if (!canPick) continue;
+    keys.add(key);
+    open.push(slider);
+  }
+  return { open, keys };
+}
+
 // ─── Styles — injected once ───────────────────────────────────────────────────
 
 const SLIDER_STYLES = `
@@ -714,11 +744,12 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string, initialSoldO
 /** Opens the picker only if something in it can actually be chosen: re-checks
  * live stock first (the payload's isAvailable comes from a lagging cache), so
  * an all-sold-out gift with no usable fallback never shows a dead modal. */
-async function openSlider(payload: GiftSliderPayload, sessionId: string): Promise<void> {
+async function openSlider(payload: GiftSliderPayload, sessionId: string): Promise<boolean> {
   const soldOut = await fetchSoldOutVariantIds(payload.selectableGifts.filter((gift) => gift.isAvailable));
   const choices = resolveGiftChoices(payload, soldOut);
-  if (!choices.some((gift) => (gift.isAvailable && !soldOut.has(gift.variantId)) || gift.isSelected)) return;
+  if (!choices.some((gift) => (gift.isAvailable && !soldOut.has(gift.variantId)) || gift.isSelected)) return false;
   mountSlider(payload, sessionId, soldOut);
+  return true;
 }
 
 /** Initialize the gift slider — listens for slider requests from runtime. */
@@ -726,38 +757,44 @@ export function initGiftSlider(sessionId: string) {
   const payloadByOfferId = new Map<string, GiftSliderPayload>();
   // Persisted (not just in-memory) — Shopify storefront navigation is a full
   // page reload, so an in-memory Set would let the slider auto-open again on
-  // every single page view for the same unchanged cart state.
-  const autoOpenedCartStates = loadAutoOpenedCartStates();
+  // every single page view while the offer stays qualified.
+  let autoOpenedCartStates = loadAutoOpenedCartStates();
   let latestPayload: GiftSliderPayload | null = null;
+  let pendingOfferIds: string[] = [];
 
   on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
     payloadByOfferId.clear();
     latestPayload = null;
-    if (result.giftSlider && Array.isArray(result.giftSlider.selectableGifts)) {
-      latestPayload = result.giftSlider;
-      payloadByOfferId.set(result.giftSlider.offerId, result.giftSlider);
+    const sliders = [result.giftSlider, ...(result.additionalGiftSliders ?? [])].filter(
+      (s): s is GiftSliderPayload => !!s && Array.isArray(s.selectableGifts),
+    );
+    for (const slider of sliders) payloadByOfferId.set(slider.offerId, slider);
+    latestPayload = sliders[0] ?? null;
+    const qualifiedOfferIds = new Set([
+      ...(Array.isArray(result.qualifiedOffers) ? result.qualifiedOffers.map((o) => o.offerId) : []),
+      ...sliders.map((s) => s.offerId),
+    ]);
+    const { open, keys } = decideAutoOpen(autoOpenedCartStates, sliders, qualifiedOfferIds, loadDeclinedGiftRewards());
+    if (keys.size !== autoOpenedCartStates.size || [...keys].some((k) => !autoOpenedCartStates.has(k))) {
+      autoOpenedCartStates = keys;
+      saveAutoOpenedCartStates(keys);
     }
-    const autoOpenKey = result.giftSlider
-      ? `${result.giftSlider.offerId}:${result.cartHash}:${result.giftSlider.selectableGifts.map((gift) => gift.offerVersion).join(",")}`
-      : null;
-    const declinedGiftRewards = loadDeclinedGiftRewards();
-    const hasNonDeclinedGift = (slider: GiftSliderPayload) =>
-      slider.selectableGifts.some(
-        (gift) => gift.isAvailable && !declinedGiftRewards.has(giftRewardKey(slider.offerId, gift.rewardId)),
-      );
-    if (
-      result.giftSlider &&
-      Array.isArray(result.giftSlider.selectableGifts) &&
-      result.giftSlider.alreadySelectedCount === 0 &&
-      hasNonDeclinedGift(result.giftSlider) &&
-      autoOpenKey &&
-      !autoOpenedCartStates.has(autoOpenKey)
-    ) {
-      autoOpenedCartStates.add(autoOpenKey);
-      saveAutoOpenedCartStates(autoOpenedCartStates);
-      void openSlider(result.giftSlider, sessionId);
+    // Newly qualified pickers open one after another: first now, the rest as each closes.
+    // A picker whose live stock check leaves nothing choosable is skipped, not left blocking the queue.
+    if (open.length > 0) {
+      pendingOfferIds = open.map((s) => s.offerId);
+      void openNext();
     }
   });
+
+  async function openNext(): Promise<void> {
+    while (pendingOfferIds.length > 0) {
+      const payload = payloadByOfferId.get(pendingOfferIds.shift()!);
+      if (payload && (await openSlider(payload, sessionId))) return;
+    }
+  }
+
+  on(PromoEvents.GiftSliderClosed, () => void openNext());
 
   on<GiftSliderPayload | { offerId?: string }>(PromoEvents.GiftSliderRequested, (request) => {
     void (async () => {

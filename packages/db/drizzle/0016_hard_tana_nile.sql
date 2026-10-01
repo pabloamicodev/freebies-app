@@ -1,0 +1,1 @@
+ALTER TABLE "variant_cache" ADD COLUMN "inventory_tracked" boolean;

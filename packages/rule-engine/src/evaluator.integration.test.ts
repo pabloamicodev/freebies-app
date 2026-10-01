@@ -276,8 +276,8 @@ describe("evaluate — cart value condition", () => {
       return offer;
     });
     const result = await evaluate(makeInput(makeCart(6000)), { offers: offers, oneUseStates: [], now: NOW });
-    expect(result.giftSliders?.map((s) => s.offerId)).toEqual(["offer-1", "offer-2"]);
-    expect(result.giftSliders?.[1]?.selectableGifts.at(-1)).toMatchObject({
+    expect([result.giftSlider, ...(result.additionalGiftSliders ?? [])].map((s) => s?.offerId)).toEqual(["offer-1", "offer-2"]);
+    expect(result.additionalGiftSliders?.[0]?.selectableGifts.at(-1)).toMatchObject({
       variantId: "gid://shopify/ProductVariant/199",
       isFallback: true,
     });

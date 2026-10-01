@@ -7,6 +7,7 @@ interface InventoryVariant {
   inventoryQuantity: number | null;
   inventoryPolicy: string;
   availableForSale: boolean;
+  inventoryItem?: { tracked: boolean } | null;
 }
 
 interface InventoryVariantPage {
@@ -22,7 +23,7 @@ export const INVENTORY_VARIANTS_QUERY = `
   query GetInventory($id: ID!, $after: String) {
     inventoryItem(id: $id) {
       variants(first: 250, after: $after) {
-        nodes { id inventoryQuantity inventoryPolicy availableForSale }
+        nodes { id inventoryQuantity inventoryPolicy availableForSale inventoryItem { tracked } }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -82,6 +83,7 @@ export async function syncInventoryFromWebhook(
           inventoryQuantity: variant.inventoryQuantity,
           inventoryPolicy: variant.inventoryPolicy,
           availableForSale: variant.availableForSale,
+          inventoryTracked: variant.inventoryItem?.tracked ?? null,
           syncedAt: new Date(),
         })
         .where(

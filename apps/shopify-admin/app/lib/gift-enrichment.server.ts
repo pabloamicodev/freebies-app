@@ -22,13 +22,22 @@ export interface GiftCatalogRow {
   imageUrl: string | null;
   productStatus: string | null;
   productHandle?: string | null;
+  inventoryTracked?: boolean | null;
 }
 
 // Shopify's availableForSale already accounts for untracked inventory and the
 // "continue selling when out of stock" policy; a raw quantity of 0 is normal for untracked items.
+// availableForSale in the cache has been seen stale-true for sold-out variants, so a tracked variant
+// at or below zero that can't oversell is sold out regardless. Untracked stock legitimately reads 0.
 function isGiftVariantAvailable(variant: GiftCatalogRow | undefined): boolean {
-  return Boolean(
-    variant && variant.productStatus === "ACTIVE" && variant.availableForSale && !variant.requiresSellingPlan,
+  if (!variant) return false;
+  const soldOutTracked =
+    variant.inventoryTracked === true &&
+    variant.inventoryQuantity !== null &&
+    variant.inventoryQuantity <= 0 &&
+    variant.inventoryPolicy !== "CONTINUE";
+  return (
+    variant.productStatus === "ACTIVE" && variant.availableForSale && !variant.requiresSellingPlan && !soldOutTracked
   );
 }
 
@@ -82,6 +91,7 @@ export async function loadGiftCatalogData(shopId: string, variantIds: string[]):
       inventoryQuantity: variantCache.inventoryQuantity,
       inventoryPolicy: variantCache.inventoryPolicy,
       requiresSellingPlan: variantCache.requiresSellingPlan,
+      inventoryTracked: variantCache.inventoryTracked,
       productTitle: productCache.title,
       imageUrl: productCache.imageUrl,
       productStatus: productCache.status,
