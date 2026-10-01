@@ -2,7 +2,7 @@
   "offers": [
     {
       "id": "00000001-0000-4000-8000-000000000000",
-      "version": 510371777,
+      "version": 539616760,
       "offerType": "discount",
       "priority": 100,
       "stopLowerPriority": false,
@@ -38,7 +38,7 @@
             "gid://shopify/ProductVariant/50000000000001"
           ],
           "requiredAnchorMinQuantity": 1,
-          "requiresAnchorSubscription": true,
+          "requiresAnchorSubscription": false,
           "priceTiers": [],
           "quantityTiers": [],
           "selectionMode": "all",
@@ -51,11 +51,11 @@
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
       "discountCodeConditions": [],
-      "cartValueThresholdCents": 0
+      "subscriptionMode": "subscription_only"
     },
     {
       "id": "00000001-0000-4000-8000-000000000001",
-      "version": 117155987,
+      "version": 1936059170,
       "offerType": "discount",
       "priority": 101,
       "stopLowerPriority": false,
@@ -91,7 +91,7 @@
             "gid://shopify/ProductVariant/50000000000001"
           ],
           "requiredAnchorMinQuantity": 1,
-          "requiresAnchorSubscription": true,
+          "requiresAnchorSubscription": false,
           "priceTiers": [],
           "quantityTiers": [],
           "selectionMode": "all",
@@ -104,7 +104,7 @@
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
       "discountCodeConditions": [],
-      "cartValueThresholdCents": 0
+      "subscriptionMode": "subscription_only"
     },
     {
       "id": "00000001-0000-4000-8000-000000000002",
@@ -186,7 +186,7 @@
     },
     {
       "id": "00000001-0000-4000-8000-000000000004",
-      "version": 2073448797,
+      "version": 1487410978,
       "offerType": "discount",
       "priority": 104,
       "stopLowerPriority": false,
@@ -215,7 +215,7 @@
     },
     {
       "id": "00000001-0000-4000-8000-000000000005",
-      "version": 1269432277,
+      "version": 1136621744,
       "offerType": "discount",
       "priority": 105,
       "stopLowerPriority": false,
@@ -252,7 +252,7 @@
             "gid://shopify/ProductVariant/50000000000001"
           ],
           "requiredAnchorMinQuantity": 1,
-          "requiresAnchorSubscription": true,
+          "requiresAnchorSubscription": false,
           "priceTiers": [],
           "quantityTiers": [],
           "selectionMode": "all",
@@ -265,11 +265,11 @@
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
       "discountCodeConditions": [],
-      "cartValueThresholdCents": 0
+      "subscriptionMode": "subscription_only"
     },
     {
       "id": "00000001-0000-4000-8000-000000000006",
-      "version": 813526497,
+      "version": 1482178636,
       "offerType": "discount",
       "priority": 106,
       "stopLowerPriority": false,
@@ -305,7 +305,7 @@
           "requiredLineAttributeValue": "atlas-sk-otg",
           "requiredAnchorVariantIds": [],
           "requiredAnchorMinQuantity": 1,
-          "requiresAnchorSubscription": true,
+          "requiresAnchorSubscription": false,
           "priceTiers": [],
           "quantityTiers": [],
           "selectionMode": "all",
@@ -318,11 +318,11 @@
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
       "discountCodeConditions": [],
-      "cartValueThresholdCents": 0
+      "subscriptionMode": "subscription_only"
     },
     {
       "id": "00000001-0000-4000-8000-000000000007",
-      "version": 783358251,
+      "version": 230873494,
       "offerType": "discount",
       "priority": 107,
       "stopLowerPriority": false,
@@ -358,7 +358,7 @@
             "gid://shopify/ProductVariant/50000000000001"
           ],
           "requiredAnchorMinQuantity": 1,
-          "requiresAnchorSubscription": true,
+          "requiresAnchorSubscription": false,
           "priceTiers": [],
           "quantityTiers": [],
           "selectionMode": "all",
@@ -371,11 +371,11 @@
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
       "discountCodeConditions": [],
-      "cartValueThresholdCents": 0
+      "subscriptionMode": "subscription_only"
     },
     {
       "id": "00000001-0000-4000-8000-000000000008",
-      "version": 1302851700,
+      "version": 1924400455,
       "offerType": "discount",
       "priority": 108,
       "stopLowerPriority": false,
@@ -411,7 +411,7 @@
             "gid://shopify/ProductVariant/50000000000001"
           ],
           "requiredAnchorMinQuantity": 1,
-          "requiresAnchorSubscription": true,
+          "requiresAnchorSubscription": false,
           "priceTiers": [],
           "quantityTiers": [],
           "selectionMode": "all",
@@ -424,7 +424,7 @@
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
       "discountCodeConditions": [],
-      "cartValueThresholdCents": 0
+      "subscriptionMode": "subscription_only"
     },
     {
       "id": "00000001-0000-4000-8000-000000000009",
@@ -482,7 +482,7 @@
     },
     {
       "id": "00000001-0000-4000-8000-000000000010",
-      "version": 1556036918,
+      "version": 945905225,
       "offerType": "discount",
       "priority": 110,
       "stopLowerPriority": false,
@@ -518,7 +518,7 @@
             "gid://shopify/ProductVariant/50000000000001"
           ],
           "requiredAnchorMinQuantity": 1,
-          "requiresAnchorSubscription": true,
+          "requiresAnchorSubscription": false,
           "priceTiers": [],
           "quantityTiers": [],
           "selectionMode": "all",
@@ -531,7 +531,7 @@
       "cartAttributeConditions": [],
       "pageUrlConditions": [],
       "discountCodeConditions": [],
-      "cartValueThresholdCents": 0
+      "subscriptionMode": "subscription_only"
     },
     {
       "id": "00000001-0000-4000-8000-000000000011",
@@ -701,7 +701,7 @@
         "gid://shopify/ProductVariant/50000000000001"
       ],
       "requiredAnchorMinQuantity": 1,
-      "requiresAnchorSubscription": true
+      "requiresAnchorSubscription": false
     }
   ],
   "version": "1",

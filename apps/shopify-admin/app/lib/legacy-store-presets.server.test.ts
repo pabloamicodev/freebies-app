@@ -9,7 +9,7 @@ import {
 
 const expectedOfferCounts = new Map([
   ["hpn-supplements.myshopify.com", 3],
-  ["onesolsupps.myshopify.com", 1],
+  ["onesolsupps.myshopify.com", 2],
   ["ambrosia-nutraceuticals.myshopify.com", 11],
   ["gettrusupps.myshopify.com", 8],
 ]);

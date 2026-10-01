@@ -1,0 +1,53 @@
+{
+  "shop": "hpn-supplements.myshopify.com",
+  "snapshot": "2026-10-01",
+  "rules": [
+    {
+      "id": "pa7-cross-sell",
+      "type": "pa7_cross_sell",
+      "enabled": true,
+      "triggerProductId": "gid://shopify/Product/1313973239892",
+      "targetProductIds": [
+        "gid://shopify/Product/1319321763924",
+        "gid://shopify/Product/1313557741652"
+      ],
+      "targetLineQuantityEquals": 1,
+      "discountPercentage": 10,
+      "message": "Congratulations! 10% Off (when purchased with PA7)"
+    },
+    {
+      "id": "nad3-single-planta-samples",
+      "type": "required_variants_free_variants",
+      "enabled": true,
+      "requiredVariantIds": [
+        "gid://shopify/ProductVariant/21174522675284",
+        "gid://shopify/ProductVariant/40608348438665",
+        "gid://shopify/ProductVariant/40608348373129"
+      ],
+      "freeVariantIds": [
+        "gid://shopify/ProductVariant/40608348438665",
+        "gid://shopify/ProductVariant/40608348373129"
+      ],
+      "freeQuantityPerLine": 1,
+      "discountPercentage": 100,
+      "message": "Free Planta Samples - NAD3 Subscription"
+    },
+    {
+      "id": "nad3-240-pouches",
+      "type": "required_product_with_free_variants",
+      "enabled": true,
+      "triggerProductId": "gid://shopify/Product/6784435060873",
+      "requiredVariantIds": [
+        "gid://shopify/ProductVariant/44633124995209",
+        "gid://shopify/ProductVariant/44633124864137"
+      ],
+      "freeVariantIds": [
+        "gid://shopify/ProductVariant/44633124995209",
+        "gid://shopify/ProductVariant/44633124864137"
+      ],
+      "freeQuantityPerLine": 1,
+      "discountPercentage": 100,
+      "message": "Free 1-Week Pouches - NAD3 240 Bundle"
+    }
+  ]
+}

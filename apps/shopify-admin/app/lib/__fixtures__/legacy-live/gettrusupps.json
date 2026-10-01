@@ -1,0 +1,193 @@
+{
+  "shop": "gettrusupps.myshopify.com",
+  "snapshot": "2026-10-01",
+  "rules": [
+    {
+      "id": "swell-free-product",
+      "type": "swell_free_product",
+      "enabled": true,
+      "message": "Rewards"
+    },
+    {
+      "id": "swell-cart-fixed-amount",
+      "type": "swell_cart_fixed_amount",
+      "enabled": true,
+      "message": "Rewards"
+    },
+    {
+      "id": "protein-landing-subscription-tiers",
+      "type": "landing_quantity_tier_fixed_price",
+      "enabled": true,
+      "targetVariantIds": [
+        "gid://shopify/ProductVariant/31358533206097",
+        "gid://shopify/ProductVariant/31358533140561",
+        "gid://shopify/ProductVariant/39594543808593",
+        "gid://shopify/ProductVariant/31358533271633",
+        "gid://shopify/ProductVariant/31927032250449",
+        "gid://shopify/ProductVariant/32642048393297",
+        "gid://shopify/ProductVariant/31358533468241",
+        "gid://shopify/ProductVariant/32773556240465"
+      ],
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "protein-complete-lp",
+      "requiresSubscription": true,
+      "tiers": [
+        {
+          "quantity": 1,
+          "targetPricePerUnit": 45
+        },
+        {
+          "quantity": 2,
+          "targetPricePerUnit": 38.25
+        },
+        {
+          "quantity": 3,
+          "targetPricePerUnit": 36
+        },
+        {
+          "quantity": 4,
+          "targetPricePerUnit": 33.75
+        }
+      ],
+      "message": "Protein Complete Bundle"
+    },
+    {
+      "id": "protein-landing-onetime-tiers",
+      "type": "landing_quantity_tier_fixed_price",
+      "enabled": true,
+      "targetVariantIds": [
+        "gid://shopify/ProductVariant/31358533206097",
+        "gid://shopify/ProductVariant/31358533140561",
+        "gid://shopify/ProductVariant/39594543808593",
+        "gid://shopify/ProductVariant/31358533271633",
+        "gid://shopify/ProductVariant/31927032250449",
+        "gid://shopify/ProductVariant/32642048393297",
+        "gid://shopify/ProductVariant/31358533468241",
+        "gid://shopify/ProductVariant/32773556240465"
+      ],
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "protein-complete-lp",
+      "requiresSubscription": false,
+      "tiers": [
+        {
+          "quantity": 1,
+          "targetPricePerUnit": 49.99
+        },
+        {
+          "quantity": 2,
+          "targetPricePerUnit": 42.49
+        },
+        {
+          "quantity": 3,
+          "targetPricePerUnit": 39.99
+        },
+        {
+          "quantity": 4,
+          "targetPricePerUnit": 37.49
+        }
+      ],
+      "message": "Protein Complete Bundle"
+    },
+    {
+      "id": "protein-landing-recipe-ebook",
+      "type": "landing_scoped_product_discount",
+      "enabled": true,
+      "targetProductIds": [
+        "gid://shopify/Product/15083050828144"
+      ],
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "protein-complete-lp",
+      "requiredAnchorVariantIds": [
+        "gid://shopify/ProductVariant/31358533206097",
+        "gid://shopify/ProductVariant/31358533140561",
+        "gid://shopify/ProductVariant/39594543808593",
+        "gid://shopify/ProductVariant/31358533271633",
+        "gid://shopify/ProductVariant/31927032250449",
+        "gid://shopify/ProductVariant/32642048393297",
+        "gid://shopify/ProductVariant/31358533468241",
+        "gid://shopify/ProductVariant/32773556240465"
+      ],
+      "requiredAnchorMinQuantity": 1,
+      "discountPercentage": 100,
+      "message": "Protein Complete Bundle"
+    },
+    {
+      "id": "protein-landing-shaker",
+      "type": "landing_scoped_product_discount",
+      "enabled": true,
+      "targetProductIds": [
+        "gid://shopify/Product/15030069100912"
+      ],
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "protein-complete-lp",
+      "requiredAnchorVariantIds": [
+        "gid://shopify/ProductVariant/31358533206097",
+        "gid://shopify/ProductVariant/31358533140561",
+        "gid://shopify/ProductVariant/39594543808593",
+        "gid://shopify/ProductVariant/31358533271633",
+        "gid://shopify/ProductVariant/31927032250449",
+        "gid://shopify/ProductVariant/32642048393297",
+        "gid://shopify/ProductVariant/31358533468241",
+        "gid://shopify/ProductVariant/32773556240465"
+      ],
+      "requiredAnchorMinQuantity": 3,
+      "discountPercentage": 100,
+      "message": "Protein Complete Bundle"
+    },
+    {
+      "id": "protein-landing-resistance-bands",
+      "type": "landing_scoped_product_discount",
+      "enabled": true,
+      "targetProductIds": [
+        "gid://shopify/Product/7461732286545"
+      ],
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "protein-complete-lp",
+      "requiredAnchorVariantIds": [
+        "gid://shopify/ProductVariant/31358533206097",
+        "gid://shopify/ProductVariant/31358533140561",
+        "gid://shopify/ProductVariant/39594543808593",
+        "gid://shopify/ProductVariant/31358533271633",
+        "gid://shopify/ProductVariant/31927032250449",
+        "gid://shopify/ProductVariant/32642048393297",
+        "gid://shopify/ProductVariant/31358533468241",
+        "gid://shopify/ProductVariant/32773556240465"
+      ],
+      "requiredAnchorMinQuantity": 4,
+      "discountPercentage": 100,
+      "message": "Protein Complete Bundle"
+    },
+    {
+      "id": "protein-landing-free-shipping",
+      "type": "landing_free_shipping",
+      "enabled": true,
+      "requiredLineAttributeKey": "__landing_source",
+      "requiredLineAttributeValue": "protein-complete-lp",
+      "requiredAnchorVariantIds": [
+        "gid://shopify/ProductVariant/31358533206097",
+        "gid://shopify/ProductVariant/31358533140561",
+        "gid://shopify/ProductVariant/39594543808593",
+        "gid://shopify/ProductVariant/31358533271633",
+        "gid://shopify/ProductVariant/31927032250449",
+        "gid://shopify/ProductVariant/32642048393297",
+        "gid://shopify/ProductVariant/31358533468241",
+        "gid://shopify/ProductVariant/32773556240465"
+      ],
+      "requiredAnchorMinQuantity": 2,
+      "message": "Protein Complete Bundle"
+    },
+    {
+      "id": "quiz-bundle-price-match",
+      "type": "quiz_bundle_price_match",
+      "enabled": true,
+      "discountPercentageOnGifts": 100,
+      "message": "Product Quiz Bundle"
+    },
+    {
+      "id": "quiz-bundle-free-shipping",
+      "type": "quiz_bundle_free_shipping",
+      "enabled": false,
+      "message": "Product Quiz Bundle"
+    }
+  ]
+}
