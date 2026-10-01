@@ -174,13 +174,20 @@ export async function handleEvaluationRequest(
   const rawLocale = (body as { locale?: unknown } | null)?.locale;
   const locale = typeof rawLocale === "string" && /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})?$/.test(rawLocale) ? rawLocale : "en";
   const [giftCatalog, upsells, giftLabels] = await Promise.all([
-    loadGiftCatalogData(shop.id, collectGiftCatalogVariantIds(result.giftSlider, result.cartActions, offerDefinitions)),
+    loadGiftCatalogData(shop.id, [
+      ...collectGiftCatalogVariantIds(result.giftSlider, result.cartActions, offerDefinitions),
+      ...(result.additionalGiftSliders ?? []).flatMap((slider) => collectGiftCatalogVariantIds(slider, [], offerDefinitions)),
+    ]),
     buildUpsells(shop.id, result.qualifiedOffers, offerDefinitions),
-    result.giftSlider ? loadGiftSliderTranslations(shop.id, locale).catch(() => null) : Promise.resolve(null),
+    result.giftSlider || result.additionalGiftSliders?.length ? loadGiftSliderTranslations(shop.id, locale).catch(() => null) : Promise.resolve(null),
   ]);
   timer.mark("enrich");
   result.upsells = upsells;
   result.giftSlider = enrichGiftSlider(giftCatalog, result.giftSlider, offerDefinitions, input.cart.lines, giftLabels);
+  result.additionalGiftSliders = (result.additionalGiftSliders ?? []).flatMap((slider) => {
+    const enriched = enrichGiftSlider(giftCatalog, slider, offerDefinitions, input.cart.lines, giftLabels);
+    return enriched ? [enriched] : [];
+  });
   result.cartActions = resolveSoldOutGiftAdds(giftCatalog, result.cartActions, offerDefinitions);
 
   // Shadow mode: log what WOULD have happened during the BOGOS migration
@@ -189,6 +196,7 @@ export async function handleEvaluationRequest(
     result.cartActions = [];
     result.discountCodes = { add: [], remove: [] };
     result.giftSlider = null;
+    result.additionalGiftSliders = [];
   }
 
   // Targeting details (why an offer did/didn't qualify) are useful for the

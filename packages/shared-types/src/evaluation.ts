@@ -156,6 +156,8 @@ export const EvaluationResultSchema = z.object({
     remove: z.array(z.string()),
   }),
   giftSlider: GiftSliderPayloadSchema.nullable(),
+  /** Other qualifying selectable-gift offers/tiers beyond `giftSlider`. */
+  additionalGiftSliders: z.array(GiftSliderPayloadSchema).optional(),
   cartMessages: z.array(CartMessagePayloadSchema),
   progressBars: z.array(ProgressBarPayloadSchema),
   upsells: z.array(UpsellPayloadSchema),

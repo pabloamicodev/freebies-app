@@ -764,7 +764,7 @@ class PromoEngineRuntime {
     evaluate: () => this.triggerEvaluation(),
     validateGiftOffer: async (offerId: string) => {
       const result = await this.triggerEvaluation({ force: true, emitResult: false });
-      return result?.giftSlider?.offerId === offerId ? result.giftSlider : null;
+      return [result?.giftSlider, ...(result?.additionalGiftSliders ?? [])].find((slider) => slider?.offerId === offerId) ?? null;
     },
     prepareCheckout: async () => {
       this.debouncedEvaluate.cancel();

@@ -18,6 +18,7 @@ export interface EvaluationResult {
   cartActions: CartAction[];
   discountCodes: { add: string[]; remove: string[] };
   giftSlider: GiftSliderPayload | null;
+  additionalGiftSliders?: GiftSliderPayload[];
   cartMessages: CartMessagePayload[];
   progressBars: ProgressBarPayload[];
   upsells: UpsellPayload[];

@@ -127,47 +127,90 @@ describe("fetchSoldOutVariantIds", () => {
 });
 
 describe("decideAutoOpen", () => {
-  const slider = (over: Partial<GiftSliderPayload> = {}, avail = true): GiftSliderPayload =>
+  const slider = (offerId = "o1", over: Partial<GiftSliderPayload> = {}, avail = true): GiftSliderPayload =>
     ({
-      offerId: "o1",
+      offerId,
       alreadySelectedCount: 0,
-      selectableGifts: [{ rewardId: "r1", offerVersion: 3, isAvailable: avail }],
+      selectableGifts: [{ rewardId: `r-${offerId}`, offerVersion: 3, isAvailable: avail }],
       ...over,
     }) as unknown as GiftSliderPayload;
   const none = new Set<string>();
+  const q = (...ids: string[]) => new Set(ids);
+  const ids = (r: { open: GiftSliderPayload[] }) => r.open.map((s) => s.offerId);
 
   it("opens on first qualification, not again while still qualified (dismiss / re-render)", () => {
-    const first = decideAutoOpen(none, slider(), none);
-    expect(first.open).toBe(true);
-    expect(decideAutoOpen(first.keys, slider(), new Set(["o1:r1"])).open).toBe(false);
-    expect(decideAutoOpen(first.keys, slider(), none).open).toBe(false);
+    const first = decideAutoOpen(none, [slider()], q("o1"), none);
+    expect(ids(first)).toEqual(["o1"]);
+    expect(ids(decideAutoOpen(first.keys, [slider()], q("o1"), new Set(["o1:r-o1"])))).toEqual([]);
+    expect(ids(decideAutoOpen(first.keys, [slider()], q("o1"), none))).toEqual([]);
   });
 
   it("reopens after dipping below the threshold and crossing again, even for an identical cart", () => {
-    const first = decideAutoOpen(none, slider(), none);
-    const dipped = decideAutoOpen(first.keys, null, none);
+    const first = decideAutoOpen(none, [slider()], q("o1"), none);
+    const dipped = decideAutoOpen(first.keys, [], q(), none);
     expect(dipped.keys.size).toBe(0);
-    expect(decideAutoOpen(dipped.keys, slider(), none).open).toBe(true);
+    expect(ids(decideAutoOpen(dipped.keys, [slider()], q("o1"), none))).toEqual(["o1"]);
   });
 
   it("reload keeps the persisted stretch (no reopen) until a real down-up transition", () => {
-    const persisted = decideAutoOpen(none, slider(), none).keys;
-    expect(decideAutoOpen(new Set(persisted), slider(), none).open).toBe(false);
+    const persisted = decideAutoOpen(none, [slider()], q("o1"), none).keys;
+    expect(ids(decideAutoOpen(new Set(persisted), [slider()], q("o1"), none))).toEqual([]);
   });
 
   it("does not open when the gift is already in the cart, and stays quiet afterwards", () => {
-    const r = decideAutoOpen(none, slider({ alreadySelectedCount: 1 }), none);
-    expect(r.open).toBe(false);
-    expect(decideAutoOpen(r.keys, slider(), none).open).toBe(false);
+    const r = decideAutoOpen(none, [slider("o1", { alreadySelectedCount: 1 })], q("o1"), none);
+    expect(ids(r)).toEqual([]);
+    expect(ids(decideAutoOpen(r.keys, [slider()], q("o1"), none))).toEqual([]);
   });
 
   it("does not force-open a dead modal, but opens once stock returns", () => {
-    const r = decideAutoOpen(none, slider({}, false), none);
-    expect(r.open).toBe(false);
-    expect(decideAutoOpen(r.keys, slider(), none).open).toBe(true);
+    const r = decideAutoOpen(none, [slider("o1", {}, false)], q("o1"), none);
+    expect(ids(r)).toEqual([]);
+    expect(ids(decideAutoOpen(r.keys, [slider()], q("o1"), none))).toEqual(["o1"]);
   });
 
-  it("drops other offers' state", () => {
-    expect(decideAutoOpen(new Set(["o2:1"]), slider(), none).keys.has("o2:1")).toBe(false);
+  it("opens two offers qualifying together in priority order, neither again in the same stretch", () => {
+    const both = [slider("a"), slider("b")];
+    const r = decideAutoOpen(none, both, q("a", "b"), none);
+    expect(ids(r)).toEqual(["a", "b"]);
+    expect(ids(decideAutoOpen(r.keys, both, q("a", "b"), none))).toEqual([]);
+  });
+
+  it("tier 1 then tier 2 crossing in sequence opens each once", () => {
+    const t1 = decideAutoOpen(none, [slider("t1")], q("t1"), none);
+    expect(ids(t1)).toEqual(["t1"]);
+    const t2 = decideAutoOpen(t1.keys, [slider("t1"), slider("t2")], q("t1", "t2"), none);
+    expect(ids(t2)).toEqual(["t2"]);
+  });
+
+  it("dropping below tier 2 but staying above tier 1 reopens only tier 2 when crossed again", () => {
+    const both = decideAutoOpen(none, [slider("t1"), slider("t2")], q("t1", "t2"), none);
+    const dipped = decideAutoOpen(both.keys, [slider("t1")], q("t1"), none);
+    expect(ids(dipped)).toEqual([]);
+    const back = decideAutoOpen(dipped.keys, [slider("t1"), slider("t2")], q("t1", "t2"), none);
+    expect(ids(back)).toEqual(["t2"]);
+  });
+
+  it("keeps state for offers that still qualify but have no visible slider", () => {
+    const r = decideAutoOpen(none, [slider("a")], q("a"), none);
+    const hidden = decideAutoOpen(r.keys, [], q("a"), none);
+    expect(hidden.keys.size).toBe(1);
+    expect(ids(decideAutoOpen(hidden.keys, [slider("a")], q("a"), none))).toEqual([]);
+  });
+
+  it("opens when the primary is out of stock but a fallback option comes back available", () => {
+    const withFallback = slider("o1", {
+      selectableGifts: [
+        { rewardId: "r1", offerVersion: 3, isAvailable: true, replacesTitle: "T-Shirt" },
+      ] as unknown as GiftSliderPayload["selectableGifts"],
+    });
+    expect(ids(decideAutoOpen(none, [withFallback], q("o1"), none))).toEqual(["o1"]);
+    const mixed = slider("o1", {
+      selectableGifts: [
+        { rewardId: "r1", offerVersion: 3, isAvailable: false },
+        { rewardId: "r2", offerVersion: 3, isAvailable: true },
+      ] as unknown as GiftSliderPayload["selectableGifts"],
+    });
+    expect(ids(decideAutoOpen(none, [mixed], q("o1"), none))).toEqual(["o1"]);
   });
 });

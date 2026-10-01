@@ -383,7 +383,7 @@ export async function evaluate(
     ]),
   ];
 
-  const giftSlider = buildGiftSliderPayload(finalQualified, ctx.offers, input.cart);
+  const [giftSlider = null, ...additionalGiftSliders] = buildGiftSliderPayloads(finalQualified, ctx.offers, input.cart);
   const progressBars = buildProgressBars([...finalQualified, ...disqualifiedOffers], ctx.offers, input.cart);
   const cartMessages = progressBars.map((bar) => ({
     offerId: bar.offerId,
@@ -401,6 +401,7 @@ export async function evaluate(
     cartActions: allCartActions,
     discountCodes: { add: codesToAdd, remove: codesToRemove },
     giftSlider,
+    additionalGiftSliders,
     cartMessages,
     progressBars,
     // Upsell offers need catalog pricing the pure evaluator doesn't have —
@@ -411,11 +412,14 @@ export async function evaluate(
   };
 }
 
-function buildGiftSliderPayload(
+/** One payload per qualifying selectable-gift offer (tiers are separate
+ * offers), in evaluation priority order. */
+function buildGiftSliderPayloads(
   qualifiedOffers: EvaluatedOffer[],
   offers: OfferDefinition[],
   cart: EvaluationInput["cart"],
-): EvaluationResult["giftSlider"] {
+): NonNullable<EvaluationResult["giftSlider"]>[] {
+  const payloads: NonNullable<EvaluationResult["giftSlider"]>[] = [];
   for (const evaluated of qualifiedOffers) {
     const offer = offers.find((item) => item.id === evaluated.offerId);
     const selectableRewards = offer?.rewards.filter((reward) => {
@@ -456,7 +460,7 @@ function buildGiftSliderPayload(
     });
 
     if (selectableGifts.length > 0) {
-      return {
+      payloads.push({
         offerId: offer.id,
         title: selectableRewards[0]?.label ?? "Choose your gift",
         subtitle: null,
@@ -467,10 +471,10 @@ function buildGiftSliderPayload(
           0,
         ),
         alreadySelectedCount: selectableGifts.filter((gift) => gift.isSelected).length,
-      };
+      });
     }
   }
-  return null;
+  return payloads;
 }
 
 function formatMoney(cents: number, currencyCode: string): string {

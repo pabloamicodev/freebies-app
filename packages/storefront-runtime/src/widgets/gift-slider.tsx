@@ -43,23 +43,28 @@ function saveAutoOpenedCartStates(states: Set<string>): void {
  * so crossing the threshold again after dipping below re-opens the picker. */
 export function decideAutoOpen(
   opened: ReadonlySet<string>,
-  slider: GiftSliderPayload | null,
+  sliders: readonly GiftSliderPayload[],
+  qualifiedOfferIds: ReadonlySet<string>,
   declined: ReadonlySet<string>,
-): { open: boolean; keys: Set<string> } {
-  if (!slider || !Array.isArray(slider.selectableGifts)) return { open: false, keys: new Set() };
-  const key = `${slider.offerId}:${slider.selectableGifts.map((gift) => gift.offerVersion).join(",")}`;
-  const keys = new Set([...opened].filter((k) => k.startsWith(`${slider.offerId}:`)));
-  if (keys.has(key)) return { open: false, keys };
-  if (slider.alreadySelectedCount > 0) {
+): { open: GiftSliderPayload[]; keys: Set<string> } {
+  const keys = new Set([...opened].filter((k) => qualifiedOfferIds.has(k.split(":")[0] ?? "")));
+  const open: GiftSliderPayload[] = [];
+  for (const slider of sliders) {
+    if (!Array.isArray(slider.selectableGifts)) continue;
+    const key = `${slider.offerId}:${slider.selectableGifts.map((gift) => gift.offerVersion).join(",")}`;
+    if (keys.has(key)) continue;
+    if (slider.alreadySelectedCount > 0) {
+      keys.add(key);
+      continue;
+    }
+    const canPick = slider.selectableGifts.some(
+      (gift) => gift.isAvailable && !declined.has(giftRewardKey(slider.offerId, gift.rewardId)),
+    );
+    if (!canPick) continue;
     keys.add(key);
-    return { open: false, keys };
+    open.push(slider);
   }
-  const canPick = slider.selectableGifts.some(
-    (gift) => gift.isAvailable && !declined.has(giftRewardKey(slider.offerId, gift.rewardId)),
-  );
-  if (!canPick) return { open: false, keys };
-  keys.add(key);
-  return { open: true, keys };
+  return { open, keys };
 }
 
 // ─── Styles — injected once ───────────────────────────────────────────────────
@@ -716,20 +721,37 @@ export function initGiftSlider(sessionId: string) {
   // every single page view while the offer stays qualified.
   let autoOpenedCartStates =loadAutoOpenedCartStates();
   let latestPayload: GiftSliderPayload | null = null;
+  let pendingOfferIds: string[] = [];
 
   on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
     payloadByOfferId.clear();
     latestPayload = null;
-    if (result.giftSlider && Array.isArray(result.giftSlider.selectableGifts)) {
-      latestPayload = result.giftSlider;
-      payloadByOfferId.set(result.giftSlider.offerId, result.giftSlider);
-    }
-    const { open, keys } = decideAutoOpen(autoOpenedCartStates, result.giftSlider, loadDeclinedGiftRewards());
+    const sliders = [result.giftSlider, ...(result.additionalGiftSliders ?? [])].filter(
+      (s): s is GiftSliderPayload => !!s && Array.isArray(s.selectableGifts),
+    );
+    for (const slider of sliders) payloadByOfferId.set(slider.offerId, slider);
+    latestPayload = sliders[0] ?? null;
+    const qualifiedOfferIds = new Set([
+      ...(Array.isArray(result.qualifiedOffers) ? result.qualifiedOffers.map((o) => o.offerId) : []),
+      ...sliders.map((s) => s.offerId),
+    ]);
+    const { open, keys } = decideAutoOpen(autoOpenedCartStates, sliders, qualifiedOfferIds, loadDeclinedGiftRewards());
     if (keys.size !== autoOpenedCartStates.size || [...keys].some((k) => !autoOpenedCartStates.has(k))) {
       autoOpenedCartStates = keys;
       saveAutoOpenedCartStates(keys);
     }
-    if (open && result.giftSlider) mountSlider(result.giftSlider, sessionId);
+    // Newly qualified pickers open one after another: first now, the rest as each closes.
+    const [first, ...rest] = open;
+    if (first) {
+      pendingOfferIds = rest.map((s) => s.offerId);
+      mountSlider(first, sessionId);
+    }
+  });
+
+  on(PromoEvents.GiftSliderClosed, () => {
+    const next = pendingOfferIds.shift();
+    const payload = next ? payloadByOfferId.get(next) : undefined;
+    if (payload) mountSlider(payload, sessionId);
   });
 
   on<GiftSliderPayload | { offerId?: string }>(PromoEvents.GiftSliderRequested, (request) => {
