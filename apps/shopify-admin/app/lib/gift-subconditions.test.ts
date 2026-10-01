@@ -170,19 +170,27 @@ describe("normalizeGiftSubconditions", () => {
     });
   });
 
-  it("normalizes a discount_code subcondition, trimming whitespace", () => {
-    const result = normalizeOfferSubconditions({ discount_code: { code: "  PRIME2026  " } });
-
-    expect(result).toEqual({
-      success: true,
-      data: [{ conditionType: "discount_code", operator: "eq", value: { code: "PRIME2026" } }],
+  it("rejects a discount_code subcondition: codes live on the offer's Codes tab", () => {
+    expect(normalizeOfferSubconditions({ discount_code: { code: "PRIME2026" } })).toEqual({
+      success: false,
+      error: "Discount codes are managed on the offer's Codes tab, not as a condition.",
     });
   });
 
-  it("rejects a discount_code subcondition with no code entered", () => {
-    expect(normalizeOfferSubconditions({ discount_code: { code: "   " } })).toEqual({
-      success: false,
-      error: "Enter the discount code this offer requires.",
+  it("carries onlyMatchedLines through a link (magic URL) subcondition", () => {
+    const result = normalizeOfferSubconditions({
+      link: { requiredUrl: "/pages/vip", onlyMatchedLines: true },
+    });
+
+    expect(result).toEqual({
+      success: true,
+      data: [
+        {
+          conditionType: "specific_link",
+          operator: "eq",
+          value: { requiredUrl: "/pages/vip", onlyMatchedLines: true },
+        },
+      ],
     });
   });
 

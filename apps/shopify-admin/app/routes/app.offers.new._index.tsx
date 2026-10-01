@@ -5,8 +5,8 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { isConstraintViolation, isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
 import { ensureOneOf, parseInteger, requiredText } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
-import { offers, offerCombinationPolicies, offerConditions, offerRewards } from "@promo/db";
-import { validateRequiredDiscountCode as validateRequiredDiscountCodeShared } from "@promo/shared-types";
+import { offers, offerCombinationPolicies, offerConditions, offerRewards, discountCodes } from "@promo/db";
+import { CODE_TAKEN_MESSAGE, DISCOUNT_CODE_INDEX, normalizeTypedCode } from "../lib/discount-codes.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -78,19 +78,8 @@ const TEMPLATE_PRESETS: Record<string, {
 const VALID_TYPES = ["gift", "bundle", "upsell", "discount", "booster"] as const;
 
 // Extra selectable card that isn't a real DB offer type — it stores as
-// "discount" underneath (see `dbOfferTypeFor`) plus `requiredDiscountCode`.
+// "discount" underneath (see `dbOfferTypeFor`) plus a first discount code.
 const SELECTABLE_TYPES = [...VALID_TYPES, "checkout_code_promo"] as const;
-
-/** Trim/uppercase/length-check a checkout-gating discount code — thin
- * wrapper preserving this route's {data, error} shape around the shared
- * `@promo/shared-types` validator, so this route and the compiled offer
- * schema can never silently disagree on what a valid code looks like. */
-function validateRequiredDiscountCode(raw: string | null): { data: string | null; error?: string } {
-  if (!(raw ?? "").trim()) return { data: null, error: "Enter the discount code customers will use at checkout." };
-  const result = validateRequiredDiscountCodeShared(raw);
-  if (!result.success) return { data: null, error: result.error.issues[0]?.message ?? "Invalid discount code." };
-  return { data: result.data };
-}
 
 function dbOfferTypeFor(selectedType: string): (typeof VALID_TYPES)[number] {
   return selectedType === "checkout_code_promo" ? "discount" : (selectedType as (typeof VALID_TYPES)[number]);
@@ -221,11 +210,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const template = (formData.get("template") as string) ?? "scratch";
   const preset = TEMPLATE_PRESETS[template];
 
-  let requiredDiscountCode: string | null = null;
+  // The first code is created with the offer; more are added on the Codes tab.
+  let initialCode: string | null = null;
   if (selectedType === "checkout_code_promo") {
-    const codeResult = validateRequiredDiscountCode(formData.get("requiredDiscountCode") as string | null);
-    if (codeResult.error) return { error: codeResult.error };
-    requiredDiscountCode = codeResult.data;
+    const codeResult = normalizeTypedCode(formData.get("requiredDiscountCode"));
+    if (!codeResult.ok) return { error: codeResult.error };
+    initialCode = codeResult.code;
   }
 
   // Names: form values take priority; preset provides fallback defaults
@@ -253,10 +243,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           internalName: candidateName,
           publicTitle,
           priority,
-          requiredDiscountCode,
+          requiresCode: initialCode !== null,
         })
         .returning({ id: offers.id });
       if (!offer) throw new Error("Failed to create offer");
+      if (initialCode) {
+        await tx.insert(discountCodes).values({ shopId, offerId: offer.id, code: initialCode });
+      }
 
       const setupTasks: Array<PromiseLike<unknown>> = [
         tx.insert(offerCombinationPolicies).values({
@@ -314,9 +307,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // the name index is really what failed. A discount-code collision needs
     // a friendly error instead: retrying with a suffixed name would resubmit
     // the SAME already-taken code and fail again, uncaught.
-    if (isConstraintViolation(err, "offers_shop_required_discount_code_idx")) {
-      return { error: "That discount code is already used by another offer. Choose a different code." };
-    }
+    if (isConstraintViolation(err, DISCOUNT_CODE_INDEX)) return { error: CODE_TAKEN_MESSAGE };
     if (!isUniqueViolation(err)) throw err;
     newOffer = await createOfferWithChildren(withUniqueOfferSuffix(internalName));
   }
@@ -554,16 +545,16 @@ export default function NewOfferPage() {
                 <span className="b-banner-icon">&#9432;</span>
                 <div className="b-banner-body">
                   <p className="b-banner-text" style={{ margin: 0 }}>
-                    We&apos;ll create a real Shopify discount code and link it to this offer
-                    automatically — no manual $0-value code setup needed. Once created, you can still
-                    add any other conditions on the next step, such as requiring the customer came
-                    from a specific landing page.
+                    This offer applies only while the customer has this code entered. We
+                    manage the code for you, so there is nothing to set up in Shopify. After creating the
+                    offer you can add more codes or generate a batch on the Codes tab, and add other
+                    conditions, such as requiring the customer came from a specific landing page.
                   </p>
                 </div>
               </div>
               <div>
                 <label className="b-label" htmlFor="requiredDiscountCode">
-                  Discount code customers will enter at checkout <span style={{ color: "var(--red, #e53e3e)" }}>*</span>
+                  First discount code customers will enter <span style={{ color: "var(--red, #e53e3e)" }}>*</span>
                 </label>
                 <input
                   id="requiredDiscountCode"
@@ -580,7 +571,7 @@ export default function NewOfferPage() {
                 />
                 {fieldErrors.requiredDiscountCode
                   ? <div className="b-help-error">{fieldErrors.requiredDiscountCode}</div>
-                  : <div className="b-help">Case-insensitive. This is the exact code Shopify will accept at checkout.</div>
+                  : <div className="b-help">Letters, numbers, dashes and underscores. Customers can type it in any case.</div>
                 }
               </div>
             </div>

@@ -27,6 +27,10 @@ pub struct CompiledShippingOffer {
     pub required_anchor_min_quantity: i64,
     #[serde(default)]
     pub requires_anchor_subscription: bool,
+    #[serde(default)]
+    pub code_hashes: Vec<String>,
+    #[serde(default)]
+    pub accept_codes: bool,
 }
 
 fn default_shipping_scope() -> String {

@@ -1,5 +1,6 @@
 query Input {
   presentmentCurrencyRate
+  enteredDiscountCodes { code }
   discount {
     discountClasses
     metafield(namespace: "promo_engine", key: "function_config") {

@@ -8,7 +8,7 @@ import { parseJsonRecord, parseJsonStringArray, parseDateRange } from "../lib/of
 import { normalizeConditionValue } from "../lib/offer-config-normalization.server.js";
 import { publishShopConfig, republishIfActive, validateOffersPublishable } from "../lib/offer-publish-flow.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
-import { offers, offerConditions, offerRewards, offerCombinationPolicies, offerVersions } from "@promo/db";
+import { offers, offerConditions, offerRewards, offerCombinationPolicies, offerVersions, discountCodes } from "@promo/db";
 import { and, eq, desc, sql } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
@@ -25,6 +25,7 @@ import { OnlyMatchedLinesCheckbox } from "../components/subconditions/forms.js";
 import { GIFT_SUBCONDITIONS } from "../components/subconditions/types.js";
 import type { SubconditionId } from "../components/subconditions/types.js";
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
+import { getCodeNotices, offerRequiresCode } from "../lib/discount-codes.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
@@ -36,10 +37,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
-  const [conditions, rewards, policy] = await Promise.all([
+  const [conditions, rewards, policy, [firstCode]] = await Promise.all([
     db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId))),
     db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))),
     db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId))).limit(1),
+    db.select({ id: discountCodes.id }).from(discountCodes).where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offerId))).limit(1),
   ]);
 
   return {
@@ -57,6 +59,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     rewards,
     policy: policy[0] ?? null,
     shopCurrencyCode,
+    isCodePromo: Boolean(firstCode) || Boolean(offer.requiredDiscountCode) || offer.requiresCode,
+    codeNotices: await getCodeNotices(db, shopId, offer),
   };
 };
 
@@ -128,6 +132,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const conditionTypeResult = ConditionTypeSchema.safeParse(formData.get("conditionType"));
       if (!conditionTypeResult.success) return { error: "Condition type is invalid." };
       const conditionType = conditionTypeResult.data;
+      if (conditionType === "discount_code") return { error: "Discount codes are managed on the offer's Codes tab, not as a condition." };
       const scopeResult = ConditionScopeSchema.safeParse(formData.get("scope") ?? "main");
       if (!scopeResult.success) return { error: "Condition scope is invalid." };
       const scope = scopeResult.data;
@@ -330,6 +335,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         // reusing the same code anyway), and reusing the discount node id
         // would let two different offers silently share one live discount.
         requiredDiscountCode: null, codeDiscountId: null,
+        // The copy has none of the source's codes, so it must stay inert (never run
+        // ungated) until codes are added: requiresCode keeps the gate.
+        requiresCode: await offerRequiresCode(db, shopId, offer),
       }).returning({ id: offers.id });
       if (newOffer) return redirect(`/app/offers/${newOffer.id}`);
       break;
@@ -392,10 +400,6 @@ function subconditionsFromRows(
       case "sales_channels":
         activeSubs.push("sales_channel");
         subValues["sales_channel"] = v;
-        break;
-      case "discount_code":
-        activeSubs.push("discount_code");
-        subValues["discount_code"] = v;
         break;
       case "utm_parameters":
         activeSubs.push("utm_parameters");
@@ -519,24 +523,59 @@ function AppliesToSelect({ value, onChange }: { value: string; onChange: (v: str
 /* ── Inline condition editor ────────────────────────────── */
 type ConditionValue = Record<string, unknown>;
 
+/* ── Code notices: an inert code offer, and codes published under a suffixed variant ── */
+function CodeNoticeBanners({
+  offerId,
+  notices,
+}: {
+  offerId: string;
+  notices: { inert: boolean; collisions: Array<{ id: string; code: string; requestedCode: string; existingDiscount: string | null }> };
+}) {
+  return (
+    <>
+      {notices.inert && (
+        <div className="b-banner b-banner-orange" style={{ marginBottom: 12 }} role="alert">
+          <div className="b-banner-body">
+            <p className="b-banner-text" style={{ margin: 0 }}>
+              This offer needs a discount code, but none can be redeemed right now, so it is not live.{" "}
+              <Link to={`/app/offers/${offerId}/codes`}>Manage codes</Link>
+            </p>
+          </div>
+        </div>
+      )}
+      {notices.collisions.map((collision) => (
+        <div key={collision.id} className="b-banner b-banner-orange" style={{ marginBottom: 12 }} role="status">
+          <div className="b-banner-body">
+            <p className="b-banner-text" style={{ margin: 0 }}>
+              {collision.requestedCode} already exists in Shopify
+              {collision.existingDiscount ? ` (discount "${collision.existingDiscount}")` : ""}; it was published as{" "}
+              <strong>{collision.code}</strong>. <Link to={`/app/offers/${offerId}/codes`}>Retry the original code</Link>
+            </p>
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
 /* ── Page URL condition editor ──────────────────────────── */
 function PageUrlConditionEditor({
   conditionId,
   val,
   update,
   save,
-  isCheckoutCodePromo,
+  isCodePromo,
 }: {
   conditionId: string;
   val: ConditionValue;
   update: (patch: Partial<ConditionValue>) => void;
   save: (overrideVal?: ConditionValue) => void;
-  isCheckoutCodePromo: boolean;
+  isCodePromo: boolean;
 }) {
   const patterns = Array.isArray(val.patterns) ? (val.patterns as string[]) : [""];
   const matchMode = (val.matchMode as string | undefined) ?? "starts_with";
   const caseSensitive = Boolean(val.caseSensitive);
-  const onlyMatchedLines = resolveOnlyMatchedLines(val.onlyMatchedLines, isCheckoutCodePromo);
+  const onlyMatchedLines = resolveOnlyMatchedLines(val.onlyMatchedLines, isCodePromo);
 
   function setPatterns(next: string[]) {
     const nextVal = { ...val, patterns: next };
@@ -666,13 +705,13 @@ function ConditionCard({
   conditionType,
   initialValue,
   onDelete,
-  isCheckoutCodePromo,
+  isCodePromo,
 }: {
   conditionId: string;
   conditionType: string;
   initialValue: ConditionValue;
   onDelete: () => void;
-  isCheckoutCodePromo: boolean;
+  isCodePromo: boolean;
 }) {
   const fetcher = useFetcher();
   const isSaving = fetcher.state !== "idle";
@@ -965,7 +1004,7 @@ function ConditionCard({
 
         {/* ── Page URL ───────────────────────────────────────── */}
         {conditionType === "page_url" && (
-          <PageUrlConditionEditor conditionId={conditionId} val={val} update={update} save={save} isCheckoutCodePromo={isCheckoutCodePromo} />
+          <PageUrlConditionEditor conditionId={conditionId} val={val} update={update} save={save} isCodePromo={isCodePromo} />
         )}
       </div>
     </div>
@@ -1084,7 +1123,7 @@ function formatStartDate(iso: string | null): string {
    PAGE COMPONENT
    ═══════════════════════════════════════════════════════════ */
 export default function OfferDetailPage() {
-  const { offer, conditions, rewards, policy, shopCurrencyCode } = useLoaderData<typeof loader>();
+  const { offer, conditions, rewards, policy, shopCurrencyCode, isCodePromo, codeNotices } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const fetcher = useFetcher();
@@ -1357,6 +1396,7 @@ export default function OfferDetailPage() {
               </div>
             </div>
 
+            <CodeNoticeBanners offerId={offer.id} notices={codeNotices} />
             {actionData && "error" in actionData && actionData.error && (
               <div className="b-banner b-banner-red" style={{ marginBottom: 12 }}>
                 <span className="b-banner-icon">!</span>
@@ -1489,7 +1529,7 @@ export default function OfferDetailPage() {
                   conditionType={c.conditionType}
                   initialValue={c.value as ConditionValue}
                   onDelete={() => deleteCondition(c.id)}
-                  isCheckoutCodePromo={Boolean(offer.requiredDiscountCode)}
+                  isCodePromo={isCodePromo}
                 />
               ))}
 
@@ -1564,7 +1604,7 @@ export default function OfferDetailPage() {
                       <SubForm
                         value={subValues[id] as Record<string, unknown> | undefined}
                         onChange={(v) => updateSubconditionValue(id, v)}
-                        isCheckoutCodePromo={Boolean(offer.requiredDiscountCode)}
+                        isCodePromo={isCodePromo}
                       />
                     </SubconditionCard>
                   );
@@ -1770,6 +1810,7 @@ export default function OfferDetailPage() {
             )}
           </div>
 
+          <CodeNoticeBanners offerId={offer.id} notices={codeNotices} />
           {/* Action feedback banners */}
           {actionData && "error" in actionData && actionData.error && (
             <div className="b-banner b-banner-red" style={{ marginBottom: 12 }}>

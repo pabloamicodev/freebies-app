@@ -24,6 +24,75 @@ pub fn run(input: Input) -> Result<schema::CartDeliveryOptionsDiscountsGenerateR
         return Ok(empty_result());
     }
 
+    let entered = entered_codes(&input);
+    let accept = accept_operation(&config.shipping_offers, &entered);
+    let mut result = apply_offers(&input, &config, &entered)?;
+    if let Some(op) = accept {
+        result.operations.insert(0, op);
+    }
+    Ok(result)
+}
+
+/// Entered codes, trimmed and deduped as typed, paired with their hash.
+fn entered_codes(input: &Input) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for entered in input.entered_discount_codes() {
+        let code = entered.code().trim_ascii();
+        if code.is_empty() || out.iter().any(|(c, _)| c == code) {
+            continue;
+        }
+        out.push((code.to_string(), code_hash(code)));
+    }
+    out
+}
+
+/// FNV-1a 64 over the ASCII-uppercased, trimmed code; first 12 lowercase hex digits.
+pub fn code_hash(code: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in code.trim_ascii().bytes() {
+        hash ^= u64::from(byte.to_ascii_uppercase());
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let mut out = String::with_capacity(12);
+    for i in 0..12 {
+        let nibble = ((hash >> (60 - 4 * i)) & 0xf) as u8;
+        out.push(char::from(if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 }));
+    }
+    out
+}
+
+fn offer_has_code(offer: &CompiledShippingOffer, entered: &[(String, String)]) -> bool {
+    entered
+        .iter()
+        .any(|(_, hash)| offer.code_hashes.iter().any(|h| h == hash))
+}
+
+fn accept_operation(
+    offers: &[CompiledShippingOffer],
+    entered: &[(String, String)],
+) -> Option<schema::DeliveryOperation> {
+    let codes: Vec<schema::DiscountCode> = entered
+        .iter()
+        .filter(|(_, hash)| {
+            offers
+                .iter()
+                .any(|o| o.accept_codes && o.code_hashes.iter().any(|h| h == hash))
+        })
+        .map(|(code, _)| schema::DiscountCode { code: code.clone() })
+        .collect();
+    if codes.is_empty() {
+        return None;
+    }
+    Some(schema::DeliveryOperation::EnteredDiscountCodesAccept(
+        schema::EnteredDiscountCodesAcceptOperation { codes },
+    ))
+}
+
+fn apply_offers(
+    input: &Input,
+    config: &CompiledConfig,
+    entered: &[(String, String)],
+) -> Result<schema::CartDeliveryOptionsDiscountsGenerateRunResult> {
     let delivery_groups = input.cart().delivery_groups();
     if delivery_groups.is_empty() {
         return Ok(empty_result());
@@ -62,6 +131,9 @@ pub fn run(input: Input) -> Result<schema::CartDeliveryOptionsDiscountsGenerateR
     });
 
     for offer in &offers {
+        if !offer.code_hashes.is_empty() && !offer_has_code(offer, entered) {
+            continue;
+        }
         if !shipping_offer_qualifies(offer, input.cart().lines()) {
             continue;
         }
@@ -357,9 +429,21 @@ mod tests {
         groups_json: &str,
         lines_json: &str,
     ) -> String {
+        payload_full(discount_classes, subtotal, config, groups_json, lines_json, "[]")
+    }
+
+    fn payload_full(
+        discount_classes: &str,
+        subtotal: &str,
+        config: &str,
+        groups_json: &str,
+        lines_json: &str,
+        codes_json: &str,
+    ) -> String {
         format!(
             r#"{{
                 "presentmentCurrencyRate": "1.0",
+                "enteredDiscountCodes": {codes_json},
                 "discount": {{
                     "discountClasses": {discount_classes},
                     "metafield": {{ "value": {config} }}
@@ -407,6 +491,158 @@ mod tests {
     ) -> schema::CartDeliveryOptionsDiscountsGenerateRunResult {
         let json = payload_with_lines(discount_classes, subtotal, config, groups_json, lines_json);
         run_function_with_input(super::run, &json).expect("should not error")
+    }
+
+    fn run_with_codes(
+        config: &str,
+        codes: &[&str],
+    ) -> schema::CartDeliveryOptionsDiscountsGenerateRunResult {
+        let codes_json = format!(
+            "[{}]",
+            codes
+                .iter()
+                .map(|c| format!(r#"{{"code":{}}}"#, serde_json::to_string(c).unwrap()))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let groups = format!(
+            "[{}]",
+            group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false)
+        );
+        let json = payload_full(r#"["SHIPPING"]"#, "10.00", config, &groups, "[]", &codes_json);
+        run_function_with_input(super::run, &json).expect("should not error")
+    }
+
+    fn coded_offer(id: &str, priority: i32, pct: f64, extra: &str) -> String {
+        format!(
+            r#"{{"id":"{id}","priority":{priority},"targetGroupTypes":null,{extra}
+            "tiers":[{{"minimumSubtotalCents":0,"discountType":"percentage","discountValue":{pct},"appliesWhen":null}}]}}"#
+        )
+    }
+
+    fn discount_pct(result: &schema::CartDeliveryOptionsDiscountsGenerateRunResult) -> Option<f64> {
+        result.operations.iter().find_map(|op| match op {
+            schema::DeliveryOperation::DeliveryDiscountsAdd(add) => {
+                match &add.candidates[0].value {
+                    schema::DeliveryDiscountCandidateValue::Percentage(p) => Some(p.value.0),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+    }
+
+    fn accepted(result: &schema::CartDeliveryOptionsDiscountsGenerateRunResult) -> Vec<String> {
+        result
+            .operations
+            .iter()
+            .filter_map(|op| match op {
+                schema::DeliveryOperation::EnteredDiscountCodesAccept(a) => {
+                    Some(a.codes.iter().map(|c| c.code.clone()).collect::<Vec<_>>())
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    #[test]
+    fn code_hash_vectors() {
+        assert_eq!(code_hash("SUMMER10"), "9e35947c8d25");
+        assert_eq!(code_hash("VIP-2026"), "e8cf18d732cc");
+        assert_eq!(code_hash("A"), "af63fc4c8602");
+        assert_eq!(code_hash("AMAZON_PROMO"), "5f2c120b2677");
+        assert_eq!(code_hash("  summer10 "), "9e35947c8d25");
+    }
+
+    #[test]
+    fn gated_offer_needs_its_code() {
+        let config = shipping_config(&format!(
+            "[{}]",
+            coded_offer("g", 1, 100.0, r#""codeHashes":["9e35947c8d25"],"#)
+        ));
+        assert_eq!(discount_pct(&run_with_codes(&config, &["SUMMER10"])), Some(100.0));
+        assert_eq!(discount_pct(&run_with_codes(&config, &[])), None);
+        assert_eq!(discount_pct(&run_with_codes(&config, &["WRONG"])), None);
+        assert_eq!(discount_pct(&run_with_codes(&config, &["  summer10  "])), Some(100.0));
+        assert_eq!(discount_pct(&run_with_codes(&config, &["nope", "Summer10"])), Some(100.0));
+    }
+
+    #[test]
+    fn gated_and_ungated_offers_coexist() {
+        let config = shipping_config(&format!(
+            "[{},{}]",
+            coded_offer("gated", 1, 100.0, r#""codeHashes":["9e35947c8d25"],"#),
+            coded_offer("open", 2, 10.0, "")
+        ));
+        assert_eq!(discount_pct(&run_with_codes(&config, &[])), Some(10.0));
+        assert_eq!(discount_pct(&run_with_codes(&config, &["SUMMER10"])), Some(100.0));
+    }
+
+    #[test]
+    fn gated_scoped_offer_without_code_does_not_block_sitewide() {
+        let scoped = coded_offer(
+            "quiz",
+            1,
+            50.0,
+            r#""scopeMode":"quiz_bundle","codeHashes":["9e35947c8d25"],"#,
+        );
+        let config = shipping_config(&format!("[{scoped},{}]", coded_offer("open", 2, 10.0, "")));
+        let bundle = r#"[{"quantity":1,"cost":{"subtotalAmount":{"amount":"4.00","currencyCode":"USD"}},"lineTypeAttribute":null,"cartGiftTierAttribute":null,"landingSourceAttribute":null,"quizBundleIdAttribute":{"value":"q"},"quizFreeGiftAttribute":{"value":"false"},"quizExpectedPaidCountAttribute":{"value":"1"},"sellingPlanAllocation":null,"merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/1"}}]"#;
+        let groups = format!(
+            "[{}]",
+            group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false)
+        );
+        let run = |codes: &str| {
+            let json = payload_full(r#"["SHIPPING"]"#, "10.00", &config, &groups, bundle, codes);
+            run_function_with_input(super::run, &json).unwrap()
+        };
+        assert_eq!(discount_pct(&run("[]")), Some(10.0));
+        assert_eq!(discount_pct(&run(r#"[{"code":"summer10"}]"#)), Some(50.0));
+    }
+
+    #[test]
+    fn accept_codes_offer_emits_accept_first_with_and_without_discount() {
+        let config = shipping_config(&format!(
+            "[{}]",
+            coded_offer("g", 1, 100.0, r#""codeHashes":["9e35947c8d25"],"acceptCodes":true,"#)
+        ));
+        let result = run_with_codes(&config, &[" summer10 ", "summer10", "WRONG"]);
+        assert!(matches!(
+            result.operations[0],
+            schema::DeliveryOperation::EnteredDiscountCodesAccept(_)
+        ));
+        assert_eq!(accepted(&result), vec!["summer10".to_string()]);
+        assert_eq!(discount_pct(&result), Some(100.0));
+
+        let failing_tier = r#"{"id":"g","priority":1,"targetGroupTypes":null,"codeHashes":["9e35947c8d25"],"acceptCodes":true,
+            "tiers":[{"minimumSubtotalCents":999999,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}]}"#;
+        let config = shipping_config(&format!("[{failing_tier}]"));
+        let result = run_with_codes(&config, &["SUMMER10"]);
+        assert_eq!(accepted(&result), vec!["SUMMER10".to_string()]);
+        assert_eq!(discount_pct(&result), None);
+
+        assert!(run_with_codes(&config, &["WRONG"]).operations.is_empty());
+        assert!(run_with_codes(&config, &[]).operations.is_empty());
+    }
+
+    #[test]
+    fn non_accept_offers_never_emit_accept() {
+        let config = shipping_config(&format!(
+            "[{}]",
+            coded_offer("g", 1, 100.0, r#""codeHashes":["9e35947c8d25"],"#)
+        ));
+        let result = run_with_codes(&config, &["SUMMER10"]);
+        assert!(accepted(&result).is_empty());
+        assert_eq!(discount_pct(&result), Some(100.0));
+    }
+
+    #[test]
+    fn offers_without_codes_ignore_entered_codes() {
+        let config = shipping_config(&format!("[{}]", coded_offer("open", 1, 10.0, "")));
+        let result = run_with_codes(&config, &["SUMMER10"]);
+        assert!(accepted(&result).is_empty());
+        assert_eq!(discount_pct(&result), Some(10.0));
     }
 
     #[test]

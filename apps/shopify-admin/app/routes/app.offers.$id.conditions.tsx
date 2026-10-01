@@ -14,7 +14,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
-import { offerConditions } from "@promo/db";
+import { discountCodes, offerConditions } from "@promo/db";
 import {
   CART_ATTRIBUTE_KEYS,
   ConditionTypeSchema,
@@ -58,10 +58,17 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     return [];
   });
 
+  const [firstCode] = await db
+    .select({ id: discountCodes.id })
+    .from(discountCodes)
+    .where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offerId)))
+    .limit(1);
+
   return {
     offer,
     conditions: conditionRows.sort((a, b) => a.sortOrder - b.sortOrder),
     markets,
+    isCodePromo: Boolean(firstCode) || Boolean(offer.requiredDiscountCode),
   };
 };
 
@@ -166,6 +173,7 @@ function buildConditionValue(
           requiredUrl,
           ...(paramName ? { paramName } : {}),
           ...(paramValue ? { paramValue } : {}),
+          onlyMatchedLines: formData.get("onlyMatchedLines") === "on",
         };
         break;
       }
@@ -221,8 +229,7 @@ function buildConditionValue(
         };
         break;
       case "discount_code":
-        value = { code: String(formData.get("discountCode") ?? "").trim() };
-        break;
+        return { error: "Discount codes are managed on the offer's Codes tab, not as a condition." };
       case "utm_parameters":
         value = {
           utmSource: String(formData.get("utmSource") ?? "").trim(),
@@ -351,7 +358,7 @@ function deriveConditionEditFields(value: Record<string, unknown>) {
 }
 
 export default function OfferConditionsPage() {
-  const { offer, conditions, markets } = useLoaderData<typeof loader>();
+  const { offer, conditions, markets, isCodePromo } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const submit = useSubmit();
@@ -438,7 +445,7 @@ export default function OfferConditionsPage() {
 
   const editingCondition = editingId ? conditions.find((c) => c.id === editingId) : undefined;
   const editingValue = (editingCondition?.value ?? {}) as Record<string, unknown>;
-  const defaultOnlyMatchedLines = resolveOnlyMatchedLines(editingValue["onlyMatchedLines"], Boolean(offer.requiredDiscountCode));
+  const defaultOnlyMatchedLines = resolveOnlyMatchedLines(editingValue["onlyMatchedLines"], isCodePromo);
 
   if (!offer) return <NotFound message="Offer not found." />;
 
@@ -484,16 +491,17 @@ export default function OfferConditionsPage() {
           actions={<Link to={`/app/offers/${offer.id}/rewards`} className="b-btn b-btn-primary">Rewards →</Link>}
         />
 
-        {/* Checkout-code-gated offer explainer */}
-        {offer.requiredDiscountCode && (
+        {/* Code-gated offer explainer */}
+        {isCodePromo && (
           <div className="b-banner b-banner-blue b-mb-4" role="status">
             <span className="b-banner-icon">&#9432;</span>
             <div className="b-banner-body">
               <p className="b-banner-text" style={{ margin: 0 }}>
-                This offer only activates when the customer enters the code{" "}
-                <strong>{offer.requiredDiscountCode}</strong> at checkout. Any conditions you add
-                below apply IN ADDITION to that — for example, add a landing-page condition here to
-                also require the customer came from a specific page.
+                This offer only applies while the customer has one of its{" "}
+                <Link to={`/app/offers/${offer.id}/codes`}>discount codes</Link> entered. Any conditions
+                you add below apply IN ADDITION to that. For example, add a landing-page, UTM or magic-link
+                condition here to also require the customer came from a specific source; only the products
+                added from that page get the discount.
               </p>
             </div>
           </div>
@@ -1051,47 +1059,8 @@ export default function OfferConditionsPage() {
                         <label className="b-label" htmlFor="paramValue">Expected parameter value (optional)</label>
                         <input id="paramValue" name="paramValue" className="b-input" placeholder="summer" autoComplete="off" defaultValue={typeof editingValue["paramValue"] === "string" ? editingValue["paramValue"] : undefined} />
                       </div>
+                      <OnlyMatchedLinesCheckbox id="onlyMatchedLines" name="onlyMatchedLines" defaultChecked={defaultOnlyMatchedLines} />
                       <p className="b-help">The storefront runtime evaluates the current browser URL. Shopify Functions cannot read a browser URL directly.</p>
-                    </div>
-                  )}
-
-                  {selectedType === "discount_code" && (
-                    <div className="b-stack b-stack-3">
-                      <div>
-                        <label className="b-label" htmlFor="discountCode">Discount code</label>
-                        <input
-                          id="discountCode"
-                          name="discountCode"
-                          className="b-input"
-                          placeholder="PRIME2026"
-                          required
-                          autoComplete="off"
-                          style={{ textTransform: "uppercase" }}
-                          defaultValue={typeof editingValue["code"] === "string" ? editingValue["code"] : undefined}
-                        />
-                      </div>
-                      <div className="b-banner b-banner-blue" role="status">
-                        <div className="b-banner-body" style={{ width: "100%" }}>
-                          <p className="b-banner-title">This condition does not create the code — it only gates this offer</p>
-                          <p className="b-banner-text">
-                            <strong>Setup, in order:</strong> 1) In Shopify Admin, go to Discounts → Create
-                            discount and make a plain discount with exactly this code (use 0% / $0 if the
-                            code itself shouldn't carry a value — this offer applies the real discount).
-                            2) Save this condition with the same code. Once the customer enters it at
-                            checkout, Shopify validates it as usual and this offer applies automatically —
-                            no other code-redemption logic to build. Matching is case-insensitive.
-                          </p>
-                          <p className="b-banner-text" style={{ marginTop: 8 }}>
-                            <strong>Combining it:</strong> add another main or sub-condition below — every
-                            enabled condition on this offer applies together (AND). Example: to sell a
-                            "Prime Day" style code sitewide but keep it off your landing pages, add this
-                            condition <em>and</em> a "Line attribute — approved legacy property" condition
-                            on <code>__landing_source</code> with match "not equal" — landing-page lines
-                            carry that property, so the code has no effect there even if it's copied onto
-                            a landing-page offer.
-                          </p>
-                        </div>
-                      </div>
                     </div>
                   )}
 

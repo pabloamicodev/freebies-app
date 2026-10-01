@@ -215,6 +215,7 @@ const CanonicalUrlParamConditionValueSchema = z
     requiredUrl: z.string().default(""),
     paramName: z.string().min(1).optional(),
     paramValue: z.string().optional(),
+    onlyMatchedLines: z.boolean().optional(),
   })
   .refine((value) => value.requiredUrl.trim().length > 0 || Boolean(value.paramName), {
     message: "A required URL or URL parameter name is required.",
@@ -246,15 +247,16 @@ export const PageUrlConditionValueSchema = z.object({
 export type PageUrlConditionValue = z.infer<typeof PageUrlConditionValueSchema>;
 
 /**
- * `onlyMatchedLines` on a page_url / utm_parameters condition: discount only
- * the cart lines added while on the matching page. Unset means "the default",
- * which is on for checkout-code promos and off for everything else.
+ * `onlyMatchedLines` on a page_url / utm_parameters / specific_link condition:
+ * discount only the cart lines added while on the matching page. Unset means
+ * "the default", which is on for code promos (offers with their own discount
+ * codes) and off for everything else.
  */
 export function resolveOnlyMatchedLines(
   onlyMatchedLines: unknown,
-  isCheckoutCodePromo: boolean,
+  isCodePromo: boolean,
 ): boolean {
-  return typeof onlyMatchedLines === "boolean" ? onlyMatchedLines : isCheckoutCodePromo;
+  return typeof onlyMatchedLines === "boolean" ? onlyMatchedLines : isCodePromo;
 }
 
 export const LINE_ATTRIBUTE_KEYS = [

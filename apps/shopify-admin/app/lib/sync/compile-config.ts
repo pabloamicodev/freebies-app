@@ -16,8 +16,19 @@ import {
 } from "@promo/shared-types";
 import { normalizeConditionValue } from "../offer-config-normalization.server.js";
 
-function onlyMatchedLines(flag: unknown, offer: { requiredDiscountCode?: string | null }): boolean {
-  return resolveOnlyMatchedLines(flag, Boolean(offer.requiredDiscountCode));
+export interface CompileOfferOptions {
+  /** The offer is gated by its own discount codes (the "code promo" default for onlyMatchedLines). */
+  codePromo?: boolean;
+  /** Backend B: hashes of the offer's redeemable codes (see code-hash.ts); the code Function accepts them. */
+  codeHashes?: string[];
+}
+
+function onlyMatchedLines(
+  flag: unknown,
+  offer: { requiredDiscountCode?: string | null },
+  options: CompileOfferOptions,
+): boolean {
+  return resolveOnlyMatchedLines(flag, options.codePromo === true || Boolean(offer.requiredDiscountCode));
 }
 
 export interface CompiledFunctionConfig {
@@ -53,6 +64,10 @@ export interface CompiledShippingOffer {
   requiredAnchorVariantIds: string[];
   requiredAnchorMinQuantity: number;
   requiresAnchorSubscription: boolean;
+  /** Only read by the delivery Function: applies only while an entered code hashes into this set. */
+  codeHashes?: string[];
+  /** Backend B: the delivery Function also accepts the matched codes (they are not Shopify discounts). */
+  acceptCodes?: true;
 }
 
 export interface CompiledOffer {
@@ -100,7 +115,8 @@ export interface CompiledOffer {
   lineAttributeConditions?: CompiledAttributeCondition[];
   cartAttributeConditions?: CompiledAttributeCondition[];
   pageUrlConditions?: CompiledPageUrlCondition[];
-  discountCodeConditions?: CompiledDiscountCodeCondition[];
+  /** Only read by the code Function: the offer applies only while an entered code hashes into this set. */
+  codeHashes?: string[];
   /** Product/order rewards only touch lines added from a page matching every
    * pageUrlConditions entry. Only ever set to true, so it is absent otherwise. */
   restrictToMatchedLines?: true;
@@ -111,13 +127,6 @@ export interface CompiledAttributeCondition {
   value?: string;
   matchMode: "equals" | "not_equals" | "exists";
   minMatchingQuantity: number;
-}
-
-/** Gates the offer on a specific discount code being present in
- * `cart.discountCodes` — Shopify only surfaces codes it has already
- * validated as active and applicable to this cart. */
-export interface CompiledDiscountCodeCondition {
-  code: string;
 }
 
 export interface CompiledPageUrlCondition {
@@ -232,6 +241,7 @@ export function compileOfferConfig(
   rewards: RewardRow[],
   policy: PolicyRow | null,
   versionNumber: number,
+  options: CompileOfferOptions = {},
 ): CompiledOffer {
   const config: CompiledOffer = {
     id: offer.id,
@@ -260,7 +270,7 @@ export function compileOfferConfig(
     lineAttributeConditions: [],
     cartAttributeConditions: [],
     pageUrlConditions: [],
-    discountCodeConditions: [],
+    ...(options.codeHashes ? { codeHashes: options.codeHashes } : {}),
   };
 
   for (const cond of conditions.filter(
@@ -414,13 +424,6 @@ export function compileOfferConfig(
         });
         break;
       }
-      case "discount_code": {
-        const { value } = typedCondition;
-        config.discountCodeConditions!.push({
-          code: String(value.code ?? "").trim(),
-        });
-        break;
-      }
       case "customer_tags": {
         const { value } = typedCondition;
         config.requiredCustomerTags = Array.isArray(value.includeTags)
@@ -466,6 +469,7 @@ export function compileOfferConfig(
             ? { paramValue: encodeURIComponent(value.paramValue) }
             : {}),
         });
+        if (onlyMatchedLines(value.onlyMatchedLines, offer, options)) config.restrictToMatchedLines = true;
         break;
       }
       case "page_url": {
@@ -482,7 +486,7 @@ export function compileOfferConfig(
               : "contains",
           caseSensitive: value.caseSensitive === true,
         });
-        if (onlyMatchedLines(value.onlyMatchedLines, offer)) config.restrictToMatchedLines = true;
+        if (onlyMatchedLines(value.onlyMatchedLines, offer, options)) config.restrictToMatchedLines = true;
         break;
       }
       case "utm_parameters": {
@@ -509,7 +513,7 @@ export function compileOfferConfig(
             paramValue: encodeURIComponent(paramValue),
           });
         }
-        if (onlyMatchedLines(value.onlyMatchedLines, offer)) config.restrictToMatchedLines = true;
+        if (onlyMatchedLines(value.onlyMatchedLines, offer, options)) config.restrictToMatchedLines = true;
         break;
       }
       default:
@@ -862,6 +866,7 @@ export function compileShippingOfferConfigs(
   offer: OfferRow,
   conditions: ConditionRow[],
   rewards: RewardRow[],
+  options: { codeHashes?: string[]; acceptCodes?: boolean } = {},
 ): CompiledShippingOffer[] {
   const enabledConditions = conditions.filter(
     (condition) => condition.isEnabled && (condition.scope === "main" || condition.scope === "sub"),
@@ -951,6 +956,8 @@ export function compileShippingOfferConfigs(
           requiredAnchorVariantIds,
           requiredAnchorMinQuantity: Math.max(1, Number(target.requiredAnchorMinQuantity ?? 1)),
           requiresAnchorSubscription: target.requiresAnchorSubscription === true,
+          ...(options.codeHashes ? { codeHashes: options.codeHashes } : {}),
+          ...(options.acceptCodes ? { acceptCodes: true as const } : {}),
         },
       ];
     });
@@ -997,7 +1004,7 @@ const OFFER_DEFAULTS: FieldDefaults = {
   lineAttributeConditions: [],
   cartAttributeConditions: [],
   pageUrlConditions: [],
-  discountCodeConditions: [],
+  codeHashes: [],
 };
 // Combination policy is applied to the discount node, never read by a Function.
 const OFFER_UNREAD_KEYS = [
@@ -1027,6 +1034,7 @@ const SHIPPING_OFFER_DEFAULTS: FieldDefaults = {
   requiredAnchorVariantIds: [],
   requiredAnchorMinQuantity: 1,
   requiresAnchorSubscription: false,
+  codeHashes: [],
 };
 
 function omitDefaults(
@@ -1065,12 +1073,21 @@ export function compactCompiledOffer(offer: CompiledOffer): Record<string, unkno
 }
 
 /** The metafield value: Function metafield input is capped at 10,000 bytes. */
-export function serializeFunctionConfig(config: CompiledFunctionConfig): string {
+export function serializeFunctionConfig(
+  config: CompiledFunctionConfig,
+  options: { omitCartAttributeSlots?: boolean } = {},
+): string {
+  // The code Function's query has no c1-c3 slots (they cost complexity); only declared variables go in.
+  const withoutSlots = options.omitCartAttributeSlots === true;
+  const queryVariables = withoutSlots
+    ? { customerTags: FUNCTION_QUERY_VARIABLE_DEFAULTS.customerTags }
+    : FUNCTION_QUERY_VARIABLE_DEFAULTS;
   return JSON.stringify(
     omitDefaults(
       {
-        ...FUNCTION_QUERY_VARIABLE_DEFAULTS,
+        ...queryVariables,
         ...config,
+        ...(withoutSlots ? { c1: undefined, c2: undefined, c3: undefined } : {}),
         offers: config.offers.map(compactCompiledOffer),
         shippingOffers: config.shippingOffers.map((offer) =>
           omitDefaults(offer, SHIPPING_OFFER_DEFAULTS),

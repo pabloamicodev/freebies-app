@@ -108,3 +108,19 @@ describe("AjaxCartAdapter legacy metadata migration", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("appliedDiscountCodes", () => {
+  it("keeps only codes Shopify applied; applicable=false (or unknown codes) never count", async () => {
+    const { appliedDiscountCodes } = await import("./cart-adapter.js");
+    expect(
+      appliedDiscountCodes({
+        discount_codes: [
+          { code: "GOOD", applicable: true },
+          { code: "BAD", applicable: false },
+          { code: "LEGACY" },
+        ],
+      }),
+    ).toEqual(["GOOD", "LEGACY"]);
+    expect(appliedDiscountCodes({})).toEqual([]);
+  });
+});

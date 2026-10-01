@@ -10,10 +10,13 @@ use std::collections::HashMap;
 pub struct CompiledConfig {
     pub offers: Vec<CompiledOffer>,
     #[serde(default)]
+    #[cfg_attr(feature = "code_gate", allow(dead_code))]
     pub c1: Option<String>,
     #[serde(default)]
+    #[cfg_attr(feature = "code_gate", allow(dead_code))]
     pub c2: Option<String>,
     #[serde(default)]
+    #[cfg_attr(feature = "code_gate", allow(dead_code))]
     pub c3: Option<String>,
 }
 
@@ -92,6 +95,10 @@ pub struct CompiledOffer {
     /// every page URL condition (the lines added from the campaign page).
     #[serde(default)]
     pub restrict_to_matched_lines: bool,
+    /// Truncated FNV-1a-64 hashes of this offer's discount codes (code-discount Function only).
+    #[cfg(feature = "code_gate")]
+    #[serde(default)]
+    pub code_hashes: Vec<String>,
 }
 
 fn scale_cents(cents: &mut Option<i64>, rate: f64) {

@@ -6,7 +6,7 @@
  * row is hovered or expanded.
  */
 import { and, eq, inArray, count } from "drizzle-orm";
-import { offerConditions, offerRewards, offerCombinationPolicies, productCache, variantCache, widgets, analyticsEvents } from "@promo/db";
+import { offerConditions, offerRewards, offerCombinationPolicies, productCache, variantCache, widgets, analyticsEvents, discountCodes } from "@promo/db";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { conditionSummary, targetSummaryParts, collectGids, urlsFromCondition, rewardHeadline } from "../lib/offer-summaries.js";
@@ -39,7 +39,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const offerId = params["id"]!;
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
-  const [conditionRows, rewardRows, policyRows, widgetRows, redemptionRows] = await Promise.all([
+  const [conditionRows, rewardRows, policyRows, widgetRows, redemptionRows, codeCountRows] = await Promise.all([
     db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId))),
     db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))),
     db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId))).limit(1),
@@ -52,6 +52,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       eq(analyticsEvents.offerId, offerId),
       eq(analyticsEvents.eventName, "order_placed_attributed"),
     )),
+    db.select({ total: count() }).from(discountCodes).where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offerId))),
   ]);
   const redemptionCount = redemptionRows[0]?.total ?? 0;
 
@@ -121,6 +122,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       startsAt: offer.startsAt?.toISOString() ?? null,
       endsAt: offer.endsAt?.toISOString() ?? null,
       requiredDiscountCode: offer.requiredDiscountCode,
+      codeCount: codeCountRows[0]?.total ?? 0,
+      requiresCode: offer.requiresCode,
     },
     headline: rewardRows[0] ? rewardHeadline(rewardRows[0]) : null,
     conditions,

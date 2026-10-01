@@ -2,6 +2,7 @@ import { NavLink } from "react-router";
 
 export type OfferStepKey =
   | "conditions"
+  | "codes"
   | "rewards"
   | "combination"
   | "schedule"
@@ -10,6 +11,7 @@ export type OfferStepKey =
 
 const STEPS: Array<{ key: OfferStepKey; label: string; path: string }> = [
   { key: "conditions", label: "Conditions", path: "conditions" },
+  { key: "codes", label: "Codes", path: "codes" },
   { key: "rewards", label: "Rewards", path: "rewards" },
   { key: "combination", label: "Combination", path: "combination" },
   { key: "schedule", label: "Schedule", path: "schedule" },

@@ -72,15 +72,6 @@ function IQty() {
   );
 }
 
-function ITicket() {
-  return (
-    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#5c6ac4" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v1a2 2 0 0 0 0 4v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1a2 2 0 0 0 0-4V9z"/>
-      <line x1="13" y1="7" x2="13" y2="17" strokeDasharray="2 2"/>
-    </svg>
-  );
-}
-
 function ITag() {
   return (
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#5c6ac4" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -108,6 +99,5 @@ export const SUB_ICONS: Record<SubconditionId, () => JSX.Element> = {
   markets:        IGlobe,
   custom_attribute: IQty,
   quantity_limit: IQty,
-  discount_code: ITicket,
   utm_parameters: ITag,
 };

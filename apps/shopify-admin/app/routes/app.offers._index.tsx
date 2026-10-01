@@ -34,6 +34,7 @@ import {
   validateOffersPublishable,
 } from "../lib/offer-publish-flow.server.js";
 import { neutralizeCodeDiscountNode } from "../lib/sync/offer-publisher.server.js";
+import { offerRequiresCode } from "../lib/discount-codes.server.js";
 import * as Sentry from "@sentry/node";
 import type { OfferCreateModalType } from "../components/offers/OfferCreateModalFlow.js";
 import { SUBSCRIPTION_OFFER_TEMPLATES } from "../lib/subscription-offer-templates.js";
@@ -354,6 +355,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           // and sharing a discount node between two offers is unsafe).
           requiredDiscountCode: null,
           codeDiscountId: null,
+          // Keeps a copy of a code offer gated (and inert) until it has codes of its own.
+          requiresCode: await offerRequiresCode(db, shopId, source),
         })
         .returning({ id: offers.id });
       if (newOffer) return redirect(`/app/offers/${newOffer.id}`);
@@ -766,7 +769,17 @@ function OfferRowPreviewContent({
     <div className="b-preview">
       <div className="b-preview-header">
         {headline && <span className="b-preview-headline">{headline}</span>}
-        {offer.requiredDiscountCode && (
+        {offer.codeCount > 0 && (
+          <span className="b-badge b-badge-blue" title="This offer only applies while one of its discount codes is entered">
+            {offer.codeCount === 1 ? "Requires a discount code" : `${offer.codeCount.toLocaleString("en-US")} discount codes`}
+          </span>
+        )}
+        {offer.codeCount === 0 && offer.requiresCode && !offer.requiredDiscountCode && (
+          <span className="b-badge b-badge-orange" title="This offer needs a discount code and has none, so it is not live">
+            Needs a discount code
+          </span>
+        )}
+        {offer.codeCount === 0 && offer.requiredDiscountCode && (
           <span className="b-badge b-badge-blue" title="This offer only activates with this checkout discount code">
             Requires code: {offer.requiredDiscountCode}
           </span>

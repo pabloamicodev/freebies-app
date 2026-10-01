@@ -41,7 +41,13 @@ export interface CartData {
   items_subtotal_price?: number;
   currency: string;
   item_count: number;
-  discount_codes?: Array<{ code: string }>;
+  /** `applicable` is false for codes Shopify did not accept; those must not count as applied. */
+  discount_codes?: Array<{ code: string; applicable?: boolean }>;
+}
+
+/** Codes Shopify actually applied; a rejected or not-yet-accepted code must not unlock a code offer. */
+export function appliedDiscountCodes(cart: Pick<CartData, "discount_codes">): string[] {
+  return cart.discount_codes?.filter((discount) => discount.applicable !== false).map((discount) => discount.code) ?? [];
 }
 
 export interface CartItem {

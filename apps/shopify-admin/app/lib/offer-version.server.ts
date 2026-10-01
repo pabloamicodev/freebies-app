@@ -12,6 +12,7 @@ const VOLATILE_KEYS = new Set([
   // fails cart validation as "outdated" the moment either value changes.
   "requiredDiscountCode",
   "codeDiscountId",
+  "requiresCode",
 ]);
 
 /**

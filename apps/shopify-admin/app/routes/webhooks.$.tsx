@@ -13,6 +13,8 @@ import { syncMarketsForShop } from "../lib/sync/market-sync.server.js";
 import { publishOffersForShop } from "../lib/sync/offer-publisher.server.js";
 import { PermanentIntegrationError } from "../lib/integration-dispatcher.server.js";
 import { handleOrderPaid, type OrderWebhookPayload } from "../lib/webhooks/order-paid.server.js";
+import type { OrderCodePayload } from "../lib/discount-codes.server.js";
+import { handleDiscountCodeRedemptions } from "../lib/webhooks/discount-code-redemption.server.js";
 import { handleAppUninstalled } from "../lib/webhooks/app-uninstalled.server.js";
 import {
   handleCustomersDataRequest,
@@ -128,6 +130,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       case "ORDERS_PAID": {
         const shopId = await getShopId(shop);
         await handleOrderPaid(getDb(), shopId, shop, payload as OrderWebhookPayload);
+        await handleDiscountCodeRedemptions(
+          getDb(),
+          shopId,
+          shop,
+          payload as OrderWebhookPayload & OrderCodePayload,
+        );
         break;
       }
 

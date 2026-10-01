@@ -5,6 +5,7 @@ import { and, eq, inArray, count } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { checkRateLimit, getClientIp } from "./rate-limit.server.js";
 import { getOfferDefinitions } from "./offer-definitions.server.js";
+import { applyCodeGates } from "./code-gate.server.js";
 import { resolveCustomer } from "./resolve-customer.server.js";
 import { buildUpsells } from "./upsell-enrichment.server.js";
 import {
@@ -133,10 +134,12 @@ export async function handleEvaluationRequest(
     });
   }
 
-  const [offerDefinitions, shadowModeEnabled] = await Promise.all([
+  const [rawOfferDefinitions, shadowModeEnabled] = await Promise.all([
     getOfferDefinitions(shop.id, shop.db),
     isShadowModeEnabled(shop.id),
   ]);
+  // Offers that own discount codes only qualify while one of their codes is applied.
+  const offerDefinitions = await applyCodeGates(shop.id, shop.db, rawOfferDefinitions, parsed.data.cart.discountCodes);
   timer.mark("offers");
 
   // resolveCustomer's Admin API round trip is only needed when some active

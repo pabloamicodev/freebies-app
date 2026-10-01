@@ -10,7 +10,7 @@
  * 5. Broadcast evaluation results to all widgets.
  */
 
-import { AjaxCartAdapter, type CartData, type CartItem } from "./cart-adapter.js";
+import { AjaxCartAdapter, appliedDiscountCodes, type CartData, type CartItem } from "./cart-adapter.js";
 import { debounce, AbortableRequest } from "./debounce.js";
 import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
 import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
@@ -712,7 +712,7 @@ class PromoEngineRuntime {
         })
         .sort(),
       String(cart.items_subtotal_price ?? cart.total_price),
-      ...(cart.discount_codes?.map((discount) => discount.code).sort() ?? []),
+      ...(cart.discount_codes?.map((discount) => `${discount.code}:${discount.applicable !== false}`).sort() ?? []),
       cart.currency,
     ];
     return parts.join("|");
@@ -746,7 +746,7 @@ class PromoEngineRuntime {
       })),
       attributes: cart.attributes ?? {},
       subtotalCents: cart.items_subtotal_price ?? cart.total_price,
-      discountCodes: cart.discount_codes?.map((d) => d.code) ?? [],
+      discountCodes: appliedDiscountCodes(cart),
       currencyCode: cart.currency,
       totalQuantity: cart.item_count,
     };

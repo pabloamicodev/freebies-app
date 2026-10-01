@@ -19,7 +19,6 @@ const DEFAULT_VALUES: Record<SubconditionId, Record<string, unknown>> = {
     matchMode: "all",
     rules: [{ qty: 1, scope: "specific_products", operator: "at_least", productIds: [] }],
   },
-  discount_code: { code: "" },
   utm_parameters: { utmSource: "", utmMedium: "", utmCampaign: "", utmTerm: "", utmContent: "" },
 };
 

@@ -59,6 +59,10 @@ export const offers = pgTable(
      * shared automatic-discount config, as every offer did before this
      * column existed. */
     requiredDiscountCode: text("required_discount_code"),
+    /** The offer only runs while one of its discount codes is applied. Set when it is
+     * created as a code offer or gets codes, and copied on duplicate, so an offer that
+     * has lost (or never copied) its codes stays inert instead of running ungated. */
+    requiresCode: boolean("requires_code").notNull().default(false),
     /** GID of this offer's own discountCodeAppCreate node, once created.
      * Only set for offers with `requiredDiscountCode`. */
     codeDiscountId: text("code_discount_id"),

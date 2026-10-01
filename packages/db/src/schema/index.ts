@@ -7,3 +7,4 @@ export * from "./analytics";
 export * from "./rate-limits";
 export * from "./webhook-deliveries";
 export * from "./shopify-sessions";
+export * from "./discount-codes";

@@ -576,15 +576,10 @@ describe("compileOfferConfig", () => {
     ]);
   });
 
-  it("compiles a discount_code condition, trimming whitespace", () => {
-    const result = compileOfferConfig(
-      offer(),
-      [condition("discount_code", { code: "  PRIME2026  " })],
-      [],
-      null,
-      1,
-    );
-    expect(result.discountCodeConditions).toEqual([{ code: "PRIME2026" }]);
+  it("refuses to compile a legacy discount_code condition instead of dropping its gate", () => {
+    expect(() =>
+      compileOfferConfig(offer(), [condition("discount_code", { code: "PRIME2026" })], [], null, 1),
+    ).toThrow(/no case for condition type "discount_code"/);
   });
 
   it("compiles a utm_parameters condition into one pageUrlConditions entry per filled-in field", () => {
@@ -647,6 +642,44 @@ describe("compileOfferConfig", () => {
           "restrictToMatchedLines"
         ],
       ).toBe(true);
+    });
+
+    it("defaults on for offers with their own discount codes (codePromo), not only legacy required codes", () => {
+      const withCodes = (type: string, value: Record<string, unknown>) =>
+        compileOfferConfig(offer(), [condition(type, value)], [], null, 1, { codePromo: true });
+      expect(withCodes("utm_parameters", { utmSource: "amazon" }).restrictToMatchedLines).toBe(true);
+      expect(withCodes("page_url", { patterns: ["/pages/prime"], matchMode: "starts_with" }).restrictToMatchedLines).toBe(true);
+      expect(withCodes("specific_link", { requiredUrl: "/pages/vip" }).restrictToMatchedLines).toBe(true);
+      expect(
+        withCodes("utm_parameters", { utmSource: "amazon", onlyMatchedLines: false }).restrictToMatchedLines,
+      ).toBeUndefined();
+    });
+
+    it("supports onlyMatchedLines on specific_link (magic URL): explicit, defaulted for code promos, off otherwise", () => {
+      const link = { requiredUrl: "/pages/vip", paramName: "ref", paramValue: "amz" };
+      expect(compile({}, { ...link, onlyMatchedLines: true }, "specific_link").restrictToMatchedLines).toBe(true);
+      expect(compile({}, link, "specific_link").restrictToMatchedLines).toBeUndefined();
+      expect(compile({ requiredDiscountCode: "VIP" }, link, "specific_link").restrictToMatchedLines).toBe(true);
+      expect(
+        compile({ requiredDiscountCode: "VIP" }, { ...link, onlyMatchedLines: false }, "specific_link")
+          .restrictToMatchedLines,
+      ).toBeUndefined();
+    });
+
+    it("compiles a code offer with utm_source=amazon into a matched-lines config", () => {
+      const result = compileOfferConfig(
+        offer(),
+        [condition("utm_parameters", { utmSource: "amazon" })],
+        [],
+        null,
+        1,
+        { codePromo: true, codeHashes: ["9e35947c8d25"] },
+      );
+      expect(result.pageUrlConditions).toEqual([
+        { patterns: [], matchMode: "contains", caseSensitive: false, paramName: "utm_source", paramValue: "amazon" },
+      ]);
+      expect(result.restrictToMatchedLines).toBe(true);
+      expect(result.codeHashes).toEqual(["9e35947c8d25"]);
     });
 
     it("is not set by conditions that are not page-based", () => {

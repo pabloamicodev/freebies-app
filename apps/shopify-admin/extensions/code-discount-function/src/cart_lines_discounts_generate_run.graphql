@@ -1,0 +1,81 @@
+# Same shape as ../discount-function minus the three custom cart attribute slots, to make room for enteredDiscountCodes under the complexity cap of 30.
+query Input($customerTags: [String!]! = []) {
+  discount {
+    discountClasses
+    metafield(namespace: "promo_engine", key: "function_config") {
+      value
+    }
+  }
+  enteredDiscountCodes {
+    code
+  }
+  cart {
+    buyerIdentity {
+      customer {
+        numberOfOrders
+        hasTags(tags: $customerTags) {
+          tag
+          hasTag
+        }
+        amountSpent {
+          amount
+        }
+      }
+    }
+    lines {
+      id
+      quantity
+      cost {
+        amountPerQuantity {
+          amount
+        }
+        subtotalAmount {
+          amount
+        }
+      }
+      sellingPlanAllocation {
+        sellingPlan {
+          id
+        }
+      }
+      merchandise {
+        __typename
+        ... on ProductVariant {
+          id
+          product {
+            id
+            volumeDiscountTiers: metafield(namespace: "custom", key: "volume_discount_tiers") {
+              value
+            }
+          }
+        }
+      }
+      lineType: attribute(key: "_promo_engine_line_type") {
+        value
+      }
+      landingSource: attribute(key: "__landing_source") {
+        value
+      }
+      volumeDiscountBundleItem: attribute(key: "_bundle_item") {
+        value
+      }
+      volumeDiscountNektarGlp1: attribute(key: "_nektar_glp1") {
+        value
+      }
+      promoMetadata: attribute(key: "_promo_engine_metadata") {
+        value
+      }
+    }
+    cost {
+      subtotalAmount {
+        currencyCode
+      }
+    }
+  }
+  presentmentCurrencyRate
+  localization {
+    country {
+      isoCode
+    }
+  }
+}

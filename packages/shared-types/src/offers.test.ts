@@ -109,6 +109,15 @@ describe("condition contracts", () => {
     );
   });
 
+  it("keeps onlyMatchedLines on a specific_link (magic URL) condition", () => {
+    const result = validateConditionValue("specific_link", {
+      requiredUrl: "/pages/vip",
+      onlyMatchedLines: true,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toMatchObject({ onlyMatchedLines: true });
+  });
+
   it("accepts a discount_code condition and trims the code", () => {
     const result = validateConditionValue("discount_code", { code: "  PRIME2026  " });
     expect(result.success).toBe(true);

@@ -3,7 +3,7 @@ import { OfferStepTabs, type OfferStepKey } from "../components/OfferStepTabs.js
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
-const STEP_KEYS: OfferStepKey[] = ["conditions", "rewards", "combination", "schedule", "widget", "preview"];
+const STEP_KEYS: OfferStepKey[] = ["conditions", "codes", "rewards", "combination", "schedule", "widget", "preview"];
 
 /**
  * Shared layout for every /app/offers/:id/* step page. Rendering the tab bar

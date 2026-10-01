@@ -44,7 +44,8 @@ export const CONDITION_REGISTRY: Record<ConditionType, { enforcedByFunction: boo
   page_url: { enforcedByFunction: true },
   line_attribute: { enforcedByFunction: true },
   cart_attribute: { enforcedByFunction: true },
-  discount_code: { enforcedByFunction: true },
+  // Replaced by per-offer discount codes (discount_codes table); only legacy rows still carry this type.
+  discount_code: { enforcedByFunction: false },
   utm_parameters: { enforcedByFunction: true },
 };
 

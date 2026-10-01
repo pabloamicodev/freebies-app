@@ -3,6 +3,7 @@ import {
   offers,
   offerConditions,
   offerRewards,
+  discountCodes,
   type Db,
   type OfferCondition,
   type OfferReward,
@@ -78,16 +79,18 @@ export async function validateOffersPublishable(
 ): Promise<PublishValidationResult> {
   if (offerIds.length === 0) return { ok: true };
 
-  const [offerRows, conditionRows, rewardRows]: [
-    { id: string; internalName: string; requiredDiscountCode: string | null }[],
+  const [offerRows, conditionRows, rewardRows, codeRows]: [
+    { id: string; internalName: string; requiredDiscountCode: string | null; requiresCode: boolean }[],
     OfferCondition[],
     OfferReward[],
+    { offerId: string }[],
   ] = await Promise.all([
     db
       .select({
         id: offers.id,
         internalName: offers.internalName,
         requiredDiscountCode: offers.requiredDiscountCode,
+        requiresCode: offers.requiresCode,
       })
       .from(offers)
       .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds))),
@@ -99,7 +102,12 @@ export async function validateOffersPublishable(
       .select()
       .from(offerRewards)
       .where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, offerIds))),
+    db
+      .select({ offerId: discountCodes.offerId })
+      .from(discountCodes)
+      .where(and(eq(discountCodes.shopId, shopId), inArray(discountCodes.offerId, offerIds))),
   ]);
+  const offersWithCodes = new Set(codeRows.map((row) => row.offerId));
 
   const foundIds = new Set(offerRows.map((offer) => offer.id));
   for (const offerId of offerIds) {
@@ -107,6 +115,9 @@ export async function validateOffersPublishable(
   }
 
   for (const offer of offerRows) {
+    // Gated by its own codes (or a legacy required checkout code).
+    const isCodeOffer =
+      offer.requiresCode || offersWithCodes.has(offer.id) || Boolean(offer.requiredDiscountCode);
     const conditions = conditionRows.filter((condition) => condition.offerId === offer.id);
     const eligibilityConditions = conditions.filter(
       (condition) => condition.scope === "main" || condition.scope === "sub",
@@ -116,11 +127,11 @@ export async function validateOffersPublishable(
       (condition) => condition.scope === "main" && condition.isEnabled,
     );
 
-    // A code-gated offer is already gated by its real Shopify checkout
-    // code — Shopify only invokes the Function when that code is present on
+    // A code-gated offer is already gated by its Shopify checkout
+    // codes — Shopify only invokes the Function when that code is present on
     // the cart — so it doesn't need an additional enabled main condition to
     // be safely publishable, unlike every other offer.
-    if (mainConditions.length === 0 && !offer.requiredDiscountCode) {
+    if (mainConditions.length === 0 && !isCodeOffer) {
       return {
         ok: false,
         error: `Cannot publish "${offer.internalName}": add at least one enabled main condition.`,
@@ -134,17 +145,6 @@ export async function validateOffersPublishable(
     }
 
     if (rewards.some((reward) => reward.rewardType === "shipping_discount")) {
-      // Code-gated offers only ever compile through the cart-lines Function
-      // (their dedicated discount node never references the delivery
-      // Function a shipping_discount reward needs) — without this check the
-      // offer publishes successfully and the real Shopify code goes live,
-      // but the shipping reward silently never applies.
-      if (offer.requiredDiscountCode) {
-        return {
-          ok: false,
-          error: `Cannot publish "${offer.internalName}": checkout-code-gated offers don't support shipping discount rewards yet — use a regular offer for shipping discounts.`,
-        };
-      }
       const unsupportedShippingCondition = eligibilityConditions.find(
         (condition) => condition.isEnabled && condition.conditionType !== "cart_value",
       );
@@ -154,6 +154,17 @@ export async function validateOffersPublishable(
           error: `Cannot publish "${offer.internalName}": shipping discounts do not yet support the ${unsupportedShippingCondition.conditionType} condition in Shopify Functions.`,
         };
       }
+    }
+
+    if (
+      eligibilityConditions.some(
+        (condition) => condition.isEnabled && condition.conditionType === "discount_code",
+      )
+    ) {
+      return {
+        ok: false,
+        error: `Cannot publish "${offer.internalName}": it still has a "Requires a discount code" condition, which is now managed on the offer's Codes tab. Run the discount-code migration (scripts/migrate-discount-codes.ts) or recreate the code there.`,
+      };
     }
 
     const unsupportedFunctionCondition = eligibilityConditions.find(

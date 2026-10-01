@@ -71,3 +71,24 @@ describe("create-offer duplicate-code handling (app.offers.new._index.tsx)", () 
     });
   });
 });
+
+describe("driver error shapes", () => {
+  const postgresJs = Object.assign(new Error("duplicate key"), { code: "23505", constraint_name: "idx_a" });
+
+  it("reads the constraint from postgres.js errors (constraint_name)", () => {
+    expect(isConstraintViolation(postgresJs, "idx_a")).toBe(true);
+    expect(isConstraintViolation(postgresJs, "idx_b")).toBe(false);
+  });
+
+  it("finds the Postgres error under a DrizzleQueryError-style cause", () => {
+    const wrapped = Object.assign(new Error("Failed query: insert ..."), { cause: postgresJs });
+    expect(isUniqueViolation(wrapped)).toBe(true);
+    expect(isConstraintViolation(wrapped, "idx_a")).toBe(true);
+  });
+
+  it("does not treat unrelated errors as unique violations", () => {
+    expect(isUniqueViolation(new Error("boom"))).toBe(false);
+    expect(isUniqueViolation(null)).toBe(false);
+    expect(isConstraintViolation(Object.assign(new Error("x"), { code: "23503" }), "idx_a")).toBe(false);
+  });
+});

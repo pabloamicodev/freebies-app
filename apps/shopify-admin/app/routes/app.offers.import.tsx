@@ -96,12 +96,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { error: { row: rowNumber, message: "Priority must be a non-negative integer" } };
     }
 
+    // A code offer re-imported from an export keeps its gate (codes themselves are not
+    // exported with the offer): it stays inert until codes are added on the Codes tab.
+    const requiresCodeRaw = (row["requires_code"] ?? "").toLowerCase();
+    if (requiresCodeRaw && requiresCodeRaw !== "true" && requiresCodeRaw !== "false") {
+      return { error: { row: rowNumber, message: "requires_code must be true or false" } };
+    }
+    const requiresCode = requiresCodeRaw === "true";
+
     let validatedCondition: { conditionType: ConditionType; value: Record<string, unknown> } | null = null;
     if (row["condition_type"] && row["condition_value_threshold_cents"]) {
       const conditionType = row["condition_type"] ?? "";
       const conditionTypeResult = ConditionTypeSchema.safeParse(conditionType);
       if (!conditionTypeResult.success) {
         return { error: { row: rowNumber, message: `Invalid condition_type "${conditionType}"` } };
+      }
+      if (conditionTypeResult.data === "discount_code") {
+        return { error: { row: rowNumber, message: "Discount codes are managed on the offer's Codes tab, not as a condition." } };
       }
       const thresholdCents = parseInt(row["condition_value_threshold_cents"], 10);
       if (!Number.isInteger(thresholdCents) || thresholdCents < 0) {
@@ -156,6 +167,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           type: offerType,
           status: "draft",
           priority,
+          requiresCode,
           discountTags: row["discount_tags"] ? row["discount_tags"].split("|") : [],
         }).returning({ id: offers.id });
 
@@ -240,6 +252,7 @@ const COLUMNS = [
   { col: "is_auto_add",   req: false, note: "true | false" },
   { col: "track_mode",    req: false, note: "product | variant" },
   { col: "discount_tags", req: false, note: "Tag strings, pipe-separated" },
+  { col: "requires_code", req: false, note: "true | false (offer stays inactive until it has discount codes)" },
 ];
 
 const TEMPLATE_CSV = `internal_name,public_title,type,priority,condition_type,condition_value_threshold_cents,reward_type,discount_type,reward_value,gift_variant_gids,gift_quantity,is_auto_add,track_mode,discount_tags

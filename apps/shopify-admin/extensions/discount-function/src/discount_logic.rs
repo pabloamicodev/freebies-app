@@ -50,6 +50,25 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
     let mut offers = config.offers.clone();
     offers.sort_by_key(|o| o.priority);
 
+    // Operations start with the accept op so buyer codes show as applied even when no discount follows.
+    #[cfg(feature = "code_gate")]
+    let mut operations = Vec::new();
+    #[cfg(feature = "code_gate")]
+    let entered_hashes = {
+        let (accepted, hashes) = entered_codes(&input, &offers);
+        if !accepted.is_empty() {
+            operations.push(schema::CartOperation::EnteredDiscountCodesAccept(
+                schema::EnteredDiscountCodesAcceptOperation {
+                    codes: accepted
+                        .into_iter()
+                        .map(|code| schema::DiscountCode { code })
+                        .collect(),
+                },
+            ));
+        }
+        hashes
+    };
+
     let mut candidates: Vec<schema::ProductDiscountCandidate> = Vec::new();
     let mut order_candidates: Vec<schema::OrderDiscountCandidate> = Vec::new();
     let mut stop_after_priority: Option<i32> = None;
@@ -59,6 +78,10 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
             if offer.priority > stop_at {
                 break;
             }
+        }
+        #[cfg(feature = "code_gate")]
+        if !offer_code_matches(offer, &entered_hashes) {
+            continue;
         }
 
         let mut offer_candidates = if has_product_discount {
@@ -90,11 +113,15 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
     }
 
     if candidates.is_empty() && order_candidates.is_empty() {
+        #[cfg(feature = "code_gate")]
+        return Ok(schema::CartLinesDiscountsGenerateRunResult { operations });
+        #[cfg(not(feature = "code_gate"))]
         return Ok(schema::CartLinesDiscountsGenerateRunResult { operations: vec![] });
     }
 
     let candidates = best_candidate_per_line(candidates, &input);
 
+    #[cfg(not(feature = "code_gate"))]
     let mut operations = Vec::new();
     if !candidates.is_empty() {
         operations.push(schema::CartOperation::ProductDiscountsAdd(
@@ -1405,6 +1432,13 @@ fn line_attribute_value(line: &Lines, key: &str, _config: &CompiledConfig) -> Op
     metadata_value(line, key)
 }
 
+// The code-discount query has no custom cart attribute slots (complexity budget), so cart attribute conditions never match.
+#[cfg(feature = "code_gate")]
+fn cart_attribute_value(_: &Input, _: &str, _: &CompiledConfig) -> Option<String> {
+    None
+}
+
+#[cfg(not(feature = "code_gate"))]
 fn cart_attribute_value(input: &Input, key: &str, config: &CompiledConfig) -> Option<String> {
     if config.c1.as_deref() == Some(key) {
         return input
@@ -1463,12 +1497,49 @@ fn metadata_value(line: &Lines, key: &str) -> Option<String> {
         .remove(key)
 }
 
+/// Truncated FNV-1a-64 of the ASCII-uppercased code, 12 lowercase hex chars (mirrored by the TS publisher).
+#[cfg(feature = "code_gate")]
+pub fn code_hash(code: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in code.as_bytes() {
+        hash = (hash ^ u64::from(byte.to_ascii_uppercase())).wrapping_mul(0x100000001b3);
+    }
+    (0..12)
+        .map(|i| char::from(b"0123456789abcdef"[((hash >> (60 - 4 * i)) & 0xf) as usize]))
+        .collect()
+}
+
+/// Returns the entered codes (trimmed, as typed, deduped) matching any offer, plus the hashes of all entered codes.
+#[cfg(feature = "code_gate")]
+fn entered_codes(input: &Input, offers: &[CompiledOffer]) -> (Vec<String>, Vec<String>) {
+    let mut accepted: Vec<String> = Vec::new();
+    let mut hashes = Vec::new();
+    for entered in input.entered_discount_codes() {
+        let code = entered.code().trim_ascii();
+        let hash = code_hash(code);
+        if offers.iter().any(|offer| offer.code_hashes.contains(&hash))
+            && !accepted.iter().any(|seen| code_hash(seen) == hash)
+        {
+            accepted.push(code.to_string());
+        }
+        hashes.push(hash);
+    }
+    (accepted, hashes)
+}
+
+/// This node only serves code offers: no codeHashes, or no entered code in the set, means not eligible.
+#[cfg(feature = "code_gate")]
+fn offer_code_matches(offer: &CompiledOffer, entered_hashes: &[String]) -> bool {
+    entered_hashes.iter().any(|hash| offer.code_hashes.contains(hash))
+}
+
 fn parse_config(input: &Input) -> Option<CompiledConfig> {
     let value = input.discount().metafield()?.value();
     serde_json::from_str(value).ok()
 }
 
-#[cfg(test)]
+// These fixtures target the original query shape; the code-gate tests live in the code-discount crate.
+#[cfg(all(test, not(feature = "code_gate")))]
 mod tests {
     use super::*;
     use shopify_function::run_function_with_input;

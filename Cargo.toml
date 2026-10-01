@@ -2,6 +2,7 @@
 members = [
     "apps/shopify-admin/extensions/discount-function",
     "apps/shopify-admin/extensions/delivery-discount-function",
+    "apps/shopify-admin/extensions/code-discount-function",
     "apps/shopify-admin/extensions/cart-transform",
     "apps/shopify-admin/extensions/cart-validation",
 ]

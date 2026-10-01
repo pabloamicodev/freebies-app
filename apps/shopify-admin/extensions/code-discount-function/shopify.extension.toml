@@ -1,0 +1,23 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Promo Engine Code Discount"
+handle = "promo-engine-code-discount"
+type = "function"
+uid = "7c0d5b1e-3a8f-4e62-9b47-d1f2a6c58e93"
+
+  [[extensions.targeting]]
+  target = "cart.lines.discounts.generate.run"
+  input_query = "src/cart_lines_discounts_generate_run.graphql"
+  export = "cart_lines_discounts_generate_run"
+
+  [extensions.build]
+  # 249000 leaves room for the ~13KB trampoline the Shopify CLI adds before its 256KB upload check.
+  # --target-dir=target is mandatory in the build script: the workspace root target/ once shipped stale binaries.
+  command = "node ../../../../scripts/build-shopify-function.mjs target/wasm32-wasip1/release/promo-engine-code-discount-function.wasm 249000"
+  path = "target/wasm32-wasip1/release/promo-engine-code-discount-function.wasm"
+  watch = ["src/**/*.rs", "../discount-function/src/**/*.rs"]
+
+  [extensions.input.variables]
+  namespace = "promo_engine"
+  key = "function_config"

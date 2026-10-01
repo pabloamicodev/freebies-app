@@ -11,7 +11,6 @@ export type SubconditionId =
   | "markets"
   | "custom_attribute"
   | "quantity_limit"
-  | "discount_code"
   | "utm_parameters";
 
 export interface SubconditionDef {

@@ -14,12 +14,6 @@ describe("initializeOfferConditionValues", () => {
     });
   });
 
-  it("defaults a newly added discount_code card to an empty code", () => {
-    expect(initializeOfferConditionValues(["discount_code"], {})).toEqual({
-      discount_code: { code: "" },
-    });
-  });
-
   it("returns independent nested defaults across calls", () => {
     const first = initializeOfferConditionValues(["quantity_limit"], {});
     const second = initializeOfferConditionValues(["quantity_limit"], {});

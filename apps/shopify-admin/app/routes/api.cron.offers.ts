@@ -5,6 +5,7 @@ import * as Sentry from "@sentry/node";
 import { waitUntil } from "@vercel/functions";
 import { isCronRequestAuthorized } from "../lib/cron-auth.server.js";
 import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
+import { runDiscountCodeSchedule } from "../lib/discount-code-schedule.server.js";
 import { reconcileActiveShopDiscountNodes } from "../lib/discount-reconciliation.server.js";
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -29,14 +30,25 @@ export async function loader({ request }: LoaderFunctionArgs) {
         extra: failure,
       });
     }
-    const hasFailures = reconciliation.failures.length > 0 || result.failures.length > 0;
+    const codeSchedule = await runDiscountCodeSchedule(getDb());
+    for (const failure of codeSchedule.failures) {
+      Sentry.captureMessage("Discount code schedule publish failed", {
+        level: "error",
+        tags: { cron: "offers", stage: "discount-codes", shopId: failure.shopId },
+        extra: failure,
+      });
+    }
+    const hasFailures =
+      reconciliation.failures.length > 0 ||
+      result.failures.length > 0 ||
+      codeSchedule.failures.length > 0;
     if (hasFailures) {
       // These are captureMessage, not thrown exceptions, so nothing else on
       // this request path flushes them — without this Vercel can freeze the
       // function before the batch reaches Sentry.
       waitUntil(Sentry.flush(2000));
     }
-    return apiJson(request, { ok: !hasFailures, reconciliation, ...result }, {
+    return apiJson(request, { ok: !hasFailures, reconciliation, codeSchedule, ...result }, {
       status: hasFailures ? 207 : 200,
     });
   } catch (err) {

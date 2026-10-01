@@ -58,6 +58,9 @@ export function normalizeOfferSubconditions(input: Record<string, unknown>): Nor
             ...(value["paramValue"] === undefined || String(value["paramValue"]).length === 0
               ? {}
               : { paramValue: String(value["paramValue"]) }),
+            ...(typeof value["onlyMatchedLines"] === "boolean"
+              ? { onlyMatchedLines: value["onlyMatchedLines"] }
+              : {}),
           },
         });
         break;
@@ -185,12 +188,11 @@ export function normalizeOfferSubconditions(input: Record<string, unknown>): Nor
         });
         break;
       }
-      case "discount_code": {
-        const code = String(value["code"] ?? "").trim();
-        if (!code) return { success: false, error: "Enter the discount code this offer requires." };
-        conditions.push({ conditionType: "discount_code", operator: "eq", value: { code } });
-        break;
-      }
+      case "discount_code":
+        return {
+          success: false,
+          error: "Discount codes are managed on the offer's Codes tab, not as a condition.",
+        };
       case "utm_parameters": {
         const field = (key: string) => String(value[key] ?? "").trim();
         conditions.push({

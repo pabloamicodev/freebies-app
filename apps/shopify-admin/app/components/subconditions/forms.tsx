@@ -12,11 +12,11 @@ export interface SubFormProps {
   value?: Record<string, unknown>;
   /** Called whenever the form value changes, with the full serialised object. */
   onChange?: (value: Record<string, unknown>) => void;
-  /** The offer only runs when a checkout code is entered (changes some defaults). */
-  isCheckoutCodePromo?: boolean;
+  /** The offer only runs while one of its discount codes is entered (changes some defaults). */
+  isCodePromo?: boolean;
 }
 
-// ─── "Only discount items added from this page" (page_url / utm_parameters) ───
+// ─── "Only discount items added from this page" (page_url / utm_parameters / specific_link) ───
 export function OnlyMatchedLinesCheckbox({
   id,
   name,
@@ -105,14 +105,16 @@ function serializeQuantityRules(rules: QuantityRule[]): Array<Omit<QuantityRule,
 }
 
 // ─── Link ─────────────────────────────────────────────────────────────────────
-export function LinkForm({ value, onChange }: SubFormProps) {
+export function LinkForm({ value, onChange, isCodePromo = false }: SubFormProps) {
   const idPrefix = useId();
   const requiredUrl = getv(value, "requiredUrl", "") as string;
   const paramName = getv(value, "paramName", "freegifts_code") as string;
   const paramValue = getv(value, "paramValue", "") as string;
+  const onlyMatchedLines = resolveOnlyMatchedLines(value?.["onlyMatchedLines"], isCodePromo);
 
-  function emit(patch: Partial<Record<string, string>>) {
-    onChange?.({ requiredUrl, paramName, paramValue, ...patch });
+  // Always emit an explicit onlyMatchedLines so what's saved matches what's shown.
+  function emit(patch: Partial<Record<string, string | boolean>>) {
+    onChange?.({ requiredUrl, paramName, paramValue, onlyMatchedLines, ...patch });
   }
 
   const generated = `${requiredUrl || "/"}${paramName ? `?${encodeURIComponent(paramName)}=${encodeURIComponent(paramValue || "<value>")}` : ""}`;
@@ -136,6 +138,12 @@ export function LinkForm({ value, onChange }: SubFormProps) {
         <input id={`${idPrefix}-param-value`} aria-label="Expected value" className="b-input" value={paramValue}
           onChange={(e) => emit({ paramValue: e.target.value })} placeholder="summer2024" autoComplete="off" />
       </div>
+
+      <OnlyMatchedLinesCheckbox
+        id={`${idPrefix}-only-matched-lines`}
+        checked={onlyMatchedLines}
+        onChange={(checked) => emit({ onlyMatchedLines: checked })}
+      />
 
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
@@ -445,57 +453,15 @@ export function MarketsForm({ value, onChange }: SubFormProps) {
   );
 }
 
-// ─── Discount code gate ────────────────────────────────────────────────────────
-export function DiscountCodeForm({ value, onChange }: SubFormProps) {
-  const idPrefix = useId();
-  const code = getv(value, "code", "") as string;
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div>
-        <label className="b-label" htmlFor={`${idPrefix}-code`}>Discount code</label>
-        <input
-          id={`${idPrefix}-code`}
-          className="b-input"
-          value={code}
-          onChange={(event) => onChange?.({ code: event.target.value })}
-          placeholder="PRIME2026"
-          autoComplete="off"
-          style={{ textTransform: "uppercase" }}
-        />
-      </div>
-      <div className="b-banner b-banner-blue" role="status">
-        <div className="b-banner-body" style={{ width: "100%" }}>
-          <p className="b-banner-title">This condition does not create the code — it only gates this offer</p>
-          <p className="b-banner-text">
-            <strong>Setup, in order:</strong> 1) In Shopify Admin, go to Discounts → Create discount and
-            make a plain discount with exactly this code (use 0% / $0 if the code itself shouldn't carry
-            a value — this offer will apply the real discount). 2) Save this condition with the same code.
-            Once the customer enters it at checkout, Shopify validates it as usual and this offer applies
-            automatically — no other code-redemption logic to build. Matching is case-insensitive.
-          </p>
-          <p className="b-banner-text" style={{ marginTop: 8 }}>
-            <strong>Combining it:</strong> add it alongside any other condition here — they all apply
-            together (AND). Example: to sell a "Prime Day" style code sitewide but keep it off your
-            landing pages, add this condition <em>and</em> a "Store custom field" condition on the
-            <code> __landing_source</code> line property set to "not equal" — landing-page lines carry
-            that property, so the code has no effect there even if it's copied onto a landing-page offer.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── UTM parameters ────────────────────────────────────────────────────────────
-export function UtmParametersForm({ value, onChange, isCheckoutCodePromo = false }: SubFormProps) {
+export function UtmParametersForm({ value, onChange, isCodePromo = false }: SubFormProps) {
   const idPrefix = useId();
   const utmSource = getv(value, "utmSource", "") as string;
   const utmMedium = getv(value, "utmMedium", "") as string;
   const utmCampaign = getv(value, "utmCampaign", "") as string;
   const utmTerm = getv(value, "utmTerm", "") as string;
   const utmContent = getv(value, "utmContent", "") as string;
-  const onlyMatchedLines = resolveOnlyMatchedLines(value?.["onlyMatchedLines"], isCheckoutCodePromo);
+  const onlyMatchedLines = resolveOnlyMatchedLines(value?.["onlyMatchedLines"], isCodePromo);
 
   // Always emit an explicit onlyMatchedLines so what's saved matches what's shown.
   function emit(patch: Partial<Record<string, unknown>>) {

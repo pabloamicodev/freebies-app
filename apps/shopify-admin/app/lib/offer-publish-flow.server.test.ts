@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { offers, offerConditions, offerRewards, type Db } from "@promo/db";
+import { offers, offerConditions, offerRewards, discountCodes, type Db } from "@promo/db";
 import {
   hasUnenforcedScopeFilter,
   isConditionEnforcedByFunction,
@@ -11,12 +11,14 @@ interface FakeOfferRow {
   id: string;
   internalName: string;
   requiredDiscountCode: string | null;
+  requiresCode?: boolean;
 }
 
 function fakeDb(rows: {
   offerRows: FakeOfferRow[];
   conditionRows?: unknown[];
   rewardRows?: unknown[];
+  codeRows?: Array<{ offerId: string }>;
 }): Db {
   const db = {
     select: () => ({
@@ -25,6 +27,7 @@ function fakeDb(rows: {
           if (table === offers) return Promise.resolve(rows.offerRows);
           if (table === offerConditions) return Promise.resolve(rows.conditionRows ?? []);
           if (table === offerRewards) return Promise.resolve(rows.rewardRows ?? []);
+          if (table === discountCodes) return Promise.resolve(rows.codeRows ?? []);
           return Promise.resolve([]);
         },
       }),
@@ -64,7 +67,6 @@ describe("isConditionEnforcedByFunction", () => {
     "markets",
     "specific_link",
     "page_url",
-    "discount_code",
   ])("allows Function-enforced condition %s", (conditionType) => {
     expect(isConditionEnforcedByFunction(conditionType)).toBe(true);
   });
@@ -75,6 +77,7 @@ describe("isConditionEnforcedByFunction", () => {
     "exclude_collections",
     "exclude_vendors",
     "exclude_types",
+    "discount_code",
   ])("fails closed for storefront-only condition %s", (conditionType) => {
     expect(isConditionEnforcedByFunction(conditionType)).toBe(false);
   });
@@ -158,21 +161,80 @@ describe("validateOffersPublishable — required discount code", () => {
     });
   });
 
-  it("rejects a shipping_discount reward on a code-gated offer — its dedicated node never references the delivery Function", async () => {
+  const shippingReward = {
+    ...validGiftReward,
+    rewardType: "shipping_discount",
+    discountType: "free",
+    value: { amount: 100 },
+    target: { deliveryGroupTypes: ["ONE_TIME_PURCHASE"] },
+  };
+
+  it("allows a shipping-only offer gated by a legacy required code (its node runs the delivery Function)", async () => {
     const db = fakeDb({
-      offerRows: [
-        { id: "offer-1", internalName: "Prime Day", requiredDiscountCode: "PRIMEDAY2026" },
+      offerRows: [{ id: "offer-1", internalName: "Ship", requiredDiscountCode: "FREESHIP" }],
+      rewardRows: [shippingReward],
+    });
+
+    expect(await validateOffersPublishable(db, "shop-1", ["offer-1"])).toEqual({ ok: true });
+  });
+
+  it("allows a shipping-only offer gated by its own discount codes, with no main condition", async () => {
+    const db = fakeDb({
+      offerRows: [{ id: "offer-1", internalName: "Ship", requiredDiscountCode: null }],
+      rewardRows: [shippingReward],
+      codeRows: [{ offerId: "offer-1" }],
+    });
+
+    expect(await validateOffersPublishable(db, "shop-1", ["offer-1"])).toEqual({ ok: true });
+  });
+
+  it("allows mixing shipping with other rewards on a code offer: shipping is gated in the delivery config", async () => {
+    const db = fakeDb({
+      offerRows: [{ id: "offer-1", internalName: "Prime Day", requiredDiscountCode: null, requiresCode: false }],
+      rewardRows: [validGiftReward, shippingReward],
+      codeRows: [{ offerId: "offer-1" }],
+    });
+
+    expect(await validateOffersPublishable(db, "shop-1", ["offer-1"])).toEqual({ ok: true });
+  });
+
+  it("treats a requiresCode offer with no codes as code-gated (no main condition needed, never ungated)", async () => {
+    const db = fakeDb({
+      offerRows: [{ id: "offer-1", internalName: "Copy", requiredDiscountCode: null, requiresCode: true }],
+      rewardRows: [validGiftReward],
+    });
+
+    expect(await validateOffersPublishable(db, "shop-1", ["offer-1"])).toEqual({ ok: true });
+  });
+
+  it("still rejects unsupported conditions on a shipping code offer", async () => {
+    const db = fakeDb({
+      offerRows: [{ id: "offer-1", internalName: "Ship", requiredDiscountCode: null }],
+      rewardRows: [shippingReward],
+      codeRows: [{ offerId: "offer-1" }],
+      conditionRows: [
+        { offerId: "offer-1", scope: "main", isEnabled: true, conditionType: "cart_quantity", operator: "gte", value: { minQuantity: 1 } },
       ],
-      rewardRows: [{ ...validGiftReward, rewardType: "shipping_discount" }],
     });
 
     const result = await validateOffersPublishable(db, "shop-1", ["offer-1"]);
 
-    expect(result).toEqual({
-      ok: false,
-      error:
-        'Cannot publish "Prime Day": checkout-code-gated offers don\'t support shipping discount rewards yet — use a regular offer for shipping discounts.',
+    expect(result.error).toMatch(/shipping discounts do not yet support the cart_quantity condition/);
+  });
+
+  it("blocks a legacy discount_code condition with a pointer to the Codes tab instead of publishing it ungated", async () => {
+    const db = fakeDb({
+      offerRows: [{ id: "offer-1", internalName: "Legacy", requiredDiscountCode: null }],
+      rewardRows: [validGiftReward],
+      conditionRows: [
+        { offerId: "offer-1", scope: "main", isEnabled: true, conditionType: "discount_code", operator: "eq", value: { code: "PRIME" } },
+      ],
     });
+
+    const result = await validateOffersPublishable(db, "shop-1", ["offer-1"]);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/Codes tab/);
   });
 });
 
