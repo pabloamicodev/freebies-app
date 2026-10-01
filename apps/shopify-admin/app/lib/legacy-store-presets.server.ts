@@ -903,55 +903,62 @@ export async function importLegacyPreset(db: Db, shopId: string, preset: LegacyS
   let created = 0;
 
   for (const presetOffer of pending) {
-    await db.transaction(async (tx) => {
-      const [createdOffer] = await tx
-        .insert(offers)
-        .values({
-          shopId,
-          type: presetOffer.type,
-          status: "draft",
-          internalName: presetOffer.internalName,
-          publicTitle: presetOffer.publicTitle,
-          description: presetOffer.description,
-          priority: presetOffer.priority,
-          createdBy: "legacy-preset-importer",
-          updatedBy: "legacy-preset-importer",
-        })
-        .returning({ id: offers.id });
-      if (!createdOffer) throw new Error(`Failed to create ${presetOffer.internalName}.`);
-
-      await tx.insert(offerConditions).values(
-        ensureMainCondition(presetOffer.conditions).map((condition, index) => ({
-          shopId,
-          offerId: createdOffer.id,
-          scope: "main" as const,
-          conditionType: condition.conditionType,
-          operator: condition.operator,
-          value: condition.value,
-          sortOrder: index,
-          isEnabled: true,
-        })),
-      );
-      await tx.insert(offerRewards).values(
-        presetOffer.rewards.map((reward, index) => ({
-          shopId,
-          offerId: createdOffer.id,
-          rewardType: reward.rewardType,
-          discountType: reward.discountType,
-          value: reward.value,
-          target: reward.target,
-          quantity: reward.quantity ?? null,
-          isAutoAdd: reward.isAutoAdd ?? false,
-          isCustomerSelectable: reward.isCustomerSelectable ?? false,
-          trackMode: "variant",
-          sortOrder: index,
-          label: reward.label,
-        })),
-      );
-      await tx.insert(offerCombinationPolicies).values({ shopId, offerId: createdOffer.id });
-    });
+    await db.transaction((tx) => insertPresetOffer(tx, shopId, presetOffer));
     created += 1;
   }
 
   return { created, skipped: inspected.length - created, total: inspected.length };
+}
+
+export const LEGACY_IMPORTER = "legacy-preset-importer";
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+export const presetConditionRows = (shopId: string, offerId: string, preset: LegacyOfferPreset) =>
+  ensureMainCondition(preset.conditions).map((condition, index) => ({
+    shopId,
+    offerId,
+    scope: "main" as const,
+    conditionType: condition.conditionType,
+    operator: condition.operator,
+    value: condition.value,
+    sortOrder: index,
+    isEnabled: true,
+  }));
+
+export const presetRewardRows = (shopId: string, offerId: string, preset: LegacyOfferPreset) =>
+  preset.rewards.map((reward, index) => ({
+    shopId,
+    offerId,
+    rewardType: reward.rewardType,
+    discountType: reward.discountType,
+    value: reward.value,
+    target: reward.target,
+    quantity: reward.quantity ?? null,
+    isAutoAdd: reward.isAutoAdd ?? false,
+    isCustomerSelectable: reward.isCustomerSelectable ?? false,
+    trackMode: "variant",
+    sortOrder: index,
+    label: reward.label,
+  }));
+
+export async function insertPresetOffer(tx: Tx, shopId: string, presetOffer: LegacyOfferPreset) {
+  const [createdOffer] = await tx
+    .insert(offers)
+    .values({
+      shopId,
+      type: presetOffer.type,
+      status: "draft",
+      internalName: presetOffer.internalName,
+      publicTitle: presetOffer.publicTitle,
+      description: presetOffer.description,
+      priority: presetOffer.priority,
+      createdBy: LEGACY_IMPORTER,
+      updatedBy: LEGACY_IMPORTER,
+    })
+    .returning({ id: offers.id });
+  if (!createdOffer) throw new Error(`Failed to create ${presetOffer.internalName}.`);
+
+  await tx.insert(offerConditions).values(presetConditionRows(shopId, createdOffer.id, presetOffer));
+  await tx.insert(offerRewards).values(presetRewardRows(shopId, createdOffer.id, presetOffer));
+  await tx.insert(offerCombinationPolicies).values({ shopId, offerId: createdOffer.id });
 }

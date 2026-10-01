@@ -17,6 +17,7 @@
     "test:e2e": "pnpm --filter shopify-admin test:e2e",
     "seed:ambrosia-e2e": "tsx scripts/seed-ambrosia-e2e.ts",
     "verify:ambrosia-e2e": "tsx scripts/verify-ambrosia-e2e.ts",
+    "reconcile:legacy-presets": "tsx scripts/reconcile-legacy-presets.ts",
     "test:load": "tsx apps/shopify-admin/tests/load/evaluation.load.ts",
     "lint": "eslint .",
     "format": "prettier --write .",

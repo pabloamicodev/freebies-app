@@ -42,6 +42,13 @@ export const NormalizedCartLineSchema = z.object({
   availableForSale: z.boolean(),
   inventoryPolicy: z.enum(["CONTINUE", "DENY"]),
   inventoryQuantity: z.number().int().nullable(),
+  /** Product metafield custom.volume_discount_tiers. Server-populated from the catalog
+   * (client values are overwritten): the cart_value condition nets out the volume
+   * discount a separate store Function applies, like the discount Function does. */
+  volumeDiscountTiers: z
+    .array(z.object({ qty: z.number().int().positive(), percent: z.number().min(0).finite() }))
+    .max(50)
+    .optional(),
 });
 export type NormalizedCartLine = z.infer<typeof NormalizedCartLineSchema>;
 

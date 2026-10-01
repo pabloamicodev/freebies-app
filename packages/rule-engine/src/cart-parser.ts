@@ -62,6 +62,49 @@ export function sumQualifyingValue(lines: NormalizedCartLine[]): number {
   );
 }
 
+/**
+ * Discount a separate store volume-discount Function will apply, projected per
+ * product (qty-summed best tier, percent of the group's line subtotals). Mirrors
+ * the discount Function's projected_volume_discount_cents and the legacy
+ * projectedVolumeDiscountCents: gift lines, `_bundle_item=="true"` and any
+ * `_nektar_glp1` line never count.
+ */
+export function projectedVolumeDiscountCents(lines: NormalizedCartLine[]): number {
+  const groups = new Map<string, { quantity: number; subtotal: number; tiers: { qty: number; percent: number }[] }>();
+  for (const line of lines) {
+    const tiers = line.volumeDiscountTiers;
+    if (!tiers?.length) continue;
+    const props = line.properties;
+    if (
+      props["_promo_engine_line_type"] === "gift"
+      || props["__cart_gift_tier"]
+      || props["_quiz_free_gift"] === "true"
+      || props["_bundle_item"] === "true"
+      || props["_nektar_glp1"]
+    ) continue;
+    const subtotal = line.lineSubtotalCents ?? line.priceCents * line.quantity;
+    if (subtotal <= 0) continue;
+    const group = groups.get(line.productId) ?? { quantity: 0, subtotal: 0, tiers: [] };
+    group.quantity += line.quantity;
+    group.subtotal += subtotal;
+    group.tiers.push(...tiers);
+    groups.set(line.productId, group);
+  }
+  let total = 0;
+  for (const group of groups.values()) {
+    const best = group.tiers
+      .filter((tier) => tier.percent > 0 && group.quantity >= tier.qty)
+      .sort((a, b) => b.qty - a.qty || b.percent - a.percent)[0];
+    if (best) total += Math.round((group.subtotal * best.percent) / 100);
+  }
+  return total;
+}
+
+/** Qualifying cart value: line subtotals net of the projected volume discount. */
+export function sumQualifyingValueNet(lines: NormalizedCartLine[]): number {
+  return Math.max(0, sumQualifyingValue(lines) - projectedVolumeDiscountCents(lines));
+}
+
 /** Total qualifying item count across lines. */
 export function sumQualifyingQuantity(lines: NormalizedCartLine[]): number {
   return lines.reduce((acc, line) => acc + line.quantity, 0);

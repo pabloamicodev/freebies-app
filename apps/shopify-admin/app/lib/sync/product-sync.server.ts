@@ -38,6 +38,7 @@ interface ShopifyProduct {
   productType: string;
   tags: string[];
   status: string;
+  volumeDiscountTiers?: { value: string } | null;
   featuredMedia: { image?: { url: string } | null } | null;
   collections: { nodes: Array<{ id: string }>; pageInfo: PageInfo };
   variants: { nodes: ShopifyVariant[]; pageInfo: PageInfo };
@@ -60,6 +61,7 @@ export const PRODUCTS_QUERY = `
       pageInfo { hasNextPage endCursor }
       nodes {
         id title handle vendor productType tags status
+        volumeDiscountTiers: metafield(namespace: "custom", key: "volume_discount_tiers") { value }
         featuredMedia { ... on MediaImage { image { url } } }
         variants(first: $variantsFirst) {
           pageInfo { hasNextPage endCursor }

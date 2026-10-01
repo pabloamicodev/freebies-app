@@ -6,7 +6,7 @@ import type {
   EligibilityReason,
 } from "@promo/shared-types";
 import { err, type Result } from "@promo/shared-types";
-import { buildCartHash, extractGiftLines, extractQualifyingLines } from "./cart-parser.js";
+import { buildCartHash, extractGiftLines, extractQualifyingLines, sumQualifyingValueNet } from "./cart-parser.js";
 import { evaluateCartValue, type CartValueConditionValue } from "./conditions/cart-value.js";
 import { evaluateCartQuantity, type CartQuantityConditionValue } from "./conditions/cart-quantity.js";
 import { evaluateSpecificProduct, type SpecificProductConditionValue } from "./conditions/specific-product.js";
@@ -497,7 +497,12 @@ function buildProgressBars(
     const value = condition.value as { thresholdCents?: number; minQuantity?: number };
     const targetCents = condition.conditionType === "cart_value" ? Math.max(0, value.thresholdCents ?? 0) : 0;
     const targetQuantity = condition.conditionType === "cart_quantity" ? Math.max(1, value.minQuantity ?? 1) : null;
-    const currentCents = cart.subtotalCents;
+    // Same qualifying value the cart_value condition checks: gift lines out, net of volume discounts.
+    const includeGifts = (condition.value as { includeGiftValues?: boolean }).includeGiftValues === true;
+    const currentCents =
+      condition.conditionType === "cart_value"
+        ? sumQualifyingValueNet(extractQualifyingLines(cart, { includeGiftValues: includeGifts }))
+        : cart.subtotalCents;
     const currentQuantity = cart.totalQuantity;
     const current = targetQuantity ? currentQuantity : currentCents;
     const target = targetQuantity ?? targetCents;
