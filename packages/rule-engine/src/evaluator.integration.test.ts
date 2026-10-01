@@ -284,6 +284,41 @@ describe("evaluate — cart value condition", () => {
     expect(result.giftSlider?.offerId).toBe("offer-1");
   });
 
+  it("never builds a picker (primary or additional) for a code-gated offer whose code is absent", async () => {
+    const gated = (id: string, code: string) => {
+      const offer = makeGiftOffer(id, 5000);
+      offer.rewards[0] = {
+        ...offer.rewards[0]!,
+        target: { variantIds: [`gid://shopify/ProductVariant/${id}-a`, `gid://shopify/ProductVariant/${id}-b`] },
+        isAutoAdd: false,
+        isCustomerSelectable: true,
+      };
+      offer.conditions.unshift({
+        id: "code-gate",
+        scope: "main",
+        conditionType: "discount_code",
+        operator: "eq",
+        value: { code },
+        isEnabled: true,
+        sortOrder: -1,
+      } as OfferDefinition["conditions"][number]);
+      return offer;
+    };
+    const offers = [gated("offer-1", ""), gated("offer-2", "WELCOME")];
+    const cart = makeCart(6000);
+    const closed = await evaluate(makeInput(cart), { offers, oneUseStates: [], now: NOW });
+    expect(closed.giftSlider).toBeNull();
+    expect(closed.additionalGiftSliders ?? []).toEqual([]);
+    expect(closed.qualifiedOffers).toEqual([]);
+
+    const open = await evaluate(makeInput(cart, { cart: { ...cart, discountCodes: ["welcome"] } }), {
+      offers,
+      oneUseStates: [],
+      now: NOW,
+    });
+    expect([open.giftSlider, ...(open.additionalGiftSliders ?? [])].map((s) => s?.offerId)).toEqual(["offer-2"]);
+  });
+
   it("passes fallback variants on an auto-add so the runtime can retry a live sold-out add", async () => {
     const offer = makeGiftOffer("offer-1", 5000);
     offer.rewards[0] = {
