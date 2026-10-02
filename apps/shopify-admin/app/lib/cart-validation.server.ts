@@ -67,8 +67,8 @@ export function buildCartValidationConfig(compiledOffers: CompiledOffer[]): Cart
 interface ExistingValidation {
   id: string;
   shopifyFunction: { handle: string };
-  metafield: { id: string } | null;
-  appMetafield?: { id: string } | null;
+  metafield: { id: string; namespace: string } | null;
+  appMetafield?: { id: string; namespace: string } | null;
 }
 
 interface ValidationMutationResult {
@@ -100,8 +100,8 @@ export async function syncCartValidation(
         nodes {
           id
           shopifyFunction { handle }
-          metafield(namespace: "${VALIDATION_METAFIELD_NAMESPACE}", key: "${VALIDATION_METAFIELD_KEY}") { id }
-          appMetafield: metafield(namespace: "${VALIDATION_APP_METAFIELD_NAMESPACE}", key: "${VALIDATION_METAFIELD_KEY}") { id }
+          metafield(namespace: "${VALIDATION_METAFIELD_NAMESPACE}", key: "${VALIDATION_METAFIELD_KEY}") { id namespace }
+          appMetafield: metafield(namespace: "${VALIDATION_APP_METAFIELD_NAMESPACE}", key: "${VALIDATION_METAFIELD_KEY}") { id namespace }
         }
       }
     }`,
@@ -114,14 +114,16 @@ export async function syncCartValidation(
   const metafieldsFor = (existing: ExistingValidation | undefined) => [
     {
       ...(existing?.metafield?.id ? { id: existing.metafield.id } : {}),
-      namespace: VALIDATION_METAFIELD_NAMESPACE,
+      namespace: existing?.metafield?.namespace ?? VALIDATION_METAFIELD_NAMESPACE,
       key: VALIDATION_METAFIELD_KEY,
       type: "json",
       value,
     },
     {
       ...(existing?.appMetafield?.id ? { id: existing.appMetafield.id } : {}),
-      namespace: VALIDATION_APP_METAFIELD_NAMESPACE,
+      // validationUpdate rejects the $app alias together with an existing ID.
+      // Reuse Shopify's resolved namespace; the alias is valid for creation.
+      namespace: existing?.appMetafield?.namespace ?? VALIDATION_APP_METAFIELD_NAMESPACE,
       key: VALIDATION_METAFIELD_KEY,
       type: "json",
       value,
