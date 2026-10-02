@@ -25,6 +25,15 @@ describe("declined-gifts", () => {
     expect(() => saveDeclinedGiftRewards(new Set(["a:b"]))).not.toThrow();
   });
 
+  it("preserves runtime state on unreadable storage but respects a successfully cleared value", () => {
+    const current = new Set(["a:b"]);
+    vi.stubGlobal("sessionStorage", { getItem: () => { throw new Error("Blocked"); } });
+    expect(loadDeclinedGiftRewards(current)).toEqual(current);
+    vi.stubGlobal("sessionStorage", { getItem: () => "[]" });
+    expect(loadDeclinedGiftRewards(current)).toEqual(new Set());
+    expect(current).toEqual(new Set(["a:b"]));
+  });
+
   it("caps how many entries are retained", () => {
     const store = new Map<string, string>();
     vi.stubGlobal("sessionStorage", {

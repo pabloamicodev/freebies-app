@@ -620,6 +620,9 @@ export class PromoEngineRuntime {
    * theme's own cart controls, the cart drawer, or the gift slider's own
    * removeLines call. Record it so we don't force it back in. */
   private detectDeclinedGifts(cart: CartData): void {
+    // The slider can record a dismissal after this runtime was constructed.
+    // Read it before saving a newly removed gift so neither choice is lost.
+    this.declinedGiftRewards = loadDeclinedGiftRewards(this.declinedGiftRewards);
     if (!this.knownGiftKeys) return; // nothing observed yet (first load)
     const currentGiftKeys = new Set(
       cart.items.flatMap((item) => {
@@ -642,6 +645,8 @@ export class PromoEngineRuntime {
    * entirely, drop it — if it starts qualifying again later that's a fresh
    * chance to accept the gift. */
   private clearDeclinedGiftsForUnqualifiedOffers(result: EvaluationResult): void {
+    // A dismissal can also happen while the evaluation request is in flight.
+    this.declinedGiftRewards = loadDeclinedGiftRewards(this.declinedGiftRewards);
     if (this.declinedGiftRewards.size === 0) return;
     const qualifiedOfferIds = new Set(
       (Array.isArray(result.qualifiedOffers) ? result.qualifiedOffers : []).map((o) => o.offerId),

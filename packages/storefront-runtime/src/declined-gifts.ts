@@ -14,14 +14,14 @@ export function giftRewardKey(offerId: string, rewardId: string): string {
   return `${offerId}:${rewardId}`;
 }
 
-export function loadDeclinedGiftRewards(): Set<string> {
+export function loadDeclinedGiftRewards(fallback: ReadonlySet<string> = new Set()): Set<string> {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
     if (!raw) return new Set();
     const parsed: unknown = JSON.parse(raw);
     return Array.isArray(parsed) ? new Set(parsed.filter((v) => typeof v === "string")) : new Set();
   } catch {
-    return new Set();
+    return new Set(fallback);
   }
 }
 

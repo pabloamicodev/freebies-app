@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, type VNode } from "preact";
 import type * as Preact from "preact";
 import { emit, PromoEvents } from "../event-bus.js";
+import { loadDeclinedGiftRewards } from "../declined-gifts.js";
+import { PromoEngineRuntime } from "../runtime.js";
 import type { EvaluationResult, GiftSliderPayload } from "../types.js";
 import { initGiftSlider } from "./gift-slider.js";
 
@@ -67,6 +69,64 @@ afterEach(() => {
 });
 
 describe("gift slider auto-open lifecycle", () => {
+  it("reopens after dismissal without selecting, dropping below $85, and qualifying again", async () => {
+    Object.assign(window, { location: { href: "https://test.myshopify.com/cart" } });
+    let subtotal = 9_000;
+    const requests: Array<{ declinedGiftRewards: string[] }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/cart.js") {
+        return new Response(JSON.stringify({
+          token: "test-cart",
+          items: [{ key: "paid-line", variant_id: 2, product_id: 2, quantity: 1, price: subtotal, properties: {} }],
+          total_price: subtotal,
+          item_count: 1,
+          currency: "USD",
+        }));
+      }
+      if (url.includes("/evaluate")) {
+        requests.push(JSON.parse(String(init?.body)) as { declinedGiftRewards: string[] });
+        return new Response(JSON.stringify({
+          qualifiedOffers: subtotal >= 8_500 ? [{ offerId: "first" }] : [],
+          giftSlider: subtotal >= 8_500 ? slider("first") : null,
+          cartActions: [],
+        }));
+      }
+      return new Response(JSON.stringify({ variants: [{ id: 1, available: true }] }));
+    }));
+    window.fetch = fetch;
+    const runtime = new PromoEngineRuntime({ shopDomain: "test.myshopify.com", locale: "en", currency: "USD", debug: false });
+    initGiftSlider("test-session");
+
+    await runtime.api.evaluate();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openedOfferIds()).toEqual(["first"]);
+    const node = vi.mocked(render).mock.calls[0]![0] as VNode<{
+      onDismissWithoutSelection: () => void;
+      onClose: () => void;
+    }>;
+    node.props.onDismissWithoutSelection();
+    node.props.onClose();
+    expect(loadDeclinedGiftRewards()).toEqual(new Set(["first:reward-first"]));
+
+    subtotal = 9_100;
+    await runtime.api.evaluate();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openedOfferIds()).toEqual(["first"]);
+    expect.soft(requests[1]!.declinedGiftRewards).toEqual(["first:reward-first"]);
+
+    subtotal = 8_000;
+    await runtime.api.evaluate();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(JSON.parse(sessionStorage.getItem(AUTO_OPENED_KEY)!)).toEqual([]);
+    expect.soft(loadDeclinedGiftRewards()).toEqual(new Set());
+
+    subtotal = 9_000;
+    await runtime.api.evaluate();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requests[3]!.declinedGiftRewards).toEqual([]);
+    expect(openedOfferIds()).toEqual(["first", "first"]);
+  });
+
   it("opens with server stock when the new live-stock preflight stalls", async () => {
     initGiftSlider("test-session");
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));

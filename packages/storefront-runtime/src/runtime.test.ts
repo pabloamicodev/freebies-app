@@ -8,6 +8,7 @@ vi.mock("./widgets/gift-slider.js", async (importOriginal) => ({
 
 import { initRuntime, PromoEngineRuntime } from "./runtime.js";
 import { OWN_REQUEST_HEADER } from "./cart-adapter.js";
+import { loadDeclinedGiftRewards, saveDeclinedGiftRewards } from "./declined-gifts.js";
 
 const CONFIG = { shopDomain: "s.myshopify.com", locale: "en", currency: "USD", debug: false, cartItemCount: 0 };
 const GIFT_PROPS = {
@@ -231,6 +232,48 @@ describe("declined-gift false positive", () => {
     await rt.api.evaluate();
     await rt.api.evaluate();
     expect([...(rt as unknown as { declinedGiftRewards: Set<string> }).declinedGiftRewards]).toEqual(["o1:r1"]);
+  });
+
+  it("clears a dismissal recorded while evaluation was pending, preserving other qualified offers", async () => {
+    let finishEvaluation!: (response: Response) => void;
+    const h = harness([
+      [/cart\.js/, () => json(emptyCart)],
+      [/evaluate/, () => new Promise<Response>((resolve) => { finishEvaluation = resolve; })],
+    ]);
+    const rt = new PromoEngineRuntime(CONFIG);
+    const pending = rt.api.evaluate();
+    await vi.advanceTimersByTimeAsync(0);
+    saveDeclinedGiftRewards(new Set(["o1:r1", "o2:r2"]));
+    finishEvaluation(json(okResult({ qualifiedOffers: [{ offerId: "o2" }] })));
+    await pending;
+    expect(loadDeclinedGiftRewards()).toEqual(new Set(["o2:r2"]));
+
+    const next = rt.api.validateGiftOffer("o2");
+    await vi.advanceTimersByTimeAsync(0);
+    const body = JSON.parse(String(h.calls.filter(({ url }) => /evaluate/.test(url))[1]!.init?.body));
+    expect(body.declinedGiftRewards).toEqual(["o2:r2"]);
+    finishEvaluation(json(okResult({ qualifiedOffers: [{ offerId: "o2" }] })));
+    await next;
+  });
+
+  it("does not overwrite a newly dismissed reward when detecting another removed gift", async () => {
+    let addGift = true;
+    const h = harness([
+      [/cart\/add\.js/, () => json(emptyCart)],
+      [/cart\.js/, () => json(emptyCart)],
+      [/evaluate/, () => json(okResult({
+        qualifiedOffers: [{ offerId: "o1" }, { offerId: "o2" }],
+        cartActions: addGift ? [giftAction] : [],
+      }))],
+    ]);
+    const rt = new PromoEngineRuntime(CONFIG);
+    await rt.api.evaluate();
+    saveDeclinedGiftRewards(new Set(["o2:r2"]));
+    addGift = false;
+    await rt.api.validateGiftOffer("o1");
+    const body = JSON.parse(String(h.calls.filter(({ url }) => /evaluate/.test(url))[1]!.init?.body));
+    expect(new Set(body.declinedGiftRewards)).toEqual(new Set(["o1:r1", "o2:r2"]));
+    expect(loadDeclinedGiftRewards()).toEqual(new Set(["o1:r1", "o2:r2"]));
   });
 });
 
