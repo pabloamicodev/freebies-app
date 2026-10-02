@@ -22,11 +22,12 @@ Operational procedures for the Promo Engine. Release steps live in `docs/DEPLOY.
 
 ## Environments and ownership
 
-| Thing | HPN project | Ambrosia project |
-|---|---|---|
-| Vercel project | `freebies-app-shopify-admin` | `freebies-app-ambrosia` |
-| Shopify app config | `shopify.app.toml` | `shopify.app.ambrosia.toml` |
-| Stores | HPN, TRU, hpn-test-store | Ambrosia (**live, Prime Day reference load**) |
+| Thing | HPN project | Ambrosia project | One Sol project |
+|---|---|---|---|
+| Vercel project | `freebies-app-shopify-admin` | `freebies-app-ambrosia` | `freebies-app-onesol` |
+| Shopify app config | `shopify.app.toml` | `shopify.app.ambrosia.toml` | `shopify.app.onesol.toml` |
+| Stores | HPN, TRU, hpn-test-store | Ambrosia (**live, Prime Day reference load**) | One Sol (onesolsupps) |
+| Crons | owner (`CRONS_ENABLED=true`) | `CRONS_ENABLED=false` | `CRONS_ENABLED=false` |
 
 Both Vercel projects build the same folder from the same push. Anything that must differ between them is an env var, never a file (see `docs/DEPLOY.md`: no `alias` in any `vercel.json`).
 

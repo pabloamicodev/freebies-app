@@ -2,12 +2,13 @@
 
 ## Vercel: two projects, one folder
 
-The GitHub repo is git-connected to two Vercel projects, and **both build from `apps/shopify-admin`**. A push to `main` deploys both.
+The GitHub repo is git-connected to three Vercel projects, and **all build from `apps/shopify-admin`**. A push to `main` deploys all three.
 
 | Vercel project | Production domain | Shopify app config |
 |---|---|---|
 | `freebies-app-shopify-admin` | `freebies-app-shopify-admin.vercel.app` | `shopify.app.toml` (promo-engine-hpn: HPN, TRU, hpn-test-store) |
 | `freebies-app-ambrosia` | `freebies-app-ambrosia.vercel.app` | `shopify.app.ambrosia.toml` (promo-engine-ambrosia) |
+| `freebies-app-onesol` | `freebies-app-onesol.vercel.app` | `shopify.app.onesol.toml` (promo-engine-onesol: onesolsupps) |
 
 **Never add `"alias"` to `apps/shopify-admin/vercel.json`, or to the root `vercel.json`.** Both projects read the same file. An alias for one project's domain makes the other project fail with *Domain Error: the chosen alias is already in use*. That happened on 2026-06 and again on 2026-10-01. Production domains are assigned only in each project's Settings → Domains. `vercel-config.test.ts` enforces this.
 
