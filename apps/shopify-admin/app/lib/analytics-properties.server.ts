@@ -2,11 +2,14 @@
  * The analytics endpoint is reachable by anyone who can hit the storefront app proxy, and its
  * rows feed dashboards, so stored properties are an allowlist of scalar fields with bounded
  * length. Anything else (emails, click ids, nested blobs, forged order totals) is dropped.
+ *
+ * Client events never carry money or order identity: `total_value` and `order_id` are not accepted here.
+ * Order attribution and revenue come only from the orders/paid webhook, which writes the `order_id`
+ * column and its own amounts server-side.
  */
 const STRING_PROPERTIES: Record<string, number> = {
   product_id: 100,
   product_title: 200,
-  order_id: 100,
   variant_id: 100,
   reason: 100,
   action_type: 60,
@@ -15,7 +18,6 @@ const STRING_PROPERTIES: Record<string, number> = {
   key: 100,
   line_key: 100,
   offer_version: 100,
-  total_value: 40,
 };
 const NUMBER_PROPERTIES = new Set(["quantity"]);
 const UTM_KEEP = /^utm_[a-z0-9_]{1,30}$/i;

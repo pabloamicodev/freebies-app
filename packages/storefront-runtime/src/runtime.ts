@@ -13,7 +13,7 @@
 import { AjaxCartAdapter, appliedDiscountCodes, type CartData, type CartItem } from "./cart-adapter.js";
 import { captureUi, isEditingWithin, restoreUi } from "./dom-preserve.js";
 import { rememberSpecificLinkParams } from "./metadata-bridge.js";
-import { expectedGiftKeys, hasOwnMarker, parseRetryAfter, type GiftOutcome } from "./runtime-helpers.js";
+import { expectedGiftKeys, hasOwnMarker, parseRetryAfter, withJitter, type GiftOutcome } from "./runtime-helpers.js";
 import { debounce, AbortableRequest } from "./debounce.js";
 import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
 import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
@@ -603,7 +603,7 @@ export class PromoEngineRuntime {
       this.rateLimitRetries = 0;
       return;
     }
-    const delay = retryAfterMs ?? Math.min(30_000, 2_000 * 2 ** this.rateLimitRetries);
+    const delay = withJitter(retryAfterMs ?? Math.min(30_000, 2_000 * 2 ** this.rateLimitRetries));
     this.rateLimitRetries++;
     this.log(`Evaluation rate limited — retrying in ${delay} ms`);
     this.retryTimer = setTimeout(() => {

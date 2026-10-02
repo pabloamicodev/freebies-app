@@ -19,5 +19,5 @@ uid = "7c0d5b1e-3a8f-4e62-9b47-d1f2a6c58e93"
   watch = ["src/**/*.rs", "../discount-function/src/**/*.rs"]
 
   [extensions.input.variables]
-  namespace = "promo_engine"
+  namespace = "$app:promo_engine"
   key = "function_config"

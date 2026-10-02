@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   installPromoMetadataBridge,
+  migrateLegacyLanding,
+  specificLinkParams,
   needsPromoMetadataPacking,
   packCartAddRequest,
   packXhrBody,
@@ -356,5 +358,109 @@ describe("XMLHttpRequest cart add stamping (jQuery / raw XHR)", () => {
   it("packXhrBody passes unknown body types through", () => {
     expect(packXhrBody(undefined)).toBeUndefined();
     expect(packXhrBody(null)).toBeNull();
+  });
+});
+
+describe("multi-item form adds (items[N][...])", () => {
+  const meta = (v: string | null) => JSON.parse(v!) as Record<string, string>;
+  const onPage = () =>
+    vi.stubGlobal("window", { location: { origin: "https://s.example", pathname: "/products/x", search: "?gclid=1" } });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("stamps every item of a urlencoded body and leaves existing properties intact", () => {
+    onPage();
+    const body = new URLSearchParams(
+      "items[0][id]=1&items[0][quantity]=1&items[1][id]=2&items[1][quantity]=3&items[1][properties][engraving]=Ada",
+    );
+    const out = packXhrBody(body) as URLSearchParams;
+    expect(meta(out.get("items[0][properties][_promo_engine_metadata]"))._promo_page_url).toBe("/products/x");
+    const second = meta(out.get("items[1][properties][_promo_engine_metadata]"));
+    expect(second).toMatchObject({ engraving: "Ada", _promo_page_url: "/products/x" });
+    expect(out.get("properties[_promo_engine_metadata]")).toBeNull();
+    expect(out.get("items[1][properties][engraving]")).toBe("Ada");
+  });
+
+  it("stamps every item of a FormData body and a raw string body", () => {
+    onPage();
+    const fd = new FormData();
+    fd.append("items[0][id]", "1");
+    fd.append("items[1][id]", "2");
+    const out = packXhrBody(fd) as FormData;
+    expect(out.get("items[0][properties][_promo_engine_metadata]")).toBeTruthy();
+    expect(out.get("items[1][properties][_promo_engine_metadata]")).toBeTruthy();
+    const parsed = new URLSearchParams(packXhrBody("items[0][id]=1&items[1][id]=2") as string);
+    expect(parsed.get("items[0][properties][_promo_engine_metadata]")).toBeTruthy();
+    expect(parsed.get("items[1][properties][_promo_engine_metadata]")).toBeTruthy();
+  });
+
+  it("still stamps single-item form bodies at the root", () => {
+    onPage();
+    const out = packXhrBody(new URLSearchParams("id=1&quantity=1&properties[a]=b")) as URLSearchParams;
+    expect(meta(out.get("properties[_promo_engine_metadata]"))).toMatchObject({ a: "b" });
+  });
+});
+
+describe("legacy sessionStorage landing migration", () => {
+  const NOW = Date.UTC(2026, 9, 1);
+  const stores = (legacy?: string, current?: string) => {
+    const session = memoryStorage();
+    const local = memoryStorage();
+    if (legacy !== undefined) session.setItem(LANDING_KEY, legacy);
+    if (current !== undefined) local.setItem(LANDING_KEY, current);
+    return { session, local };
+  };
+
+  it("moves a sanitized legacy landing into localStorage with a fresh 24 h expiry, once", () => {
+    const { session, local } = stores("/lp?utm_source=amz&email=a%40b.co");
+    migrateLegacyLanding(session, local, NOW);
+    expect(JSON.parse(local.getItem(LANDING_KEY)!)).toEqual({ u: "/lp?utm_source=amz", e: NOW + 24 * 3600_000 });
+    expect(session.getItem(LANDING_KEY)).toBeNull();
+    migrateLegacyLanding(session, local, NOW + 1000);
+    expect((JSON.parse(local.getItem(LANDING_KEY)!) as { e: number }).e).toBe(NOW + 24 * 3600_000);
+  });
+
+  it("does not overwrite a valid localStorage landing but replaces an expired one", () => {
+    const valid = JSON.stringify({ u: "/new?utm_a=1", e: NOW + 1000 });
+    const a = stores("/old?utm_b=2", valid);
+    migrateLegacyLanding(a.session, a.local, NOW);
+    expect(landing(a.local)).toBe("/new?utm_a=1");
+    expect(a.session.getItem(LANDING_KEY)).toBeNull();
+    const b = stores("/old?utm_b=2", JSON.stringify({ u: "/x?utm_a=1", e: NOW - 1 }));
+    migrateLegacyLanding(b.session, b.local, NOW);
+    expect(landing(b.local)).toBe("/old?utm_b=2");
+  });
+
+  it("ignores non-UTM legacy values and never throws on blocked storage", () => {
+    const a = stores("/plain?x=1");
+    migrateLegacyLanding(a.session, a.local, NOW);
+    expect(a.local.getItem(LANDING_KEY)).toBeNull();
+    expect(a.session.getItem(LANDING_KEY)).toBeNull();
+    const throwing = { getItem: () => { throw new Error("denied"); }, removeItem: () => {} };
+    expect(() => migrateLegacyLanding(throwing, memoryStorage(), NOW)).not.toThrow();
+  });
+});
+
+describe("specificLinkParams when the embed passes null (metafield missing)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("falls back to freegifts_code, then to the cached server list", () => {
+    vi.stubGlobal("window", { __promoEngineConfig: { specificLinkParams: null } });
+    vi.stubGlobal("localStorage", memoryStorage());
+    expect(specificLinkParams()).toEqual(["freegifts_code"]);
+    expect(sanitizePageUrl("/p?freegifts_code=A&x=1")).toBe("/p?freegifts_code=A");
+    rememberSpecificLinkParams(["ref_code"]);
+    expect(specificLinkParams()).toEqual(["ref_code"]);
+    rememberSpecificLinkParams(null);
+    expect(specificLinkParams()).toEqual(["ref_code"]);
+  });
+
+  it("survives blocked storage", () => {
+    vi.stubGlobal("window", { __promoEngineConfig: { specificLinkParams: null } });
+    vi.stubGlobal("localStorage", {
+      getItem: () => { throw new Error("blocked"); },
+      setItem: () => { throw new Error("blocked"); },
+    });
+    expect(specificLinkParams()).toEqual(["freegifts_code"]);
+    expect(() => rememberSpecificLinkParams(["a"])).not.toThrow();
   });
 });

@@ -1,8 +1,18 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-vi.mock("./rate-limit.server.js", () => ({
+vi.mock("./rate-limit.server.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   checkRateLimit: vi.fn().mockResolvedValue({ ok: true }),
   getClientIp: vi.fn().mockReturnValue("203.0.113.1"),
+}));
+vi.mock("./redis.server.js", () => ({
+  redisGetString: vi.fn().mockResolvedValue(null),
+  redisSetString: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@vercel/functions", () => ({ waitUntil: vi.fn() }));
+vi.mock("./code-gate.server.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  applyCodeGatesDetailed: vi.fn(async (_shopId: string, _db: unknown, definitions: unknown[]) => ({ definitions, blocked: false, truncated: false })),
 }));
 vi.mock("./offer-definitions.server.js", () => ({
   getOfferDefinitions: vi.fn().mockResolvedValue([]),
@@ -43,15 +53,18 @@ vi.mock("@promo/rule-engine", () => ({
 const { handleEvaluationRequest } = await import("./promo-evaluation.server.js");
 const { checkRateLimit, getClientIp } = await import("./rate-limit.server.js");
 const { getOfferDefinitions } = await import("./offer-definitions.server.js");
+const { redisGetString, redisSetString } = await import("./redis.server.js");
+const { applyCodeGatesDetailed } = await import("./code-gate.server.js");
+const { waitUntil } = await import("@vercel/functions");
 
-function makeRequest(cartToken: string | null) {
+function makeRequest(cartToken: string | null, discountCodes: string[] = []) {
   const body = {
     cart: {
       token: cartToken,
       id: null,
       lines: [],
       subtotalCents: 0,
-      discountCodes: [],
+      discountCodes,
       currencyCode: "USD",
       totalQuantity: 0,
     },
@@ -87,7 +100,12 @@ describe("handleEvaluationRequest rate limit keys", () => {
 
   it("checks a shop-wide fixed-window ceiling keyed only by shop id", async () => {
     await handleEvaluationRequest(makeRequest("cart-tok-1"), shop, null);
-    expect(checkRateLimit).toHaveBeenCalledWith("evaluate:shop:shop-1", { limit: 12_000, windowMs: 60_000, fixedWindow: true });
+    expect(checkRateLimit).toHaveBeenCalledWith("evaluate:shop:shop-1", {
+      limit: 12_000,
+      windowMs: 60_000,
+      fixedWindow: true,
+      onRedisUnavailable: "skip",
+    });
   });
 
   it("keys per-caller limits by the signed customer and by the cart token", async () => {
@@ -118,7 +136,98 @@ describe("handleEvaluationRequest rate limit keys", () => {
     vi.mocked(checkRateLimit).mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, retryAfterSeconds: 7 });
     const response = await handleEvaluationRequest(makeRequest("cart-tok-1"), shop, null, undefined, { viaAppProxy: true });
     expect(response.status).toBe(429);
-    expect(response.headers.get("Retry-After")).toBe("7");
+    expect(Number(response.headers.get("Retry-After"))).toBeGreaterThanOrEqual(7);
+  });
+});
+
+describe("H6: anonymous traffic cannot spend the budget of known shoppers", () => {
+  const proxy = { viaAppProxy: true };
+  beforeEach(() => {
+    vi.mocked(checkRateLimit).mockReset().mockResolvedValue({ ok: true });
+    vi.mocked(redisGetString).mockReset().mockResolvedValue(null);
+    vi.mocked(redisSetString).mockClear();
+    vi.mocked(waitUntil).mockClear();
+    delete process.env["EVALUATE_SHOP_LIMIT_PER_MINUTE"];
+    delete process.env["EVALUATE_KNOWN_SHOP_LIMIT_PER_MINUTE"];
+  });
+
+  it("counts a cart token that completed an evaluation before against its own, larger shop budget", async () => {
+    vi.mocked(redisGetString).mockResolvedValueOnce("1");
+    await handleEvaluationRequest(makeRequest("seen-tok"), shop, null, undefined, proxy);
+    expect(checkRateLimit).toHaveBeenCalledWith("evaluate:shop-known:shop-1", { limit: 36_000, windowMs: 60_000, fixedWindow: true, onRedisUnavailable: "skip" });
+    expect(vi.mocked(checkRateLimit).mock.calls.map((call) => call[0])).not.toContain("evaluate:shop:shop-1");
+    expect(redisSetString).not.toHaveBeenCalled();
+  });
+
+  it("sheds an unknown caller on the anonymous budget while a known one is not affected by it", async () => {
+    vi.mocked(checkRateLimit).mockImplementation(async (key: string) => (key === "evaluate:shop:shop-1" ? { ok: false, retryAfterSeconds: 20 } : { ok: true }));
+    expect((await handleEvaluationRequest(makeRequest(null), shop, null, undefined, proxy)).status).toBe(429);
+    expect((await handleEvaluationRequest(makeRequest("never-seen"), shop, null, undefined, proxy)).status).toBe(429);
+
+    vi.mocked(redisGetString).mockResolvedValueOnce("1");
+    expect((await handleEvaluationRequest(makeRequest("seen-tok"), shop, null, undefined, proxy)).status).toBe(200);
+  });
+
+  it("remembers the cart token after a successful evaluation, not after a shed one", async () => {
+    await handleEvaluationRequest(makeRequest("new-tok"), shop, null, undefined, proxy);
+    expect(redisSetString).toHaveBeenCalledWith("evaluate:seen:shop-1:new-tok", "1", 1800);
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+
+    vi.mocked(redisSetString).mockClear();
+    vi.mocked(checkRateLimit).mockResolvedValue({ ok: false, retryAfterSeconds: 5 });
+    await handleEvaluationRequest(makeRequest("shed-tok"), shop, null, undefined, proxy);
+    expect(redisSetString).not.toHaveBeenCalled();
+  });
+
+  it("reads the caps from the environment", async () => {
+    process.env["EVALUATE_SHOP_LIMIT_PER_MINUTE"] = "5000";
+    await handleEvaluationRequest(makeRequest("t"), shop, null, undefined, proxy);
+    expect(checkRateLimit).toHaveBeenCalledWith("evaluate:shop:shop-1", expect.objectContaining({ limit: 5000 }));
+    vi.mocked(checkRateLimit).mockClear();
+    vi.mocked(redisGetString).mockResolvedValueOnce("1");
+    process.env["EVALUATE_KNOWN_SHOP_LIMIT_PER_MINUTE"] = "7000";
+    await handleEvaluationRequest(makeRequest("t"), shop, null, undefined, proxy);
+    expect(checkRateLimit).toHaveBeenCalledWith("evaluate:shop-known:shop-1", expect.objectContaining({ limit: 7000 }));
+    delete process.env["EVALUATE_SHOP_LIMIT_PER_MINUTE"];
+    delete process.env["EVALUATE_KNOWN_SHOP_LIMIT_PER_MINUTE"];
+  });
+
+  it("answers 429 with a jittered Retry-After of at least the window remainder", async () => {
+    vi.mocked(checkRateLimit).mockResolvedValue({ ok: false, retryAfterSeconds: 30 });
+    const response = await handleEvaluationRequest(makeRequest("x"), shop, null, undefined, proxy);
+    const retryAfter = Number(response.headers.get("Retry-After"));
+    expect(retryAfter).toBeGreaterThanOrEqual(30);
+    expect(retryAfter).toBeLessThanOrEqual(40);
+  });
+});
+
+describe("H5: discount codes need a cart token on the app proxy", () => {
+  beforeEach(() => {
+    vi.mocked(checkRateLimit).mockReset().mockResolvedValue({ ok: true });
+    vi.mocked(applyCodeGatesDetailed).mockClear();
+  });
+
+  it("rejects a proxy request with codes and no cart token before any lookup", async () => {
+    const response = await handleEvaluationRequest(makeRequest(null, ["GUESS1"]), shop, null, undefined, { viaAppProxy: true });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "CART_TOKEN_REQUIRED" });
+    expect(applyCodeGatesDetailed).not.toHaveBeenCalled();
+  });
+
+  it("still accepts a token-less proxy request that carries no codes, and codes with a token", async () => {
+    expect((await handleEvaluationRequest(makeRequest(null), shop, null, undefined, { viaAppProxy: true })).status).toBe(200);
+    expect((await handleEvaluationRequest(makeRequest(null, ["  "]), shop, null, undefined, { viaAppProxy: true })).status).toBe(200);
+    expect((await handleEvaluationRequest(makeRequest("tok", ["CODE1"]), shop, null, undefined, { viaAppProxy: true })).status).toBe(200);
+  });
+
+  it("keys the missed-code limit by the cart token, else the signed customer, else one shared anonymous bucket", async () => {
+    const keyOf = () => vi.mocked(applyCodeGatesDetailed).mock.calls.at(-1)![5]!.rateLimitKey;
+    await handleEvaluationRequest(makeRequest("tok-9", ["A"]), shop, "42", undefined, { viaAppProxy: true });
+    expect(keyOf()).toBe("tok-9");
+    await handleEvaluationRequest(makeRequest(null, ["A"]), shop, "42");
+    expect(keyOf()).toBe("c:42");
+    await handleEvaluationRequest(makeRequest(null, ["A"]), shop, null);
+    expect(keyOf()).toBe("anon");
   });
 });
 

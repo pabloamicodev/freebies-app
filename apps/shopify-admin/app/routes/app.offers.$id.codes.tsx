@@ -85,6 +85,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       oncePerCustomer: row.oncePerCustomer,
       synced: Boolean(row.shopifySyncedAt),
       syncPending: Boolean(row.shopifySyncPendingAt),
+      syncNote: row.syncNote,
     })),
     total,
     page,
@@ -392,6 +393,9 @@ export default function OfferCodesPage() {
                             </td>
                             <td>
                               {statusBadge(code.status, code.live)}
+                              {code.status === "disabled" && code.syncNote && (
+                                <div className="b-text-sm b-text-sub" title={code.syncNote}>Disabled: {code.syncNote}</div>
+                              )}
                               {code.syncPending && <span className="b-badge b-badge-blue"> Syncing with Shopify…</span>}
                             </td>
                             <td>{code.usageCount.toLocaleString("en-US")}{code.usageLimit ? ` / ${code.usageLimit.toLocaleString("en-US")}` : ""}</td>

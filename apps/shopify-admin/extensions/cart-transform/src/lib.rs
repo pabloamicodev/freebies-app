@@ -99,6 +99,29 @@ pub struct ExpandedItem {
     pub quantity: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub price: Option<serde_json::Value>,
+    /// Set when invalid components were dropped from this bundle: stamps `_promo_engine_bundle_partial`.
+    #[serde(skip)]
+    pub partial_bundle: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ItemAttribute {
+    pub key: &'static str,
+    pub value: &'static str,
+}
+
+impl ShopifySerialize for ItemAttribute {
+    fn serialize(&self, context: &mut Context) -> Result<(), wasm_api::write::Error> {
+        context.write_object(
+            |context| {
+                context.write_utf8_str("key")?;
+                context.write_utf8_str(self.key)?;
+                context.write_utf8_str("value")?;
+                context.write_utf8_str(self.value)
+            },
+            2,
+        )
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -179,9 +202,17 @@ impl ShopifySerialize for ExpandedItem {
                 context.write_utf8_str("quantity")?;
                 ShopifySerialize::serialize(&self.quantity, context)?;
                 context.write_utf8_str("price")?;
-                context.write_null()
+                context.write_null()?;
+                if self.partial_bundle {
+                    context.write_utf8_str("attributes")?;
+                    ShopifySerialize::serialize(
+                        &vec![ItemAttribute { key: "_promo_engine_bundle_partial", value: "true" }],
+                        context,
+                    )?;
+                }
+                Ok(())
             },
-            3,
+            if self.partial_bundle { 4 } else { 3 },
         )
     }
 }
@@ -273,7 +304,8 @@ fn expand_bundle_parent(line: &CartLine) -> Option<ExpandOperation> {
 
     // Parse per element so one malformed component is dropped instead of failing the whole line.
     let raw: Vec<serde_json::Value> = serde_json::from_str(components_json).ok()?;
-    let expanded_cart_items: Vec<ExpandedItem> = raw
+    let component_count = raw.len();
+    let mut expanded_cart_items: Vec<ExpandedItem> = raw
         .into_iter()
         .filter_map(|value| {
             let c: BundleComponent = serde_json::from_value(value).ok()?;
@@ -294,11 +326,18 @@ fn expand_bundle_parent(line: &CartLine) -> Option<ExpandOperation> {
                 merchandise_id: c.variant_id,
                 quantity,
                 price: None, // let Discount Function handle pricing
+                partial_bundle: false,
             })
         })
         .collect();
     if expanded_cart_items.is_empty() {
         return None;
+    }
+    // The bundle still expands with its valid components; the flag lets the storefront/support see it was cut short.
+    if expanded_cart_items.len() < component_count {
+        for item in &mut expanded_cart_items {
+            item.partial_bundle = true;
+        }
     }
 
     let bundle_title = attribute_value(&line.bundle_title);
@@ -450,6 +489,9 @@ mod tests {
         let op = expand_of(&components, None, 1).unwrap();
         let ids: Vec<&str> = op.expanded_cart_items.iter().map(|i| i.merchandise_id.as_str()).collect();
         assert_eq!(ids, ["gid://shopify/ProductVariant/1", "gid://shopify/ProductVariant/5"]);
+        assert!(op.expanded_cart_items.iter().all(|item| item.partial_bundle), "dropped components flag the bundle");
+        let intact = expand_of(&format!("[{V1}]"), None, 1).unwrap();
+        assert!(intact.expanded_cart_items.iter().all(|item| !item.partial_bundle));
     }
 
     #[test]

@@ -125,6 +125,39 @@ export function recordUtmLanding(
   }
 }
 
+/**
+ * The previous bundle kept the raw landing (no expiry, unsanitized) in sessionStorage under the same key.
+ * Move it once into the localStorage record (fresh 24 h, sanitized) unless a valid one exists, then drop it.
+ */
+export function migrateLegacyLanding(
+  session: Pick<Storage, "getItem" | "removeItem"> | undefined = sessionStorageOrUndefined(),
+  local: Pick<Storage, "getItem" | "setItem"> | undefined = localStorageOrUndefined(),
+  now = Date.now(),
+): void {
+  try {
+    const legacy = session?.getItem(LANDING_STORAGE_KEY);
+    if (legacy == null) return;
+    session?.removeItem(LANDING_STORAGE_KEY);
+    if (!local || legacy.startsWith("{") || !/[?&]utm_/i.test(legacy)) return;
+    const current = local.getItem(LANDING_STORAGE_KEY);
+    if (current) {
+      const parsed = JSON.parse(current) as { e?: unknown };
+      if (typeof parsed.e === "number" && parsed.e > now) return;
+    }
+    local.setItem(LANDING_STORAGE_KEY, JSON.stringify({ u: sanitizePageUrl(legacy), e: now + LANDING_TTL_MS }));
+  } catch {
+    // Storage unavailable or corrupt: nothing to migrate.
+  }
+}
+
+function sessionStorageOrUndefined(): Storage | undefined {
+  try {
+    return typeof sessionStorage === "undefined" ? undefined : sessionStorage;
+  } catch {
+    return undefined;
+  }
+}
+
 function rawBrowserUrl(): string | undefined {
   if (typeof window === "undefined" || !window.location) return undefined;
   return `${window.location.pathname}${window.location.search}`;
@@ -220,29 +253,53 @@ function stringProperties(value: object): LineProperties {
   );
 }
 
+const ROOT_PROP = /^properties\[([^\]]+)]$/;
+const ITEM_PROP = /^items\[(\d+)]\[properties]\[([^\]]+)]$/;
+const ITEM_ANY = /^items\[(\d+)]\[/;
+
+/** Stamps flat form/urlencoded bodies: root `properties[k]`, or each `items[N][properties][k]` of a multi-item add. */
+function stampFlat(entries: Array<[string, unknown]>, set: (name: string, value: string) => void): void {
+  const root: LineProperties = {};
+  const items = new Map<string, LineProperties>();
+  for (const [name, value] of entries) {
+    const itemProp = ITEM_PROP.exec(name);
+    if (itemProp) {
+      const bucket = items.get(itemProp[1]!) ?? {};
+      if (typeof value === "string") bucket[itemProp[2]!] = value;
+      items.set(itemProp[1]!, bucket);
+      continue;
+    }
+    const itemAny = ITEM_ANY.exec(name);
+    if (itemAny) {
+      if (!items.has(itemAny[1]!)) items.set(itemAny[1]!, {});
+      continue;
+    }
+    const key = ROOT_PROP.exec(name)?.[1];
+    if (key && typeof value === "string") root[key] = value;
+  }
+  if (items.size === 0) items.set("", root);
+  items.forEach((properties, index) => {
+    const packed = withPromoMetadata(properties)[METADATA_PROPERTY];
+    if (packed) set(index === "" ? `properties[${METADATA_PROPERTY}]` : `items[${index}][properties][${METADATA_PROPERTY}]`, packed);
+  });
+}
+
 function packedFormData(body: FormData): FormData {
   const clone = new FormData();
-  body.forEach((value, key) => clone.append(key, value));
-  const properties: LineProperties = {};
-  clone.forEach((value, name) => {
-    const match = /^properties\[([^\]]+)]$/.exec(name);
-    const key = match?.[1];
-    if (key && typeof value === "string") properties[key] = value;
+  const entries: Array<[string, unknown]> = [];
+  body.forEach((value, key) => {
+    clone.append(key, value);
+    entries.push([key, value]);
   });
-  const packed = withPromoMetadata(properties)[METADATA_PROPERTY];
-  if (packed) clone.set(`properties[${METADATA_PROPERTY}]`, packed);
+  stampFlat(entries, (name, value) => clone.set(name, value));
   return clone;
 }
 
 function packedSearchParams(body: URLSearchParams): URLSearchParams {
   const clone = new URLSearchParams(body);
-  const properties: LineProperties = {};
-  clone.forEach((value, name) => {
-    const key = /^properties\[([^\]]+)]$/.exec(name)?.[1];
-    if (key) properties[key] = value;
-  });
-  const packed = withPromoMetadata(properties)[METADATA_PROPERTY];
-  if (packed) clone.set(`properties[${METADATA_PROPERTY}]`, packed);
+  const entries: Array<[string, unknown]> = [];
+  clone.forEach((value, name) => entries.push([name, value]));
+  stampFlat(entries, (name, value) => clone.set(name, value));
   return clone;
 }
 
@@ -340,6 +397,7 @@ export function installPromoMetadataBridge(): void {
   const state = window as Window & { __promoEngineMetadataBridgeInstalled?: boolean };
   if (state.__promoEngineMetadataBridgeInstalled) return;
   state.__promoEngineMetadataBridgeInstalled = true;
+  migrateLegacyLanding();
   recordUtmLanding();
 
   const nativeFetch = window.fetch.bind(window);
@@ -365,24 +423,18 @@ export function installPromoMetadataBridge(): void {
         !isCartAddRequest(form.action, { method: form.method })
       )
         return;
-      const properties: LineProperties = {};
-      new FormData(form).forEach((value, name) => {
-        const match = /^properties\[([^\]]+)]$/.exec(name);
-        const key = match?.[1];
-        if (key && typeof value === "string") properties[key] = value;
+      const entries: Array<[string, unknown]> = [];
+      new FormData(form).forEach((value, name) => entries.push([name, value]));
+      stampFlat(entries, (name, value) => {
+        let input = Array.from(form.querySelectorAll<HTMLInputElement>("input")).find((el) => el.name === name);
+        if (!input) {
+          input = document.createElement("input");
+          input.type = "hidden";
+          input.name = name;
+          form.append(input);
+        }
+        input.value = value;
       });
-      const packed = withPromoMetadata(properties)[METADATA_PROPERTY];
-      if (!packed) return;
-      let input = form.querySelector<HTMLInputElement>(
-        `input[name="properties[${METADATA_PROPERTY}]"]`,
-      );
-      if (!input) {
-        input = document.createElement("input");
-        input.type = "hidden";
-        input.name = `properties[${METADATA_PROPERTY}]`;
-        form.append(input);
-      }
-      input.value = packed;
     },
     true,
   );

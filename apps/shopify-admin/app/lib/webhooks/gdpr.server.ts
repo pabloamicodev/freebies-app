@@ -29,6 +29,7 @@ export async function handleCustomersDataRequest(
   shopId: string | null,
   shop: string,
   payload: CustomerGdprPayload,
+  webhookId: string | null = null,
 ): Promise<void> {
   const rawCustomerId = String(payload.customer?.id ?? "");
   const customerId = rawCustomerId && /^\d+$/.test(rawCustomerId)
@@ -87,47 +88,57 @@ export async function handleCustomersDataRequest(
   // The export itself: everything this app holds about the customer, as JSON the merchant can
   // download from the admin and hand to the customer. It expires, and customers/redact deletes it.
   const requestedAt = new Date();
-  const [stored] = await db
-    .insert(gdprExports)
-    .values({
-      shopId,
-      customerId,
-      requestedAt,
-      expiresAt: new Date(requestedAt.getTime() + GDPR_EXPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000),
-      payload: {
-        exportVersion: 1,
-        shop,
-        requestedAt: requestedAt.toISOString(),
-        customer: { id: customerId, email: customerEmail || null },
-        ordersRequested: payload.orders_requested ?? [],
-        data: {
-          analyticsEvents: events,
-          cartMutationLogs: mutationLogs,
-          discountCodeRedemptions: redemptions,
+  // Export and audit entry commit together, keyed by the webhook id: a redelivery (or a retry after
+  // a crash between the two writes) can neither store a second export nor lose the audit entry.
+  const recorded = await db.transaction(async (tx) => {
+    const [stored] = await tx
+      .insert(gdprExports)
+      .values({
+        shopId,
+        customerId,
+        webhookId,
+        requestedAt,
+        expiresAt: new Date(requestedAt.getTime() + GDPR_EXPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000),
+        payload: {
+          exportVersion: 1,
+          shop,
+          requestedAt: requestedAt.toISOString(),
+          customer: { id: customerId, email: customerEmail || null },
+          ordersRequested: payload.orders_requested ?? [],
+          data: {
+            analyticsEvents: events,
+            cartMutationLogs: mutationLogs,
+            discountCodeRedemptions: redemptions,
+          },
         },
+      })
+      .onConflictDoNothing()
+      .returning({ id: gdprExports.id });
+    if (!stored) return false;
+
+    // Keep the audit trail PII-minimal: counts and the export id, never the customer payload.
+    await tx.insert(auditLogs).values({
+      shopId,
+      entityType: "gdpr_customer_data_request",
+      entityId: customerId,
+      action: "export",
+      before: null,
+      after: {
+        requestedAt: requestedAt.toISOString(),
+        exportId: stored.id,
+        orderCount: payload.orders_requested?.length ?? 0,
+        analyticsEventCount: events.length,
+        cartMutationLogCount: mutationLogs.length,
+        discountCodeRedemptionCount: redemptions.length,
       },
-    })
-    .returning({ id: gdprExports.id });
-
-  // Keep the audit trail PII-minimal: counts and the export id, never the customer payload.
-  const exportSummary = {
-    requestedAt: requestedAt.toISOString(),
-    exportId: stored?.id ?? null,
-    orderCount: payload.orders_requested?.length ?? 0,
-    analyticsEventCount: events.length,
-    cartMutationLogCount: mutationLogs.length,
-    discountCodeRedemptionCount: redemptions.length,
-  };
-
-  await db.insert(auditLogs).values({
-    shopId,
-    entityType: "gdpr_customer_data_request",
-    entityId: customerId,
-    action: "export",
-    before: null,
-    after: exportSummary,
-    performedBy: "shopify_webhook",
+      performedBy: "shopify_webhook",
+    });
+    return true;
   });
+  if (!recorded) {
+    console.info("GDPR CUSTOMERS_DATA_REQUEST duplicate delivery ignored", { shop, webhookId });
+    return;
+  }
 
   console.info("GDPR CUSTOMERS_DATA_REQUEST export recorded", {
     shop,

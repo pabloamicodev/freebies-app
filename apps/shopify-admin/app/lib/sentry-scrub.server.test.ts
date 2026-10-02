@@ -35,3 +35,47 @@ describe("scrubSentryEvent", () => {
     expect(event.exception?.values?.[0]?.value).toBe("[secret] rejected");
   });
 });
+
+describe("scrubSentryEvent: query params, breadcrumbs, discount codes", () => {
+  it("redacts any param ending in code/token/email, case-insensitively, in urls and query strings", () => {
+    const event = scrubSentryEvent({
+      type: undefined,
+      request: {
+        url: "https://s.test/cart?freegifts_code=SECRET1&Discount_Code=SECRET2&access_token=abc&UserEmail=a@b.co&utm_source=news&x=1#frag",
+        query_string: "freegifts_code=SECRET1&utm_source=news&AuthToken=zzz",
+      },
+    });
+    expect(event.request?.url).toBe("https://s.test/cart?freegifts_code=[redacted]&Discount_Code=[redacted]&access_token=[redacted]&UserEmail=[redacted]&utm_source=news&x=1#frag");
+    expect(event.request?.query_string).toBe("freegifts_code=[redacted]&utm_source=news&AuthToken=[redacted]");
+  });
+
+  it("scrubs query strings inside breadcrumb data.url and message", () => {
+    const event = scrubSentryEvent({
+      type: undefined,
+      breadcrumbs: [
+        { category: "fetch", message: "POST https://s.test/apps/promo-engine/evaluate?signature=abc&code=SAVE20", data: { url: "/cart.js?discount_code=SAVE20&shop=a.myshopify.com", status_code: 200 } },
+        { category: "navigation", data: { from: "/p?token=t1", to: "/c?email=x@y.com" } },
+      ],
+    });
+    const text = JSON.stringify(event.breadcrumbs);
+    expect(text).not.toMatch(/SAVE20|abc|t1|x@y\.com/);
+    expect(text).toContain("shop=a.myshopify.com");
+    expect(event.breadcrumbs?.[0]?.data?.["status_code"]).toBe(200);
+  });
+
+  it("redacts discount codes in extras whatever their shape", () => {
+    const event = scrubSentryEvent({
+      type: undefined,
+      extra: {
+        discountCodes: ["SAVE20", "VIP"],
+        requiredDiscountCode: "LEGACY",
+        entered_codes: ["A"],
+        nested: { coupon_code: "C1", cartToken: "tk9", kept: "ok", error_code: "RATE_LIMITED" },
+      },
+    });
+    const text = JSON.stringify(event.extra);
+    expect(text).not.toMatch(/SAVE20|VIP|LEGACY|"A"|C1|tk9/);
+    expect(text).toContain("RATE_LIMITED");
+    expect(text).toContain("ok");
+  });
+});

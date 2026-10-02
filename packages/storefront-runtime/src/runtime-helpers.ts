@@ -29,3 +29,8 @@ export function expectedGiftKeys(cartGiftKeys: Iterable<string>, outcome: GiftOu
   for (const key of outcome.removed) known.delete(key);
   return known;
 }
+
+/** +-30% so many tabs hitting the same 429 don't retry in lockstep. */
+export function withJitter(ms: number, random = Math.random): number {
+  return Math.round(ms * (0.7 + random() * 0.6));
+}

@@ -152,7 +152,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       case "CUSTOMERS_DATA_REQUEST": {
         const shopId = await getShopId(shop);
-        await handleCustomersDataRequest(getDb(), shopId, shop, payload as CustomerGdprPayload);
+        await handleCustomersDataRequest(getDb(), shopId, shop, payload as CustomerGdprPayload, webhookId);
         break;
       }
 

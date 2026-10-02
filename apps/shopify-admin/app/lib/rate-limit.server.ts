@@ -7,6 +7,47 @@ interface RateLimitOptions {
   windowMs: number;
   /** O(1) INCR per window instead of a sorted set: use for high caps (shop-wide). Allows up to 2x burst at a window edge. */
   fixedWindow?: boolean;
+  /**
+   * What to do when Redis is unavailable. "db" (default) uses the `rate_limits` table. "skip" allows the request:
+   * use it for shop-wide caps, where every request would otherwise upsert the same hot row and Redis being down
+   * would turn into a Neon outage. "memory" counts per instance (a weaker but free limit).
+   */
+  onRedisUnavailable?: "db" | "skip" | "memory";
+}
+
+/** Positive integer from the environment, read at call time so a redeploy-free test or override works. */
+export function envLimit(name: string, fallback: number, env: NodeJS.ProcessEnv = process.env): number {
+  const parsed = Math.floor(Number(env[name]));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Retry-After for a 429, spread over a few seconds so shed clients do not all come back on the same tick
+ * (a fixed window resets for everyone at once). Clients should wait at least this long.
+ */
+export function jitteredRetryAfter(seconds: number, random: () => number = Math.random): number {
+  const base = Math.max(1, Math.ceil(seconds));
+  return base + Math.floor(random() * Math.min(10, base + 1));
+}
+
+const memoryWindows = new Map<string, { count: number; resetAt: number }>();
+
+function memoryCheckRateLimit(key: string, options: RateLimitOptions): { ok: true } | { ok: false; retryAfterSeconds: number } {
+  const now = Date.now();
+  if (memoryWindows.size > 5_000) {
+    for (const [name, entry] of memoryWindows) if (entry.resetAt <= now) memoryWindows.delete(name);
+  }
+  let entry = memoryWindows.get(key);
+  if (!entry || entry.resetAt <= now) {
+    entry = { count: 0, resetAt: now + options.windowMs };
+    memoryWindows.set(key, entry);
+  }
+  entry.count += 1;
+  return entry.count <= options.limit ? { ok: true } : { ok: false, retryAfterSeconds: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)) };
+}
+
+export function resetMemoryRateLimits(): void {
+  memoryWindows.clear();
 }
 
 interface RateLimitRow extends Record<string, unknown> {
@@ -114,6 +155,8 @@ export async function checkRateLimit(
   const redisResult = options.fixedWindow ? await redisFixedWindow(key, options) : await redisCheckRateLimit(key, options);
   if (redisResult !== null) return redisResult;
 
+  if (options.onRedisUnavailable === "skip") return { ok: true };
+  if (options.onRedisUnavailable === "memory") return memoryCheckRateLimit(key, options);
   return dbCheckRateLimit(key, options);
 }
 

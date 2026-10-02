@@ -235,6 +235,32 @@ describe("orders/paid handler", () => {
     expect((await recordDiscountCodeRedemptions(db, shopId, { id: 10, discount_codes: [{ code: "LASTONE" }] })).exhaustedOfferIds).toEqual([offerId]);
   });
 
+  it("flags the shop publish-pending before deferring the republish (a killed waitUntil must not lose it)", async () => {
+    const { publishShopConfig } = await import("./offer-publish-flow.server.js");
+    const { markPublishPending } = await import("./publish-pending.server.js");
+    const order: string[] = [];
+    vi.mocked(markPublishPending).mockReset();
+    vi.mocked(markPublishPending).mockImplementation(async () => {
+      order.push("pending");
+    });
+    vi.mocked(publishShopConfig).mockReset();
+    vi.mocked(publishShopConfig).mockResolvedValue(null);
+    const { handleDiscountCodeRedemptions } = await import("./webhooks/discount-code-redemption.server.js");
+    const shopId = await seedShop(db, "paid-flag-first.myshopify.com");
+    const offerId = await seedOffer(db, shopId);
+    await db.insert(discountCodes).values({ shopId, offerId, code: "FLAGFIRST", usageLimit: 1, shopifySyncedAt: new Date() });
+
+    await handleDiscountCodeRedemptions(
+      db,
+      shopId,
+      "paid-flag-first.myshopify.com",
+      { id: 50, discount_codes: [{ code: "FLAGFIRST" }] },
+      { defer: () => void order.push("defer") },
+    );
+
+    expect(order).toEqual(["pending", "defer"]);
+  });
+
   it("also parks the shop when the republish throws", async () => {
     const { publishShopConfig } = await import("./offer-publish-flow.server.js");
     const { markPublishPending } = await import("./publish-pending.server.js");

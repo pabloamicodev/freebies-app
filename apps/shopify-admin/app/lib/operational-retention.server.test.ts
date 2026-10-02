@@ -23,7 +23,8 @@ describe("operational retention", () => {
       .mockResolvedValueOnce([{ key: "old-rate-limit" }])
       .mockResolvedValueOnce([{ webhookId: "processed" }, { webhookId: "processed-2" }])
       .mockResolvedValueOnce([{ webhookId: "failed" }])
-      .mockResolvedValueOnce([{ webhookId: "stuck-processing" }]);
+      .mockResolvedValueOnce([{ webhookId: "stuck-processing" }])
+      .mockResolvedValueOnce([{ id: "expired-export" }, { id: "expired-export-2" }]);
     const where = vi.fn(() => ({ returning }));
     const deleteFrom = vi.fn(() => ({ where }));
     const db = { delete: deleteFrom };
@@ -36,7 +37,8 @@ describe("operational retention", () => {
       processedWebhooks: 2,
       failedWebhooks: 1,
       stuckProcessingWebhooks: 1,
+      expiredGdprExports: 2,
     });
-    expect(deleteFrom).toHaveBeenCalledTimes(4);
+    expect(deleteFrom).toHaveBeenCalledTimes(5);
   });
 });

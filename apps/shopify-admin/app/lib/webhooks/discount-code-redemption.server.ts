@@ -38,6 +38,10 @@ export async function handleDiscountCodeRedemptions(
   const { exhaustedOfferIds } = await recordDiscountCodeRedemptions(db, shopId, order);
   if (exhaustedOfferIds.length === 0) return;
 
+  // Flagged before the work is deferred: if the runtime kills the deferred promise (waitUntil is
+  // best effort) the flag survives and the offers cron republishes. A successful publish clears it.
+  await markPublishPending(shopId);
+
   const publish = deps.publish ?? publishShopConfig;
   const defer = deps.defer ?? ((work: Promise<void>) => waitUntil(work));
   defer(

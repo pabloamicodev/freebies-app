@@ -12,6 +12,7 @@ import { getDb } from "@promo/db";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
 import { ConditionTypeSchema, DiscountTypeSchema, RewardTypeSchema, validateConditionValue, validateRewardPayload, type ConditionType, type DiscountType, type RewardType } from "@promo/shared-types";
+import { toStoredAmount } from "../lib/money.js";
 import { MAX_CSV_BYTES, MAX_CSV_COLUMNS, MAX_CSV_ROWS, parseCSV } from "../lib/csv.js";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
@@ -42,11 +43,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const shopRows = await db
-    .select({ id: shops.id })
+    .select({ id: shops.id, currencyCode: shops.currencyCode })
     .from(shops)
     .where(eq(shops.myshopifyDomain, session.shop))
     .limit(1);
   const shopId = shopRows[0]?.id;
+  const shopCurrency = shopRows[0]?.currencyCode ?? "USD";
   if (!shopId) return { error: "Shop not found", created: [], errors: [] };
 
   let parsedRows: string[][];
@@ -146,7 +148,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const rewardValueRaw = parseFloat(row["reward_value"] ?? "0");
       const rewardValue = Number.isFinite(rewardValueRaw) ? rewardValueRaw : 0;
       const rewardTarget = variantIds.length ? { variantIds } : { scope: "cart" };
-      const rewardValuePayload = { amount: discountTypeResult.data === "percentage" ? rewardValue : Math.round(rewardValue * 100), currencyCode: "USD" };
+      const rewardValuePayload = { amount: discountTypeResult.data === "percentage" ? rewardValue : toStoredAmount(rewardValue, shopCurrency), currencyCode: shopCurrency };
       const rewardPayloadResult = validateRewardPayload(rewardTypeResult.data, discountTypeResult.data, rewardValuePayload, rewardTarget);
       if (!rewardPayloadResult.success) {
         return { error: { row: rowNumber, message: rewardPayloadResult.error.issues[0]?.message ?? "Invalid reward payload" } };

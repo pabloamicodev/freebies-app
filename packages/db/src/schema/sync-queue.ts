@@ -33,11 +33,17 @@ export const gdprExports = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
     customerId: text("customer_id").notNull(),
+    /** x-shopify-webhook-id of the request; a redelivery must not store a second export. */
+    webhookId: text("webhook_id"),
     payload: jsonb("payload").notNull(),
     requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   },
-  (t) => [index("gdpr_exports_shop_customer_idx").on(t.shopId, t.customerId)],
+  (t) => [
+    index("gdpr_exports_shop_customer_idx").on(t.shopId, t.customerId),
+    uniqueIndex("gdpr_exports_shop_webhook_idx").on(t.shopId, t.webhookId),
+    index("gdpr_exports_expires_idx").on(t.expiresAt),
+  ],
 );
 
 export type CatalogRefreshQueueRow = typeof catalogRefreshQueue.$inferSelect;

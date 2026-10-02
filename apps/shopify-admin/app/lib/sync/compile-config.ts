@@ -23,6 +23,21 @@ export interface CompileOfferOptions {
   codePromo?: boolean;
   /** Backend B: hashes of the offer's redeemable codes (see code-hash.ts); the code Function accepts them. */
   codeHashes?: string[];
+  /**
+   * The shop's currency. Rewards that don't carry their own currency fall back to it, never to USD:
+   * a zero-decimal shop (JPY, KRW) read as USD turns 500 yen into 5 and every fixed amount wrong.
+   */
+  shopCurrencyCode?: string;
+}
+
+const CURRENCY_PATTERN = /^[A-Z]{3}$/;
+
+/** The reward's own currency when it has a valid one, else the shop's, else USD (shop unknown, e.g. tests). */
+function rewardCurrency(valueCurrency: unknown, shopCurrencyCode?: string): string {
+  const own = typeof valueCurrency === "string" ? valueCurrency.trim().toUpperCase() : "";
+  if (CURRENCY_PATTERN.test(own)) return own;
+  const shop = (shopCurrencyCode ?? "").trim().toUpperCase();
+  return CURRENCY_PATTERN.test(shop) ? shop : "USD";
 }
 
 function onlyMatchedLines(
@@ -393,7 +408,7 @@ export function compileOfferConfig(
     giftProductIds: [],
     discountType: "free",
     discountValue: 100,
-    currencyCode: "USD",
+    currencyCode: rewardCurrency(undefined, options.shopCurrencyCode),
     combinesWithOrderDiscounts: policy?.combinesWithOrderDiscounts ?? true,
     combinesWithShippingDiscounts: policy?.combinesWithShippingDiscounts ?? true,
     combinesWithProductDiscounts: policy?.combinesWithProductDiscounts ?? true,
@@ -628,7 +643,7 @@ export function compileOfferConfig(
       config.discountValue = functionDiscountValue(
         reward.discountType,
         Number(value["amount"] ?? value["percentage"] ?? 100),
-        String(value["currencyCode"] ?? "USD"),
+        rewardCurrency(value["currencyCode"], options.shopCurrencyCode),
       );
       config.giftRewards.push({
         id: reward.id,
@@ -659,7 +674,7 @@ export function compileOfferConfig(
       const targetProductIds =
         (target["productIds"] as string[]) ??
         (target["productId"] ? [target["productId"] as string] : []);
-      const currencyCode = String(value["currencyCode"] ?? "USD");
+      const currencyCode = rewardCurrency(value["currencyCode"], options.shopCurrencyCode);
       config.productRewards.push({
         id: reward.id,
         targetProductIds,
@@ -795,7 +810,7 @@ export function compileOfferConfig(
       });
     }
     if (reward.rewardType === "order_discount") {
-      const currencyCode = String(value["currencyCode"] ?? "USD");
+      const currencyCode = rewardCurrency(value["currencyCode"], options.shopCurrencyCode);
       const discountType =
         reward.discountType === "fixed_amount"
           ? "fixed_amount"
@@ -946,7 +961,7 @@ export function compileShippingOfferConfigs(
   offer: OfferRow,
   conditions: ConditionRow[],
   rewards: RewardRow[],
-  options: { codeHashes?: string[]; acceptCodes?: boolean } = {},
+  options: { codeHashes?: string[]; acceptCodes?: boolean; shopCurrencyCode?: string } = {},
 ): CompiledShippingOffer[] {
   const enabledConditions = conditions.filter(
     (condition) => condition.isEnabled && (condition.scope === "main" || condition.scope === "sub"),
@@ -1045,9 +1060,14 @@ export function compileShippingOfferConfigs(
           id: `${offer.id}:${reward.id}`,
           title: offer.publicTitle?.trim() || undefined,
           priority: offer.priority * 1000 + rewardIndex,
-          ...(typeof value.currencyCode === "string" && value.currencyCode && value.currencyCode !== "USD"
-            ? { currencyCode: value.currencyCode }
-            : {}),
+          // Fixed tiers and subtotal thresholds are in the shop's currency; the shipping wizard stamps a
+          // hard-coded "USD" on the reward, so the shop's currency wins and the reward's is only a fallback.
+          ...(() => {
+            const currency = options.shopCurrencyCode
+              ? rewardCurrency(undefined, options.shopCurrencyCode)
+              : rewardCurrency(value.currencyCode);
+            return currency !== "USD" ? { currencyCode: currency } : {};
+          })(),
           tiers,
           targetGroupTypes,
           scopeMode,

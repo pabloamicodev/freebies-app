@@ -3,7 +3,9 @@ import { evaluate, type OfferDefinition } from "@promo/rule-engine";
 import { analyticsEvents, type Db } from "@promo/db";
 import { and, eq, inArray, count } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
-import { checkRateLimit, getClientIp } from "./rate-limit.server.js";
+import { waitUntil } from "@vercel/functions";
+import { checkRateLimit, envLimit, getClientIp, jitteredRetryAfter } from "./rate-limit.server.js";
+import { redisGetString, redisSetString } from "./redis.server.js";
 import { getOfferDefinitions } from "./offer-definitions.server.js";
 import { applyCodeGatesDetailed, MISSED_CODE_WINDOW_MS } from "./code-gate.server.js";
 import { resolveCustomer } from "./resolve-customer.server.js";
@@ -126,15 +128,29 @@ const SLOW_EVALUATION_MS = 1_500;
 type RateLimitResult = Awaited<ReturnType<typeof checkRateLimit>>;
 
 /**
- * Shop-wide evaluate ceiling per minute. Capacity estimate (confirm with scripts/load/evaluate.k6.js):
- * a Prime Day peak of ~1,500 concurrent shoppers x ~6 evaluations/min is ~9,000/min (150 rps). With the
- * Redis-cached definitions each evaluation costs about 3 indexed queries, ~450 qps against Neon's pooler,
- * and ~25 concurrent function instances at ~150 ms. 12,000 leaves ~30% headroom above that peak and
- * stops a runaway client loop. Override per project with EVALUATE_SHOP_LIMIT_PER_MINUTE.
+ * Shop-wide evaluate ceilings per minute, all overridable per Vercel project (read per call).
+ * Capacity estimate (confirm with scripts/load/evaluate.k6.js): a Prime Day peak of ~1,500 concurrent
+ * shoppers x ~6 evaluations/min is ~9,000/min (150 rps). With the Redis-cached definitions each evaluation
+ * costs about 3 indexed queries, ~450 qps against Neon's pooler, and ~25 concurrent function instances at
+ * ~150 ms. 12,000 leaves ~30% headroom above that peak and stops a runaway client loop.
+ *
+ * Two budgets so anonymous traffic (bots, requests without a cart token, a cart token never seen before)
+ * cannot spend the capacity real shoppers need: the first (EVALUATE_SHOP_LIMIT_PER_MINUTE) is the only one
+ * unknown callers count against and are shed by; callers that already completed an evaluation
+ * (cart token seen before) count against EVALUATE_KNOWN_SHOP_LIMIT_PER_MINUTE (default 3x), their own ceiling.
  */
-export const EVALUATE_SHOP_LIMIT_PER_MINUTE = Number(process.env["EVALUATE_SHOP_LIMIT_PER_MINUTE"]) || 12_000;
-export const EVALUATE_CALLER_LIMIT_PER_MINUTE = 120;
-export const EVALUATE_IP_LIMIT_PER_MINUTE = 600;
+export function evaluateLimits(env: NodeJS.ProcessEnv = process.env) {
+  const shop = envLimit("EVALUATE_SHOP_LIMIT_PER_MINUTE", 12_000, env);
+  return {
+    shop,
+    knownShop: envLimit("EVALUATE_KNOWN_SHOP_LIMIT_PER_MINUTE", shop * 3, env),
+    caller: envLimit("EVALUATE_CALLER_LIMIT_PER_MINUTE", 120, env),
+    ip: envLimit("EVALUATE_IP_LIMIT_PER_MINUTE", 600, env),
+  };
+}
+
+const SEEN_CART_TTL_SECONDS = 30 * 60;
+const seenCartKey = (shopId: string, cartToken: string) => `evaluate:seen:${shopId}:${cartToken.slice(0, 100)}`;
 
 export async function handleEvaluationRequest(
   request: Request,
@@ -169,22 +185,36 @@ export async function handleEvaluationRequest(
   // ceiling uses a fixed-window counter (O(1)) because its cap is high.
   timer.mark("body");
   const cartToken = parsed.data.cart.token;
+  // Codes are a guessing oracle and the per-visitor miss limit is keyed on the cart token, so a
+  // proxy request that carries codes must carry the token too.
+  if (options.viaAppProxy && !cartToken && parsed.data.cart.discountCodes.some((code) => code.trim().length > 0)) {
+    return apiError(request, {
+      status: 400,
+      code: "CART_TOKEN_REQUIRED",
+      message: "A cart token is required when discount codes are sent.",
+    });
+  }
+  const limits = evaluateLimits();
   const clientIp = options.viaAppProxy ? null : getClientIp(request);
+  const known = cartToken ? (await redisGetString(seenCartKey(shop.id, cartToken))) !== null : false;
+  // Shop-wide ceilings count in Redis only: with Redis down every request would upsert the same hot
+  // rate_limits row, so the caps are skipped and the per-caller limits (DB) stay.
   const checks: Array<{ message: string; result: Promise<RateLimitResult> }> = [
     {
       message: "Too many evaluation requests for this shop.",
-      result: checkRateLimit(`evaluate:shop:${shop.id}`, {
-        limit: EVALUATE_SHOP_LIMIT_PER_MINUTE,
+      result: checkRateLimit(known ? `evaluate:shop-known:${shop.id}` : `evaluate:shop:${shop.id}`, {
+        limit: known ? limits.knownShop : limits.shop,
         windowMs: 60_000,
         fixedWindow: true,
+        onRedisUnavailable: "skip",
       }),
     },
   ];
-  const caller = { limit: EVALUATE_CALLER_LIMIT_PER_MINUTE, windowMs: 60_000 };
+  const caller = { limit: limits.caller, windowMs: 60_000 };
   if (loggedInCustomerId) checks.push({ message: "Too many evaluation requests.", result: checkRateLimit(`evaluate:${shop.id}:c:${loggedInCustomerId}`, caller) });
   if (cartToken) checks.push({ message: "Too many evaluation requests.", result: checkRateLimit(`evaluate:${shop.id}:t:${cartToken}`, caller) });
   if (clientIp && clientIp !== "unknown") {
-    checks.push({ message: "Too many evaluation requests.", result: checkRateLimit(`evaluate:${shop.id}:ip:${clientIp}`, { limit: EVALUATE_IP_LIMIT_PER_MINUTE, windowMs: 60_000 }) });
+    checks.push({ message: "Too many evaluation requests.", result: checkRateLimit(`evaluate:${shop.id}:ip:${clientIp}`, { limit: limits.ip, windowMs: 60_000 }) });
   }
   const results = await Promise.all(checks.map((check) => check.result));
   timer.mark("ratelimit");
@@ -196,7 +226,7 @@ export async function handleEvaluationRequest(
       code: "RATE_LIMITED",
       message: checks[blocked]!.message,
       retryable: true,
-      retryAfterSeconds: result.retryAfterSeconds,
+      retryAfterSeconds: jitteredRetryAfter(result.retryAfterSeconds),
     });
   }
 
@@ -206,7 +236,8 @@ export async function handleEvaluationRequest(
   ]);
   // Offers that own discount codes only qualify while one of their codes is applied.
   const gate = await applyCodeGatesDetailed(shop.id, shop.db, rawOfferDefinitions, parsed.data.cart.discountCodes, new Date(), {
-    rateLimitKey: parsed.data.cart.token ?? loggedInCustomerId ?? undefined,
+    // No token: one shared anonymous bucket, never "no limit" (a client can simply omit its token).
+    rateLimitKey: cartToken ?? (loggedInCustomerId ? `c:${loggedInCustomerId}` : "anon"),
   });
   if (gate.blocked) {
     return apiError(request, {
@@ -214,7 +245,7 @@ export async function handleEvaluationRequest(
       code: "RATE_LIMITED",
       message: "Too many invalid discount codes. Try again later.",
       retryable: true,
-      retryAfterSeconds: Math.ceil(MISSED_CODE_WINDOW_MS / 1000),
+      retryAfterSeconds: jitteredRetryAfter(Math.ceil(MISSED_CODE_WINDOW_MS / 1000)),
     });
   }
   const offerDefinitions = gate.definitions;
@@ -300,6 +331,14 @@ export async function handleEvaluationRequest(
       message: "The promotion evaluation produced an invalid result.",
       retryable: true,
     });
+  }
+
+  if (cartToken && !known) {
+    try {
+      waitUntil(redisSetString(seenCartKey(shop.id, cartToken), "1", SEEN_CART_TTL_SECONDS));
+    } catch {
+      // waitUntil is unavailable outside the Vercel runtime; the mark is only an optimisation.
+    }
   }
 
   timer.mark("serialize");

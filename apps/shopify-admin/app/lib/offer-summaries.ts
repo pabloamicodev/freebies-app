@@ -3,6 +3,7 @@
  * so all three describe a given condition/reward the same way. */
 
 import { pageTypeLabel } from "./page-types.js";
+import { fromStoredAmount } from "./money.js";
 
 export function conditionSummary(conditionType: string, value: unknown): string {
   const v = (value ?? {}) as Record<string, unknown>;
@@ -140,12 +141,12 @@ export function rewardHeadline(reward: { rewardType: string; discountType: strin
   }
   if (reward.discountType === "percentage") return `${amount}% off`;
   if (reward.discountType === "most_expensive_item_discount") return `${amount}% off most expensive item`;
-  if (reward.discountType === "fixed_price") return `Fixed price ${currency} ${(amount / 100).toFixed(2)}`;
+  if (reward.discountType === "fixed_price") return `Fixed price ${currency} ${fromStoredAmount(amount, currency).toFixed(2)}`;
   if (reward.discountType === "fixed_amount") {
     // Shipping rewards store this raw (dollars), not in cents like every
     // other reward type — see the shipping vs. generic value-building
     // branches in app.offers.$id.rewards.tsx's action.
-    const dollars = reward.rewardType === "shipping_discount" ? amount : amount / 100;
+    const dollars = reward.rewardType === "shipping_discount" ? amount : fromStoredAmount(amount, currency);
     return `${currency} ${dollars.toFixed(2)} off`;
   }
   return reward.discountType;

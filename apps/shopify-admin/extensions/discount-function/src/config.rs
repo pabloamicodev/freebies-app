@@ -82,6 +82,9 @@ de_struct! {
         "lineAttributeConditions" => line_attribute_conditions: Vec<CompiledAttributeCondition> = Vec::new(),
         "cartAttributeConditions" => cart_attribute_conditions: Vec<CompiledAttributeCondition> = Vec::new(),
         "pageUrlConditions" => page_url_conditions: Vec<CompiledPageUrlCondition> = Vec::new(),
+        // Not part of the payload: fingerprint of `page_url_conditions`, set by `localize`, so equal
+        // condition sets share cached per-line match results within a run.
+        "__pageSetKey" => page_set_key: u64 = 0,
         // Product/order rewards only touch lines whose `_promo_page_url` matches
         // every page URL condition (the lines added from the campaign page).
         "restrictToMatchedLines" => restrict_to_matched_lines: bool = false,
@@ -119,6 +122,7 @@ impl CompiledConfig {
                 }
             };
         for offer in &mut self.offers {
+            offer.page_set_key = page_set_key(&offer.page_url_conditions);
             let cents_rate = rate * minor_units(active_currency) / minor_units(&offer.currency_code);
             localize_threshold(&mut offer.cart_value_threshold_cents, &offer.currency_overrides, cents_rate);
             localize_threshold(&mut offer.cart_value_max_cents, &offer.max_currency_overrides, cents_rate);
@@ -325,6 +329,37 @@ pub fn is_zero_decimal(currency_code: &str) -> bool {
             | "XOF"
             | "XPF"
     )
+}
+
+fn page_set_key(conditions: &[CompiledPageUrlCondition]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    let mut feed = |bytes: &[u8]| {
+        for byte in bytes {
+            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
+        }
+        hash = (hash ^ 0xff).wrapping_mul(0x100000001b3);
+    };
+    for condition in conditions {
+        feed(condition.match_mode.as_bytes());
+        feed(&[condition.case_sensitive as u8]);
+        feed(condition.param_name.as_deref().unwrap_or("").as_bytes());
+        feed(condition.param_value.as_deref().unwrap_or("").as_bytes());
+        feed(condition.source.as_deref().unwrap_or("").as_bytes());
+        for pattern in &condition.patterns {
+            feed(pattern.as_bytes());
+        }
+        feed(b"
+");
+    }
+    hash
+}
+
+pub fn minor_units(currency_code: &str) -> f64 {
+    if is_zero_decimal(currency_code) {
+        1.0
+    } else {
+        100.0
+    }
 }
 
 pub fn to_cents(amount: f64, currency_code: &str) -> i64 {

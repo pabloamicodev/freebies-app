@@ -28,7 +28,13 @@
         return;
       }
       var offerId = container.dataset.offerId;
-      var params = new URLSearchParams({ page_url: window.location.href });
+      // page_url travels in a GET query string (proxy/access logs), so drop personal and ad-click params.
+      var pageUrl = new URL(window.location.href);
+      Array.from(pageUrl.searchParams.keys()).forEach(function(key) {
+        if (/(^|_)(e?mail|email_address|phone|token|_kx|gclid|fbclid|msclkid|ttclid|dclid|wbraid|gbraid)$/i.test(key)) pageUrl.searchParams.delete(key);
+      });
+      pageUrl.hash = '';
+      var params = new URLSearchParams({ page_url: pageUrl.toString() });
       if (offerId) params.set('offer_id', offerId);
       fetch('/apps/promo-engine/bundle?' + params.toString(), { headers: { Accept: 'application/json' } })
         .then(function(response) {

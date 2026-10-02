@@ -2,6 +2,9 @@ use std::process;
 
 #[path = "../../discount-function/src/cart_delivery_options_discounts_generate_run.rs"]
 pub mod cart_delivery_options_discounts_generate_run;
+#[macro_use]
+#[path = "../../discount-function/src/de.rs"]
+mod de;
 mod config;
 #[path = "../../discount-function/src/delivery_discount_logic.rs"]
 mod delivery_discount_logic;

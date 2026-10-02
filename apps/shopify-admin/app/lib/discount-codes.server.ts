@@ -43,7 +43,9 @@ export async function offerRequiresCode(
   return Boolean(row);
 }
 
-async function markRequiresCode(db: Db, shopId: string, offerId: string): Promise<void> {
+type DbOrTx = Pick<Db, "update">;
+
+async function markRequiresCode(db: DbOrTx, shopId: string, offerId: string): Promise<void> {
   await db
     .update(offers)
     .set({ requiresCode: true })
@@ -100,21 +102,25 @@ export function validateBatchEntropy(
   return null;
 }
 
-/** Whether the offer's active codes already commit to once-per-customer (true), its absence (false), or have none (null). */
+/**
+ * Whether the offer's live-or-about-to-be-live codes already commit to once-per-customer (true), its
+ * absence (false), or have none (null). Scheduled codes (startsAt in the future) count: they will share
+ * the node the moment they start, so mixing with them now would only fail at that publish.
+ */
 async function existingOncePerCustomer(db: Db, shopId: string, offerId: string): Promise<boolean | null> {
   const rows = await db
     .selectDistinct({ oncePerCustomer: discountCodes.oncePerCustomer })
     .from(discountCodes)
-    .where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offerId), redeemableCondition(new Date())));
+    .where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offerId), redeemableCondition(new Date(), { includeScheduled: true })));
   if (rows.length !== 1) return rows.length === 0 ? null : false;
   return rows[0]!.oncePerCustomer;
 }
 
 /** SQL twin of `isCodeRedeemable`. */
-function redeemableCondition(now: Date) {
+function redeemableCondition(now: Date, options: { includeScheduled?: boolean } = {}) {
   return and(
     eq(discountCodes.status, "active"),
-    or(isNull(discountCodes.startsAt), lte(discountCodes.startsAt, now)),
+    options.includeScheduled ? undefined : or(isNull(discountCodes.startsAt), lte(discountCodes.startsAt, now)),
     or(isNull(discountCodes.endsAt), gt(discountCodes.endsAt, now)),
     or(isNull(discountCodes.usageLimit), sql`${discountCodes.usageCount} < ${discountCodes.usageLimit}`),
   );
@@ -153,20 +159,24 @@ export async function createDiscountCode(
     return { ok: false, error: CODE_TAKEN_MESSAGE };
   }
   try {
-    const [row] = await db
-      .insert(discountCodes)
-      .values({
-        shopId: input.shopId,
-        offerId: input.offerId,
-        code: normalized.code,
-        startsAt: input.startsAt ?? null,
-        endsAt: input.endsAt ?? null,
-        usageLimit: input.usageLimit ?? null,
-        oncePerCustomer: input.oncePerCustomer ?? false,
-      })
-      .returning();
+    // One transaction: a code row without the offer's requiresCode flag would publish ungated.
+    const row = await db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(discountCodes)
+        .values({
+          shopId: input.shopId,
+          offerId: input.offerId,
+          code: normalized.code,
+          startsAt: input.startsAt ?? null,
+          endsAt: input.endsAt ?? null,
+          usageLimit: input.usageLimit ?? null,
+          oncePerCustomer: input.oncePerCustomer ?? false,
+        })
+        .returning();
+      if (inserted) await markRequiresCode(tx, input.shopId, input.offerId);
+      return inserted;
+    });
     if (!row) return { ok: false, error: "Could not create the code." };
-    await markRequiresCode(db, input.shopId, input.offerId);
     const warning = typedCodeWarning(row.code);
     return { ok: true, code: row, ...(warning ? { warning } : {}) };
   } catch (err) {
@@ -194,63 +204,78 @@ export async function createDiscountCodeBatch(
     return { ok: false, error: MIXED_ONCE_PER_CUSTOMER_ERROR };
   }
 
-  const [batch] = await db
-    .insert(discountCodeBatches)
-    .values({
-      shopId: input.shopId,
-      offerId: input.offerId,
-      prefix: input.spec.prefix,
-      length: input.spec.length,
-      charset: input.spec.charset,
-      count: input.spec.count,
-    })
-    .returning({ id: discountCodeBatches.id });
-  if (!batch) return { ok: false, error: "Could not create the batch." };
-
-  let created = 0;
-  // Uniqueness is decided by the (shop, code) index, so concurrent batches and
-  // existing codes just lose the conflict and the loop tops the batch back up.
-  // Candidates are over-generated and inserted in chunks no larger than what is
-  // still missing, so the batch never overshoots its count.
-  for (let round = 0; round < 12 && created < input.spec.count; round += 1) {
-    const missing = input.spec.count - created;
-    const candidates = generateUniqueCodes({ ...input.spec, count: missing * 2 + 20 });
-    const legacy = await db
-      .select({ code: offers.requiredDiscountCode })
-      .from(offers)
-      .where(and(eq(offers.shopId, input.shopId), inArray(offers.requiredDiscountCode, candidates)));
-    const blocked = new Set(legacy.map((row) => row.code));
-    const fresh = candidates.filter((code) => !blocked.has(code));
-    for (let i = 0; i < fresh.length && created < input.spec.count; ) {
-      const size = Math.min(INSERT_CHUNK, input.spec.count - created);
-      const inserted = await db
-        .insert(discountCodes)
-        .values(
-          fresh.slice(i, i + size).map((code) => ({
-            shopId: input.shopId,
-            offerId: input.offerId,
-            batchId: batch.id,
-            code,
-            startsAt: input.startsAt ?? null,
-            endsAt: input.endsAt ?? null,
-            usageLimit: input.usageLimit ?? null,
-            oncePerCustomer: input.oncePerCustomer ?? false,
-          })),
-        )
-        .onConflictDoNothing()
-        .returning({ id: discountCodes.id });
-      created += inserted.length;
-      i += size;
+  // Batch row, codes and the requiresCode flag commit together. A short batch rolls everything back,
+  // so no partial batch (and no code rows on an ungated offer) is left behind.
+  class ShortBatch extends Error {
+    constructor(readonly created: number) {
+      super("short batch");
     }
   }
-  if (created < input.spec.count) {
-    return {
-      ok: false,
-      error: `Only ${created} of ${input.spec.count} unique codes could be generated. Increase the code length.`,
-    };
+  try {
+    return await db.transaction(async (tx) => {
+      const [batch] = await tx
+        .insert(discountCodeBatches)
+        .values({
+          shopId: input.shopId,
+          offerId: input.offerId,
+          prefix: input.spec.prefix,
+          length: input.spec.length,
+          charset: input.spec.charset,
+          count: input.spec.count,
+        })
+        .returning({ id: discountCodeBatches.id });
+      if (!batch) throw new Error("Could not create the batch.");
+
+      let created = 0;
+      // Uniqueness is decided by the (shop, code) index, so concurrent batches and
+      // existing codes just lose the conflict and the loop tops the batch back up.
+      // Candidates are over-generated and inserted in chunks no larger than what is
+      // still missing, so the batch never overshoots its count.
+      for (let round = 0; round < 12 && created < input.spec.count; round += 1) {
+        const missing = input.spec.count - created;
+        const candidates = generateUniqueCodes({ ...input.spec, count: missing * 2 + 20 });
+        const legacy = await tx
+          .select({ code: offers.requiredDiscountCode })
+          .from(offers)
+          .where(and(eq(offers.shopId, input.shopId), inArray(offers.requiredDiscountCode, candidates)));
+        const blocked = new Set(legacy.map((row) => row.code));
+        const fresh = candidates.filter((code) => !blocked.has(code));
+        for (let i = 0; i < fresh.length && created < input.spec.count; ) {
+          const size = Math.min(INSERT_CHUNK, input.spec.count - created);
+          const inserted = await tx
+            .insert(discountCodes)
+            .values(
+              fresh.slice(i, i + size).map((code) => ({
+                shopId: input.shopId,
+                offerId: input.offerId,
+                batchId: batch.id,
+                code,
+                startsAt: input.startsAt ?? null,
+                endsAt: input.endsAt ?? null,
+                usageLimit: input.usageLimit ?? null,
+                oncePerCustomer: input.oncePerCustomer ?? false,
+              })),
+            )
+            .onConflictDoNothing()
+            .returning({ id: discountCodes.id });
+          created += inserted.length;
+          i += size;
+        }
+      }
+      if (created < input.spec.count) throw new ShortBatch(created);
+      await markRequiresCode(tx, input.shopId, input.offerId);
+      return { ok: true as const, created, batchId: batch.id };
+    });
+  } catch (err) {
+    if (err instanceof ShortBatch) {
+      return {
+        ok: false,
+        error: `Only ${err.created} of ${input.spec.count} unique codes could be generated. Increase the code length.`,
+      };
+    }
+    if (err instanceof Error && err.message === "Could not create the batch.") return { ok: false, error: err.message };
+    throw err;
   }
-  await markRequiresCode(db, input.shopId, input.offerId);
-  return { ok: true, created, batchId: batch.id };
 }
 
 export interface CodeListQuery {
@@ -317,38 +342,41 @@ export function streamDiscountCodesCsv(
   pageSize = 1_000,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
-  let after: { createdAt: Date; code: string } | null = null;
+  // Keyed on the timestamp as Postgres prints it: a JS Date keeps only milliseconds, and a
+  // truncated key re-selects (duplicates) or skips rows that share the millisecond.
+  let after: { createdAtText: string; code: string } | null = null;
   let first = true;
   let finished = false;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       if (finished) return;
       try {
-        const rows: DiscountCode[] = await db
-          .select()
+        const found = await db
+          .select({ row: discountCodes, createdAtText: sql<string>`${discountCodes.createdAt}::text` })
           .from(discountCodes)
           .where(
             and(
               codeFilter(shopId, offerId, query),
               after
-                ? sql`(${discountCodes.createdAt}, ${discountCodes.code}) > (${after.createdAt.toISOString()}::timestamptz, ${after.code})`
+                ? sql`(${discountCodes.createdAt}, ${discountCodes.code}) > (${after.createdAtText}::timestamptz, ${after.code})`
                 : undefined,
             ),
           )
           .orderBy(asc(discountCodes.createdAt), asc(discountCodes.code))
           .limit(pageSize);
+        const rows: DiscountCode[] = found.map((entry) => entry.row);
         const csv = discountCodesToCsv(rows);
         // discountCodesToCsv always starts with the header line; only the first page keeps it.
         const chunkText = first ? csv : csv.slice(csv.indexOf("\n") + 1);
         first = false;
         if (chunkText.length > 0) controller.enqueue(encoder.encode(chunkText));
-        const last = rows.at(-1);
-        if (rows.length < pageSize || !last) {
+        const last = found.at(-1);
+        if (found.length < pageSize || !last) {
           finished = true;
           controller.close();
           return;
         }
-        after = { createdAt: last.createdAt, code: last.code };
+        after = { createdAtText: last.createdAtText, code: last.row.code };
       } catch (error) {
         finished = true;
         controller.error(error);

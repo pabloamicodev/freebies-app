@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { diffMigrationJournal, isTransientMigrationError, resolveMigrationSettings, retryTransient } from "./migrate-lib.js";
+import { diffMigrationJournal, isTransientMigrationError, resolveMigrationSettings, retryTransient, runLockedWithRetry } from "./migrate-lib.js";
 
 describe("resolveMigrationSettings", () => {
   it("refuses the pooled URL as a fallback for a remote database", () => {
@@ -66,5 +66,41 @@ describe("diffMigrationJournal", () => {
     ]);
     expect(r.hashMismatch).toEqual(["0017_b"]);
     expect(r.unknown).toEqual([999]);
+  });
+});
+
+describe("runLockedWithRetry", () => {
+  const connectionLost = Object.assign(new Error("reset"), { code: "ECONNRESET" });
+  const opts = { attempts: 4, sleep: async () => undefined };
+
+  it("takes the advisory lock again before every attempt, so a dropped connection never migrates unlocked", async () => {
+    const events: string[] = [];
+    const acquire = vi.fn(async () => void events.push("lock"));
+    const run = vi
+      .fn<() => Promise<string>>()
+      .mockImplementationOnce(async () => {
+        events.push("run");
+        throw connectionLost;
+      })
+      .mockImplementationOnce(async () => {
+        events.push("run");
+        return "done";
+      });
+    await expect(runLockedWithRetry(acquire, run, opts)).resolves.toBe("done");
+    expect(events).toEqual(["lock", "run", "lock", "run"]);
+  });
+
+  it("does not retry (or re-lock) after a permanent error", async () => {
+    const acquire = vi.fn(async () => undefined);
+    const permanent = Object.assign(new Error("syntax"), { code: "42601" });
+    await expect(runLockedWithRetry(acquire, async () => Promise.reject(permanent), opts)).rejects.toBe(permanent);
+    expect(acquire).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries when re-acquiring the lock itself hits a connection error", async () => {
+    const acquire = vi.fn().mockRejectedValueOnce(connectionLost).mockResolvedValue(undefined);
+    const run = vi.fn(async () => "ok");
+    await expect(runLockedWithRetry(acquire, run, opts)).resolves.toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });

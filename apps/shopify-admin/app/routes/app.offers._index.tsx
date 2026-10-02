@@ -27,6 +27,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { OfferToggle } from "../components/BogosSwitch.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { getOfferPublishErrors } from "../lib/offer-publish-errors.server.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
 import {
@@ -115,9 +116,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const total = totalRow?.total ?? 0;
 
+  const publishErrors = await getOfferPublishErrors(shopId);
   const serializedOffers = await timer.time("offers.serialize_rows", () =>
     rows.map((row) => ({
       ...row,
+      publishError: publishErrors[row.id] ?? null,
       startsAt: row.startsAt?.toISOString() ?? null,
       updatedAt: row.updatedAt.toISOString(),
     })),
@@ -410,6 +413,7 @@ type OfferRow = {
   priority: number;
   startsAt: string | null;
   updatedAt: string;
+  publishError?: string | null;
 };
 
 type ConfirmActionState = {
@@ -663,6 +667,11 @@ function OfferTableRow({
         {/* Status badge */}
         <td>
           <StatusBadge status={offer.status} />
+          {offer.publishError && (
+            <span className="b-badge b-badge-orange" style={{ marginLeft: 6 }} title={offer.publishError}>
+              Not fully live
+            </span>
+          )}
         </td>
 
         {/* On/off toggle */}

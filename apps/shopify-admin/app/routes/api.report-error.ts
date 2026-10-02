@@ -3,33 +3,29 @@ import { waitUntil } from "@vercel/functions";
 import * as Sentry from "@sentry/node";
 import { checkRateLimit, getClientIp } from "../lib/rate-limit.server.js";
 import { ReportErrorRequestSchema } from "@promo/shared-types";
+import { bearerToken, verifySessionToken } from "../lib/session-token.server.js";
 import { apiError, apiJson, handleApiError, readJsonBody } from "../lib/api-response.server.js";
 
 const MAX_REPORT_BYTES = 16 * 1024;
 const GLOBAL_LIMIT_PER_MINUTE = 120;
 const SHOP_LIMIT_PER_MINUTE = 30;
-const SHOP_DOMAIN = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
-
-/** The embedded admin URL carries `shop`; it is a claim, used only to meter, never to authorize. */
-function shopFromRequest(request: Request): string | null {
-  const shop = new URL(request.url).searchParams.get("shop")?.toLowerCase() ?? "";
-  return SHOP_DOMAIN.test(shop) ? shop : null;
-}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   if (request.method !== "POST") {
     return apiError(request, { status: 405, code: "METHOD_NOT_ALLOWED", message: "Method not allowed.", headers: { Allow: "POST" } });
   }
-  // Sentry quota protection, unauthenticated caller: a global ceiling (the real defence, it cannot
-  // be dodged by rotating identities), a per-shop budget so one broken merchant session cannot
-  // drown the others, and the IP as a last-resort per-client limit (this route is called directly
-  // from the admin iframe, not through the app proxy, so the address is the real client's).
-  const shop = shopFromRequest(request);
+  // Sentry quota protection. The caller must present a valid App Bridge session token (verified locally,
+  // no DB): its `dest` is the shop that gets the per-shop budget, so a stranger cannot spend another
+  // merchant's budget or the Sentry quota. The global ceiling stays as the defence that cannot be dodged by
+  // rotating identities, and the IP is a last-resort per-client limit (this route is called straight from the
+  // admin iframe, not through the app proxy, so the address is the real client's).
+  const shop = verifySessionToken(bearerToken(request));
+  if (!shop) {
+    return apiError(request, { status: 401, code: "UNAUTHORIZED", message: "A valid session token is required." });
+  }
   const limits = await Promise.all([
-    checkRateLimit("report-error:global", { limit: GLOBAL_LIMIT_PER_MINUTE, windowMs: 60_000, fixedWindow: true }),
-    shop
-      ? checkRateLimit(`report-error:shop:${shop}`, { limit: SHOP_LIMIT_PER_MINUTE, windowMs: 60_000 })
-      : Promise.resolve({ ok: true as const }),
+    checkRateLimit("report-error:global", { limit: GLOBAL_LIMIT_PER_MINUTE, windowMs: 60_000, fixedWindow: true, onRedisUnavailable: "memory" }),
+    checkRateLimit(`report-error:shop:${shop}`, { limit: SHOP_LIMIT_PER_MINUTE, windowMs: 60_000 }),
     checkRateLimit(`report-error:${getClientIp(request)}`, { limit: 10, windowMs: 60_000 }),
   ]);
   const blocked = limits.find((limit) => !limit.ok);

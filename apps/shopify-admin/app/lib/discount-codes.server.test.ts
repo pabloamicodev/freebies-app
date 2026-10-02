@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
-import { discountCodes, discountCodeRedemptions, offers, type Db } from "@promo/db";
+import { eq, sql } from "drizzle-orm";
+import { discountCodeBatches, discountCodes, discountCodeRedemptions, offers, type Db } from "@promo/db";
 import {
   CODE_TAKEN_MESSAGE,
   MIXED_ONCE_PER_CUSTOMER_ERROR,
@@ -354,11 +354,76 @@ describe("once-per-customer cannot be mixed within one offer", () => {
     ).toMatchObject({ ok: true });
   });
 
+  it("counts scheduled (future-dated) codes: they share the node the moment they start", async () => {
+    const offerId = await newOffer();
+    const startsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    expect((await createDiscountCode(db, { shopId, offerId, code: "LATER-ONCE", oncePerCustomer: true, startsAt })).ok).toBe(true);
+    expect(await createDiscountCode(db, { shopId, offerId, code: "NOW-MULTI", oncePerCustomer: false })).toEqual({
+      ok: false,
+      error: MIXED_ONCE_PER_CUSTOMER_ERROR,
+    });
+    expect(
+      await createDiscountCodeBatch(db, {
+        shopId,
+        offerId,
+        spec: { prefix: "LB-", length: 8, charset: "unambiguous", count: 3 },
+      }),
+    ).toEqual({ ok: false, error: MIXED_ONCE_PER_CUSTOMER_ERROR });
+  });
+
   it("ignores disabled codes, so the merchant can switch the whole offer over", async () => {
     const offerId = await newOffer();
     await createDiscountCode(db, { shopId, offerId, code: "OLD-ONCE", oncePerCustomer: true });
     await setDiscountCodesStatus(db, shopId, offerId, { all: true }, "disabled");
     expect((await createDiscountCode(db, { shopId, offerId, code: "NEW-MULTI", oncePerCustomer: false })).ok).toBe(true);
+  });
+});
+
+describe("code insert and requiresCode flag are one transaction", () => {
+  /** A db whose transactions fail on the requiresCode update, like a crash between the two statements. */
+  const failingFlagDb = (): Db =>
+    new Proxy(db, {
+      get(target, key, receiver) {
+        if (key !== "transaction") return Reflect.get(target, key, receiver);
+        return (fn: (tx: unknown) => Promise<unknown>) =>
+          target.transaction((tx) =>
+            fn(
+              new Proxy(tx, {
+                get(inner, innerKey) {
+                  if (innerKey === "update") {
+                    return () => {
+                      throw new Error("flag update failed");
+                    };
+                  }
+                  return Reflect.get(inner, innerKey);
+                },
+              }),
+            ),
+          );
+      },
+    });
+
+  it("leaves no code row behind when marking the offer gated fails", async () => {
+    const offerId = await newOffer();
+    await expect(createDiscountCode(failingFlagDb(), { shopId, offerId, code: "ATOMIC-1" })).rejects.toThrow("flag update failed");
+    expect(await countDiscountCodes(db, shopId, offerId)).toBe(0);
+  });
+
+  it("leaves no batch or codes behind for a batch either, and flags the offer when it succeeds", async () => {
+    const offerId = await newOffer();
+    await expect(
+      createDiscountCodeBatch(failingFlagDb(), {
+        shopId,
+        offerId,
+        spec: { prefix: "AT-", length: 8, charset: "unambiguous", count: 5 },
+      }),
+    ).rejects.toThrow("flag update failed");
+    expect(await countDiscountCodes(db, shopId, offerId)).toBe(0);
+    expect(await db.select().from(discountCodeBatches).where(eq(discountCodeBatches.offerId, offerId))).toEqual([]);
+
+    expect(await createDiscountCodeBatch(db, { shopId, offerId, spec: { prefix: "AT-", length: 8, charset: "unambiguous", count: 5 } })).toMatchObject({ ok: true });
+    const [offer] = await db.select({ requiresCode: offers.requiresCode }).from(offers).where(eq(offers.id, offerId));
+    expect(offer?.requiresCode).toBe(true);
   });
 });
 
@@ -441,6 +506,21 @@ describe("streamed CSV export and counting", () => {
     const { text } = await readAll(streamDiscountCodesCsv(db, shopId, offerId, {}, 2));
     expect(text.trim().split("\n")).toHaveLength(5);
     expect(text.match(/^code,status/gm)).toHaveLength(1);
+  });
+
+  it("pages through rows that share a millisecond without repeating or skipping any (microsecond keyset)", async () => {
+    const offerId = await newOffer();
+    await db.insert(discountCodes).values(Array.from({ length: 7 }, (_, i) => ({ shopId, offerId, code: `MICRO-${i}` })));
+    // Same millisecond, different microseconds: a millisecond-precision key re-selects these across pages.
+    for (let i = 0; i < 7; i += 1) {
+      await db
+        .update(discountCodes)
+        .set({ createdAt: sql`('2026-01-01 00:00:00.123' || ${String(100 + i)})::timestamptz` })
+        .where(eq(discountCodes.code, `MICRO-${i}`));
+    }
+    const { text } = await readAll(streamDiscountCodesCsv(db, shopId, offerId, {}, 2));
+    const lines = text.trim().split(/\r?\n/).slice(1);
+    expect(lines.map((line) => line.split(",")[0])).toEqual(Array.from({ length: 7 }, (_, i) => `MICRO-${i}`));
   });
 
   it("honours the same filters as the list", async () => {

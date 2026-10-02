@@ -1,4 +1,5 @@
 import {
+  gdprExports,
   getDb,
   rateLimits,
   webhookDeliveries,
@@ -49,6 +50,7 @@ export async function cleanupOperationalState(
   processedWebhooks: number;
   failedWebhooks: number;
   stuckProcessingWebhooks: number;
+  expiredGdprExports: number;
 }> {
   const cutoffs = operationalRetentionCutoffs(now, settings);
   const staleRateLimits = await db
@@ -83,10 +85,22 @@ export async function cleanupOperationalState(
     )
     .returning({ webhookId: webhookDeliveries.webhookId });
 
+  const expiredGdprExports = await deleteExpiredGdprExports(db, now);
+
   return {
     rateLimits: staleRateLimits.length,
     processedWebhooks: processedWebhooks.length,
     failedWebhooks: failedWebhooks.length,
     stuckProcessingWebhooks: stuckProcessingWebhooks.length,
+    expiredGdprExports,
   };
+}
+
+/** customers/data_request exports hold personal data; they are downloadable only until expires_at. */
+export async function deleteExpiredGdprExports(db: Db = getDb(), now = new Date()): Promise<number> {
+  const rows = await db
+    .delete(gdprExports)
+    .where(lt(gdprExports.expiresAt, now))
+    .returning({ id: gdprExports.id });
+  return rows.length;
 }

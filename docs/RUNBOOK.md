@@ -15,6 +15,10 @@ Operational procedures for the Promo Engine. Release steps live in `docs/DEPLOY.
 9. [Secrets rotation](#secrets-rotation)
 10. [Analytics table: index review](#analytics-table-index-review)
 11. [Env var reference](#env-var-reference)
+12. [Storefront rate limits and code guessing](#storefront-rate-limits-and-code-guessing)
+13. [Drift repair pause switch](#drift-repair-pause-switch)
+14. [Cart validation and blockOnFailure](#cart-validation-and-blockonfailure)
+15. [Load testing](#load-testing)
 
 ## Environments and ownership
 
@@ -32,7 +36,7 @@ Both projects deploy the same `vercel.json`, so **both** invoke every cron. Each
 
 1. returns `200 {"skipped":"crons_disabled"}` when the project is not the cron owner (no work, no Sentry check-in);
 2. checks `CRON_SECRET`;
-3. takes an overlap lock (Redis `SET NX PX`, falling back to a `rate_limits` row; TTL = the route's `maxDuration`), so a slow run or a duplicate Vercel delivery cannot overlap itself. A skipped run returns `{"skipped":"already_running"}`;
+3. takes an overlap lock (Redis `SET NX PX`, falling back to a `rate_limits` row; TTL = the route's `maxDuration`), so a slow run or a duplicate Vercel delivery cannot overlap itself. The key is `cron-lock:<VERCEL_PROJECT_ID or CRON_PROJECT or default>:<name>`: the lock is per Vercel project, so a stuck lock in one project never blocks the other, **and it no longer stops both projects from running the same cron at once**. That is why exactly one project must have `CRONS_ENABLED=true`. A skipped run returns `{"skipped":"already_running"}`;
 4. sends Sentry cron-monitor check-ins `in_progress`, then `ok` or `error` (a 207/`ok:false` partial failure counts as `error`), under the monitor slug `cron-<name>`;
 5. reports thrown errors to Sentry through `handleApiError`.
 
@@ -44,15 +48,17 @@ Both projects deploy the same `vercel.json`, so **both** invoke every cron. Each
 | `/api/cron/skio-shipping` | every 15 min | 300 s | `cron-skio-shipping` |
 | `/api/cron/analytics-cleanup` | daily 03:00 UTC | 60 s | `cron-analytics-cleanup` |
 
+`catalog-sync` runs two drains (product sync, then the catalog refresh queue) that share one 50 s budget (30 s for the first, the remainder for the second, skipped when none is left), because the route's `maxDuration` is 60 s and a step started near the end still finishes.
+
 The schedules live in `CRON_JOBS` and `cron-config.test.ts` fails if either `vercel.json` drifts from it. The old `/apps/promo-engine/evaluate` "warm" cron is removed: it sent a GET to a POST-only route (405), so it warmed nothing. Add a cheap DB ping only if measured cold starts hurt.
 
 **Flag semantics.** Unset keeps today's behaviour (crons run) so nothing changes on deploy. Resolution order: `CRONS_ENABLED` (`false`/`0`/`no`/`off` = off, anything else = on) → `CRONS_DISABLED=true` → `DISABLE_CRONS=1` (legacy) → on.
 
-**User action U1 (do in this order):**
+**Current state (set 2026-10-02): HPN (`freebies-app-shopify-admin`) owns the crons with `CRONS_ENABLED=true`; Ambrosia has `CRONS_ENABLED=false` (it also carries a legacy `DISABLE_CRONS` from 2026-09-26). Both projects use the same Neon database, so one owner runs every shop's jobs. HPN was kept as owner because it is the arrangement already proven in production. To move ownership, flip both flags and redeploy both projects.**
 
 1. Confirm both projects point at the **same** Neon database. If they use different databases, each project must run its own crons: set `CRONS_ENABLED=true` on both and skip step 2.
-2. On the **HPN** project (`freebies-app-shopify-admin`) set `CRONS_ENABLED=false` (Production scope) and redeploy. Its crons now answer `skipped`.
-3. On the **Ambrosia** project set `CRONS_ENABLED=true` (Production scope) so ownership is explicit, and redeploy.
+2. On the project giving up ownership set `CRONS_ENABLED=false` (Production scope) and redeploy. Its crons now answer `skipped`.
+3. On the new owner set `CRONS_ENABLED=true` (Production scope) and redeploy.
 4. Verify in Vercel → each project → Cron Jobs that HPN shows 200 responses with `skipped`, and in Sentry → Crons that `cron-*` monitors check in only from Ambrosia.
 5. Optional later change: flip the default to "off when unset" in `cronsEnabled` once both projects have an explicit value.
 
@@ -113,13 +119,14 @@ Migrations run on every production Vercel build, before the new code is live and
 - `pg_try_advisory_lock` is polled for up to `MIGRATION_LOCK_WAIT_MS` (120 s) so two concurrent deploys serialize.
 - `lock_timeout = 5 s` (`MIGRATION_LOCK_TIMEOUT_MS`): DDL gives up instead of queueing behind a long transaction and blocking every query behind it. `statement_timeout = 120 s` (`MIGRATION_STATEMENT_TIMEOUT_MS`).
 - Transient failures (`55P03` lock not available, `57014` statement timeout, deadlock, dropped connection) retry up to 4 times with 2/4/8 s backoff. Drizzle applies all pending files in one transaction, so a retry starts clean. A permanent error fails the build.
+- The advisory lock belongs to the database connection. A connection-class error (`ECONNRESET`, `57P01`, `08xxx`) drops it and the driver reconnects with a fresh session, so **every retry takes the lock again before migrating** (`runLockedWithRetry` in `migrate-lib.ts`); the lock is released with `pg_advisory_unlock_all()` at the end.
 - If a migration legitimately needs longer (big index build), run it as a manual one-off script off-peak with a larger `MIGRATION_STATEMENT_TIMEOUT_MS`, not by raising the default.
 
 ### Expand / contract
 
 Allowed in a normal migration (**expand**):
 
-- `CREATE TABLE`, `CREATE INDEX`, `ADD COLUMN` that is nullable or has a `DEFAULT`, new enum values, new constraints that are `NOT VALID`.
+- `CREATE TABLE`, `CREATE INDEX` on a table created in the same file (or `CREATE INDEX CONCURRENTLY`, see below), `ADD COLUMN` that is nullable or has a `DEFAULT`, new enum values, new constraints that are `NOT VALID`.
 
 Not allowed in a normal migration (**contract**), because the previous release still reads and writes them:
 
@@ -127,9 +134,16 @@ Not allowed in a normal migration (**contract**), because the previous release s
 - `RENAME` of a table or column
 - `ALTER COLUMN ... SET NOT NULL`, `ALTER COLUMN ... TYPE` (table rewrite)
 - `ADD COLUMN ... NOT NULL` without a `DEFAULT`
-- `DELETE FROM` without `WHERE`
+- `DELETE FROM` or `UPDATE` without `WHERE` (or `WHERE true`): an unbounded backfill
+- `CREATE INDEX` without `CONCURRENTLY` on a table the file did not create: it blocks writes for the whole build
 
-`scripts/check-migration-safety.mjs` (CI job "TypeScript + Vitest") fails on those in any migration numbered above 0017. To allow one deliberately, put this line in the file: `-- destructive-ok: <why it is safe, and which release already stopped using it>`.
+`scripts/check-migration-safety.mjs` (CI job "TypeScript + Vitest") fails on those in any migration numbered above 0017. To allow one deliberately, put this line in the file: `-- destructive-ok: <why it is safe, and which release already stopped using it>`. For a reviewed index, `UPDATE` or `DELETE` the narrower `-- backfill-ok: <reason, e.g. offers has 40 rows>` is enough.
+
+### Lock order, index builds and backfills
+
+- **Put exclusive-lock `ALTER`s last.** Drizzle runs all pending files in one transaction, and `ALTER TABLE` takes `ACCESS EXCLUSIVE` on the table until commit. An `ALTER` early in the file holds that lock while every later statement (index builds, backfills) runs, so live traffic on that table stalls for the whole migration. Order each file: new tables and columns, indexes, data statements, and the `ALTER`s that need an exclusive lock (constraints, `SET NOT NULL`, type changes) last, so they hold the lock for milliseconds. `lock_timeout` (5 s) makes the migration fail instead of queueing behind traffic.
+- **Split backfills.** Never one `UPDATE` over a large table inside a migration. Ship the column in the migration, then backfill in batches from a script in `packages/db/scripts` (`UPDATE ... WHERE id IN (SELECT id ... LIMIT 1000)` in a loop, dry-run first, `--apply` after), and only then add the constraint in a later migration.
+- **Indexes on big tables.** A normal migration cannot `CREATE INDEX CONCURRENTLY` (it cannot run inside a transaction). For a table that is not small, create the index by hand off-peak with `CREATE INDEX CONCURRENTLY IF NOT EXISTS ...` (unpooled URL), then ship the migration with `CREATE INDEX IF NOT EXISTS` and a `-- backfill-ok: index already built concurrently` marker so it is a no-op.
 
 Doing a rename or a drop safely takes releases, not one migration:
 
@@ -197,6 +211,7 @@ Reference load: Ambrosia. Capacity estimate behind the numbers: about 1,500 conc
 | Shadow mode (`shadow_mode.enabled` app setting) | Evaluation still runs, but every cart action, code add/remove and gift slider is suppressed | On-call engineer | `setShadowMode(shopId, true)` (admin settings) | within 30 s (cached) |
 | Pause an offer | That offer stops applying in Functions and the storefront | Merchant or on-call via admin | Offer page → Pause (republishes the shop config) | seconds |
 | Deactivate the automatic discount nodes | Function discounts stop entirely (last resort, merchant-visible) | Engineering lead with merchant approval | Shopify admin → Discounts → deactivate `promo-engine-*` nodes | immediate |
+| Drift repair pause (`DRIFT_REPAIR_DISABLED=true`, or `setDriftRepairPaused(shopId, true)` for one shop) | Stops the 5-minute drift repair from re-activating nodes a merchant switched off and republishing code nodes, which would undo an emergency "deactivate the nodes" within 5 minutes. Detection continues and Sentry gets an info event "Discount drift detected, repair is paused" per shop every 5 minutes. **Pause this before deactivating nodes; unpause when the emergency ends.** | Engineering lead | Vercel env + redeploy (all shops), or the app setting `drift_repair.paused` (one shop). See [Drift repair pause switch](#drift-repair-pause-switch) | one redeploy, or within the next cron run |
 
 `ENABLE_WASM_EVALUATOR` appears (empty) in `apps/shopify-admin/.env.production` but **no code reads it**; do not rely on it. The checkout evaluator is the Rust Functions, and the only ways to take it out of the path are pausing offers or deactivating the discount nodes above. Open item for the orchestrator: delete the unused variable from `.env.production` or wire it.
 
@@ -205,7 +220,7 @@ Reference load: Ambrosia. Capacity estimate behind the numbers: about 1,500 conc
 - One named on-call per shift (engineering lead assigns; the on-call owns every kill switch above) and one merchant contact for the embed toggle.
 - Watch: Sentry (error rate, `cron-*` monitors), Vercel (function errors, duration, concurrency), Neon (connections, CPU, slow queries), Upstash (command rate, errors), `/api/health`.
 - Expected under load: some 429s (`RATE_LIMITED`) from a single cart token (a loop) are healthy; sustained shop-wide 429s mean the cap is below real demand: raise `EVALUATE_SHOP_LIMIT_PER_MINUTE` only after checking Neon headroom.
-- If Redis is down, evaluation still works (DB fallback), but every request pays the DB cost: expect higher Neon load and watch the shop cap.
+- If Redis is down, evaluation still works. The shop-wide caps are **skipped** (they would otherwise upsert one hot `rate_limits` row per shop on every request), while the per-cart-token, per-customer and missed-code limits fall back to the database: expect higher Neon load, and no shop-wide shedding until Redis is back. See [Storefront rate limits and code guessing](#storefront-rate-limits-and-code-guessing).
 
 ### After
 
@@ -217,7 +232,7 @@ User action U3. Create in Sentry (org → Alerts), project = shopify-admin:
 
 1. **Error spike**: issue alert, "number of events in an issue is more than 20 in 5 minutes", environment `production`, notify the on-call channel.
 2. **New issue in production**: "a new issue is created", environment `production`, low-priority channel.
-3. **Cron monitors**: Monitors → Crons shows `cron-offers`, `cron-catalog-sync`, `cron-gift-stock`, `cron-skio-shipping`, `cron-analytics-cleanup`, created automatically from the first check-in (schedule and margins come from the code). Add an alert on each: "missed check-in" and "failed check-in" (2 consecutive, matches `failure_issue_threshold`). Only the cron-owning project checks in; if HPN shows up here, `CRONS_ENABLED=false` is not applied.
+3. **Cron monitors**: Monitors → Crons shows `cron-offers`, `cron-catalog-sync`, `cron-gift-stock`, `cron-skio-shipping`, `cron-analytics-cleanup`, created automatically from the first check-in (schedule and margins come from the code). Add an alert on each: "missed check-in" and "failed check-in" (2 consecutive, matches `failure_issue_threshold`). Only the cron-owning project checks in; if Ambrosia shows up here, its `CRONS_ENABLED=false` is not applied.
 4. **Function errors**: Shopify Partner Dashboard → app → Monitoring → Functions: enable email alerts for failed runs for the discount, delivery, validation and transform Functions on both apps. Function failures never reach Sentry.
 5. **Uptime**: any uptime monitor (Sentry Uptime, Better Stack, Vercel checks) on `https://freebies-app-ambrosia.vercel.app/api/health` and `https://freebies-app-shopify-admin.vercel.app/api/health`, 1-minute interval, alert after 2 failures.
 6. **Vercel**: Settings → Notifications → deployment failed, and Spend/usage alerts.
@@ -281,12 +296,80 @@ Ingestion hardening (shipped): stored `properties` are an allowlist of scalar fi
 
 | Variable | Project | Purpose | Default |
 |---|---|---|---|
-| `CRONS_ENABLED` | both | `true` on the cron owner (Ambrosia), `false` on the other | unset = crons run |
+| `CRONS_ENABLED` | both | `true` on the cron owner (HPN), `false` on Ambrosia | unset = crons run |
 | `CRONS_DISABLED` / `DISABLE_CRONS` | either | alternative opt-outs | unset |
 | `ENABLE_STOREFRONT_RUNTIME` | either | `false` = evaluate returns an inert result | unset = on |
-| `EVALUATE_SHOP_LIMIT_PER_MINUTE` | either | shop-wide evaluate cap | 12000 |
+| `EVALUATE_SHOP_LIMIT_PER_MINUTE` | either | shop-wide evaluate cap for callers without a cart token or a prior successful evaluation | 12000 |
+| `EVALUATE_KNOWN_SHOP_LIMIT_PER_MINUTE` | either | shop-wide cap for cart tokens that already completed an evaluation | 3x the previous |
+| `EVALUATE_CALLER_LIMIT_PER_MINUTE`, `EVALUATE_IP_LIMIT_PER_MINUTE` | either | per cart token / customer, and per IP (direct callers only) | 120, 600 |
+| `BUNDLE_SHOP_LIMIT_PER_MINUTE`, `PRODUCT_CUSTOMIZATIONS_SHOP_LIMIT_PER_MINUTE`, `ORDER_ATTRIBUTION_SHOP_LIMIT_PER_MINUTE`, `ANALYTICS_SHOP_LIMIT_PER_MINUTE` | either | shop-wide caps of the other storefront endpoints | 12000, 24000, 3000, 12000 |
+| `CODE_MISS_SHOP_LIMIT` | either | missed discount codes per 10 min before the shop's code matching is locked | 500 |
+| `CRON_PROJECT` | either | names the project in the cron lock key when `VERCEL_PROJECT_ID` is absent | unset |
+| `DRIFT_REPAIR_DISABLED` | either | `true` = drift repair detects and alerts but never repairs | unset |
 | `DB_STATEMENT_TIMEOUT_MS` | either | opt-in startup `statement_timeout` for the app pool (test on a preview first: a transaction-mode pooler may reject startup parameters). Pooler-safe alternative: `ALTER ROLE <app_role> SET statement_timeout = '15s';` run once in Neon | unset = none |
 | `DATABASE_URL_UNPOOLED` | both | **required** for migrations | none |
 | `MIGRATION_LOCK_TIMEOUT_MS`, `MIGRATION_STATEMENT_TIMEOUT_MS`, `MIGRATION_LOCK_WAIT_MS`, `MIGRATION_ATTEMPTS` | both | migration tuning | 5000, 120000, 120000, 4 |
 | `ANALYTICS_RETENTION_DAYS` | either | analytics retention | 90 |
 | `ENABLE_GRAPHQL_CONSOLE` | both | must be unset in production (U4) | unset |
+
+## Storefront rate limits and code guessing
+
+Every app-proxy endpoint is rate limited by shop-wide counters (Redis fixed window, O(1)) and, for logged-in visitors and cart tokens, per-caller counters. The client IP is never a key behind the proxy (it is Shopify's address).
+
+**Evaluate (`/apps/promo-engine/evaluate`) keeps two shop budgets so anonymous traffic cannot lock real shoppers out.**
+
+- `evaluate:shop:<shop>` (`EVALUATE_SHOP_LIMIT_PER_MINUTE`) counts and sheds callers with no cart token, or a token that has not completed an evaluation yet.
+- `evaluate:shop-known:<shop>` (`EVALUATE_KNOWN_SHOP_LIMIT_PER_MINUTE`, default 3x) counts callers whose cart token was marked as seen: after every successful evaluation the token is stored in Redis (`evaluate:seen:<shop>:<token>`, 30 min). Bot traffic can exhaust the first budget; shoppers who already evaluated once keep working on the second.
+- Per cart token and per signed customer: `EVALUATE_CALLER_LIMIT_PER_MINUTE` (120/min), on the database when Redis is down.
+- A 429 carries `Retry-After` (seconds) with 0 to 10 s of server-side jitter on top of the window remainder, so shed clients do not return on the same tick. Clients should wait at least that long and add their own small jitter and exponential backoff.
+- **Redis down:** the shop-wide counters are skipped (`onRedisUnavailable: "skip"`). No shop-wide shedding until Redis is back; the per-caller limits stay on the database.
+
+**Code guessing (the code gate is a guessing oracle).**
+
+- A request that carries discount codes through the app proxy **must** carry `cart.token` (otherwise `400 CART_TOKEN_REQUIRED`). Only 5 distinct codes are looked at per request.
+- Misses (codes that exist nowhere in the shop) count against the visitor: `code-miss:<shop>:<cart token | c:<customer> | anon>`, 10 per 10 min. No token falls into the shared `anon` bucket, never "no limit".
+- Every miss also counts against `code-miss-shop:<shop>`: `CODE_MISS_SHOP_LIMIT` (500) per 10 min. When it is spent the shop is **locked** for 10 min: every request that carries codes matches nothing (valid codes too, otherwise hits would be distinguishable from misses) and answers 429 `Too many invalid discount codes`. A Sentry warning "Discount code guessing suspected" is raised once per lock. The lock lives in Redis (`code-lock:<shop>`) and in instance memory.
+- Responding: check Sentry for the source (cart tokens, timing). A real campaign with a mistyped code can also trip it; shoppers without codes are unaffected. To lift a lock early, delete the Redis key `code-lock:<shopId>` (Upstash console) and `code-miss-shop:<shopId>:*`; otherwise it expires in 10 min. Raise `CODE_MISS_SHOP_LIMIT` only if the traffic is legitimate.
+
+**Other endpoints.** `bundle`, `product-customizations`, `order-attribution` and `analytics` take their shop cap from `<SCOPE>_SHOP_LIMIT_PER_MINUTE` (see the env table), skipped when Redis is down. Analytics also limits per session id for **every** event of a batch (at most 10 distinct sessions per request; events without a session id share one bucket) and stores no client-supplied order id or amount: revenue comes only from the orders/paid webhook.
+
+**`/api/report-error`** requires an App Bridge session token (`Authorization: Bearer <id token>`, verified locally with the app secret: signature, expiry, audience). Its `dest` shop gets a 30/min budget; the 120/min global ceiling stays. Requests without a valid token get 401. The admin ErrorBoundary must send the token (`await shopify.idToken()`).
+
+**Sentry scrubbing** (`app/lib/sentry-scrub.server.ts`): query params whose name ends in `code`, `token` or `email` (case-insensitive) and the signed proxy params are redacted in request URLs, query strings, breadcrumbs and messages; extras with discount-code, token, secret, password or email keys are replaced wholesale.
+
+## Drift repair pause switch
+
+The 5-minute offers cron includes a drift check that repairs discount nodes (re-activates automatic nodes a merchant switched off, republishes code nodes). During an emergency that deliberately deactivates the discount nodes (see Kill switches), repair would undo the switch within five minutes. Pause it first:
+
+- **Every shop:** set `DRIFT_REPAIR_DISABLED=true` on the Vercel project and redeploy. Drift is still detected (Sentry info event "Discount drift detected, repair is paused" per shop every 5 minutes), but nothing is repaired.
+- **One shop:** set the app setting `drift_repair.paused` to `true` for that shop (`setDriftRepairPaused(shopId, true)` in `app/lib/drift-repair-settings.server.ts`).
+- Remove the pause (and redeploy) when the incident is over, then let the next cron run repair.
+
+## Cart validation and blockOnFailure
+
+The cart-validation Function only blocks placeholder/clone products priced below their minimum. Gift limits, listed variants and offer existence are enforced on the discount side: the discount Function refuses to discount a gift line that breaks them, so it is charged at the variant price like any other line. The validation is registered with `blockOnFailure: false`, so a Function error or instruction overrun never blocks checkout.
+
+Trade-off: if the validation itself fails, a below-minimum placeholder could be bought at its low price. That is accepted because the discount-side caps already prevent free gifts without a valid offer. After a deploy, `validationUpdate` flips existing validations to `false`.
+
+### Function input variables and the `$app:promo_engine` namespace
+
+The Function input variables (`c1` to `c3`, `customerTags`) are now read from `$app:promo_engine`. They live in the same dual-written `function_config` metafield (see [Function config namespace](#function-config-namespace-promo_engine---apppromo_engine)), so the deploy order does not change: **server first, confirm the drift check is clean (no unresolved findings from `/api/cron/offers`), then `shopify app deploy`.** Rolling the Functions back stays safe because the legacy namespace is still written.
+
+## Load testing
+
+`scripts/load/evaluate.k6.js` (profiles `smoke`, `peak`, `soak`) runs **only against hpn-test-store** and goes through the storefront (`https://hpn-test-store.myshopify.com/apps/promo-engine/evaluate`), never the app origin. App-proxy requests need Shopify's signature (`signature`, `timestamp`, `shop`, `logged_in_customer_id` query params, HMAC with the app secret), and **only Shopify's proxy can produce it**: the script therefore cannot sign requests itself. Requesting the app origin directly (`https://freebies-app-shopify-admin.vercel.app/apps/promo-engine/evaluate`) fails signature verification with 401, which would test nothing. Do not copy the app secret into k6 to sign by hand.
+
+Run it from a machine with k6 installed (`winget install k6` / `brew install k6`):
+
+```bash
+k6 run -e STORE_URL=https://hpn-test-store.myshopify.com \
+       -e VARIANT_IDS=gid://shopify/ProductVariant/<id> \
+       -e PROFILE=smoke \
+       [-e STORE_COOKIE='storefront_digest=...'] scripts/load/evaluate.k6.js
+```
+
+Notes for the run:
+
+- The script mints a fresh random cart token per request, so every request counts against the anonymous shop budget (`EVALUATE_SHOP_LIMIT_PER_MINUTE`, 200 rps at the default): it is the worst case for H6, not the typical one. The known-shopper budget is exercised by repeating a token (`__ITER % 50` cycles are not enough: change the script to reuse the token across iterations to test it).
+- 429s now carry a jittered `Retry-After`; the script should not count them as errors above the cap.
+- Watch Neon connections/CPU, Upstash command rate (about 4 commands per evaluate now: seen lookup, shop counter, token counter, seen mark), Vercel concurrency and Sentry.

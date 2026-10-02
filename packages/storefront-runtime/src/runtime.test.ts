@@ -116,6 +116,23 @@ describe("evaluate timeout", () => {
 });
 
 describe("429 + Retry-After", () => {
+  beforeEach(() => void vi.spyOn(Math, "random").mockReturnValue(0.5));
+  afterEach(() => vi.restoreAllMocks());
+
+  it("jitters the delay by +-30% so tabs do not retry in lockstep", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const h = harness([
+      [/cart\.js/, () => json(emptyCart)],
+      [/evaluate/, () => new Response("no", { status: 429, headers: { "Retry-After": "10" } })],
+    ]);
+    const rt = new PromoEngineRuntime(CONFIG);
+    await rt.api.evaluate();
+    await vi.advanceTimersByTimeAsync(6_900);
+    expect(h.count(/evaluate/)).toBe(1);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.count(/evaluate/)).toBe(2);
+  });
+
   it("retries once after the server-specified delay, not before", async () => {
     let evaluateCalls = 0;
     const h = harness([
@@ -143,6 +160,9 @@ describe("429 + Retry-After", () => {
     await rt.api.evaluate();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(h.count(/evaluate/)).toBe(4);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.count(/evaluate/)).toBe(4);
+    expect(h.win.dispatchEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: "promo-engine:cart-mutation-error" }));
   });
 });
 

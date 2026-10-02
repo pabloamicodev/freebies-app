@@ -95,7 +95,7 @@ Two code reviews also fed into it: one of the own-codes commit `60be3d2`, and on
 - Discount-node lookups use `query:` filters.
 
 **D9. Crons run in exactly one Vercel project.**
-- A new env flag `CRONS_ENABLED=true` gates every cron route. Set it on Ambrosia only (user action U1).
+- A new env flag `CRONS_ENABLED` gates every cron route. It is opt-out: HPN owns the crons (`true`), Ambrosia has `false` (done 2026-10-02).
 - Remove the useless evaluate warm cron. Replace it with a cheap DB ping only if measurements show cold starts hurt.
 
 **D10. Storefront hot path.**
@@ -382,7 +382,7 @@ Finish or revert each partial change so that everything is green and coherent: t
 - Watch Sentry for 30 minutes.
 
 ## User actions (cannot be done by agents)
-- **U1.** Set `CRONS_ENABLED=true` on the Ambrosia Vercel project only.
+- **U1. Done 2026-10-02:** HPN `CRONS_ENABLED=true` (owner), Ambrosia `CRONS_ENABLED=false`.
 - **U2.** Confirm the Neon PITR window and plan.
 - **U3.** Create the Sentry alert rules (error spike, cron monitor missed, function errors) and an uptime monitor on `/api/health`.
 - **U4.** Make sure `ENABLE_GRAPHQL_CONSOLE` is unset in production on both projects.

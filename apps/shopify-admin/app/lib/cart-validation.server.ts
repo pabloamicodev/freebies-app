@@ -143,7 +143,7 @@ export async function syncCartValidation(
         validation: {
           title: VALIDATION_TITLE,
           enable: true,
-          blockOnFailure: true,
+          blockOnFailure: false,
           metafields: metafieldsFor(existing),
         },
       },
@@ -169,7 +169,7 @@ export async function syncCartValidation(
           title: VALIDATION_TITLE,
           functionHandle: VALIDATION_FUNCTION_HANDLE,
           enable: true,
-          blockOnFailure: true,
+          blockOnFailure: false,
           metafields: metafieldsFor(undefined),
         },
       },

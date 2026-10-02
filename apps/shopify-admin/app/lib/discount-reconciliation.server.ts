@@ -5,6 +5,7 @@ import { FUNCTION_CONFIG_NAMESPACES, publishOffersForShop } from "./sync/offer-p
 import { decryptToken } from "./token-crypto.server.js";
 import { shopifyGraphQL } from "./shopify-fetch.server.js";
 import { configHash, readPublishManifest, type PublishManifest } from "./publish-manifest.server.js";
+import { isDriftRepairGloballyDisabled, isDriftRepairPausedForShop } from "./drift-repair-settings.server.js";
 import {
   VALIDATION_FUNCTION_HANDLE,
   VALIDATION_METAFIELD_KEY,
@@ -106,6 +107,10 @@ export interface DiscountDriftResult {
   shops: number;
   drifted: number;
   repaired: number;
+  /** Drift found but not repaired because repair is paused (kill switch); one info event per shop. */
+  paused: number;
+  /** The repair publish was parked (lock timeout / unknown outcome); the cron retries it, no alert. */
+  deferred: number;
   /** Still wrong after the repair publish; an alert was raised for each shop. */
   unresolved: DriftFinding[];
   failures: Array<{ shopId: string; error: string }>;
@@ -304,6 +309,98 @@ async function checkCodeCounts(
   return findings;
 }
 
+const NODE_CODES_MAX_PAGES = 100;
+
+/** Every code on a code node, uppercased; null when the node is too big to list (a repair can't pinpoint codes). */
+async function readNodeCodes(
+  shop: { domain: string; accessToken: string },
+  nodeId: string,
+  graphQL: DriftDeps["graphQL"],
+): Promise<Set<string> | null> {
+  const codes = new Set<string>();
+  let after: string | null = null;
+  for (let page = 0; page < NODE_CODES_MAX_PAGES; page += 1) {
+    const data: {
+      codeDiscountNode: {
+        codeDiscount: {
+          codes?: { nodes: Array<{ code: string }>; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+        };
+      } | null;
+    } = await graphQL({
+      shopDomain: shop.domain,
+      accessToken: shop.accessToken,
+      query: `query PromoEngineNodeCodes($id: ID!, $after: String) {
+        codeDiscountNode(id: $id) {
+          codeDiscount { ... on DiscountCodeApp { codes(first: 250, after: $after) { nodes { code } pageInfo { hasNextPage endCursor } } } }
+        }
+      }`,
+      variables: { id: nodeId, after },
+    });
+    const connection = data.codeDiscountNode?.codeDiscount.codes;
+    if (!connection) return codes;
+    for (const node of connection.nodes) codes.add(node.code.toUpperCase());
+    if (!connection.pageInfo.hasNextPage || !connection.pageInfo.endCursor) return codes;
+    after = connection.pageInfo.endCursor;
+  }
+  return null;
+}
+
+/**
+ * A code the database says is on a node but Shopify doesn't have (deleted in the Shopify admin) is
+ * queued for exactly one re-add: its synced flag is cleared and the repair publish attaches it again.
+ * If that re-add fails (taken by another discount, rejected) the publisher disables the code with a
+ * note, so the same deletion can never keep the drift repair running.
+ */
+export async function queueMissingCodesForReadd(
+  shop: { id: string; domain: string; accessToken: string },
+  codeNodeId: string,
+  graphQL: DriftDeps["graphQL"],
+): Promise<number> {
+  const db = getDb();
+  const [offer] = await db
+    .select({ id: offers.id })
+    .from(offers)
+    .where(and(eq(offers.shopId, shop.id), eq(offers.codeDiscountId, codeNodeId)))
+    .limit(1);
+  if (!offer) return 0;
+  const onNode = await readNodeCodes(shop, codeNodeId, graphQL);
+  if (!onNode) {
+    Sentry.captureMessage("Code node too large to pinpoint missing codes", {
+      level: "warning",
+      tags: { shopId: shop.id, cron: "drift-repair" },
+      extra: { nodeId: codeNodeId },
+    });
+    return 0;
+  }
+  const synced = await db
+    .select({ id: discountCodes.id, code: discountCodes.code })
+    .from(discountCodes)
+    .where(
+      and(
+        eq(discountCodes.shopId, shop.id),
+        eq(discountCodes.offerId, offer.id),
+        isNotNull(discountCodes.shopifySyncedAt),
+        isNull(discountCodes.shopifySyncPendingAt),
+      ),
+    );
+  const missing = synced.filter((row) => !onNode.has(row.code.toUpperCase()));
+  for (let offset = 0; offset < missing.length; offset += 1_000) {
+    await db
+      .update(discountCodes)
+      .set({ shopifySyncedAt: null, shopifyReaddAttemptedAt: new Date(), updatedAt: new Date() })
+      .where(
+        and(
+          eq(discountCodes.shopId, shop.id),
+          inArray(
+            discountCodes.id,
+            missing.slice(offset, offset + 1_000).map((row) => row.id),
+          ),
+        ),
+      );
+  }
+  return missing.length;
+}
+
 async function reactivateAutomaticNodes(
   shop: { domain: string; accessToken: string },
   findings: DriftFinding[],
@@ -350,7 +447,16 @@ export async function runDiscountDriftRepair(
     .from(shops)
     .where(eq(shops.isActive, true));
 
-  const result: DiscountDriftResult = { shops: 0, drifted: 0, repaired: 0, unresolved: [], failures: [] };
+  const globallyPaused = isDriftRepairGloballyDisabled();
+  const result: DiscountDriftResult = {
+    shops: 0,
+    drifted: 0,
+    repaired: 0,
+    paused: 0,
+    deferred: 0,
+    unresolved: [],
+    failures: [],
+  };
   for (const row of activeShops) {
     // Shops that never published have nothing on Shopify to drift from.
     if (!row.discountId && !row.deliveryDiscountId) continue;
@@ -369,22 +475,58 @@ export async function runDiscountDriftRepair(
       if (found.length === 0) continue;
       result.drifted += 1;
 
+      const summary = (list: DriftFinding[]) => list.map(({ issue, nodeId, detail }) => ({ issue, nodeId, detail }));
+      if (globallyPaused || (await isDriftRepairPausedForShop(row.id))) {
+        result.paused += 1;
+        Sentry.captureMessage("Discount drift detected, repair is paused", {
+          level: "info",
+          tags: { shopId: row.id, cron: "drift-repair" },
+          extra: { scope: globallyPaused ? "DRIFT_REPAIR_DISABLED" : "drift_repair.paused", findings: summary(found) },
+        });
+        continue;
+      }
+
       await reactivateAutomaticNodes(shop, found, graphQL);
-      await publish(row.id, row.domain);
-      const after = await checkShopDrift(shop, await readPublishManifest(row.id), graphQL);
+      for (const finding of found) {
+        if (finding.issue === "code_count_mismatch" && finding.nodeId) {
+          await queueMissingCodesForReadd(shop, finding.nodeId, graphQL);
+        }
+      }
+      const outcome = await publish(row.id, row.domain);
+      if (outcome === "pending") {
+        // The publish was parked behind a lock or a timed-out request; its retry rewrites the manifest.
+        // Checking now would compare against the old manifest and raise a false alert.
+        result.deferred += 1;
+        continue;
+      }
+      // The publish may have created nodes (new ids on the shop row) and rewrote the manifest.
+      const [fresh] = await db
+        .select({ discountId: shops.discountId, deliveryDiscountId: shops.deliveryDiscountId })
+        .from(shops)
+        .where(eq(shops.id, row.id))
+        .limit(1);
+      const after = await checkShopDrift(
+        {
+          ...shop,
+          discountId: fresh?.discountId ?? shop.discountId,
+          deliveryDiscountId: fresh?.deliveryDiscountId ?? shop.deliveryDiscountId,
+        },
+        await readPublishManifest(row.id),
+        graphQL,
+      );
       if (after.length === 0) {
         result.repaired += 1;
         Sentry.captureMessage("Discount drift repaired", {
           level: "warning",
           tags: { shopId: row.id, cron: "drift-repair" },
-          extra: { findings: found.map(({ issue, nodeId, detail }) => ({ issue, nodeId, detail })) },
+          extra: { findings: summary(found) },
         });
       } else {
         result.unresolved.push(...after);
         Sentry.captureMessage("Discount drift could not be repaired", {
           level: "error",
           tags: { shopId: row.id, cron: "drift-repair" },
-          extra: { findings: after.map(({ issue, nodeId, detail }) => ({ issue, nodeId, detail })) },
+          extra: { findings: summary(after) },
         });
       }
     } catch (error) {

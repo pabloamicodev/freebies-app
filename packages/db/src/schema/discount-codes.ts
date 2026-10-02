@@ -48,6 +48,10 @@ export const discountCodes = pgTable(
      * this while unsynced may already be live on Shopify (crash / timeout mid-call), so it must
      * not be deleted and the next publish looks it up instead of assuming it is absent. */
     shopifySyncPendingAt: timestamp("shopify_sync_pending_at", { withTimezone: true }),
+    /** Set when drift repair found this synced code missing on its node and queued it for one re-add. */
+    shopifyReaddAttemptedAt: timestamp("shopify_readd_attempted_at", { withTimezone: true }),
+    /** Why the app disabled the code on its own (e.g. deleted in Shopify and could not be re-added). */
+    syncNote: text("sync_note"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

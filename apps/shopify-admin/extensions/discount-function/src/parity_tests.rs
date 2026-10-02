@@ -365,5 +365,79 @@ mod budget {
         }
     }
 
+    fn page_conditioned_cart(offers: usize) -> String {
+        page_conditioned_cart_with(&vec!["product"; offers])
+    }
+
+    /// One offer per entry, each restricted to lines added from the given page type.
+    fn page_conditioned_cart_with(page_types: &[&str]) -> String {
+        let offer = |index: usize| {
+            json!({
+                "id": format!("offer-{index}"), "version": 1, "offerType": "discount", "priority": 100 + index as i64,
+                "stopLowerPriority": false, "requiredProductIds": [], "requiredVariantIds": [], "excludedProductIds": [],
+                "giftVariantIds": [], "giftProductIds": [], "discountType": "percentage", "discountValue": 10,
+                "currencyCode": "USD", "combinesWithOrderDiscounts": true, "combinesWithShippingDiscounts": true,
+                "combinesWithProductDiscounts": true, "requirements": [], "orderRewards": [],
+                "restrictToMatchedLines": true,
+                "pageUrlConditions": [{ "patterns": [page_types[index]], "matchMode": "page_type" }],
+                "productRewards": [{
+                    "id": format!("reward-{index}"), "rewardType": "product_discount", "targetProductIds": [], "targetVariantIds": [],
+                    "discountType": "percentage", "discountValue": 10, "subscriptionMode": "any", "scopeMode": "sitewide",
+                    "requiredAnchorVariantIds": [], "requiredAnchorMinQuantity": 1, "requiresAnchorSubscription": false,
+                    "priceTiers": [], "discountPercentageOnGifts": 100
+                }]
+            })
+        };
+        let lines: Vec<Value> = (0..40)
+            .map(|index| {
+                json!({
+                    "id": format!("gid://shopify/CartLine/{index}"),
+                    "variantId": format!("gid://shopify/ProductVariant/{index}"),
+                    "productId": format!("gid://shopify/Product/{index}"),
+                    "quantity": 1, "unitPrice": "19.00", "lineType": Value::Null,
+                    "metadata": { "_promo_page_url": format!("/en/products/item-{index}?utm_source=email") },
+                })
+            })
+            .collect();
+        let fixture = json!({
+            "config": { "offers": (0..page_types.len()).map(offer).collect::<Vec<_>>() },
+            "cart": { "currency": "USD", "presentmentCurrencyRate": 1, "country": "US", "customerTags": [], "enteredCodes": [], "lines": lines },
+        });
+        function_input(&fixture).to_string()
+    }
+
+    fn allocations_per_run(input: &str) -> (u64, usize) {
+        let first = run_function_with_input(run, input).expect("should not error");
+        let discounted: usize = outcomes(&first).values().map(|lines| lines.len()).sum();
+        let before = ALLOCATIONS.with(Cell::get);
+        for _ in 0..10 {
+            run_function_with_input(run, input).expect("should not error");
+        }
+        ((ALLOCATIONS.with(Cell::get) - before) / 10, discounted)
+    }
+
+    /// Page matching is cached per line per distinct condition set, so ten offers sharing the same
+    /// page conditions cost one match per line rather than ten.
+    #[test]
+    fn ten_page_conditioned_offers_over_40_lines_do_not_rematch_each_line_per_offer() {
+        let (one, discounted_one) = allocations_per_run(&page_conditioned_cart(1));
+        let (ten, discounted_ten) = allocations_per_run(&page_conditioned_cart(10));
+        println!("page-conditioned: 1 offer {one} allocations/run, 10 offers {ten} allocations/run");
+        assert_eq!(discounted_one, 40);
+        assert!(discounted_ten >= 40, "every offer's lines still get discounted");
+        assert!(ten < PAGE_CONDITIONED_LIMIT, "10 offers x 40 lines: {ten} allocations per run");
+    }
+
+    #[test]
+    fn different_page_condition_sets_do_not_share_cached_matches() {
+        let input = page_conditioned_cart_with(&["product", "collection"]);
+        let result = run_function_with_input(run, &input).expect("should not error");
+        let discounted = outcomes(&result);
+        assert_eq!(discounted.get("offer-0").map(|lines| lines.len()), Some(40));
+        assert!(!discounted.contains_key("offer-1"), "collection offer must not match product-page lines");
+    }
+
+    // Measured ~6.6k (7.0k before the cache); the rest is the 400 candidates themselves.
+    const PAGE_CONDITIONED_LIMIT: u64 = 8_000;
     const ALLOCATION_LIMIT: u64 = 13_000;
 }

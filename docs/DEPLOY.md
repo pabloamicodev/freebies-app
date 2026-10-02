@@ -13,7 +13,7 @@ The GitHub repo is git-connected to two Vercel projects, and **both build from `
 
 Env vars (Shopify client id/secret, `DATABASE_URL`, `CRON_SECRET`, …) are per project. Set them in both when a new one is added. Both projects run Node 24.x (root `engines`, CI and Vercel agree).
 
-**Crons run in one project only.** Both projects deploy the same `vercel.json`, so the project that is not the owner sets `CRONS_ENABLED=false` (Ambrosia sets `true`). Unset = crons run. Details and the exact steps: `docs/RUNBOOK.md#cron-ownership-d9`. Cron routes need a literal `export const config = { maxDuration: N }` (the Vercel preset parses it statically); `cron-config.test.ts` keeps it in line with `CRON_JOBS`.
+**Crons run in one project only.** Both projects deploy the same `vercel.json`, so HPN (the owner) has `CRONS_ENABLED=true` and Ambrosia has `CRONS_ENABLED=false` (both set 2026-10-02). The code is opt-out: unset = crons run, so both must stay set. Details and the exact steps: `docs/RUNBOOK.md#cron-ownership-d9`. Cron routes need a literal `export const config = { maxDuration: N }` (the Vercel preset parses it statically); `cron-config.test.ts` keeps it in line with `CRON_JOBS`.
 
 `DATABASE_URL_UNPOOLED` is **required** on both projects: migrations never fall back to the pooled URL.
 

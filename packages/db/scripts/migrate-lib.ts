@@ -71,6 +71,23 @@ export async function retryTransient<T>(
   }
 }
 
+/**
+ * Runs `run` under the migration advisory lock, retrying transient failures. The lock belongs to the
+ * database connection: a connection-class error (ECONNRESET, 57P01, 08xxx...) silently drops it and postgres.js
+ * reconnects with a fresh session, so every attempt takes the lock again before touching the schema. Taking it
+ * twice on a surviving session is harmless (the final `pg_advisory_unlock_all` / session end releases it).
+ */
+export async function runLockedWithRetry<T>(
+  acquireLock: () => Promise<void>,
+  run: () => Promise<T>,
+  options: Parameters<typeof retryTransient>[1],
+): Promise<T> {
+  return retryTransient(async () => {
+    await acquireLock();
+    return run();
+  }, options) as Promise<T>;
+}
+
 export interface JournalEntry {
   idx: number;
   tag: string;

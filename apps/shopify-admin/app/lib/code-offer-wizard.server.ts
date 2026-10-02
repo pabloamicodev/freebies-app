@@ -18,6 +18,7 @@ import {
   validateRewardPayload,
   type PageType,
 } from "@promo/shared-types";
+import { toStoredAmount } from "./money.js";
 import { compileOfferConfig, serializeFunctionConfig } from "./sync/compile-config.js";
 import { createDiscountCode, createDiscountCodeBatch, validateBatchEntropy, type CodeSettings } from "./discount-codes.server.js";
 import { CODE_CHARSETS, type BatchSpec, type CodeCharset } from "./discount-code-generation.js";
@@ -196,7 +197,7 @@ function parseReward(formData: FormData, currencyCode: string): Result<{ target:
   if (!Number.isFinite(amount) || amount <= 0) return fail("Enter a discount greater than zero.");
   if (discountType === "percentage" && amount > 100) return fail("A percentage discount can't be more than 100%.");
   const value = {
-    amount: discountType === "percentage" ? amount : Math.round(amount * 100),
+    amount: discountType === "percentage" ? amount : toStoredAmount(amount, currencyCode),
     currencyCode,
   };
 

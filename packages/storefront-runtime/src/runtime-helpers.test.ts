@@ -166,3 +166,13 @@ describe("trapTarget (today-offer dialog focus trap)", () => {
     expect(trapTarget({ querySelectorAll: () => [] } as unknown as ParentNode, null, false)).toBeNull();
   });
 });
+
+import { withJitter } from "./runtime-helpers.js";
+
+describe("withJitter", () => {
+  it("spans 70%..130% of the base delay", () => {
+    expect(withJitter(1000, () => 0)).toBe(700);
+    expect(withJitter(1000, () => 0.5)).toBe(1000);
+    expect(withJitter(1000, () => 1)).toBe(1300);
+  });
+});

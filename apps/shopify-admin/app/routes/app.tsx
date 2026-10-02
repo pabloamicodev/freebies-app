@@ -154,12 +154,15 @@ export function ErrorBoundary() {
         ? `${error.status} ${error.statusText}: ${typeof error.data === "string" ? error.data : JSON.stringify(error.data)}`
         : JSON.stringify(error);
     const stack = error instanceof Error ? (error.stack ?? "") : "";
-    const shop = new URLSearchParams(window.location.search).get("shop");
-    fetch(`/api/report-error${shop ? `?shop=${encodeURIComponent(shop)}` : ""}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, stack, url: window.location.href }),
-    }).catch(() => undefined);
+    void (async () => {
+      const token = await (window as { shopify?: { idToken?: () => Promise<string> } }).shopify?.idToken?.().catch(() => null);
+      if (!token) return;
+      await fetch("/api/report-error", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ message, stack, url: window.location.href }),
+      });
+    })().catch(() => undefined);
   }, [error, isClientError]);
 
   if (isShopifyAuthResponse) return boundary.error(error);

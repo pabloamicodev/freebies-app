@@ -26,6 +26,7 @@ import {
   type ShippingDiscountTier,
 } from "@promo/shared-types";
 import { and, eq } from "drizzle-orm";
+import { toStoredAmount, fromStoredAmount } from "../lib/money.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { targetSummaryParts } from "../lib/offer-summaries.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -118,7 +119,7 @@ function LandingIntegrationContract({ source }: { source: string }) {
 }
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { shopId, db, currencyCode: shopCurrencyCode } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
@@ -129,6 +130,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
   return {
     offer,
+    shopCurrencyCode,
     rewards: rewardRows.sort((a, b) => a.sortOrder - b.sortOrder),
   };
 };
@@ -139,6 +141,7 @@ async function buildRewardRecord(
   formData: FormData,
   db: ShopDb,
   shopId: string,
+  shopCurrencyCode: string,
 ): Promise<
   | {
       data: {
@@ -190,7 +193,7 @@ async function buildRewardRecord(
     const rawLabel = formData.get("label");
     const label = typeof rawLabel === "string" && rawLabel.trim() ? rawLabel.trim() : null;
     if (label && label.length > 120) return { error: "Reward label cannot exceed 120 characters." };
-    const currencyCode = String(formData.get("currencyCode") || "USD")
+    const currencyCode = String(formData.get("currencyCode") || shopCurrencyCode)
       .trim()
       .toUpperCase();
     if (!/^[A-Z]{3}$/.test(currencyCode))
@@ -407,7 +410,7 @@ async function buildRewardRecord(
             : ordinaryTarget;
       }
       value = {
-        amount: discountType === "percentage" ? discountValue : Math.round(discountValue * 100),
+        amount: discountType === "percentage" ? discountValue : toStoredAmount(discountValue, currencyCode),
         currencyCode,
       };
     }
@@ -433,14 +436,14 @@ async function buildRewardRecord(
 }
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session, shopId, db } = await getShopContext(request);
+  const { session, shopId, db, currencyCode: shopCurrencyCode } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
   if (intent === "add_reward" || intent === "update_reward") {
-    const built = await buildRewardRecord(formData, db, shopId);
+    const built = await buildRewardRecord(formData, db, shopId, shopCurrencyCode);
     if ("error" in built) return { error: built.error };
     const { rewardType, discountType, value, target, quantity, isAutoAdd, isCustomerSelectable, trackMode, label } = built.data;
 
@@ -591,7 +594,7 @@ const DEFAULT_SHIPPING_TIER: ShippingTierDraft = {
 };
 
 export default function OfferRewardsPage() {
-  const { offer, rewards } = useLoaderData<typeof loader>();
+  const { offer, rewards, shopCurrencyCode } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const navigation = useNavigation();
   const submit = useSubmit();
@@ -606,7 +609,7 @@ export default function OfferRewardsPage() {
     selectedGiftGids: [] as string[],
     fallbackPickerOpen: false,
     fallbackGids: [] as string[],
-    currencyCode: "USD",
+    currencyCode: shopCurrencyCode,
     giftQuantity: "1",
     shippingTiers: [{ ...DEFAULT_SHIPPING_TIER }],
     deliveryGroupTypes: ["ONE_TIME_PURCHASE", "SUBSCRIPTION"] as DeliveryGroupType[],
@@ -693,7 +696,7 @@ export default function OfferRewardsPage() {
     setAdding(true);
     setRewardType(r.rewardType);
     setDiscountType(r.discountType);
-    setCurrencyCode(typeof value["currencyCode"] === "string" ? (value["currencyCode"] as string) : "USD");
+    setCurrencyCode(typeof value["currencyCode"] === "string" ? (value["currencyCode"] as string) : shopCurrencyCode);
     setGiftQuantity(r.quantity != null ? String(r.quantity) : "1");
 
     const targetVariantIds = Array.isArray(target["variantIds"]) ? target["variantIds"] as string[] : [];
@@ -1054,7 +1057,7 @@ export default function OfferRewardsPage() {
                             typeof editingRewardValue["amount"] === "number"
                               ? (discountType === "percentage" || discountType === "most_expensive_item_discount"
                                   ? editingRewardValue["amount"]
-                                  : (editingRewardValue["amount"] as number) / 100)
+                                  : fromStoredAmount(editingRewardValue["amount"] as number, typeof editingRewardValue["currencyCode"] === "string" ? editingRewardValue["currencyCode"] : shopCurrencyCode))
                               : undefined
                           }
                         />

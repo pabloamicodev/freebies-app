@@ -16,7 +16,7 @@ import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { isLocalDatabaseUrl, normalizeDatabaseUrl } from "../src/connection-url.js";
-import { MIGRATION_LOCK_KEY, resolveMigrationSettings, retryTransient } from "./migrate-lib.js";
+import { MIGRATION_LOCK_KEY, resolveMigrationSettings, runLockedWithRetry } from "./migrate-lib.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.join(__dirname, "..", "drizzle");
@@ -46,16 +46,21 @@ async function acquireAdvisoryLock(): Promise<void> {
 }
 
 try {
-  await acquireAdvisoryLock();
-  console.info("[migrate] advisory lock acquired, applying migrations...");
-  await retryTransient(() => migrate(drizzle(sql), { migrationsFolder }), {
-    attempts: settings.attempts,
-    onRetry: (error, attempt) =>
-      console.warn(`[migrate] attempt ${attempt} failed (${(error as { code?: string }).code ?? "error"}), retrying`),
-  });
+  await runLockedWithRetry(
+    async () => {
+      await acquireAdvisoryLock();
+      console.info("[migrate] advisory lock held, applying migrations...");
+    },
+    () => migrate(drizzle(sql), { migrationsFolder }),
+    {
+      attempts: settings.attempts,
+      onRetry: (error, attempt) =>
+        console.warn(`[migrate] attempt ${attempt} failed (${(error as { code?: string }).code ?? "error"}), retrying (lock is re-acquired)`),
+    },
+  );
   console.info("[migrate] completed");
 } finally {
-  await sql`select pg_advisory_unlock(${MIGRATION_LOCK_KEY})`.catch((err) => {
+  await sql`select pg_advisory_unlock_all()`.catch((err) => {
     console.error("[migrate] failed to release advisory lock", err instanceof Error ? err.message : err);
   });
   await sql.end();

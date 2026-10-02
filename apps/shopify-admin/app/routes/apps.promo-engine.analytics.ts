@@ -3,7 +3,7 @@ import { getDb, analyticsEvents, offers, widgets } from "@promo/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { AnalyticsRequestSchema, analyticsEventName, normalizeAnalyticsRequest } from "@promo/shared-types";
 import { getSignedShopCached } from "../lib/proxy-shop.server.js";
-import { checkRateLimit } from "../lib/rate-limit.server.js";
+import { checkRateLimit, envLimit, jitteredRetryAfter } from "../lib/rate-limit.server.js";
 import { sanitizeAnalyticsProperties } from "../lib/analytics-properties.server.js";
 import { apiError, apiJson, handleApiError, readJsonBody } from "../lib/api-response.server.js";
 
@@ -12,8 +12,12 @@ import { apiError, apiJson, handleApiError, readJsonBody } from "../lib/api-resp
 export const config = { maxDuration: 15 };
 
 const MAX_ANALYTICS_BODY_BYTES = 64 * 1024;
-const ANALYTICS_SHOP_LIMIT_PER_MINUTE = 12_000;
 const ANALYTICS_SESSION_LIMIT_PER_MINUTE = 120;
+/** One request may span a few sessions (the pixel batches), but never an unbounded number of rate-limit lookups. */
+const MAX_SESSIONS_PER_REQUEST = 10;
+/** Events without a session id share one bucket, so omitting the id is not a way around the session limit. */
+const NO_SESSION_KEY = "none";
+const NO_SESSION_LIMIT_PER_MINUTE = 600;
 
 function uuidOrNull(value: unknown): string | null {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
@@ -39,9 +43,10 @@ export async function action({ request }: ActionFunctionArgs) {
     // Never keyed by IP (it is Shopify's behind the app proxy): shop-wide ceiling first,
     // per-session budget once the body is parsed.
     const rateLimit = await checkRateLimit(`analytics:${shopId}`, {
-      limit: ANALYTICS_SHOP_LIMIT_PER_MINUTE,
+      limit: envLimit("ANALYTICS_SHOP_LIMIT_PER_MINUTE", 12_000),
       windowMs: 60_000,
       fixedWindow: true,
+      onRedisUnavailable: "skip",
     });
     if (!rateLimit.ok) {
       return apiError(request, {
@@ -49,7 +54,7 @@ export async function action({ request }: ActionFunctionArgs) {
         code: "RATE_LIMITED",
         message: "Too many analytics events.",
         retryable: true,
-        retryAfterSeconds: rateLimit.retryAfterSeconds,
+        retryAfterSeconds: jitteredRetryAfter(rateLimit.retryAfterSeconds),
       });
     }
 
@@ -71,21 +76,32 @@ export async function action({ request }: ActionFunctionArgs) {
     const events = normalizeAnalyticsRequest(parsed.data);
     const eventNames = events.map((event) => analyticsEventName(event)!);
 
-    const sessionKey = boundedString(events[0]!["session_id"] ?? events[0]!["sessionId"], 200);
-    if (sessionKey) {
-      const sessionLimit = await checkRateLimit(`analytics:${shopId}:s:${sessionKey}`, {
-        limit: ANALYTICS_SESSION_LIMIT_PER_MINUTE,
-        windowMs: 60_000,
+    // Every event's session id counts, not just the first: a batch can mix sessions.
+    const sessionKeys = [...new Set(events.map((event) => boundedString(event["session_id"] ?? event["sessionId"], 200) ?? NO_SESSION_KEY))];
+    if (sessionKeys.length > MAX_SESSIONS_PER_REQUEST) {
+      return apiError(request, {
+        status: 400,
+        code: "INVALID_ANALYTICS_PAYLOAD",
+        message: "Too many distinct sessions in one analytics request.",
       });
-      if (!sessionLimit.ok) {
-        return apiError(request, {
-          status: 429,
-          code: "RATE_LIMITED",
-          message: "Too many analytics events.",
-          retryable: true,
-          retryAfterSeconds: sessionLimit.retryAfterSeconds,
-        });
-      }
+    }
+    const sessionLimits = await Promise.all(
+      sessionKeys.map((key) =>
+        checkRateLimit(`analytics:${shopId}:s:${key}`, {
+          limit: key === NO_SESSION_KEY ? NO_SESSION_LIMIT_PER_MINUTE : ANALYTICS_SESSION_LIMIT_PER_MINUTE,
+          windowMs: 60_000,
+        }),
+      ),
+    );
+    const sessionLimit = sessionLimits.find((result) => !result.ok);
+    if (sessionLimit && !sessionLimit.ok) {
+      return apiError(request, {
+        status: 429,
+        code: "RATE_LIMITED",
+        message: "Too many analytics events.",
+        retryable: true,
+        retryAfterSeconds: jitteredRetryAfter(sessionLimit.retryAfterSeconds),
+      });
     }
 
     const trustedCustomerId = loggedInCustomerId && /^\d+$/.test(loggedInCustomerId)

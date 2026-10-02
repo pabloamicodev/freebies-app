@@ -34,6 +34,12 @@ export function cronsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return !(disabled("CRONS_DISABLED") || disabled("DISABLE_CRONS"));
 }
 
+/** Per Vercel project (VERCEL_PROJECT_ID, or CRON_PROJECT to name it by hand), so one project's stuck lock never blocks the other's. */
+export function cronLockKey(name: string, env: NodeJS.ProcessEnv = process.env): string {
+  const project = env["VERCEL_PROJECT_ID"]?.trim() || env["CRON_PROJECT"]?.trim() || "default";
+  return `cron-lock:${project}:${name}`;
+}
+
 async function acquireDbLock(key: string, ttlMs: number): Promise<boolean> {
   const rows = await getDb().execute(sql`
     INSERT INTO rate_limits (key, count, window_start, updated_at)
@@ -51,7 +57,7 @@ async function releaseDbLock(key: string): Promise<void> {
 
 /** Overlap guard. Redis first, `rate_limits` row as fallback; fails open if neither is reachable. */
 export async function acquireCronLock(name: string, ttlMs: number): Promise<(() => Promise<void>) | null> {
-  const key = `cron-lock:${name}`;
+  const key = cronLockKey(name);
   const token = randomUUID();
   try {
     const viaRedis = await redisAcquireLock(key, token, ttlMs);

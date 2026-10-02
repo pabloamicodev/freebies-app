@@ -1,6 +1,6 @@
 use crate::config::{
-    is_zero_decimal, to_cents, CompiledConfig, CompiledOffer, CompiledOrderReward,
-    CompiledPageUrlCondition, CompiledProductReward,
+    is_zero_decimal, minor_units, to_cents, CompiledConfig, CompiledOffer, CompiledOrderReward,
+    CompiledProductReward,
 };
 use crate::page_match::{metadata_matches, LineMetadata};
 use crate::schema;
@@ -18,6 +18,9 @@ const LINE_TYPE_UPSELL: &str = "upsell";
 thread_local! {
     // Each line's packed metadata is parsed once per run (it used to be re-parsed on every lookup).
     static LINE_METADATA: RefCell<HashMap<String, Option<Rc<LineMetadata>>>> = RefCell::new(HashMap::new());
+    // Page-match result per condition-set fingerprint, then line id, so offers sharing the same page
+    // conditions match each line once per run instead of once per offer.
+    static PAGE_MATCH: RefCell<HashMap<u64, HashMap<String, bool>>> = RefCell::new(HashMap::new());
     static ZERO_DECIMAL_CURRENCY: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -54,6 +57,7 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
     };
     let currency = input.cart().cost().subtotal_amount().currency_code().to_string();
     LINE_METADATA.with(|cache| cache.borrow_mut().clear());
+    PAGE_MATCH.with(|cache| cache.borrow_mut().clear());
     ZERO_DECIMAL_CURRENCY.with(|flag| flag.set(is_zero_decimal(&currency)));
     config.localize(input.presentment_currency_rate().as_f64(), &currency);
 
@@ -478,6 +482,8 @@ fn landing_anchor_qualifies(reward: &CompiledProductReward, input: &Input) -> bo
     quantity >= reward.required_anchor_min_quantity
 }
 
+const DEFAULT_QUIZ_MAX_DISCOUNT_PERCENT: f64 = 50.0;
+
 struct QuizGroup<'a> {
     paid: Vec<&'a Lines>,
     gifts: Vec<&'a Lines>,
@@ -531,6 +537,7 @@ fn evaluate_quiz_bundle_reward(
     }
 
     let bundle_price_configured = reward.discount_type == "fixed_price" && reward.discount_value > 0.0;
+    let currency = input.cart().cost().subtotal_amount().currency_code().to_string();
     let mut candidates = vec![];
     for (_bundle_id, group) in groups {
         let Some(expected_paid_count) = group.expected_paid_count else {
@@ -567,7 +574,7 @@ fn evaluate_quiz_bundle_reward(
             reward.discount_value
         } else {
             match group.target_cents {
-                Some(cents) if cents > 0 => cents as f64 / 100.0,
+                Some(minor) if minor > 0 => minor as f64 / minor_units(&currency),
                 _ => continue,
             }
         };
@@ -581,7 +588,9 @@ fn evaluate_quiz_bundle_reward(
             .sum();
         let mut discount_needed = (current_total - target_price).min(current_total);
         // The client-set target can only ever shave a configured share off the paid lines.
-        if let Some(percent) = reward.quiz_max_discount_percent {
+        // With no configured price the cap defaults to 50% so a forged target can't approach 100% off.
+        if !bundle_price_configured || reward.quiz_max_discount_percent.is_some() {
+            let percent = reward.quiz_max_discount_percent.unwrap_or(DEFAULT_QUIZ_MAX_DISCOUNT_PERCENT);
             discount_needed = discount_needed.min(current_total * percent / 100.0);
         }
         if discount_needed <= 0.0 {
@@ -931,7 +940,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
     if !offer.page_url_conditions.is_empty()
         && !non_gift_lines
             .iter()
-            .any(|line| added_from_matching_page(line, &offer.page_url_conditions))
+            .any(|line| added_from_matching_page(line, offer))
     {
         return false;
     }
@@ -939,7 +948,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
     if offer.reject_unmatched_lines
         && non_gift_lines.iter().any(|line| {
             line_type(line).as_deref() != Some(LINE_TYPE_UPSELL)
-                && !added_from_matching_page(line, &offer.page_url_conditions)
+                && !added_from_matching_page(line, offer)
         })
     {
         return false;
@@ -1453,12 +1462,29 @@ fn nektar_glp1(line: &Lines) -> Option<String> {
 
 /// The storefront stamps each line with the page it was added from, plus the
 /// session's last UTM landing URL (`source: "landing"` conditions read that).
-fn added_from_matching_page(line: &Lines, conditions: &[CompiledPageUrlCondition]) -> bool {
-    metadata_matches(metadata_map(line).as_deref(), conditions)
+fn added_from_matching_page(line: &Lines, offer: &CompiledOffer) -> bool {
+    let cached = PAGE_MATCH.with(|cache| {
+        cache
+            .borrow()
+            .get(&offer.page_set_key)
+            .and_then(|lines| lines.get(line.id()).copied())
+    });
+    if let Some(matched) = cached {
+        return matched;
+    }
+    let matched = metadata_matches(metadata_map(line).as_deref(), &offer.page_url_conditions);
+    PAGE_MATCH.with(|cache| {
+        cache
+            .borrow_mut()
+            .entry(offer.page_set_key)
+            .or_default()
+            .insert(line.id().clone(), matched)
+    });
+    matched
 }
 
 fn outside_matched_lines(offer: &CompiledOffer, line: &Lines) -> bool {
-    offer.restrict_to_matched_lines && !added_from_matching_page(line, &offer.page_url_conditions)
+    offer.restrict_to_matched_lines && !added_from_matching_page(line, offer)
 }
 
 // Line attributes other than the direct ones in the input query come from the packed
@@ -1585,6 +1611,7 @@ fn parse_config(input: &Input) -> Option<CompiledConfig> {
 #[cfg(all(test, not(feature = "code_gate")))]
 mod tests {
     use super::*;
+    use crate::config::CompiledPageUrlCondition;
     use shopify_function::run_function_with_input;
     use serde_json::Value;
 
@@ -4189,9 +4216,13 @@ mod tests {
     }
 
     fn quiz_paid_line(target_cents: &str) -> String {
+        quiz_paid_line_priced("50.00", target_cents)
+    }
+
+    fn quiz_paid_line_priced(price: &str, target_cents: &str) -> String {
         scoped_line(
             "gid://shopify/CartLine/1", "gid://shopify/ProductVariant/p1", "gid://shopify/Product/p1",
-            "50.00", 1, None, Some(("bundle-a", target_cents, "1", false)),
+            price, 1, None, Some(("bundle-a", target_cents, "1", false)),
         )
     }
 
@@ -4241,7 +4272,30 @@ mod tests {
         assert_eq!(quiz_discount(&unconfigured, "999999"), None);
         // A normal target discounts down to that price, never beyond the lines' own subtotal.
         assert_eq!(quiz_discount(&unconfigured, "3000"), Some(20.0));
-        assert_eq!(quiz_discount(&unconfigured, "1"), Some(49.99));
+        // No configured price and no quizMaxDiscountPercent: the default 50% cap applies.
+        assert_eq!(quiz_discount(&unconfigured, "1"), Some(25.0));
+        assert_eq!(quiz_discount(&unconfigured, "2600"), Some(24.0), "below the cap is untouched");
+    }
+
+    #[test]
+    fn quiz_bundle_target_uses_currency_minor_units() {
+        let config = quiz_config("free", "100").replace(
+            r#""scopeMode":"quiz_bundle""#,
+            r#""scopeMode":"quiz_bundle","quizMaxDiscountPercent":90"#,
+        );
+        let discount = |currency: &str, subtotal: &str, target: &str| {
+            let json = cart_json(&format!("[{}]", quiz_paid_line_priced(subtotal, target)), subtotal, &config)
+                .replace(r#""currencyCode": "USD""#, &format!(r#""currencyCode": "{currency}""#));
+            run_function_with_input(run, &json).unwrap().operations.iter().find_map(|operation| match operation {
+                schema::CartOperation::ProductDiscountsAdd(op) => match &op.candidates[0].value {
+                    schema::ProductDiscountCandidateValue::FixedAmount(value) => Some(value.amount.0),
+                    _ => None,
+                },
+                _ => None,
+            })
+        };
+        assert_eq!(discount("JPY", "5000", "3000"), Some(2000.0), "JPY target is whole yen, not /100");
+        assert_eq!(discount("USD", "50.00", "3000"), Some(20.0));
     }
 
     #[test]

@@ -2,6 +2,7 @@ import type * as ShopifyFetch from "../shopify-fetch.server.js";
 import type * as PublishPending from "../publish-pending.server.js";
 import { ShopifyOutcomeUnknownError } from "../shopify-fetch.server.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as Sentry from "@sentry/node";
 import type * as DrizzleOrm from "drizzle-orm";
 import type * as PromoDb from "@promo/db";
 import type * as CartValidation from "../cart-validation.server.js";
@@ -98,6 +99,8 @@ interface FakeCode {
   oncePerCustomer: boolean;
   shopifySyncedAt: Date | null;
   shopifySyncPendingAt: Date | null;
+  shopifyReaddAttemptedAt?: Date | null;
+  syncNote?: string | null;
 }
 
 interface MetafieldPush {
@@ -138,6 +141,12 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
     mutations: [] as Array<{ name: string; retryable: boolean }>,
     failNextLocks: 0,
     lockAttempts: 0,
+    /** Shop-wide active automatic discount count reported to the pool's limit check. */
+    automaticDiscountCount: 0,
+    /** currentAppInstallation answers with an access error (the app lacks the scope). */
+    appInstallationError: null as string | null,
+    /** A metafield write whose owner id contains this text fails (a non-retryable user error). */
+    failMetafieldsFor: null as string | null,
     failNextShopifyCall: null as Error | null,
     onAdd: null as null | (() => void),
     pendingAtAddTime: null as Date | null,
@@ -352,12 +361,24 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
       };
     }
     if (query.includes("PromoEngineNodesExist")) {
-      return { nodes: (variables!.ids as string[]).map((id) => (state.knownDiscountIds.has(id) ? { id } : null)) };
+      return {
+        nodes: (variables!.ids as string[]).map((id) => {
+          if (!state.knownDiscountIds.has(id)) return null;
+          const slot = /\/pool-(\d+)$/.exec(id)?.[1];
+          return slot ? { id, automaticDiscount: { title: `Promo Engine Coded Shipping ${slot}` } } : { id };
+        }),
+      };
+    }
+    if (query.includes("PromoEngineAutomaticDiscountCount")) {
+      return { discountNodesCount: { count: state.automaticDiscountCount } };
     }
     if (query.includes("DeletePromoEngineAutomaticDiscount")) {
       state.deletedAutoNodes.push(variables!.id as string);
       state.knownDiscountIds.delete(variables!.id as string);
       return { discountAutomaticDelete: { deletedAutomaticDiscountId: variables!.id, userErrors: [] } };
+    }
+    if (query.includes("PromoEngineAppInstallation") && state.appInstallationError) {
+      throw new Error(state.appInstallationError);
     }
     if (query.includes("PromoEngineAppInstallation")) return { currentAppInstallation: { id: "gid://shopify/AppInstallation/1" } };
     if (query.includes("PromoEngineSpecificLinkParams")) {
@@ -521,6 +542,9 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
     }
     if (query.includes("MetafieldsSet")) {
       const metafields = variables!.metafields as Array<{ ownerId: string; namespace: string; value: string }>;
+      if (state.failMetafieldsFor && metafields.some((m) => m.ownerId.includes(state.failMetafieldsFor!))) {
+        return { metafieldsSet: { metafields: [], userErrors: [{ message: "Shopify says no" }] } };
+      }
       state.metafieldPushes.push({
         ownerIds: [...new Set(metafields.map((m) => m.ownerId))],
         namespaces: [...new Set(metafields.map((m) => m.namespace))],
@@ -544,6 +568,7 @@ vi.mock("../shopify-fetch.server.js", async (importOriginal) => ({
   shopifyGraphQL: shopifyGraphQLMock,
 }));
 
+vi.mock("@sentry/node", () => ({ captureMessage: vi.fn(), captureException: vi.fn() }));
 vi.mock("@vercel/functions", () => ({ waitUntil: () => undefined }));
 
 // The real retry sleeps for seconds and would republish into a later test's state.
@@ -1486,6 +1511,9 @@ describe("publishOffersForShop — mixed code offers (product/order AND shipping
     state.mutations = [];
     state.failNextLocks = 0;
     state.lockAttempts = 0;
+    state.automaticDiscountCount = 0;
+    state.failMetafieldsFor = null;
+    state.appInstallationError = null;
   };
   const sharedShipping = poolShipping;
 
@@ -1563,6 +1591,94 @@ describe("publishOffersForShop — mixed code offers (product/order AND shipping
     expect(poolShipping()).toHaveLength(1);
   });
 
+  it("writes every function_config (shared, code and pool nodes) to both namespaces, which is what the Functions' input variables read", async () => {
+    reset();
+    state.codeRows = [makeCode({ offerId: "mixed", code: "SUMMER10" })];
+
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+    const owners = new Set(state.metafieldPushes.flatMap((push) => push.ownerIds));
+    expect(owners.size).toBeGreaterThanOrEqual(4);
+    for (const push of state.metafieldPushes) {
+      expect(push.namespaces.slice().sort()).toEqual(["$app:promo_engine", "promo_engine"]);
+    }
+  });
+
+  it("refreshes the specific-link params on every publish (drift repair republishes), and a missing scope neither fails the publish nor pages", async () => {
+    reset();
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    expect(state.shopMetafieldPushes).toHaveLength(1);
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    expect(state.shopMetafieldPushes).toHaveLength(2);
+
+    state.appInstallationError = "Access denied for currentAppInstallation field. Required access: write_app_data";
+    vi.mocked(Sentry.captureException).mockClear();
+    await expect(publishOffersForShop(SHOP_ID, SHOP_DOMAIN)).resolves.toBe("published");
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(Sentry.captureMessage).toHaveBeenCalledWith(
+      "Specific-link params not written: the app lacks access",
+      expect.objectContaining({ level: "warning" }),
+    );
+  });
+
+  it("keeps publishing when the pool push fails: the offer is flagged with a message, the manifest is still written, nothing is paused", async () => {
+    reset();
+    state.codeRows = [makeCode({ offerId: "mixed", code: "SUMMER10" })];
+    state.failMetafieldsFor = "/pool-";
+
+    await expect(publishOffersForShop(SHOP_ID, SHOP_DOMAIN)).resolves.toBe("published");
+
+    // The code offer's own node and codes still went live.
+    expect(state.metafieldPushes.some((p) => p.ownerIds.includes(NODE))).toBe(true);
+    expect(state.codeRows.every((row) => row.shopifySyncedAt)).toBe(true);
+    expect(state.offers.find((o) => o.id === "mixed")!.status).toBe("active");
+    expect(state.settings.find((row) => row.key === "publish_manifest.v1")).toBeTruthy();
+    const errors = JSON.parse(state.settings.find((row) => row.key === "offer_publish_errors.v1")!.value) as Record<string, string>;
+    expect(errors.mixed).toMatch(/Free shipping with this offer's codes could not be published/);
+    expect(Sentry.captureMessage).toHaveBeenCalledWith(
+      "Coded shipping pool could not be published",
+      expect.objectContaining({ level: "error" }),
+    );
+
+    // Healthy again: the next publish clears the flag.
+    state.failMetafieldsFor = null;
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    expect(JSON.parse(state.settings.find((row) => row.key === "offer_publish_errors.v1")!.value)).toEqual({});
+  });
+
+  it("fails only the code offer that needs new pool nodes when the shop is at Shopify's 25 automatic discounts, before creating any", async () => {
+    reset();
+    state.codeRows = [makeCode({ offerId: "mixed", code: "SUMMER10" })];
+    state.automaticDiscountCount = 25;
+
+    await expect(publishOffersForShop(SHOP_ID, SHOP_DOMAIN)).resolves.toBe("published");
+
+    expect(state.createdAutoNodes).toEqual([]);
+    const errors = JSON.parse(state.settings.find((row) => row.key === "offer_publish_errors.v1")!.value) as Record<string, string>;
+    expect(errors.mixed).toMatch(/already has 25 active and Shopify allows 25/);
+    expect(state.metafieldPushes.some((p) => p.ownerIds.includes(NODE))).toBe(true);
+  });
+
+  it("allocates slot titles from the nodes that exist: a deleted middle node never makes a new one collide with a live title", async () => {
+    reset();
+    state.codeRows = Array.from({ length: 1500 }, (_, i) =>
+      makeCode({ offerId: "mixed", code: `GEN${String(i).padStart(5, "0")}` }),
+    );
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    const before = JSON.parse(state.settings.find((row) => row.key === "coded_shipping_pool.ids")!.value) as string[];
+    expect(before.length).toBeGreaterThanOrEqual(3);
+
+    state.knownDiscountIds.delete(before[1]!);
+    state.createdAutoNodes = [];
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+    const after = JSON.parse(state.settings.find((row) => row.key === "coded_shipping_pool.ids")!.value) as string[];
+    expect(after).toHaveLength(before.length);
+    expect(new Set(after).size).toBe(after.length);
+    expect(state.createdAutoNodes).toHaveLength(1);
+    expect(after).toContain(before[1]);
+  });
+
   it("refuses to use more automatic delivery nodes than Shopify's limit leaves room for, before creating any", async () => {
     reset();
     await expect(ensureCodedShippingNodes(SHOP_ID, SHOP_DOMAIN, "token", MAX_CODED_SHIPPING_NODES + 1)).rejects.toThrow(
@@ -1605,6 +1721,59 @@ describe("publishOffersForShop — mixed code offers (product/order AND shipping
     await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
 
     expect(sharedShipping()[0]!.codeHashes).toEqual(["9e35947c8d25"]);
+  });
+
+  describe("codes queued for a re-add after being deleted in the Shopify admin", () => {
+    const setup = () => {
+      reset();
+      state.offers = [makeOffer({ id: "mixed", codeDiscountId: NODE })];
+      state.knownDiscountIds.add(NODE);
+      state.nodeCodes[NODE] = ["KEEP1"];
+    };
+    const queued = (code: string) =>
+      makeCode({ offerId: "mixed", code, shopifyReaddAttemptedAt: new Date(), shopifySyncedAt: null });
+
+    it("adds the code back once, and clears the re-add flag", async () => {
+      setup();
+      state.codeRows = [makeCode({ offerId: "mixed", code: "KEEP1", shopifySyncedAt: new Date() }), queued("GONE1")];
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+      expect(state.nodeCodes[NODE]).toContain("GONE1");
+      const row = state.codeRows.find((r) => r.code === "GONE1")!;
+      expect(row.shopifySyncedAt).toBeTruthy();
+      expect(row.shopifyReaddAttemptedAt).toBeNull();
+      expect(row.status).toBe("active");
+    });
+
+    it("disables a code that another discount took meanwhile, with a note, instead of renaming it", async () => {
+      setup();
+      state.codeRows = [makeCode({ offerId: "mixed", code: "KEEP1", shopifySyncedAt: new Date() }), queued("GONE1")];
+      state.shopifyCodes.GONE1 = { id: "gid://shopify/DiscountCodeNode/theirs", title: "Their sale" };
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+      const row = state.codeRows.find((r) => r.code === "GONE1")!;
+      expect(row).toMatchObject({ status: "disabled", shopifySyncedAt: null, shopifyReaddAttemptedAt: null });
+      expect(row.syncNote).toMatch(/deleted from the Shopify discount/);
+      expect(state.codeRows.map((r) => r.code).sort()).toEqual(["GONE1", "KEEP1"]);
+      expect(state.nodeCodes[NODE]).not.toContain("GONE1");
+    });
+
+    it("disables a code Shopify rejects on the re-add, and never retries it", async () => {
+      setup();
+      state.codeRows = [makeCode({ offerId: "mixed", code: "KEEP1", shopifySyncedAt: new Date() }), queued("GONE1")];
+      state.rejectCodes.add("GONE1");
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+      const row = state.codeRows.find((r) => r.code === "GONE1")!;
+      expect(row).toMatchObject({ status: "disabled", shopifySyncedAt: null });
+      expect(row.syncNote).toBeTruthy();
+
+      state.addedCodes = [];
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+      expect(state.addedCodes.flatMap((entry) => entry.codes)).not.toContain("GONE1");
+    });
   });
 
   it("publishes no shipping at all once no code is redeemable (never ungated)", async () => {

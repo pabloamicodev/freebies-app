@@ -29,6 +29,20 @@ describe("sanitizeAnalyticsProperties", () => {
     expect(out).toEqual({});
   });
   it("accepts numeric ids and rejects non-finite quantity", () => {
-    expect(sanitizeAnalyticsProperties({ properties: { order_id: 12345, quantity: Number.POSITIVE_INFINITY } })).toEqual({ order_id: "12345" });
+    expect(sanitizeAnalyticsProperties({ properties: { variant_id: 12345, quantity: Number.POSITIVE_INFINITY } })).toEqual({ variant_id: "12345" });
+  });
+});
+
+describe("client events cannot carry money or order identity", () => {
+  it("drops total_value, order_id and any other amount-like field, top level or nested", () => {
+    const result = sanitizeAnalyticsProperties({
+      total_value: "99999.00",
+      order_id: "1001",
+      value: 5,
+      price: 10,
+      amount: 3,
+      properties: { total_value: 1, order_id: "x", revenue: 2, product_id: "p1" },
+    });
+    expect(result).toEqual({ product_id: "p1" });
   });
 });

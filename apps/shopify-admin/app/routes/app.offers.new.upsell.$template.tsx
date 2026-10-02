@@ -9,6 +9,7 @@ import { Form, useActionData, useLoaderData, useNavigate, useNavigation, redirec
 import { useEffect } from "react";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { Toast } from "../components/Toast.js";
+import { toStoredAmount } from "../lib/money.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
 import { statusForSubmit } from "../lib/offer-scheduling.server.js";
@@ -65,7 +66,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
-  const { shopId, db, session, timezone } = context;
+  const { shopId, db, session, timezone, currencyCode: shopCurrency } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
@@ -133,7 +134,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       ? 0
       : discountType === "percentage"
         ? discountValue
-        : Math.round(discountValue * 100);
+        : toStoredAmount(discountValue, shopCurrency);
   const hasPositiveTrigger = ["product", "product_selected"].includes(triggerType);
   const triggerRequirements = triggerProducts.map((id) => ({
     ...(id.includes("/ProductVariant/") ? { variantId: id } : { productId: id }),
@@ -236,7 +237,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             | "free"
             | "cheapest_item_free"
             | "most_expensive_item_discount",
-          value: { amount: rewardAmount, currencyCode: "USD" },
+          value: { amount: rewardAmount, currencyCode: shopCurrency },
           target: {
             scopeMode: "sitewide",
             scope: "cart",

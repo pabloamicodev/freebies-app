@@ -5,11 +5,9 @@
  * Runs AFTER Discount Function at checkout — can see applied discounts.
  * Runs across ALL express checkout surfaces (Shop Pay, PayPal, Google Pay, Apple Pay).
  *
- * Blocks checkout when:
- * - Gift quantity exceeds allowed maximum
- * - Gift variant is not in the allowed gift set (tampered properties)
- * - Clone gift product is being purchased directly (price ~$0, no promo properties)
- * - Bundle is incomplete (parent without components or vice versa)
+ * Blocks checkout only when a placeholder/clone product is priced below its minimum without our
+ * discount on the line. Gift limits and gift-set membership are NOT blocked here: the discount
+ * Function refuses to discount a gift that breaks them, so it is charged as a normal paid line.
  */
 
 use serde::{Deserialize, Serialize};
@@ -242,8 +240,6 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
         None => return FunctionOutput { operations: vec![] }, // No config = no validation (fail open)
     };
 
-    let allowed_variants: HashSet<&str> =
-        config.allowed_gift_variant_ids.iter().map(|s| s.as_str()).collect();
     let clone_products: HashSet<&str> =
         config.clone_product_ids.iter().map(|s| s.as_str()).collect();
 
@@ -264,117 +260,31 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
 
     let mut errors: Vec<ValidationError> = Vec::new();
 
-    let mut gift_qty_by_offer: HashMap<String, i64> = HashMap::new();
-    let mut gift_qty_by_reward: HashMap<(String, String), i64> = HashMap::new();
-    let strict_rules_enabled = !config.offer_rules.is_empty();
-
+    // Gift limits, offer/reward existence and listed variants are enforced by the discount
+    // Function, which refuses to discount a gift line that breaks them: such a line is charged at
+    // the variant price like any other paid line, so it is never an error here. The only thing
+    // this Function guards is a placeholder/clone product (a ~$0 stand-in) sold below its minimum.
     for line in &input.cart.lines {
         // CustomProduct (POS custom sale, draft custom item) and any other non-variant
         // merchandise carry no variant id: nothing here applies to them.
-        let Some(variant_id) = line.merchandise.id.as_deref() else {
+        if line.merchandise.id.is_none() {
             continue;
-        };
-        let line_type = attribute_value(&line.line_type);
-        let offer_id = attribute_value(&line.offer_id);
-        let mut valid_gift = false;
-
-        if line_type == "gift" {
-            let reward_id = attribute_value(&line.reward_id);
-            if line.quantity <= 0 || offer_id.is_empty() || reward_id.is_empty() {
-                errors.push(ValidationError {
-                    message: "Your cart contains an invalid free gift. Please contact support.".to_string(),
-                    target: "$.cart".to_string(),
-                });
-                continue;
-            }
-
-            // A gift is valid while its offer and reward still exist and list this variant. The
-            // offer version is deliberately not compared: a republish must not invalidate carts.
-            // A gift that lost our discount (non-combinable merchant code, ...) is simply charged
-            // at the variant price, so a missing allocation is not an error here.
-            if strict_rules_enabled {
-                let Some(offer_rule) = config.offer_rules.get(offer_id) else {
-                    errors.push(ValidationError {
-                        message: "This free gift offer is no longer active. Please update your cart.".to_string(),
-                        target: "$.cart".to_string(),
-                    });
-                    continue;
-                };
-                let Some(reward_rule) = offer_rule.rewards.get(reward_id) else {
-                    errors.push(ValidationError {
-                        message: "Your cart contains an invalid free gift. Please update your cart.".to_string(),
-                        target: "$.cart".to_string(),
-                    });
-                    continue;
-                };
-                if !reward_rule.variant_ids.iter().any(|id| id == variant_id) {
-                    errors.push(ValidationError {
-                        message: "This free gift selection is outdated or invalid. Please choose it again.".to_string(),
-                        target: "$.cart".to_string(),
-                    });
-                    continue;
-                }
-                *gift_qty_by_reward
-                    .entry((offer_id.to_string(), reward_id.to_string()))
-                    .or_insert(0) += line.quantity;
-            } else if !allowed_variants.contains(variant_id) {
-                errors.push(ValidationError {
-                    message: "Your cart contains an invalid free gift. Please contact support.".to_string(),
-                    target: "$.cart".to_string(),
-                });
-                continue;
-            }
-
-            valid_gift = true;
-            *gift_qty_by_offer.entry(offer_id.to_string()).or_insert(0) += line.quantity;
         }
-
-        // ── Block placeholder/clone products priced below their minimum ───────
-        // Valid gifts are exempt only while our discount is on the line (or while the cart is
-        // still being edited), so spoofed gift properties cannot unlock a near-free placeholder.
         let is_clone = line
             .merchandise
             .product
             .as_ref()
             .is_some_and(|product| clone_products.contains(product.id.as_str()));
-        let exempt = valid_gift && (cart_interaction || has_promo_engine_discount(line));
-        if is_clone && !exempt && below_min_price(line, &config, rate) {
+        if !is_clone {
+            continue;
+        }
+        // A gift is exempt only while our discount is on the line (or while the cart is still
+        // being edited), so spoofed gift properties cannot unlock a near-free placeholder.
+        let exempt = attribute_value(&line.line_type) == "gift"
+            && (cart_interaction || has_promo_engine_discount(line));
+        if !exempt && below_min_price(line, &config, rate) {
             errors.push(ValidationError {
                 message: "This product is only available as part of a promotion. Please add it through the offer.".to_string(),
-                target: "$.cart".to_string(),
-            });
-        }
-    }
-
-    // ── Check max gift quantity per offer ─────────────────────────────────────
-    // If an offer is not in offer_max_quantities, apply a conservative default of 1
-    // to prevent unlimited gifts from newly-created offers whose config wasn't published yet.
-    const DEFAULT_MAX_GIFT_QTY: i64 = 1;
-    for (offer_id, qty) in &gift_qty_by_offer {
-        let max_qty = config.offer_rules.get(offer_id)
-            .map(|rule| rule.max_quantity)
-            .or_else(|| config.offer_max_quantities.get(offer_id).copied())
-            .unwrap_or(DEFAULT_MAX_GIFT_QTY);
-        if *qty > max_qty {
-            errors.push(ValidationError {
-                message: format!(
-                    "You can only add {} free gift(s) with this offer. Please update your cart.",
-                    max_qty
-                ),
-                target: "$.cart".to_string(),
-            });
-        }
-    }
-
-    for ((offer_id, reward_id), qty) in &gift_qty_by_reward {
-        let max_qty = config.offer_rules
-            .get(offer_id)
-            .and_then(|offer| offer.rewards.get(reward_id))
-            .map(|reward| reward.max_quantity)
-            .unwrap_or(0);
-        if *qty > max_qty {
-            errors.push(ValidationError {
-                message: format!("You can only add {} gift(s) for this reward. Please update your cart.", max_qty),
                 target: "$.cart".to_string(),
             });
         }
@@ -482,80 +392,50 @@ mod tests {
             .unwrap_or(&[])
     }
 
+    fn input_for(config: &ValidationConfig, lines: Vec<CartLine>) -> FunctionInput {
+        FunctionInput {
+            buyer_journey: None,
+            presentment_currency_rate: None,
+            cart: Cart { lines },
+            validation_node: ValidationNode {
+                metafield: Some(Metafield { value: serde_json::to_string(config).unwrap() }),
+            },
+        }
+    }
+
     #[test]
     fn test_valid_gift_passes() {
         let config = make_config(2, vec!["gid://shopify/ProductVariant/gift-v1"], vec![]);
-        let config_json = serde_json::to_string(&config).unwrap();
         let line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-1", 1);
-        let input = FunctionInput {
-            buyer_journey: None,
-            presentment_currency_rate: None,
-            cart: Cart { lines: vec![line] },
-            validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
-        };
-        let output = function(input);
-        assert!(validation_errors(&output).is_empty());
+        assert!(validation_errors(&function(input_for(&config, vec![line]))).is_empty());
     }
 
     #[test]
-    fn test_excess_gift_quantity_blocked() {
-        let config = make_config(1, vec!["gid://shopify/ProductVariant/gift-v1"], vec![]);
-        let config_json = serde_json::to_string(&config).unwrap();
-        // Buyer has 3 gifts but max is 1
-        let line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-1", 3);
-        let input = FunctionInput {
-            buyer_journey: None,
-            presentment_currency_rate: None,
-            cart: Cart { lines: vec![line] },
-            validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
+    fn excess_unlisted_and_unknown_gift_lines_are_paid_lines_not_errors() {
+        let config = make_config(1, vec!["gid://shopify/ProductVariant/allowed-gift"], vec![]);
+        let paid = |variant: &str, offer: &str, qty: i64| {
+            let mut line = make_gift_line("l1", variant, "p1", offer, qty);
+            line.discount_allocations.clear();
+            line.cost.amount_per_quantity.amount = "25.00".to_string();
+            line
         };
-        let output = function(input);
-        assert_eq!(validation_errors(&output).len(), 1);
-        assert!(validation_errors(&output)[0].message.contains("1 free gift"));
-    }
-
-    #[test]
-    fn test_invalid_gift_variant_blocked() {
-        let config = make_config(2, vec!["gid://shopify/ProductVariant/allowed-gift"], vec![]);
-        let config_json = serde_json::to_string(&config).unwrap();
-        // Using a variant NOT in the allowed list
-        let line = make_gift_line("l1", "gid://shopify/ProductVariant/expensive-product", "p1", "offer-1", 1);
-        let input = FunctionInput {
-            buyer_journey: None,
-            presentment_currency_rate: None,
-            cart: Cart { lines: vec![line] },
-            validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
-        };
-        let output = function(input);
-        assert_eq!(validation_errors(&output).len(), 1);
-        assert!(validation_errors(&output)[0].message.contains("invalid"));
-    }
-
-    #[test]
-    fn test_offer_not_in_max_quantities_uses_default() {
-        // Config that knows about offer-1 but NOT offer-2
-        let config = ValidationConfig {
-            offer_rules: HashMap::new(),
-            offer_max_quantities: {
-                let mut m = HashMap::new();
-                m.insert("offer-1".to_string(), 5_i64);
-                m
-            },
-            allowed_gift_variant_ids: vec!["gid://shopify/ProductVariant/gift-v1".to_string()],
-            clone_product_ids: vec![],
-            clone_min_price_cents: Some(100),
-        };
-        let config_json = serde_json::to_string(&config).unwrap();
-        // offer-2 is not in max_quantities — buyer tries to add 2 gifts (> DEFAULT_MAX of 1)
-        let line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-2", 2);
-        let input = FunctionInput {
-            buyer_journey: None,
-            presentment_currency_rate: None,
-            cart: Cart { lines: vec![line] },
-            validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
-        };
-        let output = function(input);
-        assert_eq!(validation_errors(&output).len(), 1, "Unknown offer should fall back to DEFAULT_MAX_GIFT_QTY=1");
+        for line in [
+            paid("gid://shopify/ProductVariant/allowed-gift", "offer-1", 3),
+            paid("gid://shopify/ProductVariant/expensive-product", "offer-1", 1),
+            paid("gid://shopify/ProductVariant/allowed-gift", "offer-gone", 2),
+        ] {
+            assert!(validation_errors(&function(input_for(&config, vec![line]))).is_empty());
+        }
+        for (variant, reward, offer, qty) in [
+            ("gid://shopify/ProductVariant/gift-v2", "reward-1", "offer-1", 1),
+            ("gid://shopify/ProductVariant/gift-v1", "reward-1", "offer-unknown", 1),
+            ("gid://shopify/ProductVariant/gift-v1", "reward-gone", "offer-1", 1),
+            ("gid://shopify/ProductVariant/gift-v1", "reward-1", "offer-1", 5),
+        ] {
+            let mut line = paid(variant, offer, qty);
+            set_gift_metadata(&mut line, reward, "3");
+            assert!(validation_errors(&run_with_config(strict_config(), vec![line])).is_empty());
+        }
     }
 
     #[test]
@@ -619,50 +499,11 @@ mod tests {
     }
 
     #[test]
-    fn strict_rules_bind_variant_to_offer_and_reward() {
-        let mut cross_reward = make_gift_line(
-            "l1",
-            "gid://shopify/ProductVariant/gift-v2",
-            "p2",
-            "offer-1",
-            1,
-        );
-        set_gift_metadata(&mut cross_reward, "reward-1", "3");
-        let output = run_with_config(strict_config(), vec![cross_reward]);
-        assert_eq!(validation_errors(&output).len(), 1);
-    }
-
-    #[test]
     fn stale_offer_version_is_not_an_error() {
         let mut line = make_gift_line("l2", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-1", 1);
         set_gift_metadata(&mut line, "reward-1", "2");
         let output = run_with_config(strict_config(), vec![line]);
         assert!(validation_errors(&output).is_empty());
-    }
-
-    #[test]
-    fn strict_rules_reject_unknown_offers_and_reward_quantity_abuse() {
-        let mut unknown = make_gift_line(
-            "l1",
-            "gid://shopify/ProductVariant/gift-v1",
-            "p1",
-            "offer-unknown",
-            1,
-        );
-        set_gift_metadata(&mut unknown, "reward-1", "3");
-        let output = run_with_config(strict_config(), vec![unknown]);
-        assert_eq!(validation_errors(&output).len(), 1);
-
-        let mut excessive = make_gift_line(
-            "l2",
-            "gid://shopify/ProductVariant/gift-v1",
-            "p1",
-            "offer-1",
-            2,
-        );
-        set_gift_metadata(&mut excessive, "reward-1", "3");
-        let output = run_with_config(strict_config(), vec![excessive]);
-        assert!(validation_errors(&output).iter().any(|error| error.message.contains("this reward")));
     }
 
     #[test]
@@ -762,7 +603,7 @@ mod tests {
         }"#;
         let output: FunctionOutput =
             shopify_function::run_function_with_input(super::run, payload).expect("must not error");
-        assert!(validation_errors(&output).iter().any(|e| e.message.contains("1 free gift")));
+        assert!(output.operations.is_empty(), "an over-limit paid gift line must not block checkout");
     }
 
     #[test]
@@ -775,7 +616,10 @@ mod tests {
             2,
         );
         set_gift_metadata(&mut line, "reward-1", "3");
-        let output = run_with_config(strict_config(), vec![line]);
+        let mut config = strict_config();
+        config.clone_product_ids = vec!["p1".to_string()];
+        line.discount_allocations.clear();
+        let output = run_at_step(config, vec![line], Some("CHECKOUT_COMPLETION"));
         let json = serde_json::to_value(output).unwrap();
         assert!(json["operations"][0]["validationAdd"]["errors"].is_array());
         assert_eq!(json["operations"][0]["validationAdd"]["errors"][0]["target"], "$.cart");

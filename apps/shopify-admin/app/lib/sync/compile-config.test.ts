@@ -1084,3 +1084,47 @@ describe("quizMaxDiscountPercent", () => {
     expect(compile({ quizMaxDiscountPercent: 130 }).productRewards[0]).not.toHaveProperty("quizMaxDiscountPercent");
   });
 });
+
+describe("currency comes from the shop, never an implicit USD", () => {
+  it("shipping: a JPY shop's tiers are tagged JPY even when the reward carries no currency or a stamped USD", () => {
+    const conditions = [condition("cart_value", { thresholdCents: 5000 })];
+    for (const value of [{ amount: 100 }, { amount: 100, currencyCode: "USD" }]) {
+      const [compiled] = compileShippingOfferConfigs(offer(), conditions, [shippingReward({ value })], {
+        shopCurrencyCode: "JPY",
+      });
+      expect(compiled?.currencyCode).toBe("JPY");
+    }
+  });
+
+  it("shipping: a USD shop (or an unknown shop and a USD reward) keeps the Function default and omits the key", () => {
+    const [usd] = compileShippingOfferConfigs(offer(), [], [shippingReward()], { shopCurrencyCode: "USD" });
+    expect(usd).not.toHaveProperty("currencyCode");
+    const [unknown] = compileShippingOfferConfigs(offer(), [], [shippingReward()]);
+    expect(unknown).not.toHaveProperty("currencyCode");
+  });
+
+  it("offers: a fixed amount without a reward currency is read in the shop's currency (no /100 for JPY)", () => {
+    const compile = (shopCurrencyCode?: string) =>
+      compileOfferConfig(
+        offer() as never,
+        [] as never,
+        [
+          {
+            id: REWARD_ID,
+            rewardType: "order_discount",
+            discountType: "fixed_amount",
+            value: { amount: 500 },
+            target: {},
+            quantity: null,
+            sortOrder: 0,
+          },
+        ] as never,
+        { stopLowerPriority: false } as never,
+        1,
+        { shopCurrencyCode },
+      );
+    expect(compile("JPY")).toMatchObject({ currencyCode: "JPY", orderRewards: [{ discountValue: 500 }] });
+    expect(compile("USD")).toMatchObject({ currencyCode: "USD", orderRewards: [{ discountValue: 5 }] });
+    expect(compile()).toMatchObject({ currencyCode: "USD", orderRewards: [{ discountValue: 5 }] });
+  });
+});

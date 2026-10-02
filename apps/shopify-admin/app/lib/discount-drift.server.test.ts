@@ -1,5 +1,5 @@
 import type * as PromoDb from "@promo/db";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { discountCodes, offers, shops, type Db } from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
@@ -22,6 +22,7 @@ vi.mock("@sentry/node", () => ({
 }));
 
 const { runDiscountDriftRepair } = await import("./discount-reconciliation.server.js");
+const { setDriftRepairPaused } = await import("./drift-repair-settings.server.js");
 const { ManifestCollector, readPublishManifest, writePublishManifest } = await import("./publish-manifest.server.js");
 
 let db: Db;
@@ -47,6 +48,8 @@ interface FakeNode {
   appValue?: string | null;
   status: string;
   codesCount?: number;
+  /** Codes the node actually holds, for the node-codes listing (defaults to none). */
+  codes?: string[];
 }
 
 /** A tiny stand-in for the part of Shopify the drift check reads, with a publish that can restore it. */
@@ -74,6 +77,14 @@ function fakeShopify(initial: Record<string, FakeNode>, validation: { present: b
                 codeDiscount: { status: node.status, codesCount: { count: node.codesCount ?? 0 } },
               };
         }),
+      };
+    }
+    if (query.includes("PromoEngineNodeCodes")) {
+      const node = nodes[variables!.id as string];
+      return {
+        codeDiscountNode: node
+          ? { codeDiscount: { codes: { nodes: (node.codes ?? []).map((code) => ({ code })), pageInfo: { hasNextPage: false, endCursor: null } } } }
+          : null,
       };
     }
     if (query.includes("PromoEngineValidationDrift")) {
@@ -206,6 +217,80 @@ describe("runDiscountDriftRepair", () => {
     expect(result.unresolved.filter((f) => f.shopId === shop.shopId)).toEqual([]);
   });
 
+  describe("kill switch", () => {
+    afterEach(() => vi.unstubAllEnvs());
+
+    async function driftedShop() {
+      const shop = await seedPublishedShop();
+      const fake = fakeShopify({
+        [shop.cart]: { kind: "automatic", value: shop.cartValue, status: "EXPIRED" },
+        [shop.delivery]: { kind: "automatic", value: shop.cartValue, status: "ACTIVE" },
+      });
+      return { shop, fake };
+    }
+
+    it("a shop with drift_repair.paused is detected but neither re-activated nor republished", async () => {
+      const { shop, fake } = await driftedShop();
+      await setDriftRepairPaused(shop.shopId, true);
+
+      const { publish, result } = await run(fake.graphQL);
+
+      expect(fake.calls.filter((call) => call.startsWith("activate:"))).toEqual([]);
+      expect(onlyMine(publish, shop.shopId)).toEqual([]);
+      expect(result.paused).toBeGreaterThanOrEqual(1);
+      expect(captureMessage).toHaveBeenCalledWith(
+        "Discount drift detected, repair is paused",
+        expect.objectContaining({ level: "info", tags: expect.objectContaining({ shopId: shop.shopId }) }),
+      );
+      const mine = captureMessage.mock.calls.filter((call) => (call[1] as { tags?: { shopId?: string } })?.tags?.shopId === shop.shopId);
+      expect(mine.map((call) => call[0])).toEqual(["Discount drift detected, repair is paused"]);
+
+      // Un-pausing resumes the repair.
+      await setDriftRepairPaused(shop.shopId, false);
+      expect(onlyMine((await run(fake.graphQL)).publish, shop.shopId)).toHaveLength(1);
+    });
+
+    it("DRIFT_REPAIR_DISABLED=true pauses every shop", async () => {
+      const { shop, fake } = await driftedShop();
+      vi.stubEnv("DRIFT_REPAIR_DISABLED", "true");
+
+      const { publish } = await run(fake.graphQL);
+
+      expect(fake.calls.filter((call) => call.startsWith("activate:"))).toEqual([]);
+      expect(onlyMine(publish, shop.shopId)).toEqual([]);
+    });
+  });
+
+  it("re-reads the shop's node ids after the repair publish: a node the publish recreated is not reported missing", async () => {
+    const shop = await seedPublishedShop();
+    const newCart = `gid://shopify/DiscountAutomaticNode/recreated-${counter}`;
+    const fake = fakeShopify({ [shop.delivery]: { kind: "automatic", value: shop.cartValue, status: "ACTIVE" } });
+    const publish = vi.fn(async (shopId: string) => {
+      if (shopId !== shop.shopId) return;
+      fake.nodes[newCart] = { kind: "automatic", value: shop.cartValue, status: "ACTIVE" };
+      await db.update(shops).set({ discountId: newCart }).where(eq(shops.id, shopId));
+      const collector = new ManifestCollector();
+      collector.record(newCart, "cart", shop.cartValue);
+      collector.record(shop.delivery, "delivery", shop.cartValue);
+      await writePublishManifest(shopId, collector.build());
+    });
+
+    const { result } = await run(fake.graphQL, publish as never);
+
+    expect(result.unresolved.filter((f) => f.shopId === shop.shopId)).toEqual([]);
+  });
+
+  it("does not raise an unresolved alert when the repair publish was parked as pending (the retry finishes the job)", async () => {
+    const shop = await seedPublishedShop();
+    const fake = fakeShopify({ [shop.delivery]: { kind: "automatic", value: shop.cartValue, status: "ACTIVE" } });
+    const publish = vi.fn(async () => "pending");
+
+    const { result } = await run(fake.graphQL, publish as never);
+
+    expect(result.deferred).toBeGreaterThanOrEqual(1);
+    expect(result.unresolved.filter((f) => f.shopId === shop.shopId)).toEqual([]);
+  });
+
   it("does not flag a code node that was deliberately expired", async () => {
     const shop = await seedPublishedShop();
     const code = `gid://shopify/DiscountCodeNode/stale-${counter}`;
@@ -268,16 +353,62 @@ describe("runDiscountDriftRepair", () => {
       expect(result.unresolved.filter((f) => f.shopId === shop.shopId)).toEqual([]);
     });
 
-    it("reports the node as unresolved when the repair publish cannot fix it", async () => {
-      const shop = await withCodeNode({ synced: 3, shopifyCount: 1 });
+    it("reports the node as unresolved when the repair publish cannot fix it (Shopify holds codes the app doesn't know)", async () => {
+      const shop = await withCodeNode({ synced: 1, shopifyCount: 3 });
+      shop.fake.nodes[shop.codeNode]!.codes = [`DRIFT${counter}-0`, "STRANGER-1", "STRANGER-2"];
 
       const { result } = await run(shop.fake.graphQL);
 
       const mine = result.unresolved.filter((f) => f.shopId === shop.shopId);
       expect(mine).toEqual([
-        expect.objectContaining({ issue: "code_count_mismatch", nodeId: shop.codeNode, detail: "Shopify has 1 codes, the app expects 3" }),
+        expect.objectContaining({ issue: "code_count_mismatch", nodeId: shop.codeNode, detail: "Shopify has 3 codes, the app expects 1" }),
       ]);
       expect(captureMessage).toHaveBeenCalledWith("Discount drift could not be repaired", expect.objectContaining({ level: "error" }));
+    });
+
+    it("queues a code deleted in the Shopify admin for exactly one re-add, then the node is whole again", async () => {
+      const shop = await withCodeNode({ synced: 3, shopifyCount: 2 });
+      shop.fake.nodes[shop.codeNode]!.codes = [`DRIFT${counter}-0`, `DRIFT${counter}-1`];
+      let queuedBeforePublish: Array<{ code: string; readd: Date | null; synced: Date | null }> = [];
+      const publish = vi.fn(async (shopId: string) => {
+        if (shopId !== shop.shopId) return;
+        queuedBeforePublish = (await db.select().from(discountCodes).where(eq(discountCodes.shopId, shopId))).map((row) => ({
+          code: row.code,
+          readd: row.shopifyReaddAttemptedAt,
+          synced: row.shopifySyncedAt,
+        }));
+        // The publisher adds the queued code back and marks it synced.
+        shop.fake.nodes[shop.codeNode]!.codesCount = 3;
+        await db
+          .update(discountCodes)
+          .set({ shopifySyncedAt: new Date(), shopifyReaddAttemptedAt: null })
+          .where(eq(discountCodes.code, `DRIFT${counter}-2`));
+      });
+
+      const { result } = await run(shop.fake.graphQL, publish as never);
+
+      expect(queuedBeforePublish.filter((row) => row.readd)).toEqual([
+        expect.objectContaining({ code: `DRIFT${counter}-2`, synced: null }),
+      ]);
+      expect(result.unresolved.filter((f) => f.shopId === shop.shopId)).toEqual([]);
+    });
+
+    it("a code the publisher had to disable (taken / rejected on re-add) leaves the counts equal: no endless loop", async () => {
+      const shop = await withCodeNode({ synced: 3, shopifyCount: 2 });
+      shop.fake.nodes[shop.codeNode]!.codes = [`DRIFT${counter}-0`, `DRIFT${counter}-1`];
+      const publish = vi.fn(async (shopId: string) => {
+        if (shopId !== shop.shopId) return;
+        await db
+          .update(discountCodes)
+          .set({ status: "disabled", syncNote: "taken", shopifySyncedAt: null, shopifyReaddAttemptedAt: null })
+          .where(eq(discountCodes.code, `DRIFT${counter}-2`));
+      });
+
+      const first = await run(shop.fake.graphQL, publish as never);
+      expect(first.result.unresolved.filter((f) => f.shopId === shop.shopId)).toEqual([]);
+
+      const second = await run(shop.fake.graphQL);
+      expect(onlyMine(second.publish, shop.shopId)).toEqual([]);
     });
 
     it("does not read a count mismatch as drift while codes are in flight", async () => {

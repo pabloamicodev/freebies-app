@@ -34,6 +34,7 @@ import {
   CART_DISCOUNT_CLASSES,
   DELIVERY_DISCOUNT_CLASSES,
   addRedeemCodes,
+  codeOwners,
   createOrFindCodeDiscount,
   deleteCodeDiscountNode,
   ensureCodedShippingNodes,
@@ -56,6 +57,7 @@ import { codeHash } from "../code-hash.js";
 import { resolveCodeCollisions } from "../code-preflight.server.js";
 import type { CodeCharset } from "../discount-code-generation.js";
 import { isCodeBackendBEnabled } from "../code-backend.server.js";
+import { setOfferPublishErrors, type OfferPublishErrors } from "../offer-publish-errors.server.js";
 import { buildCartValidationConfig, syncCartValidation } from "../cart-validation.server.js";
 import { computeOfferVersion } from "../offer-version.server.js";
 import {
@@ -146,7 +148,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
   const db = getDb();
 
   const [shopRow] = await db
-    .select({ accessTokenEncrypted: shops.accessTokenEncrypted })
+    .select({ accessTokenEncrypted: shops.accessTokenEncrypted, currencyCode: shops.currencyCode })
     .from(shops)
     .where(
       and(eq(shops.id, shopId), eq(shops.myshopifyDomain, shopDomain), eq(shops.isActive, true)),
@@ -158,6 +160,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       "Cannot publish offers: active shop identity does not match the requested shop.",
     );
   }
+  const shopCurrencyCode = shopRow.currencyCode;
 
   const accessToken = await decryptToken(shopRow.accessTokenEncrypted);
   // Self-heals if afterAuth's registration failed or hasn't run yet (e.g. the
@@ -277,6 +280,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     accessToken,
     codeOffers,
     codesByOffer,
+    shopCurrencyCode,
   );
   const compiledBackendB = await compileBackendBOffers(
     shopId,
@@ -284,6 +288,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     accessToken,
     backendBOffers,
     codesByOffer,
+    shopCurrencyCode,
   );
   const codeOfferConfigs = [
     ...compiledCodeOffers.map((entry) => entry.compiledOffer),
@@ -300,6 +305,24 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
   ];
   const gatedShippingOffers = gatedShipping.flatMap((entry) => entry.gatedShippingOffers);
   const gatedPolicyOffers = gatedShipping.map((entry) => entry.compiledOffer);
+  const ownerOfShipping = new Map(
+    gatedShipping.flatMap((entry) => entry.gatedShippingOffers.map((offer) => [offer.id, entry.offer.id] as const)),
+  );
+  // A pool failure must not take the shop's publish down with it (the shared config is already live
+  // by then): the affected code offers are recorded and the rest keeps publishing.
+  const poolErrors: OfferPublishErrors = {};
+  const pushPool = async () => {
+    const failures = await pushCodedShippingPool(
+      shopId,
+      shopDomain,
+      accessToken,
+      gatedShippingOffers,
+      gatedPolicyOffers,
+      manifest,
+      ownerOfShipping,
+    );
+    for (const failure of failures) for (const offerId of failure.offerIds) poolErrors[offerId] = failure.message;
+  };
 
   if (regularOffers.length === 0) {
     const emptyConfig: CompiledFunctionConfig = {
@@ -319,14 +342,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
       ...compiledBackendB.flatMap((entry) => entry.conditionRows),
     ]);
-    await pushCodedShippingPool(
-      shopId,
-      shopDomain,
-      accessToken,
-      gatedShippingOffers,
-      gatedPolicyOffers,
-      manifest,
-    );
+    await pushPool();
     const emptyValidation = buildCartValidationConfig(codeOfferConfigs);
     await syncCartValidation(shopDomain, accessToken, emptyValidation);
     manifest.validationHash = configHash(JSON.stringify(emptyValidation));
@@ -401,8 +417,9 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
             rewards,
             policy,
             computeOfferVersion(offer, versionConditions, rewards, policy),
+            { shopCurrencyCode },
           ),
-          shippingOffers: compileShippingOfferConfigs(offer, conditions, rewards),
+          shippingOffers: compileShippingOfferConfigs(offer, conditions, rewards, { shopCurrencyCode }),
         };
       });
 
@@ -469,14 +486,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
       ...compiledBackendB.flatMap((entry) => entry.conditionRows),
     ]);
-    await pushCodedShippingPool(
-      shopId,
-      shopDomain,
-      accessToken,
-      gatedShippingOffers,
-      gatedPolicyOffers,
-      manifest,
-    );
+    await pushPool();
 
     for (const compiledOffer of compiledOffers) {
       await db
@@ -491,6 +501,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
   await pushCodeOfferConfigs(shopId, shopDomain, accessToken, compiledCodeOffers, manifest);
   await pushBackendBConfig(shopId, shopDomain, accessToken, compiledBackendB, manifest);
   await writePublishManifest(shopId, manifest.build());
+  await setOfferPublishErrors(shopId, poolErrors);
 }
 
 type CodeNodeKind = "cart" | "delivery";
@@ -557,7 +568,7 @@ async function markCodesSynced(shopId: string, rows: DiscountCode[]): Promise<vo
   const syncedAt = new Date();
   await getDb()
     .update(discountCodes)
-    .set({ shopifySyncedAt: syncedAt, shopifySyncPendingAt: null })
+    .set({ shopifySyncedAt: syncedAt, shopifySyncPendingAt: null, shopifyReaddAttemptedAt: null })
     .where(
       and(
         eq(discountCodes.shopId, shopId),
@@ -570,8 +581,51 @@ async function markCodesSynced(shopId: string, rows: DiscountCode[]): Promise<vo
   for (const row of rows) {
     row.shopifySyncedAt = syncedAt;
     row.shopifySyncPendingAt = null;
+    row.shopifyReaddAttemptedAt = null;
   }
 }
+
+/**
+ * A code Shopify no longer has (deleted in its admin) that cannot be put back, because another discount
+ * took it or Shopify rejects it. It is disabled with a note instead of being retried on every publish.
+ */
+async function disableUnrestorableCodes(shopId: string, rows: DiscountCode[], note: string): Promise<void> {
+  if (rows.length === 0) return;
+  await getDb()
+    .update(discountCodes)
+    .set({
+      status: "disabled",
+      syncNote: note,
+      shopifySyncedAt: null,
+      shopifySyncPendingAt: null,
+      shopifyReaddAttemptedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(discountCodes.shopId, shopId),
+        inArray(
+          discountCodes.id,
+          rows.map((row) => row.id),
+        ),
+      ),
+    );
+  for (const row of rows) {
+    row.status = "disabled";
+    row.syncNote = note;
+    row.shopifySyncedAt = null;
+    row.shopifySyncPendingAt = null;
+    row.shopifyReaddAttemptedAt = null;
+  }
+  Sentry.captureMessage("Discount codes disabled: deleted in Shopify and could not be re-added", {
+    level: "warning",
+    tags: { shopId },
+    extra: { count: rows.length, sample: rows.slice(0, 5).map((row) => row.code) },
+  });
+}
+
+const READD_FAILED_NOTE =
+  "This code was deleted from the Shopify discount and could not be added back (another discount uses it, or Shopify rejected it), so it was disabled.";
 
 const codeNodeTitle = (offer: Offer) => `[Promo Engine] ${offer.internalName || offer.publicTitle}`;
 
@@ -686,6 +740,7 @@ async function compileCodeOffers(
   accessToken: string,
   codeOffers: Offer[],
   codesByOffer: Map<string, DiscountCode[]>,
+  shopCurrencyCode?: string,
 ): Promise<CompiledCodeOffer[]> {
   const db = getDb();
   const now = new Date();
@@ -741,11 +796,12 @@ async function compileCodeOffers(
       if (!discountId && ownRows.length > 0) {
         await db
           .update(discountCodes)
-          .set({ shopifySyncedAt: null, shopifySyncPendingAt: null })
+          .set({ shopifySyncedAt: null, shopifySyncPendingAt: null, shopifyReaddAttemptedAt: null })
           .where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offer.id)));
         for (const row of ownRows) {
           row.shopifySyncedAt = null;
           row.shopifySyncPendingAt = null;
+          row.shopifyReaddAttemptedAt = null;
         }
       }
     }
@@ -759,7 +815,27 @@ async function compileCodeOffers(
     // vanishingly rare: the pre-flight (40 codes per Admin API call) is skipped for them, and
     // a code taken in a race is caught per code when it is added. Typed codes always go through
     // it, and so does any code left in flight by an earlier crashed publish (it may already be ours).
-    const preflightRows = pendingRows.filter((row) => !row.batchId || row.shopifySyncPendingAt);
+    // Codes queued for a re-add (drift repair found them missing on the node) get one attempt: they are
+    // looked up here, and one that another discount now holds is disabled rather than renamed.
+    const readdRows = discountId ? pendingRows.filter((row) => row.shopifyReaddAttemptedAt) : [];
+    if (readdRows.length > 0 && discountId) {
+      const owners = await codeOwners(shopDomain, accessToken, readdRows.map((row) => row.code));
+      await markCodesSynced(
+        shopId,
+        readdRows.filter((row) => owners.get(row.code) === discountId),
+      );
+      await disableUnrestorableCodes(
+        shopId,
+        readdRows.filter((row) => {
+          const owner = owners.get(row.code);
+          return Boolean(owner) && owner !== discountId;
+        }),
+        READD_FAILED_NOTE,
+      );
+    }
+    const preflightRows = pendingRows.filter(
+      (row) => !readdRows.includes(row) && (!row.batchId || row.shopifySyncPendingAt),
+    );
     if (preflightRows.length > 0) {
       const resolution = await resolveCodeCollisions(
         preflightRows,
@@ -816,7 +892,7 @@ async function compileCodeOffers(
       rewardRows,
       policy,
       computeOfferVersion(offer, conditionRows, rewardRows, policy),
-      { codePromo: true },
+      { codePromo: true, shopCurrencyCode },
     );
     const [resolvedOffer] = await resolveLegacyGiftVariants(shopId, [compiledOffer]);
     const finalCompiledOffer = resolvedOffer ?? compiledOffer;
@@ -828,12 +904,13 @@ async function compileCodeOffers(
       compiledOffer: finalCompiledOffer,
       shippingOffers:
         kind === "delivery"
-          ? compileShippingOfferConfigs(offer, functionConditionRows, rewardRows)
+          ? compileShippingOfferConfigs(offer, functionConditionRows, rewardRows, { shopCurrencyCode })
           : [],
       gatedShippingOffers:
         kind === "cart" && rewardRows.some((reward) => reward.rewardType === "shipping_discount")
           ? compileShippingOfferConfigs(offer, functionConditionRows, rewardRows, {
               codeHashes: [...new Set(liveCodes.map(codeHash))].sort(),
+              shopCurrencyCode,
             })
           : [],
       conditionRows,
@@ -917,7 +994,12 @@ async function pushCodeOfferConfigs(
       const added = toAdd.filter((row) => !failedCodes.has(row.code));
       await markCodesSynced(shopId, added);
       if (failed.length === 0) break;
-      const failedRows = toAdd.filter((row) => failedCodes.has(row.code));
+      const rejected = toAdd.filter((row) => failedCodes.has(row.code));
+      // A re-add that Shopify rejects (taken / invalid) ends here: disabled with a note, never retried.
+      const failedReadds = rejected.filter((row) => row.shopifyReaddAttemptedAt);
+      await disableUnrestorableCodes(shopId, failedReadds, READD_FAILED_NOTE);
+      const failedRows = rejected.filter((row) => !failedReadds.includes(row));
+      if (failedRows.length === 0) break;
       if (round >= 3) {
         const sample = failed
           .slice(0, 3)
@@ -965,6 +1047,7 @@ async function compileBackendBOffers(
   accessToken: string,
   codeOffers: Offer[],
   codesByOffer: Map<string, DiscountCode[]>,
+  shopCurrencyCode?: string,
 ): Promise<CompiledBackendBOffer[]> {
   const db = getDb();
   const now = new Date();
@@ -1020,7 +1103,7 @@ async function compileBackendBOffers(
       rewardRows,
       policy,
       computeOfferVersion(offer, conditionRows, rewardRows, policy),
-      { codePromo: true, codeHashes: [...new Set(codes.map(codeHash))].sort() },
+      { codePromo: true, codeHashes: [...new Set(codes.map(codeHash))].sort(), shopCurrencyCode },
     );
     const [resolved] = await resolveLegacyGiftVariants(shopId, [compiled]);
     const hashes = [...new Set(codes.map(codeHash))].sort();
@@ -1032,6 +1115,7 @@ async function compileBackendBOffers(
       gatedShippingOffers: compileShippingOfferConfigs(offer, functionConditionRows, rewardRows, {
         codeHashes: hashes,
         acceptCodes: true,
+        shopCurrencyCode,
       }),
       conditionRows,
     });
@@ -1218,25 +1302,61 @@ async function pushCodedShippingPool(
   gatedShippingOffers: CompiledShippingOffer[],
   policyOffers: CompiledFunctionConfig["offers"],
   manifest: ManifestCollector,
-): Promise<void> {
+  ownerOfShipping: ReadonlyMap<string, string>,
+): Promise<PoolFailure[]> {
   const groups = packCodedShippingOffers(gatedShippingOffers);
-  if (groups.length === 0 && (await readCodedShippingNodeIds(shopId)).length === 0) return;
-  const ids = await ensureCodedShippingNodes(shopId, shopDomain, accessToken, groups.length);
+  if (groups.length === 0 && (await readCodedShippingNodeIds(shopId)).length === 0) return [];
+  const offerIdsOf = (group: CompiledShippingOffer[]) => [
+    ...new Set(group.flatMap((offer) => ownerOfShipping.get(offer.id) ?? [])),
+  ];
+  const failures: PoolFailure[] = [];
+  const fail = (offerIds: string[], error: unknown) => {
+    // A request that may have landed, or a lock wait, parks the whole publish for a retry instead.
+    if (error instanceof ShopifyOutcomeUnknownError || isLockTimeoutError(error)) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    Sentry.captureMessage("Coded shipping pool could not be published", {
+      level: "error",
+      tags: { shopId, context: "coded-shipping-pool" },
+      extra: { offerIds, reason },
+    });
+    failures.push({
+      offerIds,
+      message: `Free shipping with this offer's codes could not be published to Shopify: ${reason}`,
+    });
+  };
+
+  let ids: string[];
+  try {
+    ids = await ensureCodedShippingNodes(shopId, shopDomain, accessToken, groups.length);
+  } catch (error) {
+    fail(offerIdsOf(groups.flat()), error);
+    return failures;
+  }
   const combination = compileDiscountCombinationPolicy(policyOffers);
   for (const [index, group] of groups.entries()) {
     const nodeId = ids[index];
     if (!nodeId) continue;
-    const value = serializeFunctionConfig({
-      offers: [],
-      shippingOffers: group,
-      version: "1",
-      compiledAt: new Date().toISOString(),
-    });
-    assertConfigFits(value);
-    await syncDiscountCombinationPolicy(shopDomain, accessToken, nodeId, combination, DELIVERY_DISCOUNT_CLASSES);
-    await pushMetafields(shopDomain, accessToken, [nodeId], value);
-    manifest.record(nodeId, "pool", value);
+    try {
+      const value = serializeFunctionConfig({
+        offers: [],
+        shippingOffers: group,
+        version: "1",
+        compiledAt: new Date().toISOString(),
+      });
+      assertConfigFits(value);
+      await syncDiscountCombinationPolicy(shopDomain, accessToken, nodeId, combination, DELIVERY_DISCOUNT_CLASSES);
+      await pushMetafields(shopDomain, accessToken, [nodeId], value);
+      manifest.record(nodeId, "pool", value);
+    } catch (error) {
+      fail(offerIdsOf(group), error);
+    }
   }
+  return failures;
+}
+
+interface PoolFailure {
+  offerIds: string[];
+  message: string;
 }
 
 /** Query-string params the storefront must keep on the stored page URL (D4): every enabled specific_link param. */
@@ -1297,6 +1417,17 @@ async function pushSpecificLinkParams(
     const errors = data.metafieldsSet.userErrors;
     if (errors.length > 0) throw new Error(errors.map((e) => e.message).join(", "));
   } catch (error) {
+    // A missing scope is a setup state (the merchant hasn't re-approved), not a bug: warn, don't page.
+    if (error instanceof ShopifyOutcomeUnknownError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    if (/access denied|scope|not approved|forbidden/i.test(message)) {
+      Sentry.captureMessage("Specific-link params not written: the app lacks access", {
+        level: "warning",
+        tags: { shopDomain, context: "specific-link-params" },
+        extra: { message },
+      });
+      return;
+    }
     Sentry.captureException(error, { tags: { shopDomain, context: "specific-link-params" } });
   }
 }

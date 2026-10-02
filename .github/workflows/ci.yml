@@ -87,6 +87,8 @@ jobs:
         run: node scripts/check-bundle-sizes.mjs
       - name: Committed promo-engine.js is fresh
         run: node scripts/check-storefront-freshness.mjs
+      - name: Storefront bundle is ES2019
+        run: pnpm check:storefront-es2019
 
   # ── ESLint ───────────────────────────────────────────────────────────────────
   lint:

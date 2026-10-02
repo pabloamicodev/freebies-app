@@ -14,10 +14,12 @@ vi.mock("@promo/db", () => ({
 vi.mock("./redis.server.js", () => ({
   getSharedRedis: () => Promise.resolve(null),
   resetSharedRedis: () => undefined,
+  recordRedisFailure: () => undefined,
+  redisIncrWindow: () => Promise.resolve(null),
 }));
 
 // Import AFTER the mock is registered
-const { checkRateLimit, getClientIp } = await import("./rate-limit.server.js");
+const { checkRateLimit, getClientIp, envLimit, jitteredRetryAfter, resetMemoryRateLimits } = await import("./rate-limit.server.js");
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -104,5 +106,54 @@ describe("checkRateLimit — DB enforcement", () => {
 
     expect(result).toEqual({ ok: false, retryAfterSeconds: 45 });
     expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Redis unavailable: where the shop-wide caps must not land ────────────────
+
+describe("checkRateLimit — onRedisUnavailable", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    resetMemoryRateLimits();
+  });
+
+  it('"skip" allows the request and never touches the database (no hot row per shop)', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      expect(await checkRateLimit("evaluate:shop:s1", { limit: 1, windowMs: 60_000, fixedWindow: true, onRedisUnavailable: "skip" })).toEqual({ ok: true });
+    }
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('"memory" counts per instance without the database', async () => {
+    const options = { limit: 2, windowMs: 60_000, fixedWindow: true, onRedisUnavailable: "memory" as const };
+    expect((await checkRateLimit("code-miss-shop:s1", options)).ok).toBe(true);
+    expect((await checkRateLimit("code-miss-shop:s1", options)).ok).toBe(true);
+    const third = await checkRateLimit("code-miss-shop:s1", options);
+    expect(third.ok).toBe(false);
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect((await checkRateLimit("code-miss-shop:other", options)).ok).toBe(true);
+  });
+
+  it("the default stays on the database, so per-caller limits keep being enforced", async () => {
+    makeDbRow(1);
+    await checkRateLimit("evaluate:s1:t:tok", { limit: 120, windowMs: 60_000 });
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("envLimit", () => {
+  it("uses a positive integer from the environment, else the fallback", () => {
+    expect(envLimit("X", 12_000, { X: "5000" })).toBe(5000);
+    expect(envLimit("X", 12_000, { X: "50.9" })).toBe(50);
+    for (const bad of ["", "0", "-3", "abc", undefined]) expect(envLimit("X", 12_000, { X: bad })).toBe(12_000);
+  });
+});
+
+describe("jitteredRetryAfter", () => {
+  it("never goes below the window remainder and spreads by up to 10 s", () => {
+    expect(jitteredRetryAfter(30, () => 0)).toBe(30);
+    expect(jitteredRetryAfter(30, () => 0.999)).toBe(39);
+    expect(jitteredRetryAfter(0, () => 0)).toBe(1);
+    expect(jitteredRetryAfter(2, () => 0.999)).toBe(4);
   });
 });

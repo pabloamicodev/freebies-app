@@ -113,6 +113,37 @@ describe("handleCustomersDataRequest", () => {
     expect(JSON.stringify(payload)).not.toContain("someone_else");
   });
 
+  it("stores one export and one audit entry per webhook id, however often it is delivered", async () => {
+    const { shopId, domain } = await newShop();
+    const request = { customer: { id: 77 } };
+    await handleCustomersDataRequest(db, shopId, domain, request, "wh-dup-1");
+    await handleCustomersDataRequest(db, shopId, domain, request, "wh-dup-1");
+    expect(await db.select().from(gdprExports).where(eq(gdprExports.shopId, shopId))).toHaveLength(1);
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.shopId, shopId))).toHaveLength(1);
+
+    // A different request for the same customer is a new export.
+    await handleCustomersDataRequest(db, shopId, domain, request, "wh-dup-2");
+    expect(await db.select().from(gdprExports).where(eq(gdprExports.shopId, shopId))).toHaveLength(2);
+  });
+
+  it("deletes exports past expires_at in the operational cleanup, and keeps live ones", async () => {
+    const { cleanupOperationalState } = await import("../operational-retention.server.js");
+    const { shopId, domain } = await newShop();
+    await handleCustomersDataRequest(db, shopId, domain, { customer: { id: 78 } }, "wh-exp-live");
+    await db.insert(gdprExports).values({
+      shopId,
+      customerId: "gid://shopify/Customer/79",
+      payload: {},
+      expiresAt: new Date(Date.now() - 1000),
+    });
+
+    const result = await cleanupOperationalState(db);
+
+    expect(result.expiredGdprExports).toBeGreaterThanOrEqual(1);
+    const left = await db.select().from(gdprExports).where(eq(gdprExports.shopId, shopId));
+    expect(left.map((row) => row.customerId)).toEqual(["gid://shopify/Customer/78"]);
+  });
+
   it("makes the export expire after the retention period", async () => {
     const { shopId, domain } = await newShop();
     const before = Date.now();

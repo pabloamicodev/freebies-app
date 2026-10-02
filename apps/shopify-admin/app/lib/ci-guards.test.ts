@@ -47,7 +47,10 @@ describe("check-migration-safety", () => {
   const check = (sql: string) => run("check-migration-safety.mjs", ["--dir", dirWith(sql), "--grandfathered", "17"]);
 
   it("accepts additive DDL", () => {
-    expect(check('ALTER TABLE "offers" ADD COLUMN "x" text;\nCREATE INDEX "i" ON "offers" ("x");').status).toBe(0);
+    expect(check('ALTER TABLE "offers" ADD COLUMN "x" text;').status).toBe(0);
+    expect(check('CREATE TABLE "t" ("id" uuid);\n--> statement-breakpoint\nCREATE INDEX "t_idx" ON "t" ("id");').status).toBe(0);
+    expect(check('CREATE INDEX CONCURRENTLY "i" ON "offers" ("x");').status).toBe(0);
+    expect(check('UPDATE "offers" SET "x" = 1 WHERE "x" IS NULL;').status).toBe(0);
     expect(check('ALTER TABLE "offers" ADD COLUMN "x" boolean DEFAULT false NOT NULL;').status).toBe(0);
   });
 
@@ -57,12 +60,26 @@ describe("check-migration-safety", () => {
     'ALTER TABLE "offers" RENAME COLUMN "a" TO "b";',
     'ALTER TABLE "offers" ALTER COLUMN "a" SET NOT NULL;',
     'ALTER TABLE "offers" ADD COLUMN "a" text NOT NULL;',
+    'CREATE INDEX "i" ON "offers" ("x");',
+    'CREATE UNIQUE INDEX IF NOT EXISTS "i" ON "public"."offers" USING btree ("x");',
+    'UPDATE "offers" SET "x" = 1;',
+    'UPDATE "offers" SET "x" = 1 WHERE true;',
+    'DELETE FROM "offers";',
+    'DELETE FROM "offers" WHERE 1=1;',
   ])("blocks %s", (sql) => {
     expect(check(sql).status).toBe(1);
   });
 
   it("allows destructive DDL with an override marker", () => {
     expect(check('-- destructive-ok: column unused since release 2026-10-01\nALTER TABLE "offers" DROP COLUMN "x";').status).toBe(0);
+  });
+
+  it("allows a reviewed index or backfill with a backfill-ok marker", () => {
+    expect(check('-- backfill-ok: offers has 40 rows\nCREATE INDEX "i" ON "offers" ("x");\nUPDATE "offers" SET "x" = 1;').status).toBe(0);
+  });
+
+  it("flags an index on an existing table even when a different table is created in the same file", () => {
+    expect(check('CREATE TABLE "t" ("id" uuid);\nCREATE INDEX "i" ON "offers" ("x");').status).toBe(1);
   });
 
   it("ignores statements inside comments", () => {

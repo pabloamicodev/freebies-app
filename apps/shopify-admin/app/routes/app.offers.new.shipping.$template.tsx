@@ -82,7 +82,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   if (!context.shopId) return { error: "Shop not found." };
-  const { db, shopId, session, timezone } = context;
+  const { db, shopId, session, timezone, currencyCode: shopCurrency } = context;
   const internalNameResult = requiredText(formData, "internalName", "Internal name");
   if (internalNameResult.error) return { error: internalNameResult.error };
   const publicTitleResult = requiredText(formData, "publicTitle", "Public title");
@@ -124,7 +124,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     discountType: tiersResult.tiers[0]?.discountType ?? "percentage",
     value: {
       amount: tiersResult.tiers[0]?.discountValue ?? 0,
-      currencyCode: "USD",
+      currencyCode: shopCurrency,
       tiers: tiersResult.tiers,
     },
     target,
@@ -170,7 +170,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           operator: "gte",
           value: {
             thresholdCents: minimumThreshold,
-            currencyCode: "USD",
+            currencyCode: shopCurrency,
             includeGiftValues: false,
           },
           sortOrder: 0,
