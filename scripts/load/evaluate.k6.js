@@ -26,6 +26,8 @@ const STORE_URL = (__ENV.STORE_URL || "").replace(/\/$/, "");
 const PROFILE = __ENV.PROFILE || "smoke";
 const VARIANTS = (__ENV.VARIANT_IDS || "gid://shopify/ProductVariant/1").split(",");
 const OFFER_ID = __ENV.OFFER_ID || "";
+// EvaluationInputSchema requires the shop domain and an absolute requestedUrl.
+const SHOP_DOMAIN = __ENV.SHOP_DOMAIN || STORE_URL.replace(/^https?:\/\//, "");
 const headers = { "Content-Type": "application/json", ...(__ENV.STORE_COOKIE ? { Cookie: __ENV.STORE_COOKIE } : {}) };
 
 const profiles = {
@@ -99,6 +101,7 @@ function cartPayload() {
     inventoryQuantity: 100,
   }));
   return {
+    shopDomain: SHOP_DOMAIN,
     cart: {
       token,
       id: null,
@@ -112,7 +115,7 @@ function cartPayload() {
     market: null,
     locale: "en",
     salesChannel: "online_store",
-    requestedUrl: "/cart",
+    requestedUrl: `${STORE_URL}/cart`,
     sessionId: `k6-session-${__VU}`,
   };
 }
