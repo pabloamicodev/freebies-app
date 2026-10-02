@@ -201,6 +201,37 @@ function giftKey(gift: Pick<SelectableGift, "rewardId" | "variantId">): string {
   return `${gift.rewardId}:${gift.variantId}`;
 }
 
+export function toggleGiftSelection(
+  selected: ReadonlySet<string>,
+  gift: SelectableGift,
+  gifts: readonly SelectableGift[],
+  maxSelectable: number,
+  soldOut: ReadonlySet<string> = new Set(),
+): Set<string> | null {
+  const key = giftKey(gift);
+  const next = new Set(selected);
+  if (next.has(key)) {
+    next.delete(key);
+    return next;
+  }
+  if (!gift.isAvailable || soldOut.has(gift.variantId)) return null;
+  // A single-choice gift behaves like a size picker: choosing another card
+  // replaces the current choice instead of ignoring the click at 1 / 1.
+  if (maxSelectable === 1) {
+    next.clear();
+  } else if (gift.rewardMaxQuantity === 1) {
+    for (const candidate of gifts) {
+      if (candidate.rewardId === gift.rewardId) next.delete(giftKey(candidate));
+    }
+  }
+  const rewardSelectedCount = gifts.filter(
+    (candidate) => candidate.rewardId === gift.rewardId && next.has(giftKey(candidate)),
+  ).length;
+  if (next.size >= maxSelectable || rewardSelectedCount >= gift.rewardMaxQuantity) return null;
+  next.add(key);
+  return next;
+}
+
 // The Ajax Cart API's error responses (cart-adapter.ts's fetchJson) are raw
 // `Cart API error 422: {"status":422,"message":"...already sold out.",...}`
 // text meant for logs, never customers. This is the last line of defense
@@ -392,18 +423,8 @@ function GiftSlider({
   }, [payload]);
 
   function toggleGift(gift: SelectableGift) {
-    const key = giftKey(gift);
-    const next = new Set(selected);
-    if (next.has(key)) {
-      next.delete(key);
-    } else {
-      if (!isAvailable(gift)) return;
-      const rewardSelectedCount = gifts.filter(
-        (candidate) => candidate.rewardId === gift.rewardId && next.has(giftKey(candidate)),
-      ).length;
-      if (next.size >= maxSelectable || rewardSelectedCount >= gift.rewardMaxQuantity) return;
-      next.add(key);
-    }
+    const next = toggleGiftSelection(selected, gift, payload.selectableGifts, maxSelectable, soldOut);
+    if (!next) return;
     setError(null);
     setSelected(next);
   }
@@ -570,7 +591,7 @@ function GiftSlider({
                   </p>
                   {gift.replacesTitle && (
                     <p class="pe-gift-variant">
-                      {(payload.labels?.replaces ?? "Replaces {{title}} (out of stock)").replace(
+                      {(payload.labels?.replaces ?? "Replacement for {{title}}").replace(
                         "{{title}}",
                         gift.replacesTitle,
                       )}

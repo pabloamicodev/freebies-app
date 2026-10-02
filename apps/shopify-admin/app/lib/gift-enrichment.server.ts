@@ -143,7 +143,7 @@ const GIFT_SLIDER_LABEL_DEFAULTS = {
   outOfStock: "Out of stock",
   selectPrompt: "Select a gift",
   remove: "Remove Gifts from Cart",
-  replaces: "Replaces {{title}} (out of stock)",
+  replaces: "Replacement for {{title}}",
 } as const;
 
 /** Builds the gift slider's `labels`, layering merchant overrides (from the

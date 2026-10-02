@@ -92,6 +92,74 @@ describe("gift slider auto-open lifecycle", () => {
     expect(openedOfferIds()).toEqual(["first"]);
   });
 
+  it.each([
+    { name: "no configured fallback", hasFallback: false },
+    { name: "a sold-out fallback", hasFallback: true },
+  ])("does not open automatically or manually with sold-out gifts and $name", async ({ hasFallback }) => {
+    initGiftSlider("test-session");
+    const unavailable = slider("first");
+    unavailable.selectableGifts[0]!.isAvailable = false;
+    if (hasFallback) {
+      unavailable.selectableGifts.push({
+        ...unavailable.selectableGifts[0]!,
+        variantId: "gid://shopify/ProductVariant/2",
+        isFallback: true,
+      });
+    }
+    const fetchStock = vi.fn();
+    vi.stubGlobal("fetch", fetchStock);
+
+    evaluate(unavailable);
+    await vi.advanceTimersByTimeAsync(0);
+    emit(PromoEvents.GiftSliderRequested, { offerId: unavailable.offerId });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(openedOfferIds()).toEqual([]);
+    expect(sessionStorage.getItem(AUTO_OPENED_KEY)).toBeNull();
+    expect(fetchStock).not.toHaveBeenCalled();
+  });
+
+  it("does not open when live stock invalidates both the primary and its fallback, then retries after restock", async () => {
+    initGiftSlider("test-session");
+    const payload = slider("first");
+    payload.selectableGifts.push({
+      ...payload.selectableGifts[0]!,
+      variantId: "gid://shopify/ProductVariant/2",
+      isFallback: true,
+    });
+    let fallbackAvailable = false;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ variants: [
+      { id: 1, available: false },
+      { id: 2, available: fallbackAvailable },
+    ] }))));
+
+    evaluate(payload);
+    await vi.advanceTimersByTimeAsync(0);
+    emit(PromoEvents.GiftSliderRequested, { offerId: payload.offerId });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openedOfferIds()).toEqual([]);
+    expect(sessionStorage.getItem(AUTO_OPENED_KEY)).toBeNull();
+
+    fallbackAvailable = true;
+    evaluate(payload);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openedOfferIds()).toEqual(["first"]);
+    expect(JSON.parse(sessionStorage.getItem(AUTO_OPENED_KEY)!)).toEqual(["first:1,1"]);
+  });
+
+  it("skips an offer with no live stock and opens the next available offer", async () => {
+    initGiftSlider("test-session");
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ variants: [{ id: 1, available: false }] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ variants: [{ id: 1, available: true }] }))));
+
+    evaluate(slider("sold-out"), slider("available"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(openedOfferIds()).toEqual(["available"]);
+    expect(JSON.parse(sessionStorage.getItem(AUTO_OPENED_KEY)!)).toEqual(["available:1"]);
+  });
+
   it("keeps unopened offers queued when another offer qualifies while a picker is open", async () => {
     initGiftSlider("test-session");
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ variants: [{ id: 1, available: true }] }))));

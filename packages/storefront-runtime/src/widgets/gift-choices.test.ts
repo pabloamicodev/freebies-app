@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideAutoOpen, resolveGiftChoices } from "./gift-slider.js";
+import { decideAutoOpen, resolveGiftChoices, toggleGiftSelection } from "./gift-slider.js";
 import type { GiftSliderPayload, SelectableGift } from "../types.js";
 
 const gift = (variantId: string, over: Partial<SelectableGift> = {}): SelectableGift => ({
@@ -29,6 +29,58 @@ const payload = (primaries: SelectableGift[], fallbackGifts?: SelectableGift[]):
 });
 
 const ids = (gifts: SelectableGift[]) => gifts.map((g) => g.variantId);
+
+describe("toggleGiftSelection", () => {
+  it("switches sizes with one click when only one gift can be chosen", () => {
+    const gifts = [gift("L"), gift("XL")];
+    const selected = new Set(["r1:L"]);
+    expect(toggleGiftSelection(selected, gifts[1]!, gifts, 1)).toEqual(new Set(["r1:XL"]));
+    expect(selected).toEqual(new Set(["r1:L"]));
+  });
+
+  it("replaces the same reward's selection while preserving other rewards at the global limit", () => {
+    const gifts = [gift("L"), gift("XL"), gift("bottle", { rewardId: "r2" })];
+    const selected = new Set(["r1:L", "r2:bottle"]);
+    expect(toggleGiftSelection(selected, gifts[1]!, gifts, 2)).toEqual(new Set(["r2:bottle", "r1:XL"]));
+  });
+
+  it("can switch rewards when the whole offer allows only one gift", () => {
+    const gifts = [gift("tee"), gift("bottle", { rewardId: "r2" })];
+    expect(toggleGiftSelection(new Set(["r1:tee"]), gifts[1]!, gifts, 1)).toEqual(new Set(["r2:bottle"]));
+  });
+
+  it("does not replace a selection with a gift unavailable in the payload or live stock", () => {
+    const selected = new Set(["r1:L"]);
+    const unavailable = gift("XL", { isAvailable: false });
+    expect(toggleGiftSelection(selected, unavailable, [gift("L"), unavailable], 1)).toBeNull();
+    expect(toggleGiftSelection(selected, gift("XL"), [gift("L"), gift("XL")], 1, new Set(["XL"]))).toBeNull();
+    expect(selected).toEqual(new Set(["r1:L"]));
+  });
+
+  it("deselects a selected gift, including one that has sold out", () => {
+    const selected = new Set(["r1:L", "r2:bottle"]);
+    const unavailable = gift("L", { isAvailable: false });
+    expect(toggleGiftSelection(selected, unavailable, [unavailable], 2)).toEqual(new Set(["r2:bottle"]));
+  });
+
+  it("still enforces the global limit when adding a different reward", () => {
+    const gifts = [gift("L"), gift("bottle", { rewardId: "r2" }), gift("bag", { rewardId: "r3" })];
+    expect(toggleGiftSelection(new Set(["r1:L", "r2:bottle"]), gifts[2]!, gifts, 2)).toBeNull();
+  });
+
+  it("keeps multiple selections up to the reward cap and refuses overflow", () => {
+    const gifts = [gift("L", { rewardMaxQuantity: 2 }), gift("XL", { rewardMaxQuantity: 2 }), gift("M", { rewardMaxQuantity: 2 })];
+    const selected = toggleGiftSelection(new Set(["r1:L"]), gifts[1]!, gifts, 3)!;
+    expect(selected).toEqual(new Set(["r1:L", "r1:XL"]));
+    expect(toggleGiftSelection(selected, gifts[2]!, gifts, 3)).toBeNull();
+  });
+
+  it("does not select a gift when either configured limit is zero", () => {
+    expect(toggleGiftSelection(new Set(), gift("L"), [gift("L")], 0)).toBeNull();
+    const disabled = gift("L", { rewardMaxQuantity: 0 });
+    expect(toggleGiftSelection(new Set(["r2:bottle"]), disabled, [disabled], 1)).toBeNull();
+  });
+});
 
 describe("resolveGiftChoices", () => {
   it("keeps primaries (dimmed by the caller) while at least one is purchasable", () => {
