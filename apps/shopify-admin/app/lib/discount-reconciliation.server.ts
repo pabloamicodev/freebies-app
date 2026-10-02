@@ -91,7 +91,8 @@ export type DriftIssue =
   | "inactive_node"
   | "code_count_mismatch"
   | "validation_mismatch"
-  | "validation_missing";
+  | "validation_missing"
+  | "missing_manifest";
 
 export interface DriftFinding {
   shopId: string;
@@ -137,6 +138,9 @@ async function checkShopDrift(
 ): Promise<DriftFinding[]> {
   const findings: DriftFinding[] = [];
   const base = { shopId: shop.id, shopDomain: shop.domain };
+  // Published before manifests existed: nothing to compare against, and its Functions may
+  // still lack the $app:promo_engine copy. One republish writes both and records a manifest.
+  if (!manifest) findings.push({ ...base, issue: "missing_manifest" });
   const nodeIds = [
     ...new Set([
       ...Object.keys(manifest?.nodes ?? {}),

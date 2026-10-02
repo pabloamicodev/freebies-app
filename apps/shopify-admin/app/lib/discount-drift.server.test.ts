@@ -307,7 +307,7 @@ describe("runDiscountDriftRepair", () => {
     expect(result.unresolved.filter((f) => f.shopId === shop.shopId).map((f) => f.issue)).toEqual(["validation_missing"]);
   });
 
-  it("without a manifest it can only verify that the shop's two nodes still exist", async () => {
+  it("republishes a shop that has no manifest (published before manifests and the $app copy existed)", async () => {
     counter += 1;
     const shopId = await seedShop(db, `drift-nomanifest-${counter}.myshopify.com`);
     const cart = `gid://shopify/DiscountAutomaticNode/c-${counter}`;
@@ -319,7 +319,7 @@ describe("runDiscountDriftRepair", () => {
       [cart]: { kind: "automatic", value: "{}", status: "ACTIVE" },
       [delivery]: { kind: "automatic", value: "{}", status: "ACTIVE" },
     });
-    expect(onlyMine((await run(present.graphQL)).publish, shopId)).toEqual([]);
+    expect(onlyMine((await run(present.graphQL)).publish, shopId)).toHaveLength(1);
 
     const missing = fakeShopify({ [cart]: { kind: "automatic", value: "{}", status: "ACTIVE" } });
     expect(onlyMine((await run(missing.graphQL)).publish, shopId)).toHaveLength(1);
