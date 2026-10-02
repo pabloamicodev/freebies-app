@@ -15,8 +15,15 @@ import {
 } from "../declined-gifts.js";
 import type { GiftSliderPayload, SelectableGift, EvaluationResult } from "../types.js";
 
-const AUTO_OPENED_STORAGE_KEY = "promo_engine_gift_slider_auto_opened";
+// v1 recorded candidates before mounting; those entries cannot prove a shopper
+// saw the picker. Start fresh while retaining independently stored declines.
+const AUTO_OPENED_STORAGE_KEY = "promo_engine_gift_slider_auto_opened_v2";
 const MAX_TRACKED_AUTO_OPENED = 50;
+const LIVE_STOCK_TIMEOUT_MS = 2_000;
+
+function autoOpenKey(slider: GiftSliderPayload): string {
+  return `${slider.offerId}:${slider.selectableGifts.map((gift) => gift.offerVersion).join(",")}`;
+}
 
 function loadAutoOpenedCartStates(): Set<string> {
   try {
@@ -53,7 +60,7 @@ export function decideAutoOpen(
   const open: GiftSliderPayload[] = [];
   for (const slider of sliders) {
     if (!Array.isArray(slider.selectableGifts)) continue;
-    const key = `${slider.offerId}:${slider.selectableGifts.map((gift) => gift.offerVersion).join(",")}`;
+    const key = autoOpenKey(slider);
     if (keys.has(key)) continue;
     if (slider.alreadySelectedCount > 0) {
       keys.add(key);
@@ -282,18 +289,35 @@ export async function fetchSoldOutVariantIds(
   const root = (typeof window !== "undefined" && window.Shopify?.routes?.root) || "/";
   await Promise.all(
     [...byHandle].map(async ([handle, handleGifts]) => {
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const response = await fetchImpl(`${root}products/${encodeURIComponent(handle)}.js`, {
-          headers: { Accept: "application/json" },
+        // Stock is a best-effort refinement of the server payload. Bound both
+        // headers and body so one slow product cannot keep the picker closed.
+        const readStock = async () => {
+          const response = await fetchImpl(`${root}products/${encodeURIComponent(handle)}.js`, {
+            headers: { Accept: "application/json" },
+            signal: controller.signal,
+          });
+          if (!response.ok) return null;
+          const product = (await response.json()) as { variants?: Array<{ id: number; available: boolean }> };
+          return new Map((product.variants ?? []).map((v) => [String(v.id), v.available]));
+        };
+        const timeout = new Promise<null>((resolve) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            resolve(null);
+          }, LIVE_STOCK_TIMEOUT_MS);
         });
-        if (!response.ok) return;
-        const product = (await response.json()) as { variants?: Array<{ id: number; available: boolean }> };
-        const availableById = new Map((product.variants ?? []).map((v) => [String(v.id), v.available]));
+        const availableById = await Promise.race([readStock(), timeout]);
+        if (!availableById) return;
         for (const gift of handleGifts) {
           if (availableById.get(gift.variantId.split("/").pop() ?? "") === false) soldOut.add(gift.variantId);
         }
       } catch {
         // Unknown stock — keep the server's answer.
+      } finally {
+        clearTimeout(timer);
       }
     }),
   );
@@ -741,8 +765,13 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string, initialSoldO
 /** Opens the picker only if something in it can actually be chosen: re-checks
  * live stock first (the payload's isAvailable comes from a lagging cache), so
  * an all-sold-out gift with no usable fallback never shows a dead modal. */
-async function openSlider(payload: GiftSliderPayload, sessionId: string): Promise<boolean> {
+async function openSlider(
+  payload: GiftSliderPayload,
+  sessionId: string,
+  isCurrent: () => boolean = () => true,
+): Promise<boolean> {
   const soldOut = await fetchSoldOutVariantIds(payload.selectableGifts.filter((gift) => gift.isAvailable));
+  if (!isCurrent()) return false;
   const choices = resolveGiftChoices(payload, soldOut);
   if (!choices.some((gift) => (gift.isAvailable && !soldOut.has(gift.variantId)) || gift.isSelected)) return false;
   mountSlider(payload, sessionId, soldOut);
@@ -758,6 +787,9 @@ export function initGiftSlider(sessionId: string) {
   let autoOpenedCartStates = loadAutoOpenedCartStates();
   let latestPayload: GiftSliderPayload | null = null;
   let pendingOfferIds: string[] = [];
+  let nextOpeningToken = 0;
+  let openingToken: number | null = null;
+  let activeOfferId: string | null = null;
 
   on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => {
     payloadByOfferId.clear();
@@ -772,26 +804,55 @@ export function initGiftSlider(sessionId: string) {
       ...sliders.map((s) => s.offerId),
     ]);
     const { open, keys } = decideAutoOpen(autoOpenedCartStates, sliders, qualifiedOfferIds, loadDeclinedGiftRewards());
+    // A candidate has not opened yet: stock checks can skip it, and queued
+    // offers may never be displayed before the shopper navigates away.
+    for (const slider of open) keys.delete(autoOpenKey(slider));
     if (keys.size !== autoOpenedCartStates.size || [...keys].some((k) => !autoOpenedCartStates.has(k))) {
       autoOpenedCartStates = keys;
       saveAutoOpenedCartStates(keys);
     }
     // Newly qualified pickers open one after another: first now, the rest as each closes.
     // A picker whose live stock check leaves nothing choosable is skipped, not left blocking the queue.
-    if (open.length > 0) {
-      pendingOfferIds = open.map((s) => s.offerId);
-      void openNext();
-    }
+    const eligibleToOpen = new Set(open.map((slider) => slider.offerId));
+    pendingOfferIds = [...new Set([...pendingOfferIds, ...eligibleToOpen])]
+      .filter((offerId) => eligibleToOpen.has(offerId));
+    void openNext();
   });
 
   async function openNext(): Promise<void> {
-    while (pendingOfferIds.length > 0) {
-      const payload = payloadByOfferId.get(pendingOfferIds.shift()!);
-      if (payload && (await openSlider(payload, sessionId))) return;
+    if (openingToken !== null || activeOfferId) return;
+    const token = ++nextOpeningToken;
+    openingToken = token;
+    try {
+      while (pendingOfferIds.length > 0) {
+        const payload = payloadByOfferId.get(pendingOfferIds[0]!);
+        if (!payload || autoOpenedCartStates.has(autoOpenKey(payload))) {
+          pendingOfferIds.shift();
+          continue;
+        }
+        const opened = await openSlider(payload, sessionId, () =>
+          openingToken === token && payloadByOfferId.get(payload.offerId) === payload,
+        );
+        // Manual requests take ownership. Leave this offer pending for when
+        // that picker closes, without letting a late response overwrite it.
+        if (openingToken !== token) return;
+        if (payloadByOfferId.get(payload.offerId) !== payload) continue;
+        pendingOfferIds = pendingOfferIds.filter((offerId) => offerId !== payload.offerId);
+        if (!opened) continue;
+        activeOfferId = payload.offerId;
+        autoOpenedCartStates.add(autoOpenKey(payload));
+        saveAutoOpenedCartStates(autoOpenedCartStates);
+        return;
+      }
+    } finally {
+      if (openingToken === token) openingToken = null;
     }
   }
 
-  on(PromoEvents.GiftSliderClosed, () => void openNext());
+  on(PromoEvents.GiftSliderClosed, () => {
+    activeOfferId = null;
+    void openNext();
+  });
 
   on<GiftSliderPayload | { offerId?: string }>(PromoEvents.GiftSliderRequested, (request) => {
     void (async () => {
@@ -801,15 +862,29 @@ export function initGiftSlider(sessionId: string) {
         (request.offerId ? payloadByOfferId.get(request.offerId) : latestPayload) ??
         latestPayload;
       if (!cachedPayload) return;
-      if (directPayload || !window.PromoEngine?.validateGiftOffer) {
-        await openSlider(cachedPayload, sessionId);
-        return;
+      const token = ++nextOpeningToken;
+      openingToken = token;
+      try {
+        const payload = directPayload || !window.PromoEngine?.validateGiftOffer
+          ? cachedPayload
+          : await window.PromoEngine.validateGiftOffer(cachedPayload.offerId);
+        if (!payload || openingToken !== token) return;
+        latestPayload = payload;
+        payloadByOfferId.set(payload.offerId, payload);
+        const opened = await openSlider(payload, sessionId, () =>
+          openingToken === token && payloadByOfferId.get(payload.offerId) === payload,
+        );
+        if (!opened) return;
+        activeOfferId = payload.offerId;
+        pendingOfferIds = pendingOfferIds.filter((offerId) => offerId !== payload.offerId);
+        autoOpenedCartStates.add(autoOpenKey(payload));
+        saveAutoOpenedCartStates(autoOpenedCartStates);
+      } finally {
+        if (openingToken === token) {
+          openingToken = null;
+          void openNext();
+        }
       }
-      const freshPayload = await window.PromoEngine.validateGiftOffer(cachedPayload.offerId);
-      if (!freshPayload) return;
-      latestPayload = freshPayload;
-      payloadByOfferId.set(freshPayload.offerId, freshPayload);
-      await openSlider(freshPayload, sessionId);
     })();
   });
 

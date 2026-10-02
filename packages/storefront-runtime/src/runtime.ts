@@ -513,7 +513,7 @@ export class PromoEngineRuntime {
       if (signal.aborted) return null;
 
       if (reply.status === 429 || (reply.status === 503 && reply.retryAfterMs !== null)) {
-        this.scheduleRateLimitRetry(reply.retryAfterMs);
+        this.scheduleRateLimitRetry(reply.retryAfterMs, options);
         return null;
       }
       if (!reply.ok || !reply.data) {
@@ -597,7 +597,10 @@ export class PromoEngineRuntime {
     }
   }
 
-  private scheduleRateLimitRetry(retryAfterMs: number | null): void {
+  private scheduleRateLimitRetry(
+    retryAfterMs: number | null,
+    options: { force?: boolean; emitResult?: boolean },
+  ): void {
     if (this.rateLimitRetries >= MAX_RATE_LIMIT_RETRIES) {
       this.log("Evaluation rate limited — giving up until the next cart change");
       this.rateLimitRetries = 0;
@@ -608,7 +611,7 @@ export class PromoEngineRuntime {
     this.log(`Evaluation rate limited — retrying in ${delay} ms`);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
-      void this.triggerEvaluation({ emitResult: false });
+      void this.triggerEvaluation(options);
     }, delay);
   }
 

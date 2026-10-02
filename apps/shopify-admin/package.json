@@ -9,6 +9,7 @@
     "build:shopify": "node ../../scripts/shopify-build.mjs",
     "start": "shopify app start",
     "test:e2e": "playwright test",
+    "test:ui": "playwright test --config playwright.ui.config.ts",
     "typecheck": "react-router typegen && tsc --noEmit",
     "lint": "eslint app --ext .ts,.tsx"
   },

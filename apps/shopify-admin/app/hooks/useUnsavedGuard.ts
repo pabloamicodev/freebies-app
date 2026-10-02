@@ -3,7 +3,12 @@ import { useBlocker } from "react-router";
 
 export function useUnsavedGuard(isSubmitting: boolean) {
   const [isDirty, setIsDirty] = useState(false);
-  const blocker = useBlocker(isDirty && !isSubmitting);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) =>
+    isDirty && !isSubmitting && (
+      currentLocation.pathname !== nextLocation.pathname ||
+      currentLocation.search !== nextLocation.search
+    ),
+  );
 
   useEffect(() => {
     if (!isDirty) return;
@@ -11,10 +16,6 @@ export function useUnsavedGuard(isSubmitting: boolean) {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [isDirty]);
-
-  useEffect(() => {
-    if (isSubmitting) setIsDirty(false);
-  }, [isSubmitting]);
 
   return { markDirty: () => setIsDirty(true), blocker };
 }

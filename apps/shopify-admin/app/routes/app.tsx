@@ -82,11 +82,14 @@ export default function AppLayout() {
       }
     };
 
-    document.addEventListener("click", handleClick, true);
-    document.addEventListener("submit", handleSubmit, true);
+    // Observe after React's handlers have run. Router links/forms and rejected
+    // submissions prevent the native event; useNavigation tracks router work.
+    // Capturing first would leave this flag stuck when no document navigation occurs.
+    document.addEventListener("click", handleClick);
+    document.addEventListener("submit", handleSubmit);
     return () => {
-      document.removeEventListener("click", handleClick, true);
-      document.removeEventListener("submit", handleSubmit, true);
+      document.removeEventListener("click", handleClick);
+      document.removeEventListener("submit", handleSubmit);
     };
   }, []);
 

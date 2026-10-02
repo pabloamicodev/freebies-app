@@ -253,11 +253,15 @@ function CollectionPicker({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <input
+        type="search"
         className="b-input"
         aria-label="Search collections"
         placeholder="Search collections"
         value={query}
         onChange={(event) => setQuery(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) event.preventDefault();
+        }}
         autoComplete="off"
       />
       {error && <p className="b-help" style={{ margin: 0 }}>{error}</p>}
@@ -567,7 +571,11 @@ export default function NewCodesOfferPage() {
                   <button type="button" className="b-btn b-btn-secondary" onClick={() => setProductPickerOpen(true)}>
                     Select products
                   </button>
-                  <SelectedProductsList gids={productIds} onRemove={(gid) => setProductIds(productIds.filter((id) => id !== gid))} />
+                  <SelectedProductsList
+                    gids={productIds}
+                    variantMode={false}
+                    onRemove={(gid) => setProductIds(productIds.filter((id) => id !== gid))}
+                  />
                 </div>
                 <div>
                   <div className="b-label">Collections</div>

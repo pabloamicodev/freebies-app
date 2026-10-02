@@ -151,6 +151,43 @@ describe("429 + Retry-After", () => {
     expect(h.count(/evaluate/)).toBe(2);
   });
 
+  it.each([429, 503])("publishes a successful retry after %s so qualified gift pickers can open", async (status) => {
+    let evaluateCalls = 0;
+    const result = okResult({ giftSlider: { offerId: "o1", selectableGifts: [] } });
+    const h = harness([
+      [/cart\.js/, () => json(emptyCart)],
+      [/evaluate/, () => ++evaluateCalls === 1
+        ? new Response("retry", { status, headers: { "Retry-After": "1" } })
+        : json(result)],
+    ]);
+    const rt = new PromoEngineRuntime(CONFIG);
+    await rt.api.evaluate();
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(h.win.dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: "promo-engine:evaluation-completed",
+      detail: result,
+    }));
+  });
+
+  it("preserves a forced silent gift validation when it must retry", async () => {
+    let evaluateCalls = 0;
+    const h = harness([
+      [/cart\.js/, () => json(emptyCart)],
+      [/evaluate/, () => ++evaluateCalls === 2
+        ? new Response("retry", { status: 429, headers: { "Retry-After": "1" } })
+        : json(okResult())],
+    ]);
+    const rt = new PromoEngineRuntime(CONFIG);
+    await rt.api.evaluate();
+    h.win.dispatchEvent.mockClear();
+    await rt.api.validateGiftOffer("o1");
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(h.count(/evaluate/)).toBe(3);
+    expect(h.win.dispatchEvent).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: "promo-engine:evaluation-completed",
+    }));
+  });
+
   it("gives up after 3 consecutive rate limits instead of hammering", async () => {
     const h = harness([
       [/cart\.js/, () => json(emptyCart)],
