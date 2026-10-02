@@ -38,6 +38,14 @@ function positiveInteger(value: unknown): number | null {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
+function lineMatchFlags(value: Record<string, unknown>): Record<string, boolean> {
+  return Object.fromEntries(
+    (["onlyMatchedLines", "rejectUnmatchedLines"] as const).flatMap((key) =>
+      typeof value[key] === "boolean" ? [[key, value[key]]] : [],
+    ),
+  );
+}
+
 export function normalizeOfferSubconditions(input: Record<string, unknown>): NormalizeResult {
   const conditions: NormalizedOfferSubcondition[] = [];
 
@@ -58,9 +66,7 @@ export function normalizeOfferSubconditions(input: Record<string, unknown>): Nor
             ...(value["paramValue"] === undefined || String(value["paramValue"]).length === 0
               ? {}
               : { paramValue: String(value["paramValue"]) }),
-            ...(typeof value["onlyMatchedLines"] === "boolean"
-              ? { onlyMatchedLines: value["onlyMatchedLines"] }
-              : {}),
+            ...lineMatchFlags(value),
           },
         });
         break;
@@ -204,13 +210,19 @@ export function normalizeOfferSubconditions(input: Record<string, unknown>): Nor
             utmCampaign: field("utmCampaign"),
             utmTerm: field("utmTerm"),
             utmContent: field("utmContent"),
-            ...(typeof value["onlyMatchedLines"] === "boolean"
-              ? { onlyMatchedLines: value["onlyMatchedLines"] }
-              : {}),
+            ...(value["scope"] === "visit" || value["scope"] === "page" ? { scope: value["scope"] } : {}),
+            ...lineMatchFlags(value),
           },
         });
         break;
       }
+      case "page_types":
+        conditions.push({
+          conditionType: "page_types",
+          operator: "eq",
+          value: { pageTypes: csv(value["pageTypes"]), ...lineMatchFlags(value) },
+        });
+        break;
       case "custom_attribute": {
         const scope = value["scope"] === "cart" ? "cart" : "line";
         conditions.push({

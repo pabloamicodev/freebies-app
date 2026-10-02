@@ -194,6 +194,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const typeParam = url.searchParams.get("type") ?? "gift";
+  // Code promos have their own wizard (codes, discount, pages, UTM in one place).
+  if (typeParam === "checkout_code_promo") throw redirect("/app/offers/new/codes/single");
   const initialType = (SELECTABLE_TYPES as readonly string[]).includes(typeParam) ? typeParam : "gift";
   return { shopDomain: session.shop, initialType };
 };
@@ -366,7 +368,7 @@ const OFFER_TYPES = [
   {
     value: "checkout_code_promo",
     label: "Checkout Code Promo",
-    desc: "Gate an offer behind a real Shopify discount code — no manual $0-value code setup.",
+    desc: "Discount codes customers type at checkout: one code, unique codes, or campaign-only codes.",
     color: "#0369a1",
     gradient: "linear-gradient(135deg, #38bdf8 0%, #0369a1 100%)",
     illus: <IllusCheckoutCode />,
@@ -449,7 +451,11 @@ export default function NewOfferPage() {
                   <button
                     key={type.value}
                     type="button"
-                    onClick={() => setOfferType(type.value)}
+                    onClick={() =>
+                      type.value === "checkout_code_promo"
+                        ? void navigate("/app/offers/new/codes/single")
+                        : setOfferType(type.value)
+                    }
                     className={`ot-card${type.wide ? " ot-wide" : ""}${active ? ` ot-active-${type.value}` : ""}`}
                   >
                     <div className="ot-card-illus" style={{ background: type.gradient }}>

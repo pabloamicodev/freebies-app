@@ -51,6 +51,14 @@ describe("conditionSummary", () => {
   it("falls back to a no-parameters message when utm_parameters has nothing set", () => {
     expect(conditionSummary("utm_parameters", {})).toBe("no UTM parameters set");
   });
+
+  it("describes visit-scoped UTMs, page types and the reject-other-pages flag in plain words", () => {
+    expect(conditionSummary("utm_parameters", { utmSource: "news", scope: "visit", rejectUnmatchedLines: true })).toBe(
+      "utm_source=news (this visit) · other pages block it",
+    );
+    expect(conditionSummary("page_types", { pageTypes: ["home", "product"] })).toBe("added from Home page, Product pages");
+    expect(conditionSummary("page_types", { pageTypes: [] })).toBe("no page types set");
+  });
 });
 
 describe("rewardHeadline", () => {

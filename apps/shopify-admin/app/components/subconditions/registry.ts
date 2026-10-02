@@ -8,6 +8,7 @@ import {
   LocationForm,
   MarketsForm,
   OrderHistoryForm,
+  PageTypesForm,
   QuantityLimitForm,
   SalesChannelForm,
   SubscriptionForm,
@@ -25,4 +26,5 @@ export const SUB_FORMS: Record<SubconditionId, ComponentType<SubFormProps>> = {
   custom_attribute: CustomAttributeForm,
   quantity_limit: QuantityLimitForm,
   utm_parameters: UtmParametersForm,
+  page_types: PageTypesForm,
 };

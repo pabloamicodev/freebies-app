@@ -10,9 +10,11 @@ export type OfferCreateModalType =
   | "upsell"
   | "discount"
   | "shipping"
-  | "subscription";
+  | "subscription"
+  | "codes";
 
 const SUBSCRIPTION_GRAD = "linear-gradient(135deg, #818cf8 0%, #4f46e5 100%)";
+const CODES_GRAD = "linear-gradient(135deg, #fb923c 0%, #ea580c 100%)";
 
 const GIFT_SLUG_MAP: Record<string, string> = {
   buy_x_get_y: "bxgy",
@@ -153,6 +155,26 @@ function SubscriptionSvg() {
       <path d="M3 21v-5h5" />
       <path d="M3 12a9 9 0 0 1 15.4-6.4L21 8" />
       <path d="M21 3v5h-5" />
+    </svg>
+  );
+}
+
+function CodesSvg() {
+  return (
+    <svg
+      width="28"
+      height="28"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="white"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v3a2 2 0 0 0 0 4v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 0 0-4z" />
+      <path d="M15 9l-6 6" />
+      <path d="M9.5 9.5h.01M14.5 14.5h.01" />
     </svg>
   );
 }
@@ -421,6 +443,18 @@ const OFFER_CATALOG = [
     iconBorder: "rgba(79,70,229,0.22)",
     grad: SUBSCRIPTION_GRAD,
     Icon: SubscriptionSvg,
+  },
+  {
+    value: "codes",
+    name: "Discount Codes",
+    tagline: "Codes customers type at checkout",
+    examples: ["SUMMER10 → 10% off the order", "Unique codes, or campaign-only codes"],
+    accent: "#ea580c",
+    glow: "rgba(234,88,12,0.18)",
+    iconBg: "rgba(234,88,12,0.10)",
+    iconBorder: "rgba(234,88,12,0.22)",
+    grad: CODES_GRAD,
+    Icon: CodesSvg,
   },
 ];
 
@@ -1673,6 +1707,145 @@ function Modal2SubscriptionWizard({
   );
 }
 
+/* ══════════════════════════════════════════════════════════
+   MODAL 2 — DISCOUNT CODES: single, bulk or campaign
+   ══════════════════════════════════════════════════════════ */
+function CodeChip({ children, faded = false }: { children: string; faded?: boolean }) {
+  return (
+    <span
+      style={{
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize: 12,
+        fontWeight: 700,
+        letterSpacing: "0.5px",
+        color: faded ? "#9a3412" : "#7c2d12",
+        background: faded ? "rgba(255,255,255,0.6)" : "white",
+        border: "1.5px dashed #ea580c",
+        borderRadius: 6,
+        padding: "4px 8px",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+const CODES_TEMPLATES = [
+  {
+    id: "single",
+    name: "Single code",
+    desc: "One code everyone shares, like SUMMER10.",
+    IllusComponent: () => (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+        <CodeChip>SUMMER10</CodeChip>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "#9a3412" }}>10% off the order</span>
+      </div>
+    ),
+  },
+  {
+    id: "bulk",
+    name: "Bulk codes",
+    desc: "Hundreds of unique one-time codes for influencers, inserts or emails.",
+    IllusComponent: () => (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
+        <CodeChip>VIP-7KQ2M9XA</CodeChip>
+        <CodeChip faded>VIP-H3PZ8WRT</CodeChip>
+        <CodeChip faded>VIP-2NDF6YLC</CodeChip>
+      </div>
+    ),
+  },
+  {
+    id: "campaign",
+    name: "Campaign code",
+    desc: "Works only for visitors who arrived from a tagged campaign link (UTM).",
+    IllusComponent: () => (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+        <span
+          style={{
+            fontSize: 11,
+            color: "#6d7175",
+            background: "white",
+            border: "1px solid #e5e7eb",
+            borderRadius: 12,
+            padding: "3px 8px",
+          }}
+        >
+          ?utm_source=newsletter
+        </span>
+        <span style={{ color: "#9a3412", fontSize: 14 }}>↓</span>
+        <CodeChip>NEWS15</CodeChip>
+      </div>
+    ),
+  },
+];
+
+function Modal2CodesWizard({ onClose, onBack }: { onClose: () => void; onBack: () => void }) {
+  const [selected, setSelected] = useState("single");
+  const navigate = useNavigate();
+  return (
+    <AccessibleModal ariaLabel="Create discount codes" onClose={onClose}>
+      <div className="b-modal-header">
+        <div>
+          <h2 className="b-modal-title">Create discount codes</h2>
+          <p className="b-modal-subtitle">Codes we create and manage for you, nothing to set up in Shopify</p>
+        </div>
+        <button type="button" className="b-modal-close" onClick={onClose} aria-label="Close">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+          >
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div className="b-modal-body">
+        <div className="b-template-grid">
+          {CODES_TEMPLATES.map((tmpl) => (
+            <button
+              type="button"
+              key={tmpl.id}
+              className={`b-template-card${selected === tmpl.id ? " selected" : ""}`}
+              onClick={() => setSelected(tmpl.id)}
+              aria-pressed={selected === tmpl.id}
+            >
+              <div className="b-template-illus" style={{ background: "linear-gradient(135deg, #fff7ed 0%, #fed7aa 100%)" }}>
+                <tmpl.IllusComponent />
+              </div>
+              <div className="b-template-info">
+                <div className="b-template-radio-row" aria-hidden="true">
+                  <span className={`b-template-radio${selected === tmpl.id ? " selected" : ""}`} />
+                  <p className="b-template-name">{tmpl.name}</p>
+                </div>
+                <p className="b-template-desc">{tmpl.desc}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="b-modal-footer">
+        <button type="button" className="b-btn b-btn-secondary" onClick={onBack}>
+          Back
+        </button>
+        <button
+          type="button"
+          className="b-btn b-btn-dark"
+          onClick={() => {
+            void navigate(`/app/offers/new/codes/${selected}`);
+          }}
+        >
+          Create codes
+        </button>
+      </div>
+    </AccessibleModal>
+  );
+}
+
 type OfferCreateModalFlowProps = {
   modal: OfferCreateModalType;
   onClose: () => void;
@@ -1695,7 +1868,8 @@ export default function OfferCreateModalFlow({
             type === "upsell" ||
             type === "discount" ||
             type === "shipping" ||
-            type === "subscription"
+            type === "subscription" ||
+            type === "codes"
           ) {
             onChange(type);
           }
@@ -1722,6 +1896,10 @@ export default function OfferCreateModalFlow({
 
   if (modal === "shipping") {
     return <Modal2ShippingWizard onClose={onClose} onBack={() => onChange("type")} />;
+  }
+
+  if (modal === "codes") {
+    return <Modal2CodesWizard onClose={onClose} onBack={() => onChange("type")} />;
   }
 
   return <Modal2DiscountWizard onClose={onClose} onBack={() => onChange("type")} />;

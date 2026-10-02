@@ -1,6 +1,8 @@
 // ─── Subcondition type definitions ───────────────────────────────────────────
 // Add new subcondition IDs here as the product grows.
 
+import { FUNCTION_ENFORCED_CONDITION_TYPES, type ConditionType } from "@promo/shared-types";
+
 export type SubconditionId =
   | "link"
   | "order_history"
@@ -11,7 +13,33 @@ export type SubconditionId =
   | "markets"
   | "custom_attribute"
   | "quantity_limit"
-  | "utm_parameters";
+  | "utm_parameters"
+  | "page_types";
+
+/** The stored condition types each picker entry can produce (see normalizeOfferSubconditions). */
+export const SUBCONDITION_CONDITION_TYPES: Record<SubconditionId, ConditionType[]> = {
+  link: ["specific_link"],
+  order_history: [
+    "order_history_total_spent",
+    "order_history_last_order_spent",
+    "order_history_total_orders",
+    "one_use_per_customer",
+  ],
+  customer_tags: ["customer_tags"],
+  location: ["customer_location"],
+  subscription: ["subscription_product_type"],
+  sales_channel: ["sales_channels"],
+  markets: ["markets"],
+  custom_attribute: ["line_attribute", "cart_attribute"],
+  quantity_limit: ["cart_quantity", "specific_product"],
+  utm_parameters: ["utm_parameters"],
+  page_types: ["page_types"],
+};
+
+/** Entries checkout can actually enforce for at least one of their modes; the rest can never publish on a code offer. */
+export function isFunctionEnforcedSubcondition(id: SubconditionId): boolean {
+  return SUBCONDITION_CONDITION_TYPES[id].some((type) => FUNCTION_ENFORCED_CONDITION_TYPES.has(type));
+}
 
 export interface SubconditionDef {
   id: SubconditionId;
@@ -82,6 +110,12 @@ const ALL_SUBCONDITIONS: SubconditionDef[] = [
     id: "utm_parameters",
     name: "UTM Parameters",
     desc: "Only applies to customers who arrived via specific UTM tracking parameters (utm_source, utm_medium, etc.) — captured automatically from their landing URL, no landing-page snippet needed.",
+    plus: false,
+  },
+  {
+    id: "page_types",
+    name: "Store pages",
+    desc: "Only counts products added to the cart from certain kinds of pages, like product pages or collections.",
     plus: false,
   },
 ];

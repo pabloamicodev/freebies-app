@@ -25,6 +25,12 @@ import { evaluateProductQuantityLimits, type ProductQuantityLimitsConditionValue
 import { evaluateSubscriptionCondition, type SubscriptionConditionValue } from "./conditions/subscription.js";
 import { evaluateUrlParam, type UrlParamConditionValue } from "./conditions/url-param.js";
 import { evaluatePageUrl, type PageUrlConditionValue } from "./conditions/page-url.js";
+import {
+  evaluatePageTypes,
+  evaluateUtmParameters,
+  type PageTypesConditionValue,
+  type UtmParametersConditionValue,
+} from "./conditions/page-context.js";
 import { evaluateCountry, type CountryConditionValue } from "./conditions/country.js";
 import { applyPriority } from "./priority-resolver.js";
 import { evaluateCartAttribute, evaluateLineAttribute, evaluateDiscountCode, type CartAttributeConditionValue, type LineAttributeConditionValue, type DiscountCodeConditionValue } from "./conditions/attributes.js";
@@ -585,10 +591,23 @@ function evaluateCondition(
       return evaluateSubscriptionCondition(input.cart, cond.value as SubscriptionConditionValue);
 
     case "specific_link":
-      return evaluateSourcePages(input, (url) => evaluateUrlParam(url, cond.value as UrlParamConditionValue));
+      return evaluateSourcePages(input, cond.value, (url) => evaluateUrlParam(url, cond.value as UrlParamConditionValue));
 
     case "page_url":
-      return evaluateSourcePages(input, (url) => evaluatePageUrl(url, cond.value as PageUrlConditionValue));
+      return evaluateSourcePages(input, cond.value, (url) => evaluatePageUrl(url, cond.value as PageUrlConditionValue));
+
+    case "page_types":
+      return evaluateSourcePages(input, cond.value, (url) => evaluatePageTypes(url, cond.value as PageTypesConditionValue));
+
+    case "utm_parameters": {
+      const value = cond.value as UtmParametersConditionValue;
+      return evaluateSourcePages(
+        input,
+        cond.value,
+        (url) => evaluateUtmParameters(url, value),
+        value.scope === "visit" ? "_promo_landing_url" : "_promo_page_url",
+      );
+    }
 
     case "customer_location":
       return evaluateCountry(
@@ -616,18 +635,35 @@ function evaluateCondition(
 
 /**
  * Checkout only sees the page each line was added from (`_promo_page_url`,
- * stamped by the metadata bridge), not where the shopper is now — evaluate
- * the same thing so the storefront never promises what checkout rejects.
+ * stamped by the metadata bridge; `_promo_landing_url` for visit-scoped UTM),
+ * not where the shopper is now — evaluate the same thing so the storefront
+ * never promises what checkout rejects. With `rejectUnmatchedLines` every
+ * non-gift line must pass, as the Function requires.
  */
 function evaluateSourcePages(
   input: EvaluationInput,
+  conditionValue: unknown,
   check: (url: string | null) => Result<EligibilityReason, EligibilityReason>,
+  urlKey: "_promo_page_url" | "_promo_landing_url" = "_promo_page_url",
 ): Result<EligibilityReason, EligibilityReason> {
-  const pages = extractQualifyingLines(input.cart)
-    .map((line) => line.properties["_promo_page_url"])
-    .filter((url): url is string => typeof url === "string" && url.length > 0);
+  const lines = extractQualifyingLines(input.cart);
+  const urlOf = (properties: Record<string, string>): string | null => {
+    const url = properties[urlKey];
+    return properties["_promo_page_url"] && typeof url === "string" && url.length > 0 ? url : null;
+  };
+  const reject = (conditionValue as { rejectUnmatchedLines?: unknown } | null)?.rejectUnmatchedLines === true;
+  if (reject) {
+    let result = check(null);
+    for (const line of lines) {
+      result = check(urlOf(line.properties));
+      if (!result.ok) return result;
+    }
+    return result;
+  }
   let result = check(null);
-  for (const url of pages) {
+  for (const line of lines) {
+    const url = urlOf(line.properties);
+    if (!url) continue;
     result = check(url);
     if (result.ok) return result;
   }

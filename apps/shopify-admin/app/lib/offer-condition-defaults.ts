@@ -20,6 +20,7 @@ const DEFAULT_VALUES: Record<SubconditionId, Record<string, unknown>> = {
     rules: [{ qty: 1, scope: "specific_products", operator: "at_least", productIds: [] }],
   },
   utm_parameters: { utmSource: "", utmMedium: "", utmCampaign: "", utmTerm: "", utmContent: "" },
+  page_types: { pageTypes: ["home", "collection", "product"] },
 };
 
 export function initializeOfferConditionValues(

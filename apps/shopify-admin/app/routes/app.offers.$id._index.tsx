@@ -1,6 +1,6 @@
 import { useLoaderData, useNavigate, useFetcher, useActionData, redirect, Link } from "react-router";
 import { useState } from "react";
-import { SUPPORTED_CURRENCIES, validateConditionValue, validateRewardPayload, ConditionTypeSchema, ConditionScopeSchema, resolveOnlyMatchedLines } from "@promo/shared-types";
+import { SUPPORTED_CURRENCIES, validateConditionValue, validateRewardPayload, ConditionTypeSchema, ConditionScopeSchema, resolveOnlyMatchedLines, resolveRejectUnmatchedLines } from "@promo/shared-types";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
@@ -21,10 +21,17 @@ import { SelectedProductsList } from "../components/SelectedProductsList.js";
 import { SubconditionModal } from "../components/SubconditionModal.js";
 import { SubconditionCard } from "../components/SubconditionCard.js";
 import { SUB_FORMS } from "../components/subconditions/registry.js";
-import { OnlyMatchedLinesCheckbox } from "../components/subconditions/forms.js";
+import {
+  OnlyMatchedLinesCheckbox,
+  PAGE_TYPES_HELP,
+  PageTypeCheckboxes,
+  RejectUnmatchedLinesCheckbox,
+} from "../components/subconditions/forms.js";
 import { GIFT_SUBCONDITIONS } from "../components/subconditions/types.js";
 import type { SubconditionId } from "../components/subconditions/types.js";
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
+import { subconditionsFromRows } from "../lib/subcondition-prefill.js";
+import { pageTypeLabel, readPageTypes } from "../lib/page-types.js";
 import { getCodeNotices, offerRequiresCode } from "../lib/discount-codes.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -362,93 +369,9 @@ const CONDITION_TYPE_NAMES: Record<string, string> = {
   customer_location:     "Customer Location",
   sales_channels:        "Sales Channels",
   page_url:              "Page URL",
+  page_types:            "Store pages",
+  utm_parameters:        "UTM Parameters",
 };
-
-/* ── Sub-condition rows (scope="sub") → subcondition-picker form state ──────
- * Reverses normalizeOfferSubconditions() so existing sub-conditions reopen
- * pre-filled instead of forcing the merchant to reconfigure them. Most forms
- * already read the same canonical field names the DB stores, so this is
- * mostly a conditionType → SubconditionId relabel; "quantity_limit" is the
- * one type whose stored shape (cart_quantity/specific_product rows) doesn't
- * map cleanly back to the picker's `rules` array, so it's left to the
- * merchant to reconfigure if already present. */
-function subconditionsFromRows(
-  rows: Array<{ conditionType: string; value: Record<string, unknown> }>,
-): { activeSubs: SubconditionId[]; subValues: Record<string, unknown> } {
-  const activeSubs: SubconditionId[] = [];
-  const subValues: Record<string, unknown> = {};
-
-  for (const row of rows) {
-    const v = row.value;
-    switch (row.conditionType) {
-      case "specific_link":
-        activeSubs.push("link");
-        subValues["link"] = v;
-        break;
-      case "customer_tags":
-        activeSubs.push("customer_tags");
-        subValues["customer_tags"] = v;
-        break;
-      case "customer_location":
-        activeSubs.push("location");
-        subValues["location"] = v;
-        break;
-      case "subscription_product_type":
-        activeSubs.push("subscription");
-        subValues["subscription"] = v;
-        break;
-      case "sales_channels":
-        activeSubs.push("sales_channel");
-        subValues["sales_channel"] = v;
-        break;
-      case "utm_parameters":
-        activeSubs.push("utm_parameters");
-        subValues["utm_parameters"] = v;
-        break;
-      case "markets":
-        activeSubs.push("markets");
-        subValues["markets"] = v;
-        break;
-      case "cart_attribute":
-        activeSubs.push("custom_attribute");
-        subValues["custom_attribute"] = { ...v, scope: "cart" };
-        break;
-      case "line_attribute":
-        activeSubs.push("custom_attribute");
-        subValues["custom_attribute"] = { ...v, scope: "line" };
-        break;
-      case "one_use_per_customer":
-        activeSubs.push("order_history");
-        subValues["order_history"] = { metric: "one_use_per_customer" };
-        break;
-      case "order_history_total_spent":
-      case "order_history_last_order_spent":
-      case "order_history_total_orders": {
-        activeSubs.push("order_history");
-        const metric = row.conditionType === "order_history_total_orders"
-          ? "total_orders"
-          : row.conditionType === "order_history_last_order_spent"
-            ? "last_order_spent"
-            : "total_spent";
-        const threshold = metric === "total_orders"
-          ? Number(v["value"] ?? 0)
-          : Number(v["valueCents"] ?? 0) / 100;
-        subValues["order_history"] = { metric, operator: v["operator"] ?? "gte", threshold };
-        break;
-      }
-      case "cart_quantity":
-      case "specific_product":
-        // Sub-scope quantity limits: mark as active so the card shows up,
-        // but leave the value for the merchant to re-enter (see doc comment).
-        if (!activeSubs.includes("quantity_limit")) activeSubs.push("quantity_limit");
-        break;
-      default:
-        break;
-    }
-  }
-
-  return { activeSubs, subValues };
-}
 
 /* ── Currency chips shown on monetary conditions ────────── */
 const CURRENCIES = SUPPORTED_CURRENCIES;
@@ -575,7 +498,6 @@ function PageUrlConditionEditor({
   const patterns = Array.isArray(val.patterns) ? (val.patterns as string[]) : [""];
   const matchMode = (val.matchMode as string | undefined) ?? "starts_with";
   const caseSensitive = Boolean(val.caseSensitive);
-  const onlyMatchedLines = resolveOnlyMatchedLines(val.onlyMatchedLines, isCodePromo);
 
   function setPatterns(next: string[]) {
     const nextVal = { ...val, patterns: next };
@@ -688,14 +610,71 @@ function PageUrlConditionEditor({
         </div>
       </div>
 
+      <LineMatchCheckboxes conditionId={conditionId} val={val} update={update} save={save} isCodePromo={isCodePromo} />
+    </div>
+  );
+}
+
+/* ── "Products added from other pages" flags, shared by page-matching editors ── */
+function LineMatchCheckboxes({
+  conditionId,
+  val,
+  update,
+  save,
+  isCodePromo,
+}: {
+  conditionId: string;
+  val: ConditionValue;
+  update: (patch: Partial<ConditionValue>) => void;
+  save: (overrideVal?: ConditionValue) => void;
+  isCodePromo: boolean;
+}) {
+  const setFlag = (key: "onlyMatchedLines" | "rejectUnmatchedLines", checked: boolean) => {
+    update({ [key]: checked });
+    save({ ...val, [key]: checked });
+  };
+  return (
+    <>
       <OnlyMatchedLinesCheckbox
         id={`condition-${conditionId}-only-matched-lines`}
-        checked={onlyMatchedLines}
-        onChange={(checked) => {
-          update({ onlyMatchedLines: checked });
-          save({ ...val, onlyMatchedLines: checked });
+        checked={resolveOnlyMatchedLines(val.onlyMatchedLines, isCodePromo)}
+        onChange={(checked) => setFlag("onlyMatchedLines", checked)}
+      />
+      <RejectUnmatchedLinesCheckbox
+        id={`condition-${conditionId}-reject-unmatched-lines`}
+        checked={resolveRejectUnmatchedLines(val.rejectUnmatchedLines)}
+        onChange={(checked) => setFlag("rejectUnmatchedLines", checked)}
+      />
+    </>
+  );
+}
+
+/* ── Store page types condition editor ──────────────────── */
+function PageTypesConditionEditor({
+  conditionId,
+  val,
+  update,
+  save,
+  isCodePromo,
+}: {
+  conditionId: string;
+  val: ConditionValue;
+  update: (patch: Partial<ConditionValue>) => void;
+  save: (overrideVal?: ConditionValue) => void;
+  isCodePromo: boolean;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <PageTypeCheckboxes
+        idPrefix={`condition-${conditionId}`}
+        selected={readPageTypes(val.pageTypes)}
+        onChange={(next) => {
+          update({ pageTypes: next });
+          save({ ...val, pageTypes: next });
         }}
       />
+      <div className="b-help">{PAGE_TYPES_HELP}</div>
+      <LineMatchCheckboxes conditionId={conditionId} val={val} update={update} save={save} isCodePromo={isCodePromo} />
     </div>
   );
 }
@@ -1006,6 +985,11 @@ function ConditionCard({
         {conditionType === "page_url" && (
           <PageUrlConditionEditor conditionId={conditionId} val={val} update={update} save={save} isCodePromo={isCodePromo} />
         )}
+
+        {/* ── Store page types ───────────────────────────────── */}
+        {conditionType === "page_types" && (
+          <PageTypesConditionEditor conditionId={conditionId} val={val} update={update} save={save} isCodePromo={isCodePromo} />
+        )}
       </div>
     </div>
   );
@@ -1106,6 +1090,10 @@ function conditionSummary(conditionType: string, value: ConditionValue, currency
       const label = mode.replace("_", " ");
       if (patterns.length === 0) return ["No URL patterns configured"];
       return [`URL ${label}: ${patterns.slice(0, 2).join(", ")}${patterns.length > 2 ? ` +${patterns.length - 2} more` : ""}`];
+    }
+    case "page_types": {
+      const types = readPageTypes(v.pageTypes);
+      return [types.length ? `Added from: ${types.map(pageTypeLabel).join(", ")}` : "No store pages selected"];
     }
     default:
       return [conditionType];
@@ -1275,6 +1263,7 @@ export default function OfferDetailPage() {
       cart_value_multiplier: { thresholdCents: 50000, currencyCode: "USD", appliesTo: "any_product" },
       specific_product: { minQtyPerProduct: 1, multiplyGifts: false, giftsMatchProducts: false, trackMode: "variant", appliesTo: "specific_products", variantIds: [] },
       page_url: { patterns: [""], matchMode: "starts_with", caseSensitive: false },
+      page_types: { pageTypes: ["home", "collection", "product"] },
     };
     const fd = new FormData();
     fd.append("intent", "add_condition");
@@ -1551,6 +1540,7 @@ export default function OfferDetailPage() {
                     <option value="cart_value_multiplier">Cart Value Multiplier — earn gifts per $ spent</option>
                     <option value="specific_product">Specific Product — must contain selected products</option>
                     <option value="page_url">Page URL — restrict to specific storefront pages</option>
+                    <option value="page_types">Store pages — products added from home, collections, product pages…</option>
                   </select>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button

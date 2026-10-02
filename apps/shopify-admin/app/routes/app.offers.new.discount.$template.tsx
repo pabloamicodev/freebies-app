@@ -20,7 +20,8 @@ import {
   nowInZone,
 } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
-import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
+import { offers, offerConditions, offerRewards, offerCombinationPolicies, type Db } from "@promo/db";
+import { createDiscountCode, normalizeTypedCode } from "../lib/discount-codes.server.js";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { SelectedProductsList } from "../components/SelectedProductsList.js";
@@ -37,6 +38,9 @@ const SLUG_TO_TEMPLATE: Record<string, string> = {
   cheapest: "cheapest_item",
   cart: "cart",
 };
+
+/** Rolls the creation transaction back when the optional first code is refused (e.g. already used). */
+class CodeRejectedError extends Error {}
 
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
@@ -181,6 +185,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const status = statusForSubmit(intent, startsAt);
 
+  let initialCode: string | null = null;
+  if (formData.get("requiresCode") === "on") {
+    const codeResult = normalizeTypedCode(formData.get("discountCode"));
+    if (!codeResult.ok) return { error: codeResult.error };
+    initialCode = codeResult.code;
+  }
+
   // ── Condition ──
   const firstVolumeMinimum = Math.min(...volumeTiers.map((tier) => tier.qty));
   const firstCheapestMinimum = Math.min(...cheapestTiers.map((tier) => tier.requiredQty));
@@ -259,9 +270,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           startsAt: startsAt ?? new Date(),
           endsAt,
           timezone,
+          requiresCode: initialCode !== null,
         })
         .returning({ id: offers.id });
       if (!offer) throw new Error("Failed to create offer");
+      if (initialCode) {
+        const created = await createDiscountCode(tx as unknown as Db, { shopId, offerId: offer.id, code: initialCode });
+        if (!created.ok) throw new CodeRejectedError(created.error);
+      }
 
       await Promise.all([
         tx.insert(offerConditions).values({
@@ -342,10 +358,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   let newOffer: { id: string } | undefined;
   try {
-    newOffer = await createOfferWithChildren(internalName);
+    try {
+      newOffer = await createOfferWithChildren(internalName);
+    } catch (err) {
+      if (err instanceof CodeRejectedError || !isUniqueViolation(err)) throw err;
+      newOffer = await createOfferWithChildren(withUniqueOfferSuffix(internalName));
+    }
   } catch (err) {
-    if (!isUniqueViolation(err)) throw err;
-    newOffer = await createOfferWithChildren(withUniqueOfferSuffix(internalName));
+    if (err instanceof CodeRejectedError) return { error: err.message };
+    throw err;
   }
 
   if (!newOffer) return { error: "Failed to create offer" };
@@ -502,6 +523,8 @@ export default function NewDiscountOfferPage() {
     combinesOrderDiscounts: true,
     combinesShippingDiscounts: true,
     combinesProductDiscounts: true,
+    requiresCode: false,
+    discountCode: "",
   }));
   const {
     fieldErrors,
@@ -526,7 +549,11 @@ export default function NewDiscountOfferPage() {
     combinesOrderDiscounts,
     combinesShippingDiscounts,
     combinesProductDiscounts,
+    requiresCode,
+    discountCode,
   } = formState;
+  const setRequiresCode = createFieldSetter(setFormField, "requiresCode");
+  const setDiscountCode = createFieldSetter(setFormField, "discountCode");
   const setFieldErrors = createFieldSetter(setFormField, "fieldErrors");
   const setShowToast = createFieldSetter(setFormField, "showToast");
   const setToastMsg = createFieldSetter(setFormField, "toastMsg");
@@ -555,13 +582,14 @@ export default function NewDiscountOfferPage() {
     if (!internalName.trim()) errs.internalName = "Offer name is required";
     if (!publicTitle.trim()) errs.publicTitle = "Offer title is required";
     setFieldErrors(errs);
-    if (Object.keys(errs).length > 0) {
-      setToastMsg(Object.values(errs)[0]!);
+    const firstError = Object.values(errs)[0] ?? (requiresCode && !discountCode.trim() ? "Enter the discount code" : null);
+    if (firstError) {
+      setToastMsg(firstError);
       setShowToast(true);
       return false;
     }
     return true;
-  }, [internalName, publicTitle, setFieldErrors, setToastMsg, setShowToast]);
+  }, [internalName, publicTitle, requiresCode, discountCode, setFieldErrors, setToastMsg, setShowToast]);
 
   // ── Tier helpers ──
 
@@ -2001,13 +2029,40 @@ export default function NewDiscountOfferPage() {
             {/* ── Discount code (all templates) ── */}
             <div className="b-card">
               <div className="b-card-header">Discount code</div>
-              <div className="b-card-body">
+              <div className="b-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
-                  <input type="checkbox" style={{ accentColor: "var(--discount-color)" }} />
+                  <input
+                    type="checkbox"
+                    name="requiresCode"
+                    checked={requiresCode}
+                    onChange={(e) => setRequiresCode(e.target.checked)}
+                    style={{ accentColor: "var(--discount-color)" }}
+                  />
                   <span style={{ fontSize: 13, color: "var(--text)" }}>
                     Add a custom discount code
                   </span>
                 </label>
+                {requiresCode && (
+                  <div>
+                    <label className="b-label" htmlFor="discountCode">
+                      Code customers enter
+                    </label>
+                    <input
+                      id="discountCode"
+                      className="b-input"
+                      name="discountCode"
+                      value={discountCode}
+                      onChange={(e) => setDiscountCode(e.target.value.toUpperCase())}
+                      placeholder="SAVE10"
+                      autoComplete="off"
+                      style={{ textTransform: "uppercase" }}
+                    />
+                    <div className="b-help">
+                      The discount only applies while this code is entered. Add more codes later on
+                      the offer's Codes tab.
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 

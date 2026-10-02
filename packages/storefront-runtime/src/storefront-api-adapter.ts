@@ -277,7 +277,7 @@ export class StorefrontApiAdapter {
         lines: updates.map((u) => ({
           id: u.id,
           quantity: u.quantity,
-          attributes: Object.entries(withPromoMetadata(u.attributes)).map(([key, value]) => ({ key, value })),
+          attributes: Object.entries(withPromoMetadata(u.attributes, undefined, null)).map(([key, value]) => ({ key, value })),
         })),
       },
     );

@@ -11,6 +11,7 @@ import type {
 } from "@promo/db";
 import {
   resolveOnlyMatchedLines,
+  resolveRejectUnmatchedLines,
   type ConditionType,
   type TypedOfferCondition,
 } from "@promo/shared-types";
@@ -29,6 +30,16 @@ function onlyMatchedLines(
   options: CompileOfferOptions,
 ): boolean {
   return resolveOnlyMatchedLines(flag, options.codePromo === true || Boolean(offer.requiredDiscountCode));
+}
+
+function applyLineMatchFlags(
+  config: CompiledOffer,
+  value: { onlyMatchedLines?: unknown; rejectUnmatchedLines?: unknown },
+  offer: { requiredDiscountCode?: string | null },
+  options: CompileOfferOptions,
+): void {
+  if (onlyMatchedLines(value.onlyMatchedLines, offer, options)) config.restrictToMatchedLines = true;
+  if (resolveRejectUnmatchedLines(value.rejectUnmatchedLines)) config.rejectUnmatchedLines = true;
 }
 
 export interface CompiledFunctionConfig {
@@ -120,6 +131,9 @@ export interface CompiledOffer {
   /** Product/order rewards only touch lines added from a page matching every
    * pageUrlConditions entry. Only ever set to true, so it is absent otherwise. */
   restrictToMatchedLines?: true;
+  /** The offer does not apply while any non-gift line misses a pageUrlConditions
+   * entry. Only ever set to true, so it is absent otherwise. */
+  rejectUnmatchedLines?: true;
 }
 
 export interface CompiledAttributeCondition {
@@ -131,10 +145,13 @@ export interface CompiledAttributeCondition {
 
 export interface CompiledPageUrlCondition {
   patterns: string[];
-  matchMode: "exact" | "contains" | "starts_with" | "ends_with";
+  /** "page_type": patterns are PageType names, matched against the classified path. */
+  matchMode: "exact" | "contains" | "starts_with" | "ends_with" | "page_type";
   caseSensitive: boolean;
   paramName?: string;
   paramValue?: string;
+  /** "landing": read the line's `_promo_landing_url` (session UTM landing) instead of `_promo_page_url`. */
+  source?: "landing";
 }
 
 export interface CompiledRequirement {
@@ -469,7 +486,7 @@ export function compileOfferConfig(
             ? { paramValue: encodeURIComponent(value.paramValue) }
             : {}),
         });
-        if (onlyMatchedLines(value.onlyMatchedLines, offer, options)) config.restrictToMatchedLines = true;
+        applyLineMatchFlags(config, value, offer, options);
         break;
       }
       case "page_url": {
@@ -486,7 +503,7 @@ export function compileOfferConfig(
               : "contains",
           caseSensitive: value.caseSensitive === true,
         });
-        if (onlyMatchedLines(value.onlyMatchedLines, offer, options)) config.restrictToMatchedLines = true;
+        applyLineMatchFlags(config, value, offer, options);
         break;
       }
       case "utm_parameters": {
@@ -511,9 +528,22 @@ export function compileOfferConfig(
             caseSensitive: false,
             paramName,
             paramValue: encodeURIComponent(paramValue),
+            ...(value.scope === "visit" ? { source: "landing" as const } : {}),
           });
         }
-        if (onlyMatchedLines(value.onlyMatchedLines, offer, options)) config.restrictToMatchedLines = true;
+        applyLineMatchFlags(config, value, offer, options);
+        break;
+      }
+      case "page_types": {
+        const { value } = typedCondition;
+        config.pageUrlConditions!.push({
+          patterns: Array.isArray(value.pageTypes)
+            ? value.pageTypes.filter((pageType) => typeof pageType === "string")
+            : [],
+          matchMode: "page_type",
+          caseSensitive: false,
+        });
+        applyLineMatchFlags(config, value, offer, options);
         break;
       }
       default:

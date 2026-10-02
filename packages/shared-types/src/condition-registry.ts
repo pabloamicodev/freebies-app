@@ -47,6 +47,7 @@ export const CONDITION_REGISTRY: Record<ConditionType, { enforcedByFunction: boo
   // Replaced by per-offer discount codes (discount_codes table); only legacy rows still carry this type.
   discount_code: { enforcedByFunction: false },
   utm_parameters: { enforcedByFunction: true },
+  page_types: { enforcedByFunction: true },
 };
 
 export const FUNCTION_ENFORCED_CONDITION_TYPES: ReadonlySet<ConditionType> = new Set(

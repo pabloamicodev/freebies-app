@@ -3,6 +3,7 @@ import {
   installPromoMetadataBridge,
   needsPromoMetadataPacking,
   packCartAddRequest,
+  recordUtmLanding,
   withPromoMetadata,
 } from "./metadata-bridge.js";
 
@@ -148,5 +149,80 @@ describe("installPromoMetadataBridge", () => {
     expect(response).toBeInstanceOf(Response);
     expect(nativeFetch).toHaveBeenCalledTimes(1);
     expect(nativeFetch).toHaveBeenCalledWith(badRequest, undefined);
+  });
+});
+
+function memoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => void values.delete(key),
+    setItem: (key, value) => void values.set(key, value),
+  };
+}
+
+describe("UTM landing URL (visit-scoped UTM conditions)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("records only page views with a utm_* param, keeping the last UTM touch", () => {
+    const storage = memoryStorage();
+    recordUtmLanding("/pages/lp?utm_source=amazon", storage);
+    recordUtmLanding("/collections/all", storage);
+    recordUtmLanding("/products/x?ref=home", storage);
+    expect(storage.getItem("promo_engine_utm_landing")).toBe("/pages/lp?utm_source=amazon");
+    recordUtmLanding("/?foo=1&utm_campaign=fall", storage);
+    expect(storage.getItem("promo_engine_utm_landing")).toBe("/?foo=1&utm_campaign=fall");
+  });
+
+  it("stamps the recorded landing URL into every cart add of the session", () => {
+    const storage = memoryStorage();
+    vi.stubGlobal("sessionStorage", storage);
+    recordUtmLanding("/pages/lp?utm_source=amazon", storage);
+
+    const properties = withPromoMetadata({}, "/products/x");
+    expect(properties._promo_landing_url).toBe("/pages/lp?utm_source=amazon");
+    expect(JSON.parse(properties._promo_engine_metadata!)).toEqual({
+      _promo_page_url: "/products/x",
+      _promo_landing_url: "/pages/lp?utm_source=amazon",
+    });
+  });
+
+  it("omits the landing URL when the session never saw a UTM page", () => {
+    vi.stubGlobal("sessionStorage", memoryStorage());
+    const properties = withPromoMetadata({}, "/products/x");
+    expect(properties._promo_landing_url).toBeUndefined();
+    expect(JSON.parse(properties._promo_engine_metadata!)).toEqual({ _promo_page_url: "/products/x" });
+  });
+
+  it("survives storage that throws", () => {
+    const throwing = {
+      setItem: () => {
+        throw new Error("quota");
+      },
+    };
+    expect(() => recordUtmLanding("/?utm_source=x", throwing)).not.toThrow();
+    vi.stubGlobal("sessionStorage", {
+      getItem: () => {
+        throw new Error("denied");
+      },
+    });
+    expect(withPromoMetadata({}, "/")._promo_landing_url).toBeUndefined();
+  });
+
+  it("records the landing page when the bridge installs", () => {
+    const storage = memoryStorage();
+    vi.stubGlobal("sessionStorage", storage);
+    vi.stubGlobal("window", {
+      fetch: vi.fn(),
+      location: { origin: "https://store.example", pathname: "/pages/lp", search: "?utm_source=tiktok" },
+    });
+    vi.stubGlobal("document", { addEventListener: vi.fn() });
+    installPromoMetadataBridge();
+    expect(storage.getItem("promo_engine_utm_landing")).toBe("/pages/lp?utm_source=tiktok");
   });
 });

@@ -627,6 +627,69 @@ describe("evaluate — page_url matches the page lines were added from", () => {
   });
 });
 
+describe("evaluate — page_types / utm_parameters scope / rejectUnmatchedLines", () => {
+  const offerWith = (conditionType: string, value: Record<string, unknown>) => {
+    const base = makeGiftOffer("page-ctx", 1000);
+    base.conditions.push({
+      id: "cond-page-ctx",
+      scope: "sub",
+      conditionType,
+      operator: "eq",
+      value,
+      isEnabled: true,
+      sortOrder: 1,
+    });
+    return base;
+  };
+  const cartWith = (...lineProperties: Array<Record<string, string>>) => {
+    const cart = makeCart(5000);
+    const template = cart.lines[0]!;
+    cart.lines = lineProperties.map((properties, index) => ({
+      ...template,
+      key: `line-${index + 1}`,
+      properties,
+    }));
+    return cart;
+  };
+  const qualifies = async (offer: OfferDefinition, cart: NormalizedCart) =>
+    (await evaluate(makeInput(cart), { offers: [offer], oneUseStates: [], now: NOW })).qualifiedOffers
+      .length === 1;
+
+  it("page_types qualifies when any line was added from a selected page type", async () => {
+    const offer = offerWith("page_types", { pageTypes: ["product"] });
+    expect(await qualifies(offer, cartWith({ _promo_page_url: "/" }, { _promo_page_url: "/en/products/x" }))).toBe(true);
+    expect(await qualifies(offer, cartWith({ _promo_page_url: "/" }))).toBe(false);
+    expect(await qualifies(offer, cartWith({}))).toBe(false);
+  });
+
+  it("rejectUnmatchedLines requires every non-gift line to match", async () => {
+    const offer = offerWith("page_types", { pageTypes: ["product"], rejectUnmatchedLines: true });
+    expect(await qualifies(offer, cartWith({ _promo_page_url: "/" }, { _promo_page_url: "/products/x" }))).toBe(false);
+    expect(await qualifies(offer, cartWith({ _promo_page_url: "/products/y" }, { _promo_page_url: "/products/x" }))).toBe(true);
+    expect(await qualifies(offer, cartWith({ _promo_page_url: "/products/y" }, {}))).toBe(false);
+  });
+
+  it("utm_parameters reads the add page by default and the visit landing with scope visit", async () => {
+    const landing = { _promo_page_url: "/products/x", _promo_landing_url: "/pages/lp?utm_source=amazon" };
+    expect(await qualifies(offerWith("utm_parameters", { utmSource: "amazon" }), cartWith(landing))).toBe(false);
+    expect(
+      await qualifies(offerWith("utm_parameters", { utmSource: "amazon", scope: "visit" }), cartWith(landing)),
+    ).toBe(true);
+    expect(
+      await qualifies(
+        offerWith("utm_parameters", { utmSource: "amazon", scope: "visit" }),
+        cartWith({ _promo_page_url: "/products/x?utm_source=amazon" }),
+      ),
+    ).toBe(false);
+    expect(
+      await qualifies(
+        offerWith("utm_parameters", { utmSource: "amazon" }),
+        cartWith({ _promo_page_url: "/products/x?utm_source=amazon" }),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("evaluate — discount code condition (gate an automatic offer behind a real Shopify code)", () => {
   function offerWithDiscountCode(code: string): OfferDefinition {
     return makeGiftOffer("offer-1", 0, 100, {

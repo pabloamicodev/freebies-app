@@ -180,7 +180,7 @@ export const AjaxCartAdapter = {
         body: JSON.stringify({
           id: line.key,
           quantity: line.quantity,
-          ...(line.properties ? { properties: withPromoMetadata(line.properties) } : {}),
+          ...(line.properties ? { properties: withPromoMetadata(line.properties, undefined, null) } : {}),
         }),
       }),
     );

@@ -216,3 +216,37 @@ describe("normalizeGiftSubconditions", () => {
     });
   });
 });
+
+describe("normalizeOfferSubconditions page matching flags", () => {
+  it("passes through page_types, utm scope and rejectUnmatchedLines", () => {
+    const result = normalizeOfferSubconditions({
+      page_types: { pageTypes: ["product", "cart"], rejectUnmatchedLines: true },
+      utm_parameters: { utmSource: "amazon", scope: "visit", onlyMatchedLines: true, rejectUnmatchedLines: false },
+    });
+    expect(result).toEqual({
+      success: true,
+      data: [
+        {
+          conditionType: "page_types",
+          operator: "eq",
+          value: { pageTypes: ["product", "cart"], rejectUnmatchedLines: true },
+        },
+        {
+          conditionType: "utm_parameters",
+          operator: "eq",
+          value: {
+            utmSource: "amazon",
+            utmMedium: "",
+            utmCampaign: "",
+            utmTerm: "",
+            utmContent: "",
+            scope: "visit",
+            onlyMatchedLines: true,
+            rejectUnmatchedLines: false,
+          },
+        },
+      ],
+    });
+    expect(normalizeOfferSubconditions({ page_types: { pageTypes: [] } }).success).toBe(false);
+  });
+});

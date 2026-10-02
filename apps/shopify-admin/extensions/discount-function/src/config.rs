@@ -95,6 +95,9 @@ pub struct CompiledOffer {
     /// every page URL condition (the lines added from the campaign page).
     #[serde(default)]
     pub restrict_to_matched_lines: bool,
+    /// The offer does not apply while any non-gift line misses a page URL condition.
+    #[serde(default)]
+    pub reject_unmatched_lines: bool,
     /// Truncated FNV-1a-64 hashes of this offer's discount codes (code-discount Function only).
     #[cfg(feature = "code_gate")]
     #[serde(default)]
@@ -278,6 +281,8 @@ pub struct CompiledPageUrlCondition {
     pub case_sensitive: bool,
     pub param_name: Option<String>,
     pub param_value: Option<String>,
+    /// Some("landing"): match `_promo_landing_url` (session UTM landing) instead of `_promo_page_url`.
+    pub source: Option<String>,
 }
 
 fn default_count_rule() -> String {

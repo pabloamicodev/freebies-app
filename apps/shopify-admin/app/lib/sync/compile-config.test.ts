@@ -646,6 +646,74 @@ describe("compileOfferConfig", () => {
     ]);
   });
 
+  describe("page_types, visit-scoped UTM and rejectUnmatchedLines", () => {
+    const compile = (conditions: Array<[string, Record<string, unknown>]>, options = {}) =>
+      compileOfferConfig(
+        offer(),
+        conditions.map(([type, value]) => condition(type, value)),
+        [],
+        null,
+        1,
+        options,
+      );
+
+    it("compiles page_types into a page_type pageUrlConditions entry", () => {
+      const result = compile([["page_types", { pageTypes: ["product", "collection"] }]]);
+      expect(result.pageUrlConditions).toEqual([
+        { patterns: ["product", "collection"], matchMode: "page_type", caseSensitive: false },
+      ]);
+      expect(compactCompiledOffer(result)["pageUrlConditions"]).toEqual([
+        { patterns: ["product", "collection"], matchMode: "page_type" },
+      ]);
+      expect(result.restrictToMatchedLines).toBeUndefined();
+      expect(compile([["page_types", { pageTypes: ["home"] }]], { codePromo: true }).restrictToMatchedLines).toBe(true);
+    });
+
+    it("tags visit-scoped UTM entries with source landing; page scope is unchanged", () => {
+      const visit = compile([["utm_parameters", { utmSource: "amazon", utmMedium: "cpc", scope: "visit" }]]);
+      expect(visit.pageUrlConditions).toEqual([
+        { patterns: [], matchMode: "contains", caseSensitive: false, paramName: "utm_source", paramValue: "amazon", source: "landing" },
+        { patterns: [], matchMode: "contains", caseSensitive: false, paramName: "utm_medium", paramValue: "cpc", source: "landing" },
+      ]);
+      const explicitPage = compile([["utm_parameters", { utmSource: "amazon", scope: "page" }]]);
+      const unset = compile([["utm_parameters", { utmSource: "amazon" }]]);
+      expect(JSON.stringify(compactCompiledOffer(explicitPage))).toBe(JSON.stringify(compactCompiledOffer(unset)));
+    });
+
+    it("sets rejectUnmatchedLines only when a page condition asks for it", () => {
+      for (const [type, value] of [
+        ["page_types", { pageTypes: ["product"] }],
+        ["page_url", { patterns: ["/pages/vip"], matchMode: "exact" }],
+        ["specific_link", { requiredUrl: "/pages/vip" }],
+        ["utm_parameters", { utmSource: "amazon" }],
+      ] as Array<[string, Record<string, unknown>]>) {
+        expect(compile([[type, value]], { codePromo: true }).rejectUnmatchedLines).toBeUndefined();
+        expect(compile([[type, { ...value, rejectUnmatchedLines: false }]]).rejectUnmatchedLines).toBeUndefined();
+        expect(compile([[type, { ...value, rejectUnmatchedLines: true }]]).rejectUnmatchedLines).toBe(true);
+      }
+      const compact = compactCompiledOffer(compile([["utm_parameters", { utmSource: "amazon" }]], { codePromo: true }));
+      expect("rejectUnmatchedLines" in compact).toBe(false);
+    });
+
+    it("ANDs page_types with visit-scoped UTM in one offer", () => {
+      const result = compile(
+        [
+          ["page_types", { pageTypes: ["product"], rejectUnmatchedLines: true }],
+          ["utm_parameters", { utmCampaign: "fall sale", scope: "visit" }],
+        ],
+        { codePromo: true },
+      );
+      expect(compactCompiledOffer(result)).toMatchObject({
+        pageUrlConditions: [
+          { patterns: ["product"], matchMode: "page_type" },
+          { matchMode: "contains", paramName: "utm_campaign", paramValue: "fall%20sale", source: "landing" },
+        ],
+        restrictToMatchedLines: true,
+        rejectUnmatchedLines: true,
+      });
+    });
+  });
+
   describe("restrictToMatchedLines", () => {
     const compile = (offerOverrides: Record<string, unknown>, value: Record<string, unknown>, type = "utm_parameters") =>
       compileOfferConfig(offer(offerOverrides), [condition(type, value)], [], null, 1);

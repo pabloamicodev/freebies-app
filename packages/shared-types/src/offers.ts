@@ -65,6 +65,7 @@ export const ConditionTypeSchema = z.enum([
   "cart_attribute",
   "discount_code",
   "utm_parameters",
+  "page_types",
 ]);
 export type ConditionType = z.infer<typeof ConditionTypeSchema>;
 
@@ -216,6 +217,7 @@ const CanonicalUrlParamConditionValueSchema = z
     paramName: z.string().min(1).optional(),
     paramValue: z.string().optional(),
     onlyMatchedLines: z.boolean().optional(),
+    rejectUnmatchedLines: z.boolean().optional(),
   })
   .refine((value) => value.requiredUrl.trim().length > 0 || Boolean(value.paramName), {
     message: "A required URL or URL parameter name is required.",
@@ -243,20 +245,44 @@ export const PageUrlConditionValueSchema = z.object({
   matchMode: z.enum(["exact", "contains", "starts_with", "ends_with"]),
   caseSensitive: z.boolean().default(false),
   onlyMatchedLines: z.boolean().optional(),
+  rejectUnmatchedLines: z.boolean().optional(),
 });
 export type PageUrlConditionValue = z.infer<typeof PageUrlConditionValueSchema>;
 
+/** Storefront page kinds, classified from the pathname a cart line was added
+ * from (locale prefix like /en or /fr-ca ignored). Mirrored by
+ * `classifyPageType` in the rule engine and `page_type` in the Rust Function. */
+export const PAGE_TYPES = ["home", "collection", "product", "search", "page", "blog", "cart"] as const;
+export const PageTypeSchema = z.enum(PAGE_TYPES);
+export type PageType = (typeof PAGE_TYPES)[number];
+
+export const PageTypesConditionValueSchema = z.object({
+  pageTypes: z.array(PageTypeSchema).min(1, "Select at least one page type."),
+  onlyMatchedLines: z.boolean().optional(),
+  rejectUnmatchedLines: z.boolean().optional(),
+});
+export type PageTypesConditionValue = z.infer<typeof PageTypesConditionValueSchema>;
+
 /**
- * `onlyMatchedLines` on a page_url / utm_parameters / specific_link condition:
- * discount only the cart lines added while on the matching page. Unset means
- * "the default", which is on for code promos (offers with their own discount
- * codes) and off for everything else.
+ * `onlyMatchedLines` on a page-matching condition (page_url / page_types /
+ * utm_parameters / specific_link): discount only the cart lines added while on
+ * the matching page. Unset means "the default", which is on for code promos
+ * (offers with their own discount codes) and off for everything else.
  */
 export function resolveOnlyMatchedLines(
   onlyMatchedLines: unknown,
   isCodePromo: boolean,
 ): boolean {
   return typeof onlyMatchedLines === "boolean" ? onlyMatchedLines : isCodePromo;
+}
+
+/**
+ * `rejectUnmatchedLines` on a page-matching condition: the offer does not
+ * apply at all while any non-gift cart line was added from a non-matching
+ * page. Off unless explicitly set, for code promos too.
+ */
+export function resolveRejectUnmatchedLines(rejectUnmatchedLines: unknown): boolean {
+  return rejectUnmatchedLines === true;
 }
 
 export const LINE_ATTRIBUTE_KEYS = [
@@ -335,6 +361,8 @@ export function validateRequiredDiscountCode(
  * landing URL (auto-stamped as `_promo_page_url` by the storefront runtime —
  * see `packages/storefront-runtime/src/metadata-bridge.ts` — no landing-page
  * snippet required, unlike the `__landing_source` line-attribute mechanism).
+ * With `scope: "visit"` the params are read from `_promo_landing_url` instead:
+ * the session's most recent page view that carried any utm_* param.
  * Compiles to one `pageUrlConditions` entry per filled-in field, all AND'd
  * together by the Function. At least one field must be set. */
 export const UtmParametersConditionValueSchema = z
@@ -348,7 +376,10 @@ export const UtmParametersConditionValueSchema = z
       .optional(),
     utmTerm: z.string().trim().max(255, "UTM term must be 255 characters or fewer.").optional(),
     utmContent: z.string().trim().max(255, "UTM content must be 255 characters or fewer.").optional(),
+    /** "page" (default): the page the line was added from; "visit": the session's last UTM landing URL. */
+    scope: z.enum(["page", "visit"]).optional(),
     onlyMatchedLines: z.boolean().optional(),
+    rejectUnmatchedLines: z.boolean().optional(),
   })
   .refine(
     (value) =>
@@ -407,6 +438,7 @@ export const CONDITION_VALUE_SCHEMAS = {
   cart_attribute: CartAttributeConditionValueSchema,
   discount_code: DiscountCodeConditionValueSchema,
   utm_parameters: UtmParametersConditionValueSchema,
+  page_types: PageTypesConditionValueSchema,
 } satisfies Record<ConditionType, z.ZodTypeAny>;
 
 /** Value shape for each condition type, derived from `CONDITION_VALUE_SCHEMAS`. */
@@ -465,6 +497,8 @@ export function validateConditionValue(
       return DiscountCodeConditionValueSchema.safeParse(value);
     case "utm_parameters":
       return UtmParametersConditionValueSchema.safeParse(value);
+    case "page_types":
+      return PageTypesConditionValueSchema.safeParse(value);
     case "one_use_per_customer":
       return z.record(z.string(), z.unknown()).safeParse(value);
     default:
@@ -1074,10 +1108,11 @@ export const CompiledOfferSchema = z.object({
     .array(
       z.object({
         patterns: z.array(z.string()),
-        matchMode: z.enum(["exact", "contains", "starts_with", "ends_with"]),
+        matchMode: z.enum(["exact", "contains", "starts_with", "ends_with", "page_type"]),
         caseSensitive: z.boolean(),
         paramName: z.string().optional(),
         paramValue: z.string().optional(),
+        source: z.literal("landing").optional(),
       }),
     )
     .default([]),

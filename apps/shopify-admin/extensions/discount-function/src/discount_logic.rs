@@ -853,6 +853,13 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
     {
         return false;
     }
+    if offer.reject_unmatched_lines
+        && non_gift_lines
+            .iter()
+            .any(|line| !added_from_matching_page(line, &offer.page_url_conditions))
+    {
+        return false;
+    }
 
     for condition in &offer.line_attribute_conditions {
         let matching_quantity: i64 = non_gift_lines
@@ -1360,13 +1367,23 @@ fn nektar_glp1(line: &Lines) -> Option<String> {
     )
 }
 
-/// The storefront stamps each line with the page it was added from.
+/// The storefront stamps each line with the page it was added from, plus the
+/// session's last UTM landing URL (`source: "landing"` conditions read that).
 fn added_from_matching_page(line: &Lines, conditions: &[CompiledPageUrlCondition]) -> bool {
-    metadata_value(line, "_promo_page_url").is_some_and(|page_url| {
-        conditions
-            .iter()
-            .all(|condition| page_url_condition_matches(&page_url, condition))
-    })
+    let Some(metadata) = metadata_map(line) else {
+        return false;
+    };
+    metadata.contains_key("_promo_page_url")
+        && conditions.iter().all(|condition| {
+            let key = if condition.source.is_some() {
+                "_promo_landing_url"
+            } else {
+                "_promo_page_url"
+            };
+            metadata
+                .get(key)
+                .is_some_and(|url| page_url_condition_matches(url, condition))
+        })
 }
 
 fn outside_matched_lines(offer: &CompiledOffer, line: &Lines) -> bool {
@@ -1390,6 +1407,10 @@ fn page_url_condition_matches(page_url: &str, condition: &CompiledPageUrlConditi
     } else {
         path.to_ascii_lowercase()
     };
+    if condition.match_mode == "page_type" {
+        let page_type = page_type(&normalized_path);
+        return condition.patterns.iter().any(|pattern| pattern == page_type);
+    }
     let path_matches = condition.patterns.is_empty()
         || condition.patterns.iter().any(|pattern| {
             let normalized_pattern = if condition.case_sensitive {
@@ -1415,6 +1436,37 @@ fn page_url_condition_matches(page_url: &str, condition: &CompiledPageUrlConditi
     match condition.param_value.as_deref() {
         Some(expected) => actual == Some(expected),
         None => actual.is_some(),
+    }
+}
+
+/// Shopify storefront page kind of a (lowercased) path, after an optional
+/// locale segment (`/en`, `/fr-ca`). Unknown paths get "", which no pattern equals.
+fn page_type(path: &str) -> &'static str {
+    let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+    let mut first = segments.next();
+    if first.is_some_and(is_locale_segment) {
+        first = segments.next();
+    }
+    match first {
+        None => "home",
+        Some("products") => "product",
+        Some("collections") if segments.nth(1) == Some("products") => "product",
+        Some("collections") => "collection",
+        Some("search") => "search",
+        Some("pages") => "page",
+        Some("blogs") => "blog",
+        Some("cart") => "cart",
+        _ => "",
+    }
+}
+
+fn is_locale_segment(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    let letters = |range: &[u8]| range.iter().all(u8::is_ascii_alphabetic);
+    match bytes.len() {
+        2 => letters(bytes),
+        5 => bytes[2] == b'-' && letters(&bytes[..2]) && letters(&bytes[3..]),
+        _ => false,
     }
 }
 
@@ -1488,13 +1540,15 @@ fn cart_gift_tier(line: &Lines) -> Option<String> {
 }
 
 fn metadata_value(line: &Lines, key: &str) -> Option<String> {
+    metadata_map(line)?.remove(key)
+}
+
+fn metadata_map(line: &Lines) -> Option<HashMap<String, String>> {
     let raw = line
         .promo_metadata()
         .as_ref()
         .and_then(|attribute| attribute.value())?;
-    serde_json::from_str::<HashMap<String, String>>(raw)
-        .ok()?
-        .remove(key)
+    serde_json::from_str(raw).ok()
 }
 
 /// Truncated FNV-1a-64 of the ASCII-uppercased code, 12 lowercase hex chars (mirrored by the TS publisher).
@@ -3173,6 +3227,7 @@ mod tests {
             case_sensitive: false,
             param_name: Some("code".to_string()),
             param_value: Some("summer%20sale".to_string()),
+            source: None,
         };
         assert!(page_url_condition_matches(
             "/pages/vip?code=summer%20sale#offer",
@@ -3189,6 +3244,7 @@ mod tests {
             case_sensitive: true,
             param_name: None,
             param_value: None,
+            source: None,
         };
         assert!(page_url_condition_matches(
             "/collections/sale/shoes?sort=price",
@@ -3371,6 +3427,179 @@ mod tests {
 
         let unrestricted = order_candidate(order_reward);
         assert_eq!(unrestricted, (vec![], 50.0));
+    }
+
+    fn page_type_condition(types: &[&str]) -> CompiledPageUrlCondition {
+        CompiledPageUrlCondition {
+            patterns: types.iter().map(|t| t.to_string()).collect(),
+            match_mode: "page_type".to_string(),
+            case_sensitive: false,
+            param_name: None,
+            param_value: None,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn page_type_classifies_shopify_paths_with_optional_locale_prefix() {
+        let cases = [
+            ("/", "home"),
+            ("", "home"),
+            ("/?utm_source=x", "home"),
+            ("/en", "home"),
+            ("/fr-ca/", "home"),
+            ("/products/shirt", "product"),
+            ("/es/products/shirt?variant=1", "product"),
+            ("/collections/sale/products/shirt", "product"),
+            ("/en-us/collections/sale/products/shirt", "product"),
+            ("/collections", "collection"),
+            ("/collections/sale", "collection"),
+            ("/de/collections/sale/tag", "collection"),
+            ("/search?q=shirt", "search"),
+            ("/pages/about", "page"),
+            ("/blogs/news/post", "blog"),
+            ("/cart", "cart"),
+            ("/EN/Products/Shirt", "product"),
+            ("https://shop.example/en/pages/vip?x=1", "page"),
+        ];
+        for (url, expected) in cases {
+            for kind in ["home", "collection", "product", "search", "page", "blog", "cart"] {
+                assert_eq!(
+                    page_url_condition_matches(url, &page_type_condition(&[kind])),
+                    kind == expected,
+                    "{url} as {kind}"
+                );
+            }
+        }
+        let all = page_type_condition(&["home", "collection", "product", "search", "page", "blog", "cart"]);
+        for unknown in ["/account", "/policies/refund-policy", "/eng/products/x", "/apps/foo"] {
+            assert!(!page_url_condition_matches(unknown, &all), "{unknown}");
+        }
+        assert!(!page_url_condition_matches("/products/x", &page_type_condition(&[])));
+    }
+
+    /// Two regular lines with the given packed metadata, a 10% plain discount offer.
+    fn two_line_payload(offer_fields: &str, metadata: [serde_json::Value; 2]) -> String {
+        let config = format!(
+            r#"{{"offers":[{{
+                "id":"offer-1","version":1,"offerType":"discount","priority":100,
+                "currencyCode":"USD","discountType":"percentage","discountValue":10,
+                {offer_fields}
+            }}]}}"#
+        );
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/a", "gid://shopify/Product/a", "40.00", 1),
+            regular_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/b", "gid://shopify/Product/b", "60.00", 1),
+        );
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&cart_json_with_classes(&lines, "100.00", &config, r#"["PRODUCT"]"#)).unwrap();
+        for (index, value) in metadata.into_iter().enumerate() {
+            if !value.is_null() {
+                payload["cart"]["lines"][index]["promoMetadata"] =
+                    serde_json::json!({ "value": value.to_string() });
+            }
+        }
+        serde_json::to_string(&payload).unwrap()
+    }
+
+    const PRODUCT_PAGES: &str =
+        r#""pageUrlConditions":[{"matchMode":"page_type","patterns":["product"]}]"#;
+
+    #[test]
+    fn page_type_condition_gates_and_restricts_lines() {
+        let metadata = || {
+            [
+                serde_json::json!({ "_promo_page_url": "/en/collections/x/products/y" }),
+                serde_json::json!({ "_promo_page_url": "/" }),
+            ]
+        };
+        let restricted = two_line_payload(&format!(r#"{PRODUCT_PAGES},"restrictToMatchedLines":true"#), metadata());
+        let result = run_function_with_input(run, &restricted).expect("restricted");
+        assert_eq!(product_target_ids(&result), vec!["gid://shopify/CartLine/1"]);
+
+        let unrestricted = two_line_payload(PRODUCT_PAGES, metadata());
+        let result = run_function_with_input(run, &unrestricted).expect("unrestricted");
+        assert_eq!(product_target_ids(&result).len(), 2);
+
+        let no_product_page = two_line_payload(
+            PRODUCT_PAGES,
+            [serde_json::json!({ "_promo_page_url": "/cart" }), serde_json::Value::Null],
+        );
+        let result = run_function_with_input(run, &no_product_page).expect("no product page");
+        assert!(result.operations.is_empty());
+    }
+
+    #[test]
+    fn reject_unmatched_lines_blocks_mixed_carts_while_restrict_only_excludes() {
+        let mixed = || {
+            [
+                serde_json::json!({ "_promo_page_url": "/products/y" }),
+                serde_json::json!({ "_promo_page_url": "/collections/all" }),
+            ]
+        };
+        let reject = two_line_payload(
+            &format!(r#"{PRODUCT_PAGES},"restrictToMatchedLines":true,"rejectUnmatchedLines":true"#),
+            mixed(),
+        );
+        let result = run_function_with_input(run, &reject).expect("reject mixed");
+        assert!(result.operations.is_empty());
+
+        let exclude = two_line_payload(&format!(r#"{PRODUCT_PAGES},"restrictToMatchedLines":true"#), mixed());
+        let result = run_function_with_input(run, &exclude).expect("exclude mixed");
+        assert_eq!(product_target_ids(&result), vec!["gid://shopify/CartLine/1"]);
+
+        // A line without any page metadata counts as unmatched.
+        let missing = two_line_payload(
+            &format!(r#"{PRODUCT_PAGES},"rejectUnmatchedLines":true"#),
+            [serde_json::json!({ "_promo_page_url": "/products/y" }), serde_json::Value::Null],
+        );
+        let result = run_function_with_input(run, &missing).expect("reject missing");
+        assert!(result.operations.is_empty());
+
+        let all_matched = two_line_payload(
+            &format!(r#"{PRODUCT_PAGES},"rejectUnmatchedLines":true"#),
+            [
+                serde_json::json!({ "_promo_page_url": "/products/y" }),
+                serde_json::json!({ "_promo_page_url": "/es/products/z" }),
+            ],
+        );
+        let result = run_function_with_input(run, &all_matched).expect("reject all matched");
+        assert_eq!(product_target_ids(&result).len(), 2);
+    }
+
+    #[test]
+    fn visit_scope_utm_reads_the_session_landing_url() {
+        let visit = r#""pageUrlConditions":[{"matchMode":"contains","paramName":"utm_source","paramValue":"amazon","source":"landing"}],"restrictToMatchedLines":true"#;
+        let landing = "/pages/prime?utm_source=amazon";
+        let lines = || {
+            [
+                serde_json::json!({ "_promo_page_url": "/products/y", "_promo_landing_url": landing }),
+                serde_json::json!({ "_promo_page_url": "/products/z" }),
+            ]
+        };
+        let result = run_function_with_input(run, &two_line_payload(visit, lines())).expect("visit");
+        assert_eq!(product_target_ids(&result), vec!["gid://shopify/CartLine/1"]);
+
+        // Page scope ignores the landing URL: neither line was added from a UTM page.
+        let page = visit.replace(r#","source":"landing""#, "");
+        let result = run_function_with_input(run, &two_line_payload(&page, lines())).expect("page");
+        assert!(result.operations.is_empty());
+
+        // Visit scope ANDs with a page-scoped condition on the same line.
+        let combined = r#""pageUrlConditions":[{"matchMode":"page_type","patterns":["product"]},{"matchMode":"contains","paramName":"utm_source","paramValue":"amazon","source":"landing"}],"restrictToMatchedLines":true"#;
+        let result = run_function_with_input(
+            run,
+            &two_line_payload(
+                combined,
+                [
+                    serde_json::json!({ "_promo_page_url": "/products/y", "_promo_landing_url": landing }),
+                    serde_json::json!({ "_promo_page_url": "/", "_promo_landing_url": landing }),
+                ],
+            ),
+        )
+        .expect("combined");
+        assert_eq!(product_target_ids(&result), vec!["gid://shopify/CartLine/1"]);
     }
 
     #[test]

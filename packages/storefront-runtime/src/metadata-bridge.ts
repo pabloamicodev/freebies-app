@@ -1,4 +1,5 @@
 const METADATA_PROPERTY = "_promo_engine_metadata";
+const LANDING_STORAGE_KEY = "promo_engine_utm_landing";
 
 type LineProperties = Record<string, string>;
 
@@ -22,14 +23,52 @@ function browserPageUrl(): string | undefined {
   return `${window.location.pathname}${window.location.search}`;
 }
 
+/**
+ * Remembers the session's latest page view carrying a utm_* param (pathname +
+ * search) so visit-scoped UTM conditions still match lines added later from
+ * other pages. A later UTM page view overwrites it (last UTM touch).
+ */
+export function recordUtmLanding(
+  pageUrl = browserPageUrl(),
+  storage: Pick<Storage, "setItem"> | undefined = sessionStorageOrUndefined(),
+): void {
+  if (!pageUrl || !/[?&]utm_/i.test(pageUrl)) return;
+  try {
+    storage?.setItem(LANDING_STORAGE_KEY, pageUrl);
+  } catch {
+    // Storage disabled or full: visit-scoped UTM offers just won't match.
+  }
+}
+
+function sessionStorageOrUndefined(): Storage | undefined {
+  try {
+    return typeof sessionStorage === "undefined" ? undefined : sessionStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+function browserLandingUrl(): string | undefined {
+  try {
+    return sessionStorageOrUndefined()?.getItem(LANDING_STORAGE_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function withPromoMetadata(
   properties: LineProperties,
   sourcePageUrl = browserPageUrl(),
+  /** null: an update of an existing line, which keeps the landing it was added under. */
+  landingUrl: string | null | undefined = browserLandingUrl(),
 ): LineProperties {
-  const enriched =
+  let enriched =
     sourcePageUrl && !properties["_promo_page_url"]
       ? { ...properties, _promo_page_url: sourcePageUrl }
       : properties;
+  if (landingUrl && !enriched["_promo_landing_url"]) {
+    enriched = { ...enriched, _promo_landing_url: landingUrl };
+  }
   const metadata = existingMetadata(enriched[METADATA_PROPERTY]);
   for (const [key, value] of Object.entries(enriched)) {
     if (key !== METADATA_PROPERTY) metadata[key] = value;
@@ -173,6 +212,7 @@ export function installPromoMetadataBridge(): void {
   const state = window as Window & { __promoEngineMetadataBridgeInstalled?: boolean };
   if (state.__promoEngineMetadataBridgeInstalled) return;
   state.__promoEngineMetadataBridgeInstalled = true;
+  recordUtmLanding();
 
   const nativeFetch = window.fetch.bind(window);
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {

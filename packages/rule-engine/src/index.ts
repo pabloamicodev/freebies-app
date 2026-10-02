@@ -14,3 +14,4 @@ export { evaluateUrlParam } from "./conditions/url-param.js";
 export { evaluatePageUrl, type PageUrlConditionValue } from "./conditions/page-url.js";
 export { evaluateCountry } from "./conditions/country.js";
 export { evaluateBogo } from "./conditions/bogo.js";
+export { classifyPageType, evaluatePageTypes, evaluateUtmParameters } from "./conditions/page-context.js";

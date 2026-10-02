@@ -3,8 +3,14 @@
 // The parent serializes their values via hidden inputs on form submit.
 
 import { useState, useId, useEffect } from "react";
-import { CART_ATTRIBUTE_KEYS, LINE_ATTRIBUTE_KEYS, resolveOnlyMatchedLines } from "@promo/shared-types";
+import {
+  CART_ATTRIBUTE_KEYS,
+  LINE_ATTRIBUTE_KEYS,
+  resolveOnlyMatchedLines,
+  resolveRejectUnmatchedLines,
+} from "@promo/shared-types";
 import { ProductPicker } from "../ProductPicker.js";
+import { PAGE_TYPE_OPTIONS, readPageTypes } from "../../lib/page-types.js";
 
 // ─── Shared props ─────────────────────────────────────────────────────────────
 export interface SubFormProps {
@@ -50,6 +56,44 @@ export function OnlyMatchedLinesCheckbox({
           Anything they add later from other pages of your store stays at full price, even if it's in
           the same cart. Leave this unchecked to discount the whole cart once the customer has visited
           the page.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── "Don't apply if other pages' products are in the cart" ───────────────────
+export function RejectUnmatchedLinesCheckbox({
+  id,
+  name,
+  checked,
+  defaultChecked,
+  onChange,
+}: {
+  id: string;
+  name?: string;
+  checked?: boolean;
+  defaultChecked?: boolean;
+  onChange?: (checked: boolean) => void;
+}) {
+  return (
+    <div className="b-checkbox-row">
+      <input
+        type="checkbox"
+        id={id}
+        name={name}
+        checked={checked}
+        defaultChecked={defaultChecked}
+        onChange={onChange ? (event) => onChange(event.target.checked) : undefined}
+        style={{ accentColor: "var(--blue)", width: 15, height: 15 }}
+      />
+      <div>
+        <label htmlFor={id} className="b-checkbox-label">
+          Don't apply the offer if the cart has products added from other pages
+        </label>
+        <div className="b-checkbox-help">
+          As soon as the cart holds something the customer added on a page that doesn't match, the
+          whole offer stops applying (for a code offer, the code stops working).
         </div>
       </div>
     </div>
@@ -111,10 +155,11 @@ export function LinkForm({ value, onChange, isCodePromo = false }: SubFormProps)
   const paramName = getv(value, "paramName", "freegifts_code") as string;
   const paramValue = getv(value, "paramValue", "") as string;
   const onlyMatchedLines = resolveOnlyMatchedLines(value?.["onlyMatchedLines"], isCodePromo);
+  const rejectUnmatchedLines = resolveRejectUnmatchedLines(value?.["rejectUnmatchedLines"]);
 
   // Always emit an explicit onlyMatchedLines so what's saved matches what's shown.
   function emit(patch: Partial<Record<string, string | boolean>>) {
-    onChange?.({ requiredUrl, paramName, paramValue, onlyMatchedLines, ...patch });
+    onChange?.({ requiredUrl, paramName, paramValue, onlyMatchedLines, rejectUnmatchedLines, ...patch });
   }
 
   const generated = `${requiredUrl || "/"}${paramName ? `?${encodeURIComponent(paramName)}=${encodeURIComponent(paramValue || "<value>")}` : ""}`;
@@ -143,6 +188,11 @@ export function LinkForm({ value, onChange, isCodePromo = false }: SubFormProps)
         id={`${idPrefix}-only-matched-lines`}
         checked={onlyMatchedLines}
         onChange={(checked) => emit({ onlyMatchedLines: checked })}
+      />
+      <RejectUnmatchedLinesCheckbox
+        id={`${idPrefix}-reject-unmatched-lines`}
+        checked={rejectUnmatchedLines}
+        onChange={(checked) => emit({ rejectUnmatchedLines: checked })}
       />
 
       <div>
@@ -461,11 +511,23 @@ export function UtmParametersForm({ value, onChange, isCodePromo = false }: SubF
   const utmCampaign = getv(value, "utmCampaign", "") as string;
   const utmTerm = getv(value, "utmTerm", "") as string;
   const utmContent = getv(value, "utmContent", "") as string;
+  const scope = value?.["scope"] === "visit" ? "visit" : "page";
   const onlyMatchedLines = resolveOnlyMatchedLines(value?.["onlyMatchedLines"], isCodePromo);
+  const rejectUnmatchedLines = resolveRejectUnmatchedLines(value?.["rejectUnmatchedLines"]);
 
   // Always emit an explicit onlyMatchedLines so what's saved matches what's shown.
   function emit(patch: Partial<Record<string, unknown>>) {
-    onChange?.({ utmSource, utmMedium, utmCampaign, utmTerm, utmContent, onlyMatchedLines, ...patch });
+    onChange?.({
+      utmSource,
+      utmMedium,
+      utmCampaign,
+      utmTerm,
+      utmContent,
+      scope,
+      onlyMatchedLines,
+      rejectUnmatchedLines,
+      ...patch,
+    });
   }
 
   return (
@@ -490,10 +552,16 @@ export function UtmParametersForm({ value, onChange, isCodePromo = false }: SubF
         <label className="b-label" htmlFor={`${idPrefix}-utm-content`}>UTM Content</label>
         <input id={`${idPrefix}-utm-content`} className="b-input" value={utmContent} onChange={(event) => emit({ utmContent: event.target.value })} placeholder="banner-a" autoComplete="off" />
       </div>
+      <UtmScopeChoice name={`${idPrefix}-utm-scope`} value={scope} onChange={(next) => emit({ scope: next })} />
       <OnlyMatchedLinesCheckbox
         id={`${idPrefix}-only-matched-lines`}
         checked={onlyMatchedLines}
         onChange={(checked) => emit({ onlyMatchedLines: checked })}
+      />
+      <RejectUnmatchedLinesCheckbox
+        id={`${idPrefix}-reject-unmatched-lines`}
+        checked={rejectUnmatchedLines}
+        onChange={(checked) => emit({ rejectUnmatchedLines: checked })}
       />
       <div className="b-banner b-banner-blue" role="status">
         <div className="b-banner-body" style={{ width: "100%" }}>
@@ -516,6 +584,134 @@ export function UtmParametersForm({ value, onChange, isCodePromo = false }: SubF
           </p>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── UTM scope: the add-to-cart page vs. anywhere in the visit ─────────────────
+export const UTM_SCOPE_OPTIONS = [
+  {
+    value: "visit",
+    label: "Visitor arrived with these UTMs at any point in the visit",
+    help: "Works even if they browse around first; the UTMs from their latest tagged link in this visit count.",
+  },
+  {
+    value: "page",
+    label: "UTM must be in the URL of the page where the product is added",
+    help: "Stricter: the product has to be added on a page whose address still carries the UTMs.",
+  },
+] as const;
+
+export function UtmScopeChoice({
+  name,
+  value,
+  defaultValue,
+  onChange,
+}: {
+  name: string;
+  value?: "page" | "visit";
+  defaultValue?: "page" | "visit";
+  onChange?: (value: "page" | "visit") => void;
+}) {
+  return (
+    <fieldset style={{ border: 0, padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+      <legend className="b-label">When do the UTMs count?</legend>
+      {UTM_SCOPE_OPTIONS.map((option) => (
+        <label key={option.value} className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, alignItems: "flex-start" }}>
+          <input
+            type="radio"
+            name={name}
+            value={option.value}
+            checked={value === undefined ? undefined : value === option.value}
+            defaultChecked={defaultValue === undefined ? undefined : defaultValue === option.value}
+            onChange={() => onChange?.(option.value)}
+            style={{ accentColor: "var(--blue)", width: 14, height: 14, marginTop: 3 }}
+          />
+          <span>
+            <span style={{ fontSize: 13, color: "var(--text)" }}>{option.label}</span>
+            <span className="b-checkbox-help" style={{ display: "block" }}>{option.help}</span>
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
+// ─── Store page types ─────────────────────────────────────────────────────────
+export function PageTypeCheckboxes({
+  idPrefix,
+  selected,
+  onChange,
+  name,
+}: {
+  idPrefix: string;
+  selected: string[];
+  onChange?: (next: string[]) => void;
+  /** When set, each checkbox posts its value under this name (plain form submit). */
+  name?: string;
+}) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 8 }}>
+      {PAGE_TYPE_OPTIONS.map((option) => {
+        const id = `${idPrefix}-page-type-${option.value}`;
+        return (
+          <label key={option.value} htmlFor={id} className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, alignItems: "flex-start" }}>
+            <input
+              id={id}
+              type="checkbox"
+              name={name}
+              value={option.value}
+              {...(onChange
+                ? {
+                    checked: selected.includes(option.value),
+                    onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+                      onChange(
+                        event.target.checked
+                          ? [...selected, option.value]
+                          : selected.filter((type) => type !== option.value),
+                      ),
+                  }
+                : { defaultChecked: selected.includes(option.value) })}
+              style={{ accentColor: "var(--blue)", width: 14, height: 14, marginTop: 3 }}
+            />
+            <span>
+              <span style={{ fontSize: 13, color: "var(--text)" }}>{option.label}</span>
+              <span className="b-checkbox-help" style={{ display: "block" }}>{option.example}</span>
+            </span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+export const PAGE_TYPES_HELP =
+  "We look at the page each product was added to the cart from, not the page the customer is on at checkout.";
+
+export function PageTypesForm({ value, onChange, isCodePromo = false }: SubFormProps) {
+  const idPrefix = useId();
+  const pageTypes = readPageTypes(value?.["pageTypes"]);
+  const onlyMatchedLines = resolveOnlyMatchedLines(value?.["onlyMatchedLines"], isCodePromo);
+  const rejectUnmatchedLines = resolveRejectUnmatchedLines(value?.["rejectUnmatchedLines"]);
+
+  function emit(patch: Partial<Record<string, unknown>>) {
+    onChange?.({ pageTypes, onlyMatchedLines, rejectUnmatchedLines, ...patch });
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <PageTypeCheckboxes idPrefix={idPrefix} selected={pageTypes} onChange={(next) => emit({ pageTypes: next })} />
+      <div className="b-help">{PAGE_TYPES_HELP}</div>
+      <OnlyMatchedLinesCheckbox
+        id={`${idPrefix}-only-matched-lines`}
+        checked={onlyMatchedLines}
+        onChange={(checked) => emit({ onlyMatchedLines: checked })}
+      />
+      <RejectUnmatchedLinesCheckbox
+        id={`${idPrefix}-reject-unmatched-lines`}
+        checked={rejectUnmatchedLines}
+        onChange={(checked) => emit({ rejectUnmatchedLines: checked })}
+      />
     </div>
   );
 }

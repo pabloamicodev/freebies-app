@@ -2,7 +2,7 @@ import { useState } from "react";
 import { SubconditionCard } from "./SubconditionCard.js";
 import { SubconditionModal } from "./SubconditionModal.js";
 import { SUB_FORMS } from "./subconditions/registry.js";
-import { GIFT_SUBCONDITIONS } from "./subconditions/types.js";
+import { GIFT_SUBCONDITIONS, isFunctionEnforcedSubcondition } from "./subconditions/types.js";
 import type { SubconditionId } from "./subconditions/types.js";
 import { initializeOfferConditionValues } from "../lib/offer-condition-defaults.js";
 
@@ -10,6 +10,12 @@ interface OfferConditionsBuilderProps {
   name?: string;
   title?: string;
   description?: string;
+  /** Only offer conditions checkout can enforce (code offers can't publish with the others). */
+  functionEnforcedOnly?: boolean;
+  /** Conditions the surrounding wizard already asks for in its own steps. */
+  exclude?: SubconditionId[];
+  /** The offer is code-gated; forwarded to forms whose defaults depend on it. */
+  isCodePromo?: boolean;
 }
 
 /**
@@ -21,11 +27,19 @@ export function OfferConditionsBuilder({
   name = "subconditions",
   title = "Advanced conditions",
   description = "URL, customer, market, subscription, store attributes and quantity guards are combined with AND logic.",
+  functionEnforcedOnly = false,
+  exclude,
+  isCodePromo = false,
 }: OfferConditionsBuilderProps) {
   const [active, setActive] = useState<SubconditionId[]>([]);
   const [values, setValues] = useState<Record<string, Record<string, unknown>>>({});
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [modalOpen, setModalOpen] = useState(false);
+  const types = GIFT_SUBCONDITIONS.filter(
+    (definition) =>
+      !exclude?.includes(definition.id) &&
+      (!functionEnforcedOnly || isFunctionEnforcedSubcondition(definition.id)),
+  );
 
   return (
     <>
@@ -40,7 +54,7 @@ export function OfferConditionsBuilder({
         <div className="b-card-body">
           {active.map((id) => {
             const SubForm = SUB_FORMS[id];
-            const definition = GIFT_SUBCONDITIONS.find((candidate) => candidate.id === id);
+            const definition = types.find((candidate) => candidate.id === id);
             if (!definition) return null;
             return (
               <SubconditionCard
@@ -64,6 +78,7 @@ export function OfferConditionsBuilder({
                   onChange={(nextValue) =>
                     setValues((current) => ({ ...current, [id]: nextValue }))
                   }
+                  isCodePromo={isCodePromo}
                 />
               </SubconditionCard>
             );
@@ -84,7 +99,7 @@ export function OfferConditionsBuilder({
       <SubconditionModal
         open={modalOpen}
         active={active}
-        types={GIFT_SUBCONDITIONS}
+        types={types}
         onClose={() => setModalOpen(false)}
         onConfirm={(nextActive) => {
           setActive(nextActive);

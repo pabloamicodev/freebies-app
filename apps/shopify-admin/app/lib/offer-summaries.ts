@@ -2,6 +2,8 @@
  * Shared by the conditions/rewards editors and the offers-list row preview
  * so all three describe a given condition/reward the same way. */
 
+import { pageTypeLabel } from "./page-types.js";
+
 export function conditionSummary(conditionType: string, value: unknown): string {
   const v = (value ?? {}) as Record<string, unknown>;
   switch (conditionType) {
@@ -31,7 +33,13 @@ export function conditionSummary(conditionType: string, value: unknown): string 
         ["utm_content", v["utmContent"]],
       ];
       const set = fields.filter(([, value]) => typeof value === "string" && value.length > 0);
-      return set.length ? set.map(([key, value]) => `${key}=${value}`).join(", ") : "no UTM parameters set";
+      const summary = set.length ? set.map(([key, value]) => `${key}=${value}`).join(", ") : "no UTM parameters set";
+      return `${v["scope"] === "visit" ? `${summary} (this visit)` : summary}${v["rejectUnmatchedLines"] === true ? " · other pages block it" : ""}`;
+    }
+    case "page_types": {
+      const types = Array.isArray(v["pageTypes"]) ? v["pageTypes"] as string[] : [];
+      const summary = types.length ? `added from ${types.map(pageTypeLabel).join(", ")}` : "no page types set";
+      return v["rejectUnmatchedLines"] === true ? `${summary} · other pages block it` : summary;
     }
     case "specific_product":
     case "pack_of_products": {

@@ -20,10 +20,18 @@ import {
   ConditionTypeSchema,
   LINE_ATTRIBUTE_KEYS,
   resolveOnlyMatchedLines,
+  resolveRejectUnmatchedLines,
   validateConditionValue,
   type ConditionOperator,
 } from "@promo/shared-types";
-import { OnlyMatchedLinesCheckbox } from "../components/subconditions/forms.js";
+import {
+  OnlyMatchedLinesCheckbox,
+  PAGE_TYPES_HELP,
+  PageTypeCheckboxes,
+  RejectUnmatchedLinesCheckbox,
+  UtmScopeChoice,
+} from "../components/subconditions/forms.js";
+import { DEFAULT_CODE_PAGE_TYPES, readPageTypes } from "../lib/page-types.js";
 import { and, eq } from "drizzle-orm";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { getMarketsForShop } from "../lib/markets.server.js";
@@ -47,6 +55,32 @@ function splitCountryCsv(value: string | null): string[] {
   });
 }
 
+function lineMatchFlags(formData: FormData) {
+  return {
+    onlyMatchedLines: formData.get("onlyMatchedLines") === "on",
+    rejectUnmatchedLines: formData.get("rejectUnmatchedLines") === "on",
+  };
+}
+
+function LineMatchFields({
+  defaultOnlyMatchedLines,
+  defaultRejectUnmatchedLines,
+}: {
+  defaultOnlyMatchedLines: boolean;
+  defaultRejectUnmatchedLines: boolean;
+}) {
+  return (
+    <>
+      <OnlyMatchedLinesCheckbox id="onlyMatchedLines" name="onlyMatchedLines" defaultChecked={defaultOnlyMatchedLines} />
+      <RejectUnmatchedLinesCheckbox
+        id="rejectUnmatchedLines"
+        name="rejectUnmatchedLines"
+        defaultChecked={defaultRejectUnmatchedLines}
+      />
+    </>
+  );
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = params["id"]!;
@@ -68,7 +102,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     offer,
     conditions: conditionRows.sort((a, b) => a.sortOrder - b.sortOrder),
     markets,
-    isCodePromo: Boolean(firstCode) || Boolean(offer.requiredDiscountCode),
+    isCodePromo: Boolean(firstCode) || Boolean(offer.requiredDiscountCode) || offer.requiresCode,
   };
 };
 
@@ -173,8 +207,14 @@ function buildConditionValue(
           requiredUrl,
           ...(paramName ? { paramName } : {}),
           ...(paramValue ? { paramValue } : {}),
-          onlyMatchedLines: formData.get("onlyMatchedLines") === "on",
+          ...lineMatchFlags(formData),
         };
+        break;
+      }
+      case "page_types": {
+        const pageTypes = formData.getAll("pageTypes").map(String);
+        if (pageTypes.length === 0) return { error: "Select at least one kind of store page." };
+        value = { pageTypes, ...lineMatchFlags(formData) };
         break;
       }
       case "page_url": {
@@ -182,7 +222,7 @@ function buildConditionValue(
         const patterns = splitCsvList(patternsRaw).filter((p) => p.length > 0);
         if (patterns.length === 0) return { error: "Enter at least one URL pattern." };
         const matchMode = (formData.get("matchMode") as string | null) ?? "starts_with";
-        value = { patterns, matchMode, caseSensitive: false, onlyMatchedLines: formData.get("onlyMatchedLines") === "on" };
+        value = { patterns, matchMode, caseSensitive: false, ...lineMatchFlags(formData) };
         break;
       }
       case "specific_product":
@@ -237,7 +277,8 @@ function buildConditionValue(
           utmCampaign: String(formData.get("utmCampaign") ?? "").trim(),
           utmTerm: String(formData.get("utmTerm") ?? "").trim(),
           utmContent: String(formData.get("utmContent") ?? "").trim(),
-          onlyMatchedLines: formData.get("onlyMatchedLines") === "on",
+          scope: formData.get("utmScope") === "visit" ? "visit" : "page",
+          ...lineMatchFlags(formData),
         };
         break;
     }
@@ -321,6 +362,7 @@ const MAIN_CONDITION_TYPES = [
   { label: "Specific Product — must contain selected products", value: "specific_product" },
   { label: "Pack of Products — all products must be present", value: "pack_of_products" },
   { label: "Page URL — restrict to specific storefront pages", value: "page_url" },
+  { label: "Store pages — products added from home, collections, product pages…", value: "page_types" },
   { label: "Line attribute — approved legacy property", value: "line_attribute" },
   { label: "Cart attribute — approved legacy property", value: "cart_attribute" },
 ];
@@ -337,6 +379,7 @@ const SUB_CONDITION_TYPES = [
   { label: "Subscription Products Only", value: "subscription_product_type" },
   { label: "Specific Link / Magic URL", value: "specific_link" },
   { label: "UTM Parameters", value: "utm_parameters" },
+  { label: "Store pages", value: "page_types" },
 ];
 
 /** Pulls the edit-form-relevant fields out of a condition's stored value —
@@ -446,6 +489,8 @@ export default function OfferConditionsPage() {
   const editingCondition = editingId ? conditions.find((c) => c.id === editingId) : undefined;
   const editingValue = (editingCondition?.value ?? {}) as Record<string, unknown>;
   const defaultOnlyMatchedLines = resolveOnlyMatchedLines(editingValue["onlyMatchedLines"], isCodePromo);
+  const defaultRejectUnmatchedLines = resolveRejectUnmatchedLines(editingValue["rejectUnmatchedLines"]);
+  const editingPageTypes = editingCondition ? readPageTypes(editingValue["pageTypes"]) : DEFAULT_CODE_PAGE_TYPES;
 
   if (!offer) return <NotFound message="Offer not found." />;
 
@@ -960,8 +1005,17 @@ export default function OfferConditionsPage() {
                           <option value="ends_with">Ends with</option>
                         </select>
                       </div>
-                      <OnlyMatchedLinesCheckbox id="onlyMatchedLines" name="onlyMatchedLines" defaultChecked={defaultOnlyMatchedLines} />
+                      <LineMatchFields defaultOnlyMatchedLines={defaultOnlyMatchedLines} defaultRejectUnmatchedLines={defaultRejectUnmatchedLines} />
                     </>
+                  )}
+
+                  {selectedType === "page_types" && (
+                    <fieldset className="b-stack b-stack-3" style={{ border: 0, padding: 0, margin: 0 }}>
+                      <legend className="b-label">Products count when added to the cart from</legend>
+                      <PageTypeCheckboxes idPrefix="condition" name="pageTypes" selected={editingPageTypes} />
+                      <p className="b-help" style={{ margin: 0 }}>{PAGE_TYPES_HELP}</p>
+                      <LineMatchFields defaultOnlyMatchedLines={defaultOnlyMatchedLines} defaultRejectUnmatchedLines={defaultRejectUnmatchedLines} />
+                    </fieldset>
                   )}
 
                   {(selectedType === "order_history_total_spent" || selectedType === "order_history_last_order_spent" || selectedType === "order_history_total_orders") && (
@@ -1059,7 +1113,7 @@ export default function OfferConditionsPage() {
                         <label className="b-label" htmlFor="paramValue">Expected parameter value (optional)</label>
                         <input id="paramValue" name="paramValue" className="b-input" placeholder="summer" autoComplete="off" defaultValue={typeof editingValue["paramValue"] === "string" ? editingValue["paramValue"] : undefined} />
                       </div>
-                      <OnlyMatchedLinesCheckbox id="onlyMatchedLines" name="onlyMatchedLines" defaultChecked={defaultOnlyMatchedLines} />
+                      <LineMatchFields defaultOnlyMatchedLines={defaultOnlyMatchedLines} defaultRejectUnmatchedLines={defaultRejectUnmatchedLines} />
                       <p className="b-help">The storefront runtime evaluates the current browser URL. Shopify Functions cannot read a browser URL directly.</p>
                     </div>
                   )}
@@ -1086,7 +1140,8 @@ export default function OfferConditionsPage() {
                         <label className="b-label" htmlFor="utmContent">UTM Content</label>
                         <input id="utmContent" name="utmContent" className="b-input" placeholder="banner-a" autoComplete="off" defaultValue={typeof editingValue["utmContent"] === "string" ? editingValue["utmContent"] : undefined} />
                       </div>
-                      <OnlyMatchedLinesCheckbox id="onlyMatchedLines" name="onlyMatchedLines" defaultChecked={defaultOnlyMatchedLines} />
+                      <UtmScopeChoice name="utmScope" defaultValue={editingValue["scope"] === "visit" ? "visit" : "page"} />
+                      <LineMatchFields defaultOnlyMatchedLines={defaultOnlyMatchedLines} defaultRejectUnmatchedLines={defaultRejectUnmatchedLines} />
                       <div className="b-banner b-banner-blue" role="status">
                         <div className="b-banner-body" style={{ width: "100%" }}>
                           <p className="b-banner-title">What this does</p>

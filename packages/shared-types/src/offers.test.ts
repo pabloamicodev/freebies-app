@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  CONDITION_VALUE_SCHEMAS,
+  PAGE_TYPES,
+  resolveRejectUnmatchedLines,
   LineAttributeKeySchema,
   ProductDiscountTierSchema,
   resolveOnlyMatchedLines,
@@ -180,6 +183,41 @@ describe("condition contracts", () => {
       validateConditionValue("utm_parameters", { utmSource: "amazon", onlyMatchedLines: "yes" }).success,
     ).toBe(false);
     expect(validateConditionValue("page_url", { ...pageUrl, onlyMatchedLines: 1 }).success).toBe(false);
+  });
+});
+
+describe("page_types condition and page-match flags", () => {
+  it("accepts known page types (min 1) with optional line-match flags", () => {
+    expect(PAGE_TYPES).toEqual(["home", "collection", "product", "search", "page", "blog", "cart"]);
+    expect(validateConditionValue("page_types", { pageTypes: ["product", "home"] }).success).toBe(true);
+    expect(
+      validateConditionValue("page_types", {
+        pageTypes: ["cart"],
+        onlyMatchedLines: true,
+        rejectUnmatchedLines: false,
+      }).success,
+    ).toBe(true);
+    expect(validateConditionValue("page_types", { pageTypes: [] }).success).toBe(false);
+    expect(validateConditionValue("page_types", { pageTypes: ["checkout"] }).success).toBe(false);
+    expect(validateConditionValue("page_types", { pageTypes: ["home"], rejectUnmatchedLines: "y" }).success).toBe(false);
+    expect(CONDITION_VALUE_SCHEMAS.page_types.safeParse({ pageTypes: ["blog"] }).success).toBe(true);
+  });
+
+  it("accepts utm scope page|visit and rejectUnmatchedLines on page_url / specific_link / utm", () => {
+    expect(validateConditionValue("utm_parameters", { utmSource: "a", scope: "visit" }).success).toBe(true);
+    expect(validateConditionValue("utm_parameters", { utmSource: "a", scope: "page" }).success).toBe(true);
+    expect(validateConditionValue("utm_parameters", { utmSource: "a", scope: "session" }).success).toBe(false);
+    expect(validateConditionValue("utm_parameters", { utmSource: "a", rejectUnmatchedLines: true }).success).toBe(true);
+    expect(
+      validateConditionValue("page_url", { patterns: ["/x"], matchMode: "exact", rejectUnmatchedLines: true }).success,
+    ).toBe(true);
+    expect(validateConditionValue("specific_link", { requiredUrl: "/x", rejectUnmatchedLines: true }).success).toBe(true);
+  });
+
+  it("rejectUnmatchedLines defaults off, even for code promos", () => {
+    expect(resolveRejectUnmatchedLines(undefined)).toBe(false);
+    expect(resolveRejectUnmatchedLines(false)).toBe(false);
+    expect(resolveRejectUnmatchedLines(true)).toBe(true);
   });
 });
 
