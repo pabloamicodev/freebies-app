@@ -1,6 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const APP_URL = process.env["APP_URL"] ?? "http://localhost:3000";
 const product = {
   id: "gid://shopify/Product/101",
   title: "Discount picker test product",
@@ -32,7 +31,7 @@ test.beforeEach(async ({ page }) => {
     }] } });
   });
 
-  await page.goto(`${APP_URL}/app/offers/new/codes/single`);
+  await page.goto("/app/offers/new/codes/single");
   await page.getByRole("radio", { name: /Specific products/ }).check();
 });
 
