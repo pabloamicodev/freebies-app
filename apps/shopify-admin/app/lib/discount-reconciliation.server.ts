@@ -8,6 +8,7 @@ import { configHash, readPublishManifest, type PublishManifest } from "./publish
 import {
   VALIDATION_FUNCTION_HANDLE,
   VALIDATION_METAFIELD_KEY,
+  VALIDATION_APP_METAFIELD_NAMESPACE,
   VALIDATION_METAFIELD_NAMESPACE,
 } from "./cart-validation.server.js";
 
@@ -112,7 +113,7 @@ export interface DiscountDriftResult {
 interface DriftNode {
   __typename?: string;
   id?: string;
-  metafield?: { value: string } | null;
+  [alias: `m${number}`]: { value: string } | null | undefined;
   automaticDiscount?: { status?: string } | null;
   codeDiscount?: { status?: string; codesCount?: { count: number } | null } | null;
 }
@@ -122,7 +123,11 @@ interface DriftDeps {
   publish: (shopId: string, shopDomain: string) => Promise<unknown>;
 }
 
-const CONFIG_NAMESPACE = FUNCTION_CONFIG_NAMESPACES[0] ?? "promo_engine";
+// Every namespace the publisher writes must hold the published config: Functions read the
+// $app one, so a shop whose new copy was never written counts as drifted and gets republished.
+const metafieldSelections = FUNCTION_CONFIG_NAMESPACES.map(
+  (namespace, index) => `m${index}: metafield(namespace: "${namespace}", key: "function_config") { value }`,
+).join(" ");
 
 /** Reads every node the last publish wrote and compares it with what that publish pushed. */
 async function checkShopDrift(
@@ -151,12 +156,12 @@ async function checkShopDrift(
           __typename
           ... on DiscountAutomaticNode {
             id
-            metafield(namespace: "${CONFIG_NAMESPACE}", key: "function_config") { value }
+            ${metafieldSelections}
             automaticDiscount { ... on DiscountAutomaticApp { status } }
           }
           ... on DiscountCodeNode {
             id
-            metafield(namespace: "${CONFIG_NAMESPACE}", key: "function_config") { value }
+            ${metafieldSelections}
             codeDiscount { ... on DiscountCodeApp { status codesCount { count } } }
           }
         }
@@ -177,13 +182,17 @@ async function checkShopDrift(
     }
     const expected = manifest?.nodes[id];
     if (!expected) continue;
-    const actualHash = node.metafield?.value ? configHash(node.metafield.value) : null;
-    if (actualHash !== expected.hash) {
+    const copies = FUNCTION_CONFIG_NAMESPACES.map((namespace, index) => {
+      const value = node[`m${index}`]?.value;
+      return { namespace, hash: value ? configHash(value) : null };
+    });
+    const wrong = copies.find((copy) => copy.hash !== expected.hash);
+    if (wrong) {
       findings.push({
         ...base,
         issue: "config_mismatch",
         nodeId: id,
-        detail: actualHash ? "metafield differs from the last publish" : "metafield is missing",
+        detail: `${wrong.namespace} metafield ${wrong.hash ? "differs from the last publish" : "is missing"}`,
       });
     }
     const status = node.automaticDiscount?.status ?? node.codeDiscount?.status;
@@ -198,6 +207,7 @@ async function checkShopDrift(
         nodes: Array<{
           shopifyFunction: { handle: string };
           metafield: { value: string } | null;
+          appMetafield: { value: string } | null;
         }>;
       };
     }>({
@@ -208,6 +218,7 @@ async function checkShopDrift(
           nodes {
             shopifyFunction { handle }
             metafield(namespace: "${VALIDATION_METAFIELD_NAMESPACE}", key: "${VALIDATION_METAFIELD_KEY}") { value }
+            appMetafield: metafield(namespace: "${VALIDATION_APP_METAFIELD_NAMESPACE}", key: "${VALIDATION_METAFIELD_KEY}") { value }
           }
         }
       }`,
@@ -216,7 +227,11 @@ async function checkShopDrift(
       (node) => node.shopifyFunction.handle === VALIDATION_FUNCTION_HANDLE,
     );
     if (!validation) findings.push({ ...base, issue: "validation_missing" });
-    else if (!validation.metafield?.value || configHash(validation.metafield.value) !== manifest.validationHash) {
+    else if (
+      [validation.metafield, validation.appMetafield].some(
+        (copy) => !copy?.value || configHash(copy.value) !== manifest.validationHash,
+      )
+    ) {
       findings.push({ ...base, issue: "validation_mismatch" });
     }
   }

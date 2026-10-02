@@ -11,7 +11,7 @@ vi.mock("@promo/db", async (importOriginal) => ({
 }));
 vi.mock("./token-crypto.server.js", () => ({ decryptToken: async () => "token" }));
 vi.mock("./sync/offer-publisher.server.js", () => ({
-  FUNCTION_CONFIG_NAMESPACES: ["promo_engine"],
+  FUNCTION_CONFIG_NAMESPACES: ["promo_engine", "$app:promo_engine"],
   publishOffersForShop: vi.fn(),
 }));
 const captureMessage = vi.fn();
@@ -43,6 +43,8 @@ beforeEach(() => {
 interface FakeNode {
   kind: "automatic" | "code";
   value: string | null;
+  /** The $app:promo_engine copy; defaults to `value`. */
+  appValue?: string | null;
   status: string;
   codesCount?: number;
 }
@@ -58,12 +60,17 @@ function fakeShopify(initial: Record<string, FakeNode>, validation: { present: b
         nodes: (variables!.ids as string[]).map((id) => {
           const node = nodes[id];
           if (!node) return null;
+          const appValue = node.appValue === undefined ? node.value : node.appValue;
+          const copies = {
+            m0: node.value ? { value: node.value } : null,
+            m1: appValue ? { value: appValue } : null,
+          };
           return node.kind === "automatic"
-            ? { __typename: "DiscountAutomaticNode", id, metafield: node.value ? { value: node.value } : null, automaticDiscount: { status: node.status } }
+            ? { __typename: "DiscountAutomaticNode", id, ...copies, automaticDiscount: { status: node.status } }
             : {
                 __typename: "DiscountCodeNode",
                 id,
-                metafield: node.value ? { value: node.value } : null,
+                ...copies,
                 codeDiscount: { status: node.status, codesCount: { count: node.codesCount ?? 0 } },
               };
         }),
@@ -73,7 +80,7 @@ function fakeShopify(initial: Record<string, FakeNode>, validation: { present: b
       return {
         validations: {
           nodes: validation.present
-            ? [{ shopifyFunction: { handle: "promo-engine-cart-validation" }, metafield: validation.value ? { value: validation.value } : null }]
+            ? [{ shopifyFunction: { handle: "promo-engine-cart-validation" }, metafield: validation.value ? { value: validation.value } : null, appMetafield: validation.value ? { value: validation.value } : null }]
             : [],
         },
       };
@@ -167,6 +174,22 @@ describe("runDiscountDriftRepair", () => {
       expect(onlyMine(publish, shop.shopId)).toHaveLength(1);
       expect(result.unresolved.filter((f) => f.shopId === shop.shopId)).toEqual([]);
     }
+  });
+
+  it("republishes a shop whose $app:promo_engine copy was never written (pre-namespace publish)", async () => {
+    const shop = await seedPublishedShop();
+    const fake = fakeShopify({
+      [shop.cart]: { kind: "automatic", value: shop.cartValue, appValue: null, status: "ACTIVE" },
+      [shop.delivery]: { kind: "automatic", value: shop.cartValue, status: "ACTIVE" },
+    });
+    const publish = vi.fn(async (shopId: string) => {
+      if (shopId === shop.shopId) fake.nodes[shop.cart]!.appValue = shop.cartValue;
+    });
+
+    const { result } = await run(fake.graphQL, publish as never);
+
+    expect(onlyMine(publish, shop.shopId)).toHaveLength(1);
+    expect(result.unresolved.filter((f) => f.shopId === shop.shopId)).toEqual([]);
   });
 
   it("re-activates an automatic node the merchant switched off, then republishes", async () => {
