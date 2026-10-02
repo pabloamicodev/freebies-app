@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
-import { customerIdFromSub, getActiveShop, shopDomainFromDest } from "../lib/extension-auth.server.js";
+import { customerIdFromSub, shopDomainFromDest } from "../lib/extension-auth.server.js";
+import { loadActiveShop } from "../lib/proxy-shop.server.js";
 import { handleEvaluationRequest } from "../lib/promo-evaluation.server.js";
 import { apiError, handleApiError } from "../lib/api-response.server.js";
 
@@ -22,7 +23,7 @@ export async function action({ request }: ActionFunctionArgs) {
     return cors(apiError(request, { status: 405, code: "METHOD_NOT_ALLOWED", message: "Method not allowed.", headers: { Allow: "POST" } }));
   }
   try {
-    const shop = await getActiveShop(shopDomainFromDest(sessionToken.dest));
+    const shop = await loadActiveShop(shopDomainFromDest(sessionToken.dest));
     return cors(await handleEvaluationRequest(request, shop, customerIdFromSub(sessionToken.sub)));
   } catch (error) {
     return cors(handleApiError(request, error, "api.checkout.evaluate"));

@@ -129,12 +129,26 @@ describe("code offer wizard: single code", () => {
     ]);
   });
 
-  it("free shipping gets no page or UTM rules, since the delivery Function can't check them", async () => {
+  it("free shipping keeps the page and UTM steps (D2)", async () => {
     const result = await create({ code: "SHIPFREE", discountTarget: "shipping", utmEnabled: "on", utmSource: "x" });
     if (!result.ok) throw new Error(result.error);
     const { conditions, rewards } = await offerRows(result.data.offerId);
-    expect(conditions).toEqual([]);
+    expect(conditions.map((condition) => condition.conditionType).sort()).toEqual(["page_types", "utm_parameters"]);
     expect(rewards[0]).toMatchObject({ rewardType: "shipping_discount", discountType: "free" });
+  });
+
+  it("caps products by the real per-offer config size, not a fixed count", async () => {
+    const ids = (count: number) => Array.from({ length: count }, (_, i) => `gid://shopify/Product/${8_000_000_000_000 + i}`);
+    const collection = async () => ids(150);
+    const fits = await create({ code: "BIGOK", discountTarget: "products", collectionIds: JSON.stringify(["gid://shopify/Collection/7"]) }, collection);
+    if (!fits.ok) throw new Error(fits.error);
+
+    const tooMany = await create(
+      { code: "BIGNO", discountTarget: "products", collectionIds: JSON.stringify(["gid://shopify/Collection/7"]) },
+      async () => ids(500),
+    );
+    expect(tooMany.ok).toBe(false);
+    if (!tooMany.ok) expect(tooMany.error).toMatch(/500 products; this code's configuration holds about \d+/);
   });
 });
 
@@ -209,6 +223,7 @@ describe("code offer wizard: validation", () => {
     expect(error({ code: "" })).toMatch(/Enter the discount code/);
     expect(error({ codeMode: "bulk", batchCount: "" })).toMatch(/how many codes/);
     expect(error({ codeMode: "bulk", batchCount: "10", batchCharset: "emoji" })).toMatch(/character set/);
+    expect(error({ codeMode: "bulk", batchCount: "1000", batchLength: "4", batchCharset: "letters" })).toMatch(/too easy to guess/);
     expect(error({ code: "A1", discountValue: "0" })).toMatch(/greater than zero/);
     expect(error({ code: "A1", discountValue: "120" })).toMatch(/more than 100%/);
     expect(error({ code: "A1", usageLimit: "0" })).toMatch(/Usage limit/);

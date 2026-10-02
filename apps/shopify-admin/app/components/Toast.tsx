@@ -36,7 +36,11 @@ export function Toast({ message, type = "error", onDismiss, duration = 4000 }: T
   }, [onDismiss, duration, type]);
 
   return (
-    <div className={`b-toast b-toast-${type}`} role="alert" aria-live="assertive">
+    <div
+      className={`b-toast b-toast-${type}`}
+      role={type === "error" ? "alert" : "status"}
+      aria-live={type === "error" ? "assertive" : "polite"}
+    >
       {ICONS[type]}
       <span style={{ flex: 1 }}>{message}</span>
       <button type="button" className="b-toast-close" onClick={onDismiss} aria-label="Close">

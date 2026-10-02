@@ -47,3 +47,17 @@ describe("evaluateUtmParameters", () => {
     expect(evaluateUtmParameters(null, value).ok).toBe(false);
   });
 });
+
+describe("D3 URL handling", () => {
+  it("decodes + and %20 as spaces and compares utm_* ASCII case-insensitively", () => {
+    const value = { utmCampaign: "summer sale", utmSource: "fb/ig" };
+    expect(evaluateUtmParameters("/?utm_campaign=Summer+Sale&UTM_SOURCE=fb%2Fig", value).ok).toBe(true);
+    expect(evaluateUtmParameters("/?utm_campaign=summer%2Bsale&utm_source=fb%2Fig", value).ok).toBe(false);
+  });
+
+  it("does not mistake a :// inside the query for a scheme", () => {
+    expect(classifyPageType("/products/x?next=https://a.com/pages/y")).toBe("product");
+    expect(classifyPageType("//shop.example/pages/y")).toBe("page");
+    expect(classifyPageType("shop.example/pages/y")).toBe(null);
+  });
+});

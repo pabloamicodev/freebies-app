@@ -1,9 +1,18 @@
+import type * as ShopifyFetch from "../shopify-fetch.server.js";
+import type * as PublishPending from "../publish-pending.server.js";
+import { ShopifyOutcomeUnknownError } from "../shopify-fetch.server.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as DrizzleOrm from "drizzle-orm";
 import type * as PromoDb from "@promo/db";
 import type * as CartValidation from "../cart-validation.server.js";
-import { CART_FUNCTION_TITLE } from "../discount-node.server.js";
-import { neutralizeCodeDiscountNode, publishOffersForShop } from "./offer-publisher.server.js";
+import { CART_FUNCTION_TITLE, MAX_CODED_SHIPPING_NODES, ensureCodedShippingNodes } from "../discount-node.server.js";
+import {
+  neutralizeCodeDiscountNode,
+  FUNCTION_CONFIG_NAMESPACES,
+  packCodedShippingOffers,
+  publishOffersForShop,
+  specificLinkParamNames,
+} from "./offer-publisher.server.js";
 
 const SHOP_ID = "11111111-1111-1111-1111-111111111111";
 const SHOP_DOMAIN = "test-shop.myshopify.com";
@@ -70,6 +79,7 @@ interface FakeShop {
   accessTokenEncrypted: string;
   discountId: string;
   deliveryDiscountId: string;
+  publishPendingAt?: Date | null;
 }
 
 interface FakeCode {
@@ -87,10 +97,12 @@ interface FakeCode {
   usageCount: number;
   oncePerCustomer: boolean;
   shopifySyncedAt: Date | null;
+  shopifySyncPendingAt: Date | null;
 }
 
 interface MetafieldPush {
   ownerIds: string[];
+  namespaces: string[];
   value: string;
 }
 
@@ -119,7 +131,16 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
     deletedNodes: [] as string[],
     addedCodes: [] as Array<{ discountId: string; codes: string[] }>,
     removedCodes: [] as Array<{ discountId: string; ids: string[] }>,
+    deletedAutoNodes: [] as string[],
+    shopMetafieldPushes: [] as Array<{ ownerId: string; namespace: string; key: string; value: string }>,
     nodeCodes: {} as Record<string, string[]>,
+    preflightLookups: 0,
+    mutations: [] as Array<{ name: string; retryable: boolean }>,
+    failNextLocks: 0,
+    lockAttempts: 0,
+    failNextShopifyCall: null as Error | null,
+    onAdd: null as null | (() => void),
+    pendingAtAddTime: null as Date | null,
     rejectCodes: new Set<string>(),
     rewardRows: [] as Array<{
       id: string;
@@ -257,19 +278,44 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
           },
         }),
       }),
-      transaction: async (cb: (tx: { execute: () => Promise<void> }) => Promise<void>) =>
-        cb({ execute: async () => {} }),
+      transaction: async (cb: (tx: { execute: () => Promise<void> }) => Promise<void>) => {
+        let call = 0;
+        return cb({
+          execute: async () => {
+            call += 1;
+            // 1st call is `set local lock_timeout`, 2nd takes the advisory lock.
+            if (call === 2) {
+              state.lockAttempts += 1;
+              if (state.failNextLocks > 0) {
+                state.failNextLocks -= 1;
+                throw Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" });
+              }
+            }
+          },
+        });
+      },
     };
   }
 
   const shopifyGraphQLMock = async ({
     query,
     variables,
+    retryable,
   }: {
     query: string;
     variables?: Record<string, unknown>;
+    retryable?: boolean;
   }): Promise<unknown> => {
+    if (state.failNextShopifyCall) {
+      const error = state.failNextShopifyCall;
+      state.failNextShopifyCall = null;
+      throw error;
+    }
+    if (/^\s*mutation/.test(query)) {
+      state.mutations.push({ name: /mutation (\w+)/.exec(query)![1]!, retryable: retryable === true });
+    }
     if (query.includes("PromoEngineCodeLookup")) {
+      state.preflightLookups += 1;
       const result: Record<string, unknown> = {};
       for (const [name, value] of Object.entries(variables!)) {
         const code = value as string;
@@ -284,6 +330,41 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
         else result[`c${name.slice(1)}`] = null;
       }
       return result;
+    }
+    if (query.includes("PromoEngineCodeOwners")) {
+      const ownCodes = state.nodeCodes;
+      const result: Record<string, unknown> = {};
+      for (const [name, value] of Object.entries(variables!)) {
+        const code = value as string;
+        const ownerId = Object.keys(ownCodes).find((id) => ownCodes[id]!.includes(code));
+        const held = state.shopifyCodes[code];
+        result[`c${name.slice(1)}`] = ownerId ? { id: ownerId } : held ? { id: held.id } : null;
+      }
+      return result;
+    }
+    if (query.includes("FindExistingCodeDiscount")) {
+      const code = variables!.code as string;
+      const ownerId = Object.keys(state.nodeCodes).find((id) => state.nodeCodes[id]!.includes(code));
+      return {
+        codeDiscountNodeByCode: ownerId
+          ? { id: ownerId, codeDiscount: { __typename: "DiscountCodeApp", appDiscountType: { functionId: "gid://shopify/ShopifyFunction/cart" } } }
+          : null,
+      };
+    }
+    if (query.includes("PromoEngineNodesExist")) {
+      return { nodes: (variables!.ids as string[]).map((id) => (state.knownDiscountIds.has(id) ? { id } : null)) };
+    }
+    if (query.includes("DeletePromoEngineAutomaticDiscount")) {
+      state.deletedAutoNodes.push(variables!.id as string);
+      state.knownDiscountIds.delete(variables!.id as string);
+      return { discountAutomaticDelete: { deletedAutomaticDiscountId: variables!.id, userErrors: [] } };
+    }
+    if (query.includes("PromoEngineShopId")) return { shop: { id: "gid://shopify/Shop/1" } };
+    if (query.includes("PromoEngineSpecificLinkParams")) {
+      for (const m of variables!.metafields as Array<{ ownerId: string; namespace: string; key: string; value: string }>) {
+        state.shopMetafieldPushes.push(m);
+      }
+      return { metafieldsSet: { metafields: [], userErrors: [] } };
     }
     if (query.includes("CheckCodeDiscountNode")) {
       const id = variables!.id as string;
@@ -334,12 +415,14 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
       };
     }
     if (query.includes("CreatePromoEngineDiscount")) {
-      const discount = variables!.discount as { functionHandle: string; discountClasses: string[] };
+      const discount = variables!.discount as { functionHandle: string; discountClasses: string[]; title: string };
       state.createdAutoNodes.push({ handle: discount.functionHandle, classes: discount.discountClasses });
-      state.knownDiscountIds.add(state.nextAutoNodeId);
+      const poolSlot = /^Promo Engine Coded Shipping (\d+)$/.exec(discount.title)?.[1];
+      const createdId = poolSlot ? `gid://shopify/DiscountAutomaticNode/pool-${poolSlot}` : state.nextAutoNodeId;
+      state.knownDiscountIds.add(createdId);
       return {
         discountAutomaticAppCreate: {
-          automaticAppDiscount: { discountId: state.nextAutoNodeId },
+          automaticAppDiscount: { discountId: createdId },
           userErrors: [],
         },
       };
@@ -354,6 +437,7 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
       return { discountCodeDelete: { deletedCodeDiscountId: variables!.id, userErrors: [] } };
     }
     if (query.includes("AddPromoEngineRedeemCodes")) {
+      state.onAdd?.();
       const codes = (variables!.codes as Array<{ code: string }>).map((c) => c.code);
       for (const code of codes) {
         if (state.raceCodes.has(code)) {
@@ -436,9 +520,10 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
       };
     }
     if (query.includes("MetafieldsSet")) {
-      const metafields = variables!.metafields as Array<{ ownerId: string; value: string }>;
+      const metafields = variables!.metafields as Array<{ ownerId: string; namespace: string; value: string }>;
       state.metafieldPushes.push({
-        ownerIds: metafields.map((m) => m.ownerId),
+        ownerIds: [...new Set(metafields.map((m) => m.ownerId))],
+        namespaces: [...new Set(metafields.map((m) => m.namespace))],
         value: metafields[0]?.value ?? "{}",
       });
       return { metafieldsSet: { metafields: [], userErrors: [] } };
@@ -454,8 +539,18 @@ vi.mock("@promo/db", async (importOriginal) => {
   return { ...actual, getDb: getDbMock };
 });
 
-vi.mock("../shopify-fetch.server.js", () => ({
+vi.mock("../shopify-fetch.server.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ShopifyFetch>()),
   shopifyGraphQL: shopifyGraphQLMock,
+}));
+
+vi.mock("@vercel/functions", () => ({ waitUntil: () => undefined }));
+
+// The real retry sleeps for seconds and would republish into a later test's state.
+const scheduleRetry = vi.fn(async () => undefined);
+vi.mock("../publish-pending.server.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof PublishPending>()),
+  scheduleBackgroundPublishRetry: (...args: unknown[]) => scheduleRetry(...(args as [])),
 }));
 
 function makeOffer(overrides: Partial<FakeOffer> & { id: string }): FakeOffer {
@@ -683,7 +778,10 @@ describe("publishOffersForShop — code-gated offers", () => {
     // authorized it, even though its own discount node was live and correct.
     expect(cartValidationCalls).toHaveLength(1);
     expect(Object.keys(cartValidationCalls[0]!.offerRules).sort()).toEqual(["code-6", "regular-4"]);
-    expect(cartValidationCalls[0]!.allowedGiftVariantIds).toEqual(
+    const ruleVariants = Object.values(cartValidationCalls[0]!.offerRules).flatMap((rule) =>
+      Object.values(rule.rewards).flatMap((reward) => reward.variantIds),
+    );
+    expect([...new Set(ruleVariants)].sort()).toEqual(
       ["gid://shopify/ProductVariant/1", "gid://shopify/ProductVariant/2"].sort(),
     );
   });
@@ -733,11 +831,24 @@ function makeCode(overrides: Partial<FakeCode> & { code: string; offerId: string
     usageCount: 0,
     oncePerCustomer: false,
     shopifySyncedAt: null,
+    shopifySyncPendingAt: null,
     ...overrides,
   };
 }
 
 const NODE = "gid://shopify/DiscountCodeNode/own";
+
+type PushedShipping = { id: string; codeHashes?: string[]; acceptCodes?: boolean };
+const shippingOffersOf = (value: string) =>
+  (JSON.parse(value) as { shippingOffers?: PushedShipping[] }).shippingOffers ?? [];
+/** Shipping offers pushed to the coded-shipping pool nodes. */
+const poolPushes = () => state.metafieldPushes.filter((p) => p.ownerIds.some((id) => id.includes("/pool-")));
+const poolShipping = () => poolPushes().flatMap((p) => shippingOffersOf(p.value));
+/** Shipping offers in the shared automatic delivery node's config (must never hold code hashes). */
+const sharedShippingOffers = () => {
+  const push = state.metafieldPushes.find((p) => p.ownerIds.includes(DELIVERY_DISCOUNT_ID));
+  return push ? shippingOffersOf(push.value) : [];
+};
 
 function shippingRewardFor(offerId: string) {
   return {
@@ -905,7 +1016,8 @@ describe("publishOffersForShop — offers with their own discount codes", () => 
         makeCode({ offerId: "coded", code: "AMZ-111111", batchId: "batch-1" }),
         makeCode({ offerId: "coded", code: "AMZ-222222", batchId: "batch-1" }),
       ];
-      state.shopifyCodes["AMZ-222222"] = { id: "x", title: "Their code" };
+      // Generated codes skip the pre-flight; Shopify rejects this one when it is added.
+      state.raceCodes = new Set(["AMZ-222222"]);
 
       await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
 
@@ -916,6 +1028,64 @@ describe("publishOffersForShop — offers with their own discount codes", () => 
       // Generated codes are not "requested" by anyone, so no notice is raised.
       expect(state.codeRows.every((r) => !r.requestedCode)).toBe(true);
       expect(new Set(codes).size).toBe(2);
+    });
+
+    it("skips the Shopify pre-flight for generated codes but keeps it for typed ones", async () => {
+      state.offers = [makeOffer({ id: "coded" })];
+      state.batchRows = [{ id: "batch-1", shopId: SHOP_ID, prefix: "AMZ-", length: 6, charset: "numbers" }];
+      state.codeRows = [
+        makeCode({ offerId: "coded", code: "AMZ-111111", batchId: "batch-1" }),
+        makeCode({ offerId: "coded", code: "AMZ-222222", batchId: "batch-1" }),
+      ];
+      state.preflightLookups = 0;
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+      expect(state.preflightLookups).toBe(0);
+
+      state.offers = [makeOffer({ id: "typed" })];
+      state.codeRows = [makeCode({ offerId: "typed", code: "TYPED1" })];
+      state.knownDiscountIds = new Set([CART_DISCOUNT_ID, DELIVERY_DISCOUNT_ID]);
+      state.nodeCodes = {};
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+      expect(state.preflightLookups).toBeGreaterThan(0);
+    });
+
+    it("looks up a generated code left in flight by a crashed publish instead of trusting it is absent", async () => {
+      state.offers = [makeOffer({ id: "coded", codeDiscountId: NODE })];
+      state.knownDiscountIds.add(NODE);
+      state.batchRows = [{ id: "batch-1", shopId: SHOP_ID, prefix: "AMZ-", length: 6, charset: "numbers" }];
+      state.nodeCodes[NODE] = ["FIRST", "AMZ-333333"];
+      state.codeRows = [
+        makeCode({ offerId: "coded", code: "FIRST", shopifySyncedAt: new Date() }),
+        // The bulk add landed on Shopify but the process died before the row was marked synced.
+        makeCode({ offerId: "coded", code: "AMZ-333333", batchId: "batch-1", shopifySyncPendingAt: new Date() }),
+      ];
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+      const row = state.codeRows.find((r) => r.code === "AMZ-333333")!;
+      expect(row.shopifySyncedAt).toBeTruthy();
+      expect(row.shopifySyncPendingAt).toBeNull();
+      expect(state.addedCodes).toEqual([]);
+    });
+
+    it("flags codes as in flight before sending them and clears the flag once Shopify has them", async () => {
+      state.offers = [makeOffer({ id: "coded", codeDiscountId: NODE })];
+      state.knownDiscountIds.add(NODE);
+      state.nodeCodes[NODE] = ["FIRST"];
+      state.codeRows = [
+        makeCode({ offerId: "coded", code: "FIRST", shopifySyncedAt: new Date() }),
+        makeCode({ offerId: "coded", code: "NEW1" }),
+      ];
+      state.onAdd = () => {
+        const row = state.codeRows.find((r) => r.code === "NEW1")!;
+        state.pendingAtAddTime = row.shopifySyncPendingAt;
+      };
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+      expect(state.pendingAtAddTime).toBeTruthy();
+      expect(state.codeRows.find((r) => r.code === "NEW1")?.shopifySyncPendingAt).toBeNull();
+      state.onAdd = null;
     });
 
     it("handles a code taken between the pre-flight and the bulk job: suffixes it, and the publish completes", async () => {
@@ -1221,15 +1391,13 @@ describe("publishOffersForShop — code backend B (code Function)", () => {
 
     await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
 
-    const shared = state.metafieldPushes.find((p) => p.ownerIds.includes(DELIVERY_DISCOUNT_ID));
-    const config = JSON.parse(shared!.value) as {
-      shippingOffers: Array<{ id: string; codeHashes: string[]; acceptCodes: boolean }>;
-    };
-    expect(config.shippingOffers).toEqual([
+    expect(poolShipping()).toEqual([
       expect.objectContaining({ id: "ship:ship-ship", codeHashes: ["9e35947c8d25"], acceptCodes: true }),
     ]);
-    // Nothing for the cart-lines code Function to do, so no code node is created.
-    expect(state.createdAutoNodes).toEqual([]);
+    expect(sharedShippingOffers()).toEqual([]);
+    // Nothing for the cart-lines code Function to do, so no code node is created; the only new
+    // automatic node is the coded-shipping pool node.
+    expect(state.createdAutoNodes).toEqual([{ handle: "promo-engine-delivery-discount", classes: ["SHIPPING"] }]);
     expect(state.createdCodeNodes).toEqual([]);
   });
 
@@ -1312,13 +1480,16 @@ describe("publishOffersForShop — mixed code offers (product/order AND shipping
     state.raceCodes = new Set();
     state.rejectCodes = new Set();
     state.rewardRows = [gift("mixed"), shippingRewardFor("mixed")];
+    state.createdAutoNodes = [];
+    state.deletedAutoNodes = [];
+    state.shopMetafieldPushes = [];
+    state.mutations = [];
+    state.failNextLocks = 0;
+    state.lockAttempts = 0;
   };
-  const sharedShipping = () => {
-    const push = state.metafieldPushes.find((p) => p.ownerIds.includes(DELIVERY_DISCOUNT_ID));
-    return (JSON.parse(push!.value) as { shippingOffers?: Array<{ id: string; codeHashes?: string[] }> }).shippingOffers ?? [];
-  };
+  const sharedShipping = poolShipping;
 
-  it("keeps the product part on the cart-lines code node and gates shipping by code hashes in the shared delivery config", async () => {
+  it("keeps the product part on the cart-lines code node and gates shipping by code hashes on a dedicated delivery node, not the shared delivery config", async () => {
     reset();
     state.codeRows = [makeCode({ offerId: "mixed", code: "SUMMER10" }), makeCode({ offerId: "mixed", code: "VIP-2026" })];
 
@@ -1332,6 +1503,92 @@ describe("publishOffersForShop — mixed code offers (product/order AND shipping
     expect(sharedShipping()).toEqual([
       expect.objectContaining({ id: "mixed:ship-mixed", codeHashes: ["9e35947c8d25", "e8cf18d732cc"].sort() }),
     ]);
+    // The hashes left the shared config: it carries no code-gated shipping at all.
+    expect(sharedShippingOffers()).toEqual([]);
+    expect(state.createdAutoNodes).toEqual([{ handle: "promo-engine-delivery-discount", classes: ["SHIPPING"] }]);
+    expect(state.settings.find((row) => row.key === "coded_shipping_pool.ids")?.value).toBe(
+      JSON.stringify(["gid://shopify/DiscountAutomaticNode/pool-1"]),
+    );
+  });
+
+  it("publishes a code set far beyond the old shop-wide limit: the hashes spread over several pool nodes and the shared config stays tiny", async () => {
+    reset();
+    state.codeRows = Array.from({ length: 1500 }, (_, i) =>
+      makeCode({ offerId: "mixed", code: `GEN${String(i).padStart(5, "0")}` }),
+    );
+
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+    const pushes = poolPushes();
+    expect(pushes.length).toBeGreaterThan(1);
+    for (const push of pushes) expect(new TextEncoder().encode(push.value).byteLength).toBeLessThanOrEqual(9500);
+    const hashes = poolShipping().flatMap((offer) => offer.codeHashes ?? []);
+    expect(hashes).toHaveLength(1500);
+    expect(new Set(hashes).size).toBe(1500);
+    expect(sharedShippingOffers()).toEqual([]);
+    expect(state.codeRows.every((row) => row.shopifySyncedAt)).toBe(true);
+  });
+
+  it("shrinks the pool: nodes that are no longer needed are deleted and forgotten", async () => {
+    reset();
+    state.codeRows = Array.from({ length: 1500 }, (_, i) =>
+      makeCode({ offerId: "mixed", code: `GEN${String(i).padStart(5, "0")}` }),
+    );
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    const before = JSON.parse(state.settings.find((row) => row.key === "coded_shipping_pool.ids")!.value) as string[];
+    expect(before.length).toBeGreaterThan(1);
+
+    // Everything but one code is deactivated.
+    state.codeRows = state.codeRows.map((row, i) => (i === 0 ? row : { ...row, status: "disabled" }));
+    state.metafieldPushes = [];
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+    const after = JSON.parse(state.settings.find((row) => row.key === "coded_shipping_pool.ids")!.value) as string[];
+    expect(after).toEqual([before[0]]);
+    expect(state.deletedAutoNodes.sort()).toEqual(before.slice(1).sort());
+    expect(poolShipping()[0]!.codeHashes).toHaveLength(1);
+  });
+
+  it("recreates a pool node the merchant deleted in Shopify", async () => {
+    reset();
+    state.codeRows = [makeCode({ offerId: "mixed", code: "SUMMER10" })];
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    state.knownDiscountIds.delete("gid://shopify/DiscountAutomaticNode/pool-1");
+    state.createdAutoNodes = [];
+    state.metafieldPushes = [];
+
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+    expect(state.createdAutoNodes).toEqual([{ handle: "promo-engine-delivery-discount", classes: ["SHIPPING"] }]);
+    expect(poolShipping()).toHaveLength(1);
+  });
+
+  it("refuses to use more automatic delivery nodes than Shopify's limit leaves room for, before creating any", async () => {
+    reset();
+    await expect(ensureCodedShippingNodes(SHOP_ID, SHOP_DOMAIN, "token", MAX_CODED_SHIPPING_NODES + 1)).rejects.toThrow(
+      /more than the 12 this app may use/,
+    );
+    expect(state.createdAutoNodes).toEqual([]);
+  });
+
+  it("creates each pool node once: a retried publish reuses the persisted ids", async () => {
+    reset();
+    state.codeRows = [makeCode({ offerId: "mixed", code: "SUMMER10" })];
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    expect(state.createdAutoNodes).toEqual([{ handle: "promo-engine-delivery-discount", classes: ["SHIPPING"] }]);
+  });
+
+  it("removes every pool node once no mixed offer needs code-gated shipping", async () => {
+    reset();
+    state.codeRows = [makeCode({ offerId: "mixed", code: "SUMMER10" })];
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+    state.codeRows = state.codeRows.map((row) => ({ ...row, status: "disabled" }));
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+    expect(state.deletedAutoNodes).toEqual(["gid://shopify/DiscountAutomaticNode/pool-1"]);
+    expect(state.settings.find((row) => row.key === "coded_shipping_pool.ids")?.value).toBe("[]");
   });
 
   it("drops exhausted and deactivated codes from the delivery hashes on republish", async () => {
@@ -1376,11 +1633,242 @@ describe("publishOffersForShop — mixed code offers (product/order AND shipping
 
     await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
 
-    const shipping = JSON.parse(
-      state.metafieldPushes.find((p) => p.ownerIds.includes(DELIVERY_DISCOUNT_ID))!.value,
-    ) as { shippingOffers: Array<{ codeHashes: string[]; acceptCodes: boolean }> };
-    expect(shipping.shippingOffers[0]).toMatchObject({ codeHashes: ["9e35947c8d25"], acceptCodes: true });
-    expect(state.createdAutoNodes).toEqual([{ handle: "promo-engine-code-discount", classes: ["PRODUCT", "ORDER"] }]);
+    expect(poolShipping()[0]).toMatchObject({ codeHashes: ["9e35947c8d25"], acceptCodes: true });
+    expect(sharedShippingOffers()).toEqual([]);
+    expect(state.createdAutoNodes).toEqual(
+      expect.arrayContaining([{ handle: "promo-engine-code-discount", classes: ["PRODUCT", "ORDER"] }]),
+    );
+  });
+});
+
+describe("publishOffersForShop — lock timeouts, retries, manifest and shop metafield", () => {
+  const reset = () => {
+    state.offers = [makeOffer({ id: "regular-1" })];
+    state.shops = [makeShop()];
+    state.metafieldPushes = [];
+    state.knownDiscountIds = new Set([CART_DISCOUNT_ID, DELIVERY_DISCOUNT_ID]);
+    state.codeRows = [];
+    state.conditionRows = [];
+    state.settings = [];
+    state.rewardRows = [];
+    state.mutations = [];
+    state.shopMetafieldPushes = [];
+    state.failNextLocks = 0;
+    state.lockAttempts = 0;
+    state.failNextShopifyCall = null;
+    state.createdAutoNodes = [];
+    state.createdCodeNodes = [];
+    cartValidationCalls.length = 0;
+  };
+
+  it("parks the shop as publish-pending on a lock timeout, resolves instead of throwing, and never touches the offers", async () => {
+    reset();
+    state.failNextLocks = 1;
+
+    scheduleRetry.mockClear();
+
+    await expect(publishOffersForShop(SHOP_ID, SHOP_DOMAIN)).resolves.toBe("pending");
+
+    expect(state.shops[0]).toMatchObject({ publishPendingAt: expect.any(Date) as unknown as Date });
+    expect(state.offers.map((o) => o.status)).toEqual(["active"]);
+    expect(state.metafieldPushes).toEqual([]);
+    // A background retry is scheduled; the cron is only the backstop.
+    expect(scheduleRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not stack retries: a background attempt that times out again leaves the schedule to the cron", async () => {
+    reset();
+    scheduleRetry.mockClear();
+    state.failNextLocks = 1;
+
+    await expect(publishOffersForShop(SHOP_ID, SHOP_DOMAIN, { background: true })).resolves.toBe("pending");
+
+    expect(scheduleRetry).not.toHaveBeenCalled();
+  });
+
+  it("clears the pending flag when a later publish gets the lock", async () => {
+    reset();
+    state.failNextLocks = 1;
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    expect(state.shops[0]).toMatchObject({ publishPendingAt: expect.any(Date) as unknown as Date });
+
+    await expect(publishOffersForShop(SHOP_ID, SHOP_DOMAIN, { background: true })).resolves.toBe("published");
+
+    expect(state.shops[0]!.publishPendingAt).toBeNull();
+  });
+
+  it("parks the shop (instead of failing the offer) when a Shopify call times out with an unknown outcome", async () => {
+    reset();
+    state.failNextShopifyCall = new ShopifyOutcomeUnknownError("The operation was aborted due to timeout");
+
+    await expect(publishOffersForShop(SHOP_ID, SHOP_DOMAIN)).resolves.toBe("pending");
+
+    expect(state.shops[0]).toMatchObject({ publishPendingAt: expect.any(Date) as unknown as Date });
+    expect(state.offers.map((o) => o.status)).toEqual(["active"]);
+  });
+
+  it("rethrows an error that is not a lock timeout", async () => {
+    reset();
+    state.shops = [];
+    await expect(publishOffersForShop(SHOP_ID, SHOP_DOMAIN)).rejects.toThrow(/active shop identity/);
+  });
+
+  it("pushes metafields with retryable (idempotent) and sends creates without blind retries", async () => {
+    reset();
+    state.offers = [makeOffer({ id: "coded" })];
+    state.codeRows = [makeCode({ offerId: "coded", code: "AAA" })];
+    state.nextCodeDiscountId = NODE;
+    state.rewardRows = [
+      {
+        id: "g",
+        shopId: SHOP_ID,
+        offerId: "coded",
+        rewardType: "product_gift",
+        discountType: "free",
+        value: {},
+        target: { variantIds: ["gid://shopify/ProductVariant/9"] },
+        quantity: 1,
+        sortOrder: 0,
+      },
+    ];
+
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+    const byName = (name: string) => state.mutations.filter((m) => m.name === name);
+    expect(byName("MetafieldsSet").length).toBeGreaterThan(0);
+    expect(byName("MetafieldsSet").every((m) => m.retryable)).toBe(true);
+    expect(byName("UpdatePromoEngineCodeDiscountCombination").every((m) => m.retryable)).toBe(true);
+    expect(byName("CreatePromoEngineCodeDiscount")).toEqual([{ name: "CreatePromoEngineCodeDiscount", retryable: false }]);
+  });
+
+  it("records what it pushed, per node, so drift can be detected later", async () => {
+    reset();
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+    const manifest = JSON.parse(state.settings.find((row) => row.key === "publish_manifest.v1")!.value) as {
+      nodes: Record<string, { kind: string; hash: string; active: boolean }>;
+      validationHash?: string;
+    };
+    expect(manifest.nodes[CART_DISCOUNT_ID]).toMatchObject({ kind: "cart", active: true });
+    expect(manifest.nodes[DELIVERY_DISCOUNT_ID]).toMatchObject({ kind: "delivery", active: true });
+    expect(manifest.nodes[CART_DISCOUNT_ID]!.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(manifest.validationHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("writes the Function config to the legacy and the app-reserved namespace (rollout works in either deploy order)", async () => {
+    reset();
+    state.offers = [makeOffer({ id: "regular-1" })];
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    expect(FUNCTION_CONFIG_NAMESPACES).toEqual(["promo_engine", "$app:promo_engine"]);
+    const pushes = state.metafieldPushes.filter((p) => p.ownerIds.length > 0);
+    expect(pushes.length).toBeGreaterThan(0);
+    for (const push of pushes) expect(push.namespaces).toEqual(["promo_engine", "$app:promo_engine"]);
+  });
+
+  it("publishes the specific-link param names as an app-owned shop metafield (default freegifts_code)", async () => {
+    reset();
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    expect(state.shopMetafieldPushes).toEqual([
+      {
+        ownerId: "gid://shopify/Shop/1",
+        namespace: "$app:promo_engine",
+        key: "specific_link_params",
+        type: "json",
+        value: JSON.stringify(["freegifts_code"]),
+      },
+    ]);
+  });
+
+  it("a failure to write the shop metafield never fails the publish", async () => {
+    reset();
+    const original = state.shopMetafieldPushes;
+    Object.defineProperty(state, "shopMetafieldPushes", {
+      configurable: true,
+      get: () => {
+        throw new Error("boom");
+      },
+    });
+    try {
+      await expect(publishOffersForShop(SHOP_ID, SHOP_DOMAIN)).resolves.toBe("published");
+    } finally {
+      Object.defineProperty(state, "shopMetafieldPushes", { configurable: true, writable: true, value: original });
+    }
+  });
+});
+
+describe("specificLinkParamNames", () => {
+  const row = (value: unknown, overrides: Record<string, unknown> = {}) =>
+    ({
+      id: "c",
+      offerId: "o",
+      shopId: SHOP_ID,
+      conditionType: "specific_link",
+      isEnabled: true,
+      scope: "main",
+      operator: "eq",
+      value,
+      ...overrides,
+    }) as never;
+
+  it("defaults to freegifts_code when no condition names a param", () => {
+    expect(specificLinkParamNames([])).toEqual(["freegifts_code"]);
+  });
+
+  it("lists the distinct param names of enabled specific_link conditions, sorted", () => {
+    expect(
+      specificLinkParamNames([
+        row({ paramName: "vip" }),
+        row({ paramName: "alpha" }),
+        row({ paramName: "vip" }),
+        row({ paramName: "ignored" }, { isEnabled: false }),
+        row({ paramName: "other-type" }, { conditionType: "cart_value" }),
+        row({ paramName: "quantity-scope" }, { scope: "quantity_limit" }),
+      ]),
+    ).toEqual(["alpha", "vip"]);
+  });
+
+  it("adds the default when a condition has no param name of its own", () => {
+    expect(specificLinkParamNames([row({ paramName: "vip" }), row({ requiredUrl: "/x" })])).toEqual([
+      "freegifts_code",
+      "vip",
+    ]);
+  });
+});
+
+describe("packCodedShippingOffers", () => {
+  const entry = (id: string, count: number) =>
+    ({
+      id,
+      priority: 1,
+      tiers: [],
+      targetGroupTypes: ["ONE_TIME_PURCHASE"],
+      scopeMode: "sitewide",
+      requiredAnchorVariantIds: [],
+      requiredAnchorMinQuantity: 1,
+      requiresAnchorSubscription: false,
+      codeHashes: Array.from({ length: count }, (_, i) => `${id[0]}${i.toString(16).padStart(11, "0")}`),
+    }) as never as Parameters<typeof packCodedShippingOffers>[0][number];
+
+  it("keeps several small offers together in one node", () => {
+    expect(packCodedShippingOffers([entry("b", 3), entry("a", 3)])).toHaveLength(1);
+  });
+
+  it("is deterministic regardless of input order", () => {
+    const one = packCodedShippingOffers([entry("b", 400), entry("a", 400)], 6000);
+    const two = packCodedShippingOffers([entry("a", 400), entry("b", 400)], 6000);
+    expect(JSON.stringify(one)).toBe(JSON.stringify(two));
+  });
+
+  it("splits one oversized offer by hash and loses none", () => {
+    const groups = packCodedShippingOffers([entry("big", 2000)], 9500);
+    expect(groups.length).toBeGreaterThan(1);
+    const hashes = groups.flat().flatMap((offer) => offer.codeHashes ?? []);
+    expect(hashes).toHaveLength(2000);
+    expect(new Set(hashes).size).toBe(2000);
+  });
+
+  it("returns nothing for nothing", () => {
+    expect(packCodedShippingOffers([])).toEqual([]);
   });
 });
 

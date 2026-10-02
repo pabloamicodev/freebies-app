@@ -8,6 +8,8 @@
 
 import { on, PromoEvents } from "../event-bus.js";
 import { escapeHtml } from "../html.js";
+import { formatMoney } from "../format.js";
+import { t } from "../i18n.js";
 
 interface VolumeTier {
   minQuantity: number;
@@ -111,11 +113,7 @@ class PromoVolumeDiscount extends HTMLElement {
   private renderTiers(payload: VolumeDiscountPayload) {
     if (!this.shadowRoot) return;
 
-    const fmt = (cents: number) =>
-      new Intl.NumberFormat(navigator.language, {
-        style: "currency",
-        currency: payload.currency,
-      }).format(cents / 100);
+    const fmt = (cents: number) => formatMoney(cents, payload.currency);
 
     const tiersHtml = payload.tiers
       .map((tier, i) => {
@@ -128,7 +126,7 @@ class PromoVolumeDiscount extends HTMLElement {
         return `
         <button type="button" class="pe-vd-tier ${i === 0 ? "pe-active" : ""}"
              data-qty="${quantity}"
-             aria-label="${escapeHtml(`Buy ${quantity}+ for ${discountedPrice} each`)}">
+             aria-label="${escapeHtml(t("volumeTier", { quantity, price: discountedPrice }))}">
           <div>
             <p class="pe-vd-qty">${quantity === 1 ? "1 item" : `${quantity}+ items`}</p>
           </div>

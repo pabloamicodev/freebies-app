@@ -3,6 +3,7 @@
  * Parses CSV, validates each row, shows diff preview, creates offers in draft.
  */
 
+import { CSV_PARSE_ERRORS, safeErrorMessage } from "../lib/safe-error.js";
 import { Form, useActionData, useNavigate } from "react-router";
 import { BackButton } from "../components/BackButton.js";
 import { useState, useRef, useId } from "react";
@@ -52,7 +53,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     parsedRows = parseCSV(csvContent, true);
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "Invalid CSV", created: [], errors: [] };
+    return { error: safeErrorMessage(error, "Invalid CSV", CSV_PARSE_ERRORS), created: [], errors: [] };
   }
   if (parsedRows.length < 2) return { error: "CSV must have a header row and at least one data row", created: [], errors: [] };
   if (parsedRows.length - 1 > MAX_CSV_ROWS) {
@@ -222,7 +223,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
       return { created: createdId };
     } catch (e) {
-      return { error: { row: rowNumber, message: (e as Error).message } };
+      return { error: { row: rowNumber, message: safeErrorMessage(e, "This row could not be imported.") } };
     }
   };
 
@@ -340,7 +341,7 @@ export default function OffersImportPage() {
 
       {/* Result banner */}
       {hasResult && (
-        <div className={`b-banner ${allOk ? "b-banner-green" : "b-banner-orange"} b-mb-4`}>
+        <div role="status" className={`b-banner ${allOk ? "b-banner-green" : "b-banner-orange"} b-mb-4`}>
           <span className="b-banner-icon">{allOk ? "✓" : "⚠"}</span>
           <div className="b-banner-body">
             <p className="b-banner-title">

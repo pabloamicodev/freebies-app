@@ -235,12 +235,12 @@ function CollectionPicker({
       fetch(`/api/products/search/collections?q=${encodeURIComponent(query)}`, { signal: controller.signal })
         .then(async (response) => {
           const body = (await response.json()) as { collections?: CollectionOption[]; message?: string };
-          if (!response.ok) throw new Error(body.message ?? "Collections could not be loaded.");
+          if (!response.ok) throw new Error("Collections could not be loaded.");
           setError(null);
           setResults(body.collections ?? []);
         })
         .catch((err: unknown) => {
-          if ((err as Error).name !== "AbortError") setError((err as Error).message);
+          if ((err as Error).name !== "AbortError") setError("Collections could not be loaded.");
         });
     }, 250);
     return () => {
@@ -377,8 +377,8 @@ export default function NewCodesOfferPage() {
     if (discountTarget === "products" && productIds.length === 0 && collections.length === 0) {
       return "Select at least one product or collection to discount.";
     }
-    if (!isShipping && pageTypes.length === 0) return "Choose at least one kind of page where the code works.";
-    if (!isShipping && utmEnabled && filledUtms.length === 0) {
+    if (pageTypes.length === 0) return "Choose at least one kind of page where the code works.";
+    if (utmEnabled && filledUtms.length === 0) {
       return "Fill in at least one UTM parameter, or turn off UTM validation.";
     }
     if (!internalName.trim()) return "Give the offer a name.";
@@ -444,7 +444,8 @@ export default function NewCodesOfferPage() {
         {/* ── 1. Codes ── */}
         <OfferWizardSection step={nextStep()} title="Codes" accent={ACCENT}>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <div className="b-grid-2" style={{ gap: 8 }}>
+            <fieldset className="b-radio-group b-grid-2" style={{ gap: 8 }}>
+<legend className="b-sr-only">How many codes</legend>
               <RadioCard
                 name="codeModeChoice"
                 value="single"
@@ -461,7 +462,7 @@ export default function NewCodesOfferPage() {
                 title="Many unique codes"
                 help="We generate them; export them as CSV afterwards."
               />
-            </div>
+            </fieldset>
 
             {codeMode === "single" ? (
               <div>
@@ -525,7 +526,7 @@ export default function NewCodesOfferPage() {
               </div>
             </div>
             <p className="b-help" style={{ margin: 0 }}>
-              Leave the dates empty and the codes work whenever the offer is live (see step {isShipping ? 3 : 7}).
+              Leave the dates empty and the codes work whenever the offer is live (see the last step).
             </p>
           </div>
         </OfferWizardSection>
@@ -533,11 +534,12 @@ export default function NewCodesOfferPage() {
         {/* ── 2. Discount ── */}
         <OfferWizardSection step={nextStep()} title="Discount" accent={ACCENT}>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <div className="b-grid-3" style={{ gap: 8 }}>
+            <fieldset className="b-radio-group b-grid-3" style={{ gap: 8 }}>
+<legend className="b-sr-only">What the discount applies to</legend>
               <RadioCard name="discountTargetChoice" value="order" checked={discountTarget === "order"} onChange={() => setDiscountTarget("order")} title="Whole order" help="Money off the order subtotal." />
               <RadioCard name="discountTargetChoice" value="products" checked={discountTarget === "products"} onChange={() => setDiscountTarget("products")} title="Specific products" help="Only the products or collections you pick." />
               <RadioCard name="discountTargetChoice" value="shipping" checked={discountTarget === "shipping"} onChange={() => setDiscountTarget("shipping")} title="Free shipping" help="Shipping costs nothing." />
-            </div>
+            </fieldset>
 
             {!isShipping && (
               <div className="b-grid-2">
@@ -579,16 +581,6 @@ export default function NewCodesOfferPage() {
           </div>
         </OfferWizardSection>
 
-        {isShipping ? (
-          <div className="b-banner b-banner-blue" role="status">
-            <div className="b-banner-body">
-              <p className="b-banner-text" style={{ margin: 0 }}>
-                Free shipping applies to the whole order, so it can't be limited to certain pages, UTM
-                campaigns or extra conditions yet. The code alone unlocks it.
-              </p>
-            </div>
-          </div>
-        ) : (
           <>
             {/* ── 3. Where the code works ── */}
             <OfferWizardSection step={nextStep()} title="Where the code works" accent={ACCENT}>
@@ -613,7 +605,9 @@ export default function NewCodesOfferPage() {
                 </label>
                 <p className="b-help" style={{ margin: 0 }}>
                   UTMs are the tags in a campaign link, like <code>?utm_source=newsletter</code>. Fill in only the ones
-                  you want to check; empty fields are ignored.
+                  you want to check; empty fields are ignored. UTM values are not case-sensitive (<code>Email</code> matches
+                  <code> email</code>). They are visible in the link, so they are not a secret: anyone who has the link can
+                  use the code. Use them to target a campaign, not to keep a code private.
                 </p>
                 {utmEnabled && (
                   <>
@@ -633,10 +627,18 @@ export default function NewCodesOfferPage() {
 
             {/* ── 5. Mixed carts ── */}
             <OfferWizardSection step={nextStep()} title="Carts with products from other pages" accent={ACCENT}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <fieldset className="b-radio-group" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+<legend className="b-sr-only">What happens with products from other pages</legend>
                 <p style={{ margin: 0, fontSize: 13, color: "var(--text)" }}>
                   What happens when the cart also has products added from pages that don't qualify{utmEnabled ? " (or without the UTMs)" : ""}?
+                  Products added by Buy it now, cart permalinks or apps that skip the page count as products from other pages.
                 </p>
+                {isShipping && (
+                  <p className="b-help" style={{ margin: 0 }}>
+                    In &quot;discount only products from allowed pages&quot; mode, free shipping applies if at least one product came
+                    from an allowed page; choose &quot;code doesn&apos;t work…&quot; to require every product to come from an allowed page.
+                  </p>
+                )}
                 <RadioCard
                   name="mixedCart"
                   value="only_matched"
@@ -653,10 +655,11 @@ export default function NewCodesOfferPage() {
                   title="Code doesn't work if the cart has products from other pages"
                   help="Strict: the customer has to remove those products to use the code."
                 />
-              </div>
+              </fieldset>
             </OfferWizardSection>
 
             {/* ── 6. Extra conditions ── */}
+            {!isShipping && (
             <OfferWizardSection step={nextStep()} title="Extra conditions (optional)" accent={ACCENT}>
               <OfferConditionsBuilder
                 title="Extra conditions"
@@ -666,8 +669,8 @@ export default function NewCodesOfferPage() {
                 isCodePromo
               />
             </OfferWizardSection>
+            )}
           </>
-        )}
 
         {/* ── 7. Schedule, combinations and review ── */}
         <OfferWizardSection step={nextStep()} title="Schedule, combinations and review" accent={ACCENT}>
@@ -712,7 +715,7 @@ export default function NewCodesOfferPage() {
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: "var(--text)", display: "flex", flexDirection: "column", gap: 4 }}>
                 <li>{codeSummary} — {limitSummary}</li>
                 <li>{discountSummary(discountTarget, discountType, discountValue, currencyCode, productIds.length, collections.length)}</li>
-                {!isShipping && (
+                {(
                   <>
                     <li>Counts products added from: {pageTypes.map(pageTypeLabel).join(", ") || "no pages selected"}</li>
                     {utmEnabled && (

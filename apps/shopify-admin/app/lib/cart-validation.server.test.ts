@@ -69,12 +69,29 @@ describe("buildCartValidationConfig", () => {
         },
       },
     });
-    expect(config.offerMaxQuantities).toEqual({ "offer-1": 3 });
-    expect(config.allowedGiftVariantIds).toEqual([
-      "gid://shopify/ProductVariant/1",
-      "gid://shopify/ProductVariant/2",
-    ]);
+    // Variant ids live only under their reward; the legacy flat lists are empty.
+    expect(config.offerMaxQuantities).toEqual({});
+    expect(config.allowedGiftVariantIds).toEqual([]);
     expect(config.cloneProductIds).toEqual(["gid://shopify/Product/1"]);
+  });
+
+  it("stores each gift variant id once, so the serialized config does not repeat them", () => {
+    const variant = "gid://shopify/ProductVariant/123456789";
+    const config = buildCartValidationConfig([
+      compiledOffer({
+        giftRewards: [
+          {
+            id: "reward-1",
+            targetProductIds: [],
+            targetVariantIds: [variant],
+            discountType: "free",
+            discountValue: 100,
+            maxQuantity: 1,
+          },
+        ],
+      }),
+    ]);
+    expect(JSON.stringify(config).split(variant).length - 1).toBe(1);
   });
 
   it("does not create validation allowances for promotions without gifts", () => {

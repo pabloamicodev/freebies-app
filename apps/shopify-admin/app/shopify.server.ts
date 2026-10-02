@@ -1,5 +1,6 @@
 import "@shopify/shopify-app-react-router/adapters/node";
 import * as Sentry from "@sentry/node";
+import { scrubSentryEvent } from "./lib/sentry-scrub.server.js";
 
 // ── Startup env validation ────────────────────────────────────────────────────
 // Fail at module load time, not on the first request. Vercel surfaces this
@@ -22,6 +23,7 @@ if (process.env["SENTRY_DSN"]) {
     dsn: process.env["SENTRY_DSN"],
     environment: process.env["NODE_ENV"] ?? "production",
     release: process.env["VERCEL_GIT_COMMIT_SHA"] || process.env["VERCEL_DEPLOYMENT_ID"],
+    sendDefaultPii: false,
     // Lower sample rate in dev/staging to reduce noise; full rate in prod
     tracesSampleRate: isProd ? 0.15 : 0.01,
     beforeSend(event, hint) {
@@ -30,13 +32,13 @@ if (process.env["SENTRY_DSN"]) {
       if (status === 404 || status === 401) return null;
       const ua = (event.request?.headers as Record<string, string> | undefined)?.["user-agent"] ?? "";
       if (/bot|crawler|spider|slurp|baiduspider/i.test(ua)) return null;
-      return event;
+      return scrubSentryEvent(event);
     },
     beforeSendTransaction(event) {
       // Drop health-check and cron noise from performance data
       const name = event.transaction ?? "";
       if (/health|ping|favicon/i.test(name)) return null;
-      return event;
+      return scrubSentryEvent(event as never) as typeof event;
     },
   });
 }
@@ -48,6 +50,7 @@ import { shopifyGraphQL } from "./lib/shopify-fetch.server.js";
 import { waitUntil } from "@vercel/functions";
 import { drainProductSyncQueue, queueProductSync } from "./lib/sync/product-sync.server.js";
 import { publishOffersForShop } from "./lib/sync/offer-publisher.server.js";
+import { invalidateShopCache } from "./lib/proxy-shop.server.js";
 import { ensureCartTransform } from "./lib/cart-transform.server.js";
 import { eq as drizzleEq } from "drizzle-orm";
 
@@ -142,6 +145,8 @@ const shopify = shopifyApp({
               updatedAt: new Date(),
             },
           });
+        // A reinstall flips the shop active again: the proxy may still hold a "not active" view of it.
+        await invalidateShopCache(shopDomain);
       } catch (dbError) {
         console.error("DB mirror after auth failed:", dbError instanceof Error ? dbError.message : dbError);
         throw dbError;

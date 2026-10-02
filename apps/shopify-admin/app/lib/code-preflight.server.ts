@@ -81,7 +81,7 @@ async function updateCode(row: DiscountCode, values: Partial<DiscountCode>): Pro
   try {
     await getDb()
       .update(discountCodes)
-      .set({ ...values, shopifySyncedAt: null, updatedAt: new Date() })
+      .set({ ...values, shopifySyncedAt: null, shopifySyncPendingAt: null, updatedAt: new Date() })
       .where(and(eq(discountCodes.shopId, row.shopId), eq(discountCodes.id, row.id)));
     return true;
   } catch (err) {
@@ -160,6 +160,7 @@ export async function resolveCodeCollisions(
         if (!suffixed.includes(row)) suffixed.push(row);
       }
       row.shopifySyncedAt = null;
+      row.shopifySyncPendingAt = null;
       stillColliding.push(row); // re-check the replacement against Shopify next round
     }
     pending = stillColliding;

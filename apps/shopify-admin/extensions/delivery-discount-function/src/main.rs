@@ -5,6 +5,9 @@ pub mod cart_delivery_options_discounts_generate_run;
 mod config;
 #[path = "../../discount-function/src/delivery_discount_logic.rs"]
 mod delivery_discount_logic;
+#[path = "../../discount-function/src/page_match.rs"]
+#[allow(dead_code)]
+mod page_match;
 
 use shopify_function::typegen;
 

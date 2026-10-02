@@ -13,6 +13,10 @@ import { getSharedRedis, recordRedisFailure, resetSharedRedis } from "./redis.se
 // Admin API round trip entirely. Long enough to matter across a session's
 // worth of add-to-cart calls, short enough that stale profiles don't linger.
 const CACHE_TTL_SECONDS = 45;
+// A failed lookup (timeout, throttle, 5xx) is cached too, so a struggling Admin API isn't hit by
+// every request, but only briefly: caching it for the full TTL would hide a customer's tags,
+// spend and country (and the offers that depend on them) for 45 s after one blip.
+export const FAILURE_CACHE_TTL_SECONDS = 5;
 
 // Sentinel wrapper so a resolved-to-null profile (guest, deleted customer,
 // lookup failure) can be cached too — otherwise those lookups would hit the
@@ -41,7 +45,11 @@ async function readCachedProfile(key: string): Promise<NormalizedCustomer | null
   }
 }
 
-async function writeCachedProfile(key: string, profile: NormalizedCustomer | null): Promise<void> {
+async function writeCachedProfile(
+  key: string,
+  profile: NormalizedCustomer | null,
+  ttlSeconds: number = CACHE_TTL_SECONDS,
+): Promise<void> {
   const redis = await getSharedRedis();
   if (!redis) return;
 
@@ -52,7 +60,7 @@ async function writeCachedProfile(key: string, profile: NormalizedCustomer | nul
       1,
       key,
       JSON.stringify(value),
-      CACHE_TTL_SECONDS,
+      ttlSeconds,
     );
   } catch {
     recordRedisFailure();
@@ -82,8 +90,8 @@ export async function resolveCustomer(
   const cached = await readCachedProfile(cacheKey);
   if (cached !== undefined) return cached;
 
-  const profile = await fetchCustomerProfile(shopDomain, accessTokenEncrypted, loggedInCustomerId);
-  await writeCachedProfile(cacheKey, profile);
+  const { profile, failed } = await fetchCustomerProfile(shopDomain, accessTokenEncrypted, loggedInCustomerId);
+  await writeCachedProfile(cacheKey, profile, failed ? FAILURE_CACHE_TTL_SECONDS : CACHE_TTL_SECONDS);
   return profile;
 }
 
@@ -91,7 +99,7 @@ async function fetchCustomerProfile(
   shopDomain: string,
   accessTokenEncrypted: string,
   loggedInCustomerId: string,
-): Promise<NormalizedCustomer | null> {
+): Promise<{ profile: NormalizedCustomer | null; failed: boolean }> {
   const accessToken = await decryptToken(accessTokenEncrypted);
   const customerGid = `gid://shopify/Customer/${loggedInCustomerId}`;
 
@@ -121,24 +129,27 @@ async function fetchCustomerProfile(
     });
 
     const customer = data.customer;
-    if (!customer) return null;
+    if (!customer) return { profile: null, failed: false };
 
     const totalSpentCents = Math.round(parseFloat(customer.amountSpent.amount) * 100);
     const totalOrders = Number.parseInt(customer.numberOfOrders, 10) || 0;
     const lastOrderAmount = customer.lastOrder.nodes[0]?.totalPriceSet.shopMoney.amount;
 
     return {
-      id: customer.id,
-      email: null,
-      tags: customer.tags,
-      totalSpentCents: Number.isFinite(totalSpentCents) ? totalSpentCents : 0,
-      totalOrders,
-      lastOrderSpentCents: lastOrderAmount ? Math.round(parseFloat(lastOrderAmount) * 100) : null,
-      countryCode: customer.defaultAddress?.countryCodeV2 ?? null,
-      isFirstTimeCustomer: totalOrders === 0,
+      profile: {
+        id: customer.id,
+        email: null,
+        tags: customer.tags,
+        totalSpentCents: Number.isFinite(totalSpentCents) ? totalSpentCents : 0,
+        totalOrders,
+        lastOrderSpentCents: lastOrderAmount ? Math.round(parseFloat(lastOrderAmount) * 100) : null,
+        countryCode: customer.defaultAddress?.countryCodeV2 ?? null,
+        isFirstTimeCustomer: totalOrders === 0,
+      },
+      failed: false,
     };
   } catch (err) {
     console.error("[resolve-customer] Failed to fetch customer from Admin API:", err instanceof Error ? err.message : err);
-    return null;
+    return { profile: null, failed: true };
   }
 }

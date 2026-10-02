@@ -3,6 +3,7 @@
  * Shows: compiled function config, metafield status, recent evaluation errors.
  */
 
+import { parseUuidParam } from "../lib/route-params.js";
 import { useActionData, useLoaderData, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -17,7 +18,7 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -104,7 +105,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { shopId, shopDomain, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   await loadOwnedOffer(db, shopId, offerId);
   const intent = (await request.formData()).get("intent");
 

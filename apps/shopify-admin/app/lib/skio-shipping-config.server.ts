@@ -103,6 +103,7 @@ export async function saveSkioShippingConfig(
     metafieldsSet: { metafields: Array<{ id: string }> | null; userErrors: UserError[] };
   }>({
     ...client,
+    retryable: true,
     query: SET_CONFIG_MUTATION,
     variables: {
       metafields: [{

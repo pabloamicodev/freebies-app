@@ -141,7 +141,8 @@
           ],
           "discountType": "free",
           "discountValue": 100,
-          "maxQuantity": 1
+          "maxQuantity": 1,
+          "selectable": true
         }
       ],
       "productRewards": [],

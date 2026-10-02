@@ -3,7 +3,6 @@ import "./metadata-bridge.js";
 import "./runtime.js";
 
 // Core runtime
-export { initCartDrawerIntegration } from "./cart-drawer-integration.js";
 export { AjaxCartAdapter } from "./cart-adapter.js";
 export { StorefrontApiAdapter } from "./storefront-api-adapter.js";
 export { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";

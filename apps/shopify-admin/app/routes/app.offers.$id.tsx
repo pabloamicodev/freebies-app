@@ -1,4 +1,5 @@
 import { Outlet, useLocation, useParams } from "react-router";
+import { OfferEditGuard } from "../components/OfferEditGuard.js";
 import { OfferStepTabs, type OfferStepKey } from "../components/OfferStepTabs.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -27,7 +28,9 @@ export default function OfferDetailLayout() {
           <OfferStepTabs offerId={id} active={active} />
         </div>
       )}
-      <Outlet />
+      <OfferEditGuard>
+        <Outlet />
+      </OfferEditGuard>
     </>
   );
 }

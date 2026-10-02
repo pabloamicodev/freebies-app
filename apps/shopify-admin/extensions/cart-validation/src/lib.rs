@@ -22,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 pub struct FunctionInput {
     pub cart: Cart,
     pub buyer_journey: Option<BuyerJourney>,
+    pub presentment_currency_rate: Option<String>,
     pub validation_node: ValidationNode,
 }
 
@@ -49,7 +50,6 @@ pub struct CartLine {
     pub line_type: Option<Attribute>,
     pub offer_id: Option<Attribute>,
     pub reward_id: Option<Attribute>,
-    pub offer_version: Option<Attribute>,
     pub cost: LineCost,
     pub discount_allocations: Vec<DiscountAllocation>,
 }
@@ -58,8 +58,9 @@ pub struct CartLine {
 #[serde(rename_all = "camelCase")]
 #[shopify_function(rename_all = "camelCase")]
 pub struct Merchandise {
-    pub id: String,
-    pub product: Product,
+    /// Absent for non-variant merchandise (CustomProduct: POS custom sales, draft custom items).
+    pub id: Option<String>,
+    pub product: Option<Product>,
 }
 
 #[derive(Debug, Deserialize, shopify_function::Deserialize)]
@@ -88,6 +89,7 @@ pub struct LineCost {
 #[shopify_function(rename_all = "camelCase")]
 pub struct Money {
     pub amount: String,
+    pub currency_code: Option<String>,
 }
 
 #[derive(Debug, Deserialize, shopify_function::Deserialize)]
@@ -141,6 +143,8 @@ pub struct ValidationConfig {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GiftOfferRule {
+    /// Informational only; the version no longer gates validation.
+    #[serde(default)]
     pub version: i64,
     pub max_quantity: i64,
     pub rewards: HashMap<String, GiftRewardRule>,
@@ -245,12 +249,18 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
 
     // During cart edits the storefront runtime removes a gift that stopped qualifying, but only
     // after the edit succeeds; rejecting it here would stop customers removing the product that
-    // unlocked the gift. Checkout still blocks any gift our discount no longer covers.
+    // unlocked the gift.
     let cart_interaction = input
         .buyer_journey
         .as_ref()
         .and_then(|journey| journey.step.as_deref())
         == Some("CART_INTERACTION");
+    let rate = input
+        .presentment_currency_rate
+        .as_deref()
+        .and_then(|rate| rate.parse::<f64>().ok())
+        .filter(|rate| *rate > 0.0)
+        .unwrap_or(1.0);
 
     let mut errors: Vec<ValidationError> = Vec::new();
 
@@ -259,13 +269,18 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
     let strict_rules_enabled = !config.offer_rules.is_empty();
 
     for line in &input.cart.lines {
+        // CustomProduct (POS custom sale, draft custom item) and any other non-variant
+        // merchandise carry no variant id: nothing here applies to them.
+        let Some(variant_id) = line.merchandise.id.as_deref() else {
+            continue;
+        };
         let line_type = attribute_value(&line.line_type);
         let offer_id = attribute_value(&line.offer_id);
+        let mut valid_gift = false;
 
         if line_type == "gift" {
             let reward_id = attribute_value(&line.reward_id);
-            let offer_version = attribute_value(&line.offer_version);
-            if line.quantity <= 0 || offer_id.is_empty() || reward_id.is_empty() || offer_version.is_empty() {
+            if line.quantity <= 0 || offer_id.is_empty() || reward_id.is_empty() {
                 errors.push(ValidationError {
                     message: "Your cart contains an invalid free gift. Please contact support.".to_string(),
                     target: "$.cart".to_string(),
@@ -273,6 +288,10 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
                 continue;
             }
 
+            // A gift is valid while its offer and reward still exist and list this variant. The
+            // offer version is deliberately not compared: a republish must not invalidate carts.
+            // A gift that lost our discount (non-combinable merchant code, ...) is simply charged
+            // at the variant price, so a missing allocation is not an error here.
             if strict_rules_enabled {
                 let Some(offer_rule) = config.offer_rules.get(offer_id) else {
                     errors.push(ValidationError {
@@ -288,9 +307,7 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
                     });
                     continue;
                 };
-                if offer_version != offer_rule.version.to_string()
-                    || !reward_rule.variant_ids.iter().any(|id| id == &line.merchandise.id)
-                {
+                if !reward_rule.variant_ids.iter().any(|id| id == variant_id) {
                     errors.push(ValidationError {
                         message: "This free gift selection is outdated or invalid. Please choose it again.".to_string(),
                         target: "$.cart".to_string(),
@@ -300,7 +317,7 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
                 *gift_qty_by_reward
                     .entry((offer_id.to_string(), reward_id.to_string()))
                     .or_insert(0) += line.quantity;
-            } else if !allowed_variants.contains(line.merchandise.id.as_str()) {
+            } else if !allowed_variants.contains(variant_id) {
                 errors.push(ValidationError {
                     message: "Your cart contains an invalid free gift. Please contact support.".to_string(),
                     target: "$.cart".to_string(),
@@ -308,31 +325,24 @@ pub fn function(input: FunctionInput) -> FunctionOutput {
                 continue;
             }
 
-            // Cart validation runs after discounts. Requiring an allocation
-            // from our own discount node proves the server-side offer
-            // conditions qualified; browser-controlled line attributes alone
-            // can never authorize a freebie.
-            if !cart_interaction && !has_promo_engine_discount(line) {
-                errors.push(ValidationError {
-                    message: "This free gift is not eligible for the current cart. Please update your cart.".to_string(),
-                    target: "$.cart".to_string(),
-                });
-                continue;
-            }
-
+            valid_gift = true;
             *gift_qty_by_offer.entry(offer_id.to_string()).or_insert(0) += line.quantity;
         }
 
-        // ── Block direct purchase of clone products ───────────────────────────
-        if clone_products.contains(line.merchandise.product.id.as_str()) && line_type != "gift" {
-            let price_cents = parse_amount(&line.cost.amount_per_quantity.amount);
-            let min_price = config.clone_min_price_cents.unwrap_or(100); // $1 default
-            if price_cents < min_price {
-                errors.push(ValidationError {
-                    message: "This product is only available as part of a promotion. Please add it through the offer.".to_string(),
-                    target: "$.cart".to_string(),
-                });
-            }
+        // ── Block placeholder/clone products priced below their minimum ───────
+        // Valid gifts are exempt only while our discount is on the line (or while the cart is
+        // still being edited), so spoofed gift properties cannot unlock a near-free placeholder.
+        let is_clone = line
+            .merchandise
+            .product
+            .as_ref()
+            .is_some_and(|product| clone_products.contains(product.id.as_str()));
+        let exempt = valid_gift && (cart_interaction || has_promo_engine_discount(line));
+        if is_clone && !exempt && below_min_price(line, &config, rate) {
+            errors.push(ValidationError {
+                message: "This product is only available as part of a promotion. Please add it through the offer.".to_string(),
+                target: "$.cart".to_string(),
+            });
         }
     }
 
@@ -398,6 +408,27 @@ fn parse_amount(amount_str: &str) -> i64 {
     (amount * 100.0).round() as i64
 }
 
+fn is_zero_decimal(currency_code: &str) -> bool {
+    matches!(
+        currency_code,
+        "JPY" | "KRW" | "VND" | "BIF" | "CLP" | "GNF" | "ISK" | "KMF" | "MGA" | "DJF" | "PYG"
+            | "RWF" | "UGX" | "VUV" | "XAF" | "XOF" | "XPF"
+    )
+}
+
+/// The minimum is stored in shop-currency cents; the line price is in the presentment currency,
+/// so scale the minimum by the presentment rate and compare in presentment minor units.
+fn below_min_price(line: &CartLine, config: &ValidationConfig, rate: f64) -> bool {
+    let price = &line.cost.amount_per_quantity;
+    let minor = match price.currency_code.as_deref() {
+        Some(code) if is_zero_decimal(code) => 1.0,
+        _ => 100.0,
+    };
+    let amount: f64 = price.amount.parse().unwrap_or(0.0);
+    let min_shop_cents = config.clone_min_price_cents.unwrap_or(100) as f64; // $1 default
+    (amount * minor).round() < (min_shop_cents / 100.0 * rate * minor).round()
+}
+
 fn has_promo_engine_discount(line: &CartLine) -> bool {
     line.discount_allocations.iter().any(|allocation| {
         allocation.discount_application.metafield.is_some()
@@ -428,16 +459,15 @@ mod tests {
             id: line_id.to_string(),
             quantity: qty,
             merchandise: Merchandise {
-                id: variant_id.to_string(),
-                product: Product { id: product_id.to_string() },
+                id: Some(variant_id.to_string()),
+                product: Some(Product { id: product_id.to_string() }),
             },
             line_type: Some(Attribute { value: Some("gift".to_string()) }),
             offer_id: Some(Attribute { value: Some(offer_id.to_string()) }),
             reward_id: Some(Attribute { value: Some("reward-1".to_string()) }),
-            offer_version: Some(Attribute { value: Some("1".to_string()) }),
-            cost: LineCost { amount_per_quantity: Money { amount: "0.00".to_string() } },
+            cost: LineCost { amount_per_quantity: Money { amount: "0.00".to_string(), currency_code: Some("USD".to_string()) } },
             discount_allocations: vec![DiscountAllocation {
-                discounted_amount: Money { amount: "10.00".to_string() },
+                discounted_amount: Money { amount: "10.00".to_string(), currency_code: None },
                 discount_application: DiscountApplication {
                     metafield: Some(Metafield { value: "promo-config".to_string() }),
                 },
@@ -459,6 +489,7 @@ mod tests {
         let line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-1", 1);
         let input = FunctionInput {
             buyer_journey: None,
+            presentment_currency_rate: None,
             cart: Cart { lines: vec![line] },
             validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
         };
@@ -474,6 +505,7 @@ mod tests {
         let line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-1", 3);
         let input = FunctionInput {
             buyer_journey: None,
+            presentment_currency_rate: None,
             cart: Cart { lines: vec![line] },
             validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
         };
@@ -490,6 +522,7 @@ mod tests {
         let line = make_gift_line("l1", "gid://shopify/ProductVariant/expensive-product", "p1", "offer-1", 1);
         let input = FunctionInput {
             buyer_journey: None,
+            presentment_currency_rate: None,
             cart: Cart { lines: vec![line] },
             validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
         };
@@ -517,6 +550,7 @@ mod tests {
         let line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-2", 2);
         let input = FunctionInput {
             buyer_journey: None,
+            presentment_currency_rate: None,
             cart: Cart { lines: vec![line] },
             validation_node: ValidationNode { metafield: Some(Metafield { value: config_json }) },
         };
@@ -528,6 +562,7 @@ mod tests {
     fn test_no_config_fails_open() {
         let input = FunctionInput {
             buyer_journey: None,
+            presentment_currency_rate: None,
             cart: Cart { lines: vec![] },
             validation_node: ValidationNode { metafield: None },
         };
@@ -564,9 +599,8 @@ mod tests {
         }
     }
 
-    fn set_gift_metadata(line: &mut CartLine, reward_id: &str, version: &str) {
+    fn set_gift_metadata(line: &mut CartLine, reward_id: &str, _version: &str) {
         line.reward_id = Some(Attribute { value: Some(reward_id.to_string()) });
-        line.offer_version = Some(Attribute { value: Some(version.to_string()) });
     }
 
     fn run_with_config(config: ValidationConfig, lines: Vec<CartLine>) -> FunctionOutput {
@@ -576,6 +610,7 @@ mod tests {
     fn run_at_step(config: ValidationConfig, lines: Vec<CartLine>, step: Option<&str>) -> FunctionOutput {
         function(FunctionInput {
             buyer_journey: Some(BuyerJourney { step: step.map(str::to_string) }),
+            presentment_currency_rate: None,
             cart: Cart { lines },
             validation_node: ValidationNode {
                 metafield: Some(Metafield { value: serde_json::to_string(&config).unwrap() }),
@@ -584,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn strict_rules_bind_variant_to_offer_reward_and_version() {
+    fn strict_rules_bind_variant_to_offer_and_reward() {
         let mut cross_reward = make_gift_line(
             "l1",
             "gid://shopify/ProductVariant/gift-v2",
@@ -595,17 +630,14 @@ mod tests {
         set_gift_metadata(&mut cross_reward, "reward-1", "3");
         let output = run_with_config(strict_config(), vec![cross_reward]);
         assert_eq!(validation_errors(&output).len(), 1);
+    }
 
-        let mut stale = make_gift_line(
-            "l2",
-            "gid://shopify/ProductVariant/gift-v1",
-            "p1",
-            "offer-1",
-            1,
-        );
-        set_gift_metadata(&mut stale, "reward-1", "2");
-        let output = run_with_config(strict_config(), vec![stale]);
-        assert_eq!(validation_errors(&output).len(), 1);
+    #[test]
+    fn stale_offer_version_is_not_an_error() {
+        let mut line = make_gift_line("l2", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-1", 1);
+        set_gift_metadata(&mut line, "reward-1", "2");
+        let output = run_with_config(strict_config(), vec![line]);
+        assert!(validation_errors(&output).is_empty());
     }
 
     #[test]
@@ -634,37 +666,103 @@ mod tests {
     }
 
     #[test]
-    fn allows_undiscounted_gift_during_cart_edits_but_blocks_checkout() {
-        let make = || {
+    fn gift_that_lost_our_discount_is_not_blocked() {
+        for step in [Some("CART_INTERACTION"), Some("CHECKOUT_INTERACTION"), Some("CHECKOUT_COMPLETION"), None] {
             let mut line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-1", 1);
-            set_gift_metadata(&mut line, "reward-1", "3");
             line.discount_allocations.clear();
-            line
-        };
-        let not_eligible = |output: &FunctionOutput| {
-            validation_errors(output).iter().any(|error| error.message.contains("not eligible"))
-        };
-        assert!(!not_eligible(&run_at_step(strict_config(), vec![make()], Some("CART_INTERACTION"))));
-        assert!(not_eligible(&run_at_step(strict_config(), vec![make()], Some("CHECKOUT_INTERACTION"))));
-        assert!(not_eligible(&run_at_step(strict_config(), vec![make()], Some("CHECKOUT_COMPLETION"))));
+            line.cost.amount_per_quantity.amount = "25.00".to_string();
+            let output = run_at_step(strict_config(), vec![line], step);
+            assert!(validation_errors(&output).is_empty(), "step {step:?}");
+        }
+    }
+
+    fn clone_config(min_cents: i64) -> ValidationConfig {
+        let mut config = strict_config();
+        config.clone_product_ids = vec!["p1".to_string()];
+        config.clone_min_price_cents = Some(min_cents);
+        config
     }
 
     #[test]
-    fn rejects_spoofed_gift_metadata_without_our_applied_discount() {
-        let mut line = make_gift_line(
-            "l1",
-            "gid://shopify/ProductVariant/gift-v1",
-            "p1",
-            "offer-1",
-            1,
-        );
-        set_gift_metadata(&mut line, "reward-1", "3");
+    fn spoofed_gift_on_cheap_placeholder_without_our_discount_is_blocked() {
+        let mut line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-1", 1);
         line.discount_allocations.clear();
+        let output = run_at_step(clone_config(100), vec![line], Some("CHECKOUT_COMPLETION"));
+        assert!(validation_errors(&output).iter().any(|e| e.message.contains("only available as part of a promotion")));
+    }
 
-        let output = run_with_config(strict_config(), vec![line]);
-        assert!(validation_errors(&output)
-            .iter()
-            .any(|error| error.message.contains("not eligible")));
+    #[test]
+    fn discounted_gift_on_clone_product_passes() {
+        let mut line = make_gift_line("l1", "gid://shopify/ProductVariant/gift-v1", "p1", "offer-1", 1);
+        line.cost.amount_per_quantity.amount = "0.50".to_string();
+        let output = run_at_step(clone_config(100), vec![line], Some("CHECKOUT_COMPLETION"));
+        assert!(validation_errors(&output).is_empty());
+    }
+
+    #[test]
+    fn clone_min_price_is_compared_in_presentment_currency() {
+        let line = |amount: &str, currency: &str| {
+            let mut line = make_gift_line("l1", "gid://shopify/ProductVariant/other", "p1", "offer-1", 1);
+            line.line_type = None;
+            line.cost.amount_per_quantity = Money { amount: amount.to_string(), currency_code: Some(currency.to_string()) };
+            line
+        };
+        let run_rate = |line: CartLine, rate: &str| {
+            function(FunctionInput {
+                buyer_journey: None,
+                presentment_currency_rate: Some(rate.to_string()),
+                cart: Cart { lines: vec![line] },
+                validation_node: ValidationNode {
+                    metafield: Some(Metafield { value: serde_json::to_string(&clone_config(100)).unwrap() }),
+                },
+            })
+        };
+        // $1 minimum at 150 JPY/USD: 120 JPY is below 150, 160 JPY is above (a naive 100-cent compare passes both).
+        assert_eq!(validation_errors(&run_rate(line("120", "JPY"), "150.0")).len(), 1);
+        assert!(validation_errors(&run_rate(line("160", "JPY"), "150.0")).is_empty());
+        // 1 USD min at rate 0.9 (EUR): 0.80 EUR is below 0.90, 0.95 is above.
+        assert_eq!(validation_errors(&run_rate(line("0.80", "EUR"), "0.9")).len(), 1);
+        assert!(validation_errors(&run_rate(line("0.95", "EUR"), "0.9")).is_empty());
+    }
+
+    #[test]
+    fn custom_product_lines_are_ignored_without_error() {
+        let payload = r#"{
+            "presentmentCurrencyRate": "1.0",
+            "buyerJourney": {"step": "CHECKOUT_COMPLETION"},
+            "validationNode": {"metafield": {"value": "{\"offerRules\":{},\"cloneProductIds\":[\"p1\"]}"}},
+            "cart": {"lines": [
+                {"id":"c1","quantity":1,"merchandise":{},
+                 "lineType":null,"offerId":null,"rewardId":null,
+                 "cost":{"amountPerQuantity":{"amount":"12.00","currencyCode":"USD"}},
+                 "discountAllocations":[]},
+                {"id":"c2","quantity":2,"merchandise":{"__typename":"CustomProduct"},
+                 "lineType":{"value":"gift"},"offerId":{"value":"offer-1"},"rewardId":{"value":"reward-1"},
+                 "cost":{"amountPerQuantity":{"amount":"0.00","currencyCode":"USD"}},
+                 "discountAllocations":[]}
+            ]}
+        }"#;
+        let output: FunctionOutput =
+            shopify_function::run_function_with_input(super::run, payload).expect("must not error");
+        assert!(output.operations.is_empty());
+    }
+
+    #[test]
+    fn real_payload_with_variant_lines_deserializes() {
+        let payload = r#"{
+            "presentmentCurrencyRate": "1.0",
+            "buyerJourney": {"step": "CHECKOUT_COMPLETION"},
+            "validationNode": {"metafield": {"value": "{\"offerRules\":{\"offer-1\":{\"maxQuantity\":1,\"rewards\":{\"reward-1\":{\"maxQuantity\":1,\"variantIds\":[\"gid://shopify/ProductVariant/g\"]}}}}}"}},
+            "cart": {"lines": [
+                {"id":"c1","quantity":3,"merchandise":{"id":"gid://shopify/ProductVariant/g","product":{"id":"p"}},
+                 "lineType":{"value":"gift"},"offerId":{"value":"offer-1"},"rewardId":{"value":"reward-1"},
+                 "cost":{"amountPerQuantity":{"amount":"5.00","currencyCode":"USD"}},
+                 "discountAllocations":[]}
+            ]}
+        }"#;
+        let output: FunctionOutput =
+            shopify_function::run_function_with_input(super::run, payload).expect("must not error");
+        assert!(validation_errors(&output).iter().any(|e| e.message.contains("1 free gift")));
     }
 
     #[test]

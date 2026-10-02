@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { shopifyGraphQL } from "./shopify-fetch.server.js";
+import { ShopifyOutcomeUnknownError, shopifyGraphQL } from "./shopify-fetch.server.js";
 import type {
   CycleDiscountValue,
   SubscriptionCyclePricingPlan,
@@ -174,8 +174,14 @@ interface RawGroup {
   };
 }
 
-function graphQL<T>(client: CyclePricingClient, query: string, variables?: Record<string, unknown>): Promise<T> {
-  return shopifyGraphQL<T>({ ...client, query, variables });
+/** `retryable` is set only on idempotent mutations; creates look before they resend. */
+function graphQL<T>(
+  client: CyclePricingClient,
+  query: string,
+  variables?: Record<string, unknown>,
+  retryable?: boolean,
+): Promise<T> {
+  return shopifyGraphQL<T>({ ...client, query, variables, ...(retryable ? { retryable } : {}) });
 }
 
 function missingPayload(operation: string): SellingPlanGroupUserError {
@@ -313,21 +319,46 @@ export async function getCyclePricingPlan(client: CyclePricingClient, id: string
   };
 }
 
+async function findGroupIdByMerchantCode(client: CyclePricingClient, merchantCode: string): Promise<string | null> {
+  let after: string | null = null;
+  do {
+    const data: {
+      sellingPlanGroups: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: RawGroup[] };
+    } = await graphQL(client, LIST_QUERY, { first: 50, after });
+    const match = data.sellingPlanGroups.nodes.find((node) => node.merchantCode === merchantCode);
+    if (match) return match.id;
+    after = data.sellingPlanGroups.pageInfo.hasNextPage ? data.sellingPlanGroups.pageInfo.endCursor : null;
+  } while (after);
+  return null;
+}
+
 export async function createCyclePricingPlan(
   client: CyclePricingClient,
   input: SubscriptionCyclePricingPlanInput,
 ): Promise<{ id: string | null; userErrors: SellingPlanGroupUserError[] }> {
-  const data = await graphQL<{
-    sellingPlanGroupCreate: { sellingPlanGroup: RawGroup | null; userErrors: SellingPlanGroupUserError[] } | null;
-  }>(client, CREATE_MUTATION, {
-    input: {
-      name: `[Freebies] ${input.name}`,
-      merchantCode: `${MERCHANT_CODE_PREFIX}-${randomUUID()}`,
-      options: [GROUP_OPTION_NAME],
-      sellingPlansToCreate: [sellingPlanInput(input)],
-    },
-    resources: { productIds: [...new Set(input.productIds)] },
-  });
+  const merchantCode = `${MERCHANT_CODE_PREFIX}-${randomUUID()}`;
+  const create = () =>
+    graphQL<{
+      sellingPlanGroupCreate: { sellingPlanGroup: RawGroup | null; userErrors: SellingPlanGroupUserError[] } | null;
+    }>(client, CREATE_MUTATION, {
+      input: {
+        name: `[Freebies] ${input.name}`,
+        merchantCode,
+        options: [GROUP_OPTION_NAME],
+        sellingPlansToCreate: [sellingPlanInput(input)],
+      },
+      resources: { productIds: [...new Set(input.productIds)] },
+    });
+  let data: Awaited<ReturnType<typeof create>>;
+  try {
+    data = await create();
+  } catch (err) {
+    if (!(err instanceof ShopifyOutcomeUnknownError)) throw err;
+    // The create may have landed (the merchantCode is unique to this attempt): look before resending.
+    const landed = await findGroupIdByMerchantCode(client, merchantCode);
+    if (landed) return { id: landed, userErrors: [] };
+    data = await create();
+  }
   const payload = data.sellingPlanGroupCreate;
   if (!payload) return { id: null, userErrors: [missingPayload("CreateCyclePricingPlan")] };
   const id = payload.sellingPlanGroup?.id ?? null;
@@ -357,7 +388,7 @@ export async function updateCyclePricingPlan(
       options: [GROUP_OPTION_NAME],
       sellingPlansToUpdate: [sellingPlanInput(input, existing.sellingPlanId)],
     },
-  });
+  }, true);
   const updatePayload = updated.sellingPlanGroupUpdate;
   if (!updatePayload) return { userErrors: [missingPayload("UpdateCyclePricingPlan")] };
   if (updatePayload.userErrors.length) return { userErrors: updatePayload.userErrors };
@@ -374,13 +405,13 @@ export async function updateCyclePricingPlan(
   if (toAdd.length) {
     const added = await graphQL<{
       sellingPlanGroupAddProducts: { userErrors: SellingPlanGroupUserError[] } | null;
-    }>(client, ADD_PRODUCTS_MUTATION, { id: existing.id, productIds: toAdd });
+    }>(client, ADD_PRODUCTS_MUTATION, { id: existing.id, productIds: toAdd }, true);
     userErrors.push(...(added.sellingPlanGroupAddProducts?.userErrors ?? [missingPayload("AddCyclePricingPlanProducts")]));
   }
   if (toRemove.length) {
     const removed = await graphQL<{
       sellingPlanGroupRemoveProducts: { userErrors: SellingPlanGroupUserError[] } | null;
-    }>(client, REMOVE_PRODUCTS_MUTATION, { id: existing.id, productIds: toRemove });
+    }>(client, REMOVE_PRODUCTS_MUTATION, { id: existing.id, productIds: toRemove }, true);
     userErrors.push(...(removed.sellingPlanGroupRemoveProducts?.userErrors ?? [missingPayload("RemoveCyclePricingPlanProducts")]));
   }
   return { userErrors };
@@ -392,7 +423,7 @@ export async function deleteCyclePricingPlan(
 ): Promise<{ userErrors: SellingPlanGroupUserError[] }> {
   const data = await graphQL<{
     sellingPlanGroupDelete: { deletedSellingPlanGroupId: string | null; userErrors: SellingPlanGroupUserError[] } | null;
-  }>(client, DELETE_MUTATION, { id });
+  }>(client, DELETE_MUTATION, { id }, true);
   const payload = data.sellingPlanGroupDelete;
   if (!payload) return { userErrors: [missingPayload("DeleteCyclePricingPlan")] };
   if (!payload.deletedSellingPlanGroupId && payload.userErrors.length === 0) {

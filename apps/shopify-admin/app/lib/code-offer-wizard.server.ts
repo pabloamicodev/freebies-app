@@ -18,7 +18,8 @@ import {
   validateRewardPayload,
   type PageType,
 } from "@promo/shared-types";
-import { createDiscountCode, createDiscountCodeBatch, type CodeSettings } from "./discount-codes.server.js";
+import { compileOfferConfig, serializeFunctionConfig } from "./sync/compile-config.js";
+import { createDiscountCode, createDiscountCodeBatch, validateBatchEntropy, type CodeSettings } from "./discount-codes.server.js";
 import { CODE_CHARSETS, type BatchSpec, type CodeCharset } from "./discount-code-generation.js";
 import { normalizeOfferSubconditions, type NormalizedOfferSubcondition } from "./gift-subconditions.js";
 import {
@@ -35,7 +36,56 @@ export type DiscountTarget = "order" | "products" | "shipping";
 export const UTM_FIELDS = ["utmSource", "utmMedium", "utmCampaign", "utmTerm", "utmContent"] as const;
 /** Condition types that match cart lines by the page they were added from. */
 const PAGE_MATCHING_TYPES = new Set(["page_types", "utm_parameters", "page_url", "specific_link"]);
-const MAX_COLLECTION_PRODUCTS = 500;
+/**
+ * A code offer publishes to its own discount node, so the only size limit is that node's
+ * single-offer Function config (`MAX_METAFIELD_BYTES` in sync/offer-publisher.server.ts,
+ * 9500 B; keep in sync). The margin covers the cart-attribute/customer-tag query variables
+ * the publisher adds and the codes' combination metadata.
+ */
+export const CODE_OFFER_CONFIG_LIMIT_BYTES = 9500;
+const CODE_OFFER_CONFIG_MARGIN_BYTES = 300;
+
+/** Exact bytes of the config this draft would publish to its dedicated node. */
+function codeOfferConfigBytes(draft: CodeOfferDraft, reward: RewardDraft, productIds: string[]): number {
+  const compiled = compileOfferConfig(
+    { id: "00000000-0000-4000-8000-000000000000", type: "discount", priority: 100, publicTitle: draft.publicTitle } as never,
+    draft.conditions.map((condition, index) => ({
+      conditionType: condition.conditionType,
+      operator: condition.operator,
+      value: condition.value,
+      scope: condition.scope,
+      isEnabled: true,
+      sortOrder: index,
+    })) as never,
+    [
+      {
+        id: "00000000-0000-4000-8000-000000000001",
+        rewardType: reward.rewardType,
+        discountType: reward.discountType,
+        value: reward.value,
+        target: { ...reward.target, productIds },
+        quantity: null,
+        sortOrder: 0,
+      },
+    ] as never,
+    null,
+    1,
+    { codePromo: true },
+  );
+  return new TextEncoder().encode(
+    serializeFunctionConfig({ offers: [compiled], shippingOffers: [], version: "1", compiledAt: "2026-01-01T00:00:00.000Z" }),
+  ).byteLength;
+}
+
+/** How many products fit in the node's config for this draft, and whether `productIds` fits. */
+function productCapacity(draft: CodeOfferDraft, reward: RewardDraft, productIds: string[]) {
+  const budget = CODE_OFFER_CONFIG_LIMIT_BYTES - CODE_OFFER_CONFIG_MARGIN_BYTES;
+  const withAll = codeOfferConfigBytes(draft, reward, productIds);
+  if (withAll <= budget) return { fits: true, max: productIds.length };
+  const base = codeOfferConfigBytes(draft, reward, []);
+  const perProduct = (withAll - base) / productIds.length;
+  return { fits: false, max: Math.max(0, Math.floor((budget - base) / perProduct)) };
+}
 
 type RewardDraft = {
   rewardType: "order_discount" | "product_discount" | "shipping_discount";
@@ -244,17 +294,18 @@ export function parseCodeOfferForm(
 
   const codes = parseCodes(formData, context.timezone);
   if (!codes.ok) return codes;
+  if (codes.data.mode === "bulk") {
+    const entropyError = validateBatchEntropy(codes.data.spec);
+    if (entropyError) return fail(entropyError);
+  }
   const reward = parseReward(formData, context.currencyCode);
   if (!reward.ok) return reward;
 
-  // Free shipping runs in Shopify's delivery Function, which can't yet check
-  // where products were added from, so shipping codes carry no page rules.
-  let conditions: CodeOfferDraft["conditions"] = [];
-  if (reward.data.target !== "shipping") {
-    const parsed = parseConditions(formData);
-    if (!parsed.ok) return parsed;
-    conditions = parsed.data;
-  }
+  // Free shipping keeps the page and UTM steps: the delivery Function matches them with the
+  // same page_match rules (D2), so shipping codes enforce them too.
+  const parsed = parseConditions(formData);
+  if (!parsed.ok) return parsed;
+  const conditions = parsed.data;
 
   const startsAt = schedule.data!.startsAt;
   return {
@@ -298,10 +349,16 @@ export async function insertCodeOffer(
     const fromCollections = await resolveCollectionProducts(draft.collectionIds);
     const productIds = [...new Set([...((reward.target["productIds"] as string[]) ?? []), ...fromCollections])];
     if (productIds.length === 0) return fail("The selected collections have no products.");
-    if (productIds.length > MAX_COLLECTION_PRODUCTS) {
-      return fail(`That's ${productIds.length} products; a code can discount up to ${MAX_COLLECTION_PRODUCTS}. Pick smaller collections.`);
-    }
     reward = { ...reward, target: { ...reward.target, productIds } };
+  }
+  if (reward.rewardType === "product_discount") {
+    const productIds = (reward.target["productIds"] as string[]) ?? [];
+    const capacity = productCapacity(draft, reward, productIds);
+    if (!capacity.fits) {
+      return fail(
+        `That's ${productIds.length} products; this code's configuration holds about ${capacity.max}. Pick fewer products or smaller collections.`,
+      );
+    }
   }
   const rewardCheck = validateRewardPayload(reward.rewardType, reward.discountType, reward.value, reward.target);
   if (!rewardCheck.success) return fail(rewardCheck.error.issues[0]?.message ?? "The discount setup is invalid.");

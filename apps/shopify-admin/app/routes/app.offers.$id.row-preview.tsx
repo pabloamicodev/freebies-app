@@ -5,6 +5,7 @@
  * sorting/filtering the list never pays for this — it's only fetched when a
  * row is hovered or expanded.
  */
+import { parseUuidParam } from "../lib/route-params.js";
 import { and, eq, inArray, count } from "drizzle-orm";
 import { offerConditions, offerRewards, offerCombinationPolicies, productCache, variantCache, widgets, analyticsEvents, discountCodes } from "@promo/db";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -36,7 +37,7 @@ const WIDGET_TYPE_LABEL: Record<string, string> = {
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const [conditionRows, rewardRows, policyRows, widgetRows, redemptionRows, codeCountRows] = await Promise.all([

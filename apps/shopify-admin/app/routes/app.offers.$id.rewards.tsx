@@ -3,6 +3,7 @@
  * Configure what the customer receives: gift products, discounts, shipping.
  */
 
+import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData, useNavigate, useNavigation, useActionData, useSubmit, Form } from "react-router";
 import { NotFound } from "../components/NotFound.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
@@ -118,7 +119,7 @@ function LandingIntegrationContract({ source }: { source: string }) {
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const rewardRows = await db
@@ -433,7 +434,7 @@ async function buildRewardRecord(
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
   const offer = await loadOwnedOffer(db, shopId, offerId);
@@ -856,7 +857,7 @@ export default function OfferRewardsPage() {
           </div>
         )}
         {"success" in (actionData ?? {}) && (actionData as { success: boolean }).success && (
-          <div className="b-banner b-banner-green b-mb-4">
+          <div className="b-banner b-banner-green b-mb-4" role="status">
             <span className="b-banner-icon">✓</span>
             <div className="b-banner-body">
               <p className="b-banner-text" style={{ margin: 0 }}>

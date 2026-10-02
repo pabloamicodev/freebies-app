@@ -49,8 +49,15 @@ export async function retryOriginalCode(
       error: `${row.requestedCode} still exists in Shopify${title}. Rename or delete that discount in Shopify, then try again.`,
     };
   }
-  if (row.shopifySyncedAt && offer?.codeDiscountId) {
-    await remove(shopDomain, accessToken, offer.codeDiscountId, [row.code]);
+  if ((row.shopifySyncedAt || row.shopifySyncPendingAt) && offer?.codeDiscountId) {
+    const outcome = await remove(shopDomain, accessToken, offer.codeDiscountId, [row.code]);
+    // Swapping the code while the suffixed one is still live on the node would orphan it.
+    if (outcome?.unconfirmed.includes(row.code)) {
+      return {
+        ok: false,
+        error: `${row.code} could not be taken off the Shopify discount yet. Try again in a moment.`,
+      };
+    }
   }
   try {
     await db
@@ -60,6 +67,7 @@ export async function retryOriginalCode(
         requestedCode: null,
         collisionNote: null,
         shopifySyncedAt: availability?.status === "ours" ? new Date() : null,
+        shopifySyncPendingAt: null,
         updatedAt: new Date(),
       })
       .where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.id, codeId)));

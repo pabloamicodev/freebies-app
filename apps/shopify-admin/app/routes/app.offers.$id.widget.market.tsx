@@ -4,6 +4,7 @@
  * POST /app/offers/:id/widget/market  → save market overrides
  */
 
+import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData, useActionData, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -48,7 +49,7 @@ function normalizeMarketOverrides(items: unknown[]): StoredMarketOverride[] {
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   await loadOwnedOffer(db, shopId, offerId);
 
   const [offerWidgets, markets, marketOverrideRow] = await Promise.all([
@@ -84,7 +85,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const formData = await request.formData();
   await loadOwnedOffer(db, shopId, offerId);
 

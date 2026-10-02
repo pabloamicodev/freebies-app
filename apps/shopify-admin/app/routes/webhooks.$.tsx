@@ -4,9 +4,8 @@ import { getDb } from "@promo/db";
 import { productCache, variantCache, shops, analyticsEvents, offers, offerConditions, webhookDeliveries } from "@promo/db";
 import { eq, and, lt, notInArray, or, sql } from "drizzle-orm";
 import { decryptToken } from "../lib/token-crypto.server.js";
-import { syncInventoryFromWebhook } from "../lib/sync/inventory-sync.server.js";
+import { coalescedDrain, enqueueCatalogRefresh } from "../lib/sync/inventory-sync-queue.server.js";
 import { deriveWebhookAvailability, isStaleProductPayload } from "../lib/sync/variant-availability.js";
-import { refreshProductVariantsFromAdmin } from "../lib/sync/gift-stock-reconcile.server.js";
 import {
   removeCollectionFromCache,
   syncCollectionFromWebhook,
@@ -131,22 +130,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       case "ORDERS_PAID": {
         const shopId = await getShopId(shop);
-        await handleOrderPaid(getDb(), shopId, shop, payload as OrderWebhookPayload);
+        // The redemption count is the durable, cheap fact: record it before the slower
+        // attribution / integration dispatch, and let its republish run after the response.
         await handleDiscountCodeRedemptions(
           getDb(),
           shopId,
           shop,
           payload as OrderWebhookPayload & OrderCodePayload,
         );
+        await handleOrderPaid(getDb(), shopId, shop, payload as OrderWebhookPayload);
         break;
       }
 
       case "ORDERS_CANCELLED":
         await handleOrderCancelled(shop, payload as OrderWebhookPayload);
-        break;
-
-      case "CUSTOMERS_UPDATE":
-        await handleCustomersUpdate(shop, payload as CustomerGdprPayload);
         break;
 
       case "APP_UNINSTALLED":
@@ -167,7 +164,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       case "SHOP_REDACT": {
         const shopId = await getShopId(shop);
-        await handleShopRedact(getDb(), sessionStorage, shopId, shop);
+        await handleShopRedact(getDb(), sessionStorage, shopId, shop, triggeredAt);
         break;
       }
 
@@ -380,20 +377,15 @@ async function handleProductUpdate(shop: string, product: ProductWebhookPayload)
         ),
       );
 
-    // The payload can't tell tracked from untracked stock; replace the derived values with Shopify's.
-    try {
-      const withToken = await getShopForWebhook(shop);
-      if (withToken) {
-        await refreshProductVariantsFromAdmin(
-          shopId,
-          shop,
-          await decryptToken(withToken.accessTokenEncrypted),
-          productGid,
-        );
-      }
-    } catch (error) {
-      console.warn(`[webhooks] variant availability refresh failed for ${productGid}`, error);
-    }
+    // The payload can't tell tracked from untracked stock, so the derived values are replaced with
+    // Shopify's own, but not inside the webhook's 5 s window: queue it (a burst of edits to one
+    // product coalesces) and let a background drain make the Admin API call.
+    await enqueueCatalogRefresh(shopId, [{ kind: "product", ref: productGid }]);
+    waitUntil(
+      coalescedDrain(shopId).catch((error) => {
+        Sentry.captureException(error, { extra: { shop, context: "product-refresh-drain" } });
+      }),
+    );
   }
 }
 
@@ -418,10 +410,18 @@ async function handleProductDelete(shop: string, legacyProductId: number) {
 }
 
 async function handleInventoryUpdate(shop: string, payload: InventoryWebhookPayload) {
-  const shopRecord = await getShopForWebhook(shop);
-  if (!shopRecord) return;
-  const accessToken = await decryptToken(shopRecord.accessTokenEncrypted);
-  await syncInventoryFromWebhook(shopRecord.id, shop, accessToken, payload.inventory_item_id);
+  const shopId = await getShopId(shop);
+  if (!shopId) return;
+  // Inventory webhooks arrive in floods. The handler only records the item (events for the same
+  // item coalesce into one row); the Admin API read happens after the response, batched.
+  await enqueueCatalogRefresh(shopId, [
+    { kind: "inventory_item", ref: `gid://shopify/InventoryItem/${payload.inventory_item_id}` },
+  ]);
+  waitUntil(
+    coalescedDrain(shopId).catch((error) => {
+      Sentry.captureException(error, { extra: { shop, context: "inventory-refresh-drain" } });
+    }),
+  );
 }
 
 async function handleMarketChange(shop: string) {
@@ -483,8 +483,4 @@ async function handleOrderCancelled(shop: string, order: OrderWebhookPayload) {
       order_id: order.id,
     },
   }).onConflictDoNothing({ target: analyticsEvents.deduplicationKey });
-}
-
-async function handleCustomersUpdate(_shop: string, _payload: CustomerGdprPayload) {
-  // No-op: customer cache is no longer Redis-backed; module-level cache expires naturally.
 }

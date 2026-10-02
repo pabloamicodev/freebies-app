@@ -1,16 +1,13 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { isCronRequestAuthorized } from "../lib/cron-auth.server.js";
-import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
+import { runCron } from "../lib/cron-run.server.js";
 import { reconcileAllShopsGiftVariants } from "../lib/sync/gift-stock-reconcile.server.js";
 
+// Must be a literal (the Vercel preset parses it statically); cron-config.test.ts checks it equals CRON_JOBS.
+export const config = { maxDuration: 300 };
+
 export async function loader({ request }: LoaderFunctionArgs) {
-  if (!isCronRequestAuthorized(request)) {
-    return apiError(request, { status: 401, code: "UNAUTHORIZED", message: "Unauthorized." });
-  }
-  try {
+  return runCron(request, "gift-stock", async () => {
     const result = await reconcileAllShopsGiftVariants();
-    return apiJson(request, { ok: result.failed === 0, ...result });
-  } catch (error) {
-    return handleApiError(request, error, "cron.gift-stock");
-  }
+    return { body: { ok: result.failed === 0, ...result } };
+  });
 }

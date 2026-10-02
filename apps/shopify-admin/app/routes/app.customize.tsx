@@ -1,7 +1,7 @@
 /**
  * Customize — global widget theme and default copy settings.
  * Controls colors, fonts, and default strings across all widgets.
- * Matches BOGOS's "Customize" section.
+ * Storefront widget customization.
  */
 
 import { useLoaderData, Form } from "react-router";

@@ -2,8 +2,10 @@ import { useLoaderData, Link } from "react-router";
 import { useMemo, useCallback, useState } from "react";
 import * as Sentry from "@sentry/node";
 import { getShopContext } from "../lib/shop-context.server.js";
-import { offers, analyticsEvents } from "@promo/db";
-import { and, count, eq, gte, sql } from "drizzle-orm";
+import { offers } from "@promo/db";
+import { and, count, eq, sql } from "drizzle-orm";
+import { RestoreOffersBanner } from "../components/RestoreOffersBanner.js";
+import { getRestorableOffers } from "../lib/restore-archived-offers.contract.server.js";
 import { getDashboardWarnings } from "../lib/dashboard-warnings.server.js";
 import type { LoaderFunctionArgs } from "react-router";
 
@@ -73,6 +75,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       return [];
     });
 
+    const restorable = await getRestorableOffers(db, shopId).catch((error) => {
+      Sentry.captureException(error, { tags: { route: "app._index", query: "restorableOffers" } });
+      return { count: 0 };
+    });
+
     const totalSalesCents = Number(totals?.total_sales_cents ?? 0);
     const orderCount = Number(totals?.order_count ?? 0);
     const avgOrderCents = orderCount > 0 ? Math.round(totalSalesCents / orderCount) : 0;
@@ -87,6 +94,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       orderCount,
       avgOrderCents,
       warnings,
+      restorableOffers: restorable.count,
     };
   } catch (error) {
     Sentry.captureException(error, { tags: { route: "app._index" } });
@@ -100,6 +108,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       orderCount: 0,
       avgOrderCents: 0,
       warnings: [],
+      restorableOffers: 0,
     };
   }
 };
@@ -164,6 +173,7 @@ export default function Dashboard() {
     orderCount,
     avgOrderCents,
     warnings,
+    restorableOffers,
   } = useLoaderData<typeof loader>();
   const [showOnboarding, setShowOnboarding] = useState(true);
 
@@ -223,6 +233,8 @@ export default function Dashboard() {
           </p>
         </div>
       </div>
+
+      <RestoreOffersBanner count={restorableOffers} />
 
       {/* ── Warnings ─────────────────────────────────────────── */}
       {warnings.length > 0 && (

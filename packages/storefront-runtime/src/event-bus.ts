@@ -44,6 +44,14 @@ export function on<T = unknown>(
  * `analytics.subscribe("custom", ...)`. Shopify exposes this as
  * `Shopify.analytics.publish`, not a bare `window.analytics`. */
 export function publishAnalytics(eventName: string, payload: Record<string, unknown>): void {
+  // Customer Privacy API: skip when the shopper has declined analytics. If the API isn't
+  // loaded we defer to Shopify, whose pixel pipeline (customer_privacy.analytics = true on
+  // our pixel) only delivers custom events to pixels with consent.
+  try {
+    if (window.Shopify?.customerPrivacy?.analyticsProcessingAllowed?.() === false) return;
+  } catch {
+    return;
+  }
   if (typeof window.Shopify?.analytics?.publish === "function") {
     window.Shopify.analytics.publish(eventName, payload);
   }

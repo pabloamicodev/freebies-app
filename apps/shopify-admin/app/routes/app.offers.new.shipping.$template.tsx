@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { safeErrorMessage } from "../lib/safe-error.js";
 import { Form, redirect, useActionData, useLoaderData, useNavigate, useNavigation, useParams } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
@@ -68,7 +69,7 @@ function parseTierPayload(raw: FormDataEntryValue | null) {
     return { tiers } as const;
   } catch (error) {
     return {
-      error: error instanceof Error ? error.message : "Invalid shipping tier configuration.",
+      error: safeErrorMessage(error, "Invalid shipping tier configuration.", ["Every shipping tier must be an object."]),
     } as const;
   }
 }

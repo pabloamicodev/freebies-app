@@ -697,6 +697,8 @@ export default function NewGiftOfferPage() {
                   <input
                     id="internalName"
                     className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`}
+                    aria-invalid={fieldErrors.internalName ? true : undefined}
+                    aria-describedby={fieldErrors.internalName ? "internalName-error" : undefined}
                     name="internalName"
                     value={internalName}
                     onChange={(e) => {
@@ -706,7 +708,7 @@ export default function NewGiftOfferPage() {
                     autoComplete="off"
                   />
                   {fieldErrors.internalName ? (
-                    <div className="b-help-error">{fieldErrors.internalName}</div>
+                    <div id="internalName-error" className="b-help-error" role="alert">{fieldErrors.internalName}</div>
                   ) : (
                     <div className="b-help">Internal only — not shown to customers.</div>
                   )}
@@ -718,6 +720,8 @@ export default function NewGiftOfferPage() {
                   <input
                     id="publicTitle"
                     className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`}
+                    aria-invalid={fieldErrors.publicTitle ? true : undefined}
+                    aria-describedby={fieldErrors.publicTitle ? "publicTitle-error" : undefined}
                     name="publicTitle"
                     value={publicTitle}
                     onChange={(e) => {
@@ -727,7 +731,7 @@ export default function NewGiftOfferPage() {
                     autoComplete="off"
                   />
                   {fieldErrors.publicTitle ? (
-                    <div className="b-help-error">{fieldErrors.publicTitle}</div>
+                    <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>
                   ) : (
                     <div className="b-help">Shown to customers in your online store.</div>
                   )}
@@ -1116,6 +1120,8 @@ export default function NewGiftOfferPage() {
                           </div>
                         </label>
                         <div
+                          role="radiogroup"
+                          aria-label="Track gifts by"
                           style={{
                             marginLeft: 26,
                             display: "flex",
@@ -1586,8 +1592,8 @@ export default function NewGiftOfferPage() {
                     </div>
                   </div>
 
-                  <div>
-                    <div
+                  <fieldset className="b-radio-group">
+                    <legend
                       style={{
                         fontSize: 13,
                         fontWeight: 500,
@@ -1596,7 +1602,7 @@ export default function NewGiftOfferPage() {
                       }}
                     >
                       Customer will receive:
-                    </div>
+                    </legend>
                     <label
                       className="b-checkbox-row"
                       htmlFor="gift-auto-add-all"
@@ -1655,7 +1661,7 @@ export default function NewGiftOfferPage() {
                       />
                     )}
                     {isAutoAdd && <input type="hidden" name="giftCount" value="1" />}
-                  </div>
+                  </fieldset>
 
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <button

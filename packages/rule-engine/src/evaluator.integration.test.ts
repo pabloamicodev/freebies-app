@@ -336,11 +336,11 @@ describe("evaluate — cart value condition", () => {
     });
   });
 
-  it("removes a stale-version gift and recreates the current reward line", async () => {
+  const giftLineWith = (overrides: Record<string, unknown>) => {
     const cart = makeCart(6000);
     cart.lines.push({
       ...cart.lines[0]!,
-      key: "stale-gift",
+      key: "existing-gift",
       variantId: "gid://shopify/ProductVariant/gift-offer-1",
       productId: "gid://shopify/Product/999",
       priceCents: 2000,
@@ -349,17 +349,31 @@ describe("evaluate — cart value condition", () => {
         _promo_engine_line_type: "gift",
         _promo_engine_offer_id: "offer-1",
         _promo_engine_reward_id: "reward-offer-1",
+        _promo_engine_offer_version: "1",
+      },
+      ...overrides,
+    });
+    return cart;
+  };
+
+  it("keeps a gift stamped with an older offer version (an offer edit must not churn gifts)", async () => {
+    const cart = giftLineWith({
+      properties: {
+        _promo_engine_line_type: "gift",
+        _promo_engine_offer_id: "offer-1",
+        _promo_engine_reward_id: "reward-offer-1",
         _promo_engine_offer_version: "0",
       },
     });
-    const result = await evaluate(makeInput(cart), {
-      offers: [makeGiftOffer("offer-1", 5000)],
-      oneUseStates: [],
-      now: NOW,
-    });
+    const result = await evaluate(makeInput(cart), { offers: [makeGiftOffer("offer-1", 5000)], oneUseStates: [], now: NOW });
+    expect(result.cartActions.filter((action) => action.action === "remove_line" || action.action === "add_line")).toEqual([]);
+  });
 
+  it("removes a gift whose variant is no longer on the reward's allow-list", async () => {
+    const cart = giftLineWith({ variantId: "gid://shopify/ProductVariant/not-allowed" });
+    const result = await evaluate(makeInput(cart), { offers: [makeGiftOffer("offer-1", 5000)], oneUseStates: [], now: NOW });
     expect(result.cartActions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ action: "remove_line", lineKey: "stale-gift", reason: "stale_or_invalid_gift" }),
+      expect.objectContaining({ action: "remove_line", lineKey: "existing-gift", reason: "stale_or_invalid_gift" }),
       expect.objectContaining({ action: "add_line", variantId: "gid://shopify/ProductVariant/gift-offer-1" }),
     ]));
   });
@@ -734,5 +748,108 @@ describe("evaluate — discount code condition (gate an automatic offer behind a
     const cart = makeCart(1000, { discountCodes: ["SUMMER2026"] });
     const result = await evaluate(makeInput(cart), ctx);
     expect(result.qualifiedOffers).toHaveLength(0);
+  });
+});
+
+describe("evaluate � decisions D1/priority/location", () => {
+  const countryOffer = () =>
+    makeGiftOffer("loc", 1000, 100, {
+      conditions: [
+        ...makeGiftOffer("loc", 1000).conditions,
+        { id: "c-loc", scope: "sub", conditionType: "customer_location", operator: "eq", value: { includeCountryCodes: ["US"] }, isEnabled: true, sortOrder: 1 },
+      ],
+    });
+  const customer = (countryCode: string) => ({
+    id: "c1", email: null, tags: [], totalSpentCents: 0, totalOrders: 0, lastOrderSpentCents: null, countryCode, isFirstTimeCustomer: true,
+  });
+  const market = (countryCode: string) => ({ id: "gid://shopify/Market/1", handle: "m", currencyCode: "USD", countryCode, primaryLocale: "en" });
+  const run = async (input: EvaluationInput) =>
+    (await evaluate(input, { offers: [countryOffer()], oneUseStates: [], now: NOW })).qualifiedOffers.length;
+
+  it("customer_location uses the cart's market country over the customer's own", async () => {
+    expect(await run(makeInput(makeCart(2000), { market: market("US"), customer: customer("CA") }))).toBe(1);
+    expect(await run(makeInput(makeCart(2000), { market: market("CA"), customer: customer("US") }))).toBe(0);
+    expect(await run(makeInput(makeCart(2000), { market: null, customer: customer("US") }))).toBe(1);
+  });
+
+  it("a stop-lower-priority offer blocks only strictly lower priority offers", async () => {
+    const result = await evaluate(makeInput(makeCart(6000)), {
+      offers: [
+        makeGiftOffer("a", 1000, 10, { stopLowerPriority: true }),
+        makeGiftOffer("b", 1000, 10),
+        makeGiftOffer("c", 1000, 20),
+      ],
+      oneUseStates: [],
+      now: NOW,
+    });
+    expect(result.qualifiedOffers.map((offer) => offer.offerId).sort()).toEqual(["a", "b"]);
+  });
+
+  it("page conditions are one gate: a single line must satisfy all of them", async () => {
+    const offer = makeGiftOffer("combo", 0);
+    offer.conditions = [
+      { id: "p1", scope: "sub", conditionType: "page_types", operator: "eq", value: { pageTypes: ["product"] }, isEnabled: true, sortOrder: 0 },
+      { id: "p2", scope: "sub", conditionType: "utm_parameters", operator: "eq", value: { utmSource: "amazon" }, isEnabled: true, sortOrder: 1 },
+    ];
+    const cartOf = (...pages: string[]) => {
+      const cart = makeCart(5000);
+      cart.lines = pages.map((url, index) => ({ ...cart.lines[0]!, key: `l${index}`, properties: { _promo_page_url: url } }));
+      return cart;
+    };
+    const qualifies = async (cart: NormalizedCart) =>
+      (await evaluate(makeInput(cart), { offers: [offer], oneUseStates: [], now: NOW })).qualifiedOffers.length === 1;
+    expect(await qualifies(cartOf("/products/a", "/?utm_source=amazon"))).toBe(false);
+    expect(await qualifies(cartOf("/products/a?utm_source=amazon"))).toBe(true);
+  });
+});
+
+describe("evaluate — picker gift quantity reset", () => {
+  const V1 = "gid://shopify/ProductVariant/pick-1";
+  const V2 = "gid://shopify/ProductVariant/pick-2";
+  const picker = (quantity: number) => {
+    const offer = makeGiftOffer("pick", 1000);
+    offer.rewards = [
+      { ...offer.rewards[0]!, id: "reward-pick", target: { variantIds: [V1, V2] }, quantity, isAutoAdd: false, isCustomerSelectable: true },
+    ];
+    return offer;
+  };
+  const cartWith = (...gifts: Array<[string, string, number]>) => {
+    const cart = makeCart(6000);
+    for (const [key, variantId, quantity] of gifts) {
+      cart.lines.push({
+        ...cart.lines[0]!,
+        key,
+        variantId,
+        quantity,
+        properties: {
+          _promo_engine_line_type: "gift",
+          _promo_engine_offer_id: "pick",
+          _promo_engine_reward_id: "reward-pick",
+          _promo_engine_offer_version: "1",
+        },
+      });
+    }
+    return cart;
+  };
+  const actions = async (offer: OfferDefinition, cart: NormalizedCart) =>
+    (await evaluate(makeInput(cart), { offers: [offer], oneUseStates: [], now: NOW })).cartActions.filter(
+      (action) => action.action === "update_line" || action.action === "remove_line",
+    );
+
+  it("shrinks a picked gift raised above the limit and never removes it", async () => {
+    expect(await actions(picker(1), cartWith(["g1", V1, 5]))).toEqual([
+      expect.objectContaining({ action: "update_line", lineKey: "g1", quantity: 1 }),
+    ]);
+  });
+
+  it("caps the picker's total at limit across its gifts, shrinking the later line only", async () => {
+    expect(await actions(picker(3), cartWith(["g1", V1, 2], ["g2", V2, 3]))).toEqual([
+      expect.objectContaining({ action: "update_line", lineKey: "g2", quantity: 1 }),
+    ]);
+  });
+
+  it("leaves a valid pick within the limit alone", async () => {
+    expect(await actions(picker(2), cartWith(["g1", V1, 2]))).toEqual([]);
+    expect(await actions(picker(1), cartWith(["g1", V1, 1]))).toEqual([]);
   });
 });

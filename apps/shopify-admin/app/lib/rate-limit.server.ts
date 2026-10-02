@@ -1,10 +1,12 @@
 import { getDb } from "@promo/db";
 import { sql } from "drizzle-orm";
-import { getSharedRedis, recordRedisFailure, resetSharedRedis } from "./redis.server.js";
+import { getSharedRedis, recordRedisFailure, redisIncrWindow, resetSharedRedis } from "./redis.server.js";
 
 interface RateLimitOptions {
   limit: number;
   windowMs: number;
+  /** O(1) INCR per window instead of a sorted set: use for high caps (shop-wide). Allows up to 2x burst at a window edge. */
+  fixedWindow?: boolean;
 }
 
 interface RateLimitRow extends Record<string, unknown> {
@@ -55,6 +57,18 @@ async function redisCheckRateLimit(
 
 // ─── DB-backed sliding window (fallback when Redis is absent or unhealthy) ────
 
+async function redisFixedWindow(
+  key: string,
+  options: RateLimitOptions,
+): Promise<{ ok: true } | { ok: false; retryAfterSeconds: number } | null> {
+  const now = Date.now();
+  const window = Math.floor(now / options.windowMs);
+  const count = await redisIncrWindow(`rlf:${key}:${window}`, Math.ceil(options.windowMs / 1000) + 1);
+  if (count === null) return null;
+  if (count <= options.limit) return { ok: true };
+  return { ok: false, retryAfterSeconds: Math.max(1, Math.ceil(((window + 1) * options.windowMs - now) / 1000)) };
+}
+
 async function dbCheckRateLimit(
   key: string,
   options: RateLimitOptions,
@@ -97,7 +111,7 @@ export async function checkRateLimit(
 ): Promise<{ ok: true } | { ok: false; retryAfterSeconds: number }> {
   // Every request must hit a shared enforcement tier. Per-instance counters can
   // be bypassed by spreading traffic across serverless instances.
-  const redisResult = await redisCheckRateLimit(key, options);
+  const redisResult = options.fixedWindow ? await redisFixedWindow(key, options) : await redisCheckRateLimit(key, options);
   if (redisResult !== null) return redisResult;
 
   return dbCheckRateLimit(key, options);

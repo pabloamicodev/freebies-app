@@ -8,13 +8,9 @@
  */
 
 import { on, emit, PromoEvents, publishAnalytics } from "../event-bus.js";
+import { escapeHtml } from "../html.js";
+import { t } from "../i18n.js";
 import type { EvaluationResult } from "../types.js";
-
-function escapeHtml(raw: unknown): string {
-  const div = document.createElement("div");
-  div.textContent = String(raw ?? "");
-  return div.innerHTML;
-}
 
 function safeImageUrl(raw: unknown): string | null {
   if (typeof raw !== "string" || !raw) return null;
@@ -92,16 +88,15 @@ class PromoGiftIcon extends HTMLElement {
     const customText = escapeHtml(this.getAttribute("label") ?? "Free Gift");
     const countdownSeconds = parseInt(this.getAttribute("countdown-seconds") ?? "0", 10);
     const title = escapeHtml(offer?.offerName ?? "");
-    const countdownId = escapeHtml(this.offerId);
-
+    
     this.shadowRoot.innerHTML = `
       <style>${ICON_STYLES}</style>
       <button type="button" class="pe-gift-icon-wrap${offer ? "" : " pe-hidden"}"
-           aria-label="View free gift offer"
+           aria-label="${escapeHtml(t("giftOffer"))}"
            title="${title}">
         <span class="pe-gift-emoji" aria-hidden="true">🎁</span>
         <span>${customText}</span>
-        ${countdownSeconds > 0 ? `<span class="pe-countdown" id="cd-${countdownId}"></span>` : ""}
+        ${countdownSeconds > 0 ? `<span class="pe-countdown"></span>` : ""}
       </button>
     `;
 
@@ -122,7 +117,7 @@ class PromoGiftIcon extends HTMLElement {
     if (!this.shadowRoot) return;
     let remaining = seconds;
     const update = () => {
-      const el = this.shadowRoot?.getElementById(`cd-${this.offerId}`);
+      const el = this.shadowRoot?.querySelector(".pe-countdown");
       if (!el) return;
       const m = Math.floor(remaining / 60);
       const s = remaining % 60;
@@ -204,7 +199,7 @@ class PromoGiftThumbnail extends HTMLElement {
         const title = escapeHtml(g.title);
         return imageUrl
           ? `<div class="pe-thumb-product">
-               <img class="pe-thumb-img" src="${imageUrl}" alt="${title}" loading="lazy"/>
+               <img class="pe-thumb-img" src="${escapeHtml(imageUrl)}" alt="${title}" loading="lazy"/>
                <span class="pe-thumb-name">${title}</span>
              </div>`
           : `<div class="pe-thumb-product">

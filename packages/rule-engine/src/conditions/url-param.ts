@@ -1,5 +1,14 @@
 import type { EligibilityReason } from "@promo/shared-types";
-import { ok, err, type Result } from "@promo/shared-types";
+import {
+  ok,
+  err,
+  asciiLower,
+  queryValueMatches,
+  readQueryParam,
+  specificLinkRequiredPath,
+  splitPageUrl,
+  type Result,
+} from "@promo/shared-types";
 
 export interface UrlParamConditionValue {
   /** The full URL the buyer must have visited (magic link). */
@@ -16,8 +25,10 @@ export interface UrlParamConditionValue {
 
 /**
  * Specific link / URL parameter sub-condition.
- * The buyer must have accessed the store via a specific URL or query param.
- * The requestedUrl is passed in from the storefront evaluation input.
+ * Evaluated on the page URL stamped on a cart line (a path + query, or an
+ * absolute URL), exactly like the compiled `pageUrlConditions` entry the
+ * Function runs: required path is a case-insensitive "contains", then the
+ * parameter must be present (and equal, when a value is configured).
  */
 export function evaluateUrlParam(
   requestedUrl: string | null,
@@ -31,37 +42,23 @@ export function evaluateUrlParam(
     });
   }
 
-  let url: URL;
-  try {
-    url = new URL(requestedUrl);
-  } catch {
-    return err({
-      conditionType: "specific_link",
-      passed: false,
-      message: `Invalid URL: ${requestedUrl}`,
-    });
-  }
-
-  // Check if the path matches the required URL (partial match or full)
-  const requiredUrl = condition.requiredUrl ?? "";
+  const requiredPath = specificLinkRequiredPath(condition.requiredUrl ?? "");
   const paramName = condition.paramName ?? condition.param ?? condition.key;
   const paramValue = condition.paramValue ?? condition.value;
-  const requiredBase = requiredUrl.split("?")[0] ?? requiredUrl;
-  const currentBase = url.origin + url.pathname;
-  if (requiredBase && !currentBase.includes(requiredBase)) {
+  const { path, query } = splitPageUrl(requestedUrl);
+  if (requiredPath && !asciiLower(path).includes(asciiLower(requiredPath))) {
     return err({
       conditionType: "specific_link",
       passed: false,
-      message: `URL ${currentBase} does not match required path ${requiredBase}`,
-      actual: currentBase,
-      required: requiredBase,
+      message: `URL path ${path} does not match required path ${requiredPath}`,
+      actual: path,
+      required: requiredPath,
     });
   }
 
-  // Check query param
   if (paramName) {
-    const paramVal = url.searchParams.get(paramName);
-    if (paramVal === null) {
+    const actual = readQueryParam(query, paramName);
+    if (actual === null) {
       return err({
         conditionType: "specific_link",
         passed: false,
@@ -70,12 +67,12 @@ export function evaluateUrlParam(
         required: paramName,
       });
     }
-    if (paramValue !== undefined && paramVal !== paramValue) {
+    if (paramValue !== undefined && !queryValueMatches(paramName, actual, paramValue)) {
       return err({
         conditionType: "specific_link",
         passed: false,
-        message: `Param ${paramName}=${paramVal}, expected ${paramValue}`,
-        actual: paramVal,
+        message: `Param ${paramName}=${actual}, expected ${paramValue}`,
+        actual,
         required: paramValue,
       });
     }

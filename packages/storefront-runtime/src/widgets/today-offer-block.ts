@@ -7,13 +7,8 @@
  */
 
 import { on, PromoEvents } from "../event-bus.js";
+import { escapeHtml } from "../html.js";
 import type { EvaluationResult } from "../types.js";
-
-function escapeHtml(raw: unknown): string {
-  const div = document.createElement("div");
-  div.textContent = String(raw ?? "");
-  return div.innerHTML;
-}
 
 function safeImageUrl(raw: unknown): string | null {
   if (typeof raw !== "string" || !raw) return null;
@@ -93,7 +88,7 @@ class PromoTodayOfferBlock extends HTMLElement {
       return `
       <div class="pe-tob-item" data-offer="${offerId}">
         ${imageUrl
-          ? `<img class="pe-tob-img" src="${imageUrl}" alt="${itemTitle}" loading="lazy">`
+          ? `<img class="pe-tob-img" src="${escapeHtml(imageUrl)}" alt="${itemTitle}" loading="lazy">`
           : `<div class="pe-tob-img" aria-hidden="true">🎁</div>`
         }
         <div class="pe-tob-info">

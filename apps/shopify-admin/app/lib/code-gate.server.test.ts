@@ -1,9 +1,16 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { discountCodes, type Db } from "@promo/db";
 import { evaluate, type EvaluatorContext, type OfferDefinition } from "@promo/rule-engine";
 import type { EvaluationInput, NormalizedCart } from "@promo/shared-types";
-import { applyCodeGates } from "./code-gate.server.js";
+import {
+  MAX_ENTERED_CODES,
+  MISSED_CODE_LIMIT,
+  MISSED_CODE_WINDOW_MS,
+  applyCodeGates,
+  applyCodeGatesDetailed,
+  normalizeEnteredCodes,
+} from "./code-gate.server.js";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
 let db: Db;
@@ -131,7 +138,7 @@ async function run(definition: OfferDefinition, c: NormalizedCart) {
 
 describe("applyCodeGates + evaluate: a gift on a code offer follows the applied code", () => {
   it("adds the gift only while one of the offer's codes is applied", async () => {
-    const offerId = await seedOffer(db, shopId);
+    const offerId = await seedOffer(db, shopId, { requiresCode: true });
     await db.insert(discountCodes).values([
       { shopId, offerId, code: "SUMMER10" },
       { shopId, offerId, code: "SUMMER11" },
@@ -148,7 +155,7 @@ describe("applyCodeGates + evaluate: a gift on a code offer follows the applied 
   });
 
   it("removes the gift line again once the code is removed", async () => {
-    const offerId = await seedOffer(db, shopId);
+    const offerId = await seedOffer(db, shopId, { requiresCode: true });
     await db.insert(discountCodes).values({ shopId, offerId, code: "REMOVEME" });
     const offer = giftOffer(offerId);
     const giftLine = (c: NormalizedCart) =>
@@ -169,8 +176,8 @@ describe("applyCodeGates + evaluate: a gift on a code offer follows the applied 
   });
 
   it("a code that belongs to another offer does not unlock this one", async () => {
-    const offerA = await seedOffer(db, shopId);
-    const offerB = await seedOffer(db, shopId);
+    const offerA = await seedOffer(db, shopId, { requiresCode: true });
+    const offerB = await seedOffer(db, shopId, { requiresCode: true });
     await db.insert(discountCodes).values([
       { shopId, offerId: offerA, code: "ONLYA" },
       { shopId, offerId: offerB, code: "ONLYB" },
@@ -181,7 +188,7 @@ describe("applyCodeGates + evaluate: a gift on a code offer follows the applied 
   });
 
   it("does not unlock on a deactivated, expired, not-yet-started or used-up code", async () => {
-    const offerId = await seedOffer(db, shopId);
+    const offerId = await seedOffer(db, shopId, { requiresCode: true });
     await db.insert(discountCodes).values([
       { shopId, offerId, code: "OFF1", status: "disabled" },
       { shopId, offerId, code: "EXP1", endsAt: new Date("2026-05-01") },
@@ -209,11 +216,125 @@ describe("applyCodeGates + evaluate: a gift on a code offer follows the applied 
 
   it("ignores codes belonging to another shop", async () => {
     const otherShop = await seedShop(db, "gate-other.myshopify.com");
-    const otherOffer = await seedOffer(db, otherShop);
+    const otherOffer = await seedOffer(db, otherShop, { requiresCode: true });
     await db.insert(discountCodes).values({ shopId: otherShop, offerId: otherOffer, code: "FOREIGN1" });
-    const offerId = await seedOffer(db, shopId);
+    const offerId = await seedOffer(db, shopId, { requiresCode: true });
     await db.insert(discountCodes).values({ shopId, offerId, code: "HOME1" });
 
     expect((await run(giftOffer(offerId), cart(["FOREIGN1"]))).qualifiedOffers).toHaveLength(0);
+  });
+});
+
+describe("the gate does not need to scan the codes table", () => {
+  it("gates on offers.requires_code alone: an offer that has the flag stays inert with no codes", async () => {
+    const offerId = await seedOffer(db, shopId, { requiresCode: true });
+    expect((await run(giftOffer(offerId), cart(["ANYTHING"]))).qualifiedOffers).toHaveLength(0);
+  });
+});
+
+describe("code-guessing guards", () => {
+  it("looks at no more than 5 distinct entered codes", async () => {
+    const offerId = await seedOffer(db, shopId, { requiresCode: true });
+    await db.insert(discountCodes).values({ shopId, offerId, code: "SIXTH-CODE" });
+    const six = ["A1", "A2", "A3", "A4", "A5", "SIXTH-CODE"];
+
+    const result = await applyCodeGatesDetailed(shopId, db, [giftOffer(offerId)], six, NOW);
+    expect(result.truncated).toBe(true);
+    // The valid code was 6th, so it never got looked at: the offer stays gated shut.
+    expect(result.definitions[0]!.conditions[0]).toMatchObject({ id: "code-gate", value: { code: "" } });
+
+    const fifth = await applyCodeGatesDetailed(shopId, db, [giftOffer(offerId)], ["A1", "A2", "A3", "A4", "sixth-code"], NOW);
+    expect(fifth.truncated).toBe(false);
+    expect(fifth.definitions[0]!.conditions[0]).toMatchObject({ value: { code: "SIXTH-CODE" } });
+  });
+
+  it("normalizes, de-duplicates and caps entered codes", () => {
+    expect(normalizeEnteredCodes([" a ", "A", "", "b"])).toEqual({ codes: ["A", "B"], truncated: false });
+    expect(normalizeEnteredCodes(["1", "2", "3", "4", "5", "6", "7"])).toEqual({
+      codes: ["1", "2", "3", "4", "5"],
+      truncated: true,
+    });
+    expect(MAX_ENTERED_CODES).toBe(5);
+  });
+
+  it("counts codes that exist nowhere in the shop as misses against the visitor's limit", async () => {
+    const offerId = await seedOffer(db, shopId, { requiresCode: true });
+    await db.insert(discountCodes).values({ shopId, offerId, code: "REALCODE1" });
+    const seen: Array<{ key: string; limit: number; windowMs: number }> = [];
+    const limiter = async (key: string, options: { limit: number; windowMs: number }) => {
+      seen.push({ key, ...options });
+      return { ok: true as const };
+    };
+
+    await applyCodeGatesDetailed(shopId, db, [giftOffer(offerId)], ["REALCODE1", "GUESS1", "GUESS2"], NOW, {
+      rateLimitKey: "cart-abc",
+      rateLimiter: limiter,
+    });
+
+    // Two misses, so two charges; the real code is free.
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toEqual({
+      key: `code-miss:${shopId}:cart-abc`,
+      limit: MISSED_CODE_LIMIT,
+      windowMs: MISSED_CODE_WINDOW_MS,
+    });
+  });
+
+  it("does not charge a miss for a real code of this shop, even on another offer", async () => {
+    const offerA = await seedOffer(db, shopId, { requiresCode: true });
+    const offerB = await seedOffer(db, shopId, { requiresCode: true });
+    await db.insert(discountCodes).values({ shopId, offerId: offerB, code: "OTHEROFFER1" });
+    const limiter = vi.fn(async () => ({ ok: true as const }));
+
+    await applyCodeGatesDetailed(shopId, db, [giftOffer(offerA)], ["OTHEROFFER1"], NOW, {
+      rateLimitKey: "cart-x",
+      rateLimiter: limiter,
+    });
+    expect(limiter).not.toHaveBeenCalled();
+  });
+
+  it("does not charge a miss for another offer's legacy checkout code", async () => {
+    const offerId = await seedOffer(db, shopId, { requiresCode: true });
+    await seedOffer(db, shopId, { requiredDiscountCode: "LEGACYELSEWHERE" });
+    const limiter = vi.fn(async () => ({ ok: true as const }));
+
+    await applyCodeGatesDetailed(shopId, db, [giftOffer(offerId)], ["LEGACYELSEWHERE"], NOW, {
+      rateLimitKey: "cart-y",
+      rateLimiter: limiter,
+    });
+    expect(limiter).not.toHaveBeenCalled();
+  });
+
+  it("once the miss budget is spent, a call that includes misses matches nothing, even a valid code", async () => {
+    const offerId = await seedOffer(db, shopId, { requiresCode: true });
+    await db.insert(discountCodes).values({ shopId, offerId, code: "VALID-WHILE-BLOCKED" });
+    const exhausted = async () => ({ ok: false as const, retryAfterSeconds: 60 });
+
+    const blocked = await applyCodeGatesDetailed(
+      shopId,
+      db,
+      [giftOffer(offerId)],
+      ["VALID-WHILE-BLOCKED", "GUESS"],
+      NOW,
+      { rateLimitKey: "cart-z", rateLimiter: exhausted },
+    );
+    expect(blocked.blocked).toBe(true);
+    expect(blocked.definitions[0]!.conditions[0]).toMatchObject({ value: { code: "" } });
+
+    // A call with no misses is never charged, so a customer with a real code is not locked out.
+    const clean = await applyCodeGatesDetailed(shopId, db, [giftOffer(offerId)], ["VALID-WHILE-BLOCKED"], NOW, {
+      rateLimitKey: "cart-z",
+      rateLimiter: exhausted,
+    });
+    expect(clean.blocked).toBe(false);
+    expect(clean.definitions[0]!.conditions[0]).toMatchObject({ value: { code: "VALID-WHILE-BLOCKED" } });
+  });
+
+  it("applies no limit when the caller supplies no visitor key", async () => {
+    const offerId = await seedOffer(db, shopId, { requiresCode: true });
+    const limiter = vi.fn(async () => ({ ok: false as const, retryAfterSeconds: 1 }));
+    const result = await applyCodeGatesDetailed(shopId, db, [giftOffer(offerId)], ["NOPE"], NOW, { rateLimiter: limiter });
+    expect(limiter).not.toHaveBeenCalled();
+    expect(result.blocked).toBe(false);
   });
 });

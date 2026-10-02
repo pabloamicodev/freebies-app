@@ -1,4 +1,5 @@
 import { useLoaderData } from "react-router";
+import { safeErrorMessage } from "../lib/safe-error.js";
 import { authenticate } from "../shopify.server.js";
 import { PageHeader } from "../components/PageHeader.js";
 import type { LoaderFunctionArgs } from "react-router";
@@ -60,7 +61,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const issues = await res.json() as SentryIssue[];
     return { issues, configured: true, error: null as string | null };
   } catch (err) {
-    return { issues: [] as SentryIssue[], configured: true, error: err instanceof Error ? err.message : "Failed to fetch from Sentry" };
+    return { issues: [] as SentryIssue[], configured: true, error: safeErrorMessage(err, "Failed to fetch from Sentry") };
   }
 };
 

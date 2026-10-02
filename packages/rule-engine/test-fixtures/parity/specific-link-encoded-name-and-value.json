@@ -1,0 +1,145 @@
+{
+  "name": "specific-link-encoded-name-and-value",
+  "description": "specific_link param 'gift code' = 'a&b' (stored raw): + / %20 in the name and %26 in the value decode.",
+  "source": {
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "type": "discount",
+        "priority": 100,
+        "stopLowerPriority": false,
+        "conditions": [
+          {
+            "conditionType": "specific_link",
+            "value": {
+              "requiredUrl": "/pages/vip",
+              "paramName": "gift code",
+              "paramValue": "a&b",
+              "onlyMatchedLines": true
+            },
+            "scope": "sub",
+            "operator": "eq",
+            "sortOrder": 0
+          }
+        ],
+        "rewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "rewardType": "product_discount",
+            "discountType": "percentage",
+            "value": {
+              "amount": 10,
+              "currencyCode": "USD"
+            },
+            "target": {},
+            "quantity": null,
+            "isAutoAdd": false,
+            "isCustomerSelectable": false,
+            "trackMode": "variant",
+            "sortOrder": 0,
+            "label": null
+          }
+        ]
+      }
+    ]
+  },
+  "config": {
+    "c1": "_promo_engine_unused",
+    "c2": "_promo_engine_unused",
+    "c3": "_promo_engine_unused",
+    "customerTags": [],
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "offerType": "discount",
+        "priority": 100,
+        "productRewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "discountType": "percentage",
+            "discountValue": 10
+          }
+        ],
+        "pageUrlConditions": [
+          {
+            "patterns": [
+              "/pages/vip"
+            ],
+            "matchMode": "contains",
+            "paramName": "gift code",
+            "paramValue": "a&b"
+          }
+        ],
+        "restrictToMatchedLines": true
+      }
+    ],
+    "version": "parity",
+    "compiledAt": "2026-01-01T00:00:00.000Z"
+  },
+  "cart": {
+    "currency": "USD",
+    "presentmentCurrencyRate": 1,
+    "country": "US",
+    "customerTags": [],
+    "enteredCodes": [],
+    "lines": [
+      {
+        "id": "e1",
+        "variantId": "gid://shopify/ProductVariant/1",
+        "productId": "gid://shopify/Product/1",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/pages/vip?gift+code=a%26b"
+        }
+      },
+      {
+        "id": "e2",
+        "variantId": "gid://shopify/ProductVariant/2",
+        "productId": "gid://shopify/Product/2",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/pages/vip?gift%20code=a%26b"
+        }
+      },
+      {
+        "id": "e3",
+        "variantId": "gid://shopify/ProductVariant/3",
+        "productId": "gid://shopify/Product/3",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/pages/vip?gift+code=a&b"
+        }
+      },
+      {
+        "id": "e4",
+        "variantId": "gid://shopify/ProductVariant/4",
+        "productId": "gid://shopify/Product/4",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/pages/vip?gift_code=a%26b"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "qualifiedOfferIds": [
+      "aaaaaaaa-0000-4000-8000-000000000001"
+    ],
+    "discountedLineIds": {
+      "aaaaaaaa-0000-4000-8000-000000000001": [
+        "e1",
+        "e2"
+      ]
+    }
+  }
+}

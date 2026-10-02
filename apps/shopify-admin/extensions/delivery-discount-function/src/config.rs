@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+pub use crate::page_match::CompiledPageUrlCondition;
+
 #[derive(Debug, Deserialize)]
 #[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +33,20 @@ pub struct CompiledShippingOffer {
     pub code_hashes: Vec<String>,
     #[serde(default)]
     pub accept_codes: bool,
+    /// Page conditions over the stamped line metadata. When set, at least one non-gift line
+    /// must match (exclude mode); tier thresholds still count the whole cart.
+    #[serde(default)]
+    pub page_url_conditions: Vec<CompiledPageUrlCondition>,
+    /// Reject mode: every non-gift line must match, not just one.
+    #[serde(default)]
+    pub reject_unmatched_lines: bool,
+    /// Shop currency of the tier thresholds and fixed amounts (minor-unit scale).
+    #[serde(default = "default_currency_code")]
+    pub currency_code: String,
+}
+
+fn default_currency_code() -> String {
+    "USD".to_string()
 }
 
 fn default_shipping_scope() -> String {
@@ -73,6 +89,24 @@ pub fn is_zero_decimal(currency_code: &str) -> bool {
             | "XOF"
             | "XPF"
     )
+}
+
+pub fn minor_units(currency_code: &str) -> f64 {
+    if is_zero_decimal(currency_code) {
+        1.0
+    } else {
+        100.0
+    }
+}
+
+/// Fixed amounts are sent in major units of the presentment currency: whole units for
+/// zero-decimal currencies, two decimals otherwise.
+pub fn round_amount(amount: f64, currency_code: &str) -> f64 {
+    if is_zero_decimal(currency_code) {
+        amount.round()
+    } else {
+        (amount * 100.0).round() / 100.0
+    }
 }
 
 pub fn to_cents(amount: f64, currency_code: &str) -> i64 {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { safeErrorMessage } from "../lib/safe-error.js";
 import { Link, redirect, useActionData, useLoaderData, useNavigate, useNavigation } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { OfferWizardHeader, OfferWizardSection, type WizardAccent } from "../components/offers/OfferWizardLayout.js";
@@ -81,7 +82,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
     if (result.userErrors.length) return { error: result.userErrors.map((issue) => issue.message).join(" ") };
     return redirect(template.manageTo);
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "Could not create the subscription offer." };
+    return { error: safeErrorMessage(error, "Could not create the subscription offer.") };
   }
 }
 

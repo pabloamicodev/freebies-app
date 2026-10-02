@@ -840,11 +840,14 @@ export default function NewDiscountOfferPage() {
                     <input
                       id="internalName"
                       className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`}
+                      aria-invalid={fieldErrors.internalName ? true : undefined}
+                      aria-describedby={fieldErrors.internalName ? "internalName-error" : undefined}
                       name="internalName"
                       value={internalName}
                       onChange={(e) => setInternalName(e.target.value)}
                       autoComplete="off"
                     />
+                    {fieldErrors.internalName && <div id="internalName-error" className="b-help-error" role="alert">{fieldErrors.internalName}</div>}
                     <div className="b-help">Internal use only, not shown to customers.</div>
                   </div>
                   <div className="b-card" style={{ background: "var(--bg-hover)" }}>
@@ -862,11 +865,14 @@ export default function NewDiscountOfferPage() {
                         <input
                           id="publicTitle"
                           className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`}
+                          aria-invalid={fieldErrors.publicTitle ? true : undefined}
+                          aria-describedby={fieldErrors.publicTitle ? "publicTitle-error" : undefined}
                           name="publicTitle"
                           value={publicTitle}
                           onChange={(e) => setPublicTitle(e.target.value)}
                           autoComplete="off"
                         />
+                        {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
                       </div>
                       <div>
                         <label className="b-label" htmlFor="description">
@@ -936,11 +942,14 @@ export default function NewDiscountOfferPage() {
                     <input
                       id="internalName"
                       className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`}
+                      aria-invalid={fieldErrors.internalName ? true : undefined}
+                      aria-describedby={fieldErrors.internalName ? "internalName-error" : undefined}
                       name="internalName"
                       value={internalName}
                       onChange={(e) => setInternalName(e.target.value)}
                       autoComplete="off"
                     />
+                    {fieldErrors.internalName && <div id="internalName-error" className="b-help-error" role="alert">{fieldErrors.internalName}</div>}
                   </div>
                   <div className="b-card" style={{ background: "var(--bg-hover)" }}>
                     <div className="b-card-header" style={{ fontSize: 13 }}>
@@ -957,11 +966,14 @@ export default function NewDiscountOfferPage() {
                         <input
                           id="publicTitle"
                           className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`}
+                          aria-invalid={fieldErrors.publicTitle ? true : undefined}
+                          aria-describedby={fieldErrors.publicTitle ? "publicTitle-error" : undefined}
                           name="publicTitle"
                           value={publicTitle}
                           onChange={(e) => setPublicTitle(e.target.value)}
                           autoComplete="off"
                         />
+                        {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
                       </div>
                       <div>
                         <label className="b-label" htmlFor="description">
@@ -1031,11 +1043,14 @@ export default function NewDiscountOfferPage() {
                     <input
                       id="internalName"
                       className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`}
+                      aria-invalid={fieldErrors.internalName ? true : undefined}
+                      aria-describedby={fieldErrors.internalName ? "internalName-error" : undefined}
                       name="internalName"
                       value={internalName}
                       onChange={(e) => setInternalName(e.target.value)}
                       autoComplete="off"
                     />
+                    {fieldErrors.internalName && <div id="internalName-error" className="b-help-error" role="alert">{fieldErrors.internalName}</div>}
                   </div>
                   <div className="b-card" style={{ background: "var(--bg-hover)" }}>
                     <div className="b-card-header" style={{ fontSize: 13 }}>
@@ -1052,11 +1067,14 @@ export default function NewDiscountOfferPage() {
                         <input
                           id="publicTitle"
                           className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`}
+                          aria-invalid={fieldErrors.publicTitle ? true : undefined}
+                          aria-describedby={fieldErrors.publicTitle ? "publicTitle-error" : undefined}
                           name="publicTitle"
                           value={publicTitle}
                           onChange={(e) => setPublicTitle(e.target.value)}
                           autoComplete="off"
                         />
+                        {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
                       </div>
                       <div>
                         <label className="b-label" htmlFor="description">
@@ -1147,8 +1165,8 @@ export default function NewDiscountOfferPage() {
                   </div>
 
                   {/* Display type */}
-                  <div>
-                    <div className="b-label">Choose display type:</div>
+                  <fieldset className="b-radio-group">
+                    <legend className="b-label">Choose display type:</legend>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
                       <label
                         className="b-checkbox-row"
@@ -1187,7 +1205,7 @@ export default function NewDiscountOfferPage() {
                         </span>
                       </label>
                     </div>
-                  </div>
+                  </fieldset>
 
                   {/* Referirse a */}
                   <div>
@@ -1568,8 +1586,8 @@ export default function NewDiscountOfferPage() {
                   style={{ display: "flex", flexDirection: "column", gap: 12 }}
                 >
                   {/* Discount on */}
-                  <div>
-                    <div className="b-label">Discount on:</div>
+                  <fieldset className="b-radio-group">
+                    <legend className="b-label">Discount on:</legend>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
                       <label
                         className="b-checkbox-row"
@@ -1608,7 +1626,7 @@ export default function NewDiscountOfferPage() {
                         </span>
                       </label>
                     </div>
-                  </div>
+                  </fieldset>
 
                   {cheapestTiers.map((tier, i) => (
                     <div key={tier.id} className="b-card" style={{ background: "var(--bg-hover)" }}>

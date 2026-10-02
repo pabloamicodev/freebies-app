@@ -15,8 +15,22 @@ let sessionId = null;
 
 // ─── Standard Shopify events ─────────────────────────────────────────────────
 
+// Privacy (D4): never forward emails, click ids or other query params. Keep the path and utm_* only.
+function safeUrl(raw) {
+  try {
+    const u = new URL(String(raw ?? ""), "https://localhost");
+    const kept = [];
+    u.searchParams.forEach((value, key) => {
+      if (key.toLowerCase().startsWith("utm_")) kept.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+    });
+    return kept.length ? `${u.pathname}?${kept.join("&")}` : u.pathname;
+  } catch {
+    return "";
+  }
+}
+
 analytics.subscribe("page_viewed", (event) => {
-  enqueue({ event_name: "page_viewed", properties: { url: event.data?.["url"] ?? "" } });
+  enqueue({ event_name: "page_viewed", properties: { url: safeUrl(event.data?.["url"]) } });
 });
 
 analytics.subscribe("product_viewed", (event) => {

@@ -4,6 +4,8 @@
  * and see exactly why an offer qualifies or doesn't.
  */
 
+import { SIMULATOR_INPUT_ERRORS, safeErrorMessage } from "../lib/safe-error.js";
+import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData, Form, useActionData } from "react-router";
 import { BackButton } from "../components/BackButton.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -33,7 +35,7 @@ function parseStringRecord(value: string | null, label: string): Record<string, 
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-  const offerId = params["id"];
+  const offerId = parseUuidParam(params);
   if (!offerId) throw new Response("Not found", { status: 404 });
 
   const offer = await loadOwnedOffer(db, shopId, offerId);
@@ -47,7 +49,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     request.formData(),
   ]);
   const { session, shopId, db } = context;
-  const offerId = params["id"];
+  const offerId = parseUuidParam(params);
   if (!offerId) throw new Response("Not found", { status: 404 });
   await loadOwnedOffer(db, shopId, offerId);
 
@@ -66,7 +68,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     lineProperties = parseStringRecord(formData.get("lineProperties") as string | null, "Line properties");
     cartAttributes = parseStringRecord(formData.get("cartAttributes") as string | null, "Cart attributes");
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "Simulator attributes are invalid." };
+    return { error: safeErrorMessage(error, "Simulator attributes are invalid.", SIMULATOR_INPUT_ERRORS) };
   }
 
   // Load offer definitions
@@ -295,7 +297,7 @@ export default function OfferPreviewPage() {
           <div className="b-card">
             <div className="b-card-header">Simulate Cart</div>
             <div className="b-card-body">
-              <Form method="POST">
+              <Form method="POST" data-no-dirty>
                 <div className="b-stack b-stack-3">
                   {/* Cart total */}
                   <div>

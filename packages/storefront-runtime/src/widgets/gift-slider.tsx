@@ -6,6 +6,8 @@ import { h, Fragment } from "preact";
 import { render } from "preact";
 import { on, emit, PromoEvents, publishAnalytics } from "../event-bus.js";
 import { AjaxCartAdapter } from "../cart-adapter.js";
+import { formatMoney } from "../format.js";
+import { t } from "../i18n.js";
 import {
   giftRewardKey,
   loadDeclinedGiftRewards,
@@ -174,16 +176,6 @@ function injectStyles() {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-function formatMoney(cents: number, currencyCode: string): string {
-  try {
-    return new Intl.NumberFormat(navigator.language || "en-US", {
-      style: "currency",
-      currency: currencyCode,
-    }).format(cents / 100);
-  } catch {
-    return `${(cents / 100).toFixed(2)} ${currencyCode}`;
-  }
-}
 
 interface GiftSliderProps {
   payload: GiftSliderPayload;
@@ -444,10 +436,15 @@ function GiftSlider({
   useEffect(() => {
     const previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    if (dialogRef.current && !dialogRef.current.open) dialogRef.current.showModal();
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) {
+      // Safari < 15.4 has no <dialog>.showModal(); fall back to a plain open dialog.
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.setAttribute("open", "");
+    }
     closeButtonRef.current?.focus();
     return () => {
-      if (dialogRef.current?.open) dialogRef.current.close();
+      if (dialogRef.current?.open && typeof dialogRef.current.close === "function") dialogRef.current.close();
       previouslyFocused?.focus();
     };
   }, [onClose]);
@@ -490,7 +487,7 @@ function GiftSlider({
             class="pe-slider-close"
             onClick={handleDismiss}
             disabled={loading}
-            aria-label="Close gift selection"
+            aria-label={t("giftSliderClose")}
           >
             ✕
           </button>
@@ -583,7 +580,7 @@ function GiftSlider({
               loading ||
               hasUnavailableSelection
             }
-            aria-label={loading ? "Updating gifts" : undefined}
+            aria-label={loading ? t("giftsUpdating") : undefined}
           >
             {loading ? (
               <>

@@ -70,7 +70,7 @@ export const NormalizedCartSchema = z.object({
   attributes: z.record(z.string().max(128), coercedStringValue(2_048)).optional(),
   /** Subtotal in store currency cents (before discounts). */
   subtotalCents: z.number().int().nonnegative(),
-  discountCodes: z.array(z.string().min(1).max(255)).max(100),
+  discountCodes: z.array(z.string().max(255)).max(20),
   currencyCode: z.string().length(3).regex(/^[A-Z]{3}$/),
   totalQuantity: z.number().int().nonnegative().max(500_000),
 });

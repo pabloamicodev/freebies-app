@@ -1,4 +1,4 @@
-import { shopifyGraphQL } from "./shopify-fetch.server.js";
+import { ShopifyOutcomeUnknownError, shopifyGraphQL } from "./shopify-fetch.server.js";
 
 const CART_TRANSFORM_HANDLE = "promo-engine-cart-transform";
 
@@ -19,14 +19,16 @@ interface CartTransformCreateResult {
  * nothing until cartTransformCreate activates it. Idempotent.
  */
 export async function ensureCartTransform(shopDomain: string, accessToken: string): Promise<string> {
-  const state = await shopifyGraphQL<CartTransformState>({
-    shopDomain,
-    accessToken,
-    query: `query CartTransformState {
+  const readState = () =>
+    shopifyGraphQL<CartTransformState>({
+      shopDomain,
+      accessToken,
+      query: `query CartTransformState {
       shopifyFunctions(first: 25) { nodes { id apiType handle } }
       cartTransforms(first: 10) { nodes { id functionId } }
     }`,
-  });
+    });
+  const state = await readState();
 
   const fn = state.shopifyFunctions.nodes.find(
     (node) => node.handle === CART_TRANSFORM_HANDLE || node.apiType === "cart_transform",
@@ -36,17 +38,28 @@ export async function ensureCartTransform(shopDomain: string, accessToken: strin
   const existing = state.cartTransforms.nodes.find((node) => node.functionId === fn.id);
   if (existing) return existing.id;
 
-  const result = await shopifyGraphQL<CartTransformCreateResult>({
-    shopDomain,
-    accessToken,
-    query: `mutation EnsureCartTransform($functionHandle: String!) {
+  const create = () =>
+    shopifyGraphQL<CartTransformCreateResult>({
+      shopDomain,
+      accessToken,
+      query: `mutation EnsureCartTransform($functionHandle: String!) {
       cartTransformCreate(functionHandle: $functionHandle, blockOnFailure: false) {
         cartTransform { id }
         userErrors { field message code }
       }
     }`,
-    variables: { functionHandle: CART_TRANSFORM_HANDLE },
-  });
+      variables: { functionHandle: CART_TRANSFORM_HANDLE },
+    });
+  let result: CartTransformCreateResult;
+  try {
+    result = await create();
+  } catch (err) {
+    if (!(err instanceof ShopifyOutcomeUnknownError)) throw err;
+    // The create may have landed: look before resending.
+    const recovered = (await readState()).cartTransforms.nodes.find((node) => node.functionId === fn.id);
+    if (recovered) return recovered.id;
+    result = await create();
+  }
 
   const { cartTransform, userErrors } = result.cartTransformCreate;
   if (!cartTransform) {

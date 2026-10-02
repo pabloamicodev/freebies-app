@@ -5,7 +5,7 @@
  * that Shopify's APIs exhibit in production.
  */
 
-import type { CartData } from "./cart-adapter.js";
+import { OWN_REQUEST_HEADER, type CartData } from "./cart-adapter.js";
 
 type ShopifyThemeWindow = Window & {
   Shopify?: {
@@ -72,7 +72,7 @@ export function isCartLikelyExpired(cartCreatedAt: Date): boolean {
  */
 export async function fetchFreshCart(): Promise<CartData> {
   const response = await fetch(`${window.Shopify?.routes?.root ?? "/"}cart.js`, {
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", [OWN_REQUEST_HEADER]: "1" },
   });
   if (!response.ok) throw new Error(`Cart fetch failed: ${response.status}`);
   return response.json() as Promise<CartData>;

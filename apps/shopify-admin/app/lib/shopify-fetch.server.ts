@@ -25,13 +25,38 @@ interface ShopifyGraphQLOptions {
    * That backoff protects background/bulk callers from throttling on the
    * *next* call, which doesn't apply to a one-shot hot-path lookup. */
   skipThrottleBackoff?: boolean;
+  /** Whether a timeout, network failure or 5xx may be re-sent. Defaults to true for queries and
+   * false for mutations: such a failure doesn't say whether Shopify executed the mutation, and
+   * re-sending a create duplicates it. Only idempotent mutations (updates, metafieldsSet) should
+   * opt in. 429 and GraphQL throttling are always retried: Shopify rejected those unexecuted. */
+  retryable?: boolean;
+  /** Receives `extensions.cost` for every successful response (query-cost audits). */
+  onCost?: (cost: ShopifyQueryCost) => void;
 }
+
+export interface ShopifyQueryCost {
+  requestedQueryCost: number;
+  actualQueryCost: number | null;
+  throttleStatus?: { currentlyAvailable: number; maximumAvailable: number; restoreRate: number };
+}
+
+/** The request may or may not have been executed by Shopify (timeout, network error, 5xx, cut-off body). */
+export class ShopifyOutcomeUnknownError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ShopifyOutcomeUnknownError";
+  }
+}
+
+const isMutation = (query: string) => /^\s*mutation\b/.test(query);
 
 interface GraphQLResponse<T> {
   data?: T;
   errors?: Array<{ message: string }>;
   extensions?: {
     cost?: {
+      requestedQueryCost?: number;
+      actualQueryCost?: number | null;
       throttleStatus?: { currentlyAvailable: number; maximumAvailable: number; restoreRate: number };
     };
   };
@@ -47,6 +72,8 @@ export async function shopifyGraphQL<T>({
   maxRetries = 4,
   timeoutMs = 10_000,
   skipThrottleBackoff = false,
+  retryable = !isMutation(query),
+  onCost,
 }: ShopifyGraphQLOptions): Promise<T> {
   const url = `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
   let lastError: Error | null = null;
@@ -69,7 +96,9 @@ export async function shopifyGraphQL<T>({
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (networkErr) {
-      lastError = networkErr instanceof Error ? networkErr : new Error(String(networkErr));
+      const message = networkErr instanceof Error ? networkErr.message : String(networkErr);
+      lastError = new ShopifyOutcomeUnknownError(`Shopify request failed: ${message}`, { cause: networkErr });
+      if (!retryable) throw lastError;
       continue; // retry transient network failures
     }
 
@@ -83,7 +112,8 @@ export async function shopifyGraphQL<T>({
 
     // Transient server errors — retry
     if (response.status >= 500) {
-      lastError = new Error(`Shopify ${response.status} ${response.statusText}`);
+      lastError = new ShopifyOutcomeUnknownError(`Shopify ${response.status} ${response.statusText}`);
+      if (!retryable) throw lastError;
       continue;
     }
 
@@ -91,7 +121,14 @@ export async function shopifyGraphQL<T>({
       throw new Error(`Shopify API error: ${response.status} ${response.statusText}`);
     }
 
-    const body = (await response.json()) as GraphQLResponse<T>;
+    let body: GraphQLResponse<T>;
+    try {
+      body = (await response.json()) as GraphQLResponse<T>;
+    } catch (parseErr) {
+      lastError = new ShopifyOutcomeUnknownError("Shopify response body was cut off", { cause: parseErr });
+      if (!retryable) throw lastError;
+      continue;
+    }
 
     if (body.errors && body.errors.length > 0) {
       // GraphQL-level throttle is reported as an error with a low throttle status
@@ -101,6 +138,15 @@ export async function shopifyGraphQL<T>({
         continue;
       }
       throw new Error(`Shopify GraphQL errors: ${body.errors.map((e) => e.message).join(", ")}`);
+    }
+
+    const cost = body.extensions?.cost;
+    if (onCost && cost && typeof cost.requestedQueryCost === "number") {
+      onCost({
+        requestedQueryCost: cost.requestedQueryCost,
+        actualQueryCost: cost.actualQueryCost ?? null,
+        ...(cost.throttleStatus ? { throttleStatus: cost.throttleStatus } : {}),
+      });
     }
 
     // Proactively back off if the cost bucket is nearly empty (next call would throttle)

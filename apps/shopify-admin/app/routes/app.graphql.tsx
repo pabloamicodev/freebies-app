@@ -1,4 +1,5 @@
 import { Form, useActionData, useLoaderData } from "react-router";
+import { safeErrorMessage } from "../lib/safe-error.js";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -49,7 +50,7 @@ export async function action({ request }: ActionFunctionArgs) {
   } catch (error) {
     return {
       ok: false as const,
-      error: error instanceof Error ? error.message : "GraphQL request failed.",
+      error: safeErrorMessage(error, "GraphQL request failed."),
       query,
       variables: variablesText,
     };

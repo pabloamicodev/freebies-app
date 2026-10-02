@@ -27,9 +27,15 @@ export function RootErrorBoundary() {
         <Links />
       </head>
       <body>
-        <div style={{ padding: "2rem", fontFamily: "system-ui" }}>
-          <h1>{title}</h1>
-          <p>{detail}</p>
+        <div role="alert" style={{ padding: "2rem", fontFamily: "system-ui", maxWidth: 480, margin: "10vh auto", textAlign: "center" }}>
+          <h1 style={{ fontSize: 20 }}>{title}</h1>
+          <p style={{ color: "#4b5563" }}>{detail}</p>
+          <p style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+            <button type="button" onClick={() => window.location.reload()} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #9ca3af", background: "#fff", cursor: "pointer" }}>
+              Try again
+            </button>
+            <a href="/app" style={{ padding: "8px 14px", borderRadius: 8, background: "#111827", color: "#fff", textDecoration: "none" }}>Open the app</a>
+          </p>
           {isDev && devMessage && (
             <pre style={{ color: "red", whiteSpace: "pre-wrap" }}>{devMessage}</pre>
           )}

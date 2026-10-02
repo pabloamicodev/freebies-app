@@ -124,3 +124,40 @@ describe("appliedDiscountCodes", () => {
     expect(appliedDiscountCodes({})).toEqual([]);
   });
 });
+
+describe("AjaxCartAdapter never stamps a page on updates or migrations (D4)", () => {
+  it("updateLine sends no page/landing metadata even with a UTM landing recorded, and marks the request as ours", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("localStorage", {
+      getItem: () => JSON.stringify({ u: "/lp?utm_source=x", e: Date.now() + 1000 }),
+      setItem: () => undefined,
+      removeItem: () => undefined,
+    });
+    vi.stubGlobal("window", {
+      Shopify: { routes: { root: "/" } },
+      location: { origin: "https://s.example", pathname: "/products/other", search: "?utm_source=x" },
+    });
+
+    await AjaxCartAdapter.updateLine({ key: "k", quantity: 2, properties: { _promo_engine_line_type: "gift" } });
+
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body.properties._promo_page_url).toBeUndefined();
+    expect(body.properties._promo_landing_url).toBeUndefined();
+    expect(JSON.parse(body.properties._promo_engine_metadata)).toEqual({ _promo_engine_line_type: "gift" });
+    expect((init.headers as Record<string, string>)["X-Promo-Engine-Internal"]).toBe("1");
+  });
+
+  it("addLines still stamps the page the gift was added from", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", {
+      Shopify: { routes: { root: "/" } },
+      location: { origin: "https://s.example", pathname: "/products/other", search: "?email=a%40b.co" },
+    });
+    await AjaxCartAdapter.addLines([{ variantId: "gid://shopify/ProductVariant/9", quantity: 1, properties: {} }]);
+    const body = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
+    expect(body.items[0].properties._promo_page_url).toBe("/products/other");
+  });
+});

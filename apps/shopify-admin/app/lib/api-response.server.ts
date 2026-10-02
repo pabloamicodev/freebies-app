@@ -1,8 +1,13 @@
 import { waitUntil } from "@vercel/functions";
 import * as Sentry from "@sentry/node";
+import { searchParamsObject } from "@promo/shared-types";
+import type { z } from "zod";
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const requestIds = new WeakMap<Request, string>();
+
+/** Read-only storefront GETs behind the app proxy (bundle, product-customizations). Never put on errors or per-customer data. */
+export const STOREFRONT_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=60";
 
 export interface ApiErrorOptions {
   status: number;
@@ -87,6 +92,11 @@ export function handleApiError(
 ): Response {
   if (error instanceof Response) return error;
   if (error instanceof ApiError) {
+    // 4xx are caller mistakes; a 5xx ApiError is our fault and must reach Sentry.
+    if (error.status >= 500) {
+      Sentry.captureException(error, { tags: { route: context, requestId: getRequestId(request), code: error.code } });
+      waitUntil(Sentry.flush(2000));
+    }
     return apiError(request, {
       status: error.status,
       code: error.code,
@@ -171,4 +181,20 @@ export async function readJsonBody<T>(
 function errorCode(error: Error): string | undefined {
   const code = (error as Error & { code?: unknown }).code;
   return typeof code === "string" ? code : undefined;
+}
+
+/**
+ * Validates query params with one of the shared-types query schemas. A failure throws a 400 ApiError carrying the
+ * first issue's message; `codeFor` lets a route keep the error codes its clients already know.
+ */
+export function parseQuery<S extends z.ZodTypeAny>(
+  request: Request,
+  schema: S,
+  names: readonly string[],
+  codeFor: (message: string) => string = () => "INVALID_QUERY",
+): z.infer<S> {
+  const result = schema.safeParse(searchParamsObject(new URL(request.url).searchParams, names));
+  if (result.success) return result.data;
+  const message = result.error.issues[0]?.message ?? "Invalid request.";
+  throw new ApiError({ status: 400, code: codeFor(message), message, details: { issues: result.error.issues } });
 }

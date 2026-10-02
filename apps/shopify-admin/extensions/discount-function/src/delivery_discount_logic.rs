@@ -1,4 +1,5 @@
-use crate::config::{to_cents, CompiledConfig, CompiledShippingOffer};
+use crate::config::{minor_units, round_amount, to_cents, CompiledConfig, CompiledShippingOffer};
+use crate::page_match::line_matches;
 use crate::schema;
 use schema::cart_delivery_options_discounts_generate_run::input::cart::{DeliveryGroups, Lines};
 use schema::cart_delivery_options_discounts_generate_run::Input;
@@ -108,16 +109,15 @@ fn apply_offers(
         .subtotal_amount()
         .currency_code()
         .to_string();
-    // Tier thresholds and fixed amounts are in the shop currency; the cart is
-    // in the presentment currency.
+    // Tier thresholds and fixed amounts are in the shop currency; the cart is in the
+    // presentment currency. Thresholds are minor units, so the rate also has to absorb a
+    // zero-decimal (JPY/KRW) currency on either side.
     let rate = input.presentment_currency_rate().as_f64();
-    let subtotal_cents = (qualifying_subtotal_cents(
+    let presentment_cents = qualifying_subtotal_cents(
         input.cart().lines(),
         input.cart().cost().subtotal_amount().amount().as_f64(),
         &subtotal_currency,
-    ) as f64
-        / rate)
-        .floor() as i64;
+    );
 
     let mut offers = config.shipping_offers.clone();
     offers.sort_by(|left, right| {
@@ -138,7 +138,16 @@ fn apply_offers(
             continue;
         }
         let is_scoped = offer.scope_mode != "sitewide";
-        let value = tiered_delivery_discount_value(offer, subtotal_cents, has_subscription_line, rate);
+        let subtotal_cents = (presentment_cents as f64
+            / cents_rate(rate, &subtotal_currency, &offer.currency_code))
+        .floor() as i64;
+        let value = tiered_delivery_discount_value(
+            offer,
+            subtotal_cents,
+            has_subscription_line,
+            rate,
+            &subtotal_currency,
+        );
         let Some(value) = value else {
             // A scoped (landing/quiz) offer that qualifies wins outright —
             // no falling through to a lower-priority or sitewide offer when
@@ -185,7 +194,63 @@ fn apply_offers(
     Ok(empty_result())
 }
 
+fn cents_rate(rate: f64, presentment_currency: &str, shop_currency: &str) -> f64 {
+    let (presentment, shop) = (minor_units(presentment_currency), minor_units(shop_currency));
+    if presentment == shop {
+        rate
+    } else {
+        rate * presentment / shop
+    }
+}
+
+/// Lines the offer's own rewards never apply to: gifts, cart-gift tiers and free quiz gifts.
+fn is_gift_line(line: &Lines) -> bool {
+    line.line_type_attribute()
+        .and_then(|attribute| attribute.value())
+        .is_some_and(|value| value == "gift")
+        || line.cart_gift_tier_attribute().is_some()
+        || line
+            .quiz_free_gift_attribute()
+            .and_then(|attribute| attribute.value())
+            .is_some_and(|value| value == "true")
+}
+
+fn is_app_added_line(line: &Lines) -> bool {
+    line.line_type_attribute()
+        .and_then(|attribute| attribute.value())
+        .is_some_and(|value| value == "gift" || value == "upsell")
+}
+
+/// D2: exclude mode needs at least one matched non-gift line; reject mode needs every
+/// non-gift line matched (app-added gift/upsell lines are exempt from the reject check).
+fn page_conditions_pass(offer: &CompiledShippingOffer, lines: &[Lines]) -> bool {
+    if offer.page_url_conditions.is_empty() {
+        return true;
+    }
+    let matches = |line: &Lines| {
+        line_matches(
+            line.promo_metadata()
+                .and_then(|attribute| attribute.value())
+                .map(|value| value.as_str()),
+            &offer.page_url_conditions,
+        )
+    };
+    let candidates = || {
+        lines
+            .iter()
+            .filter(|line| *line.quantity() > 0 && !is_gift_line(line))
+    };
+    if !candidates().any(matches) {
+        return false;
+    }
+    !offer.reject_unmatched_lines
+        || candidates().all(|line| is_app_added_line(line) || matches(line))
+}
+
 fn shipping_offer_qualifies(offer: &CompiledShippingOffer, lines: &[Lines]) -> bool {
+    if !page_conditions_pass(offer, lines) {
+        return false;
+    }
     match offer.scope_mode.as_str() {
         "landing" => {
             landing_anchor_quantity(offer, lines) >= offer.required_anchor_min_quantity.max(1)
@@ -308,6 +373,7 @@ fn tiered_delivery_discount_value(
     subtotal_cents: i64,
     has_subscription_line: bool,
     rate: f64,
+    presentment_currency: &str,
 ) -> Option<schema::DeliveryDiscountCandidateValue> {
     let active_condition = if has_subscription_line {
         "has_subscription"
@@ -344,11 +410,17 @@ fn tiered_delivery_discount_value(
                 value: shopify_function::scalars::Decimal(matching_tier.discount_value.min(100.0)),
             },
         )),
-        "fixed_amount" => Some(schema::DeliveryDiscountCandidateValue::FixedAmount(
-            schema::FixedAmount {
-                amount: shopify_function::scalars::Decimal(matching_tier.discount_value * rate),
-            },
-        )),
+        "fixed_amount" => {
+            let amount = round_amount(matching_tier.discount_value * rate, presentment_currency);
+            if amount <= 0.0 {
+                return None;
+            }
+            Some(schema::DeliveryDiscountCandidateValue::FixedAmount(
+                schema::FixedAmount {
+                    amount: shopify_function::scalars::Decimal(amount),
+                },
+            ))
+        }
         _ => None,
     }
 }
@@ -1209,5 +1281,174 @@ mod tests {
             result.operations.is_empty(),
             "the qualifying quiz-bundle offer has no matching tier, so it must not fall back to sitewide"
         );
+    }
+
+    // ── D2: page conditions on shipping offers ──────────────────────────────
+
+    fn page_line(line_type: Option<&str>, page: Option<&str>, amount: &str) -> String {
+        let line_type = line_type
+            .map(|t| format!(r#"{{"value":"{t}"}}"#))
+            .unwrap_or_else(|| "null".to_string());
+        let metadata = page
+            .map(|p| {
+                let raw = serde_json::json!({ "_promo_page_url": p }).to_string();
+                format!(r#"{{"value":{}}}"#, serde_json::to_string(&raw).unwrap())
+            })
+            .unwrap_or_else(|| "null".to_string());
+        format!(
+            r#"{{"quantity":1,"cost":{{"subtotalAmount":{{"amount":"{amount}","currencyCode":"USD"}}}},"lineTypeAttribute":{line_type},"cartGiftTierAttribute":null,"landingSourceAttribute":null,"quizBundleIdAttribute":null,"quizFreeGiftAttribute":null,"quizExpectedPaidCountAttribute":null,"promoMetadata":{metadata},"sellingPlanAllocation":null,"merchandise":{{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/1"}}}}"#
+        )
+    }
+
+    fn page_offer(extra: &str) -> String {
+        format!(
+            r#"{{"id":"p","priority":1,"targetGroupTypes":null,
+            "pageUrlConditions":[{{"patterns":["/pages/sale"],"matchMode":"exact","caseSensitive":false}}],{extra}
+            "tiers":[{{"minimumSubtotalCents":5000,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}}]}}"#
+        )
+    }
+
+    fn run_page(offer: &str, lines: &[String]) -> bool {
+        let config = shipping_config(&format!("[{offer}]"));
+        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let lines_json = format!("[{}]", lines.join(","));
+        // The cart subtotal comes from the lines; 60 USD in all cases so the 50 USD tier is met.
+        !run_with_lines(r#"["SHIPPING"]"#, "60.00", &config, &groups, &lines_json)
+            .operations
+            .is_empty()
+    }
+
+    #[test]
+    fn exclude_mode_needs_one_matched_non_gift_line_and_thresholds_count_the_whole_cart() {
+        let offer = page_offer("");
+        let matched = page_line(None, Some("/pages/sale?utm_source=x"), "20.00");
+        let other = page_line(None, Some("/products/y"), "40.00");
+        let unstamped = page_line(None, None, "40.00");
+        // 60 USD cart, only 20 USD of it matched: the 50 USD tier is still met.
+        assert!(run_page(&offer, &[matched.clone(), other.clone()]));
+        assert!(!run_page(&offer, &[other.clone(), unstamped.clone()]));
+        assert!(!run_page(&offer, &[unstamped.clone()]));
+        // A matched gift line does not count as the required anchor.
+        let matched_gift = page_line(Some("gift"), Some("/pages/sale"), "20.00");
+        let other_big = page_line(None, Some("/products/y"), "60.00");
+        assert!(!run_page(&offer, &[matched_gift, other_big]));
+        // No conditions: unchanged behaviour.
+        let plain = page_offer("").replace(
+            r#""pageUrlConditions":[{"patterns":["/pages/sale"],"matchMode":"exact","caseSensitive":false}],"#,
+            "",
+        );
+        assert!(run_page(&plain, &[page_line(None, None, "60.00")]));
+    }
+
+    #[test]
+    fn reject_mode_needs_every_non_gift_line_matched() {
+        let offer = page_offer(r#""rejectUnmatchedLines":true,"#);
+        let matched = page_line(None, Some("/pages/sale"), "30.00");
+        let matched2 = page_line(None, Some("/pages/sale?x=1"), "30.00");
+        let other = page_line(None, Some("/products/y"), "30.00");
+        let unstamped = page_line(None, None, "30.00");
+        assert!(run_page(&offer, &[matched.clone(), matched2]));
+        assert!(!run_page(&offer, &[matched.clone(), other]));
+        assert!(!run_page(&offer, &[matched.clone(), unstamped]));
+        // App-added gift/upsell lines are exempt from the reject check; a gift line is ignored entirely.
+        let gift = page_line(Some("gift"), None, "0.00");
+        let upsell = page_line(Some("upsell"), None, "30.00");
+        let matched_big = page_line(None, Some("/pages/sale"), "60.00");
+        assert!(run_page(&offer, &[matched_big, gift]));
+        assert!(run_page(&offer, &[matched.clone(), upsell]));
+    }
+
+    #[test]
+    fn page_gated_scoped_offer_does_not_block_sitewide() {
+        let landing = r#"{"id":"landing","priority":1,"scopeMode":"landing","requiredLineAttributeValue":"lp",
+            "pageUrlConditions":[{"patterns":["/pages/sale"],"matchMode":"exact"}],
+            "targetGroupTypes":null,
+            "tiers":[{"minimumSubtotalCents":0,"discountType":"percentage","discountValue":25.0,"appliesWhen":null}]}"#;
+        let config = shipping_config(&format!("[{landing},{}]", coded_offer("open", 2, 10.0, "")));
+        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let line = page_line(None, Some("/products/y"), "60.00")
+            .replace(r#""landingSourceAttribute":null"#, r#""landingSourceAttribute":{"value":"lp"}"#);
+        let result = run_with_lines(r#"["SHIPPING"]"#, "60.00", &config, &groups, &format!("[{line}]"));
+        assert_eq!(discount_pct(&result), Some(10.0));
+    }
+
+    // ── JPY / KRW minor units and fixed-amount rounding ─────────────────────
+
+    fn currency_payload(
+        currency: &str,
+        rate: &str,
+        subtotal: &str,
+        config: &str,
+        lines_json: &str,
+    ) -> String {
+        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        payload_with_lines(r#"["SHIPPING"]"#, subtotal, config, &groups, lines_json)
+            .replace(
+                r#""presentmentCurrencyRate": "1.0""#,
+                &format!(r#""presentmentCurrencyRate": "{rate}""#),
+            )
+            .replace(r#""currencyCode": "USD""#, &format!(r#""currencyCode": "{currency}""#))
+    }
+
+    fn currency_line(currency: &str, amount: &str) -> String {
+        format!(
+            r#"[{{"quantity":1,"cost":{{"subtotalAmount":{{"amount":"{amount}","currencyCode":"{currency}"}}}},"lineTypeAttribute":null,"cartGiftTierAttribute":null,"landingSourceAttribute":null,"quizBundleIdAttribute":null,"quizFreeGiftAttribute":null,"quizExpectedPaidCountAttribute":null,"promoMetadata":null,"sellingPlanAllocation":null,"merchandise":{{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/1"}}}}]"#
+        )
+    }
+
+    fn run_currency(currency: &str, rate: &str, amount: &str, offer: &str) -> schema::CartDeliveryOptionsDiscountsGenerateRunResult {
+        let config = shipping_config(&format!("[{offer}]"));
+        let json = currency_payload(currency, rate, amount, &config, &currency_line(currency, amount));
+        run_function_with_input(super::run, &json).expect("should not error")
+    }
+
+    #[test]
+    fn jpy_presentment_converts_to_usd_threshold_through_minor_units() {
+        // Free shipping from 50.00 USD (5000 cents), 1 USD = 150 JPY: 7,500 JPY qualifies, 7,400 does not.
+        // The pre-fix ratio divided 7,500 by 150 and compared 50 against 5000.
+        let offer = one_tier_offer(5000, "percentage", 100.0, "");
+        assert_eq!(run_currency("JPY", "150.0", "7500", &offer).operations.len(), 1);
+        assert!(run_currency("JPY", "150.0", "7400", &offer).operations.is_empty());
+    }
+
+    #[test]
+    fn jpy_shop_currency_thresholds_are_whole_yen() {
+        // Shop currency JPY: threshold 5000 means 5,000 JPY, no x100 scaling.
+        let offer = one_tier_offer(5000, "percentage", 100.0, "").replace(
+            r#""id":"ship-1""#,
+            r#""id":"ship-1","currencyCode":"JPY""#,
+        );
+        assert_eq!(run_currency("JPY", "1.0", "5000", &offer).operations.len(), 1);
+        assert!(run_currency("JPY", "1.0", "4999", &offer).operations.is_empty());
+    }
+
+    #[test]
+    fn usd_shop_with_eur_presentment_is_unchanged() {
+        let offer = one_tier_offer(5000, "percentage", 100.0, "");
+        // 1 USD = 0.9 EUR: 45.00 EUR is exactly 50.00 USD.
+        assert_eq!(run_currency("EUR", "0.9", "45.00", &offer).operations.len(), 1);
+        assert!(run_currency("EUR", "0.9", "44.99", &offer).operations.is_empty());
+    }
+
+    fn fixed_amount_of(result: &schema::CartDeliveryOptionsDiscountsGenerateRunResult) -> f64 {
+        match &result.operations[0] {
+            schema::DeliveryOperation::DeliveryDiscountsAdd(op) => match &op.candidates[0].value {
+                schema::DeliveryDiscountCandidateValue::FixedAmount(a) => a.amount.0,
+                other => panic!("expected FixedAmount, got {other:?}"),
+            },
+            other => panic!("expected DeliveryDiscountsAdd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fixed_amount_is_rounded_per_presentment_currency() {
+        let offer = one_tier_offer(0, "fixed_amount", 5.0, "");
+        // 5 USD at 0.9137 EUR/USD = 4.5685 EUR -> 4.57
+        assert_eq!(fixed_amount_of(&run_currency("EUR", "0.9137", "100.00", &offer)), 4.57);
+        // 5 USD at 149.37 JPY/USD = 746.85 JPY -> 747 whole yen
+        assert_eq!(fixed_amount_of(&run_currency("JPY", "149.37", "9000", &offer)), 747.0);
+        // A fixed amount that rounds to zero in a zero-decimal currency is no discount.
+        let tiny = one_tier_offer(0, "fixed_amount", 0.001, "");
+        assert!(run_currency("JPY", "149.37", "9000", &tiny).operations.is_empty());
     }
 }

@@ -1,4 +1,5 @@
 import { useLoaderData, useFetcher } from "react-router";
+import { WEBHOOK_URL_ERRORS, safeErrorMessage } from "../lib/safe-error.js";
 import { useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { validateKlaviyoApiKey } from "../lib/integration-dispatcher.server.js";
@@ -120,7 +121,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       try {
         await assertSafeWebhookUrl(apiKey);
       } catch (error) {
-        return { error: error instanceof Error ? error.message : "Webhook URL is invalid" };
+        return { error: safeErrorMessage(error, "Webhook URL is invalid", WEBHOOK_URL_ERRORS) };
       }
     }
 

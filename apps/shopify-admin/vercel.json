@@ -26,10 +26,6 @@
     {
       "path": "/api/cron/analytics-cleanup",
       "schedule": "0 3 * * *"
-    },
-    {
-      "path": "/apps/promo-engine/evaluate",
-      "schedule": "* * * * *"
     }
   ]
 }

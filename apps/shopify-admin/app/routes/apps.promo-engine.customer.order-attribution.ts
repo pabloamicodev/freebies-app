@@ -1,5 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { getSignedShop } from "../lib/app-proxy-auth.server.js";
+import { OrderAttributionQuerySchema, searchParamsObject } from "@promo/shared-types";
+import { getSignedShopCached } from "../lib/proxy-shop.server.js";
 import { proxyRateLimitResponse } from "../lib/proxy-rate-limit.server.js";
 import { getOrderAttributions } from "../lib/order-attribution.server.js";
 import { apiJson, handleApiError } from "../lib/api-response.server.js";
@@ -10,10 +11,12 @@ export const config = { maxDuration: 15 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
-    const shop = await getSignedShop(request);
+    const shop = await getSignedShopCached(request);
     const limited = await proxyRateLimitResponse(request, "order-attribution", shop.id, 60);
     if (limited) return limited;
-    const orderGid = new URL(request.url).searchParams.get("order_gid");
+    // An invalid order id is "no attributions", not an error (matches what the extension already handles).
+    const query = OrderAttributionQuerySchema.safeParse(searchParamsObject(new URL(request.url).searchParams, ["order_gid"]));
+    const orderGid = query.success ? query.data.order_gid : null;
     const attributions = await getOrderAttributions(shop.db, shop, orderGid, shop.loggedInCustomerId);
     return apiJson(request, { attributions });
   } catch (error) {

@@ -3,6 +3,7 @@
  * Shows which other active offers would conflict or be blocked.
  */
 
+import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -17,7 +18,7 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const [policyRows, otherActiveOffers] = await Promise.all([
@@ -47,7 +48,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const offer = await loadOwnedOffer(db, shopId, offerId);
 

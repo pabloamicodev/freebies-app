@@ -2,10 +2,18 @@ use std::process;
 
 #[path = "../../discount-function/src/cart_lines_discounts_generate_run.rs"]
 pub mod cart_lines_discounts_generate_run;
+#[macro_use]
+#[path = "../../discount-function/src/de.rs"]
+mod de;
 #[path = "../../discount-function/src/config.rs"]
 mod config;
 #[path = "../../discount-function/src/discount_logic.rs"]
 mod discount_logic;
+#[path = "../../discount-function/src/page_match.rs"]
+mod page_match;
+#[cfg(test)]
+#[path = "../../discount-function/src/parity_tests.rs"]
+mod parity_tests;
 
 use shopify_function::typegen;
 

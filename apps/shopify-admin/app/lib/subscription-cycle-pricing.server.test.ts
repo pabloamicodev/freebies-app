@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { shopifyGraphQLMock } = vi.hoisted(() => ({
+const { shopifyGraphQLMock, OutcomeUnknown } = vi.hoisted(() => ({
   shopifyGraphQLMock: vi.fn(),
+  OutcomeUnknown: class extends Error {},
 }));
 
 vi.mock("./shopify-fetch.server.js", () => ({
   shopifyGraphQL: shopifyGraphQLMock,
+  ShopifyOutcomeUnknownError: OutcomeUnknown,
 }));
 
 import {
@@ -38,6 +40,23 @@ const existing: SubscriptionCyclePricingPlan = {
 
 describe("subscription cycle pricing server", () => {
   beforeEach(() => shopifyGraphQLMock.mockReset());
+
+  it("looks for the created group before resending an unknown-outcome create", async () => {
+    shopifyGraphQLMock.mockRejectedValueOnce(new OutcomeUnknown("timeout")).mockResolvedValueOnce({ sellingPlanGroups: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } });
+    shopifyGraphQLMock.mockResolvedValueOnce({ sellingPlanGroupCreate: { sellingPlanGroup: { id: "gid://shopify/SellingPlanGroup/9" }, userErrors: [] } });
+    const result = await createCyclePricingPlan(client, input);
+    expect(result.id).toBe("gid://shopify/SellingPlanGroup/9");
+    expect(shopifyGraphQLMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("marks update, add, remove and delete as retryable but not create", async () => {
+    shopifyGraphQLMock.mockResolvedValue({ sellingPlanGroupDelete: { deletedSellingPlanGroupId: "x", userErrors: [] } });
+    await deleteCyclePricingPlan(client, "x");
+    expect((shopifyGraphQLMock.mock.calls[0]?.[0] as { retryable?: boolean }).retryable).toBe(true);
+    shopifyGraphQLMock.mockReset().mockResolvedValue({ sellingPlanGroupCreate: { sellingPlanGroup: { id: "y" }, userErrors: [] } });
+    await createCyclePricingPlan(client, input);
+    expect((shopifyGraphQLMock.mock.calls[0]?.[0] as { retryable?: boolean }).retryable).toBeUndefined();
+  });
 
   it("creates a subscription plan with fixed first-cycle and recurring policies", async () => {
     shopifyGraphQLMock.mockResolvedValue({

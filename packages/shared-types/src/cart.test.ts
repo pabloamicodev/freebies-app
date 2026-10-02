@@ -27,6 +27,14 @@ describe("EvaluationInputSchema limits", () => {
     expect(EvaluationInputSchema.safeParse(input()).success).toBe(true);
   });
 
+  it("caps applied discount codes at 20", () => {
+    const payload = input();
+    payload.cart.discountCodes = Array.from({ length: 21 }, (_, index) => `CODE${index}`);
+    expect(EvaluationInputSchema.safeParse(payload).success).toBe(false);
+    payload.cart.discountCodes = payload.cart.discountCodes.slice(0, 20);
+    expect(EvaluationInputSchema.safeParse(payload).success).toBe(true);
+  });
+
   it("rejects oversized carts before rule evaluation", () => {
     const payload = input();
     payload.cart.lines = Array.from({ length: 251 }, (_, index) => ({

@@ -15,6 +15,8 @@ import {
   validateRewardPayload,
 } from "@promo/shared-types";
 import { publishOffersForShop } from "./sync/offer-publisher.server.js";
+import { PAGE_CONDITION_TYPES } from "./sync/compile-config.js";
+import { isCodeRedeemable } from "./discount-code-generation.js";
 import { invalidateOfferDefinitions } from "./offer-definitions.server.js";
 import { normalizeConditionValue } from "./offer-config-normalization.server.js";
 
@@ -22,6 +24,9 @@ export interface PublishValidationResult {
   ok: boolean;
   error?: string;
 }
+
+export const MIXED_ONCE_PER_CUSTOMER_MESSAGE = (offerName: string) =>
+  `Cannot publish "${offerName}": some of its active codes are once-per-customer and others are not. Shopify applies that rule to a whole code discount, so make every active code once-per-customer, or none.`;
 
 const FUNCTION_NUMERIC_OPERATORS = new Set(["eq", "gt", "gte", "lt", "lte"]);
 
@@ -83,7 +88,15 @@ export async function validateOffersPublishable(
     { id: string; internalName: string; requiredDiscountCode: string | null; requiresCode: boolean }[],
     OfferCondition[],
     OfferReward[],
-    { offerId: string }[],
+    Array<{
+      offerId: string;
+      status: string;
+      startsAt: Date | null;
+      endsAt: Date | null;
+      usageLimit: number | null;
+      usageCount: number;
+      oncePerCustomer: boolean;
+    }>,
   ] = await Promise.all([
     db
       .select({
@@ -103,11 +116,20 @@ export async function validateOffersPublishable(
       .from(offerRewards)
       .where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, offerIds))),
     db
-      .select({ offerId: discountCodes.offerId })
+      .select({
+        offerId: discountCodes.offerId,
+        status: discountCodes.status,
+        startsAt: discountCodes.startsAt,
+        endsAt: discountCodes.endsAt,
+        usageLimit: discountCodes.usageLimit,
+        usageCount: discountCodes.usageCount,
+        oncePerCustomer: discountCodes.oncePerCustomer,
+      })
       .from(discountCodes)
       .where(and(eq(discountCodes.shopId, shopId), inArray(discountCodes.offerId, offerIds))),
   ]);
   const offersWithCodes = new Set(codeRows.map((row) => row.offerId));
+  const now = new Date();
 
   const foundIds = new Set(offerRows.map((offer) => offer.id));
   for (const offerId of offerIds) {
@@ -144,9 +166,22 @@ export async function validateOffersPublishable(
       };
     }
 
+    // Shopify applies once-per-customer to the whole code discount, so a node can't carry both
+    // kinds of code: the rule would silently be dropped for the once-per-customer ones.
+    const liveCodes = codeRows.filter((row) => row.offerId === offer.id && isCodeRedeemable(row, now));
+    if (liveCodes.some((row) => row.oncePerCustomer) && liveCodes.some((row) => !row.oncePerCustomer)) {
+      return {
+        ok: false,
+        error: MIXED_ONCE_PER_CUSTOMER_MESSAGE(offer.internalName),
+      };
+    }
+
     if (rewards.some((reward) => reward.rewardType === "shipping_discount")) {
       const unsupportedShippingCondition = eligibilityConditions.find(
-        (condition) => condition.isEnabled && condition.conditionType !== "cart_value",
+        (condition) =>
+          condition.isEnabled &&
+          condition.conditionType !== "cart_value" &&
+          !(PAGE_CONDITION_TYPES as readonly string[]).includes(condition.conditionType),
       );
       if (unsupportedShippingCondition) {
         return {
@@ -254,8 +289,10 @@ export async function publishShopConfig(
   shopDomain: string,
 ): Promise<string | null> {
   try {
+    // "pending" means another publish held the shop's lock: the shop is flagged and retried in the
+    // background (and by the cron). That is not an error and must never pause or draft an offer.
     await publishOffersForShop(shopId, shopDomain);
-    invalidateOfferDefinitions(shopId);
+    await invalidateOfferDefinitions(shopId);
     return null;
   } catch (err) {
     return err instanceof Error ? err.message : "Failed to publish offer configuration to Shopify.";
@@ -270,7 +307,7 @@ export async function republishIfActive(
   wasActive: boolean,
 ): Promise<string | null> {
   if (!wasActive) {
-    invalidateOfferDefinitions(shopId);
+    await invalidateOfferDefinitions(shopId);
     return null;
   }
   // The edit is already saved; an active offer whose new state can't be validated or pushed
@@ -303,7 +340,7 @@ export async function finalizeCreatedOffer(
   intendedStatus: string,
 ): Promise<string | null> {
   if (intendedStatus !== "active") {
-    invalidateOfferDefinitions(shopId);
+    await invalidateOfferDefinitions(shopId);
     return null;
   }
   const validation = await validateOffersPublishable(db, shopId, [offerId]);

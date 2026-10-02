@@ -12,6 +12,7 @@ import type {
 import {
   resolveOnlyMatchedLines,
   resolveRejectUnmatchedLines,
+  specificLinkRequiredPath,
   type ConditionType,
   type TypedOfferCondition,
 } from "@promo/shared-types";
@@ -32,14 +33,118 @@ function onlyMatchedLines(
   return resolveOnlyMatchedLines(flag, options.codePromo === true || Boolean(offer.requiredDiscountCode));
 }
 
-function applyLineMatchFlags(
-  config: CompiledOffer,
-  value: { onlyMatchedLines?: unknown; rejectUnmatchedLines?: unknown },
+/** The four page-condition types, in one place for the offer and shipping compilers. */
+export const PAGE_CONDITION_TYPES = ["page_url", "specific_link", "utm_parameters", "page_types"] as const;
+
+interface CompiledPageConditions {
+  conditions: CompiledPageUrlCondition[];
+  restrictToMatchedLines: boolean;
+  rejectUnmatchedLines: boolean;
+}
+
+/**
+ * Compile one page condition (page_url, specific_link, utm_parameters or page_types).
+ * Query names/values are stored raw: the Function percent-decodes the line URL and
+ * compares `utm_*` ASCII case-insensitively (decision D3), so nothing is encoded here.
+ * Returns null for any other condition type.
+ */
+export function compilePageCondition(
+  condition: TypedOfferCondition,
   offer: { requiredDiscountCode?: string | null },
-  options: CompileOfferOptions,
-): void {
-  if (onlyMatchedLines(value.onlyMatchedLines, offer, options)) config.restrictToMatchedLines = true;
-  if (resolveRejectUnmatchedLines(value.rejectUnmatchedLines)) config.rejectUnmatchedLines = true;
+  options: CompileOfferOptions = {},
+): CompiledPageConditions | null {
+  const flags = (value: { onlyMatchedLines?: unknown; rejectUnmatchedLines?: unknown }) => ({
+    restrictToMatchedLines: onlyMatchedLines(value.onlyMatchedLines, offer, options),
+    rejectUnmatchedLines: resolveRejectUnmatchedLines(value.rejectUnmatchedLines),
+  });
+  switch (condition.conditionType) {
+    case "specific_link": {
+      const { value } = condition;
+      const requiredPath = specificLinkRequiredPath(String(value.requiredUrl ?? ""));
+      return {
+        conditions: [
+          {
+            patterns: requiredPath ? [requiredPath] : [],
+            matchMode: "contains",
+            caseSensitive: false,
+            ...(typeof value.paramName === "string" ? { paramName: value.paramName } : {}),
+            ...(typeof value.paramValue === "string" ? { paramValue: value.paramValue } : {}),
+          },
+        ],
+        ...flags(value),
+      };
+    }
+    case "page_url": {
+      const { value } = condition;
+      return {
+        conditions: [
+          {
+            patterns: Array.isArray(value.patterns)
+              ? value.patterns.filter((pattern): pattern is string => typeof pattern === "string")
+              : [],
+            matchMode:
+              value.matchMode === "exact" ||
+              value.matchMode === "starts_with" ||
+              value.matchMode === "ends_with"
+                ? value.matchMode
+                : "contains",
+            caseSensitive: value.caseSensitive === true,
+          },
+        ],
+        ...flags(value),
+      };
+    }
+    case "utm_parameters": {
+      const { value } = condition;
+      const utmFields: Array<[string, string | undefined]> = [
+        ["utm_source", value.utmSource],
+        ["utm_medium", value.utmMedium],
+        ["utm_campaign", value.utmCampaign],
+        ["utm_term", value.utmTerm],
+        ["utm_content", value.utmContent],
+      ];
+      return {
+        conditions: utmFields.flatMap(([paramName, paramValue]) =>
+          paramValue
+            ? [
+                {
+                  patterns: [],
+                  matchMode: "contains" as const,
+                  caseSensitive: false,
+                  paramName,
+                  paramValue,
+                  ...(value.scope === "visit" ? { source: "landing" as const } : {}),
+                },
+              ]
+            : [],
+        ),
+        ...flags(value),
+      };
+    }
+    case "page_types": {
+      const { value } = condition;
+      return {
+        conditions: [
+          {
+            patterns: Array.isArray(value.pageTypes)
+              ? value.pageTypes.filter((pageType) => typeof pageType === "string")
+              : [],
+            matchMode: "page_type",
+            caseSensitive: false,
+          },
+        ],
+        ...flags(value),
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function applyPageCondition(config: CompiledOffer, compiled: CompiledPageConditions): void {
+  config.pageUrlConditions!.push(...compiled.conditions);
+  if (compiled.restrictToMatchedLines) config.restrictToMatchedLines = true;
+  if (compiled.rejectUnmatchedLines) config.rejectUnmatchedLines = true;
 }
 
 export interface CompiledFunctionConfig {
@@ -68,6 +173,8 @@ export interface CompiledShippingOffer {
   /** Customer-facing shipping discount name, emitted as the candidate message. */
   title?: string;
   priority: number;
+  /** Currency of fixed-amount tiers and subtotal thresholds; the Function defaults to USD. */
+  currencyCode?: string;
   tiers: CompiledShippingTier[];
   targetGroupTypes: Array<"ONE_TIME_PURCHASE" | "SUBSCRIPTION">;
   scopeMode: "sitewide" | "landing" | "quiz_bundle";
@@ -79,6 +186,10 @@ export interface CompiledShippingOffer {
   codeHashes?: string[];
   /** Backend B: the delivery Function also accepts the matched codes (they are not Shopify discounts). */
   acceptCodes?: true;
+  /** Page conditions (D2): a non-gift line matching all of them must exist; omitted when empty. */
+  pageUrlConditions?: CompiledPageUrlCondition[];
+  /** Every non-gift line must match pageUrlConditions (D2 reject mode). Only ever true. */
+  rejectUnmatchedLines?: true;
 }
 
 export interface CompiledOffer {
@@ -169,6 +280,10 @@ export interface CompiledGiftReward {
   discountType: string;
   discountValue: number;
   maxQuantity: number;
+  /** Customer-picked reward ("choose K of N"): the Function caps free units across all its gifts. */
+  selectable?: true;
+  /** Gifts the shopper may pick from a selectable reward; the Function defaults to 1. */
+  selectionCount?: number;
 }
 
 export interface CompiledProductReward {
@@ -198,6 +313,8 @@ export interface CompiledProductReward {
   selectionMode: "all" | "cheapest" | "most_expensive";
   countRule: "all" | "unique";
   discountPercentageOnGifts: number;
+  /** Quiz bundles: cap (share of the paid lines' subtotal) on the discount the client-set price can take. */
+  quizMaxDiscountPercent?: number;
   /** Only lines whose packed metadata carries this key/value qualify (e.g. __bundle_type). */
   requiredLineAttribute?: { key: string; value: string };
 }
@@ -466,86 +583,12 @@ export function compileOfferConfig(
           : [];
         break;
       }
-      case "specific_link": {
-        const { value } = typedCondition;
-        const requiredUrl = String(value.requiredUrl ?? "").trim();
-        let requiredPath = requiredUrl.split("?")[0] ?? "";
-        try {
-          requiredPath = new URL(requiredUrl).pathname;
-        } catch {
-          // Relative paths are already in the representation stamped by the storefront.
-        }
-        config.pageUrlConditions!.push({
-          patterns: requiredPath ? [requiredPath] : [],
-          matchMode: "contains",
-          caseSensitive: false,
-          ...(typeof value.paramName === "string"
-            ? { paramName: encodeURIComponent(value.paramName) }
-            : {}),
-          ...(typeof value.paramValue === "string"
-            ? { paramValue: encodeURIComponent(value.paramValue) }
-            : {}),
-        });
-        applyLineMatchFlags(config, value, offer, options);
+      case "specific_link":
+      case "page_url":
+      case "utm_parameters":
+      case "page_types":
+        applyPageCondition(config, compilePageCondition(typedCondition, offer, options)!);
         break;
-      }
-      case "page_url": {
-        const { value } = typedCondition;
-        config.pageUrlConditions!.push({
-          patterns: Array.isArray(value.patterns)
-            ? value.patterns.filter((pattern): pattern is string => typeof pattern === "string")
-            : [],
-          matchMode:
-            value.matchMode === "exact" ||
-            value.matchMode === "starts_with" ||
-            value.matchMode === "ends_with"
-              ? value.matchMode
-              : "contains",
-          caseSensitive: value.caseSensitive === true,
-        });
-        applyLineMatchFlags(config, value, offer, options);
-        break;
-      }
-      case "utm_parameters": {
-        const { value } = typedCondition;
-        const utmFields: Array<[string, string | undefined]> = [
-          ["utm_source", value.utmSource],
-          ["utm_medium", value.utmMedium],
-          ["utm_campaign", value.utmCampaign],
-          ["utm_term", value.utmTerm],
-          ["utm_content", value.utmContent],
-        ];
-        for (const [paramName, paramValue] of utmFields) {
-          if (!paramValue) continue;
-          // Match specific_link's encoding: the Function compares this
-          // against the raw, un-decoded query string captured off the
-          // customer's real landing URL, so a value containing a space or
-          // other reserved character must be encoded the same way a real
-          // campaign URL would already have it, or the comparison never matches.
-          config.pageUrlConditions!.push({
-            patterns: [],
-            matchMode: "contains",
-            caseSensitive: false,
-            paramName,
-            paramValue: encodeURIComponent(paramValue),
-            ...(value.scope === "visit" ? { source: "landing" as const } : {}),
-          });
-        }
-        applyLineMatchFlags(config, value, offer, options);
-        break;
-      }
-      case "page_types": {
-        const { value } = typedCondition;
-        config.pageUrlConditions!.push({
-          patterns: Array.isArray(value.pageTypes)
-            ? value.pageTypes.filter((pageType) => typeof pageType === "string")
-            : [],
-          matchMode: "page_type",
-          caseSensitive: false,
-        });
-        applyLineMatchFlags(config, value, offer, options);
-        break;
-      }
       default:
         // Only conditions the publish flow already validated as Function-enforced
         // (see FUNCTION_ENFORCED_CONDITION_TYPES / offer-publish-flow.server.ts)
@@ -594,6 +637,8 @@ export function compileOfferConfig(
         discountType: reward.discountType,
         discountValue: config.discountValue,
         maxQuantity: Math.max(1, reward.quantity ?? 1),
+        // Same test the storefront picker uses: an explicit flag, or more than one variant to choose from.
+        ...(reward.isCustomerSelectable || variantIds.length > 1 ? { selectable: true as const } : {}),
       });
     }
     if (
@@ -732,6 +777,11 @@ export function compileOfferConfig(
           100,
           Math.max(0, Number(target["discountPercentageOnGifts"] ?? 100)),
         ),
+        ...(typeof target["quizMaxDiscountPercent"] === "number" &&
+        target["quizMaxDiscountPercent"] >= 0 &&
+        target["quizMaxDiscountPercent"] <= 100
+          ? { quizMaxDiscountPercent: target["quizMaxDiscountPercent"] }
+          : {}),
         ...(() => {
           const attribute = target["requiredLineAttribute"];
           if (!attribute || typeof attribute !== "object") return {};
@@ -912,12 +962,30 @@ export function compileShippingOfferConfigs(
     : null;
   const fallbackThresholdCents = Number(cartValue?.["thresholdCents"] ?? 0);
 
+  const pageConditions: CompiledPageUrlCondition[] = [];
+  let rejectUnmatchedLines = false;
+  for (const condition of enabledConditions) {
+    const conditionType = condition.conditionType as ConditionType;
+    if (!(PAGE_CONDITION_TYPES as readonly string[]).includes(conditionType)) continue;
+    const compiled = compilePageCondition(
+      {
+        conditionType,
+        value: normalizeConditionValue(conditionType, condition.value as Record<string, unknown>),
+      } as TypedOfferCondition,
+      offer,
+    );
+    if (!compiled) continue;
+    pageConditions.push(...compiled.conditions);
+    rejectUnmatchedLines ||= compiled.rejectUnmatchedLines;
+  }
+
   return rewards
     .filter((reward) => reward.rewardType === "shipping_discount")
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .flatMap((reward, rewardIndex) => {
       const value = reward.value as {
         amount?: unknown;
+        currencyCode?: unknown;
         tiers?: Array<{
           minimumSubtotalCents?: unknown;
           maximumSubtotalCents?: unknown;
@@ -977,6 +1045,9 @@ export function compileShippingOfferConfigs(
           id: `${offer.id}:${reward.id}`,
           title: offer.publicTitle?.trim() || undefined,
           priority: offer.priority * 1000 + rewardIndex,
+          ...(typeof value.currencyCode === "string" && value.currencyCode && value.currencyCode !== "USD"
+            ? { currencyCode: value.currencyCode }
+            : {}),
           tiers,
           targetGroupTypes,
           scopeMode,
@@ -988,6 +1059,8 @@ export function compileShippingOfferConfigs(
           requiresAnchorSubscription: target.requiresAnchorSubscription === true,
           ...(options.codeHashes ? { codeHashes: options.codeHashes } : {}),
           ...(options.acceptCodes ? { acceptCodes: true as const } : {}),
+          ...(pageConditions.length > 0 ? { pageUrlConditions: pageConditions } : {}),
+          ...(pageConditions.length > 0 && rejectUnmatchedLines ? { rejectUnmatchedLines: true as const } : {}),
         },
       ];
     });
@@ -1060,11 +1133,14 @@ const PRODUCT_REWARD_DEFAULTS: FieldDefaults = {
 const ORDER_REWARD_DEFAULTS: FieldDefaults = { subtotalTiers: [] };
 const PAGE_URL_CONDITION_DEFAULTS: FieldDefaults = { patterns: [], caseSensitive: false };
 const SHIPPING_OFFER_DEFAULTS: FieldDefaults = {
+  currencyCode: "USD",
+  rejectUnmatchedLines: false,
   scopeMode: "sitewide",
   requiredAnchorVariantIds: [],
   requiredAnchorMinQuantity: 1,
   requiresAnchorSubscription: false,
   codeHashes: [],
+  pageUrlConditions: [],
 };
 
 function omitDefaults(
@@ -1120,7 +1196,15 @@ export function serializeFunctionConfig(
         ...(withoutSlots ? { c1: undefined, c2: undefined, c3: undefined } : {}),
         offers: config.offers.map(compactCompiledOffer),
         shippingOffers: config.shippingOffers.map((offer) =>
-          omitDefaults(offer, SHIPPING_OFFER_DEFAULTS),
+          omitDefaults(
+            {
+              ...offer,
+              pageUrlConditions: offer.pageUrlConditions?.map((condition) =>
+                omitDefaults(condition, PAGE_URL_CONDITION_DEFAULTS),
+              ),
+            },
+            SHIPPING_OFFER_DEFAULTS,
+          ),
         ),
       },
       CONFIG_DEFAULTS,

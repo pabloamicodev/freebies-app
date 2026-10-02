@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ilike, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, ilike, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import {
   discountCodeBatches,
   discountCodeRedemptions,
@@ -9,8 +9,9 @@ import {
 } from "@promo/db";
 import { RequiredDiscountCodeSchema } from "@promo/shared-types";
 import {
+  CODE_CHARSETS,
+  discountCodesToCsv,
   generateUniqueCodes,
-  isCodeRedeemable,
   validateBatchSpec,
   type BatchSpec,
 } from "./discount-code-generation.js";
@@ -18,6 +19,12 @@ import { isConstraintViolation } from "./unique-offer-name.server.js";
 
 export const DISCOUNT_CODE_INDEX = "discount_codes_shop_code_idx";
 export const CODE_TAKEN_MESSAGE = "That code is already used. Choose a different code.";
+/** A typed code shorter than this is easy to guess; it is allowed but flagged. */
+export const TYPED_CODE_MIN_SAFE_LENGTH = 6;
+/** A batch must leave at most a 1-in-a-million chance that one random guess hits a live code. */
+export const MIN_BATCH_GUESS_ODDS = 1_000_000;
+export const MIXED_ONCE_PER_CUSTOMER_ERROR =
+  "This offer's active codes must all be once-per-customer, or none of them: Shopify applies that rule to a whole code discount. Change the existing codes first, or create the new code with the same setting.";
 const TYPED_CODE_PATTERN = /^[A-Z0-9][A-Z0-9_-]*$/;
 const INSERT_CHUNK = 500;
 
@@ -73,6 +80,46 @@ export function normalizeTypedCode(
   return { ok: true, code: parsed.data };
 }
 
+export function typedCodeWarning(code: string): string | null {
+  return code.length < TYPED_CODE_MIN_SAFE_LENGTH
+    ? `Codes shorter than ${TYPED_CODE_MIN_SAFE_LENGTH} characters are easy to guess. Anyone could try them at checkout; use a longer code, or limit its usage.`
+    : null;
+}
+
+/** Entropy check for generated batches: the random part must be big enough that guessing is hopeless. */
+export function validateBatchEntropy(
+  spec: Pick<BatchSpec, "length" | "charset" | "count">,
+  minGuessOdds: number = MIN_BATCH_GUESS_ODDS,
+): string | null {
+  const alphabet = CODE_CHARSETS[spec.charset];
+  if (!alphabet) return "Choose a valid character set.";
+  const space = alphabet.length ** spec.length;
+  if (space / spec.count < minGuessOdds) {
+    return `These codes are too easy to guess (${spec.count.toLocaleString("en-US")} codes out of ${Math.floor(space).toLocaleString("en-US")} possible). Use a longer code or a larger character set, or generate fewer codes.`;
+  }
+  return null;
+}
+
+/** Whether the offer's active codes already commit to once-per-customer (true), its absence (false), or have none (null). */
+async function existingOncePerCustomer(db: Db, shopId: string, offerId: string): Promise<boolean | null> {
+  const rows = await db
+    .selectDistinct({ oncePerCustomer: discountCodes.oncePerCustomer })
+    .from(discountCodes)
+    .where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offerId), redeemableCondition(new Date())));
+  if (rows.length !== 1) return rows.length === 0 ? null : false;
+  return rows[0]!.oncePerCustomer;
+}
+
+/** SQL twin of `isCodeRedeemable`. */
+function redeemableCondition(now: Date) {
+  return and(
+    eq(discountCodes.status, "active"),
+    or(isNull(discountCodes.startsAt), lte(discountCodes.startsAt, now)),
+    or(isNull(discountCodes.endsAt), gt(discountCodes.endsAt, now)),
+    or(isNull(discountCodes.usageLimit), sql`${discountCodes.usageCount} < ${discountCodes.usageLimit}`),
+  );
+}
+
 async function legacyCodeHolder(db: Db, shopId: string, offerId: string, codes: string[]): Promise<string | null> {
   if (codes.length === 0) return null;
   const rows = await db
@@ -93,11 +140,15 @@ async function legacyCodeHolder(db: Db, shopId: string, offerId: string, codes: 
 export async function createDiscountCode(
   db: Db,
   input: { shopId: string; offerId: string; code: unknown } & CodeSettings,
-): Promise<{ ok: true; code: DiscountCode } | { ok: false; error: string }> {
+): Promise<{ ok: true; code: DiscountCode; warning?: string } | { ok: false; error: string }> {
   const normalized = normalizeTypedCode(input.code);
   if (!normalized.ok) return normalized;
   const settingsError = validateCodeSettings(input);
   if (settingsError) return { ok: false, error: settingsError };
+  const existingOnce = await existingOncePerCustomer(db, input.shopId, input.offerId);
+  if (existingOnce !== null && existingOnce !== (input.oncePerCustomer ?? false)) {
+    return { ok: false, error: MIXED_ONCE_PER_CUSTOMER_ERROR };
+  }
   if (await legacyCodeHolder(db, input.shopId, input.offerId, [normalized.code])) {
     return { ok: false, error: CODE_TAKEN_MESSAGE };
   }
@@ -116,7 +167,8 @@ export async function createDiscountCode(
       .returning();
     if (!row) return { ok: false, error: "Could not create the code." };
     await markRequiresCode(db, input.shopId, input.offerId);
-    return { ok: true, code: row };
+    const warning = typedCodeWarning(row.code);
+    return { ok: true, code: row, ...(warning ? { warning } : {}) };
   } catch (err) {
     if (isConstraintViolation(err, DISCOUNT_CODE_INDEX)) return { ok: false, error: CODE_TAKEN_MESSAGE };
     throw err;
@@ -125,12 +177,22 @@ export async function createDiscountCode(
 
 export async function createDiscountCodeBatch(
   db: Db,
-  input: { shopId: string; offerId: string; spec: BatchSpec } & CodeSettings,
+  input: {
+    shopId: string;
+    offerId: string;
+    spec: BatchSpec;
+    /** Lowers the guessing-odds floor; only for tests that need a tiny code space. */
+    minGuessOdds?: number;
+  } & CodeSettings,
 ): Promise<{ ok: true; created: number; batchId: string } | { ok: false; error: string }> {
-  const specError = validateBatchSpec(input.spec);
+  const specError = validateBatchSpec(input.spec) ?? validateBatchEntropy(input.spec, input.minGuessOdds);
   if (specError) return { ok: false, error: specError };
   const settingsError = validateCodeSettings(input);
   if (settingsError) return { ok: false, error: settingsError };
+  const existingOnce = await existingOncePerCustomer(db, input.shopId, input.offerId);
+  if (existingOnce !== null && existingOnce !== (input.oncePerCustomer ?? false)) {
+    return { ok: false, error: MIXED_ONCE_PER_CUSTOMER_ERROR };
+  }
 
   const [batch] = await db
     .insert(discountCodeBatches)
@@ -243,6 +305,71 @@ export async function exportDiscountCodes(
     .orderBy(asc(discountCodes.createdAt), asc(discountCodes.code));
 }
 
+/**
+ * CSV of an offer's codes as a stream: one keyset-paginated page in memory at a time, so a
+ * 100k-code export never builds the whole file (or the whole row list) in the function's memory.
+ */
+export function streamDiscountCodesCsv(
+  db: Db,
+  shopId: string,
+  offerId: string,
+  query: CodeListQuery = {},
+  pageSize = 1_000,
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let after: { createdAt: Date; code: string } | null = null;
+  let first = true;
+  let finished = false;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (finished) return;
+      try {
+        const rows: DiscountCode[] = await db
+          .select()
+          .from(discountCodes)
+          .where(
+            and(
+              codeFilter(shopId, offerId, query),
+              after
+                ? sql`(${discountCodes.createdAt}, ${discountCodes.code}) > (${after.createdAt.toISOString()}::timestamptz, ${after.code})`
+                : undefined,
+            ),
+          )
+          .orderBy(asc(discountCodes.createdAt), asc(discountCodes.code))
+          .limit(pageSize);
+        const csv = discountCodesToCsv(rows);
+        // discountCodesToCsv always starts with the header line; only the first page keeps it.
+        const chunkText = first ? csv : csv.slice(csv.indexOf("\n") + 1);
+        first = false;
+        if (chunkText.length > 0) controller.enqueue(encoder.encode(chunkText));
+        const last = rows.at(-1);
+        if (rows.length < pageSize || !last) {
+          finished = true;
+          controller.close();
+          return;
+        }
+        after = { createdAt: last.createdAt, code: last.code };
+      } catch (error) {
+        finished = true;
+        controller.error(error);
+      }
+    },
+  });
+}
+
+export async function countDiscountCodes(
+  db: Db,
+  shopId: string,
+  offerId: string,
+  query: CodeListQuery = {},
+): Promise<number> {
+  const [row] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(discountCodes)
+    .where(codeFilter(shopId, offerId, query));
+  return row?.total ?? 0;
+}
+
 /** Deactivating (or reactivating) takes effect on Shopify at the next publish. */
 export async function setDiscountCodesStatus(
   db: Db,
@@ -265,7 +392,10 @@ export async function setDiscountCodesStatus(
   return rows.length;
 }
 
-/** Only codes already removed from Shopify can be deleted, so a deleted row never leaves a live code behind. */
+/**
+ * Only codes already removed from Shopify can be deleted, so a deleted row never leaves a live code
+ * behind. A code still flagged in flight to Shopify may be live even though it isn't marked synced yet.
+ */
 export async function deleteDiscountCodes(
   db: Db,
   shopId: string,
@@ -281,6 +411,7 @@ export async function deleteDiscountCodes(
         eq(discountCodes.offerId, offerId),
         inArray(discountCodes.id, ids),
         sql`${discountCodes.shopifySyncedAt} is null`,
+        sql`${discountCodes.shopifySyncPendingAt} is null`,
       ),
     )
     .returning({ id: discountCodes.id });
@@ -376,22 +507,31 @@ export async function getCodeNotices(
   offer: { id: string; requiresCode: boolean; requiredDiscountCode: string | null },
   now: Date = new Date(),
 ): Promise<CodeNotices> {
-  const rows = await db
-    .select()
-    .from(discountCodes)
-    .where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offer.id)));
-  const gated = offer.requiresCode || Boolean(offer.requiredDiscountCode) || rows.length > 0;
-  const live = rows.some((row) => isCodeRedeemable(row, now)) || (rows.length === 0 && Boolean(offer.requiredDiscountCode));
+  const own = and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offer.id));
+  // exists / limited reads: an offer with 100k codes must not load them all to render one banner.
+  const [anyRow, liveRow, collisionRows] = await Promise.all([
+    db.select({ id: discountCodes.id }).from(discountCodes).where(own).limit(1),
+    db
+      .select({ id: discountCodes.id })
+      .from(discountCodes)
+      .where(and(own, redeemableCondition(now)))
+      .limit(1),
+    db
+      .select()
+      .from(discountCodes)
+      .where(and(own, sql`${discountCodes.requestedCode} is not null`))
+      .limit(20),
+  ]);
+  const hasRows = anyRow.length > 0;
+  const gated = offer.requiresCode || Boolean(offer.requiredDiscountCode) || hasRows;
+  const live = liveRow.length > 0 || (!hasRows && Boolean(offer.requiredDiscountCode));
   return {
     inert: gated && !live,
-    collisions: rows
-      .filter((row) => row.requestedCode)
-      .slice(0, 20)
-      .map((row) => ({
-        id: row.id,
-        code: row.code,
-        requestedCode: row.requestedCode as string,
-        existingDiscount: row.collisionNote,
-      })),
+    collisions: collisionRows.map((row) => ({
+      id: row.id,
+      code: row.code,
+      requestedCode: row.requestedCode as string,
+      existingDiscount: row.collisionNote,
+    })),
   };
 }

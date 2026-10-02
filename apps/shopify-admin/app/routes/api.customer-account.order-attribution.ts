@@ -1,4 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
+import { OrderAttributionQuerySchema, searchParamsObject } from "@promo/shared-types";
 import { authenticate } from "../shopify.server.js";
 import { customerIdFromSub, getActiveShop, shopDomainFromDest } from "../lib/extension-auth.server.js";
 import { getOrderAttributions } from "../lib/order-attribution.server.js";
@@ -11,7 +12,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { cors, sessionToken } = await authenticate.public.customerAccount(request);
   try {
     const shop = await getActiveShop(shopDomainFromDest(sessionToken.dest));
-    const orderGid = new URL(request.url).searchParams.get("order_gid");
+    const query = OrderAttributionQuerySchema.safeParse(searchParamsObject(new URL(request.url).searchParams, ["order_gid"]));
+    const orderGid = query.success ? query.data.order_gid : null;
     const attributions = await getOrderAttributions(shop.db, shop, orderGid, customerIdFromSub(sessionToken.sub));
     return cors(apiJson(request, { attributions }));
   } catch (error) {

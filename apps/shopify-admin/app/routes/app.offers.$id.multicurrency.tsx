@@ -5,6 +5,7 @@
  * Accessible from the offer detail page → "Multi-Currency" tab.
  */
 
+import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData, Form, useActionData, useNavigation } from "react-router";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
@@ -21,7 +22,7 @@ type ActionResult = { success: true } | { error: string };
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { admin, shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const conditionRows = await db.select().from(offerConditions).where(
@@ -69,7 +70,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
 export const action = async ({ request, params }: ActionFunctionArgs): Promise<ActionResult> => {
   const { session, shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
@@ -169,7 +170,7 @@ export default function MultiCurrencyPage() {
         </div>
       )}
       {actionData && "success" in actionData && actionData.success && (
-        <div className="b-banner b-banner-green b-mb-4">
+        <div className="b-banner b-banner-green b-mb-4" role="status">
           <span className="b-banner-icon">✓</span>
           <div className="b-banner-body">
             <p className="b-banner-text" style={{ margin: 0 }}>Currency overrides saved.</p>

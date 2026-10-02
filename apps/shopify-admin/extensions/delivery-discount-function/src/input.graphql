@@ -3,7 +3,7 @@ query Input {
   enteredDiscountCodes { code }
   discount {
     discountClasses
-    metafield(namespace: "promo_engine", key: "function_config") {
+    metafield(namespace: "$app:promo_engine", key: "function_config") {
       value
     }
   }
@@ -25,6 +25,7 @@ query Input {
       quizBundleIdAttribute: attribute(key: "_quiz_bundle_id") { value }
       quizFreeGiftAttribute: attribute(key: "_quiz_free_gift") { value }
       quizExpectedPaidCountAttribute: attribute(key: "_quiz_expected_paid_count") { value }
+      promoMetadata: attribute(key: "_promo_engine_metadata") { value }
       sellingPlanAllocation {
         sellingPlan {
           id

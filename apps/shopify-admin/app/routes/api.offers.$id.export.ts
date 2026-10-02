@@ -11,12 +11,14 @@ import { offers, offerConditions, offerRewards, shops } from "@promo/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { rowToCSV } from "../lib/csv.js";
 import { apiError, getRequestId, handleApiError } from "../lib/api-response.server.js";
+import { parseUuidParam } from "../lib/route-params.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   try {
   const { session } = await authenticate.admin(request);
   const db = getDb();
-  const offerId = params["id"];
+  // /api/offers/export has no :id (all offers); /api/offers/:id/export must carry a UUID.
+  const offerId = params["id"] === undefined ? undefined : parseUuidParam(params);
 
   const shopRows = await db
     .select({ id: shops.id })

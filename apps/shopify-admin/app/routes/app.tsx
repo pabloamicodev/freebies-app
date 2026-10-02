@@ -1,4 +1,4 @@
-import { Outlet, isRouteErrorResponse, useFetchers, useLoaderData, useLocation, useNavigation, useRouteError } from "react-router";
+import { Link, Outlet, isRouteErrorResponse, useFetchers, useLoaderData, useLocation, useNavigation, useRouteError } from "react-router";
 import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
@@ -12,6 +12,8 @@ import type { LoaderFunctionArgs, HeadersFunction } from "react-router";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 import bogosStyles from "../styles/bogos.css?url";
 import type { LinksFunction } from "react-router";
+
+const LOADER_DELAY_MS = 300;
 
 export const links: LinksFunction = () => [
   { rel: "stylesheet", href: polarisStyles },
@@ -41,7 +43,11 @@ export default function AppLayout() {
   const [showNavigationIndicator, setShowNavigationIndicator] = useState(false);
   const [documentNavigationPending, setDocumentNavigationPending] = useState(false);
   const isNavigating = navigation.state !== "idle";
-  const activeFetcherCount = fetchers.reduce((count, fetcher) => count + (fetcher.state !== "idle" ? 1 : 0), 0);
+  // Background GET fetchers (pickers, search, polling) must not flash the global pill; only mutations count.
+  const activeFetcherCount = fetchers.reduce(
+    (count, fetcher) => count + (fetcher.state !== "idle" && fetcher.formMethod && fetcher.formMethod.toUpperCase() !== "GET" ? 1 : 0),
+    0,
+  );
   const isBusy = isNavigating || activeFetcherCount > 0 || documentNavigationPending;
   const loadingLabel = navigation.state === "submitting" || activeFetcherCount > 0
     ? "Saving changes"
@@ -92,7 +98,7 @@ export default function AppLayout() {
 
     const timer = window.setTimeout(() => {
       setShowNavigationIndicator(true);
-    }, 80);
+    }, LOADER_DELAY_MS);
 
     return () => window.clearTimeout(timer);
   }, [isBusy]);
@@ -148,7 +154,8 @@ export function ErrorBoundary() {
         ? `${error.status} ${error.statusText}: ${typeof error.data === "string" ? error.data : JSON.stringify(error.data)}`
         : JSON.stringify(error);
     const stack = error instanceof Error ? (error.stack ?? "") : "";
-    fetch("/api/report-error", {
+    const shop = new URLSearchParams(window.location.search).get("shop");
+    fetch(`/api/report-error${shop ? `?shop=${encodeURIComponent(shop)}` : ""}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, stack, url: window.location.href }),
@@ -156,22 +163,33 @@ export function ErrorBoundary() {
   }, [error, isClientError]);
 
   if (isShopifyAuthResponse) return boundary.error(error);
-  if (isClientError) {
-    return (
-      <div style={{ padding: "2rem", fontFamily: "system-ui" }}>
-        <h1>{error.status === 404 ? "Not found" : "Request failed"}</h1>
-        <p>{typeof error.data === "string" && error.data.length < 300 ? error.data : error.statusText}</p>
-      </div>
-    );
-  }
+
+  const notFound = isClientError && error.status === 404;
+  const title = notFound ? "Page not found" : isClientError ? "Request failed" : "Something went wrong";
+  const detail = notFound
+    ? "This page doesn't exist or was removed."
+    : isClientError
+      ? typeof error.data === "string" && error.data.length < 300 ? error.data : "The request could not be completed."
+      : "An unexpected error occurred. Your data was not changed. Try again, or go back to your offers.";
 
   return (
-    <div style={{ padding: "2rem", fontFamily: "system-ui" }}>
-      <h1>Something went wrong</h1>
-      <p>An unexpected error occurred. Please try again.</p>
-      {isDev && error instanceof Error && (
-        <pre style={{ color: "red", whiteSpace: "pre-wrap" }}>{error.message}</pre>
-      )}
+    <div className="b-page">
+      <div className="b-card b-card-body" role="alert" style={{ maxWidth: 480, margin: "40px auto", textAlign: "center" }}>
+        <h1 style={{ fontSize: 18, fontWeight: 700, margin: "0 0 8px" }}>{title}</h1>
+        <p style={{ fontSize: 14, color: "var(--text-sub)", margin: "0 0 16px" }}>{detail}</p>
+        {isDev && error instanceof Error && (
+          <pre style={{ fontSize: 12, color: "var(--red, #d72c0d)", textAlign: "left", whiteSpace: "pre-wrap", margin: "0 0 16px" }}>{error.message}</pre>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+          {!notFound && (
+            <button type="button" className="b-btn b-btn-secondary" onClick={() => window.location.reload()}>
+              Try again
+            </button>
+          )}
+          <Link to="/app" className="b-btn b-btn-secondary">Dashboard</Link>
+          <Link to="/app/offers" className="b-btn b-btn-primary">All offers</Link>
+        </div>
+      </div>
     </div>
   );
 }

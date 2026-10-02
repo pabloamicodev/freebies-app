@@ -9,7 +9,7 @@
  */
 import { appSettings, getDb, shops } from "@promo/db";
 import { and, eq } from "drizzle-orm";
-import { shopifyGraphQL } from "./shopify-fetch.server.js";
+import { ShopifyOutcomeUnknownError, shopifyGraphQL } from "./shopify-fetch.server.js";
 
 const CART_DISCOUNT_TITLE = "Promo Engine";
 const DELIVERY_DISCOUNT_TITLE = "Promo Engine Shipping";
@@ -18,6 +18,9 @@ export const DELIVERY_FUNCTION_TITLE = "Promo Engine Delivery Discount";
 export const CODE_FUNCTION_TITLE = "Promo Engine Code Discount";
 const CODE_DISCOUNT_TITLE = "Promo Engine Codes";
 export const CODE_NODE_SETTING = "code_discount_node.id";
+/** Automatic delivery nodes that carry the code-gated shipping of mixed code offers (hashes live there, not in the shared delivery config). */
+export const CODED_SHIPPING_TITLE_PREFIX = "Promo Engine Coded Shipping";
+export const CODED_SHIPPING_POOL_SETTING = "coded_shipping_pool.ids";
 export type DiscountClass = "ORDER" | "PRODUCT" | "SHIPPING";
 export const CART_DISCOUNT_CLASSES = [
   "PRODUCT",
@@ -139,6 +142,7 @@ export async function syncDiscountCombinationPolicy(
   }>({
     shopDomain,
     accessToken,
+    retryable: true,
     query: `mutation UpdatePromoEngineDiscountCombination($id: ID!, $discount: DiscountAutomaticAppInput!) {
       discountAutomaticAppUpdate(id: $id, automaticAppDiscount: $discount) {
         automaticAppDiscount { discountId }
@@ -247,41 +251,50 @@ export function formatDiscountUserErrors(errors: DiscountUserError[]): string {
     .join(", ");
 }
 
-/** Reuses an existing "Promo Engine" automatic discount if one is already
- * registered (e.g. a previous afterAuth run failed after creating it but
- * before we could persist the id) — avoids creating duplicates on retry. */
-async function createOrFindAutomaticDiscount(
+/** Reuses an existing automatic discount if one is already registered (e.g. a previous
+ * afterAuth run failed after creating it but before we could persist the id) — avoids
+ * creating duplicates on retry. A create that times out is never re-sent blind: the
+ * lookup runs first, since the node may already exist. */
+export async function createOrFindAutomaticDiscount(
   shopDomain: string,
   accessToken: string,
   shopifyFunction: ShopifyFunctionSummary,
   title: string,
   discountClasses: readonly DiscountClass[],
+  match: AutomaticDiscountMatch = { functionId: shopifyFunction.id, title },
 ): Promise<string> {
-  const existingId = await findExistingAutomaticDiscount(
-    shopDomain,
-    accessToken,
-    shopifyFunction.id,
-  );
+  const existingId = await findExistingAutomaticDiscount(shopDomain, accessToken, match);
   if (existingId) return existingId;
 
-  const created = await shopifyGraphQL<{
-    discountAutomaticAppCreate: {
-      automaticAppDiscount: { discountId: string } | null;
-      userErrors: DiscountUserError[];
-    };
-  }>({
-    shopDomain,
-    accessToken,
-    query: `mutation CreatePromoEngineDiscount($discount: DiscountAutomaticAppInput!) {
+  const create = () =>
+    shopifyGraphQL<{
+      discountAutomaticAppCreate: {
+        automaticAppDiscount: { discountId: string } | null;
+        userErrors: DiscountUserError[];
+      };
+    }>({
+      shopDomain,
+      accessToken,
+      query: `mutation CreatePromoEngineDiscount($discount: DiscountAutomaticAppInput!) {
       discountAutomaticAppCreate(automaticAppDiscount: $discount) {
         automaticAppDiscount { discountId }
         userErrors { field message code }
       }
     }`,
-    variables: {
-      discount: buildAutomaticDiscountCreateInput(shopifyFunction.handle, title, discountClasses),
-    },
-  });
+      variables: {
+        discount: buildAutomaticDiscountCreateInput(shopifyFunction.handle, title, discountClasses),
+      },
+    });
+  let created: Awaited<ReturnType<typeof create>>;
+  try {
+    created = await create();
+  } catch (err) {
+    if (!(err instanceof ShopifyOutcomeUnknownError)) throw err;
+    const recovered = await findExistingAutomaticDiscount(shopDomain, accessToken, match);
+    if (recovered) return recovered;
+    // Looked and it isn't there: the first attempt didn't land, so one more is safe.
+    created = await create();
+  }
 
   const result = created.discountAutomaticAppCreate;
   if (result.automaticAppDiscount) return result.automaticAppDiscount.discountId;
@@ -293,11 +306,7 @@ async function createOrFindAutomaticDiscount(
     );
   }
 
-  const recoveredId = await findExistingAutomaticDiscount(
-    shopDomain,
-    accessToken,
-    shopifyFunction.id,
-  );
+  const recoveredId = await findExistingAutomaticDiscount(shopDomain, accessToken, match);
   if (!recoveredId) {
     throw new Error(
       `discountAutomaticAppCreate reported a duplicate but no matching discount was found: ${formatDiscountUserErrors(result.userErrors)}`,
@@ -387,6 +396,8 @@ export async function discountNodeExists(
 
 const DISCOUNT_NODES_PAGE_SIZE = 50;
 const DISCOUNT_NODES_MAX_PAGES = 10;
+/** Narrows the scan to automatic discounts so a shop with thousands of code discounts still finds ours. */
+export const AUTOMATIC_DISCOUNT_QUERY = "method:automatic";
 
 interface DiscountNodesPage {
   discountNodes: {
@@ -394,8 +405,8 @@ interface DiscountNodesPage {
       id: string;
       discount: {
         __typename: string;
+        title?: string;
         appDiscountType?: { functionId: string };
-        codes?: { nodes: Array<{ code: string }> };
       };
     }>;
     pageInfo: { hasNextPage: boolean; endCursor: string | null };
@@ -406,90 +417,108 @@ async function fetchDiscountNodesPage(
   shopDomain: string,
   accessToken: string,
   cursor: string | null,
+  query: string | null,
 ): Promise<DiscountNodesPage> {
   return shopifyGraphQL<DiscountNodesPage>({
     shopDomain,
     accessToken,
-    query: `query FindExistingAppDiscount($first: Int!, $after: String) {
-      discountNodes(first: $first, after: $after) {
+    query: `query FindExistingAppDiscount($first: Int!, $after: String, $query: String) {
+      discountNodes(first: $first, after: $after, query: $query) {
         nodes {
           id
           discount {
             __typename
-            ... on DiscountAutomaticApp { appDiscountType { functionId } }
-            ... on DiscountCodeApp {
-              appDiscountType { functionId }
-              codes(first: 1) { nodes { code } }
-            }
+            ... on DiscountAutomaticApp { title appDiscountType { functionId } }
           }
         }
         pageInfo { hasNextPage endCursor }
       }
     }`,
-    variables: { first: DISCOUNT_NODES_PAGE_SIZE, after: cursor },
+    variables: { first: DISCOUNT_NODES_PAGE_SIZE, after: cursor, query },
   });
+}
+
+export interface AutomaticDiscountMatch {
+  functionId: string;
+  title: string;
+  /** Only an exact (case-insensitive) title match counts, e.g. for the coded shipping pool nodes. */
+  exactTitle?: boolean;
+}
+
+const normalizedTitle = (title: string | undefined) => (title ?? "").trim().toLocaleLowerCase();
+
+async function scanAutomaticDiscounts(
+  shopDomain: string,
+  accessToken: string,
+  match: AutomaticDiscountMatch,
+  query: string | null,
+): Promise<string | null> {
+  // The delivery Function backs both the shared shipping node and the coded shipping pool,
+  // so a function-only match must never pick a pool node.
+  const wanted = normalizedTitle(match.title);
+  const poolPrefix = normalizedTitle(CODED_SHIPPING_TITLE_PREFIX);
+  let fallback: string | null = null;
+  let cursor: string | null = null;
+  // Paginate instead of trusting the first 50 — a shop with many discounts (legacy or from
+  // other apps) could push ours past that window, and a second run would create a duplicate.
+  for (let page = 0; page < DISCOUNT_NODES_MAX_PAGES; page += 1) {
+    const data: DiscountNodesPage = await fetchDiscountNodesPage(shopDomain, accessToken, cursor, query);
+    for (const node of data.discountNodes.nodes) {
+      if (node.discount.__typename !== "DiscountAutomaticApp") continue;
+      if (node.discount.appDiscountType?.functionId !== match.functionId) continue;
+      const title = normalizedTitle(node.discount.title);
+      if (title === wanted) return node.id;
+      if (!match.exactTitle && !title.startsWith(poolPrefix)) fallback ??= node.id;
+    }
+    const pageInfo = data.discountNodes.pageInfo;
+    if (!pageInfo.hasNextPage || !pageInfo.endCursor) break;
+    cursor = pageInfo.endCursor;
+  }
+  return fallback;
 }
 
 async function findExistingAutomaticDiscount(
   shopDomain: string,
   accessToken: string,
-  functionId: string,
+  match: AutomaticDiscountMatch,
 ): Promise<string | null> {
-  // Paginate instead of trusting the first 50 — a shop with many discounts
-  // (legacy or from other apps) could push the Promo Engine one past that
-  // window, which meant a second afterAuth run would create a duplicate.
-  let cursor: string | null = null;
-  for (let page = 0; page < DISCOUNT_NODES_MAX_PAGES; page += 1) {
-    const data: DiscountNodesPage = await fetchDiscountNodesPage(shopDomain, accessToken, cursor);
-
-    const match = data.discountNodes.nodes.find(
-      (node) =>
-        node.discount.__typename === "DiscountAutomaticApp" &&
-        node.discount.appDiscountType?.functionId === functionId,
-    );
-    if (match) return match.id;
-
-    const pageInfo = data.discountNodes.pageInfo;
-    if (!pageInfo.hasNextPage || !pageInfo.endCursor) break;
-    cursor = pageInfo.endCursor;
-  }
-  return null;
+  // Filtered first. The unfiltered scan stays as a fallback: a search term Shopify doesn't
+  // recognise returns nothing rather than an error.
+  return (
+    (await scanAutomaticDiscounts(shopDomain, accessToken, match, AUTOMATIC_DISCOUNT_QUERY)) ??
+    (await scanAutomaticDiscounts(shopDomain, accessToken, match, null))
+  );
 }
 
-/** Reuses an existing "DiscountCodeApp" node for this Function + code if one
- * is already registered — the code-discount analogue of
- * `findExistingAutomaticDiscount`, used to recover from a create that
- * reported "already exists" (e.g. a previous publish created the node but
- * failed before `offers.codeDiscountId` could be persisted). Codes are
- * matched case-insensitively since Shopify itself treats them that way, and
- * `code` here is already the normalized (trimmed, uppercased) value stored
- * on the offer. */
+/** Our DiscountCodeApp node holding `code`: an exact lookup, since codes are unique per shop
+ * (Shopify matches them case-insensitively; `code` is already the normalized stored value). */
 async function findExistingCodeDiscount(
   shopDomain: string,
   accessToken: string,
   functionId: string,
   code: string,
 ): Promise<string | null> {
-  const normalizedCode = code.trim().toUpperCase();
-  let cursor: string | null = null;
-  for (let page = 0; page < DISCOUNT_NODES_MAX_PAGES; page += 1) {
-    const data: DiscountNodesPage = await fetchDiscountNodesPage(shopDomain, accessToken, cursor);
-
-    const match = data.discountNodes.nodes.find(
-      (node) =>
-        node.discount.__typename === "DiscountCodeApp" &&
-        node.discount.appDiscountType?.functionId === functionId &&
-        (node.discount.codes?.nodes ?? []).some(
-          (c) => c.code.trim().toUpperCase() === normalizedCode,
-        ),
-    );
-    if (match) return match.id;
-
-    const pageInfo = data.discountNodes.pageInfo;
-    if (!pageInfo.hasNextPage || !pageInfo.endCursor) break;
-    cursor = pageInfo.endCursor;
-  }
-  return null;
+  const data = await shopifyGraphQL<{
+    codeDiscountNodeByCode: {
+      id: string;
+      codeDiscount: { __typename: string; appDiscountType?: { functionId: string } } | null;
+    } | null;
+  }>({
+    shopDomain,
+    accessToken,
+    query: `query FindExistingCodeDiscount($code: String!) {
+      codeDiscountNodeByCode(code: $code) {
+        id
+        codeDiscount { __typename ... on DiscountCodeApp { appDiscountType { functionId } } }
+      }
+    }`,
+    variables: { code: code.trim().toUpperCase() },
+  });
+  const node = data.codeDiscountNodeByCode;
+  return node?.codeDiscount?.__typename === "DiscountCodeApp" &&
+    node.codeDiscount.appDiscountType?.functionId === functionId
+    ? node.id
+    : null;
 }
 
 export interface CodeDiscountNodeOptions {
@@ -574,31 +603,42 @@ export async function createOrFindCodeDiscount(
   discountClasses: readonly DiscountClass[],
   options: CodeDiscountNodeOptions = {},
 ): Promise<string> {
-  const created = await shopifyGraphQL<{
-    discountCodeAppCreate: {
-      codeAppDiscount: { discountId: string } | null;
-      userErrors: DiscountUserError[];
-    };
-  }>({
-    shopDomain,
-    accessToken,
-    query: `mutation CreatePromoEngineCodeDiscount($discount: DiscountCodeAppInput!) {
+  const create = () =>
+    shopifyGraphQL<{
+      discountCodeAppCreate: {
+        codeAppDiscount: { discountId: string } | null;
+        userErrors: DiscountUserError[];
+      };
+    }>({
+      shopDomain,
+      accessToken,
+      query: `mutation CreatePromoEngineCodeDiscount($discount: DiscountCodeAppInput!) {
       discountCodeAppCreate(codeAppDiscount: $discount) {
         codeAppDiscount { discountId }
         userErrors { field message code }
       }
     }`,
-    variables: {
-      discount: buildCodeDiscountCreateInput(
-        shopifyFunction.handle,
-        code,
-        title,
-        discountClasses,
-        undefined,
-        options,
-      ),
-    },
-  });
+      variables: {
+        discount: buildCodeDiscountCreateInput(
+          shopifyFunction.handle,
+          code,
+          title,
+          discountClasses,
+          undefined,
+          options,
+        ),
+      },
+    });
+  let created: Awaited<ReturnType<typeof create>>;
+  try {
+    created = await create();
+  } catch (err) {
+    // A timed-out create may have gone through: look before sending it again.
+    if (!(err instanceof ShopifyOutcomeUnknownError)) throw err;
+    const recovered = await findExistingCodeDiscount(shopDomain, accessToken, shopifyFunction.id, code);
+    if (recovered) return recovered;
+    created = await create();
+  }
 
   const result = created.discountCodeAppCreate;
   if (result.codeAppDiscount) return result.codeAppDiscount.discountId;
@@ -646,6 +686,7 @@ export async function updateCodeDiscountCombination(
   }>({
     shopDomain,
     accessToken,
+    retryable: true,
     query: `mutation UpdatePromoEngineCodeDiscountCombination($id: ID!, $discount: DiscountCodeAppInput!) {
       discountCodeAppUpdate(id: $id, codeAppDiscount: $discount) {
         codeAppDiscount { discountId }
@@ -681,6 +722,7 @@ export async function expireCodeDiscountNode(
   }>({
     shopDomain,
     accessToken,
+    retryable: true,
     query: `mutation ExpirePromoEngineCodeDiscount($id: ID!, $discount: DiscountCodeAppInput!) {
       discountCodeAppUpdate(id: $id, codeAppDiscount: $discount) {
         codeAppDiscount { discountId }
@@ -707,6 +749,7 @@ export async function deleteCodeDiscountNode(
   }>({
     shopDomain,
     accessToken,
+    retryable: true,
     query: `mutation DeletePromoEngineCodeDiscount($id: ID!) {
       discountCodeDelete(id: $id) {
         deletedCodeDiscountId
@@ -715,7 +758,8 @@ export async function deleteCodeDiscountNode(
     }`,
     variables: { id: discountId },
   });
-  if (data.discountCodeDelete.userErrors.length > 0) {
+  // A retry after a delete that landed finds the node gone, which is the state we wanted.
+  if (data.discountCodeDelete.userErrors.some((error) => !/not exist|not found/i.test(error.message))) {
     throw new Error(
       `discountCodeDelete failed: ${formatDiscountUserErrors(data.discountCodeDelete.userErrors)}`,
     );
@@ -726,6 +770,8 @@ export async function deleteCodeDiscountNode(
 export const REDEEM_CODE_BATCH_SIZE = 250;
 const BULK_POLL_INTERVAL_MS = 500;
 const BULK_MAX_POLLS = 120;
+/** Pause before re-checking what an unknown-outcome bulk add left on the node (the job is async). */
+const UNKNOWN_OUTCOME_SETTLE_MS = 2_000;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -733,6 +779,32 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
+}
+
+/** Search term matching exactly one code; quoted so "-", ":" or spaces aren't parsed as search syntax. */
+export function codeSearchTerm(code: string): string {
+  return `code:"${code.replace(/["\\]/g, "\\$&")}"`;
+}
+
+/** Which discount node holds each code right now (null: no discount has it). Keys are the codes as given. */
+export async function codeOwners(
+  shopDomain: string,
+  accessToken: string,
+  codes: string[],
+): Promise<Map<string, string | null>> {
+  const owners = new Map<string, string | null>();
+  for (const group of chunk([...new Set(codes)], 40)) {
+    const variableDefs = group.map((_, i) => `$c${i}: String!`).join(", ");
+    const fields = group.map((_, i) => `c${i}: codeDiscountNodeByCode(code: $c${i}) { id }`).join("\n");
+    const data = await shopifyGraphQL<Record<string, { id: string } | null>>({
+      shopDomain,
+      accessToken,
+      query: `query PromoEngineCodeOwners(${variableDefs}) {\n${fields}\n}`,
+      variables: Object.fromEntries(group.map((code, i) => [`c${i}`, code])),
+    });
+    group.forEach((code, i) => owners.set(code, data[`c${i}`]?.id ?? null));
+  }
+  return owners;
 }
 
 /** Adds codes to a code discount node; resolves with the codes Shopify rejected (taken, invalid). */
@@ -743,8 +815,8 @@ export async function addRedeemCodes(
   codes: string[],
 ): Promise<Array<{ code: string; message: string }>> {
   const failed: Array<{ code: string; message: string }> = [];
-  for (const batch of chunk(codes, REDEEM_CODE_BATCH_SIZE)) {
-    const added = await shopifyGraphQL<{
+  const submit = (batch: string[]) =>
+    shopifyGraphQL<{
       discountRedeemCodeBulkAdd: {
         bulkCreation: { id: string; done: boolean } | null;
         userErrors: DiscountUserError[];
@@ -760,6 +832,31 @@ export async function addRedeemCodes(
       }`,
       variables: { discountId, codes: batch.map((code) => ({ code })) },
     });
+
+  for (const original of chunk(codes, REDEEM_CODE_BATCH_SIZE)) {
+    let batch = original;
+    let added: Awaited<ReturnType<typeof submit>> | null = null;
+    try {
+      added = await submit(batch);
+    } catch (err) {
+      if (!(err instanceof ShopifyOutcomeUnknownError)) throw err;
+      // The bulk job may be running. Codes are unique per shop, so re-sending is safe from
+      // duplicates, but look first: only codes that aren't there yet go out again, and a code
+      // another discount took is reported like any other rejection.
+      await sleep(UNKNOWN_OUTCOME_SETTLE_MS);
+      const owners = await codeOwners(shopDomain, accessToken, batch);
+      const absent: string[] = [];
+      for (const code of batch) {
+        const owner = owners.get(code) ?? null;
+        if (owner === null) absent.push(code);
+        else if (owner !== discountId) {
+          failed.push({ code, message: "That code is already used by another discount." });
+        }
+      }
+      batch = absent;
+      if (batch.length === 0) continue;
+      added = await submit(batch);
+    }
     const payload = added.discountRedeemCodeBulkAdd;
     if (payload.userErrors.length > 0 || !payload.bulkCreation) {
       throw new Error(
@@ -804,13 +901,26 @@ export async function addRedeemCodes(
   return failed;
 }
 
-/** Removes codes from a node. Codes Shopify no longer has are ignored. */
+export interface RemoveRedeemCodesResult {
+  /** Gone from the node, confirmed by a lookup after the delete. */
+  removed: string[];
+  /** Confirmed not on this node (Shopify has no such code, or another discount holds it). */
+  absent: string[];
+  /** Still on the node as far as Shopify says (search missed it, or the delete didn't take): NOT removed. */
+  unconfirmed: string[];
+}
+
+/**
+ * Removes codes from a node and reports what actually happened to each one, so callers only
+ * treat a code as gone once Shopify confirms it. Throws on Shopify user errors.
+ */
 export async function removeRedeemCodes(
   shopDomain: string,
   accessToken: string,
   discountId: string,
   codes: string[],
-): Promise<void> {
+): Promise<RemoveRedeemCodesResult> {
+  const result: RemoveRedeemCodesResult = { removed: [], absent: [], unconfirmed: [] };
   for (const group of chunk(codes, 50)) {
     const found = await shopifyGraphQL<{
       codeDiscountNode: {
@@ -826,39 +936,65 @@ export async function removeRedeemCodes(
       }`,
       variables: {
         id: discountId,
-        query: group.map((code) => `code:${code}`).join(" OR "),
+        query: group.map(codeSearchTerm).join(" OR "),
       },
     });
     const wanted = new Set(group.map((code) => code.toUpperCase()));
-    const ids = (found.codeDiscountNode?.codeDiscount.codes?.nodes ?? [])
-      .filter((node) => wanted.has(node.code.toUpperCase()))
-      .map((node) => node.id);
-    for (const idBatch of chunk(ids, REDEEM_CODE_BATCH_SIZE)) {
-      const deleted = await shopifyGraphQL<{
-        discountCodeRedeemCodeBulkDelete: {
-          job: { id: string } | null;
-          userErrors: DiscountUserError[];
-        };
-      }>({
-        shopDomain,
-        accessToken,
-        query: `mutation RemovePromoEngineRedeemCodes($discountId: ID!, $ids: [ID!]) {
+    const matches = (found.codeDiscountNode?.codeDiscount.codes?.nodes ?? []).filter((node) =>
+      wanted.has(node.code.toUpperCase()),
+    );
+    const foundCodes = new Set(matches.map((node) => node.code.toUpperCase()));
+    const missing = group.filter((code) => !foundCodes.has(code.toUpperCase()));
+    if (missing.length > 0) {
+      const owners = await codeOwners(shopDomain, accessToken, missing);
+      for (const code of missing) {
+        if (owners.get(code) === discountId) result.unconfirmed.push(code);
+        else result.absent.push(code);
+      }
+    }
+
+    const attempted = group.filter((code) => foundCodes.has(code.toUpperCase()));
+    for (const idBatch of chunk(
+      matches.map((node) => node.id),
+      REDEEM_CODE_BATCH_SIZE,
+    )) {
+      try {
+        const deleted = await shopifyGraphQL<{
+          discountCodeRedeemCodeBulkDelete: {
+            job: { id: string } | null;
+            userErrors: DiscountUserError[];
+          };
+        }>({
+          shopDomain,
+          accessToken,
+          query: `mutation RemovePromoEngineRedeemCodes($discountId: ID!, $ids: [ID!]) {
           discountCodeRedeemCodeBulkDelete(discountId: $discountId, ids: $ids) {
             job { id }
             userErrors { field message code }
           }
         }`,
-        variables: { discountId, ids: idBatch },
-      });
-      const payload = deleted.discountCodeRedeemCodeBulkDelete;
-      if (payload.userErrors.length > 0) {
-        throw new Error(
-          `discountCodeRedeemCodeBulkDelete failed: ${formatDiscountUserErrors(payload.userErrors)}`,
-        );
+          variables: { discountId, ids: idBatch },
+        });
+        const payload = deleted.discountCodeRedeemCodeBulkDelete;
+        if (payload.userErrors.length > 0) {
+          throw new Error(
+            `discountCodeRedeemCodeBulkDelete failed: ${formatDiscountUserErrors(payload.userErrors)}`,
+          );
+        }
+        if (payload.job) await waitForJob(shopDomain, accessToken, payload.job.id);
+      } catch (err) {
+        // Outcome unknown: the verification below decides what is still on the node.
+        if (!(err instanceof ShopifyOutcomeUnknownError)) throw err;
       }
-      if (payload.job) await waitForJob(shopDomain, accessToken, payload.job.id);
+    }
+    if (attempted.length === 0) continue;
+    const after = await codeOwners(shopDomain, accessToken, attempted);
+    for (const code of attempted) {
+      if (after.get(code) === discountId) result.unconfirmed.push(code);
+      else result.removed.push(code);
     }
   }
+  return result;
 }
 
 async function waitForJob(shopDomain: string, accessToken: string, id: string): Promise<void> {
@@ -936,4 +1072,132 @@ export async function ensureCodeDiscountNode(
       set: { value: JSON.stringify(id), updatedAt: new Date() },
     });
   return id;
+}
+
+/** Which of these discount node ids (automatic or code) still exist in Shopify. */
+export async function existingDiscountNodeIds(
+  shopDomain: string,
+  accessToken: string,
+  ids: string[],
+): Promise<Set<string>> {
+  const found = new Set<string>();
+  for (const group of chunk([...new Set(ids)], 100)) {
+    const data = await shopifyGraphQL<{
+      nodes: Array<{ id?: string } | null>;
+    }>({
+      shopDomain,
+      accessToken,
+      query: `query PromoEngineNodesExist($ids: [ID!]!) {
+        nodes(ids: $ids) {
+          ... on DiscountAutomaticNode { id }
+          ... on DiscountCodeNode { id }
+        }
+      }`,
+      variables: { ids: group },
+    });
+    for (const node of data.nodes) if (node?.id) found.add(node.id);
+  }
+  return found;
+}
+
+export async function deleteAutomaticDiscountNode(
+  shopDomain: string,
+  accessToken: string,
+  discountId: string,
+): Promise<void> {
+  const data = await shopifyGraphQL<{
+    discountAutomaticDelete: { deletedAutomaticDiscountId: string | null; userErrors: DiscountUserError[] };
+  }>({
+    shopDomain,
+    accessToken,
+    retryable: true,
+    query: `mutation DeletePromoEngineAutomaticDiscount($id: ID!) {
+      discountAutomaticDelete(id: $id) {
+        deletedAutomaticDiscountId
+        userErrors { field message code }
+      }
+    }`,
+    variables: { id: discountId },
+  });
+  // A retry after a delete that landed finds the node gone, which is the state we wanted.
+  if (data.discountAutomaticDelete.userErrors.some((error) => !/not exist|not found/i.test(error.message))) {
+    throw new Error(
+      `discountAutomaticDelete failed: ${formatDiscountUserErrors(data.discountAutomaticDelete.userErrors)}`,
+    );
+  }
+}
+
+export async function readCodedShippingNodeIds(shopId: string): Promise<string[]> {
+  const [row] = await getDb()
+    .select({ value: appSettings.value })
+    .from(appSettings)
+    .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, CODED_SHIPPING_POOL_SETTING)))
+    .limit(1);
+  if (!row) return [];
+  try {
+    const parsed: unknown = JSON.parse(row.value);
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeCodedShippingNodeIds(shopId: string, ids: string[]): Promise<void> {
+  await getDb()
+    .insert(appSettings)
+    .values({ shopId, key: CODED_SHIPPING_POOL_SETTING, value: JSON.stringify(ids) })
+    .onConflictDoUpdate({
+      target: [appSettings.shopId, appSettings.key],
+      set: { value: JSON.stringify(ids), updatedAt: new Date() },
+    });
+}
+
+/** Most automatic delivery nodes a shop may dedicate to code-gated shipping (Shopify caps automatic discounts at 25 per shop). */
+export const MAX_CODED_SHIPPING_NODES = 12;
+
+/**
+ * The shop's pool of automatic delivery nodes for the shipping part of mixed code offers.
+ * Returns exactly `needed` live node ids: missing ones (deleted by the merchant, or lost on
+ * reinstall) are created, and surplus ones are deleted so they don't count against Shopify's
+ * automatic-discount limit. Each node is created at most once: ids are persisted after every
+ * create and a timed-out create is looked up by title before it is repeated.
+ */
+export async function ensureCodedShippingNodes(
+  shopId: string,
+  shopDomain: string,
+  accessToken: string,
+  needed: number,
+): Promise<string[]> {
+  if (needed > MAX_CODED_SHIPPING_NODES) {
+    throw new Error(
+      `Code-gated shipping needs ${needed} delivery discounts, more than the ${MAX_CODED_SHIPPING_NODES} this app may use. Reduce the number of codes on offers with free shipping.`,
+    );
+  }
+  const stored = await readCodedShippingNodeIds(shopId);
+  const live = stored.length > 0 ? await existingDiscountNodeIds(shopDomain, accessToken, stored) : new Set<string>();
+  const kept = stored.filter((id) => live.has(id));
+  const surplus = kept.slice(needed);
+  const ids = kept.slice(0, needed);
+
+  if (ids.length < needed) {
+    const deliveryFunction = await findDeliveryDiscountFunction(shopDomain, accessToken);
+    for (let slot = ids.length; slot < needed; slot += 1) {
+      const title = `${CODED_SHIPPING_TITLE_PREFIX} ${slot + 1}`;
+      const id = await createOrFindAutomaticDiscount(
+        shopDomain,
+        accessToken,
+        deliveryFunction,
+        title,
+        DELIVERY_DISCOUNT_CLASSES,
+        { functionId: deliveryFunction.id, title, exactTitle: true },
+      );
+      ids.push(id);
+      await writeCodedShippingNodeIds(shopId, ids);
+    }
+  }
+  if (ids.length !== stored.length || ids.some((id, i) => stored[i] !== id)) {
+    await writeCodedShippingNodeIds(shopId, ids);
+  }
+  for (const id of surplus) await deleteAutomaticDiscountNode(shopDomain, accessToken, id);
+  return ids;
 }

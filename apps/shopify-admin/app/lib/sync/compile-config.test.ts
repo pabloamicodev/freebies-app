@@ -5,6 +5,7 @@ import {
   compactCompiledOffer,
   compileDiscountCombinationPolicy,
   compileShippingOfferConfigs,
+  serializeFunctionConfig,
   type CompiledShippingOffer,
 } from "./compile-config.js";
 import { buildCartValidationConfig } from "../cart-validation.server.js";
@@ -321,7 +322,7 @@ describe("compileOfferConfig", () => {
         matchMode: "contains",
         caseSensitive: false,
         paramName: "code",
-        paramValue: "summer%20sale",
+        paramValue: "summer sale",
       },
       { patterns: ["/collections/sale"], matchMode: "starts_with", caseSensitive: false },
     ]);
@@ -439,7 +440,6 @@ describe("compileOfferConfig", () => {
     expect(result.giftRewards[0]?.targetVariantIds).toEqual([...primaries, ...fallbacks]);
     // Cart validation: a fallback line is an allowed gift line for this reward.
     const validation = buildCartValidationConfig([result]);
-    expect(validation.allowedGiftVariantIds).toEqual(expect.arrayContaining(fallbacks));
     expect(Object.values(validation.offerRules)[0]?.rewards["reward-1"]?.variantIds).toEqual(
       expect.arrayContaining(fallbacks),
     );
@@ -492,6 +492,7 @@ describe("compileOfferConfig", () => {
         discountType: "percentage",
         discountValue: 50,
         maxQuantity: 2,
+        selectable: true,
       },
     ]);
   });
@@ -627,7 +628,7 @@ describe("compileOfferConfig", () => {
     ]);
   });
 
-  it("encodes a utm_parameters value with reserved characters, matching how it'll appear in the raw landing URL", () => {
+  it("stores utm_parameters values raw (D3): the Function decodes the landing URL and compares case-insensitively", () => {
     const result = compileOfferConfig(
       offer(),
       [condition("utm_parameters", { utmCampaign: "prime day sale" })],
@@ -641,7 +642,7 @@ describe("compileOfferConfig", () => {
         matchMode: "contains",
         caseSensitive: false,
         paramName: "utm_campaign",
-        paramValue: "prime%20day%20sale",
+        paramValue: "prime day sale",
       },
     ]);
   });
@@ -706,7 +707,7 @@ describe("compileOfferConfig", () => {
       expect(compactCompiledOffer(result)).toMatchObject({
         pageUrlConditions: [
           { patterns: ["product"], matchMode: "page_type" },
-          { matchMode: "contains", paramName: "utm_campaign", paramValue: "fall%20sale", source: "landing" },
+          { matchMode: "contains", paramName: "utm_campaign", paramValue: "fall sale", source: "landing" },
         ],
         restrictToMatchedLines: true,
         rejectUnmatchedLines: true,
@@ -1008,5 +1009,78 @@ describe("product reward scope validation", () => {
         variantIds: ["gid://shopify/ProductVariant/11", "gid://shopify/ProductVariant/12"],
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("shared page-condition compiler (offer and shipping)", () => {
+  const conditions = [
+    condition("page_types", { pageTypes: ["product"], rejectUnmatchedLines: true }),
+    condition("utm_parameters", { utmSource: "fb/ig", utmCampaign: "summer sale", scope: "visit" }),
+    condition("specific_link", { requiredUrl: "//shop.example/pages/vip", paramName: "gift code", paramValue: "a&b" }),
+  ];
+
+  it("stores query names and values raw (D3) and resolves //host links to a path", () => {
+    const result = compileOfferConfig(offer(), conditions, [], null, 1);
+    expect(result.pageUrlConditions).toEqual([
+      { patterns: ["product"], matchMode: "page_type", caseSensitive: false },
+      { patterns: [], matchMode: "contains", caseSensitive: false, paramName: "utm_source", paramValue: "fb/ig", source: "landing" },
+      { patterns: [], matchMode: "contains", caseSensitive: false, paramName: "utm_campaign", paramValue: "summer sale", source: "landing" },
+      { patterns: ["/pages/vip"], matchMode: "contains", caseSensitive: false, paramName: "gift code", paramValue: "a&b" },
+    ]);
+    expect(result.rejectUnmatchedLines).toBe(true);
+  });
+
+  it("shipping offers carry the same conditions and reject flag, and omit them when there are none", () => {
+    const withPage = compileShippingOfferConfigs(offer(), conditions, [shippingReward()]);
+    const offerSide = compileOfferConfig(offer(), conditions, [], null, 1);
+    expect(withPage[0]?.pageUrlConditions).toEqual(offerSide.pageUrlConditions);
+    expect(withPage[0]?.rejectUnmatchedLines).toBe(true);
+
+    const plain = compileShippingOfferConfigs(offer(), [condition("cart_value", { thresholdCents: 1000 })], [shippingReward()]);
+    expect(Object.keys(plain[0]!)).not.toContain("pageUrlConditions");
+    expect(Object.keys(plain[0]!)).not.toContain("rejectUnmatchedLines");
+    expect(Object.keys(plain[0]!)).not.toContain("currencyCode");
+  });
+
+  it("shipping offers carry a non-USD currency and serialization drops the defaults", () => {
+    const [jpy] = compileShippingOfferConfigs(offer(), [], [shippingReward({ value: { amount: 100, currencyCode: "JPY" } })]);
+    expect(jpy?.currencyCode).toBe("JPY");
+    const json = JSON.parse(
+      serializeFunctionConfig({ offers: [], shippingOffers: [jpy!], version: "1", compiledAt: "x" }),
+    ) as { shippingOffers: Array<Record<string, unknown>> };
+    expect(json.shippingOffers[0]).toMatchObject({ currencyCode: "JPY" });
+    const [usd] = compileShippingOfferConfigs(offer(), [], [shippingReward()]);
+    const usdJson = JSON.parse(
+      serializeFunctionConfig({ offers: [], shippingOffers: [usd!], version: "1", compiledAt: "x" }),
+    ) as { shippingOffers: Array<Record<string, unknown>> };
+    expect(usdJson.shippingOffers[0]).not.toHaveProperty("currencyCode");
+    expect(usdJson.shippingOffers[0]).not.toHaveProperty("pageUrlConditions");
+  });
+});
+
+describe("quizMaxDiscountPercent", () => {
+  const compile = (target: Record<string, unknown>) =>
+    compileOfferConfig(
+      offer() as never,
+      [] as never,
+      [
+        {
+          id: REWARD_ID,
+          rewardType: "product_discount",
+          discountType: "fixed_price",
+          value: { amount: 0, currencyCode: "USD" },
+          target: { scopeMode: "quiz_bundle", scope: "cart", productIds: ["gid://shopify/Product/1"], ...target },
+          quantity: null,
+          sortOrder: 0,
+        },
+      ] as never,
+      { stopLowerPriority: false } as never,
+      1,
+    );
+
+  it("is compiled when set and omitted otherwise", () => {
+    expect(compile({ quizMaxDiscountPercent: 30 }).productRewards[0]).toMatchObject({ quizMaxDiscountPercent: 30 });
+    expect(compile({}).productRewards[0]).not.toHaveProperty("quizMaxDiscountPercent");
+    expect(compile({ quizMaxDiscountPercent: 130 }).productRewards[0]).not.toHaveProperty("quizMaxDiscountPercent");
   });
 });

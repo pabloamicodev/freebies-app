@@ -7,19 +7,60 @@ import {
   type Db,
 } from "@promo/db";
 import type { OfferDefinition } from "@promo/rule-engine";
+import { waitUntil } from "@vercel/functions";
+import { redisDelete, redisGetString, redisSetString } from "./redis.server.js";
 import { computeOfferVersion } from "./offer-version.server.js";
 import { normalizeConditionValue } from "./offer-config-normalization.server.js";
 
-// Previously an in-memory cache (didn't survive across Vercel serverless instances).
-// Now we query directly — the DB indexes on (shopId, status) and (shopId, priority)
-// make this fast enough for the evaluate hot path.
+// D10: definitions are cached in Redis for OFFER_DEFINITIONS_TTL_SECONDS (shared across
+// serverless instances) and dropped on publish via invalidateOfferDefinitions. A reader that
+// raced a publish can re-cache the old value, so staleness is bounded by the TTL, not zero.
+// Without Redis (or on any Redis error) every call reads the DB, as before.
+export const OFFER_DEFINITIONS_TTL_SECONDS = 30;
+const MAX_CACHED_BYTES = 512 * 1024;
 
-export function invalidateOfferDefinitions(_shopId: string): void {
-  // No-op: kept for call-site compatibility.
+const cacheKey = (shopId: string) => `od:v1:${shopId}`;
+
+/**
+ * Call after a successful publish/pause/archive (the publisher is WS-C's: it should `await` this).
+ * Also registered with waitUntil so an un-awaited call still completes before the function freezes.
+ */
+export function invalidateOfferDefinitions(shopId: string): Promise<void> {
+  const pending = redisDelete(cacheKey(shopId)).catch(() => undefined);
+  try {
+    waitUntil(pending);
+  } catch {
+    // Not inside a Vercel request context (scripts, tests).
+  }
+  return pending;
+}
+
+function reviveDates(definitions: OfferDefinition[]): OfferDefinition[] {
+  return definitions.map((definition) => ({
+    ...definition,
+    startsAt: definition.startsAt ? new Date(definition.startsAt) : null,
+    endsAt: definition.endsAt ? new Date(definition.endsAt) : null,
+  }));
 }
 
 export async function getOfferDefinitions(shopId: string, db: Db): Promise<OfferDefinition[]> {
+  const cached = await redisGetString(cacheKey(shopId));
+  if (cached) {
+    try {
+      return reviveDates(JSON.parse(cached) as OfferDefinition[]);
+    } catch {
+      // Corrupt entry: fall through and overwrite it.
+    }
+  }
+  const definitions = await loadOfferDefinitions(shopId, db);
+  const serialized = JSON.stringify(definitions);
+  if (serialized.length <= MAX_CACHED_BYTES) {
+    await redisSetString(cacheKey(shopId), serialized, OFFER_DEFINITIONS_TTL_SECONDS);
+  }
+  return definitions;
+}
 
+export async function loadOfferDefinitions(shopId: string, db: Db): Promise<OfferDefinition[]> {
   type OfferRow = typeof offers.$inferSelect;
   type ConditionRow = typeof offerConditions.$inferSelect;
   type RewardRow = typeof offerRewards.$inferSelect;

@@ -1,0 +1,146 @@
+{
+  "name": "restrict-upsell-line-must-match",
+  "description": "With only-matched-lines an upsell line is discounted only when its own page matches.",
+  "source": {
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "type": "upsell",
+        "priority": 100,
+        "stopLowerPriority": false,
+        "conditions": [
+          {
+            "conditionType": "page_types",
+            "value": {
+              "pageTypes": [
+                "product"
+              ],
+              "onlyMatchedLines": true
+            },
+            "scope": "sub",
+            "operator": "eq",
+            "sortOrder": 0
+          }
+        ],
+        "rewards": [
+          {
+            "id": "aaaaaaaa-upsell",
+            "rewardType": "upsell_discount",
+            "discountType": "percentage",
+            "value": {
+              "amount": 20,
+              "currencyCode": "USD"
+            },
+            "target": {
+              "scopeMode": "tagged_offer",
+              "requiredOfferId": "aaaaaaaa-0000-4000-8000-000000000001",
+              "productIds": [
+                "gid://shopify/Product/60",
+                "gid://shopify/Product/61"
+              ]
+            },
+            "quantity": null,
+            "isAutoAdd": false,
+            "isCustomerSelectable": false,
+            "trackMode": "variant",
+            "sortOrder": 0,
+            "label": null
+          }
+        ]
+      }
+    ]
+  },
+  "config": {
+    "c1": "_promo_engine_unused",
+    "c2": "_promo_engine_unused",
+    "c3": "_promo_engine_unused",
+    "customerTags": [],
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "offerType": "upsell",
+        "priority": 100,
+        "productRewards": [
+          {
+            "id": "aaaaaaaa-upsell",
+            "targetProductIds": [
+              "gid://shopify/Product/60",
+              "gid://shopify/Product/61"
+            ],
+            "discountType": "percentage",
+            "discountValue": 20,
+            "scopeMode": "tagged_offer",
+            "requiredOfferId": "aaaaaaaa-0000-4000-8000-000000000001"
+          }
+        ],
+        "pageUrlConditions": [
+          {
+            "patterns": [
+              "product"
+            ],
+            "matchMode": "page_type"
+          }
+        ],
+        "restrictToMatchedLines": true
+      }
+    ],
+    "version": "parity",
+    "compiledAt": "2026-01-01T00:00:00.000Z"
+  },
+  "cart": {
+    "currency": "USD",
+    "presentmentCurrencyRate": 1,
+    "country": "US",
+    "customerTags": [],
+    "enteredCodes": [],
+    "lines": [
+      {
+        "id": "l1",
+        "variantId": "gid://shopify/ProductVariant/1",
+        "productId": "gid://shopify/Product/1",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/products/a"
+        }
+      },
+      {
+        "id": "u1",
+        "variantId": "gid://shopify/ProductVariant/60",
+        "productId": "gid://shopify/Product/60",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": "upsell",
+        "metadata": {
+          "_promo_page_url": "/cart",
+          "_promo_engine_offer_id": "aaaaaaaa-0000-4000-8000-000000000001"
+        }
+      },
+      {
+        "id": "u2",
+        "variantId": "gid://shopify/ProductVariant/61",
+        "productId": "gid://shopify/Product/61",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": "upsell",
+        "metadata": {
+          "_promo_page_url": "/products/z",
+          "_promo_engine_offer_id": "aaaaaaaa-0000-4000-8000-000000000001"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "qualifiedOfferIds": [
+      "aaaaaaaa-0000-4000-8000-000000000001"
+    ],
+    "discountedLineIds": {
+      "aaaaaaaa-0000-4000-8000-000000000001": [
+        "u2"
+      ]
+    }
+  }
+}

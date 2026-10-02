@@ -11,6 +11,9 @@
  */
 
 import { AjaxCartAdapter, appliedDiscountCodes, type CartData, type CartItem } from "./cart-adapter.js";
+import { captureUi, isEditingWithin, restoreUi } from "./dom-preserve.js";
+import { rememberSpecificLinkParams } from "./metadata-bridge.js";
+import { expectedGiftKeys, hasOwnMarker, parseRetryAfter, type GiftOutcome } from "./runtime-helpers.js";
 import { debounce, AbortableRequest } from "./debounce.js";
 import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
 import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
@@ -91,16 +94,28 @@ interface RuntimeConfig {
   /** `cart.item_count` inlined by the app embed — lets init() skip the boot
    * evaluate() on an empty cart with no promo widgets on the page. */
   cartItemCount?: number | null;
+  /** Query-param names of the offers' specific-link conditions; stored with the line page URL (D4). */
+  specificLinkParams?: string[];
+  /** Widget string overrides from the theme extension's locale files. */
+  i18n?: Record<string, string>;
 }
 
-class PromoEngineRuntime {
+const EVAL_TIMEOUT_MS = 7_000;
+const MAX_RATE_LIMIT_RETRIES = 3;
+const OWN_EVENT_QUIET_MS = 1_500;
+
+export class PromoEngineRuntime {
   private config: RuntimeConfig;
   private sessionId: string;
   private evaluationAbort = new AbortableRequest();
   private debouncedEvaluate: ReturnType<typeof debounce>;
   private lastCartHash: string | null = null;
   private savedFetch: typeof window.fetch = window.fetch.bind(window);
-  private refreshGuard = false;
+  // DOM cart events dispatched by our own refreshCartUI fallback; theme handlers run async, so ignore briefly.
+  private ownEventsUntil = 0;
+  private refreshAfterEditingPending = false;
+  private rateLimitRetries = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
   // Widgets (gift slider, bundles) mutate the cart outside the theme, so its drawer must be re-rendered.
   private widgetChangedCart = false;
   private capturedThemeSectionIds: string[] = [];
@@ -152,17 +167,10 @@ class PromoEngineRuntime {
       this.log("[PromoEngine] Cart component: cart-drawer web component (Dawn-style)");
   }
 
-  /** Run fn with self-mutation flagged so the fetch/XHR patches and Tier-4
-   * fallback events below don't schedule another evaluation for our own
-   * cart writes (gift auto-add, refresh, metadata migration). */
-  private async withRefreshGuard<T>(fn: () => Promise<T>): Promise<T> {
-    const prev = this.refreshGuard;
-    this.refreshGuard = true;
-    try {
-      return await fn();
-    } finally {
-      this.refreshGuard = prev;
-    }
+  /** Our own cart requests carry OWN_REQUEST_HEADER (checked per request in the fetch patch);
+   * only the DOM events our refresh fallback dispatches need a short quiet window. */
+  private get ownEventsQuiet(): boolean {
+    return Date.now() < this.ownEventsUntil;
   }
 
   private listenForCartChanges(): void {
@@ -173,10 +181,14 @@ class PromoEngineRuntime {
     // Standard Shopify cart change events (fallback / other themes). Guarded
     // because refreshCartUI's Tier-4 fallback dispatches these same events.
     document.addEventListener("cart:updated", () => {
-      if (!this.refreshGuard) this.debouncedEvaluate.call();
+      if (!this.ownEventsQuiet) this.debouncedEvaluate.call();
     });
     document.addEventListener("cart:refresh", () => {
-      if (!this.refreshGuard) this.debouncedEvaluate.call();
+      if (!this.ownEventsQuiet) this.debouncedEvaluate.call();
+    });
+    // bfcache restore: the page (and its cart UI) is frozen from before the user navigated away.
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted) this.debouncedEvaluate.call();
     });
     document.addEventListener("theme:cart:open", () => this.debouncedEvaluate.call());
 
@@ -201,6 +213,7 @@ class PromoEngineRuntime {
       const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
       const isCartMutation = method === "POST" && CART_MUTATE_RE.test(url);
       const isCartRelated = CART_RELATED_RE.test(url);
+      const isOwn = hasOwnMarker(input, init);
 
       const response = await originalFetch(input, init);
 
@@ -213,7 +226,7 @@ class PromoEngineRuntime {
           .json()
           .then((data: unknown) => {
             if (
-              !this.refreshGuard &&
+              !isOwn &&
               data !== null &&
               typeof data === "object" &&
               "sections" in (data as object)
@@ -230,7 +243,7 @@ class PromoEngineRuntime {
           })
           .catch(() => {});
 
-        if (isCartMutation && !this.refreshGuard) {
+        if (isCartMutation && !isOwn) {
           this.log(`[PromoEngine] Cart mutation detected (${url}) — scheduling evaluation`);
           this.debouncedEvaluate.call();
         }
@@ -269,7 +282,7 @@ class PromoEngineRuntime {
     XMLHttpRequest.prototype.send = function (this: XMLHttpRequest, ...args: unknown[]) {
       if (flagged.has(this)) {
         this.addEventListener("loadend", () => {
-          if (!runtime.refreshGuard && this.status >= 200 && this.status < 300) {
+          if (this.status >= 200 && this.status < 300) {
             runtime.debouncedEvaluate.call();
           }
         });
@@ -351,6 +364,7 @@ class PromoEngineRuntime {
           );
           if (Object.keys(sections).length > 0) {
             let updated = 0;
+            let deferred = 0;
             // One DOMParser pass per section id, reused across every target
             // selector that maps to it (multiple selectors can share a sectionId).
             const parsedBySectionId = new Map<string, Document>();
@@ -359,6 +373,11 @@ class PromoEngineRuntime {
               if (!rawHtml) continue;
               const el = document.querySelector(selector);
               if (!el) continue;
+              // Don't replace markup under a field the shopper is typing into (discount code, note, quantity).
+              if (isEditingWithin(el)) {
+                deferred++;
+                continue;
+              }
               let rendered = parsedBySectionId.get(sectionId);
               if (!rendered) {
                 rendered = new DOMParser().parseFromString(rawHtml, "text/html");
@@ -370,9 +389,13 @@ class PromoEngineRuntime {
                 rendered.querySelector(selector)?.innerHTML ??
                 rendered.querySelector(".shopify-section")?.innerHTML ??
                 rawHtml;
+              const snapshot = captureUi(el);
               el.innerHTML = innerHtml;
+              restoreUi(el, snapshot);
               updated++;
             }
+            if (deferred > 0) this.refreshAfterEditing();
+            if (updated === 0 && deferred > 0) return;
             if (updated > 0) {
               this.log(
                 `[PromoEngine] Cart UI refreshed via section rendering (${updated} element(s))`,
@@ -390,9 +413,25 @@ class PromoEngineRuntime {
     // Note: avoid calling /cart/update.js here — it triggers extra evaluations
     // via shop_events_listener's async event dispatch even with the guard set.
     this.log("refreshCartUI — falling back to DOM events");
+    this.ownEventsUntil = Date.now() + OWN_EVENT_QUIET_MS;
     document.dispatchEvent(new CustomEvent("cart:refresh", { bubbles: true }));
     document.dispatchEvent(new CustomEvent("cart:updated", { bubbles: true }));
     document.dispatchEvent(new CustomEvent("theme:cart:add", { bubbles: true }));
+  }
+
+  /** Re-run the cart UI refresh once the shopper leaves the field we skipped. */
+  private refreshAfterEditing(): void {
+    if (this.refreshAfterEditingPending) return;
+    this.refreshAfterEditingPending = true;
+    document.addEventListener(
+      "focusout",
+      () =>
+        setTimeout(() => {
+          this.refreshAfterEditingPending = false;
+          void this.refreshCartUI();
+        }, 250),
+      { once: true },
+    );
   }
 
   /** Public entry point. Aborts any in-flight evaluation's fetch immediately,
@@ -403,6 +442,10 @@ class PromoEngineRuntime {
     options: { force?: boolean; emitResult?: boolean } = {},
   ): Promise<EvaluationResult | null> {
     if (options.emitResult !== false) emit(PromoEvents.EvaluationRequested);
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
     const signal = this.evaluationAbort.start();
     const run = this.evaluationChain.then(
       () => this.runEvaluation(options, signal),
@@ -423,7 +466,7 @@ class PromoEngineRuntime {
 
     let cart: CartData;
     try {
-      cart = await this.withRefreshGuard(() => AjaxCartAdapter.getCart());
+      cart = await AjaxCartAdapter.getCart();
     } catch (e) {
       this.log("Failed to fetch cart", e);
       return null;
@@ -437,7 +480,7 @@ class PromoEngineRuntime {
       this.log("Cart unchanged, skipping evaluation");
       if (this.widgetChangedCart) {
         this.widgetChangedCart = false;
-        await this.withRefreshGuard(() => this.refreshCartUI());
+        await this.refreshCartUI();
       }
       return this.lastEvaluationResult;
     }
@@ -445,7 +488,7 @@ class PromoEngineRuntime {
     const qualifyingSubtotal = cart.items_subtotal_price ?? cart.total_price;
     this.log(
       "[PromoEngine] Evaluating cart —",
-      cart.items.map((i) => `${i.title} �-${i.quantity}`).join(", ") || "empty",
+      cart.items.map((i) => `${i.title} x${i.quantity}`).join(", ") || "empty",
       `| subtotal: $${(qualifyingSubtotal / 100).toFixed(2)}`,
     );
 
@@ -454,12 +497,8 @@ class PromoEngineRuntime {
     const market = buildMarketContext(this.config, shopifyGlobal);
 
     try {
-      const response = await fetch(this.evalEndpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      const reply = await this.postEvaluate(
+        JSON.stringify({
           cart: this.normalizeCart(cart),
           customer: null,
           market,
@@ -470,16 +509,20 @@ class PromoEngineRuntime {
           declinedGiftRewards: [...this.declinedGiftRewards],
         }),
         signal,
-      });
+      );
       if (signal.aborted) return null;
 
-      if (!response.ok) {
-        const errText = await response.text().catch(() => "(no body)");
-        throw new Error(`Evaluation failed: ${response.status} — ${errText}`);
+      if (reply.status === 429 || (reply.status === 503 && reply.retryAfterMs !== null)) {
+        this.scheduleRateLimitRetry(reply.retryAfterMs);
+        return null;
       }
+      if (!reply.ok || !reply.data) {
+        throw new Error(`Evaluation failed: ${reply.status} — ${reply.text.slice(0, 200)}`);
+      }
+      this.rateLimitRetries = 0;
 
-      const result: EvaluationResult = await response.json();
-      if (signal.aborted) return null;
+      const result = reply.data;
+      rememberSpecificLinkParams((result as { specificLinkParams?: unknown }).specificLinkParams);
 
       this.lastCartHash = cartHash;
       this.lastEvaluationResult = result;
@@ -489,20 +532,26 @@ class PromoEngineRuntime {
         this.log(
           "[PromoEngine] Cart actions to apply:",
           actions
-            .map((a) => `${a.action}(${a.variantId ?? a.lineKey ?? ""}�-${a.quantity ?? 0})`)
+            .map((a) => `${a.action}(${a.variantId ?? a.lineKey ?? ""}x${a.quantity ?? 0})`)
             .join(", "),
         );
       } else {
         this.log("[PromoEngine] Evaluation complete — no cart actions");
       }
 
-      this.predictKnownGiftKeys(cart, actions);
       this.clearDeclinedGiftsForUnqualifiedOffers(result);
 
-      await this.withRefreshGuard(() => this.applyCartActions(actions));
+      const outcome = await this.applyCartActions(actions);
+      this.knownGiftKeys = expectedGiftKeys(
+        cart.items.flatMap((item) => {
+          const key = giftKeyOfItem(item);
+          return key ? [key] : [];
+        }),
+        outcome,
+      );
       if (actions.length > 0 || this.widgetChangedCart) {
         this.widgetChangedCart = false;
-        await this.withRefreshGuard(() => this.refreshCartUI());
+        await this.refreshCartUI();
       }
       if (options.emitResult !== false) emit(PromoEvents.EvaluationCompleted, result);
       return result;
@@ -515,6 +564,52 @@ class PromoEngineRuntime {
       emit(PromoEvents.CartMutationError, { error: (e as Error).message });
       return null;
     }
+  }
+
+  /** POST the evaluation with a hard timeout covering headers AND body; a newer evaluation's abort still wins. */
+  private async postEvaluate(
+    body: string,
+    signal: AbortSignal,
+  ): Promise<{ ok: boolean; status: number; retryAfterMs: number | null; data: EvaluationResult | null; text: string }> {
+    const ctl = new AbortController();
+    const onAbort = () => ctl.abort();
+    signal.addEventListener("abort", onAbort);
+    const timer = setTimeout(() => ctl.abort(), EVAL_TIMEOUT_MS);
+    try {
+      const response = await fetch(this.evalEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: ctl.signal,
+      });
+      const retryAfterMs = parseRetryAfter(response.headers.get("Retry-After"));
+      if (!response.ok) {
+        const text = await response.text().catch(() => "(no body)");
+        return { ok: false, status: response.status, retryAfterMs, data: null, text };
+      }
+      return { ok: true, status: response.status, retryAfterMs, data: (await response.json()) as EvaluationResult, text: "" };
+    } catch (e) {
+      if (!signal.aborted && ctl.signal.aborted) throw new Error(`Evaluation timed out after ${EVAL_TIMEOUT_MS} ms`);
+      throw e;
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  private scheduleRateLimitRetry(retryAfterMs: number | null): void {
+    if (this.rateLimitRetries >= MAX_RATE_LIMIT_RETRIES) {
+      this.log("Evaluation rate limited — giving up until the next cart change");
+      this.rateLimitRetries = 0;
+      return;
+    }
+    const delay = retryAfterMs ?? Math.min(30_000, 2_000 * 2 ** this.rateLimitRetries);
+    this.rateLimitRetries++;
+    this.log(`Evaluation rate limited — retrying in ${delay} ms`);
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      void this.triggerEvaluation({ emitResult: false });
+    }, delay);
   }
 
   /** A previously-known gift line (added by us, or already in the cart last
@@ -539,35 +634,6 @@ class PromoEngineRuntime {
     if (changed) saveDeclinedGiftRewards(this.declinedGiftRewards);
   }
 
-  /** Predict the gift lines that should exist after this cycle's actions are
-   * applied, without an extra cart round-trip — compared against next
-   * cycle's actual fetch by detectDeclinedGifts above. */
-  private predictKnownGiftKeys(cart: CartData, actions: CartAction[]): void {
-    const lineKeyToGiftKey = new Map<string, string>();
-    const predicted = new Set<string>();
-    for (const item of cart.items) {
-      const key = giftKeyOfItem(item);
-      if (key) {
-        lineKeyToGiftKey.set(item.key, key);
-        predicted.add(key);
-      }
-    }
-    for (const action of actions) {
-      if (action.action === "add_line" && action.properties) {
-        const offerId = action.properties["_promo_engine_offer_id"];
-        const rewardId = action.properties["_promo_engine_reward_id"];
-        if (offerId && rewardId) predicted.add(giftRewardKey(offerId, rewardId));
-      } else if (action.action === "remove_line" && action.lineKey) {
-        const key = lineKeyToGiftKey.get(action.lineKey);
-        if (key) predicted.delete(key);
-      } else if (action.action === "update_line" && action.quantity === 0 && action.lineKey) {
-        const key = lineKeyToGiftKey.get(action.lineKey);
-        if (key) predicted.delete(key);
-      }
-    }
-    this.knownGiftKeys = predicted;
-  }
-
   /** A decline only blocks re-adding while the offer keeps qualifying for a
    * gift the customer already turned down. Once the offer stops qualifying
    * entirely, drop it — if it starts qualifying again later that's a fresh
@@ -588,7 +654,8 @@ class PromoEngineRuntime {
     if (changed) saveDeclinedGiftRewards(this.declinedGiftRewards);
   }
 
-  private async applyCartActions(actions: CartAction[]): Promise<void> {
+  private async applyCartActions(actions: CartAction[]): Promise<GiftOutcome> {
+    const outcome: GiftOutcome = { added: new Set(), removed: new Set() };
     for (const action of actions) {
       try {
         switch (action.action) {
@@ -617,6 +684,9 @@ class PromoEngineRuntime {
               }
             }
             if (!addedVariantId) break;
+            const addedOffer = action.properties?.["_promo_engine_offer_id"];
+            const addedReward = action.properties?.["_promo_engine_reward_id"];
+            if (addedOffer && addedReward) outcome.added.add(giftRewardKey(addedOffer, addedReward));
             emit(PromoEvents.GiftAutoAdded, {
               variantId: addedVariantId,
               quantity: action.quantity,
@@ -649,6 +719,7 @@ class PromoEngineRuntime {
             if (!lineKey) break;
             if (action.quantity === 0) {
               await AjaxCartAdapter.removeLine({ key: lineKey });
+              this.markRemoved(outcome, freshCart, lineKey);
               emit(PromoEvents.GiftRemoved, { lineKey });
               publishAnalytics("promo_engine:gift_removed", {
                 line_key: lineKey,
@@ -685,6 +756,7 @@ class PromoEngineRuntime {
                 : null);
             if (!lineKey) break;
             await AjaxCartAdapter.removeLine({ key: lineKey });
+            this.markRemoved(outcome, freshCart, lineKey);
             emit(PromoEvents.GiftRemoved, { lineKey });
             publishAnalytics("promo_engine:gift_removed", {
               line_key: lineKey,
@@ -704,6 +776,13 @@ class PromoEngineRuntime {
         });
       }
     }
+    return outcome;
+  }
+
+  private markRemoved(outcome: GiftOutcome, cart: CartData, lineKey: string): void {
+    const item = cart.items.find((i) => i.key === lineKey);
+    const key = item ? giftKeyOfItem(item) : null;
+    if (key) outcome.removed.add(key);
   }
 
   private buildCartHash(cart: CartData): string {
@@ -794,6 +873,7 @@ declare global {
   interface Window {
     PromoEngine?: PromoEngineRuntime["api"];
     __promoEngineConfig?: RuntimeConfig;
+    __promoEngineInitialized?: boolean;
     // Called directly by theme blocks (fbt.liquid) that mount a widget into a
     // specific container rather than reacting to a runtime-wide event.
     initFbtWidget?: typeof initFbtWidget;
@@ -801,12 +881,15 @@ declare global {
   }
 }
 
-function initRuntime() {
+export function initRuntime() {
+  // The app embed can be injected twice (theme + app, preview, bfcache re-run): never double-init.
+  if (window.__promoEngineInitialized) return;
   const config = window.__promoEngineConfig;
   if (!config) {
     console.warn("[PromoEngine] No config found. Ensure the app embed is enabled in your theme.");
     return;
   }
+  window.__promoEngineInitialized = true;
   const runtime = new PromoEngineRuntime(config);
   window.PromoEngine = runtime.api;
   // Exposed as its own global (not nested under PromoEngine) because blocks
@@ -817,8 +900,10 @@ function initRuntime() {
   runtime.init();
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", initRuntime);
-} else {
-  initRuntime();
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initRuntime);
+  } else {
+    initRuntime();
+  }
 }

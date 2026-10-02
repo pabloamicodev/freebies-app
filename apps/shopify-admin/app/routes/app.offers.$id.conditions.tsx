@@ -4,6 +4,7 @@
  * validated form for each condition type.
  */
 
+import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData, Form, Link, useActionData, useNavigation, useSubmit } from "react-router";
 import * as Sentry from "@sentry/node";
 import { NotFound } from "../components/NotFound.js";
@@ -83,7 +84,7 @@ function LineMatchFields({
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const conditionRows = await db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
@@ -291,7 +292,7 @@ function buildConditionValue(
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
   const offer = await loadOwnedOffer(db, shopId, offerId);
@@ -520,7 +521,7 @@ export default function OfferConditionsPage() {
           </div>
         )}
         {actionData && "success" in actionData && actionData.success && (
-          <div className="b-banner b-banner-green b-mb-4">
+          <div className="b-banner b-banner-green b-mb-4" role="status">
             <span className="b-banner-icon">✓</span>
             <div className="b-banner-body">
               <p className="b-banner-text" style={{ margin: 0 }}>Saved successfully.</p>

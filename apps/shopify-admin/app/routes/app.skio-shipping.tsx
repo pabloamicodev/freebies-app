@@ -1,4 +1,5 @@
 import { Form, useActionData, useLoaderData, useSubmit } from "react-router";
+import { safeErrorMessage } from "../lib/safe-error.js";
 import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
@@ -91,7 +92,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
     return { error: "Unsupported action." };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "Skio operation failed." };
+    return { error: safeErrorMessage(error, "Skio operation failed. Check your Skio connection and try again.") };
   }
 }
 

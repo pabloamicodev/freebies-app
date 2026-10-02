@@ -1,8 +1,13 @@
 use std::process;
 
 pub mod cart_lines_discounts_generate_run;
+#[macro_use]
+mod de;
 mod config;
 mod discount_logic;
+mod page_match;
+#[cfg(test)]
+mod parity_tests;
 
 use shopify_function::typegen;
 

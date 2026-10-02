@@ -354,8 +354,8 @@ export function SubscriptionForm({ value, onChange }: SubFormProps) {
   const mode = storedMode === "subscription" ? "subscription_only" : storedMode === "one_time" ? "one_time_only" : storedMode;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ fontSize: 13, color: "var(--text)", fontWeight: 500 }}>Apply offer to:</div>
+    <fieldset className="b-radio-group" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <legend style={{ fontSize: 13, color: "var(--text)", fontWeight: 500 }}>Apply offer to:</legend>
       {[
         { value: "subscription_only", label: "Subscription products only" },
         { value: "one_time_only",     label: "One-time purchase products" },
@@ -373,7 +373,7 @@ export function SubscriptionForm({ value, onChange }: SubFormProps) {
         right now (a line with a selling plan attached), not the customer's account or purchase
         history.
       </div>
-    </div>
+    </fieldset>
   );
 }
 
@@ -415,9 +415,8 @@ export function SalesChannelForm({ value, onChange }: SubFormProps) {
         <span style={{ fontSize: 13, color: "var(--text)" }}>Point of sale channel</span>
       </label>
       <div style={{ background: "#f0f4ff", border: "1px solid #c4d0fb", borderRadius: 6, padding: "10px 12px", fontSize: 12, color: "var(--text)", lineHeight: 1.5 }}>
-        By default, BOGOS works with our mobile app builder partners:{" "}
-        <strong>OneMobile</strong>, <strong>Superflux</strong>. If you use a custom mobile app,
-        contact us for integration support.
+        Mobile orders are recognised from the checkout&apos;s source channel. If you use a custom
+        mobile app, contact support for integration help.
       </div>
       <div className="b-help">
         Passes if the order comes from any one of the checked channels (OR, not AND) — check every
@@ -445,11 +444,11 @@ export function MarketsForm({ value, onChange }: SubFormProps) {
     void fetch("/api/markets", { signal: controller.signal })
       .then(async (response) => {
         const body = await response.json() as { markets?: Array<{ id: string; name: string; currencyCode: string; enabled: boolean }>; error?: string };
-        if (!response.ok) throw new Error(body.error ?? `Markets request failed (${response.status})`);
+        if (!response.ok) throw new Error(`Markets request failed (${response.status})`);
         setMarkets(body.markets ?? []);
       })
       .catch((error: unknown) => {
-        if ((error as Error).name !== "AbortError") setMarketError((error as Error).message);
+        if ((error as Error).name !== "AbortError") setMarketError("Markets could not be loaded.");
       });
     return () => controller.abort();
   }, []);
@@ -578,6 +577,11 @@ export function UtmParametersForm({ value, onChange, isCodePromo = false }: SubF
             property elsewhere in this app, there's no snippet to add to a landing page.
           </p>
           <p className="b-banner-text" style={{ marginTop: 8 }}>
+            <strong>Not a secret:</strong> UTM tags are visible in the link, so anyone who has the link
+            qualifies. Use them to target a campaign, not to keep an offer private. Values are not
+            case-sensitive.
+          </p>
+          <p className="b-banner-text" style={{ marginTop: 8 }}>
             <strong>Combining it:</strong> add it alongside any other condition here — they all apply
             together (AND). Leave a field blank to skip checking that parameter — only the fields you
             fill in are required to match.
@@ -650,8 +654,11 @@ export function PageTypeCheckboxes({
   /** When set, each checkbox posts its value under this name (plain form submit). */
   name?: string;
 }) {
+  // At least one page type must stay selected: an empty list matches nothing and the schema rejects it.
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 8 }}>
+    <fieldset style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
+      <legend className="b-sr-only">Pages where the products were added</legend>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(180px, 100%), 1fr))", gap: 8 }}>
       {PAGE_TYPE_OPTIONS.map((option) => {
         const id = `${idPrefix}-page-type-${option.value}`;
         return (
@@ -664,14 +671,19 @@ export function PageTypeCheckboxes({
               {...(onChange
                 ? {
                     checked: selected.includes(option.value),
-                    onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
-                      onChange(
-                        event.target.checked
-                          ? [...selected, option.value]
-                          : selected.filter((type) => type !== option.value),
-                      ),
+                    onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+                      if (event.target.checked) onChange([...selected, option.value]);
+                      else if (selected.some((type) => type !== option.value)) onChange(selected.filter((type) => type !== option.value));
+                    },
                   }
-                : { defaultChecked: selected.includes(option.value) })}
+                : {
+                    defaultChecked: selected.includes(option.value),
+                    onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+                      if (event.target.checked) return;
+                      const group = event.target.closest("fieldset");
+                      if (!group?.querySelector("input[type=checkbox]:checked")) event.target.checked = true;
+                    },
+                  })}
               style={{ accentColor: "var(--blue)", width: 14, height: 14, marginTop: 3 }}
             />
             <span>
@@ -682,11 +694,12 @@ export function PageTypeCheckboxes({
         );
       })}
     </div>
+    </fieldset>
   );
 }
 
 export const PAGE_TYPES_HELP =
-  "We look at the page each product was added to the cart from, not the page the customer is on at checkout.";
+  "We look at the page each product was added to the cart from, not the page the customer is on at checkout. Products added another way (Buy it now buttons, cart permalinks, or apps that add to the cart without a page) count as \"other pages\" and match none of the types above.";
 
 export function PageTypesForm({ value, onChange, isCodePromo = false }: SubFormProps) {
   const idPrefix = useId();
@@ -798,8 +811,8 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div>
-        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Customers must have:</div>
+      <fieldset className="b-radio-group">
+        <legend style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 8 }}>Customers must have:</legend>
         <div style={{ display: "flex", gap: 16 }}>
           {[{ v: "all", l: "All rules" }, { v: "any", l: "Any rule" }].map((opt) => (
             <label key={opt.v} className="b-checkbox-row" htmlFor={`${idPrefix}-match-${opt.v}`} style={{ cursor: "pointer", gap: 8 }}>
@@ -815,7 +828,7 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
           "All rules" requires every rule below to be satisfied at once; "Any rule" passes if at
           least one is. Quantities are summed across every matching cart line, not checked per line.
         </div>
-      </div>
+      </fieldset>
 
       {rules.map((rule, i) => (
         <div key={rule.id} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>

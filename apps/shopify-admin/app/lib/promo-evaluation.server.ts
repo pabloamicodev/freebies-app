@@ -1,11 +1,11 @@
-import { EvaluationInputSchema, EvaluationResultSchema, type EvaluationInput } from "@promo/shared-types";
+import { EvaluationInputSchema, EvaluationResultSchema, type EvaluationInput, type EvaluationResult } from "@promo/shared-types";
 import { evaluate, type OfferDefinition } from "@promo/rule-engine";
 import { analyticsEvents, type Db } from "@promo/db";
 import { and, eq, inArray, count } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { checkRateLimit, getClientIp } from "./rate-limit.server.js";
 import { getOfferDefinitions } from "./offer-definitions.server.js";
-import { applyCodeGates } from "./code-gate.server.js";
+import { applyCodeGatesDetailed, MISSED_CODE_WINDOW_MS } from "./code-gate.server.js";
 import { resolveCustomer } from "./resolve-customer.server.js";
 import { buildUpsells } from "./upsell-enrichment.server.js";
 import {
@@ -46,6 +46,50 @@ function customerGidFromLoggedIn(loggedInCustomerId: string | null): string | nu
     : null;
 }
 
+const DEFAULT_SPECIFIC_LINK_PARAM = "freegifts_code";
+const PARAM_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/** Query params the storefront runtime may keep in stored line metadata (D4): every active specific_link paramName. */
+export function collectSpecificLinkParams(offerDefinitions: OfferDefinition[]): string[] {
+  const names = new Set<string>([DEFAULT_SPECIFIC_LINK_PARAM]);
+  for (const offer of offerDefinitions) {
+    for (const condition of offer.conditions) {
+      if (!condition.isEnabled || condition.conditionType !== "specific_link") continue;
+      const value = condition.value as { paramName?: unknown; param?: unknown; key?: unknown } | null;
+      const name = value?.paramName ?? value?.param ?? value?.key;
+      if (typeof name === "string" && PARAM_NAME.test(name)) names.add(name);
+    }
+  }
+  return [...names];
+}
+
+/**
+ * Prime Day kill switch (docs/RUNBOOK.md): ENABLE_STOREFRONT_RUNTIME=false answers every evaluation with an
+ * inert result (no cart actions, no sliders, no DB or Redis work) so the storefront widgets go quiet instantly
+ * after a redeploy. Checkout discounts are unaffected: they run in the Shopify Functions. Unset = enabled.
+ */
+export function storefrontRuntimeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !/^(0|false|no|off)$/i.test(env["ENABLE_STOREFRONT_RUNTIME"]?.trim() ?? "");
+}
+
+function inertResult(): EvaluationResult {
+  return {
+    requestId: crypto.randomUUID(),
+    cartHash: "disabled",
+    qualifiedOffers: [],
+    disqualifiedOffers: [],
+    cartActions: [],
+    discountCodes: { add: [], remove: [] },
+    giftSlider: null,
+    additionalGiftSliders: [],
+    cartMessages: [],
+    progressBars: [],
+    upsells: [],
+    warnings: [{ code: "STOREFRONT_RUNTIME_DISABLED", message: "Storefront evaluation is switched off." }],
+    evaluatedAt: new Date().toISOString(),
+  };
+}
+
 export interface EvaluationShop {
   id: string;
   shopDomain: string;
@@ -79,12 +123,27 @@ export function createPhaseTimer(initial: [string, number][] = []) {
 
 const SLOW_EVALUATION_MS = 1_500;
 
+type RateLimitResult = Awaited<ReturnType<typeof checkRateLimit>>;
+
+/**
+ * Shop-wide evaluate ceiling per minute. Capacity estimate (confirm with scripts/load/evaluate.k6.js):
+ * a Prime Day peak of ~1,500 concurrent shoppers x ~6 evaluations/min is ~9,000/min (150 rps). With the
+ * Redis-cached definitions each evaluation costs about 3 indexed queries, ~450 qps against Neon's pooler,
+ * and ~25 concurrent function instances at ~150 ms. 12,000 leaves ~30% headroom above that peak and
+ * stops a runaway client loop. Override per project with EVALUATE_SHOP_LIMIT_PER_MINUTE.
+ */
+export const EVALUATE_SHOP_LIMIT_PER_MINUTE = Number(process.env["EVALUATE_SHOP_LIMIT_PER_MINUTE"]) || 12_000;
+export const EVALUATE_CALLER_LIMIT_PER_MINUTE = 120;
+export const EVALUATE_IP_LIMIT_PER_MINUTE = 600;
+
 export async function handleEvaluationRequest(
   request: Request,
   shop: EvaluationShop,
   loggedInCustomerId: string | null,
   timer = createPhaseTimer(),
+  options: { viaAppProxy?: boolean } = {},
 ): Promise<Response> {
+  if (!storefrontRuntimeEnabled()) return apiJson(request, { ...inertResult(), specificLinkParams: [] });
   const body = await readJsonBody<unknown>(request, {
     maxBytes: MAX_EVALUATION_BODY_BYTES,
     tooLargeMessage: "Evaluation payload is too large.",
@@ -104,34 +163,40 @@ export async function handleEvaluationRequest(
     });
   }
 
-  // Identity limit is keyed by the caller's actual identity, not IP: behind
-  // the app proxy the IP can be Shopify's own, which would otherwise merge
-  // every anonymous visitor into one shared bucket. Falls back to the cart
-  // token, then IP as a last resort (e.g. no cart yet). Both limits run in
-  // parallel — each is a Redis round trip on the hot path.
+  // D10: limits are keyed by shop + the verified customer and by shop + cart token. The client IP is
+  // only a secondary key for direct callers (checkout extension): behind the app proxy it is
+  // Shopify's egress address, which would merge every visitor into one bucket. The shop-wide
+  // ceiling uses a fixed-window counter (O(1)) because its cap is high.
   timer.mark("body");
-  const identity = loggedInCustomerId ?? parsed.data.cart.token ?? getClientIp(request);
-  const [shopRateLimit, rateLimit] = await Promise.all([
-    checkRateLimit(`evaluate:shop:${shop.id}`, { limit: 3_000, windowMs: 60_000 }),
-    checkRateLimit(`evaluate:${shop.id}:${identity}`, { limit: 120, windowMs: 60_000 }),
-  ]);
-  timer.mark("ratelimit");
-  if (!shopRateLimit.ok) {
-    return apiError(request, {
-      status: 429,
-      code: "RATE_LIMITED",
+  const cartToken = parsed.data.cart.token;
+  const clientIp = options.viaAppProxy ? null : getClientIp(request);
+  const checks: Array<{ message: string; result: Promise<RateLimitResult> }> = [
+    {
       message: "Too many evaluation requests for this shop.",
-      retryable: true,
-      retryAfterSeconds: shopRateLimit.retryAfterSeconds,
-    });
+      result: checkRateLimit(`evaluate:shop:${shop.id}`, {
+        limit: EVALUATE_SHOP_LIMIT_PER_MINUTE,
+        windowMs: 60_000,
+        fixedWindow: true,
+      }),
+    },
+  ];
+  const caller = { limit: EVALUATE_CALLER_LIMIT_PER_MINUTE, windowMs: 60_000 };
+  if (loggedInCustomerId) checks.push({ message: "Too many evaluation requests.", result: checkRateLimit(`evaluate:${shop.id}:c:${loggedInCustomerId}`, caller) });
+  if (cartToken) checks.push({ message: "Too many evaluation requests.", result: checkRateLimit(`evaluate:${shop.id}:t:${cartToken}`, caller) });
+  if (clientIp && clientIp !== "unknown") {
+    checks.push({ message: "Too many evaluation requests.", result: checkRateLimit(`evaluate:${shop.id}:ip:${clientIp}`, { limit: EVALUATE_IP_LIMIT_PER_MINUTE, windowMs: 60_000 }) });
   }
-  if (!rateLimit.ok) {
+  const results = await Promise.all(checks.map((check) => check.result));
+  timer.mark("ratelimit");
+  const blocked = results.findIndex((result) => !result.ok);
+  if (blocked >= 0) {
+    const result = results[blocked] as { ok: false; retryAfterSeconds: number };
     return apiError(request, {
       status: 429,
       code: "RATE_LIMITED",
-      message: "Too many evaluation requests.",
+      message: checks[blocked]!.message,
       retryable: true,
-      retryAfterSeconds: rateLimit.retryAfterSeconds,
+      retryAfterSeconds: result.retryAfterSeconds,
     });
   }
 
@@ -140,7 +205,19 @@ export async function handleEvaluationRequest(
     isShadowModeEnabled(shop.id),
   ]);
   // Offers that own discount codes only qualify while one of their codes is applied.
-  const offerDefinitions = await applyCodeGates(shop.id, shop.db, rawOfferDefinitions, parsed.data.cart.discountCodes);
+  const gate = await applyCodeGatesDetailed(shop.id, shop.db, rawOfferDefinitions, parsed.data.cart.discountCodes, new Date(), {
+    rateLimitKey: parsed.data.cart.token ?? loggedInCustomerId ?? undefined,
+  });
+  if (gate.blocked) {
+    return apiError(request, {
+      status: 429,
+      code: "RATE_LIMITED",
+      message: "Too many invalid discount codes. Try again later.",
+      retryable: true,
+      retryAfterSeconds: Math.ceil(MISSED_CODE_WINDOW_MS / 1000),
+    });
+  }
+  const offerDefinitions = gate.definitions;
   timer.mark("offers");
 
   // resolveCustomer's Admin API round trip is only needed when some active
@@ -229,7 +306,7 @@ export async function handleEvaluationRequest(
   if (timer.total() > SLOW_EVALUATION_MS) {
     console.warn(`[evaluate] slow ${timer.total().toFixed(0)}ms shop=${shop.id} ${timer.header()}`);
   }
-  return apiJson(request, parsedResult.data, { headers: { "Server-Timing": timer.header() } });
+  return apiJson(request, { ...parsedResult.data, specificLinkParams: collectSpecificLinkParams(offerDefinitions) }, { headers: { "Server-Timing": timer.header() } });
 }
 
 async function getOneUseStates(

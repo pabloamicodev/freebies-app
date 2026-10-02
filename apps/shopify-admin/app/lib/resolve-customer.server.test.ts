@@ -13,6 +13,7 @@ vi.mock("./shopify-fetch.server.js", () => ({
 
 let redisStore: Map<string, string> | null = new Map();
 
+const ttlByKey = new Map<string, number>();
 const mockEval = vi.fn(async (script: string, _numKeys: number, ...args: unknown[]) => {
   if (!redisStore) throw new Error("redis unavailable");
   const key = args[0] as string;
@@ -22,6 +23,7 @@ const mockEval = vi.fn(async (script: string, _numKeys: number, ...args: unknown
   // SET key value EX ttl
   const value = args[1] as string;
   redisStore.set(key, value);
+  ttlByKey.set(key, Number(args[2]));
   return "OK";
 });
 
@@ -34,7 +36,7 @@ vi.mock("./redis.server.js", () => ({
 }));
 
 // Import AFTER mocks are registered
-const { resolveCustomer } = await import("./resolve-customer.server.js");
+const { FAILURE_CACHE_TTL_SECONDS, resolveCustomer } = await import("./resolve-customer.server.js");
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -58,6 +60,8 @@ describe("resolveCustomer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     redisStore = new Map();
+    ttlByKey.clear();
+    mockGetSharedRedis.mockImplementation(async () => (redisStore ? { eval: mockEval } : null));
   });
 
   it("returns null without calling the Admin API for an invalid customer id", async () => {
@@ -128,5 +132,35 @@ describe("resolveCustomer", () => {
     const result = await resolveCustomer(SHOP_DOMAIN, ACCESS_TOKEN, "123");
 
     expect(result).toBeNull();
+  });
+
+  describe("cache lifetime", () => {
+    const onlyTtl = () => [...ttlByKey.values()][0];
+
+    it("caches a successful profile for 45 seconds", async () => {
+      mockShopifyGraphQL.mockResolvedValueOnce(makeQueryResult());
+      await resolveCustomer(SHOP_DOMAIN, ACCESS_TOKEN, "123");
+      expect(onlyTtl()).toBe(45);
+    });
+
+    it("caches a customer that does not exist for 45 seconds too: that answer is stable", async () => {
+      mockShopifyGraphQL.mockResolvedValueOnce({ customer: null });
+      await resolveCustomer(SHOP_DOMAIN, ACCESS_TOKEN, "999");
+      expect(onlyTtl()).toBe(45);
+    });
+
+    it("caches a FAILED lookup for only 5 seconds, so one blip doesn't hide the customer's tags for 45", async () => {
+      mockShopifyGraphQL.mockRejectedValueOnce(new Error("timeout"));
+      expect(await resolveCustomer(SHOP_DOMAIN, ACCESS_TOKEN, "123")).toBeNull();
+      expect(FAILURE_CACHE_TTL_SECONDS).toBe(5);
+      expect(onlyTtl()).toBe(5);
+    });
+
+    it("still avoids hammering the Admin API during that short window", async () => {
+      mockShopifyGraphQL.mockRejectedValueOnce(new Error("throttled"));
+      await resolveCustomer(SHOP_DOMAIN, ACCESS_TOKEN, "123");
+      await resolveCustomer(SHOP_DOMAIN, ACCESS_TOKEN, "123");
+      expect(mockShopifyGraphQL).toHaveBeenCalledTimes(1);
+    });
   });
 });

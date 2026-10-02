@@ -3,23 +3,18 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
-import { exportDiscountCodes } from "../lib/discount-codes.server.js";
-import { discountCodesToCsv } from "../lib/discount-code-generation.js";
-import { getRequestId, handleApiError } from "../lib/api-response.server.js";
-
-const STATUSES = ["active", "disabled", "exhausted"] as const;
+import { streamDiscountCodesCsv } from "../lib/discount-codes.server.js";
+import { CodesExportQuerySchema } from "@promo/shared-types";
+import { getRequestId, handleApiError, parseQuery } from "../lib/api-response.server.js";
+import { parseUuidParam } from "../lib/route-params.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   try {
     const { shopId, db } = await getShopContext(request);
-    const offerId = params["id"]!;
+    const offerId = parseUuidParam(params);
     const offer = await loadOwnedOffer(db, shopId, offerId);
-    const url = new URL(request.url);
-    const rows = await exportDiscountCodes(db, shopId, offerId, {
-      search: url.searchParams.get("q") ?? "",
-      status: STATUSES.find((status) => status === url.searchParams.get("status")),
-    });
-    return new Response(discountCodesToCsv(rows), {
+    const { q, status } = parseQuery(request, CodesExportQuerySchema, ["q", "status"]);
+    return new Response(streamDiscountCodesCsv(db, shopId, offerId, { search: q, status }), {
       status: 200,
       headers: {
         "Content-Type": "text/csv; charset=utf-8",

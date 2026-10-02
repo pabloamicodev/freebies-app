@@ -469,13 +469,7 @@ export default function NewUpsellOfferPage() {
               Quick tour: How to create an upsell
             </div>
             <div style={{ fontSize: 13, color: "var(--text-sub)" }}>
-              <a
-                href="https://help.secomapp.com"
-                className="b-btn b-btn-plain"
-                style={{ color: "var(--upsell-color)", textDecoration: "underline" }}
-              >
-                Get familiar with our tour or learn more in our onboarding guide.
-              </a>
+              Pick where the upsell appears, choose the products to recommend, then set the discount.
             </div>
           </div>
           <button
@@ -549,12 +543,15 @@ export default function NewUpsellOfferPage() {
                   <input
                     id="internalName"
                     className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`}
+                    aria-invalid={fieldErrors.internalName ? true : undefined}
+                    aria-describedby={fieldErrors.internalName ? "internalName-error" : undefined}
                     name="internalName"
                     value={internalName}
                     onChange={(e) => setInternalName(e.target.value)}
                     autoComplete="off"
                     placeholder="e.g., Checkout Upsell #1"
                   />
+                  {fieldErrors.internalName && <div id="internalName-error" className="b-help-error" role="alert">{fieldErrors.internalName}</div>}
                   <div className="b-help">Internal use only, not shown to customers.</div>
                 </div>
 
@@ -649,6 +646,8 @@ export default function NewUpsellOfferPage() {
               </div>
               <div
                 className="b-card-body"
+                role="radiogroup"
+                aria-label="Upsell trigger"
                 style={{ display: "flex", flexDirection: "column", gap: 10 }}
               >
                 {isFbt ? (
@@ -899,8 +898,8 @@ export default function NewUpsellOfferPage() {
                   {/* FBT: set qty for current item */}
                   {isFbt && (
                     <>
-                      <div style={{ marginTop: 10 }}>
-                        <div
+                      <fieldset className="b-radio-group" style={{ marginTop: 10 }}>
+                        <legend
                           style={{
                             fontSize: 13,
                             fontWeight: 600,
@@ -909,7 +908,7 @@ export default function NewUpsellOfferPage() {
                           }}
                         >
                           Upsell product quantity:
-                        </div>
+                        </legend>
                         <label
                           className="b-checkbox-row"
                           style={{ cursor: "pointer", gap: 10, marginBottom: 6 }}
@@ -945,7 +944,7 @@ export default function NewUpsellOfferPage() {
                             </div>
                           </div>
                         </label>
-                      </div>
+                      </fieldset>
                     </>
                   )}
                 </div>

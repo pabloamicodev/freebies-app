@@ -5,7 +5,8 @@
 
 import { getDb, productCache, variantCache, catalogSyncJobs, shops } from "@promo/db";
 import { and, asc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
-import { shopifyGraphQL } from "../shopify-fetch.server.js";
+import * as Sentry from "@sentry/node";
+import { shopifyGraphQL, type ShopifyQueryCost } from "../shopify-fetch.server.js";
 import { decryptToken } from "../token-crypto.server.js";
 
 const PRODUCTS_PER_PAGE = 50;
@@ -103,6 +104,25 @@ export const PRODUCT_COLLECTIONS_QUERY = `
   }
 `;
 
+/** Shopify rejects a single query above 1000 points; warn well before the products page gets there. */
+export const QUERY_COST_WARNING = 800;
+
+/** Logs `extensions.cost` and raises a Sentry warning when a query nears Shopify's single-query ceiling. */
+export function trackQueryCost(label: string, shopDomain: string): (cost: ShopifyQueryCost) => void {
+  return (cost) => {
+    console.info(
+      `[${label}] ${shopDomain}: requested cost ${cost.requestedQueryCost}, actual ${cost.actualQueryCost ?? "n/a"}`,
+    );
+    if (cost.requestedQueryCost >= QUERY_COST_WARNING) {
+      Sentry.captureMessage(`${label} query cost is near Shopify's limit`, {
+        level: "warning",
+        tags: { shopDomain, label },
+        extra: { ...cost },
+      });
+    }
+  };
+}
+
 async function fetchPage(shopDomain: string, accessToken: string, cursor: string | null) {
   const data = await shopifyGraphQL<{
     products: { pageInfo: PageInfo; nodes: ShopifyProductSummary[] };
@@ -111,6 +131,7 @@ async function fetchPage(shopDomain: string, accessToken: string, cursor: string
     accessToken,
     query: PRODUCTS_QUERY,
     variables: { first: PRODUCTS_PER_PAGE, after: cursor, variantsFirst: VARIANTS_PER_PRODUCT_PAGE },
+    onCost: trackQueryCost("product-sync", shopDomain),
   });
   return {
     pageInfo: data.products.pageInfo,
@@ -418,4 +439,34 @@ export async function drainProductSyncQueue(options: {
     if (lastJob.status === "completed" || lastJob.status === "failed") break;
   }
   return { steps, job: lastJob };
+}
+
+/**
+ * Nightly full catalogue reconcile: restarts every active shop's import (webhooks can miss events),
+ * then drains as much as the time budget allows. A job that doesn't finish is resumed by the
+ * catalog-sync cron; nothing is archived until a run has seen every page.
+ */
+export async function runNightlyCatalogReconcile(
+  options: { maxRuntimeMs?: number; maxSteps?: number } = {},
+): Promise<{ shops: number; queued: number; steps: number }> {
+  const activeShops = await getDb().select({ id: shops.id }).from(shops).where(eq(shops.isActive, true));
+  let queued = 0;
+  for (const shop of activeShops) {
+    const job = await queueProductSync(shop.id);
+    if (job?.status === "queued") queued += 1;
+  }
+  // drainProductSyncQueue returns as soon as one shop's import finishes; keep going to the next
+  // shop until the step or time budget is spent (the cron resumes whatever is left).
+  const maxSteps = options.maxSteps ?? 6;
+  const deadline = Date.now() + (options.maxRuntimeMs ?? 45_000);
+  let steps = 0;
+  while (steps < maxSteps && Date.now() < deadline) {
+    const drained = await drainProductSyncQueue({
+      maxSteps: maxSteps - steps,
+      maxRuntimeMs: deadline - Date.now(),
+    });
+    if (drained.steps === 0) break;
+    steps += drained.steps;
+  }
+  return { shops: activeShops.length, queued, steps };
 }

@@ -1,13 +1,12 @@
-import { ApiVersion } from "@shopify/shopify-api";
+import type { ApiVersion } from "@shopify/shopify-api";
+import { SHOPIFY_API_VERSION as SHARED_API_VERSION } from "@promo/shared-types";
 
 /**
- * Single source of truth for the Shopify Admin API version.
+ * The Admin API version, derived from the one constant in `@promo/shared-types` (which the
+ * storefront runtime and the background workers import too). Bump it there. What cannot import
+ * code (the `api_version` in the app and extension TOMLs, the Function schemas) is checked against
+ * it by `shopify-api-version.test.ts`, so a partial bump fails CI instead of production.
  *
- * Keep this in sync with `[webhooks].api_version` in shopify.app.toml and the
- * `SHOPIFY_API_VERSION` constants in the background workers (which can't import
- * from this app package).
- *
- * 2026-07 is the latest stable release and is supported by
- * @shopify/shopify-api ^14 (ApiVersion.July26).
+ * Must be a version @shopify/shopify-api knows (the test asserts that too).
  */
-export const SHOPIFY_API_VERSION = ApiVersion.July26; // "2026-07"
+export const SHOPIFY_API_VERSION = SHARED_API_VERSION as unknown as ApiVersion;

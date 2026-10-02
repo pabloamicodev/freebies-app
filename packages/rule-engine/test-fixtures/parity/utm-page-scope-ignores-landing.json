@@ -1,0 +1,118 @@
+{
+  "name": "utm-page-scope-ignores-landing",
+  "description": "Page-scoped UTM reads the add page; a landing URL carrying the utm does not count.",
+  "source": {
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "type": "discount",
+        "priority": 100,
+        "stopLowerPriority": false,
+        "conditions": [
+          {
+            "conditionType": "utm_parameters",
+            "value": {
+              "utmSource": "amazon",
+              "onlyMatchedLines": true
+            },
+            "scope": "sub",
+            "operator": "eq",
+            "sortOrder": 0
+          }
+        ],
+        "rewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "rewardType": "product_discount",
+            "discountType": "percentage",
+            "value": {
+              "amount": 10,
+              "currencyCode": "USD"
+            },
+            "target": {},
+            "quantity": null,
+            "isAutoAdd": false,
+            "isCustomerSelectable": false,
+            "trackMode": "variant",
+            "sortOrder": 0,
+            "label": null
+          }
+        ]
+      }
+    ]
+  },
+  "config": {
+    "c1": "_promo_engine_unused",
+    "c2": "_promo_engine_unused",
+    "c3": "_promo_engine_unused",
+    "customerTags": [],
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "offerType": "discount",
+        "priority": 100,
+        "productRewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "discountType": "percentage",
+            "discountValue": 10
+          }
+        ],
+        "pageUrlConditions": [
+          {
+            "matchMode": "contains",
+            "paramName": "utm_source",
+            "paramValue": "amazon"
+          }
+        ],
+        "restrictToMatchedLines": true
+      }
+    ],
+    "version": "parity",
+    "compiledAt": "2026-01-01T00:00:00.000Z"
+  },
+  "cart": {
+    "currency": "USD",
+    "presentmentCurrencyRate": 1,
+    "country": "US",
+    "customerTags": [],
+    "enteredCodes": [],
+    "lines": [
+      {
+        "id": "l1",
+        "variantId": "gid://shopify/ProductVariant/1",
+        "productId": "gid://shopify/Product/1",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/products/a?utm_source=amazon"
+        }
+      },
+      {
+        "id": "l2",
+        "variantId": "gid://shopify/ProductVariant/2",
+        "productId": "gid://shopify/Product/2",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/products/b",
+          "_promo_landing_url": "/x?utm_source=amazon"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "qualifiedOfferIds": [
+      "aaaaaaaa-0000-4000-8000-000000000001"
+    ],
+    "discountedLineIds": {
+      "aaaaaaaa-0000-4000-8000-000000000001": [
+        "l1"
+      ]
+    }
+  }
+}

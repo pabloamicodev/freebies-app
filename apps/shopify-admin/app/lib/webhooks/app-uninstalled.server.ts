@@ -1,5 +1,10 @@
-import { offers, shops, type Db } from "@promo/db";
-import { and, eq } from "drizzle-orm";
+import { appSettings, offers, shops, type Db } from "@promo/db";
+import { and, eq, inArray } from "drizzle-orm";
+import { CODED_SHIPPING_POOL_SETTING, CODE_NODE_SETTING } from "../discount-node.server.js";
+import { PUBLISH_MANIFEST_SETTING } from "../publish-manifest.server.js";
+import { recordUninstallArchive } from "../restore-archived-offers.server.js";
+import { invalidateOfferDefinitions } from "../offer-definitions.server.js";
+import { invalidateShopCache } from "../proxy-shop.server.js";
 
 export interface SessionStorageLike {
   findSessionsByShop(shop: string): Promise<Array<{ id: string }>>;
@@ -50,11 +55,34 @@ export async function handleAppUninstalled(
     .returning({ id: shops.id });
 
   if (shopRecord) {
+    // Remember which offers THIS uninstall archived, so a reinstall can offer to restore exactly them.
+    const active = await db
+      .select({ id: offers.id })
+      .from(offers)
+      .where(and(eq(offers.shopId, shopRecord.id), eq(offers.status, "active")));
+    await recordUninstallArchive(
+      db,
+      shopRecord.id,
+      active.map((offer) => offer.id),
+    );
     await db
       .update(offers)
       .set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() })
       .where(and(eq(offers.shopId, shopRecord.id), eq(offers.status, "active")));
+    // Shopify deletes the app's discount nodes with the app: ids and manifests we kept are now stale.
+    await db
+      .delete(appSettings)
+      .where(
+        and(
+          eq(appSettings.shopId, shopRecord.id),
+          inArray(appSettings.key, [CODE_NODE_SETTING, CODED_SHIPPING_POOL_SETTING, PUBLISH_MANIFEST_SETTING]),
+        ),
+      );
   }
+
+  // The storefront proxy caches the shop row and its offer definitions for ~30 s: drop both now.
+  await invalidateShopCache(shop);
+  if (shopRecord) await invalidateOfferDefinitions(shopRecord.id);
 
   const sessions = await sessionStorage.findSessionsByShop(shop);
   if (sessions.length > 0) await sessionStorage.deleteSessions(sessions.map((s) => s.id));

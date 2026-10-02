@@ -3,6 +3,7 @@
  * Controls stacking, combination with other discounts, max applications.
  */
 
+import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData, useActionData, useNavigation, Form, Link } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { NotFound } from "../components/NotFound.js";
@@ -22,7 +23,7 @@ interface RestrictingOffer {
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
   const [policyRows, activeOffers] = await Promise.all([
@@ -64,7 +65,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
@@ -279,7 +280,7 @@ export default function OfferCombinationPage() {
 
                   {/* Feedback */}
                   {actionData && "success" in actionData && (
-                    <div className="b-banner b-banner-green">
+                    <div className="b-banner b-banner-green" role="status">
                       <span className="b-banner-icon">✓</span>
                       <p className="b-banner-text" style={{ margin: 0 }}>Combination policy saved.</p>
                     </div>

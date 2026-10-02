@@ -44,6 +44,10 @@ export const discountCodes = pgTable(
     usageCount: integer("usage_count").notNull().default(0),
     /** Set while the code is attached to the offer's Shopify code node (backend A). */
     shopifySyncedAt: timestamp("shopify_synced_at", { withTimezone: true }),
+    /** Set just before the code is sent to Shopify and cleared once confirmed. A row that keeps
+     * this while unsynced may already be live on Shopify (crash / timeout mid-call), so it must
+     * not be deleted and the next publish looks it up instead of assuming it is absent. */
+    shopifySyncPendingAt: timestamp("shopify_sync_pending_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

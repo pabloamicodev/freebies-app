@@ -22,6 +22,9 @@ export const shops = pgTable("shops", {
   locale: text("locale"),
   installedAt: timestamp("installed_at", { withTimezone: true }).notNull().defaultNow(),
   uninstalledAt: timestamp("uninstalled_at", { withTimezone: true }),
+  /** Set when a publish couldn't take the per-shop lock in time (55P03); the background
+   * retry and the offers cron re-run it. Offers are never paused because of it. */
+  publishPendingAt: timestamp("publish_pending_at", { withTimezone: true }),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

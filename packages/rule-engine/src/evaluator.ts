@@ -23,14 +23,7 @@ import { evaluateCartValueMultiplier, type CartValueMultiplierConditionValue } f
 import { evaluatePack, type PackConditionValue } from "./conditions/pack.js";
 import { evaluateProductQuantityLimits, type ProductQuantityLimitsConditionValue } from "./conditions/product-quantity-limits.js";
 import { evaluateSubscriptionCondition, type SubscriptionConditionValue } from "./conditions/subscription.js";
-import { evaluateUrlParam, type UrlParamConditionValue } from "./conditions/url-param.js";
-import { evaluatePageUrl, type PageUrlConditionValue } from "./conditions/page-url.js";
-import {
-  evaluatePageTypes,
-  evaluateUtmParameters,
-  type PageTypesConditionValue,
-  type UtmParametersConditionValue,
-} from "./conditions/page-context.js";
+import { evaluatePageConditionGroup, isPageConditionType } from "./page-match.js";
 import { evaluateCountry, type CountryConditionValue } from "./conditions/country.js";
 import { applyPriority } from "./priority-resolver.js";
 import { evaluateCartAttribute, evaluateLineAttribute, evaluateDiscountCode, type CartAttributeConditionValue, type LineAttributeConditionValue, type DiscountCodeConditionValue } from "./conditions/attributes.js";
@@ -39,6 +32,9 @@ import { evaluateCartAttribute, evaluateLineAttribute, evaluateDiscountCode, typ
  * Offer definition passed into the evaluator — loaded from DB + compiled config.
  * This is a minimal in-memory representation for evaluation.
  */
+/** Gifts a shopper may pick from one picker reward; mirrors the Function default (selection_count.unwrap_or(1)). */
+const PICKER_SELECTION_COUNT = 1;
+
 export interface OfferDefinition {
   id: string;
   version: number;
@@ -146,12 +142,15 @@ export async function evaluate(
     }
 
     // Evaluate enabled conditions in order
+    const pageConditions = offer.conditions.filter(
+      (c) => (c.scope === "main" || c.scope === "sub") && c.isEnabled && isPageConditionType(c.conditionType),
+    );
     const mainConditions = offer.conditions
-      .filter((c) => c.scope === "main" && c.isEnabled)
+      .filter((c) => c.scope === "main" && c.isEnabled && !isPageConditionType(c.conditionType))
       .sort((a, b) => a.sortOrder - b.sortOrder);
 
     const subConditions = offer.conditions
-      .filter((c) => c.scope === "sub" && c.isEnabled)
+      .filter((c) => c.scope === "sub" && c.isEnabled && !isPageConditionType(c.conditionType))
       .sort((a, b) => a.sortOrder - b.sortOrder);
 
     const currency = {
@@ -186,6 +185,17 @@ export async function evaluate(
       }
     }
 
+    // Page conditions are one offer-level gate: a single line must satisfy all of them (D1).
+    if (pageConditions.length > 0) {
+      const pageResult = evaluatePageConditionGroup(
+        pageConditions,
+        extractQualifyingLines(input.cart),
+        offerExcludedProductIds(offer.conditions),
+      );
+      reasons.push(...pageResult.reasons);
+      if (!pageResult.passed) passed = false;
+    }
+
     const cartActions: CartAction[] = [];
     const discountCodesToAdd: string[] = [];
     const discountCodesToRemove: string[] = [];
@@ -197,8 +207,9 @@ export async function evaluate(
       const declinedGiftRewards = new Set(input.declinedGiftRewards ?? []);
 
       // Remove stale/tampered lines even while the offer still qualifies. A
-      // gift remains valid only for the current offer version, reward id and
-      // that reward's exact variant allow-list.
+      // gift remains valid while its offer id and reward id still exist and the
+      // variant is on that reward's allow-list. The offer version is not compared:
+      // a merchant edit must not make the storefront remove and re-add gifts (D6).
       for (const gift of existingOfferGifts) {
         const reward = giftRewardById.get(gift.rewardId);
         const target = reward?.target as { variantId?: string; variantIds?: string[]; fallbackVariantIds?: string[] } | undefined;
@@ -208,7 +219,6 @@ export async function evaluate(
         ];
         if (
           !reward ||
-          gift.offerVersion !== String(offer.version) ||
           !allowedVariantIds.includes(gift.variantId)
         ) {
           cartActions.push({
@@ -240,7 +250,6 @@ export async function evaluate(
           const existingGifts = existingOfferGifts.filter(
             (gift) =>
               gift.rewardId === reward.id &&
-              gift.offerVersion === String(offer.version) &&
               fulfillingVariantIds.has(gift.variantId),
           );
           const existingQty = existingGifts.reduce((acc, gift) => acc + gift.quantity, 0);
@@ -275,6 +284,36 @@ export async function evaluate(
                 reason: "duplicate_gift_line",
               });
             }
+          }
+        }
+      }
+      // Picker and multi-variant gift lines are never auto-added, but a shopper can still raise a
+      // line's quantity. The Function already charges the extra units; shrink the line back to what
+      // the reward allows so the cart stays honest. Only ever shrinks: a valid pick is not removed.
+      for (const reward of giftRewards) {
+        const target = reward.target as { variantId?: string; variantIds?: string[]; fallbackVariantIds?: string[] };
+        const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
+        if (reward.isAutoAdd && variantIds.length === 1) continue;
+        const allowed = new Set([...variantIds, ...(target.fallbackVariantIds ?? [])]);
+        const limit = Math.max(1, reward.quantity ?? 1);
+        const isPicker = reward.isCustomerSelectable || variantIds.length > 1;
+        let remainingForReward = isPicker ? PICKER_SELECTION_COUNT * limit : Number.POSITIVE_INFINITY;
+        const remainingByVariant = new Map<string, number>();
+        for (const gift of existingOfferGifts) {
+          if (gift.rewardId !== reward.id || !allowed.has(gift.variantId)) continue;
+          const remainingForVariant = remainingByVariant.get(gift.variantId) ?? limit;
+          const keep = Math.min(gift.quantity, remainingForVariant, remainingForReward);
+          remainingByVariant.set(gift.variantId, remainingForVariant - Math.max(keep, 0));
+          if (keep <= 0) continue;
+          remainingForReward -= keep;
+          if (keep < gift.quantity) {
+            cartActions.push({
+              action: "update_line",
+              lineKey: gift.lineKey,
+              quantity: keep,
+              offerId: offer.id,
+              variantId: gift.variantId,
+            });
           }
         }
       }
@@ -464,7 +503,6 @@ function buildGiftSliderPayloads(
           isSelected: cart.lines.some((line) =>
             line.variantId === variantId &&
             line.properties["_promo_engine_offer_id"] === offer.id &&
-            line.properties["_promo_engine_offer_version"] === String(offer.version) &&
             line.properties["_promo_engine_reward_id"] === reward.id &&
             line.properties["_promo_engine_line_type"] === "gift"
           ),
@@ -590,28 +628,11 @@ function evaluateCondition(
     case "subscription_product_type":
       return evaluateSubscriptionCondition(input.cart, cond.value as SubscriptionConditionValue);
 
-    case "specific_link":
-      return evaluateSourcePages(input, cond.value, (url) => evaluateUrlParam(url, cond.value as UrlParamConditionValue));
-
-    case "page_url":
-      return evaluateSourcePages(input, cond.value, (url) => evaluatePageUrl(url, cond.value as PageUrlConditionValue));
-
-    case "page_types":
-      return evaluateSourcePages(input, cond.value, (url) => evaluatePageTypes(url, cond.value as PageTypesConditionValue));
-
-    case "utm_parameters": {
-      const value = cond.value as UtmParametersConditionValue;
-      return evaluateSourcePages(
-        input,
-        cond.value,
-        (url) => evaluateUtmParameters(url, value),
-        value.scope === "visit" ? "_promo_landing_url" : "_promo_page_url",
-      );
-    }
-
     case "customer_location":
       return evaluateCountry(
-        input.customer?.countryCode ?? input.market?.countryCode ?? null,
+        // Checkout only knows the cart's market country (localization), so that wins;
+        // the customer's own country is just a fallback when no market is sent.
+        input.market?.countryCode ?? input.customer?.countryCode ?? null,
         cond.value as CountryConditionValue,
       );
 
@@ -633,39 +654,20 @@ function evaluateCondition(
   }
 }
 
-/**
- * Checkout only sees the page each line was added from (`_promo_page_url`,
- * stamped by the metadata bridge; `_promo_landing_url` for visit-scoped UTM),
- * not where the shopper is now — evaluate the same thing so the storefront
- * never promises what checkout rejects. With `rejectUnmatchedLines` every
- * non-gift line must pass, as the Function requires.
- */
-function evaluateSourcePages(
-  input: EvaluationInput,
-  conditionValue: unknown,
-  check: (url: string | null) => Result<EligibilityReason, EligibilityReason>,
-  urlKey: "_promo_page_url" | "_promo_landing_url" = "_promo_page_url",
-): Result<EligibilityReason, EligibilityReason> {
-  const lines = extractQualifyingLines(input.cart);
-  const urlOf = (properties: Record<string, string>): string | null => {
-    const url = properties[urlKey];
-    return properties["_promo_page_url"] && typeof url === "string" && url.length > 0 ? url : null;
-  };
-  const reject = (conditionValue as { rejectUnmatchedLines?: unknown } | null)?.rejectUnmatchedLines === true;
-  if (reject) {
-    let result = check(null);
-    for (const line of lines) {
-      result = check(urlOf(line.properties));
-      if (!result.ok) return result;
-    }
-    return result;
+/** Products the offer ignores everywhere (cart_value / cart_quantity scope filters and
+ * exclude_products), the same set the compiler hands the Function. */
+function offerExcludedProductIds(conditions: ConditionDefinition[]): Set<string> {
+  const ids = new Set<string>();
+  for (const cond of conditions) {
+    if (!cond.isEnabled) continue;
+    const value = (cond.value ?? {}) as { scopeFilter?: { excludeProductIds?: unknown }; productIds?: unknown };
+    const list =
+      cond.conditionType === "exclude_products"
+        ? value.productIds
+        : cond.conditionType === "cart_value" || cond.conditionType === "cart_quantity"
+          ? value.scopeFilter?.excludeProductIds
+          : undefined;
+    if (Array.isArray(list)) for (const id of list) if (typeof id === "string") ids.add(id);
   }
-  let result = check(null);
-  for (const line of lines) {
-    const url = urlOf(line.properties);
-    if (!url) continue;
-    result = check(url);
-    if (result.ok) return result;
-  }
-  return result;
+  return ids;
 }

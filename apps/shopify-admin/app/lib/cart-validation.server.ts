@@ -1,10 +1,11 @@
-import { shopifyGraphQL } from "./shopify-fetch.server.js";
+import { ShopifyOutcomeUnknownError, shopifyGraphQL } from "./shopify-fetch.server.js";
 import type { CompiledOffer } from "./sync/compile-config.js";
 
 const VALIDATION_TITLE = "Promo Engine Cart Protection";
-const VALIDATION_FUNCTION_HANDLE = "promo-engine-cart-validation";
-const VALIDATION_METAFIELD_NAMESPACE = "promo_engine";
-const VALIDATION_METAFIELD_KEY = "validation_config";
+export const VALIDATION_FUNCTION_HANDLE = "promo-engine-cart-validation";
+export const VALIDATION_METAFIELD_NAMESPACE = "promo_engine";
+export const VALIDATION_APP_METAFIELD_NAMESPACE = "$app:promo_engine";
+export const VALIDATION_METAFIELD_KEY = "validation_config";
 const MAX_VALIDATION_CONFIG_BYTES = 9_500;
 
 export interface GiftRewardValidationRule {
@@ -20,9 +21,10 @@ export interface GiftOfferValidationRule {
 
 export interface CartValidationConfig {
   offerRules: Record<string, GiftOfferValidationRule>;
-  /** Kept for carts created by older storefront-runtime bundles. */
+  /** Legacy, read by the Function only when `offerRules` is empty. Always empty: every gift variant
+   * id is stored once, under its reward, which keeps the metafield half the size. */
   offerMaxQuantities: Record<string, number>;
-  /** Kept for carts created by older storefront-runtime bundles. */
+  /** Legacy, see `offerMaxQuantities`. */
   allowedGiftVariantIds: string[];
   cloneProductIds: string[];
   cloneMinPriceCents: number;
@@ -30,8 +32,6 @@ export interface CartValidationConfig {
 
 export function buildCartValidationConfig(compiledOffers: CompiledOffer[]): CartValidationConfig {
   const offerRules: Record<string, GiftOfferValidationRule> = {};
-  const offerMaxQuantities: Record<string, number> = {};
-  const allowedGiftVariantIds = new Set<string>();
   const cloneProductIds = new Set<string>();
 
   for (const offer of compiledOffers) {
@@ -45,7 +45,6 @@ export function buildCartValidationConfig(compiledOffers: CompiledOffer[]): Cart
       const maxQuantity = Math.max(1, Math.trunc(reward.maxQuantity));
       rewards[reward.id] = { maxQuantity, variantIds };
       offerMaxQuantity += maxQuantity;
-      for (const variantId of variantIds) allowedGiftVariantIds.add(variantId);
       for (const productId of reward.targetProductIds) cloneProductIds.add(productId);
     }
 
@@ -54,13 +53,12 @@ export function buildCartValidationConfig(compiledOffers: CompiledOffer[]): Cart
       maxQuantity: offerMaxQuantity,
       rewards,
     };
-    offerMaxQuantities[offer.id] = offerMaxQuantity;
   }
 
   return {
     offerRules,
-    offerMaxQuantities,
-    allowedGiftVariantIds: [...allowedGiftVariantIds].sort(),
+    offerMaxQuantities: {},
+    allowedGiftVariantIds: [],
     cloneProductIds: [...cloneProductIds].sort(),
     cloneMinPriceCents: 100,
   };
@@ -70,6 +68,7 @@ interface ExistingValidation {
   id: string;
   shopifyFunction: { handle: string };
   metafield: { id: string } | null;
+  appMetafield?: { id: string } | null;
 }
 
 interface ValidationMutationResult {
@@ -90,37 +89,49 @@ export async function syncCartValidation(
     );
   }
 
-  const existingData = await shopifyGraphQL<{
-    validations: { nodes: ExistingValidation[] };
-  }>({
-    shopDomain,
-    accessToken,
-    query: `query FindPromoEngineCartValidation {
+  const findExisting = async () => {
+    const existingData = await shopifyGraphQL<{
+      validations: { nodes: ExistingValidation[] };
+    }>({
+      shopDomain,
+      accessToken,
+      query: `query FindPromoEngineCartValidation {
       validations(first: 25) {
         nodes {
           id
           shopifyFunction { handle }
           metafield(namespace: "${VALIDATION_METAFIELD_NAMESPACE}", key: "${VALIDATION_METAFIELD_KEY}") { id }
+          appMetafield: metafield(namespace: "${VALIDATION_APP_METAFIELD_NAMESPACE}", key: "${VALIDATION_METAFIELD_KEY}") { id }
         }
       }
     }`,
-  });
-
-  const existing = existingData.validations.nodes.find(
-    (validation) => validation.shopifyFunction.handle === VALIDATION_FUNCTION_HANDLE,
-  );
-  const metafield = {
-    ...(existing?.metafield?.id ? { id: existing.metafield.id } : {}),
-    namespace: VALIDATION_METAFIELD_NAMESPACE,
-    key: VALIDATION_METAFIELD_KEY,
-    type: "json",
-    value,
+    });
+    return existingData.validations.nodes.find(
+      (validation) => validation.shopifyFunction.handle === VALIDATION_FUNCTION_HANDLE,
+    );
   };
-
-  if (existing) {
+  // Dual-write until every deployed cart-validation Function reads the $app namespace (see RUNBOOK).
+  const metafieldsFor = (existing: ExistingValidation | undefined) => [
+    {
+      ...(existing?.metafield?.id ? { id: existing.metafield.id } : {}),
+      namespace: VALIDATION_METAFIELD_NAMESPACE,
+      key: VALIDATION_METAFIELD_KEY,
+      type: "json",
+      value,
+    },
+    {
+      ...(existing?.appMetafield?.id ? { id: existing.appMetafield.id } : {}),
+      namespace: VALIDATION_APP_METAFIELD_NAMESPACE,
+      key: VALIDATION_METAFIELD_KEY,
+      type: "json",
+      value,
+    },
+  ];
+  const update = async (existing: ExistingValidation) => {
     const data = await shopifyGraphQL<{ validationUpdate: ValidationMutationResult }>({
       shopDomain,
       accessToken,
+      retryable: true,
       query: `mutation UpdatePromoEngineCartValidation($id: ID!, $validation: ValidationUpdateInput!) {
         validationUpdate(id: $id, validation: $validation) {
           validation { id }
@@ -133,33 +144,47 @@ export async function syncCartValidation(
           title: VALIDATION_TITLE,
           enable: true,
           blockOnFailure: true,
-          metafields: [metafield],
+          metafields: metafieldsFor(existing),
         },
       },
     });
     return assertValidationMutation("validationUpdate", data.validationUpdate);
-  }
+  };
 
-  const data = await shopifyGraphQL<{ validationCreate: ValidationMutationResult }>({
-    shopDomain,
-    accessToken,
-    query: `mutation CreatePromoEngineCartValidation($validation: ValidationCreateInput!) {
+  const existing = await findExisting();
+  if (existing) return update(existing);
+
+  const create = () =>
+    shopifyGraphQL<{ validationCreate: ValidationMutationResult }>({
+      shopDomain,
+      accessToken,
+      query: `mutation CreatePromoEngineCartValidation($validation: ValidationCreateInput!) {
       validationCreate(validation: $validation) {
         validation { id }
         userErrors { field message }
       }
     }`,
-    variables: {
-      validation: {
-        title: VALIDATION_TITLE,
-        functionHandle: VALIDATION_FUNCTION_HANDLE,
-        enable: true,
-        blockOnFailure: true,
-        metafields: [metafield],
+      variables: {
+        validation: {
+          title: VALIDATION_TITLE,
+          functionHandle: VALIDATION_FUNCTION_HANDLE,
+          enable: true,
+          blockOnFailure: true,
+          metafields: metafieldsFor(undefined),
+        },
       },
-    },
-  });
-  return assertValidationMutation("validationCreate", data.validationCreate);
+    });
+  try {
+    const data = await create();
+    return assertValidationMutation("validationCreate", data.validationCreate);
+  } catch (err) {
+    // A timed-out create may have landed: look before sending it again.
+    if (!(err instanceof ShopifyOutcomeUnknownError)) throw err;
+    const landed = await findExisting();
+    if (landed) return update(landed);
+    const data = await create();
+    return assertValidationMutation("validationCreate", data.validationCreate);
+  }
 }
 
 function assertValidationMutation(operation: string, result: ValidationMutationResult): string {

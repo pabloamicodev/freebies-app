@@ -1,0 +1,146 @@
+{
+  "name": "utm-case-insensitive-names-and-values",
+  "description": "utm_* names and values compare ASCII case-insensitively; every configured field must match.",
+  "source": {
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "type": "discount",
+        "priority": 100,
+        "stopLowerPriority": false,
+        "conditions": [
+          {
+            "conditionType": "utm_parameters",
+            "value": {
+              "utmSource": "Amazon",
+              "utmMedium": "CPC",
+              "onlyMatchedLines": true
+            },
+            "scope": "sub",
+            "operator": "eq",
+            "sortOrder": 0
+          }
+        ],
+        "rewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "rewardType": "product_discount",
+            "discountType": "percentage",
+            "value": {
+              "amount": 10,
+              "currencyCode": "USD"
+            },
+            "target": {},
+            "quantity": null,
+            "isAutoAdd": false,
+            "isCustomerSelectable": false,
+            "trackMode": "variant",
+            "sortOrder": 0,
+            "label": null
+          }
+        ]
+      }
+    ]
+  },
+  "config": {
+    "c1": "_promo_engine_unused",
+    "c2": "_promo_engine_unused",
+    "c3": "_promo_engine_unused",
+    "customerTags": [],
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "offerType": "discount",
+        "priority": 100,
+        "productRewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "discountType": "percentage",
+            "discountValue": 10
+          }
+        ],
+        "pageUrlConditions": [
+          {
+            "matchMode": "contains",
+            "paramName": "utm_source",
+            "paramValue": "Amazon"
+          },
+          {
+            "matchMode": "contains",
+            "paramName": "utm_medium",
+            "paramValue": "CPC"
+          }
+        ],
+        "restrictToMatchedLines": true
+      }
+    ],
+    "version": "parity",
+    "compiledAt": "2026-01-01T00:00:00.000Z"
+  },
+  "cart": {
+    "currency": "USD",
+    "presentmentCurrencyRate": 1,
+    "country": "US",
+    "customerTags": [],
+    "enteredCodes": [],
+    "lines": [
+      {
+        "id": "c1",
+        "variantId": "gid://shopify/ProductVariant/1",
+        "productId": "gid://shopify/Product/1",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/?UTM_SOURCE=amazon&utm_medium=cpc"
+        }
+      },
+      {
+        "id": "c2",
+        "variantId": "gid://shopify/ProductVariant/2",
+        "productId": "gid://shopify/Product/2",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/?utm_source=AMAZON&UTM_Medium=Cpc"
+        }
+      },
+      {
+        "id": "c3",
+        "variantId": "gid://shopify/ProductVariant/3",
+        "productId": "gid://shopify/Product/3",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/?utm_source=amazon"
+        }
+      },
+      {
+        "id": "c4",
+        "variantId": "gid://shopify/ProductVariant/4",
+        "productId": "gid://shopify/Product/4",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/?utm_source=amazon&utm_medium=email"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "qualifiedOfferIds": [
+      "aaaaaaaa-0000-4000-8000-000000000001"
+    ],
+    "discountedLineIds": {
+      "aaaaaaaa-0000-4000-8000-000000000001": [
+        "c1",
+        "c2"
+      ]
+    }
+  }
+}

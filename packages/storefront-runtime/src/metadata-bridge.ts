@@ -18,53 +18,145 @@ function existingMetadata(value: string | undefined): LineProperties {
   }
 }
 
+/**
+ * Privacy / consent classification: the visit landing, the stamped page URL and the
+ * session/declined-gift state are FUNCTIONAL ("strictly necessary") storage. They exist
+ * only so a discount the shopper was promised on a page/UTM still applies at checkout,
+ * and the gift they declined is not re-added. They are first-party, never sent to a
+ * third party, and hold only the path + utm_* + the specific-link param names (D4);
+ * emails, click ids (gclid/fbclid/_kx) and every other param are dropped. The landing
+ * expires after 24 h. Analytics events (publishAnalytics) are the consent-gated part.
+ */
+const LANDING_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_LINK_PARAMS = ["freegifts_code"];
+const LINK_PARAMS_STORAGE_KEY = "promo_engine_link_params";
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value.replace(/\+/g, " "));
+  } catch {
+    return value;
+  }
+}
+
+function localStorageOrUndefined(): Storage | undefined {
+  try {
+    return typeof localStorage === "undefined" ? undefined : localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Specific-link param names: runtime config, else the last list the server sent, else the default. */
+export function specificLinkParams(): string[] {
+  const configured =
+    typeof window !== "undefined" ? window.__promoEngineConfig?.specificLinkParams : undefined;
+  const names = Array.isArray(configured) && configured.length > 0 ? configured : cachedLinkParams();
+  const list = names.length > 0 ? names : DEFAULT_LINK_PARAMS;
+  return list.filter((n): n is string => typeof n === "string" && n.length > 0).map((n) => n.toLowerCase());
+}
+
+function cachedLinkParams(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorageOrUndefined()?.getItem(LINK_PARAMS_STORAGE_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Called with the evaluate response so stamping follows the offers' configured link params. */
+export function rememberSpecificLinkParams(names: unknown): void {
+  if (!Array.isArray(names)) return;
+  const clean = names.filter((v): v is string => typeof v === "string" && v.length > 0).slice(0, 20);
+  try {
+    localStorageOrUndefined()?.setItem(LINK_PARAMS_STORAGE_KEY, JSON.stringify(clean));
+  } catch {
+    // Storage unavailable: the config/default list still applies.
+  }
+}
+
+/** Path + utm_* + specific-link params only (D4). Raw query segments are kept as sent. */
+export function sanitizePageUrl(raw: string, linkParams: string[] = specificLinkParams()): string {
+  let path = raw;
+  let query = "";
+  try {
+    const url = new URL(raw, "https://localhost");
+    path = url.pathname;
+    query = url.search.slice(1);
+  } catch {
+    const q = raw.indexOf("?");
+    if (q >= 0) {
+      path = raw.slice(0, q);
+      query = raw.slice(q + 1).split("#")[0] ?? "";
+    }
+  }
+  const kept = query.split("&").filter((segment) => {
+    if (!segment) return false;
+    const name = safeDecode(segment.split("=")[0] ?? "").toLowerCase();
+    return name.startsWith("utm_") || linkParams.includes(name);
+  });
+  return kept.length > 0 ? `${path}?${kept.join("&")}` : path;
+}
+
 function browserPageUrl(): string | undefined {
   if (typeof window === "undefined" || !window.location) return undefined;
-  return `${window.location.pathname}${window.location.search}`;
+  return sanitizePageUrl(`${window.location.pathname}${window.location.search}`);
 }
 
 /**
- * Remembers the session's latest page view carrying a utm_* param (pathname +
- * search) so visit-scoped UTM conditions still match lines added later from
- * other pages. A later UTM page view overwrites it (last UTM touch).
+ * Remembers the latest page view carrying a utm_* param (sanitized, 24 h expiry) so
+ * visit-scoped UTM conditions still match lines added later from other pages. A later
+ * UTM page view overwrites it (last UTM touch). localStorage, so it is shared across tabs.
  */
 export function recordUtmLanding(
-  pageUrl = browserPageUrl(),
-  storage: Pick<Storage, "setItem"> | undefined = sessionStorageOrUndefined(),
+  pageUrl = rawBrowserUrl(),
+  storage: Pick<Storage, "setItem"> | undefined = localStorageOrUndefined(),
+  now = Date.now(),
 ): void {
   if (!pageUrl || !/[?&]utm_/i.test(pageUrl)) return;
   try {
-    storage?.setItem(LANDING_STORAGE_KEY, pageUrl);
+    storage?.setItem(
+      LANDING_STORAGE_KEY,
+      JSON.stringify({ u: sanitizePageUrl(pageUrl), e: now + LANDING_TTL_MS }),
+    );
   } catch {
     // Storage disabled or full: visit-scoped UTM offers just won't match.
   }
 }
 
-function sessionStorageOrUndefined(): Storage | undefined {
-  try {
-    return typeof sessionStorage === "undefined" ? undefined : sessionStorage;
-  } catch {
-    return undefined;
-  }
+function rawBrowserUrl(): string | undefined {
+  if (typeof window === "undefined" || !window.location) return undefined;
+  return `${window.location.pathname}${window.location.search}`;
 }
 
-function browserLandingUrl(): string | undefined {
+function browserLandingUrl(now = Date.now()): string | undefined {
   try {
-    return sessionStorageOrUndefined()?.getItem(LANDING_STORAGE_KEY) ?? undefined;
+    const storage = localStorageOrUndefined();
+    const raw = storage?.getItem(LANDING_STORAGE_KEY);
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw) as { u?: unknown; e?: unknown };
+    if (typeof parsed.u === "string" && typeof parsed.e === "number" && parsed.e > now) return parsed.u;
+    storage?.removeItem(LANDING_STORAGE_KEY);
   } catch {
-    return undefined;
+    // Unreadable or corrupt: treat as no landing.
   }
+  return undefined;
 }
 
+/**
+ * Packs promo properties into the single `_promo_engine_metadata` field.
+ * `sourcePageUrl`/`landingUrl`: undefined = current browser state, null = never stamp
+ * (updates and migrations of an existing line must not change which page it was added on).
+ */
 export function withPromoMetadata(
   properties: LineProperties,
-  sourcePageUrl = browserPageUrl(),
-  /** null: an update of an existing line, which keeps the landing it was added under. */
+  sourcePageUrl: string | null | undefined = browserPageUrl(),
   landingUrl: string | null | undefined = browserLandingUrl(),
 ): LineProperties {
   let enriched =
     sourcePageUrl && !properties["_promo_page_url"]
-      ? { ...properties, _promo_page_url: sourcePageUrl }
+      ? { ...properties, _promo_page_url: sanitizePageUrl(sourcePageUrl) }
       : properties;
   if (landingUrl && !enriched["_promo_landing_url"]) {
     enriched = { ...enriched, _promo_landing_url: landingUrl };
@@ -208,6 +300,42 @@ export async function packCartAddRequest(
   return [new Request(request, { body, headers }), undefined];
 }
 
+type PackableBody = Document | XMLHttpRequestBodyInit | null | undefined;
+
+/** jQuery.ajax / raw XHR adds never touch fetch, so stamp them at XMLHttpRequest.send. */
+export function packXhrBody(body: PackableBody): PackableBody {
+  if (typeof body === "string") return packedBody(body) as string;
+  if (typeof FormData !== "undefined" && body instanceof FormData) return packedFormData(body);
+  if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) return packedSearchParams(body);
+  return body;
+}
+
+function patchXhrCartAdd(): void {
+  if (typeof XMLHttpRequest === "undefined") return;
+  const proto = XMLHttpRequest.prototype;
+  const originalOpen = proto.open;
+  const originalSend = proto.send;
+  const cartAdds = new WeakSet<XMLHttpRequest>();
+
+  proto.open = function (this: XMLHttpRequest, method: string, url: string | URL, ...rest: unknown[]) {
+    if (isCartAddRequest(String(url), { method: String(method) })) cartAdds.add(this);
+    else cartAdds.delete(this);
+    return (originalOpen as (...args: unknown[]) => void).apply(this, [method, url, ...rest]);
+  } as typeof proto.open;
+
+  proto.send = function (this: XMLHttpRequest, body?: PackableBody) {
+    let outgoing = body;
+    if (cartAdds.has(this)) {
+      try {
+        outgoing = packXhrBody(body);
+      } catch (e) {
+        console.warn("[PromoEngine] Cart line metadata packing failed, using request as-is", e);
+      }
+    }
+    return (originalSend as (b?: PackableBody) => void).call(this, outgoing);
+  } as typeof proto.send;
+}
+
 export function installPromoMetadataBridge(): void {
   const state = window as Window & { __promoEngineMetadataBridgeInstalled?: boolean };
   if (state.__promoEngineMetadataBridgeInstalled) return;
@@ -225,6 +353,8 @@ export function installPromoMetadataBridge(): void {
       })
       .then(([packedInput, packedInit]) => nativeFetch(packedInput, packedInit));
   }) as typeof window.fetch;
+
+  patchXhrCartAdd();
 
   document.addEventListener(
     "submit",

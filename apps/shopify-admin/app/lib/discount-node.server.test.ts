@@ -1,21 +1,27 @@
+import type * as ShopifyFetch from "./shopify-fetch.server.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  addRedeemCodes,
   buildAutomaticDiscountCreateInput,
   buildAutomaticDiscountUpdateInput,
   buildCodeDiscountCreateInput,
   buildCodeDiscountUpdateInput,
   CART_DISCOUNT_CLASSES,
   CART_FUNCTION_TITLE,
+  codeSearchTerm,
+  createOrFindAutomaticDiscount,
   createOrFindCodeDiscount,
   DELIVERY_DISCOUNT_CLASSES,
   DELIVERY_FUNCTION_TITLE,
   formatDiscountUserErrors,
+  removeRedeemCodes,
   selectFunctionId,
   updateCodeDiscountCombination,
 } from "./discount-node.server.js";
-import { shopifyGraphQL } from "./shopify-fetch.server.js";
+import { ShopifyOutcomeUnknownError, shopifyGraphQL } from "./shopify-fetch.server.js";
 
-vi.mock("./shopify-fetch.server.js", () => ({
+vi.mock("./shopify-fetch.server.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ShopifyFetch>()),
   shopifyGraphQL: vi.fn(),
 }));
 
@@ -190,18 +196,12 @@ describe("createOrFindCodeDiscount", () => {
         },
       })
       .mockResolvedValueOnce({
-        discountNodes: {
-          nodes: [
-            {
-              id: "gid://shopify/DiscountNode/existing",
-              discount: {
-                __typename: "DiscountCodeApp",
-                appDiscountType: { functionId: shopifyFunctionSummary.id },
-                codes: { nodes: [{ code: "PRIMEDAY2026" }] },
-              },
-            },
-          ],
-          pageInfo: { hasNextPage: false, endCursor: null },
+        codeDiscountNodeByCode: {
+          id: "gid://shopify/DiscountNode/existing",
+          codeDiscount: {
+            __typename: "DiscountCodeApp",
+            appDiscountType: { functionId: shopifyFunctionSummary.id },
+          },
         },
       });
 
@@ -216,6 +216,215 @@ describe("createOrFindCodeDiscount", () => {
 
     expect(id).toBe("gid://shopify/DiscountNode/existing");
     expect(shopifyGraphQLMock).toHaveBeenCalledTimes(2);
+    // An exact lookup by code, not a scan of every discount in the shop.
+    expect(shopifyGraphQLMock.mock.calls[1]![0].variables).toEqual({ code: "PRIMEDAY2026" });
+  });
+
+  it("refuses to adopt a code held by someone else's discount", async () => {
+    shopifyGraphQLMock
+      .mockResolvedValueOnce({
+        discountCodeAppCreate: {
+          codeAppDiscount: null,
+          userErrors: [{ field: null, message: "Code already exists", code: "TAKEN" }],
+        },
+      })
+      .mockResolvedValueOnce({
+        codeDiscountNodeByCode: {
+          id: "gid://shopify/DiscountNode/theirs",
+          codeDiscount: { __typename: "DiscountCodeBasic" },
+        },
+      });
+
+    await expect(
+      createOrFindCodeDiscount(
+        "shop.myshopify.com",
+        "token",
+        shopifyFunctionSummary,
+        "PRIME",
+        "Prime",
+        CART_DISCOUNT_CLASSES,
+      ),
+    ).rejects.toThrow(/already used by a Shopify discount this app doesn't manage/);
+  });
+
+  describe("a create whose outcome is unknown (timeout, network, 5xx)", () => {
+    const mutationCalls = () =>
+      shopifyGraphQLMock.mock.calls.filter(([args]) => /^\s*mutation/.test(args.query));
+
+    it("looks the node up before resending, and does not create a second one when it exists", async () => {
+      shopifyGraphQLMock
+        .mockRejectedValueOnce(new ShopifyOutcomeUnknownError("timeout"))
+        .mockResolvedValueOnce({
+          codeDiscountNodeByCode: {
+            id: "gid://shopify/DiscountNode/landed",
+            codeDiscount: {
+              __typename: "DiscountCodeApp",
+              appDiscountType: { functionId: shopifyFunctionSummary.id },
+            },
+          },
+        });
+
+      const id = await createOrFindCodeDiscount(
+        "shop.myshopify.com",
+        "token",
+        shopifyFunctionSummary,
+        "PRIMEDAY2026",
+        "Prime Day",
+        CART_DISCOUNT_CLASSES,
+      );
+
+      expect(id).toBe("gid://shopify/DiscountNode/landed");
+      expect(mutationCalls()).toHaveLength(1);
+    });
+
+    it("sends the create once more only after the lookup proved it did not land", async () => {
+      shopifyGraphQLMock
+        .mockRejectedValueOnce(new ShopifyOutcomeUnknownError("timeout"))
+        .mockResolvedValueOnce({ codeDiscountNodeByCode: null })
+        .mockResolvedValueOnce({
+          discountCodeAppCreate: {
+            codeAppDiscount: { discountId: "gid://shopify/DiscountNode/fresh" },
+            userErrors: [],
+          },
+        });
+
+      const id = await createOrFindCodeDiscount(
+        "shop.myshopify.com",
+        "token",
+        shopifyFunctionSummary,
+        "PRIMEDAY2026",
+        "Prime Day",
+        CART_DISCOUNT_CLASSES,
+      );
+
+      expect(id).toBe("gid://shopify/DiscountNode/fresh");
+      expect(shopifyGraphQLMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not swallow a plain error", async () => {
+      shopifyGraphQLMock.mockRejectedValueOnce(new Error("Shopify API error: 403 Forbidden"));
+      await expect(
+        createOrFindCodeDiscount(
+          "shop.myshopify.com",
+          "token",
+          shopifyFunctionSummary,
+          "A",
+          "A",
+          CART_DISCOUNT_CLASSES,
+        ),
+      ).rejects.toThrow("403");
+      expect(shopifyGraphQLMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("an automatic node create is looked up (by title, filtered) before it is repeated", async () => {
+      const page = (nodes: unknown[]) => ({
+        discountNodes: { nodes, pageInfo: { hasNextPage: false, endCursor: null } },
+      });
+      shopifyGraphQLMock
+        .mockResolvedValueOnce(page([])) // filtered scan
+        .mockResolvedValueOnce(page([])) // unfiltered fallback scan
+        .mockRejectedValueOnce(new ShopifyOutcomeUnknownError("socket hang up"))
+        .mockResolvedValueOnce(
+          page([
+            {
+              id: "gid://shopify/DiscountAutomaticNode/landed",
+              discount: {
+                __typename: "DiscountAutomaticApp",
+                title: "Promo Engine",
+                appDiscountType: { functionId: shopifyFunctionSummary.id },
+              },
+            },
+          ]),
+        );
+
+      const id = await createOrFindAutomaticDiscount(
+        "shop.myshopify.com",
+        "token",
+        shopifyFunctionSummary,
+        "Promo Engine",
+        CART_DISCOUNT_CLASSES,
+      );
+
+      expect(id).toBe("gid://shopify/DiscountAutomaticNode/landed");
+      expect(shopifyGraphQLMock.mock.calls[0]![0].variables).toMatchObject({ query: "method:automatic" });
+      expect(shopifyGraphQLMock.mock.calls[1]![0].variables).toMatchObject({ query: null });
+      expect(mutationCalls()).toHaveLength(1);
+    });
+
+    it("an exact-title lookup never mistakes the shared shipping node for a coded-shipping pool node", async () => {
+      const node = (id: string, title: string) => ({
+        id,
+        discount: {
+          __typename: "DiscountAutomaticApp",
+          title,
+          appDiscountType: { functionId: shopifyFunctionSummary.id },
+        },
+      });
+      shopifyGraphQLMock.mockResolvedValueOnce({
+        discountNodes: {
+          nodes: [node("pool-1", "Promo Engine Coded Shipping 1"), node("shared", "Promo Engine Shipping")],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      });
+
+      const id = await createOrFindAutomaticDiscount(
+        "shop.myshopify.com",
+        "token",
+        shopifyFunctionSummary,
+        "Promo Engine Shipping",
+        DELIVERY_DISCOUNT_CLASSES,
+      );
+      expect(id).toBe("shared");
+    });
+  });
+
+  it("an add whose outcome is unknown resends only the codes that are not on the node yet", async () => {
+    vi.useFakeTimers();
+    const NODE = "gid://shopify/DiscountCodeNode/1";
+    shopifyGraphQLMock.mockImplementation((async ({
+      query,
+      variables,
+    }: {
+      query: string;
+      variables?: Record<string, unknown>;
+    }) => {
+      if (query.includes("AddPromoEngineRedeemCodes")) {
+        const sent = (variables!.codes as Array<{ code: string }>).map((c) => c.code);
+        if (sent.length === 3) throw new ShopifyOutcomeUnknownError("timeout");
+        expect(sent).toEqual(["C"]);
+        return { discountRedeemCodeBulkAdd: { bulkCreation: { id: "bulk", done: false }, userErrors: [] } };
+      }
+      if (query.includes("PromoEngineCodeOwners")) {
+        // A and B landed before the connection dropped; C did not.
+        return { c0: { id: NODE }, c1: { id: NODE }, c2: null };
+      }
+      if (query.includes("PromoEngineRedeemCodeBulkCreation")) {
+        return { discountRedeemCodeBulkCreation: { done: true, codes: { nodes: [{ code: "C", errors: [] }] } } };
+      }
+      throw new Error(`unexpected ${query.slice(0, 40)}`);
+    }) as never);
+
+    const pending = addRedeemCodes("shop.myshopify.com", "token", NODE, ["A", "B", "C"]);
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toEqual([]);
+    vi.useRealTimers();
+  });
+
+  it("an add that finds a code taken by another discount reports it as failed", async () => {
+    vi.useFakeTimers();
+    const NODE = "gid://shopify/DiscountCodeNode/1";
+    shopifyGraphQLMock.mockImplementation((async ({ query }: { query: string }) => {
+      if (query.includes("AddPromoEngineRedeemCodes")) throw new ShopifyOutcomeUnknownError("timeout");
+      if (query.includes("PromoEngineCodeOwners")) return { c0: { id: "gid://shopify/DiscountCodeNode/other" } };
+      throw new Error("unexpected");
+    }) as never);
+
+    const pending = addRedeemCodes("shop.myshopify.com", "token", NODE, ["A"]);
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toEqual([
+      { code: "A", message: expect.stringContaining("another discount") as unknown as string },
+    ]);
+    vi.useRealTimers();
   });
 
   it("throws when create fails without an 'already exists' style error", async () => {
@@ -283,5 +492,87 @@ describe("updateCodeDiscountCombination", () => {
         CART_DISCOUNT_CLASSES,
       ),
     ).rejects.toThrow(/discountCodeAppUpdate failed/);
+  });
+});
+
+describe("removeRedeemCodes", () => {
+  const NODE = "gid://shopify/DiscountCodeNode/1";
+
+  it("quotes every search term so a dash, colon or quote in a code can't change the query", () => {
+    expect(codeSearchTerm("SUMMER-10")).toBe('code:"SUMMER-10"');
+    expect(codeSearchTerm('A"B')).toBe('code:"A\\"B"');
+    expect(codeSearchTerm("A:B OR code:C")).toBe('code:"A:B OR code:C"');
+  });
+
+  function fakeShopify(opts: { onNode: string[]; searchHides?: string[]; stubborn?: string[] }) {
+    const onNode = new Set(opts.onNode);
+    const queries: Array<{ name: string; variables: Record<string, unknown> }> = [];
+    shopifyGraphQLMock.mockImplementation((async ({
+      query,
+      variables,
+    }: {
+      query: string;
+      variables?: Record<string, unknown>;
+    }) => {
+      queries.push({ name: /(?:query|mutation) (\w+)/.exec(query)![1]!, variables: variables ?? {} });
+      if (query.includes("FindPromoEngineRedeemCodes")) {
+        return {
+          codeDiscountNode: {
+            codeDiscount: {
+              codes: {
+                nodes: [...onNode]
+                  .filter((code) => !opts.searchHides?.includes(code))
+                  .map((code) => ({ id: `rc:${code}`, code })),
+              },
+            },
+          },
+        };
+      }
+      if (query.includes("RemovePromoEngineRedeemCodes")) {
+        for (const id of variables!.ids as string[]) {
+          const code = id.slice(3);
+          if (!opts.stubborn?.includes(code)) onNode.delete(code);
+        }
+        return { discountCodeRedeemCodeBulkDelete: { job: { id: "job" }, userErrors: [] } };
+      }
+      if (query.includes("PromoEngineJob")) return { job: { done: true } };
+      if (query.includes("PromoEngineCodeOwners")) {
+        const result: Record<string, unknown> = {};
+        for (const [name, code] of Object.entries(variables!)) {
+          result[`c${name.slice(1)}`] = onNode.has(code as string) ? { id: NODE } : null;
+        }
+        return result;
+      }
+      throw new Error(`unexpected ${query.slice(0, 50)}`);
+    }) as never);
+    return queries;
+  }
+
+  it("sends quoted search terms and reports confirmed removals", async () => {
+    const queries = fakeShopify({ onNode: ["A-1", "B-2"] });
+    const result = await removeRedeemCodes("shop.myshopify.com", "token", NODE, ["A-1", "B-2"]);
+    expect(result).toEqual({ removed: ["A-1", "B-2"], absent: [], unconfirmed: [] });
+    expect(queries.find((q) => q.name === "FindPromoEngineRedeemCodes")!.variables["query"]).toBe(
+      'code:"A-1" OR code:"B-2"',
+    );
+  });
+
+  it("reports codes Shopify no longer has as absent, not removed", async () => {
+    fakeShopify({ onNode: ["A"] });
+    const result = await removeRedeemCodes("shop.myshopify.com", "token", NODE, ["A", "GONE"]);
+    expect(result).toEqual({ removed: ["A"], absent: ["GONE"], unconfirmed: [] });
+  });
+
+  it("flags a code the search could not find but that is still on the node as unconfirmed", async () => {
+    fakeShopify({ onNode: ["A", "HIDDEN"], searchHides: ["HIDDEN"] });
+    const result = await removeRedeemCodes("shop.myshopify.com", "token", NODE, ["A", "HIDDEN"]);
+    expect(result.unconfirmed).toEqual(["HIDDEN"]);
+    expect(result.removed).toEqual(["A"]);
+  });
+
+  it("flags a code whose delete did not take effect as unconfirmed", async () => {
+    fakeShopify({ onNode: ["A", "STUCK"], stubborn: ["STUCK"] });
+    const result = await removeRedeemCodes("shop.myshopify.com", "token", NODE, ["A", "STUCK"]);
+    expect(result).toEqual({ removed: ["A"], absent: [], unconfirmed: ["STUCK"] });
   });
 });

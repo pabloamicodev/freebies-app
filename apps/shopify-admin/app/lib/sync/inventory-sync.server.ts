@@ -22,7 +22,7 @@ interface InventoryVariantPage {
 export const INVENTORY_VARIANTS_QUERY = `
   query GetInventory($id: ID!, $after: String) {
     inventoryItem(id: $id) {
-      variants(first: 250, after: $after) {
+      variants(first: 5, after: $after) {
         nodes { id inventoryQuantity inventoryPolicy availableForSale inventoryItem { tracked } }
         pageInfo { hasNextPage endCursor }
       }

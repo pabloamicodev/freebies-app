@@ -3,6 +3,7 @@
  * Shows full funnel, top gift products, error rate, and A/B comparison.
  */
 
+import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData } from "react-router";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { analyticsEvents, offers } from "@promo/db";
@@ -22,7 +23,7 @@ const FUNNEL_EVENTS = [
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
 
   const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 

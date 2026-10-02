@@ -6,3 +6,5 @@ export * from "./cart.js";
 export * from "./evaluation.js";
 export * from "./translations.js";
 export * from "./shopify.js";
+export * from "./page-url.js";
+export * from "./api-requests.js";

@@ -16,6 +16,8 @@ import { h } from "preact";
 import { useState, useMemo } from "preact/hooks";
 import { render } from "preact";
 import { AjaxCartAdapter } from "../cart-adapter.js";
+import { formatMoney } from "../format.js";
+import { t } from "../i18n.js";
 import { emit, PromoEvents, publishAnalytics } from "../event-bus.js";
 
 interface BundleProduct {
@@ -62,11 +64,7 @@ interface BundleBuilderConfig {
   currency: string;
 }
 
-function formatPrice(cents: number, currency: string): string {
-  return new Intl.NumberFormat(navigator.language, { style: "currency", currency }).format(
-    cents / 100,
-  );
-}
+const formatPrice = formatMoney;
 
 export function getActiveTier(totalQty: number, tiers: BundleTier[]): BundleTier | null {
   return (
@@ -246,7 +244,7 @@ function BundleBuilderComponent({
                 placeholder="Search products..."
                 value={searchQuery}
                 onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
-                aria-label="Search products in this step"
+                aria-label={t("bundleSearch")}
               />
             )}
 
@@ -280,7 +278,7 @@ function BundleBuilderComponent({
                             updateSelection(step.id, product.variantId, Math.max(0, qty - 1))
                           }
                           disabled={qty === 0}
-                          aria-label={`Remove ${product.title}`}
+                          aria-label={t("bundleRemove", { title: product.title })}
                         >
                           −
                         </button>
@@ -288,7 +286,7 @@ function BundleBuilderComponent({
                         <button
                           onClick={() => updateSelection(step.id, product.variantId, qty + 1)}
                           disabled={atMax}
-                          aria-label={`Add ${product.title}`}
+                          aria-label={t("bundleAdd", { title: product.title })}
                         >
                           +
                         </button>

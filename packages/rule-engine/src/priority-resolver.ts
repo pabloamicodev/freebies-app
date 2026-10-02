@@ -11,25 +11,17 @@ export interface OfferWithPolicy {
  * Returns the subset of qualified offers that should be applied,
  * in priority order (lower number = higher priority).
  *
- * If offer A has stopLowerPriority=true and qualifies,
- * all offers with priority > A.priority are excluded.
+ * A qualifying stopLowerPriority offer blocks only STRICTLY lower-priority
+ * offers (priority number greater than its own); offers sharing its priority
+ * still apply. The discount Function does the same (`offer.priority > stop_at`).
  */
 export function applyPriority(offers: OfferWithPolicy[]): OfferWithPolicy[] {
   const qualified = offers
     .filter((o) => o.qualified)
     .sort((a, b) => a.priority - b.priority);
 
-  const result: OfferWithPolicy[] = [];
-
-  for (const offer of qualified) {
-    result.push(offer);
-    if (offer.stopLowerPriority) {
-      // Stop — all subsequent (lower priority = higher number) offers are blocked
-      break;
-    }
-  }
-
-  return result;
+  const stopAt = qualified.find((o) => o.stopLowerPriority)?.priority;
+  return stopAt === undefined ? qualified : qualified.filter((o) => o.priority <= stopAt);
 }
 
 /**

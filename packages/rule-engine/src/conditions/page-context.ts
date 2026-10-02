@@ -1,16 +1,18 @@
 import type { EligibilityReason, PageType } from "@promo/shared-types";
-import { ok, err, type Result } from "@promo/shared-types";
+import {
+  ok,
+  err,
+  asciiLower,
+  queryValueMatches,
+  readQueryParam,
+  splitPageUrl,
+  type Result,
+} from "@promo/shared-types";
 
 const LOCALE_SEGMENT = /^[a-z]{2}(?:-[a-z]{2})?$/;
 
 function pathOf(url: string): string {
-  let path = url;
-  try {
-    path = new URL(url).pathname;
-  } catch {
-    // Already a path (+ query), as stamped by the storefront.
-  }
-  return (path.split(/[?#]/)[0] ?? "").toLowerCase();
+  return asciiLower(splitPageUrl(url).path);
 }
 
 /**
@@ -84,17 +86,6 @@ export interface UtmParametersConditionValue {
   scope?: "page" | "visit";
 }
 
-/** Raw (still percent-encoded) query value, compared like the Function does. */
-function rawQueryParam(url: string, name: string): string | null {
-  const query = url.split("?")[1]?.split("#")[0] ?? "";
-  for (const pair of query.split("&")) {
-    const index = pair.indexOf("=");
-    const key = index === -1 ? pair : pair.slice(0, index);
-    if (key === name) return index === -1 ? "" : pair.slice(index + 1);
-  }
-  return null;
-}
-
 export function evaluateUtmParameters(
   url: string | null,
   condition: UtmParametersConditionValue,
@@ -118,8 +109,8 @@ export function evaluateUtmParameters(
   ];
   for (const [name, expected] of fields) {
     if (!expected) continue;
-    const actual = rawQueryParam(url, name);
-    if (actual !== encodeURIComponent(expected)) {
+    const actual = readQueryParam(splitPageUrl(url).query, name);
+    if (actual === null || !queryValueMatches(name, actual, expected)) {
       return err({
         conditionType: "utm_parameters",
         passed: false,

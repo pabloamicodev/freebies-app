@@ -17,14 +17,28 @@ import {
 import { eq, and, inArray, isNotNull, sql } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { decryptToken } from "../token-crypto.server.js";
-import { shopifyGraphQL } from "../shopify-fetch.server.js";
+import { ShopifyOutcomeUnknownError, shopifyGraphQL } from "../shopify-fetch.server.js";
+import {
+  ManifestCollector,
+  configHash,
+  readPublishManifest,
+  writePublishManifest,
+} from "../publish-manifest.server.js";
+import {
+  clearPublishPending,
+  isLockTimeoutError,
+  markPublishPending,
+  scheduleBackgroundPublishRetry,
+} from "../publish-pending.server.js";
 import {
   CART_DISCOUNT_CLASSES,
   DELIVERY_DISCOUNT_CLASSES,
   addRedeemCodes,
   createOrFindCodeDiscount,
   deleteCodeDiscountNode,
+  ensureCodedShippingNodes,
   ensureCodeDiscountNode,
+  readCodedShippingNodeIds,
   ensureDiscountNodes,
   expireCodeDiscountNode,
   findCodeDiscountNode,
@@ -54,12 +68,25 @@ import {
 } from "./compile-config.js";
 import { buildAttributeQueryVariables } from "./attribute-query-variables.js";
 import { isShadowModeEnabled } from "../shadow-mode.server.js";
+import { invalidateOfferDefinitions } from "../offer-definitions.server.js";
 import { syncMarketsForShop } from "./market-sync.server.js";
 import { resolveMarketConditionsToCountries } from "./market-condition-resolution.server.js";
 
-const METAFIELD_NAMESPACE = "promo_engine";
+/**
+ * Namespaces the compiled config is written to. The Functions' input queries read
+ * `$app:promo_engine`; the legacy `promo_engine` is still written so a Function build that predates the
+ * move keeps working. Drop `promo_engine` in a later release, once every shop runs the new Functions
+ * (docs/RUNBOOK.md, "Function config namespace"). Keep the legacy one FIRST: drift detection reads [0].
+ */
+export const FUNCTION_CONFIG_NAMESPACES: readonly string[] = ["promo_engine", "$app:promo_engine"];
 const METAFIELD_KEY = "function_config";
-const MAX_METAFIELD_BYTES = 9500;
+export const MAX_METAFIELD_BYTES = 9500;
+/** How long an interactive publish waits for the per-shop lock before it is parked as pending. */
+export const PUBLISH_LOCK_TIMEOUT_MS = 25_000;
+/** The background retry and the cron can afford to wait longer. */
+const BACKGROUND_LOCK_TIMEOUT_MS = 50_000;
+
+export type PublishOutcome = "published" | "pending";
 
 /**
  * Concurrent publishes for the same shop (e.g. a cron reconciliation run
@@ -70,13 +97,47 @@ const MAX_METAFIELD_BYTES = 9500;
  * leaked the lock and hung every later publish for the shop. An xact lock is
  * pinned to the transaction's backend and released on commit, rollback or
  * disconnect.
+ *
+ * If the lock isn't free within the timeout (55P03), or a Shopify call times out with an unknown
+ * outcome, the shop is flagged publish-pending and retried in the background (the cron is the
+ * backstop); this resolves "pending" instead of throwing, and no offer is paused.
  */
-export async function publishOffersForShop(shopId: string, shopDomain: string): Promise<void> {
-  await getDb().transaction(async (tx) => {
-    await tx.execute(sql`set local lock_timeout = '60s'`);
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${shopId}))`);
-    await publishOffersForShopLocked(shopId, shopDomain);
-  });
+export async function publishOffersForShop(
+  shopId: string,
+  shopDomain: string,
+  options: { lockTimeoutMs?: number; background?: boolean } = {},
+): Promise<PublishOutcome> {
+  const startedAt = new Date();
+  const lockTimeoutMs = Math.trunc(options.lockTimeoutMs ?? PUBLISH_LOCK_TIMEOUT_MS);
+  try {
+    await getDb().transaction(async (tx) => {
+      await tx.execute(sql.raw(`set local lock_timeout = '${lockTimeoutMs}ms'`));
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${shopId}))`);
+      await publishOffersForShopLocked(shopId, shopDomain);
+    });
+  } catch (error) {
+    // A request that timed out may or may not have been applied, and the publish is idempotent
+    // (every create looks before it resends), so it is retried rather than failing the offer.
+    const unknownOutcome = error instanceof ShopifyOutcomeUnknownError;
+    if (!isLockTimeoutError(error) && !unknownOutcome) throw error;
+    if (unknownOutcome) {
+      Sentry.captureMessage("Publish parked: a Shopify request timed out with an unknown outcome", {
+        level: "warning",
+        tags: { shopId },
+        extra: { error: error.message },
+      });
+    }
+    await markPublishPending(shopId);
+    if (!options.background) {
+      scheduleBackgroundPublishRetry(shopId, () =>
+        publishOffersForShop(shopId, shopDomain, { lockTimeoutMs: BACKGROUND_LOCK_TIMEOUT_MS, background: true }),
+      ).catch(() => undefined);
+    }
+    return "pending";
+  }
+  await clearPublishPending(shopId, startedAt);
+  await invalidateOfferDefinitions(shopId);
+  return "published";
 }
 
 async function publishOffersForShopLocked(shopId: string, shopDomain: string): Promise<void> {
@@ -107,6 +168,11 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     { discountId: discountNodes.deliveryDiscountId, discountClasses: DELIVERY_DISCOUNT_CLASSES },
   ];
   const discountIds = discountNodesWithClasses.map(({ discountId }) => discountId);
+  const manifest = new ManifestCollector();
+  const recordShared = (value: string) => {
+    manifest.record(discountNodes.cartLinesDiscountId, "cart", value);
+    manifest.record(discountNodes.deliveryDiscountId, "delivery", value);
+  };
 
   // Shadow mode runs in parallel with BOGOS: publishing live config would double-discount.
   const activeOffersRaw: Offer[] = (await isShadowModeEnabled(shopId))
@@ -195,7 +261,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
   // before anything below (compiling, pushing) gets a chance to throw and
   // skip it. A merchant pausing/archiving a code-gated offer must stop
   // honoring its checkout code even if some other offer's publish fails.
-  await neutralizeStaleCodeOffers(shopId, shopDomain, accessToken, codeOffers);
+  await neutralizeStaleCodeOffers(shopId, shopDomain, accessToken, codeOffers, manifest);
   // Pull deactivated/expired/exhausted codes off live nodes just as early.
   await retireInactiveCodes(shopId, shopDomain, accessToken, codeOffers, codesByOffer);
 
@@ -224,18 +290,21 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     ...compiledBackendB.map((entry) => entry.compiledOffer),
   ];
   // Shipping rewards of code offers that run on the cart-lines code node (and all of
-  // backend B's) are gated inside the shared automatic delivery node: the delivery
-  // Function applies them only while one of the offer's codes is entered. Exhausted
-  // or deactivated codes drop out of the hashes on the next publish.
-  const gatedShippingOffers = [
-    ...compiledCodeOffers.flatMap((entry) => entry.gatedShippingOffers),
-    ...compiledBackendB.flatMap((entry) => entry.gatedShippingOffers),
+  // backend B's) are gated by code hashes in the delivery Function. The hashes live on the
+  // shop's coded-shipping pool nodes (packed by size), never in the shared delivery config,
+  // so a big code set can't break the publish of every other offer. Exhausted or deactivated
+  // codes drop out of the hashes on the next publish.
+  const gatedShipping = [
+    ...compiledCodeOffers.filter((entry) => entry.gatedShippingOffers.length > 0),
+    ...compiledBackendB.filter((entry) => entry.gatedShippingOffers.length > 0),
   ];
+  const gatedShippingOffers = gatedShipping.flatMap((entry) => entry.gatedShippingOffers);
+  const gatedPolicyOffers = gatedShipping.map((entry) => entry.compiledOffer);
 
   if (regularOffers.length === 0) {
     const emptyConfig: CompiledFunctionConfig = {
       offers: [],
-      shippingOffers: gatedShippingOffers,
+      shippingOffers: [],
       version: "1",
       compiledAt: new Date().toISOString(),
     };
@@ -245,7 +314,22 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const emptyValue = serializeFunctionConfig(emptyConfig);
     assertConfigFits(emptyValue);
     await pushMetafields(shopDomain, accessToken, discountIds, emptyValue);
-    await syncCartValidation(shopDomain, accessToken, buildCartValidationConfig(codeOfferConfigs));
+    recordShared(emptyValue);
+    await pushSpecificLinkParams(shopDomain, accessToken, [
+      ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
+      ...compiledBackendB.flatMap((entry) => entry.conditionRows),
+    ]);
+    await pushCodedShippingPool(
+      shopId,
+      shopDomain,
+      accessToken,
+      gatedShippingOffers,
+      gatedPolicyOffers,
+      manifest,
+    );
+    const emptyValidation = buildCartValidationConfig(codeOfferConfigs);
+    await syncCartValidation(shopDomain, accessToken, emptyValidation);
+    manifest.validationHash = configHash(JSON.stringify(emptyValidation));
     await Promise.all(
       discountNodesWithClasses.map(({ discountId, discountClasses }) =>
         syncDiscountCombinationPolicy(
@@ -343,7 +427,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
 
     const config: CompiledFunctionConfig = {
       offers: compiledOffers,
-      shippingOffers: [...shippingOffers, ...gatedShippingOffers],
+      shippingOffers,
       version: "1",
       compiledAt: new Date().toISOString(),
       ...(customerTags.length > 0 ? { customerTags } : {}),
@@ -364,11 +448,9 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     // validation must see code offers too — they authorize gift/product/order
     // rewards exactly like a regular offer, just through a different discount
     // node, and validation has no other way to know they're allowed.
-    await syncCartValidation(
-      shopDomain,
-      accessToken,
-      buildCartValidationConfig([...compiledOffers, ...codeOfferConfigs]),
-    );
+    const validationConfig = buildCartValidationConfig([...compiledOffers, ...codeOfferConfigs]);
+    await syncCartValidation(shopDomain, accessToken, validationConfig);
+    manifest.validationHash = configHash(JSON.stringify(validationConfig));
     await Promise.all(
       discountNodesWithClasses.map(({ discountId, discountClasses }) =>
         syncDiscountCombinationPolicy(
@@ -381,6 +463,20 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       ),
     );
     await pushMetafields(shopDomain, accessToken, discountIds, value);
+    recordShared(value);
+    await pushSpecificLinkParams(shopDomain, accessToken, [
+      ...conditionRows,
+      ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
+      ...compiledBackendB.flatMap((entry) => entry.conditionRows),
+    ]);
+    await pushCodedShippingPool(
+      shopId,
+      shopDomain,
+      accessToken,
+      gatedShippingOffers,
+      gatedPolicyOffers,
+      manifest,
+    );
 
     for (const compiledOffer of compiledOffers) {
       await db
@@ -392,8 +488,9 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
 
   // Now that cart validation and the shared automatic config are live, push
   // each code offer's own guardrails-then-config to its dedicated node.
-  await pushCodeOfferConfigs(shopId, shopDomain, accessToken, compiledCodeOffers);
-  await pushBackendBConfig(shopId, shopDomain, accessToken, compiledBackendB);
+  await pushCodeOfferConfigs(shopId, shopDomain, accessToken, compiledCodeOffers, manifest);
+  await pushBackendBConfig(shopId, shopDomain, accessToken, compiledBackendB, manifest);
+  await writePublishManifest(shopId, manifest.build());
 }
 
 type CodeNodeKind = "cart" | "delivery";
@@ -433,12 +530,16 @@ async function batchShapes(
   };
 }
 
-async function markCodesSynced(shopId: string, rows: DiscountCode[]): Promise<void> {
+/**
+ * Flags codes as in flight to Shopify BEFORE the call. If the process dies or the call times out,
+ * the row stays flagged: it is never deleted (it may be live) and the next publish looks it up.
+ */
+async function markCodesSyncPending(shopId: string, rows: DiscountCode[]): Promise<void> {
   if (rows.length === 0) return;
-  const syncedAt = new Date();
+  const pendingAt = new Date();
   await getDb()
     .update(discountCodes)
-    .set({ shopifySyncedAt: syncedAt })
+    .set({ shopifySyncPendingAt: pendingAt })
     .where(
       and(
         eq(discountCodes.shopId, shopId),
@@ -448,7 +549,28 @@ async function markCodesSynced(shopId: string, rows: DiscountCode[]): Promise<vo
         ),
       ),
     );
-  for (const row of rows) row.shopifySyncedAt = syncedAt;
+  for (const row of rows) row.shopifySyncPendingAt = pendingAt;
+}
+
+async function markCodesSynced(shopId: string, rows: DiscountCode[]): Promise<void> {
+  if (rows.length === 0) return;
+  const syncedAt = new Date();
+  await getDb()
+    .update(discountCodes)
+    .set({ shopifySyncedAt: syncedAt, shopifySyncPendingAt: null })
+    .where(
+      and(
+        eq(discountCodes.shopId, shopId),
+        inArray(
+          discountCodes.id,
+          rows.map((row) => row.id),
+        ),
+      ),
+    );
+  for (const row of rows) {
+    row.shopifySyncedAt = syncedAt;
+    row.shopifySyncPendingAt = null;
+  }
 }
 
 const codeNodeTitle = (offer: Offer) => `[Promo Engine] ${offer.internalName || offer.publicTitle}`;
@@ -513,24 +635,37 @@ async function retireInactiveCodes(
     if (rows.length === 0 || !offer.codeDiscountId) continue;
     const stale = rows.filter((row) => row.shopifySyncedAt && !isCodeRedeemable(row, now));
     if (stale.length > 0) {
-      await removeRedeemCodes(
+      const outcome = await removeRedeemCodes(
         shopDomain,
         accessToken,
         offer.codeDiscountId,
         stale.map((row) => row.code),
       );
-      await db
-        .update(discountCodes)
-        .set({ shopifySyncedAt: null })
-        .where(
-          and(
-            eq(discountCodes.shopId, shopId),
-            inArray(
-              discountCodes.id,
-              stale.map((row) => row.id),
+      // Only a removal Shopify confirmed clears the synced flag. A code that is still on the node
+      // stays flagged so the next publish retries it, and an alert says it is still redeemable.
+      const gone = new Set([...outcome.removed, ...outcome.absent]);
+      const cleared = stale.filter((row) => gone.has(row.code));
+      if (cleared.length > 0) {
+        await db
+          .update(discountCodes)
+          .set({ shopifySyncedAt: null, shopifySyncPendingAt: null })
+          .where(
+            and(
+              eq(discountCodes.shopId, shopId),
+              inArray(
+                discountCodes.id,
+                cleared.map((row) => row.id),
+              ),
             ),
-          ),
-        );
+          );
+      }
+      if (outcome.unconfirmed.length > 0) {
+        Sentry.captureMessage("Deactivated discount codes are still on their Shopify node", {
+          level: "error",
+          tags: { shopId, offerId: offer.id },
+          extra: { count: outcome.unconfirmed.length, sample: outcome.unconfirmed.slice(0, 5) },
+        });
+      }
     }
     if (!rows.some((row) => isCodeRedeemable(row, now))) {
       await expireCodeDiscountNode(shopDomain, accessToken, offer.codeDiscountId);
@@ -606,9 +741,12 @@ async function compileCodeOffers(
       if (!discountId && ownRows.length > 0) {
         await db
           .update(discountCodes)
-          .set({ shopifySyncedAt: null })
+          .set({ shopifySyncedAt: null, shopifySyncPendingAt: null })
           .where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offer.id)));
-        for (const row of ownRows) row.shopifySyncedAt = null;
+        for (const row of ownRows) {
+          row.shopifySyncedAt = null;
+          row.shopifySyncPendingAt = null;
+        }
       }
     }
 
@@ -617,11 +755,16 @@ async function compileCodeOffers(
     // collision is resolved on our side (regenerate / suffixed variant), never by
     // touching their discount.
     const pendingRows = ownRows.filter((row) => !row.shopifySyncedAt && isCodeRedeemable(row, now));
-    if (pendingRows.length > 0) {
+    // Generated codes are random, so a collision with the merchant's own discounts is
+    // vanishingly rare: the pre-flight (40 codes per Admin API call) is skipped for them, and
+    // a code taken in a race is caught per code when it is added. Typed codes always go through
+    // it, and so does any code left in flight by an earlier crashed publish (it may already be ours).
+    const preflightRows = pendingRows.filter((row) => !row.batchId || row.shopifySyncPendingAt);
+    if (preflightRows.length > 0) {
       const resolution = await resolveCodeCollisions(
-        pendingRows,
+        preflightRows,
         { shopDomain, accessToken, ownNodeId: discountId, offerName: offer.internalName },
-        await batchShapes(shopId, pendingRows),
+        await batchShapes(shopId, preflightRows),
       );
       await markCodesSynced(shopId, resolution.alreadyOurs);
     }
@@ -636,6 +779,8 @@ async function compileCodeOffers(
     if (!discountId) {
       const [primary] = liveCodes;
       if (!primary) continue;
+      const primaryRow = redeemableCodes.find((row) => row.code === primary);
+      if (primaryRow) await markCodesSyncPending(shopId, [primaryRow]);
       discountId = await createOrFindCodeDiscount(
         shopDomain,
         accessToken,
@@ -649,14 +794,7 @@ async function compileCodeOffers(
         .update(offers)
         .set({ codeDiscountId: discountId, updatedAt: new Date() })
         .where(and(eq(offers.shopId, shopId), eq(offers.id, offer.id)));
-      const primaryRow = redeemableCodes.find((row) => row.code === primary);
-      if (primaryRow) {
-        primaryRow.shopifySyncedAt = now;
-        await db
-          .update(discountCodes)
-          .set({ shopifySyncedAt: now })
-          .where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.id, primaryRow.id)));
-      }
+      if (primaryRow) await markCodesSynced(shopId, [primaryRow]);
     }
 
     const hasMarketConditions = conditionRows.some(
@@ -719,6 +857,7 @@ async function pushCodeOfferConfigs(
   shopDomain: string,
   accessToken: string,
   compiledCodeOffers: CompiledCodeOffer[],
+  manifest: ManifestCollector,
 ): Promise<void> {
   const db = getDb();
 
@@ -760,12 +899,14 @@ async function pushCodeOfferConfigs(
       entry.nodeOptions,
     );
     await pushMetafields(shopDomain, accessToken, [discountId], value);
+    manifest.record(discountId, kind === "delivery" ? "code-delivery" : "code", value);
 
     // A code can be taken between the pre-flight and the bulk job (a race): treat any
     // per-code failure like a pre-flight collision (regenerate / suffix), then add the
     // replacements, so the publish completes with every code live.
     let toAdd = entry.pendingCodes;
     for (let round = 0; toAdd.length > 0; round += 1) {
+      await markCodesSyncPending(shopId, toAdd);
       const failed = await addRedeemCodes(
         shopDomain,
         accessToken,
@@ -774,22 +915,7 @@ async function pushCodeOfferConfigs(
       );
       const failedCodes = new Set(failed.map((item) => item.code.toUpperCase()));
       const added = toAdd.filter((row) => !failedCodes.has(row.code));
-      if (added.length > 0) {
-        const syncedAt = new Date();
-        await db
-          .update(discountCodes)
-          .set({ shopifySyncedAt: syncedAt })
-          .where(
-            and(
-              eq(discountCodes.shopId, shopId),
-              inArray(
-                discountCodes.id,
-                added.map((row) => row.id),
-              ),
-            ),
-          );
-        for (const row of added) row.shopifySyncedAt = syncedAt;
-      }
+      await markCodesSynced(shopId, added);
       if (failed.length === 0) break;
       const failedRows = toAdd.filter((row) => failedCodes.has(row.code));
       if (round >= 3) {
@@ -919,17 +1045,15 @@ async function pushBackendBConfig(
   shopDomain: string,
   accessToken: string,
   allCompiled: CompiledBackendBOffer[],
+  manifest: ManifestCollector,
 ): Promise<void> {
   const compiled = allCompiled.filter((entry) => entry.hasCartRewards);
   if (compiled.length === 0) {
     const nodeId = await findCodeDiscountNode(shopId, shopDomain, accessToken);
     if (nodeId) {
-      await pushMetafields(
-        shopDomain,
-        accessToken,
-        [nodeId],
-        serializeFunctionConfig(emptyFunctionConfig(), { omitCartAttributeSlots: true }),
-      );
+      const emptyValue = serializeFunctionConfig(emptyFunctionConfig(), { omitCartAttributeSlots: true });
+      await pushMetafields(shopDomain, accessToken, [nodeId], emptyValue);
+      manifest.record(nodeId, "code-b", emptyValue);
     }
     return;
   }
@@ -964,6 +1088,7 @@ async function pushBackendBConfig(
     CART_DISCOUNT_CLASSES,
   );
   await pushMetafields(shopDomain, accessToken, [nodeId], value);
+  manifest.record(nodeId, "code-b", value);
   const db = getDb();
   for (const entry of compiled) {
     await db
@@ -991,6 +1116,7 @@ async function neutralizeStaleCodeOffers(
   shopDomain: string,
   accessToken: string,
   activeCodeOffers: Offer[],
+  manifest?: ManifestCollector,
 ): Promise<void> {
   const db = getDb();
   const trackedCodeOffers = await db
@@ -1016,6 +1142,160 @@ async function neutralizeStaleCodeOffers(
   for (const discountId of staleDiscountIds) {
     await pushMetafields(shopDomain, accessToken, [discountId], emptyValue);
     await expireCodeDiscountNode(shopDomain, accessToken, discountId);
+    manifest?.record(discountId, "code", emptyValue, { active: false });
+  }
+}
+
+const textBytes = (text: string) => new TextEncoder().encode(text).byteLength;
+
+/**
+ * Packs the code-gated shipping offers into as few delivery configs as fit the metafield limit.
+ * An offer whose hashes alone exceed one node is split by hash across nodes (a code matches
+ * exactly one slice, so behaviour is the same). Deterministic: entries are ordered by id.
+ */
+export function packCodedShippingOffers(
+  entries: CompiledShippingOffer[],
+  maxBytes: number = MAX_METAFIELD_BYTES,
+): CompiledShippingOffer[][] {
+  const sizeOf = (group: CompiledShippingOffer[]) =>
+    textBytes(
+      serializeFunctionConfig({
+        offers: [],
+        shippingOffers: group,
+        version: "1",
+        compiledAt: "2000-01-01T00:00:00.000Z",
+      }),
+    );
+  const sorted = [...entries].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const groups: CompiledShippingOffer[][] = [];
+  let current: CompiledShippingOffer[] = [];
+  for (const entry of sorted) {
+    if (sizeOf([...current, entry]) <= maxBytes) {
+      current.push(entry);
+      continue;
+    }
+    if (current.length > 0) groups.push(current);
+    current = [];
+    if (sizeOf([entry]) <= maxBytes) {
+      current.push(entry);
+      continue;
+    }
+    let rest = [...(entry.codeHashes ?? [])];
+    while (rest.length > 0) {
+      let low = 0;
+      let high = rest.length;
+      while (low < high) {
+        const mid = Math.ceil((low + high) / 2);
+        if (sizeOf([{ ...entry, codeHashes: rest.slice(0, mid) }]) <= maxBytes) low = mid;
+        else high = mid - 1;
+      }
+      if (low === 0) {
+        throw new Error(
+          `The shipping reward of offer ${entry.id} doesn't fit in a delivery discount config even without codes.`,
+        );
+      }
+      const slice: CompiledShippingOffer = { ...entry, codeHashes: rest.slice(0, low) };
+      rest = rest.slice(low);
+      // The last slice stays open so the next offer can share its node.
+      if (rest.length === 0) current = [slice];
+      else groups.push([slice]);
+    }
+  }
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
+/**
+ * Pushes the code-gated shipping offers (hashes of their redeemable codes) to the shop's
+ * coded-shipping pool of automatic delivery nodes, and retires the nodes it no longer needs.
+ * Codes are unique per shop in Shopify, so the same code can't also live on a delivery code node:
+ * the delivery Function gates on the entered code itself, exactly as it did in the shared config.
+ */
+async function pushCodedShippingPool(
+  shopId: string,
+  shopDomain: string,
+  accessToken: string,
+  gatedShippingOffers: CompiledShippingOffer[],
+  policyOffers: CompiledFunctionConfig["offers"],
+  manifest: ManifestCollector,
+): Promise<void> {
+  const groups = packCodedShippingOffers(gatedShippingOffers);
+  if (groups.length === 0 && (await readCodedShippingNodeIds(shopId)).length === 0) return;
+  const ids = await ensureCodedShippingNodes(shopId, shopDomain, accessToken, groups.length);
+  const combination = compileDiscountCombinationPolicy(policyOffers);
+  for (const [index, group] of groups.entries()) {
+    const nodeId = ids[index];
+    if (!nodeId) continue;
+    const value = serializeFunctionConfig({
+      offers: [],
+      shippingOffers: group,
+      version: "1",
+      compiledAt: new Date().toISOString(),
+    });
+    assertConfigFits(value);
+    await syncDiscountCombinationPolicy(shopDomain, accessToken, nodeId, combination, DELIVERY_DISCOUNT_CLASSES);
+    await pushMetafields(shopDomain, accessToken, [nodeId], value);
+    manifest.record(nodeId, "pool", value);
+  }
+}
+
+/** Query-string params the storefront must keep on the stored page URL (D4): every enabled specific_link param. */
+export function specificLinkParamNames(conditionRows: OfferCondition[]): string[] {
+  const names = new Set<string>();
+  let usesDefault = false;
+  for (const row of conditionRows) {
+    if (!row.isEnabled || row.conditionType !== "specific_link") continue;
+    if (row.scope !== "main" && row.scope !== "sub") continue;
+    const paramName = (row.value as { paramName?: unknown } | null)?.paramName;
+    if (typeof paramName === "string" && paramName.trim()) names.add(paramName.trim());
+    else usesDefault = true;
+  }
+  if (usesDefault || names.size === 0) names.add("freegifts_code");
+  return [...names].sort();
+}
+
+/**
+ * Publishes the param names as an app-owned SHOP metafield the theme embed reads, so even the
+ * first add-to-cart of a page load stamps the right params. Best effort: a failure here must not
+ * fail the publish of the offers themselves.
+ */
+async function pushSpecificLinkParams(
+  shopDomain: string,
+  accessToken: string,
+  conditionRows: OfferCondition[],
+): Promise<void> {
+  try {
+    const shop = await shopifyGraphQL<{ shop: { id: string } }>({
+      shopDomain,
+      accessToken,
+      query: `query PromoEngineShopId { shop { id } }`,
+    });
+    const data = await shopifyGraphQL<{ metafieldsSet: { userErrors: Array<{ message: string }> } }>({
+      shopDomain,
+      accessToken,
+      retryable: true,
+      query: `mutation PromoEngineSpecificLinkParams($metafields: [MetafieldsSetInput!]!) {
+        metafieldsSet(metafields: $metafields) {
+          metafields { id }
+          userErrors { field message }
+        }
+      }`,
+      variables: {
+        metafields: [
+          {
+            ownerId: shop.shop.id,
+            namespace: "$app:promo_engine",
+            key: "specific_link_params",
+            type: "json",
+            value: JSON.stringify(specificLinkParamNames(conditionRows)),
+          },
+        ],
+      },
+    });
+    const errors = data.metafieldsSet.userErrors;
+    if (errors.length > 0) throw new Error(errors.map((e) => e.message).join(", "));
+  } catch (error) {
+    Sentry.captureException(error, { tags: { shopDomain, context: "specific-link-params" } });
   }
 }
 
@@ -1048,13 +1328,15 @@ export async function neutralizeCodeDiscountNode(
   if (!shopRow) return;
   const accessToken = await decryptToken(shopRow.accessTokenEncrypted);
 
-  await pushMetafields(
-    shopDomain,
-    accessToken,
-    [discountId],
-    serializeFunctionConfig(emptyFunctionConfig()),
-  );
+  const emptyValue = serializeFunctionConfig(emptyFunctionConfig());
+  await pushMetafields(shopDomain, accessToken, [discountId], emptyValue);
   await expireCodeDiscountNode(shopDomain, accessToken, discountId);
+  // The next drift check must not read this deliberately emptied node as damage.
+  const stored = await readPublishManifest(shopId);
+  if (stored) {
+    stored.nodes[discountId] = { kind: "code", hash: configHash(emptyValue), active: false };
+    await writePublishManifest(shopId, stored);
+  }
 }
 
 /**
@@ -1136,9 +1418,12 @@ async function pushMetafields(
   ownerIds: string[],
   value: string,
 ): Promise<void> {
+  const owners = [...new Set(ownerIds)];
   const data = await shopifyGraphQL<{ metafieldsSet: { userErrors: Array<{ message: string }> } }>({
     shopDomain,
     accessToken,
+    // Setting a metafield to a value is idempotent: a timed-out attempt may be re-sent.
+    retryable: true,
     query: `mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
       metafieldsSet(metafields: $metafields) {
         metafields { id key namespace value }
@@ -1146,13 +1431,15 @@ async function pushMetafields(
       }
     }`,
     variables: {
-      metafields: [...new Set(ownerIds)].map((ownerId) => ({
-        ownerId,
-        namespace: METAFIELD_NAMESPACE,
-        key: METAFIELD_KEY,
-        type: "json",
-        value,
-      })),
+      metafields: owners.flatMap((ownerId) =>
+        FUNCTION_CONFIG_NAMESPACES.map((namespace) => ({
+          ownerId,
+          namespace,
+          key: METAFIELD_KEY,
+          type: "json",
+          value,
+        })),
+      ),
     },
   });
 

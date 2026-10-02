@@ -1,9 +1,10 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { and, eq } from "drizzle-orm";
 import { offerRewards, offers, variantCache } from "@promo/db";
-import { getSignedShop } from "../lib/app-proxy-auth.server.js";
+import { ProductCustomizationsQuerySchema, searchParamsObject } from "@promo/shared-types";
+import { getSignedShopCached } from "../lib/proxy-shop.server.js";
 import { proxyRateLimitResponse } from "../lib/proxy-rate-limit.server.js";
-import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
+import { apiError, apiJson, handleApiError, STOREFRONT_CACHE_CONTROL } from "../lib/api-response.server.js";
 
 // Storefront endpoints get their own Vercel function (a distinct route config
 // splits the server bundle) so a cold start doesn't load the whole admin app.
@@ -34,46 +35,50 @@ function discountedCents(originalCents: number, discountType: string, discountVa
 
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
-    const { id: shopId, currencyCode, db } = await getSignedShop(request);
-    const limited = await proxyRateLimitResponse(request, "product-customizations", shopId, 240);
+    const { id: shopId, currencyCode, db } = await getSignedShopCached(request);
+    const limited = await proxyRateLimitResponse(request, "product-customizations", shopId, 240, 24_000);
     if (limited) return limited;
-    const url = new URL(request.url);
-    const offerId = url.searchParams.get("offer_id");
-    const variantId = url.searchParams.get("variant_id");
-    if (!offerId || !variantId) {
+    const raw = searchParamsObject(new URL(request.url).searchParams, ["offer_id", "variant_id"]);
+    if (!raw["offer_id"] || !raw["variant_id"]) {
       return apiError(request, {
         status: 400,
         code: "MISSING_IDENTIFIERS",
         message: "offer_id and variant_id are required.",
       });
     }
-    if (!UUID.test(offerId) || !VARIANT_GID.test(variantId)) {
+    const query = ProductCustomizationsQuerySchema.safeParse(raw);
+    if (!query.success || !UUID.test(query.data.offer_id) || !VARIANT_GID.test(query.data.variant_id)) {
       return apiError(request, {
         status: 400,
         code: "INVALID_IDENTIFIERS",
         message: "offer_id or variant_id is invalid.",
       });
     }
+    const { offer_id: offerId, variant_id: variantId } = query.data;
 
-  const [offer] = await db
-    .select({ id: offers.id, type: offers.type })
-    .from(offers)
-    .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId), eq(offers.status, "active")))
-    .limit(1);
+    // The three lookups are independent (reward and variant are keyed by the request ids, not by
+    // the offer row), so run them together instead of three sequential round trips.
+    const [[offer], [reward], [variant]] = await Promise.all([
+      db
+        .select({ id: offers.id, type: offers.type })
+        .from(offers)
+        .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId), eq(offers.status, "active")))
+        .limit(1),
+      db
+        .select()
+        .from(offerRewards)
+        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)))
+        .limit(1),
+      db
+        .select({ price: variantCache.price })
+        .from(variantCache)
+        .where(and(eq(variantCache.shopId, shopId), eq(variantCache.variantGid, variantId)))
+        .limit(1),
+    ]);
+    const cacheable = { headers: { "Cache-Control": STOREFRONT_CACHE_CONTROL } };
     if (!offer || offer.type !== "discount") {
-      return apiJson(request, {});
+      return apiJson(request, {}, cacheable);
     }
-
-  const [reward] = await db
-    .select()
-    .from(offerRewards)
-    .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)))
-    .limit(1);
-  const [variant] = await db
-    .select({ price: variantCache.price })
-    .from(variantCache)
-    .where(and(eq(variantCache.shopId, shopId), eq(variantCache.variantGid, variantId)))
-    .limit(1);
 
   const value = (reward?.value ?? {}) as { tiers?: DiscountTier[] };
   const originalPriceCents = centsFromPrice(variant?.price ?? 0);
@@ -93,7 +98,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     })
     .filter((tier) => tier.minQuantity > 0);
 
-    if (tiers.length === 0) return apiJson(request, {});
+    if (tiers.length === 0) return apiJson(request, {}, cacheable);
 
     return apiJson(request, {
       volumeDiscount: {
@@ -102,7 +107,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         tiers,
         currency: currencyCode ?? "USD",
       },
-    });
+    }, cacheable);
   } catch (error) {
     return handleApiError(request, error, "apps.promo-engine.product-customizations");
   }

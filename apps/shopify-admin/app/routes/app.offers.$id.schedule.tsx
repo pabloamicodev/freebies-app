@@ -2,6 +2,7 @@
  * Offer Schedule editor — configure start/end dates and timezone.
  */
 
+import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData, Form, useActionData, useNavigation } from "react-router";
 import { BackButton } from "../components/BackButton.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -24,7 +25,7 @@ const TIMEZONES = [
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
   return {
     offer: {
@@ -38,7 +39,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const offer = await loadOwnedOffer(db, shopId, offerId);
   const timezone = (formData.get("timezone") as string) || "UTC";
@@ -106,7 +107,7 @@ export default function OfferSchedulePage() {
         </div>
       )}
       {actionData && "success" in actionData && actionData.success && (
-        <div className="b-banner b-banner-green b-mb-4">
+        <div className="b-banner b-banner-green b-mb-4" role="status">
           <span className="b-banner-icon">✓</span>
           <div className="b-banner-body">
             <p className="b-banner-text" style={{ margin: 0 }}>Schedule saved.</p>

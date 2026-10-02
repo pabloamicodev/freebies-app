@@ -1,4 +1,5 @@
 import { useLoaderData, useNavigate, useFetcher, useActionData, redirect, Link } from "react-router";
+import { parseUuidParam } from "../lib/route-params.js";
 import { useState } from "react";
 import { SUPPORTED_CURRENCIES, validateConditionValue, validateRewardPayload, ConditionTypeSchema, ConditionScopeSchema, resolveOnlyMatchedLines, resolveRejectUnmatchedLines } from "@promo/shared-types";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -15,6 +16,7 @@ import {
   IconChevronLeft, IconChevronRight, IconChevronDown, IconInfo, IconRefresh,
   IconPlus, IconCheck, IconLink, IconCondition,
 } from "../components/Icons.js";
+import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { OfferStepTabs } from "../components/OfferStepTabs.js";
 import { SelectedProductsList } from "../components/SelectedProductsList.js";
@@ -39,7 +41,7 @@ export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBou
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, currencyCode: shopCurrencyCode, db } = await getShopContext(request);
-  const offerId = params["id"];
+  const offerId = parseUuidParam(params);
   if (!offerId) throw new Response("Not found", { status: 404 });
 
   const offer = await loadOwnedOffer(db, shopId, offerId);
@@ -74,7 +76,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   const { session, shopId, currencyCode: shopCurrencyCode, db } = context;
-  const offerId = params["id"];
+  const offerId = parseUuidParam(params);
   if (!offerId) throw new Response("Not found", { status: 404 });
   const intent = formData.get("intent") as string;
   const offer = await loadOwnedOffer(db, shopId, offerId);
@@ -696,6 +698,7 @@ function ConditionCard({
   const isSaving = fetcher.state !== "idle";
   const [val, setVal] = useState<ConditionValue>({ ...initialValue });
   const [productPickerOpen, setProductPickerOpen] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const selectedVariantIds = Array.isArray(val.variantIds) ? (val.variantIds as string[]) : [];
 
   function update(patch: Partial<ConditionValue>) {
@@ -737,7 +740,8 @@ function ConditionCard({
         </div>
         <button
           type="button"
-          onClick={onDelete}
+          onClick={() => setConfirmingDelete(true)}
+          aria-label={`Remove ${title} condition`}
           style={{
             background: "none", border: "none", cursor: "pointer",
             color: "#dc2626", fontSize: 16, lineHeight: 1, padding: "2px 4px",
@@ -746,6 +750,19 @@ function ConditionCard({
           ×
         </button>
       </div>
+
+      <ConfirmDialog
+        open={confirmingDelete}
+        ariaLabel="Remove condition"
+        title="Remove this condition?"
+        message={`The "${title}" condition will be removed from this offer.`}
+        confirmLabel="Remove condition"
+        onCancel={() => setConfirmingDelete(false)}
+        onConfirm={() => {
+          setConfirmingDelete(false);
+          onDelete();
+        }}
+      />
 
       {/* Body */}
       <div style={{ padding: "16px" }}>
@@ -1395,7 +1412,7 @@ export default function OfferDetailPage() {
               </div>
             )}
             {actionData && "success" in actionData && actionData.success && (
-              <div className="b-banner b-banner-green" style={{ marginBottom: 12 }}>
+              <div className="b-banner b-banner-green" role="status" style={{ marginBottom: 12 }}>
                 <span className="b-banner-icon">✓</span>
                 <div className="b-banner-body">
                   <p className="b-banner-text" style={{ margin: 0 }}>Saved successfully.</p>
@@ -1811,7 +1828,7 @@ export default function OfferDetailPage() {
             </div>
           )}
           {actionData && "success" in actionData && actionData.success && (
-            <div className="b-banner b-banner-green" style={{ marginBottom: 12 }}>
+            <div className="b-banner b-banner-green" role="status" style={{ marginBottom: 12 }}>
               <span className="b-banner-icon">✓</span>
               <div className="b-banner-body">
                 <p className="b-banner-text" style={{ margin: 0 }}>Saved successfully.</p>

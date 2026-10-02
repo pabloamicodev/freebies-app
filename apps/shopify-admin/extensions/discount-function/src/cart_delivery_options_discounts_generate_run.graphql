@@ -2,7 +2,7 @@ query Input {
   presentmentCurrencyRate
   discount {
     discountClasses
-    metafield(namespace: "promo_engine", key: "function_config") {
+    metafield(namespace: "$app:promo_engine", key: "function_config") {
       value
     }
   }

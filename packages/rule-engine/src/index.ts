@@ -15,3 +15,4 @@ export { evaluatePageUrl, type PageUrlConditionValue } from "./conditions/page-u
 export { evaluateCountry } from "./conditions/country.js";
 export { evaluateBogo } from "./conditions/bogo.js";
 export { classifyPageType, evaluatePageTypes, evaluateUtmParameters } from "./conditions/page-context.js";
+export { evaluatePageConditionGroup, lineMatchesPageConditions, isPageConditionType, PAGE_CONDITION_TYPES } from "./page-match.js";

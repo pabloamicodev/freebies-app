@@ -1,18 +1,66 @@
-import { describe, expect, it, vi } from "vitest";
-import type { Db } from "@promo/db";
-import { analyticsEvents, auditLogs, cartMutationLogs, shops, webhookDeliveries } from "@promo/db";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { and, eq } from "drizzle-orm";
+import {
+  analyticsEvents,
+  auditLogs,
+  cartMutationLogs,
+  discountCodeRedemptions,
+  discountCodes,
+  gdprExports,
+  offers,
+  shops,
+  webhookDeliveries,
+  type Db,
+} from "@promo/db";
+import { createTestDb, seedOffer, seedShop } from "../test-support/pglite-db.js";
 
 vi.mock("@sentry/node", () => ({ captureMessage: vi.fn(), captureException: vi.fn() }));
 
-const { handleCustomersDataRequest, handleCustomersRedact, handleShopRedact } = await import("./gdpr.server.js");
+const { GDPR_EXPORT_RETENTION_DAYS, handleCustomersDataRequest, handleCustomersRedact, handleShopRedact } = await import(
+  "./gdpr.server.js"
+);
 const Sentry = await import("@sentry/node");
 
 const CUSTOMER_NUMERIC_ID = "123456789";
 const CUSTOMER_GID = `gid://shopify/Customer/${CUSTOMER_NUMERIC_ID}`;
 
+let db: Db;
+let close: () => Promise<void>;
+let counter = 0;
+
+beforeAll(async () => {
+  ({ db, close } = await createTestDb());
+}, 60_000);
+afterAll(async () => {
+  await close();
+});
+
+async function newShop() {
+  counter += 1;
+  const domain = `gdpr-${counter}.myshopify.com`;
+  return { shopId: await seedShop(db, domain), domain };
+}
+
+async function seedCustomerData(shopId: string, offerId: string) {
+  await db.insert(analyticsEvents).values([
+    { shopId, eventName: "gift_added", customerId: CUSTOMER_GID, cartToken: "cart-1", sessionId: "sess-1", properties: { sku: "A" } },
+    // The web pixel once stored the customer id as the session id.
+    { shopId, eventName: "page_view", sessionId: CUSTOMER_NUMERIC_ID, cartToken: "cart-2" },
+    { shopId, eventName: "someone_else", customerId: "gid://shopify/Customer/999", cartToken: "cart-other" },
+  ]);
+  await db.insert(cartMutationLogs).values([
+    { shopId, cartToken: "cart-1", mutationType: "add_gift", source: "ajax_cart", status: "success" },
+    { shopId, cartToken: "cart-other", mutationType: "add_gift", source: "ajax_cart", status: "success" },
+  ]);
+  const [code] = await db.insert(discountCodes).values({ shopId, offerId, code: `GDPRCODE${counter}` }).returning();
+  await db.insert(discountCodeRedemptions).values([
+    { shopId, offerId, codeId: code!.id, code: code!.code, orderId: "1001", customerId: CUSTOMER_GID },
+    { shopId, offerId, codeId: code!.id, code: code!.code, orderId: "1002", customerId: "gid://shopify/Customer/999" },
+  ]);
+}
+
 describe("handleCustomersDataRequest", () => {
   it("always reports to Sentry, even without a resolvable shop or customer", async () => {
-    const db = { select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }) } as unknown as Db;
     await handleCustomersDataRequest(db, null, "shop.myshopify.com", {});
     expect(Sentry.captureMessage).toHaveBeenCalledWith(
       "GDPR customer data request received",
@@ -20,180 +68,207 @@ describe("handleCustomersDataRequest", () => {
     );
   });
 
-  it("does not throw and records an audit log summary when shop and customer resolve", async () => {
-    const events = [{ id: "evt-1", cartToken: "cart-1" }, { id: "evt-2", cartToken: null }];
-    const mutationLogs = [{ id: "log-1" }];
-    const auditInserts: Array<Record<string, unknown>> = [];
-    const db = {
-      select: () => ({
-        from: (table: unknown) => ({
-          where: () => Promise.resolve(table === analyticsEvents ? events : mutationLogs),
-        }),
-      }),
-      insert: () => ({
-        values: (values: Record<string, unknown>) => {
-          auditInserts.push(values);
-          return Promise.resolve(undefined);
-        },
-      }),
-    } as unknown as Db;
+  it("returns early without storing anything when shop or customer is missing", async () => {
+    const { shopId, domain } = await newShop();
+    await handleCustomersDataRequest(db, null, domain, { customer: { id: 1 } });
+    await handleCustomersDataRequest(db, shopId, domain, {});
+    expect(await db.select().from(gdprExports).where(eq(gdprExports.shopId, shopId))).toEqual([]);
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.shopId, shopId))).toEqual([]);
+  });
 
-    await expect(
-      handleCustomersDataRequest(db, "shop-1", "shop.myshopify.com", {
-        customer: { id: Number(CUSTOMER_NUMERIC_ID), email: "buyer@example.com" },
-        orders_requested: [{ id: 1, name: "#1001" }],
-      }),
-    ).resolves.toBeUndefined();
+  it("stores a real JSON export of everything held about the customer, and nothing about others", async () => {
+    const { shopId, domain } = await newShop();
+    const offerId = await seedOffer(db, shopId);
+    await seedCustomerData(shopId, offerId);
 
-    expect(auditInserts).toHaveLength(1);
-    expect(auditInserts[0]).toMatchObject({
-      shopId: "shop-1",
+    await handleCustomersDataRequest(db, shopId, domain, {
+      customer: { id: Number(CUSTOMER_NUMERIC_ID), email: "buyer@example.com" },
+      orders_requested: [{ id: 1, name: "#1001" }],
+    });
+
+    const [stored] = await db.select().from(gdprExports).where(eq(gdprExports.shopId, shopId));
+    expect(stored).toMatchObject({ customerId: CUSTOMER_GID });
+    const payload = stored!.payload as {
+      exportVersion: number;
+      shop: string;
+      customer: { id: string; email: string };
+      ordersRequested: unknown[];
+      data: {
+        analyticsEvents: Array<{ eventName: string }>;
+        cartMutationLogs: Array<{ cartToken: string }>;
+        discountCodeRedemptions: Array<{ orderId: string }>;
+      };
+    };
+    expect(payload).toMatchObject({
+      exportVersion: 1,
+      shop: domain,
+      customer: { id: CUSTOMER_GID, email: "buyer@example.com" },
+      ordersRequested: [{ id: 1, name: "#1001" }],
+    });
+    expect(payload.data.analyticsEvents.map((e) => e.eventName).sort()).toEqual(["gift_added", "page_view"]);
+    // Only the logs of this customer's carts.
+    expect(payload.data.cartMutationLogs.map((l) => l.cartToken).sort()).toEqual(["cart-1"]);
+    expect(payload.data.discountCodeRedemptions.map((r) => r.orderId)).toEqual(["1001"]);
+    expect(JSON.stringify(payload)).not.toContain("cart-other");
+    expect(JSON.stringify(payload)).not.toContain("someone_else");
+  });
+
+  it("makes the export expire after the retention period", async () => {
+    const { shopId, domain } = await newShop();
+    const before = Date.now();
+    await handleCustomersDataRequest(db, shopId, domain, { customer: { id: 5 } });
+    const [stored] = await db.select().from(gdprExports).where(eq(gdprExports.shopId, shopId));
+    const days = (stored!.expiresAt.getTime() - before) / 86_400_000;
+    expect(days).toBeGreaterThan(GDPR_EXPORT_RETENTION_DAYS - 0.01);
+    expect(days).toBeLessThan(GDPR_EXPORT_RETENTION_DAYS + 0.01);
+  });
+
+  it("records an audit log with counts and the export id, but no customer data", async () => {
+    const { shopId, domain } = await newShop();
+    const offerId = await seedOffer(db, shopId);
+    await seedCustomerData(shopId, offerId);
+
+    await handleCustomersDataRequest(db, shopId, domain, {
+      customer: { id: Number(CUSTOMER_NUMERIC_ID), email: "buyer@example.com" },
+      orders_requested: [{ id: 1, name: "#1001" }],
+    });
+
+    const [audit] = await db.select().from(auditLogs).where(eq(auditLogs.shopId, shopId));
+    const [stored] = await db.select().from(gdprExports).where(eq(gdprExports.shopId, shopId));
+    expect(audit).toMatchObject({
       entityType: "gdpr_customer_data_request",
       entityId: CUSTOMER_GID,
       action: "export",
+      performedBy: "shopify_webhook",
     });
-    expect(auditInserts[0]!["after"]).toMatchObject({
+    expect(audit!.after).toMatchObject({
+      exportId: stored!.id,
       orderCount: 1,
       analyticsEventCount: 2,
       cartMutationLogCount: 1,
+      discountCodeRedemptionCount: 1,
     });
+    expect(JSON.stringify(audit!.after)).not.toContain("buyer@example.com");
   });
 
-  it("returns early without querying anything further when shopId is null", async () => {
-    let selectCalled = false;
-    const db = {
-      select: () => {
-        selectCalled = true;
-        return { from: () => ({ where: () => Promise.resolve([]) }) };
-      },
-    } as unknown as Db;
+  it("is scoped to the requesting shop", async () => {
+    const one = await newShop();
+    const two = await newShop();
+    const offerTwo = await seedOffer(db, two.shopId);
+    await seedCustomerData(two.shopId, offerTwo);
 
-    await handleCustomersDataRequest(db, null, "shop.myshopify.com", { customer: { id: 1 } });
-    expect(selectCalled).toBe(false);
+    await handleCustomersDataRequest(db, one.shopId, one.domain, { customer: { id: Number(CUSTOMER_NUMERIC_ID) } });
+
+    const [stored] = await db.select().from(gdprExports).where(eq(gdprExports.shopId, one.shopId));
+    expect((stored!.payload as { data: { analyticsEvents: unknown[] } }).data.analyticsEvents).toEqual([]);
   });
 });
 
 describe("handleCustomersRedact", () => {
-  it("warns and returns without touching the db when shop or customer can't be resolved", async () => {
-    let dbTouched = false;
-    const db = { select: () => { dbTouched = true; return {}; } } as unknown as Db;
-    await handleCustomersRedact(db, null, "shop.myshopify.com", {});
-    expect(dbTouched).toBe(false);
+  it("warns and returns when shop or customer can't be resolved", async () => {
+    const { shopId } = await newShop();
+    await expect(handleCustomersRedact(db, null, "shop.myshopify.com", {})).resolves.toBeUndefined();
+    await expect(handleCustomersRedact(db, shopId, "shop.myshopify.com", {})).resolves.toBeUndefined();
   });
 
-  it("deletes the customer's analytics events, gdpr audit log, and linked cart mutation logs in one transaction", async () => {
-    const customerEvents = [{ sessionId: "sess-1", cartToken: "cart-1" }];
-    const deletedTables: unknown[] = [];
-    const db = {
-      select: () => ({
-        from: () => ({
-          where: () => Promise.resolve(customerEvents),
-        }),
-      }),
-      transaction: async (fn: (tx: unknown) => Promise<void>) => {
-        // auditLogs/cartMutationLogs deletes don't call `.returning()` in the
-        // source — give `.where()` a plain thenable too.
-        const txFull = {
-          delete: (table: unknown) => {
-            const chain = {
-              where: () => {
-                deletedTables.push(table);
-                return table === analyticsEvents
-                  ? { returning: () => Promise.resolve([{ id: "evt-1" }]) }
-                  : Promise.resolve(undefined);
-              },
-            };
-            return chain;
-          },
-        };
-        return fn(txFull);
-      },
-    } as unknown as Db;
+  it("erases the customer's analytics, audit trail, linked cart logs and stored export, and unlinks redemptions", async () => {
+    const { shopId, domain } = await newShop();
+    const offerId = await seedOffer(db, shopId);
+    await seedCustomerData(shopId, offerId);
+    await handleCustomersDataRequest(db, shopId, domain, { customer: { id: Number(CUSTOMER_NUMERIC_ID) } });
 
-    await handleCustomersRedact(db, "shop-1", "shop.myshopify.com", {
-      customer: { id: Number(CUSTOMER_NUMERIC_ID) },
-    });
+    await handleCustomersRedact(db, shopId, domain, { customer: { id: Number(CUSTOMER_NUMERIC_ID) } });
 
-    expect(deletedTables).toEqual([analyticsEvents, auditLogs, cartMutationLogs]);
+    const events = await db.select().from(analyticsEvents).where(eq(analyticsEvents.shopId, shopId));
+    expect(events.map((e) => e.eventName)).toEqual(["someone_else"]);
+    const logs = await db.select().from(cartMutationLogs).where(eq(cartMutationLogs.shopId, shopId));
+    expect(logs.map((l) => l.cartToken)).toEqual(["cart-other"]);
+    expect(await db.select().from(gdprExports).where(eq(gdprExports.shopId, shopId))).toEqual([]);
+    expect(await db.select().from(auditLogs).where(and(eq(auditLogs.shopId, shopId), eq(auditLogs.entityType, "gdpr_customer_data_request")))).toEqual([]);
+    const redemptions = await db.select().from(discountCodeRedemptions).where(eq(discountCodeRedemptions.shopId, shopId));
+    // The code's usage accounting stays; only the customer link goes.
+    expect(redemptions.map((r) => [r.orderId, r.customerId]).sort()).toEqual([
+      ["1001", null],
+      ["1002", "gid://shopify/Customer/999"],
+    ]);
   });
 
-  it("skips the cartMutationLogs delete when the customer has no linked sessions or cart tokens", async () => {
-    const deletedTables: unknown[] = [];
-    const db = {
-      select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
-      transaction: async (fn: (tx: unknown) => Promise<void>) => {
-        const tx = {
-          delete: (table: unknown) => ({
-            where: () => {
-              deletedTables.push(table);
-              return table === analyticsEvents
-                ? { returning: () => Promise.resolve([]) }
-                : Promise.resolve(undefined);
-            },
-          }),
-        };
-        return fn(tx);
-      },
-    } as unknown as Db;
-
-    await handleCustomersRedact(db, "shop-1", "shop.myshopify.com", {
-      customer: { id: Number(CUSTOMER_NUMERIC_ID) },
-    });
-
-    expect(deletedTables).toEqual([analyticsEvents, auditLogs]);
+  it("skips the cart-log delete when the customer has no linked sessions or cart tokens", async () => {
+    const { shopId, domain } = await newShop();
+    await db.insert(cartMutationLogs).values({ shopId, cartToken: "unrelated", mutationType: "add_gift", source: "ajax_cart", status: "success" });
+    await handleCustomersRedact(db, shopId, domain, { customer: { id: Number(CUSTOMER_NUMERIC_ID) } });
+    expect(await db.select().from(cartMutationLogs).where(eq(cartMutationLogs.shopId, shopId))).toHaveLength(1);
   });
 });
 
 describe("handleShopRedact", () => {
-  it("warns and returns without touching the db or sessions when shopId is null", async () => {
-    let dbTouched = false;
-    const db = { delete: () => { dbTouched = true; return { where: () => Promise.resolve(undefined) }; } } as unknown as Db;
-    const sessionStorage = { findSessionsByShop: vi.fn(), deleteSessions: vi.fn() };
+  const sessionStorage = () => ({
+    findSessionsByShop: vi.fn().mockResolvedValue([{ id: "sess-1" }]),
+    deleteSessions: vi.fn().mockResolvedValue(true),
+  });
+  const uninstalled = async (shopId: string, at = new Date("2026-01-01T00:00:00Z")) =>
+    db.update(shops).set({ isActive: false, uninstalledAt: at, installedAt: new Date("2025-12-01T00:00:00Z") }).where(eq(shops.id, shopId));
+  const exists = async (shopId: string) => (await db.select().from(shops).where(eq(shops.id, shopId))).length === 1;
 
-    await handleShopRedact(db, sessionStorage, null, "shop.myshopify.com");
-
-    expect(dbTouched).toBe(false);
-    expect(sessionStorage.findSessionsByShop).not.toHaveBeenCalled();
+  it("warns and returns without touching sessions when shopId is null", async () => {
+    const sessions = sessionStorage();
+    await handleShopRedact(db, sessions, null, "shop.myshopify.com");
+    expect(sessions.findSessionsByShop).not.toHaveBeenCalled();
   });
 
-  it("purges sessions, webhookDeliveries, and the shop row itself", async () => {
-    const deletedTables: unknown[] = [];
-    const db = {
-      delete: (table: unknown) => ({
-        where: () => {
-          deletedTables.push(table);
-          return Promise.resolve(undefined);
-        },
-      }),
-    } as unknown as Db;
-    const sessionStorage = {
-      findSessionsByShop: vi.fn().mockResolvedValue([{ id: "sess-1" }]),
-      deleteSessions: vi.fn().mockResolvedValue(true),
-    };
+  it("purges sessions, webhook deliveries and the shop row (cascading its data) for an uninstalled shop", async () => {
+    const { shopId, domain } = await newShop();
+    await uninstalled(shopId);
+    const offerId = await seedOffer(db, shopId, { status: "archived" });
+    await db.insert(webhookDeliveries).values({ webhookId: `wh-${counter}`, topic: "orders/paid", shopDomain: domain });
+    const sessions = sessionStorage();
 
-    await handleShopRedact(db, sessionStorage, "shop-1", "shop.myshopify.com");
+    await handleShopRedact(db, sessions, shopId, domain, "2026-01-03T00:00:00Z");
 
-    expect(sessionStorage.deleteSessions).toHaveBeenCalledWith(["sess-1"]);
-    expect(deletedTables).toEqual([webhookDeliveries, shops]);
+    expect(sessions.deleteSessions).toHaveBeenCalledWith(["sess-1"]);
+    expect(await exists(shopId)).toBe(false);
+    expect(await db.select().from(offers).where(eq(offers.id, offerId))).toEqual([]);
+    expect(await db.select().from(webhookDeliveries).where(eq(webhookDeliveries.shopDomain, domain))).toEqual([]);
   });
 
-  it("still purges webhookDeliveries and the shop row even if session cleanup throws", async () => {
-    const deletedTables: unknown[] = [];
-    const db = {
-      delete: (table: unknown) => ({
-        where: () => {
-          deletedTables.push(table);
-          return Promise.resolve(undefined);
-        },
-      }),
-    } as unknown as Db;
-    const sessionStorage = {
-      findSessionsByShop: vi.fn().mockRejectedValue(new Error("boom")),
-      deleteSessions: vi.fn(),
-    };
+  it("still deletes the shop even if session cleanup throws", async () => {
+    const { shopId, domain } = await newShop();
+    await uninstalled(shopId);
+    const sessions = { findSessionsByShop: vi.fn().mockRejectedValue(new Error("boom")), deleteSessions: vi.fn() };
+    await expect(handleShopRedact(db, sessions, shopId, domain)).resolves.toBeUndefined();
+    expect(await exists(shopId)).toBe(false);
+  });
 
-    await expect(handleShopRedact(db, sessionStorage, "shop-1", "shop.myshopify.com")).resolves.toBeUndefined();
+  it("does NOT redact a shop that is active again (reinstalled during the 48 h window)", async () => {
+    const { shopId, domain } = await newShop();
+    const offerId = await seedOffer(db, shopId, { status: "active" });
+    const sessions = sessionStorage();
 
-    expect(deletedTables).toEqual([webhookDeliveries, shops]);
+    await handleShopRedact(db, sessions, shopId, domain);
+
+    expect(await exists(shopId)).toBe(true);
+    expect(await db.select().from(offers).where(eq(offers.id, offerId))).toHaveLength(1);
+    expect(sessions.findSessionsByShop).not.toHaveBeenCalled();
+    expect(Sentry.captureMessage).toHaveBeenCalledWith(
+      "GDPR shop redact skipped: shop is active or was reinstalled",
+      expect.objectContaining({ level: "warning" }),
+    );
+  });
+
+  it("does not redact a shop with no uninstall on record", async () => {
+    const { shopId, domain } = await newShop();
+    await db.update(shops).set({ isActive: false, uninstalledAt: null }).where(eq(shops.id, shopId));
+    await handleShopRedact(db, sessionStorage(), shopId, domain);
+    expect(await exists(shopId)).toBe(true);
+  });
+
+  it("does not redact a shop reinstalled after the redact request was issued", async () => {
+    const { shopId, domain } = await newShop();
+    await db
+      .update(shops)
+      .set({ isActive: false, uninstalledAt: new Date("2026-01-01T00:00:00Z"), installedAt: new Date("2026-01-02T00:00:00Z") })
+      .where(eq(shops.id, shopId));
+    await handleShopRedact(db, sessionStorage(), shopId, domain, "2026-01-01T12:00:00Z");
+    expect(await exists(shopId)).toBe(true);
   });
 });

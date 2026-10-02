@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { getSignedShop } from "../lib/app-proxy-auth.server.js";
+import { getSignedShopCached } from "../lib/proxy-shop.server.js";
 import { createPhaseTimer, handleEvaluationRequest } from "../lib/promo-evaluation.server.js";
 import { apiError, handleApiError } from "../lib/api-response.server.js";
 
@@ -22,9 +22,9 @@ export async function action({ request }: ActionFunctionArgs) {
   }
   try {
     const timer = createPhaseTimer();
-    const signedShop = await getSignedShop(request);
+    const signedShop = await getSignedShopCached(request);
     timer.mark("auth");
-    return await handleEvaluationRequest(request, signedShop, signedShop.loggedInCustomerId, timer);
+    return await handleEvaluationRequest(request, signedShop, signedShop.loggedInCustomerId, timer, { viaAppProxy: true });
   } catch (error) {
     return handleApiError(request, error, "apps.promo-engine.evaluate");
   }

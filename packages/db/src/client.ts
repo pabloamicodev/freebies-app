@@ -12,7 +12,14 @@ export function getDb() {
     if (!databaseUrl) throw new Error("DATABASE_URL environment variable is required");
 
     const normalizedUrl = normalizeDatabaseUrl(databaseUrl);
+    // Opt-in: a startup parameter may be rejected by a transaction-mode pooler,
+    // so enable it only after checking on a preview. The pooler-safe route is
+    // `ALTER ROLE <app_role> SET statement_timeout = '15s'` (docs/RUNBOOK.md).
+    const statementTimeoutMs = Number(process.env["DB_STATEMENT_TIMEOUT_MS"]);
     _sql = postgres(normalizedUrl, {
+      ...(Number.isFinite(statementTimeoutMs) && statementTimeoutMs > 0
+        ? { connection: { statement_timeout: Math.floor(statementTimeoutMs) } }
+        : {}),
       // Each serverless function instance holds its own pool against Neon's
       // pooler, which has a hard ceiling shared across every concurrent
       // instance. Raised from 3: the evaluate hot path plus background sync/cron

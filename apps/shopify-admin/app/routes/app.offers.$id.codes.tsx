@@ -3,7 +3,10 @@
  * applies only while one of its codes is entered at checkout or in the cart.
  */
 
-import { useLoaderData, Form, Link, useActionData, useNavigation, useSearchParams } from "react-router";
+import { parseUuidParam } from "../lib/route-params.js";
+import { useRef, useState } from "react";
+import { useLoaderData, Form, Link, useActionData, useNavigation, useSearchParams, useSubmit } from "react-router";
+import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { waitUntil } from "@vercel/functions";
 import { and, eq, sql } from "drizzle-orm";
 import { discountCodes } from "@promo/db";
@@ -13,6 +16,7 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { parseDateRange, parseInteger } from "../lib/offer-validation.server.js";
 import { publishShopConfig, republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { isPublishPending } from "../lib/publish-pending.server.js";
 import {
   createDiscountCode,
   createDiscountCodeBatch,
@@ -37,7 +41,7 @@ const STATUS_FILTERS = ["active", "disabled", "exhausted"] as const;
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
   const url = new URL(request.url);
   const search = url.searchParams.get("q") ?? "";
@@ -58,9 +62,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       .groupBy(discountCodes.status),
   ]);
   const now = new Date();
-  const notices = await getCodeNotices(db, shopId, offer, now);
+  const [notices, publishPending] = await Promise.all([getCodeNotices(db, shopId, offer, now), isPublishPending(shopId)]);
   return {
     notices,
+    publishPending,
     offer: {
       id: offer.id,
       internalName: offer.internalName,
@@ -79,6 +84,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       usageCount: row.usageCount,
       oncePerCustomer: row.oncePerCustomer,
       synced: Boolean(row.shopifySyncedAt),
+      syncPending: Boolean(row.shopifySyncPendingAt),
     })),
     total,
     page,
@@ -113,13 +119,14 @@ function parseSettings(formData: FormData, timeZone: string): { error: string } 
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db } = await getShopContext(request);
-  const offerId = params["id"]!;
+  const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
   const offer = await loadOwnedOffer(db, shopId, offerId);
   const wasActive = offer.status === "active";
   let publishLarge = false;
   let message = "";
+  let warning = "";
 
   if (intent === "add_code" || intent === "generate_batch") {
     const parsed = parseSettings(formData, offer.timezone ?? "UTC");
@@ -128,6 +135,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const result = await createDiscountCode(db, { shopId, offerId, code: formData.get("code"), ...parsed.settings });
       if (!result.ok) return { error: result.error };
       message = `Code ${result.code.code} created.`;
+      warning = result.warning ?? "";
     } else {
       const count = parseInteger(formData, "count", 0, { min: 1, label: "Number of codes" });
       const length = parseInteger(formData, "length", 8, { min: 4, max: 32, label: "Code length" });
@@ -180,11 +188,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (publishLarge && wasActive) {
     waitUntil(publishShopConfig(shopId, session.shop));
-    return { success: `${message} They are being added to Shopify and will work in a few minutes.` };
+    return { success: `${message} They are being added to Shopify and will work in a few minutes.`, ...(warning ? { warning } : {}) };
   }
   const publishError = await republishIfActive(db, shopId, session.shop, offerId, wasActive);
   if (publishError) return { error: publishError };
-  return { success: wasActive ? message : `${message} They go live when the offer is published.` };
+  return { success: wasActive ? message : `${message} They go live when the offer is published.`, ...(warning ? { warning } : {}) };
 };
 
 function statusBadge(status: string, live: boolean) {
@@ -231,6 +239,9 @@ export default function OfferCodesPage() {
   const navigation = useNavigation();
   const [searchParams] = useSearchParams();
   const busy = navigation.state !== "idle";
+  const submit = useSubmit();
+  const listFormRef = useRef<HTMLFormElement>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const pages = Math.max(Math.ceil(data.total / data.pageSize), 1);
   const exportQuery = new URLSearchParams();
   if (data.search) exportQuery.set("q", data.search);
@@ -269,6 +280,21 @@ export default function OfferCodesPage() {
         <div className="b-banner b-banner-green b-mb-4" role="status">
           <div className="b-banner-body">
             <p className="b-banner-text" style={{ margin: 0 }}>{actionData.success}</p>
+          </div>
+        </div>
+      )}
+
+      {actionData && "warning" in actionData && actionData.warning && (
+        <div className="b-banner b-banner-orange b-mb-4" role="status">
+          <div className="b-banner-body">
+            <p className="b-banner-text" style={{ margin: 0 }}>{actionData.warning}</p>
+          </div>
+        </div>
+      )}
+      {data.publishPending && (
+        <div className="b-banner b-banner-blue b-mb-4" role="status">
+          <div className="b-banner-body">
+            <p className="b-banner-text" style={{ margin: 0 }}>Changes are being applied. Codes may take a minute to update in Shopify.</p>
           </div>
         </div>
       )}
@@ -343,7 +369,7 @@ export default function OfferCodesPage() {
               {data.codes.length === 0 ? (
                 <p className="b-text-sub">No codes yet. Create one or generate a batch.</p>
               ) : (
-                <Form method="POST">
+                <Form method="POST" ref={listFormRef} data-no-dirty>
                   <div className="b-table-wrap">
                     <table className="b-table">
                       <thead>
@@ -364,7 +390,10 @@ export default function OfferCodesPage() {
                               <code>{code.code}</code>
                               {code.oncePerCustomer && <span className="b-text-sm b-text-sub"> Â· 1 per customer</span>}
                             </td>
-                            <td>{statusBadge(code.status, code.live)}</td>
+                            <td>
+                              {statusBadge(code.status, code.live)}
+                              {code.syncPending && <span className="b-badge b-badge-blue"> Syncing with Shopify…</span>}
+                            </td>
                             <td>{code.usageCount.toLocaleString("en-US")}{code.usageLimit ? ` / ${code.usageLimit.toLocaleString("en-US")}` : ""}</td>
                             <td>{formatDate(code.startsAt)}</td>
                             <td>{formatDate(code.endsAt)}</td>
@@ -376,9 +405,24 @@ export default function OfferCodesPage() {
                   <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
                     <button type="submit" name="intent" value="deactivate" className="b-btn" disabled={busy}>Deactivate selected</button>
                     <button type="submit" name="intent" value="activate" className="b-btn" disabled={busy}>Activate selected</button>
-                    <button type="submit" name="intent" value="delete" className="b-btn" disabled={busy}>Delete selected</button>
+                    <button type="button" className="b-btn" disabled={busy} onClick={() => setConfirmingDelete(true)}>Delete selected</button>
                   </div>
                   <p className="b-help">Deleting is available once a deactivated code has been removed from Shopify.</p>
+                  <ConfirmDialog
+                    open={confirmingDelete}
+                    ariaLabel="Delete selected codes"
+                    title="Delete selected codes?"
+                    message="The selected codes will be permanently deleted. This cannot be undone."
+                    confirmLabel="Delete codes"
+                    onCancel={() => setConfirmingDelete(false)}
+                    onConfirm={() => {
+                      setConfirmingDelete(false);
+                      if (!listFormRef.current) return;
+                      const fd = new FormData(listFormRef.current);
+                      fd.set("intent", "delete");
+                      void submit(fd, { method: "POST" });
+                    }}
+                  />
                 </Form>
               )}
 

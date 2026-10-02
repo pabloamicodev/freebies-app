@@ -3,14 +3,20 @@ import { eq } from "drizzle-orm";
 import { discountCodes, discountCodeRedemptions, offers, type Db } from "@promo/db";
 import {
   CODE_TAKEN_MESSAGE,
+  MIXED_ONCE_PER_CUSTOMER_ERROR,
+  countDiscountCodes,
   createDiscountCode,
   createDiscountCodeBatch,
   deleteDiscountCodes,
   exportDiscountCodes,
+  getCodeNotices,
   listDiscountCodes,
   normalizeTypedCode,
   recordDiscountCodeRedemptions,
   setDiscountCodesStatus,
+  streamDiscountCodesCsv,
+  typedCodeWarning,
+  validateBatchEntropy,
 } from "./discount-codes.server.js";
 import { discountCodesToCsv, isCodeRedeemable } from "./discount-code-generation.js";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
@@ -108,6 +114,7 @@ describe("createDiscountCodeBatch", () => {
       shopId,
       offerId,
       spec: { prefix: "Z", length: 4, charset: "numbers", count: 1000 },
+      minGuessOdds: 1,
     });
     expect(result).toMatchObject({ ok: true, created: 1000 });
     const rows = await db.select({ code: discountCodes.code }).from(discountCodes).where(eq(discountCodes.offerId, offerId));
@@ -266,5 +273,205 @@ describe("recordDiscountCodeRedemptions (orders/paid)", () => {
     await recordDiscountCodeRedemptions(db, shopId, { id: 31, discount_codes: [{ code: "UNTOUCHED1" }] });
     const [after] = await db.select().from(offers).where(eq(offers.id, offerId));
     expect(after!.requiredDiscountCode).toBe(before!.requiredDiscountCode);
+  });
+});
+
+describe("typed-code length warning", () => {
+  it("warns on a code shorter than 6 characters but still creates it", async () => {
+    const offerId = await newOffer();
+    const short = await createDiscountCode(db, { shopId, offerId, code: "VIP" });
+    expect(short.ok && short.warning).toMatch(/shorter than 6 characters/);
+    expect(short.ok).toBe(true);
+    expect(typedCodeWarning("SIXSIX")).toBeNull();
+    expect(typedCodeWarning("FIVE5")).not.toBeNull();
+  });
+
+  it("gives no warning for a code of 6 or more characters", async () => {
+    const offerId = await newOffer();
+    const long = await createDiscountCode(db, { shopId, offerId, code: "BIGBONUS25" });
+    expect(long.ok && long.warning).toBeUndefined();
+  });
+});
+
+describe("batch entropy minimum", () => {
+  it("requires the random part to leave at most a one-in-a-million guessing chance", () => {
+    // 10^6 possibilities for 100 codes: one guess in 10,000 hits.
+    expect(validateBatchEntropy({ length: 6, charset: "numbers", count: 100 })).toMatch(/too easy to guess/);
+    // 32^8 ~ 1.1e12 for 5,000 codes: far above the floor.
+    expect(validateBatchEntropy({ length: 8, charset: "unambiguous", count: 5000 })).toBeNull();
+    // The boundary: exactly 1e6 possibilities per code passes.
+    expect(validateBatchEntropy({ length: 6, charset: "numbers", count: 1 })).toBeNull();
+    expect(validateBatchEntropy({ length: 6, charset: "numbers", count: 2 })).not.toBeNull();
+  });
+
+  it("is enforced when a batch is created", async () => {
+    const offerId = await newOffer();
+    const weak = await createDiscountCodeBatch(db, {
+      shopId,
+      offerId,
+      spec: { prefix: "WEAK", length: 6, charset: "numbers", count: 500 },
+    });
+    expect(weak).toMatchObject({ ok: false });
+    expect((await listDiscountCodes(db, shopId, offerId)).total).toBe(0);
+
+    const strong = await createDiscountCodeBatch(db, {
+      shopId,
+      offerId,
+      spec: { prefix: "OK-", length: 8, charset: "unambiguous", count: 50 },
+    });
+    expect(strong).toMatchObject({ ok: true, created: 50 });
+  });
+});
+
+describe("once-per-customer cannot be mixed within one offer", () => {
+  it("refuses a code whose setting differs from the offer's active codes", async () => {
+    const offerId = await newOffer();
+    expect((await createDiscountCode(db, { shopId, offerId, code: "ONCE-A", oncePerCustomer: true })).ok).toBe(true);
+
+    expect(await createDiscountCode(db, { shopId, offerId, code: "MULTI-A", oncePerCustomer: false })).toEqual({
+      ok: false,
+      error: MIXED_ONCE_PER_CUSTOMER_ERROR,
+    });
+    expect((await createDiscountCode(db, { shopId, offerId, code: "ONCE-B", oncePerCustomer: true })).ok).toBe(true);
+  });
+
+  it("applies the same rule the other way round and to generated batches", async () => {
+    const offerId = await newOffer();
+    await createDiscountCode(db, { shopId, offerId, code: "PLAIN-A" });
+    const batch = await createDiscountCodeBatch(db, {
+      shopId,
+      offerId,
+      oncePerCustomer: true,
+      spec: { prefix: "ONE-", length: 8, charset: "unambiguous", count: 5 },
+    });
+    expect(batch).toEqual({ ok: false, error: MIXED_ONCE_PER_CUSTOMER_ERROR });
+    expect(
+      await createDiscountCodeBatch(db, {
+        shopId,
+        offerId,
+        spec: { prefix: "PL-", length: 8, charset: "unambiguous", count: 5 },
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("ignores disabled codes, so the merchant can switch the whole offer over", async () => {
+    const offerId = await newOffer();
+    await createDiscountCode(db, { shopId, offerId, code: "OLD-ONCE", oncePerCustomer: true });
+    await setDiscountCodesStatus(db, shopId, offerId, { all: true }, "disabled");
+    expect((await createDiscountCode(db, { shopId, offerId, code: "NEW-MULTI", oncePerCustomer: false })).ok).toBe(true);
+  });
+});
+
+describe("getCodeNotices (exists and limited reads)", () => {
+  const gated = (offerId: string) => ({ id: offerId, requiresCode: true, requiredDiscountCode: null });
+
+  it("is inert when the offer is gated but no code is redeemable, and live when one is", async () => {
+    const offerId = await newOffer({ requiresCode: true });
+    expect((await getCodeNotices(db, shopId, gated(offerId))).inert).toBe(true);
+
+    await createDiscountCode(db, { shopId, offerId, code: "LIVE-NOTICE" });
+    expect((await getCodeNotices(db, shopId, gated(offerId))).inert).toBe(false);
+
+    await setDiscountCodesStatus(db, shopId, offerId, { all: true }, "disabled");
+    expect((await getCodeNotices(db, shopId, gated(offerId))).inert).toBe(true);
+  });
+
+  it("treats an expired, not-yet-started or used-up code as not redeemable", async () => {
+    const offerId = await newOffer({ requiresCode: true });
+    await db.insert(discountCodes).values([
+      { shopId, offerId, code: "NOTICE-EXPIRED", endsAt: new Date(Date.now() - 1000) },
+      { shopId, offerId, code: "NOTICE-FUTURE", startsAt: new Date(Date.now() + 86_400_000) },
+      { shopId, offerId, code: "NOTICE-FULL", usageLimit: 1, usageCount: 1 },
+    ]);
+    expect((await getCodeNotices(db, shopId, gated(offerId))).inert).toBe(true);
+  });
+
+  it("lists at most 20 collision notices without loading every code", async () => {
+    const offerId = await newOffer({ requiresCode: true });
+    await db.insert(discountCodes).values(
+      Array.from({ length: 25 }, (_, i) => ({
+        shopId,
+        offerId,
+        code: `NOTE-${i}`,
+        requestedCode: `ASKED-${i}`,
+        collisionNote: "Their discount",
+      })),
+    );
+    const notices = await getCodeNotices(db, shopId, gated(offerId));
+    expect(notices.collisions).toHaveLength(20);
+    expect(notices.collisions[0]).toMatchObject({ existingDiscount: "Their discount" });
+  });
+});
+
+describe("streamed CSV export and counting", () => {
+  async function readAll(stream: ReadableStream<Uint8Array>): Promise<{ text: string; chunks: number }> {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    let chunks = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return { text, chunks };
+      chunks += 1;
+      text += decoder.decode(value, { stream: true });
+    }
+  }
+
+  it("streams the same CSV the in-memory export builds, one page at a time", async () => {
+    const offerId = await newOffer();
+    await db.insert(discountCodes).values(
+      Array.from({ length: 2500 }, (_, i) => ({ shopId, offerId, code: `STREAM-${String(i).padStart(5, "0")}` })),
+    );
+
+    const { text, chunks } = await readAll(streamDiscountCodesCsv(db, shopId, offerId, {}, 1000));
+
+    expect(text).toBe(discountCodesToCsv(await exportDiscountCodes(db, shopId, offerId)));
+    expect(chunks).toBe(3);
+    expect(text.split("\n")[0]).toBe("code,status,starts_at,ends_at,usage_limit,once_per_customer,usage_count");
+    expect(text.trim().split("\n")).toHaveLength(2501);
+  });
+
+  it("handles an exact page multiple and an empty offer without a stray header or empty chunk", async () => {
+    const offerId = await newOffer();
+    expect((await readAll(streamDiscountCodesCsv(db, shopId, offerId))).text).toBe(
+      "code,status,starts_at,ends_at,usage_limit,once_per_customer,usage_count\n",
+    );
+
+    await db.insert(discountCodes).values(Array.from({ length: 4 }, (_, i) => ({ shopId, offerId, code: `EXACT-${i}` })));
+    const { text } = await readAll(streamDiscountCodesCsv(db, shopId, offerId, {}, 2));
+    expect(text.trim().split("\n")).toHaveLength(5);
+    expect(text.match(/^code,status/gm)).toHaveLength(1);
+  });
+
+  it("honours the same filters as the list", async () => {
+    const offerId = await newOffer();
+    await createDiscountCode(db, { shopId, offerId, code: "FILTER-A1" });
+    await createDiscountCode(db, { shopId, offerId, code: "FILTER-B1" });
+    const { text } = await readAll(streamDiscountCodesCsv(db, shopId, offerId, { search: "FILTER-A" }));
+    expect(text).toContain("FILTER-A1");
+    expect(text).not.toContain("FILTER-B1");
+  });
+
+  it("counts without loading rows", async () => {
+    const offerId = await newOffer();
+    await createDiscountCode(db, { shopId, offerId, code: "COUNT-1" });
+    await createDiscountCode(db, { shopId, offerId, code: "COUNT-2" });
+    expect(await countDiscountCodes(db, shopId, offerId)).toBe(2);
+    expect(await countDiscountCodes(db, shopId, offerId, { search: "COUNT-1" })).toBe(1);
+  });
+});
+
+describe("a code in flight to Shopify cannot be deleted", () => {
+  it("keeps a row flagged pending even though it is not marked synced yet", async () => {
+    const offerId = await newOffer();
+    const created = await createDiscountCode(db, { shopId, offerId, code: "INFLIGHT" });
+    if (!created.ok) throw new Error("setup");
+    await db.update(discountCodes).set({ shopifySyncPendingAt: new Date() }).where(eq(discountCodes.id, created.code.id));
+
+    expect(await deleteDiscountCodes(db, shopId, offerId, [created.code.id])).toBe(0);
+    expect((await listDiscountCodes(db, shopId, offerId)).total).toBe(1);
+
+    await db.update(discountCodes).set({ shopifySyncPendingAt: null }).where(eq(discountCodes.id, created.code.id));
+    expect(await deleteDiscountCodes(db, shopId, offerId, [created.code.id])).toBe(1);
   });
 });

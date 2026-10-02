@@ -43,7 +43,7 @@ export function IconPlus() {
   );
 }
 
-/** Duplicate/copy icon — exact Polaris SVG used by BOGOS */
+/** Duplicate/copy icon — exact Polaris SVG */
 export function IconCopy() {
   return (
     <svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor" focusable="false" aria-hidden="true">
@@ -53,7 +53,7 @@ export function IconCopy() {
   );
 }
 
-/** Trash icon — exact Polaris SVG used by BOGOS (red tone in actions column) */
+/** Trash icon — exact Polaris SVG (red tone in actions column) */
 export function IconTrash() {
   return (
     <svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor" focusable="false" aria-hidden="true">

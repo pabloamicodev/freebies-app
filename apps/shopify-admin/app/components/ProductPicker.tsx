@@ -5,6 +5,7 @@
  * Devuelve los GIDs de las variantes seleccionadas.
  */
 
+import { safeErrorMessage } from "../lib/safe-error.js";
 import { useEffect, useCallback, useRef } from "react";
 import { useDebouncedCallback } from "use-debounce";
 import { AccessibleModal } from "./AccessibleModal.js";
@@ -133,7 +134,7 @@ function ProductPickerContent({
           }
         } catch (syncError) {
           if (requestId === fetchRequestId.current) {
-            setPickerField("error", syncError instanceof Error ? syncError.message : "Catalog sync failed.");
+            setPickerField("error", safeErrorMessage(syncError, "Catalog sync failed.", [/^Sync status failed \(\d+\)$/]));
           }
         }
         setPickerField("syncing", false);

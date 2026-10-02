@@ -5,6 +5,8 @@
  */
 
 import { on, PromoEvents } from "../event-bus.js";
+import { formatMoney } from "../format.js";
+import { t } from "../i18n.js";
 import type { EvaluationResult, ProgressBarPayload } from "../types.js";
 
 class PromoProgressBar extends HTMLElement {
@@ -69,22 +71,20 @@ class PromoProgressBar extends HTMLElement {
     fill.style.width = `${pct}%`;
     fill.classList.toggle("pe-goal", payload.isGoalReached);
     wrap.setAttribute("aria-valuenow", String(pct));
-    this.setAttribute("aria-label", `Progress: ${pct}%`);
+    this.setAttribute("aria-label", t("progress", { percent: pct }));
   }
 
   private interpolateMessage(template: string, payload: ProgressBarPayload): string {
     const remainingCents = payload.targetCents - payload.currentCents;
     const remainingQty = (payload.targetQuantity ?? 0) - payload.currentQuantity;
-    const currency = this.getAttribute("currency") ?? "USD";
-
-    const formatMoney = (cents: number) =>
-      new Intl.NumberFormat(navigator.language, { style: "currency", currency }).format(cents / 100);
+    const currency = this.getAttribute("currency");
+    const money = (cents: number) => formatMoney(cents, currency);
 
     return template
-      .replaceAll("{{remaining_amount}}", formatMoney(Math.max(0, remainingCents)))
-      .replaceAll("{{remaining_quantity}}", String(Math.max(0, remainingQty)))
-      .replaceAll("{{current_amount}}", formatMoney(payload.currentCents))
-      .replaceAll("{{target_amount}}", formatMoney(payload.targetCents));
+      .replace(/\{\{remaining_amount\}\}/g, money(Math.max(0, remainingCents)))
+      .replace(/\{\{remaining_quantity\}\}/g, String(Math.max(0, remainingQty)))
+      .replace(/\{\{current_amount\}\}/g, money(payload.currentCents))
+      .replace(/\{\{target_amount\}\}/g, money(payload.targetCents));
   }
 }
 

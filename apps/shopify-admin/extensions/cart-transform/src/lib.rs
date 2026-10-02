@@ -271,19 +271,23 @@ fn expand_bundle_parent(line: &CartLine) -> Option<ExpandOperation> {
         return None;
     }
 
-    let components: Vec<BundleComponent> = serde_json::from_str(components_json).ok()?;
-    if components.is_empty() {
-        return None;
-    }
-
-    let bundle_title = attribute_value(&line.bundle_title);
-    let image_url = attribute_value(&line.bundle_image_url);
-
-    let expanded_cart_items: Option<Vec<ExpandedItem>> = components
+    // Parse per element so one malformed component is dropped instead of failing the whole line.
+    let raw: Vec<serde_json::Value> = serde_json::from_str(components_json).ok()?;
+    let expanded_cart_items: Vec<ExpandedItem> = raw
         .into_iter()
-        .map(|c| {
+        .filter_map(|value| {
+            let c: BundleComponent = serde_json::from_value(value).ok()?;
+            if !c.variant_id.starts_with(VARIANT_GID_PREFIX)
+                || c.variant_id.len() == VARIANT_GID_PREFIX.len()
+                || c.variant_id.len() > MAX_GID_LEN
+            {
+                return None;
+            }
+            if !(1..=MAX_COMPONENT_QUANTITY).contains(&c.quantity) {
+                return None;
+            }
             let quantity = c.quantity.checked_mul(line.quantity)?;
-            if !(1..=2000).contains(&quantity) {
+            if !(1..=MAX_COMPONENT_QUANTITY).contains(&quantity) {
                 return None;
             }
             Some(ExpandedItem {
@@ -293,7 +297,13 @@ fn expand_bundle_parent(line: &CartLine) -> Option<ExpandOperation> {
             })
         })
         .collect();
-    let expanded_cart_items = expanded_cart_items?;
+    if expanded_cart_items.is_empty() {
+        return None;
+    }
+
+    let bundle_title = attribute_value(&line.bundle_title);
+    let image_url = attribute_value(&line.bundle_image_url);
+    let image_url = if is_valid_image_url(image_url) { image_url } else { "" };
 
     Some(ExpandOperation {
         cart_line_id: line.id.clone(),
@@ -313,6 +323,19 @@ fn expand_bundle_parent(line: &CartLine) -> Option<ExpandOperation> {
 struct BundleComponent {
     variant_id: String,
     quantity: i32,
+}
+
+const VARIANT_GID_PREFIX: &str = "gid://shopify/ProductVariant/";
+const MAX_GID_LEN: usize = 128;
+const MAX_COMPONENT_QUANTITY: i32 = 2000;
+const MAX_IMAGE_URL_LEN: usize = 2048;
+
+/// Line properties are buyer-controlled: only plain https URLs of sane length become the bundle image.
+fn is_valid_image_url(url: &str) -> bool {
+    url.len() > "https://x".len()
+        && url.len() <= MAX_IMAGE_URL_LEN
+        && url.starts_with("https://")
+        && !url.bytes().any(|b| b <= b' ' || b == 0x7f || b == b'"' || b == b'<' || b == b'>' || b == 0x5c)
 }
 
 fn attribute_value(attribute: &Option<Attribute>) -> &str {
@@ -381,6 +404,78 @@ mod tests {
         let output = function(FunctionInput { cart });
 
         assert!(output.operations.is_empty());
+    }
+
+    fn expand_of(components: &str, image: Option<&str>, qty: i32) -> Option<ExpandOperation> {
+        let mut line = make_bundle_parent("line-1", components, qty);
+        line.bundle_image_url = image.map(|u| Attribute { value: Some(u.to_string()) });
+        function(FunctionInput { cart: Cart { lines: vec![line] } })
+            .operations
+            .into_iter()
+            .next()
+            .and_then(|op| op.expand)
+    }
+
+    const V1: &str = r#"{"variantId":"gid://shopify/ProductVariant/1","quantity":1}"#;
+
+    #[test]
+    fn valid_https_image_is_kept() {
+        let op = expand_of(&format!("[{V1}]"), Some("https://cdn.shopify.com/s/files/a.png?v=1"), 1).unwrap();
+        assert_eq!(op.image.unwrap().url, "https://cdn.shopify.com/s/files/a.png?v=1");
+    }
+
+    #[test]
+    fn invalid_images_are_dropped_but_bundle_still_expands() {
+        let long = format!("https://cdn.shopify.com/{}", "a".repeat(3000));
+        for bad in [
+            "http://cdn.shopify.com/a.png",
+            "javascript:alert(1)",
+            "data:image/png;base64,AAAA",
+            "//cdn.shopify.com/a.png",
+            "https://cdn.shopify.com/a b.png",
+            "https://",
+            long.as_str(),
+        ] {
+            let op = expand_of(&format!("[{V1}]"), Some(bad), 1).expect(bad);
+            assert!(op.image.is_none(), "{bad}");
+            assert_eq!(op.expanded_cart_items.len(), 1);
+        }
+    }
+
+    #[test]
+    fn invalid_components_are_dropped_not_fatal() {
+        let components = format!(
+            r#"[{V1},{{"variantId":"gid://shopify/Product/9","quantity":1}},{{"variantId":"gid://shopify/ProductVariant/2","quantity":0}},{{"variantId":"gid://shopify/ProductVariant/3","quantity":99999}},{{"variantId":"gid://shopify/ProductVariant/4","quantity":"x"}},{{"nope":1}},"junk",{{"variantId":"gid://shopify/ProductVariant/5","quantity":2}}]"#
+        );
+        let op = expand_of(&components, None, 1).unwrap();
+        let ids: Vec<&str> = op.expanded_cart_items.iter().map(|i| i.merchandise_id.as_str()).collect();
+        assert_eq!(ids, ["gid://shopify/ProductVariant/1", "gid://shopify/ProductVariant/5"]);
+    }
+
+    #[test]
+    fn all_components_invalid_or_bad_json_leaves_the_line_alone() {
+        assert!(expand_of(r#"[{"variantId":"evil","quantity":1}]"#, None, 1).is_none());
+        assert!(expand_of("not json", None, 1).is_none());
+        assert!(expand_of("{}", None, 1).is_none());
+    }
+
+    #[test]
+    fn component_overflowing_line_quantity_is_dropped() {
+        let components = r#"[{"variantId":"gid://shopify/ProductVariant/1","quantity":1000},{"variantId":"gid://shopify/ProductVariant/2","quantity":1}]"#;
+        let op = expand_of(components, None, 5).unwrap();
+        assert_eq!(op.expanded_cart_items.len(), 1);
+        assert_eq!(op.expanded_cart_items[0].quantity, 5);
+    }
+
+    #[test]
+    fn payload_roundtrip_through_the_wasm_input_shape() {
+        let payload = r#"{"cart":{"lines":[{"id":"l1","quantity":1,
+            "lineType":{"value":"bundle_parent"},
+            "bundleComponents":{"value":"[{\"variantId\":\"gid://shopify/ProductVariant/1\",\"quantity\":1}]"},
+            "bundleTitle":null,"bundleImageUrl":{"value":"http://insecure/x.png"},"sellingPlanAllocation":null}]}}"#;
+        let output: FunctionOutput = shopify_function::run_function_with_input(super::run, payload).unwrap();
+        let op = output.operations[0].expand.as_ref().unwrap();
+        assert!(op.image.is_none());
     }
 
     #[test]

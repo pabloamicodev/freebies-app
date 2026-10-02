@@ -180,3 +180,56 @@ export function resetSharedRedis(): void {
   restRedis = null;
   connection = null;
 }
+
+// ─── Small key/value helpers (best-effort cache + locks) ──────────────────────
+// All return null/false on any Redis problem so callers fall back to the DB.
+
+async function redisEval(script: string, key: string, ...args: Array<string | number>): Promise<unknown> {
+  const client = await getSharedRedis();
+  if (!client) return null;
+  try {
+    return await client.eval(script, 1, key, ...args);
+  } catch {
+    recordRedisFailure();
+    resetSharedRedis();
+    return null;
+  }
+}
+
+export async function redisGetString(key: string): Promise<string | null> {
+  const value = await redisEval("return redis.call('GET', KEYS[1])", key);
+  return typeof value === "string" ? value : null;
+}
+
+export async function redisSetString(key: string, value: string, ttlSeconds: number): Promise<void> {
+  await redisEval("return redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])", key, value, ttlSeconds);
+}
+
+export async function redisDelete(key: string): Promise<void> {
+  await redisEval("return redis.call('DEL', KEYS[1])", key);
+}
+
+/** SET NX PX. true = acquired, false = held elsewhere, null = Redis unavailable. */
+export async function redisAcquireLock(key: string, token: string, ttlMs: number): Promise<boolean | null> {
+  const result = await redisEval(
+    "if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'PX', ARGV[2]) then return 1 else return 0 end",
+    key,
+    token,
+    ttlMs,
+  );
+  return result === null ? null : Number(result) === 1;
+}
+
+export async function redisReleaseLock(key: string, token: string): Promise<void> {
+  await redisEval("if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0", key, token);
+}
+
+/** Fixed-window counter: O(1) per call, for high-volume limits where a sorted set per window is too heavy. */
+export async function redisIncrWindow(key: string, windowSeconds: number): Promise<number | null> {
+  const result = await redisEval(
+    "local c = redis.call('INCR', KEYS[1]) if c == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end return c",
+    key,
+    windowSeconds,
+  );
+  return result === null ? null : Number(result);
+}

@@ -546,6 +546,7 @@ export const RewardTargetSchema = z.object({
     .min(1)
     .optional(),
   discountPercentageOnGifts: z.number().min(0).max(100).optional(),
+  quizMaxDiscountPercent: z.number().min(0).max(100).optional(),
 });
 
 const ShopifyProductGidSchema = z
@@ -666,6 +667,8 @@ export const ProductDiscountTargetSchema = z.discriminatedUnion("scopeMode", [
       scopeMode: z.literal("quiz_bundle"),
       scope: z.literal("cart").default("cart"),
       discountPercentageOnGifts: z.number().min(0).max(100).default(100),
+      /** Upper bound (share of the paid lines' subtotal) on the discount the client-set quiz price can take. */
+      quizMaxDiscountPercent: z.number().min(0).max(100).optional(),
       ...TAGGED_REWARD_ALLOWLIST,
     })
     .strict(),
@@ -1070,6 +1073,7 @@ export const CompiledOfferSchema = z.object({
         selectionMode: z.enum(["all", "cheapest", "most_expensive"]).default("all"),
         countRule: z.enum(["all", "unique"]).default("all"),
         discountPercentageOnGifts: z.number().min(0).max(100).default(100),
+        quizMaxDiscountPercent: z.number().min(0).max(100).optional(),
         requiredLineAttribute: RequiredLineAttributeSchema.optional(),
       }),
     )
@@ -1116,5 +1120,9 @@ export const CompiledOfferSchema = z.object({
       }),
     )
     .default([]),
+  /** Product/order rewards only touch lines matching every pageUrlConditions entry (exclude mode). */
+  restrictToMatchedLines: z.literal(true).optional(),
+  /** The offer does not apply while any non-gift line misses a pageUrlConditions entry (reject mode). */
+  rejectUnmatchedLines: z.literal(true).optional(),
 });
 export type CompiledOffer = z.infer<typeof CompiledOfferSchema>;

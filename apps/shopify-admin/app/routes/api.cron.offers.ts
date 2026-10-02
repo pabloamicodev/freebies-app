@@ -2,18 +2,15 @@ import type { LoaderFunctionArgs } from "react-router";
 import { getDb } from "@promo/db";
 import { runOfferScheduler } from "../lib/offer-scheduling.server.js";
 import * as Sentry from "@sentry/node";
-import { waitUntil } from "@vercel/functions";
-import { isCronRequestAuthorized } from "../lib/cron-auth.server.js";
-import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
+import { runCron } from "../lib/cron-run.server.js";
 import { runDiscountCodeSchedule } from "../lib/discount-code-schedule.server.js";
-import { reconcileActiveShopDiscountNodes } from "../lib/discount-reconciliation.server.js";
+import { reconcileActiveShopDiscountNodes, runDiscountDriftRepair } from "../lib/discount-reconciliation.server.js";
+
+// Must be a literal (the Vercel preset parses it statically); cron-config.test.ts checks it equals CRON_JOBS.
+export const config = { maxDuration: 300 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  if (!isCronRequestAuthorized(request)) {
-    return apiError(request, { status: 401, code: "UNAUTHORIZED", message: "Unauthorized." });
-  }
-
-  try {
+  return runCron(request, "offers", async () => {
     const reconciliation = await reconcileActiveShopDiscountNodes();
     for (const failure of reconciliation.failures) {
       Sentry.captureMessage("Discount node reconciliation failed", {
@@ -38,20 +35,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
         extra: failure,
       });
     }
+    // Last: after the publishes above, so a shop they just fixed is not reported as drifted.
+    // runDiscountDriftRepair raises its own Sentry alerts (repaired / unresolved / failed).
+    const drift = await runDiscountDriftRepair();
     const hasFailures =
       reconciliation.failures.length > 0 ||
       result.failures.length > 0 ||
-      codeSchedule.failures.length > 0;
-    if (hasFailures) {
-      // These are captureMessage, not thrown exceptions, so nothing else on
-      // this request path flushes them — without this Vercel can freeze the
-      // function before the batch reaches Sentry.
-      waitUntil(Sentry.flush(2000));
-    }
-    return apiJson(request, { ok: !hasFailures, reconciliation, codeSchedule, ...result }, {
-      status: hasFailures ? 207 : 200,
-    });
-  } catch (err) {
-    return handleApiError(request, err, "cron.offers");
-  }
+      codeSchedule.failures.length > 0 ||
+      drift.unresolved.length > 0 ||
+      drift.failures.length > 0;
+    // These are captureMessage, not thrown exceptions, so runCron's check-in flush is
+    // what gets them out before Vercel freezes the function.
+    return { body: { ok: !hasFailures, reconciliation, codeSchedule, drift, ...result }, status: hasFailures ? 207 : 200 };
+  });
 }

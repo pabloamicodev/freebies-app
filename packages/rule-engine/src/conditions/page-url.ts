@@ -1,5 +1,5 @@
 import type { EligibilityReason } from "@promo/shared-types";
-import { ok, err, type Result } from "@promo/shared-types";
+import { ok, err, asciiLower, splitPageUrl, type Result } from "@promo/shared-types";
 
 export interface PageUrlConditionValue {
   /** URL path patterns to match against (OR logic — any match passes). */
@@ -37,15 +37,9 @@ export function evaluatePageUrl(
     });
   }
 
-  let pathname: string;
-  try {
-    pathname = new URL(requestedUrl).pathname;
-  } catch {
-    // If the URL is already a plain path (e.g. "/collections/sale"), use as-is
-    pathname = requestedUrl;
-  }
+  const { path: pathname } = splitPageUrl(requestedUrl);
 
-  const normalize = (s: string) => (caseSensitive ? s : s.toLowerCase());
+  const normalize = (s: string) => (caseSensitive ? s : asciiLower(s));
   const normalizedPathname = normalize(pathname);
 
   const matched = patterns.some((pattern) => {

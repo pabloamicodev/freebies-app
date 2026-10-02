@@ -16,9 +16,15 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Dependency audit (high and critical)
+        run: pnpm audit --audit-level=high
+      - name: Migration safety (expand-only DDL)
+        run: node scripts/check-migration-safety.mjs
+      - name: Function input query complexity (<= 30)
+        run: node scripts/check-function-query-cost.mjs
       - name: Typecheck
         run: pnpm -r typecheck
       - name: Unit tests with coverage
@@ -53,28 +59,15 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Validate complete Shopify app bundle
         run: pnpm shopify:build
-      - name: Check binary sizes
-        run: |
-          # Measure the optimized artifacts Shopify uploads, not the raw cargo output.
-          shopt -s nullglob
-          wasms=(apps/shopify-admin/extensions/*/target/wasm32-wasip1/release/*.wasm)
-          [ ${#wasms[@]} -gt 0 ] || { echo "❌ No optimized function binaries found"; exit 1; }
-          for wasm in "${wasms[@]}"; do
-            size=$(wc -c < "$wasm")
-            kb=$((size / 1024))
-            name=$(basename "$wasm")
-            echo "${name}: ${kb} KB"
-            if [ "$kb" -gt 256 ]; then
-              echo "❌ ${name} exceeds 256 KB limit"
-              exit 1
-            fi
-          done
-          echo "✅ All binaries within size limits"
+      - name: Check binary sizes (<= 249000 B)
+        run: node scripts/check-wasm-sizes.mjs
+      - name: Instruction budget
+        run: bash scripts/check-instruction-budget.sh
 
   # ── Storefront Bundle Size ───────────────────────────────────────────────────
   bundle-size:
@@ -85,13 +78,15 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Build storefront runtime
         run: pnpm --filter @promo/storefront-runtime build
       - name: Check bundle sizes
         run: node scripts/check-bundle-sizes.mjs
+      - name: Committed promo-engine.js is fresh
+        run: node scripts/check-storefront-freshness.mjs
 
   # ── ESLint ───────────────────────────────────────────────────────────────────
   lint:
@@ -102,7 +97,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
@@ -133,7 +128,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter shopify-admin exec playwright install --with-deps chromium

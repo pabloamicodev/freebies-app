@@ -1,8 +1,9 @@
 /** @jsxImportSource preact */
-import { useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { h } from "preact";
 import { render } from "preact";
 import { on, PromoEvents, publishAnalytics } from "../event-bus.js";
+import { t } from "../i18n.js";
 import type { EvaluationResult } from "../types.js";
 import type { JSX } from "preact";
 
@@ -94,6 +95,31 @@ function TodayOfferWidget({
   sessionId: string;
 }) {
   const [open, setOpen] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  // Dialog behaviour: move focus in on open, trap Tab, Escape closes, focus returns to the trigger.
+  useEffect(() => {
+    if (!open) return;
+    const panel = panelRef.current;
+    panel?.querySelector<HTMLElement>(".pe-today-close")?.focus();
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setOpen(false);
+        triggerRef.current?.focus();
+      } else if (e.key === "Tab" && panel) {
+        const target = trapTarget(panel, document.activeElement, e.shiftKey);
+        if (target) {
+          e.preventDefault();
+          target.focus();
+        }
+      }
+    }
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [open]);
+
   if (items.length === 0) return null;
 
   const posClass = config.position === "bottom_left" ? "pe-left" : "pe-right";
@@ -124,10 +150,10 @@ function TodayOfferWidget({
       style={{ "--pe-primary": config.primaryColor } as JSX.CSSProperties & Record<"--pe-primary", string>}
     >
       {open && (
-        <div class="pe-today-panel" role="dialog" aria-label="Today's offers">
+        <div class="pe-today-panel" role="dialog" aria-modal="true" aria-label={t("todayOffers")} ref={panelRef}>
           <div class="pe-today-panel-header">
-            <h3 class="pe-today-panel-title">Today's Offers</h3>
-            <button class="pe-today-close" onClick={() => setOpen(false)} aria-label="Close">✕</button>
+            <h3 class="pe-today-panel-title">{t("todayOffers")}</h3>
+            <button class="pe-today-close" onClick={() => { setOpen(false); triggerRef.current?.focus(); }} aria-label={t("close")}>✕</button>
           </div>
           <div class="pe-today-offers">
             {items.map((item) => (
@@ -137,7 +163,12 @@ function TodayOfferWidget({
                 onClick={() => handleItemClick(item)}
                 role="button"
                 tabIndex={0}
-                onKeyDown={(e) => { if (e.key === "Enter") handleItemClick(item); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handleItemClick(item);
+                  }
+                }}
               >
                 {item.imageUrl ? (
                   <img class="pe-today-offer-img" src={item.imageUrl} alt={item.title} loading="lazy" />
@@ -157,6 +188,7 @@ function TodayOfferWidget({
 
       <button
         class="pe-today-trigger"
+        ref={triggerRef}
         onClick={() => {
           setOpen((o) => !o);
           if (!open) {
@@ -169,10 +201,10 @@ function TodayOfferWidget({
         }}
         aria-expanded={open}
         aria-haspopup="dialog"
-        aria-label={`${items.length} offer${items.length !== 1 ? "s" : ""} available`}
+        aria-label={items.length === 1 ? t("offerAvailable") : t("offersAvailable", { count: items.length })}
       >
         <span class="pe-today-icon" aria-hidden="true">🎁</span>
-        {config.style === "icon_title" && <span>Today's Deals</span>}
+        {config.style === "icon_title" && <span>{t("todayDeals")}</span>}
         <span class="pe-today-dot" aria-hidden="true" />
       </button>
     </div>
@@ -180,6 +212,19 @@ function TodayOfferWidget({
 }
 
 let container: HTMLDivElement | null = null;
+
+const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+/** Tab/Shift+Tab wrap inside `panel`; returns the element that should take focus, or null to let the browser decide. */
+export function trapTarget(panel: ParentNode, active: Element | null, shift: boolean): HTMLElement | null {
+  const items = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
+  if (items.length === 0) return null;
+  const first = items[0]!;
+  const last = items[items.length - 1]!;
+  if (shift && (active === first || !active || !items.includes(active as HTMLElement))) return last;
+  if (!shift && (active === last || !active || !items.includes(active as HTMLElement))) return first;
+  return null;
+}
 
 export function initTodayOfferWidget(config: Partial<TodayOfferConfig>, sessionId: string) {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config };

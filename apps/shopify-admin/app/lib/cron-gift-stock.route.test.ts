@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const reconcile = vi.fn();
+vi.mock("./redis.server.js", () => ({
+  redisAcquireLock: vi.fn(async () => true),
+  redisReleaseLock: vi.fn(async () => undefined),
+}));
+vi.mock("@promo/db", () => ({ getDb: () => ({ execute: vi.fn(async () => []) }) }));
 vi.mock("./sync/gift-stock-reconcile.server.js", () => ({ reconcileAllShopsGiftVariants: reconcile }));
 
 const { loader } = await import("../routes/api.cron.gift-stock.js");
@@ -11,6 +16,7 @@ const call = (headers: Record<string, string> = {}) =>
 beforeEach(() => {
   process.env["CRON_SECRET"] = "s3cret";
   delete process.env["DISABLE_CRONS"];
+  delete process.env["CRONS_ENABLED"];
   reconcile.mockReset();
 });
 afterEach(() => {
@@ -29,8 +35,13 @@ describe("/api/cron/gift-stock", () => {
     delete process.env["CRON_SECRET"];
     expect((await call({ authorization: "Bearer s3cret" })).status).toBe(401);
     process.env["CRON_SECRET"] = "s3cret";
+    process.env["CRONS_ENABLED"] = "false";
+    const skipped = await call({ authorization: "Bearer s3cret" });
+    expect(skipped.status).toBe(200);
+    expect(await skipped.json()).toMatchObject({ skipped: "crons_disabled" });
+    delete process.env["CRONS_ENABLED"];
     process.env["DISABLE_CRONS"] = "1";
-    expect((await call({ authorization: "Bearer s3cret" })).status).toBe(401);
+    expect((await call({ authorization: "Bearer s3cret" })).status).toBe(200);
     expect(reconcile).not.toHaveBeenCalled();
   });
 

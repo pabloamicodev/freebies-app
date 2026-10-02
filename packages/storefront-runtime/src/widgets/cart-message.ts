@@ -5,6 +5,7 @@
  */
 
 import { on, PromoEvents } from "../event-bus.js";
+import { escapeHtml } from "../html.js";
 import type { EvaluationResult, CartMessagePayload } from "../types.js";
 
 class PromoCartMessage extends HTMLElement {
@@ -48,7 +49,7 @@ class PromoCartMessage extends HTMLElement {
     const color = typeColors[payload.type] ?? "#111";
 
     // Sanitize message — strip all HTML tags to prevent XSS
-    const safeMessage = this.sanitize(payload.message);
+    const safeMessage = escapeHtml(payload.message);
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -67,11 +68,6 @@ class PromoCartMessage extends HTMLElement {
     `;
   }
 
-  private sanitize(raw: string): string {
-    const div = document.createElement("div");
-    div.textContent = raw;
-    return div.innerHTML;
-  }
 }
 
 if (!customElements.get("promo-cart-message")) {

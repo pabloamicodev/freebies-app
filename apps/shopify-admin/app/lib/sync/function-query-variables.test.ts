@@ -7,7 +7,7 @@ const QUERY = resolve(__dirname, "../../../extensions/discount-function/src/cart
 
 describe("function config as input-query variables", () => {
   it("contains every variable the discount query declares, even when unused", () => {
-    const declared = [...readFileSync(QUERY, "utf8").matchAll(/\$(\w+)\s*:/g)].map((match) => match[1]!);
+    const declared = [...readFileSync(QUERY, "utf8").matchAll(/\$(\w+)\s*:\s*[A-Z[]/g)].map((match) => match[1]!);
     const serialized = JSON.parse(
       serializeFunctionConfig({ offers: [], shippingOffers: [], version: "1", compiledAt: "2026-01-01T00:00:00.000Z" }),
     ) as Record<string, unknown>;

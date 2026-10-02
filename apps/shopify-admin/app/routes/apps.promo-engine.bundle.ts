@@ -9,9 +9,10 @@ import {
   productCache,
   variantCache,
 } from "@promo/db";
-import { getSignedShop } from "../lib/app-proxy-auth.server.js";
+import { BundleQuerySchema, searchParamsObject } from "@promo/shared-types";
+import { getSignedShopCached } from "../lib/proxy-shop.server.js";
 import { proxyRateLimitResponse } from "../lib/proxy-rate-limit.server.js";
-import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
+import { apiError, apiJson, handleApiError, STOREFRONT_CACHE_CONTROL } from "../lib/api-response.server.js";
 import { isEligibleBundlePage } from "../lib/bundle-page-eligibility.js";
 
 // Storefront endpoints get their own Vercel function (a distinct route config
@@ -34,12 +35,24 @@ function sourceIds(value: unknown): string[] {
 
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
-    const { id: shopId, currencyCode, db } = await getSignedShop(request);
-    const limited = await proxyRateLimitResponse(request, "bundle", shopId, 120);
+    const { id: shopId, currencyCode, db } = await getSignedShopCached(request);
+    const limited = await proxyRateLimitResponse(request, "bundle", shopId, 120, 12_000);
     if (limited) return limited;
     const requestUrl = new URL(request.url);
-    const requestedOfferId = requestUrl.searchParams.get("offer_id")?.trim() || null;
-    const requestedPageUrl = requestUrl.searchParams.get("page_url")?.trim() || null;
+    // Blank params mean "not provided" (the theme block always sends both keys).
+    const raw = Object.fromEntries(
+      Object.entries(searchParamsObject(requestUrl.searchParams, ["offer_id", "page_url"])).map(([key, value]) => [key, value?.trim() || null]),
+    );
+    const query = BundleQuerySchema.safeParse(raw);
+    if (!query.success) {
+      return apiError(request, {
+        status: 400,
+        code: "INVALID_OFFER_ID",
+        message: "offer_id must be a valid UUID.",
+      });
+    }
+    const requestedOfferId = query.data.offer_id ?? null;
+    const requestedPageUrl = query.data.page_url ?? null;
     if (requestedOfferId && !UUID.test(requestedOfferId)) {
       return apiError(request, {
         status: 400,
@@ -72,7 +85,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .orderBy(asc(offers.priority), asc(offers.createdAt))
       .limit(1);
 
-    if (!bundle) return apiJson(request, {});
+    if (!bundle) return apiJson(request, {}, { headers: { "Cache-Control": STOREFRONT_CACHE_CONTROL } });
 
     const [steps, tiers, pageConditions] = await Promise.all([
       db
@@ -97,7 +110,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           ),
         ),
     ]);
-    if (!isEligibleBundlePage(requestedPageUrl, pageConditions)) return apiJson(request, {});
+    if (!isEligibleBundlePage(requestedPageUrl, pageConditions)) return apiJson(request, {}, { headers: { "Cache-Control": STOREFRONT_CACHE_CONTROL } });
     const selectedIds = [...new Set(steps.flatMap((step) => sourceIds(step.sourceConfig)))];
     const productIds = selectedIds.filter((id) => id.includes("/Product/"));
     const variantIds = selectedIds.filter((id) => id.includes("/ProductVariant/"));
@@ -192,7 +205,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         }),
         currency: currencyCode ?? "USD",
       },
-    });
+    }, { headers: { "Cache-Control": STOREFRONT_CACHE_CONTROL } });
   } catch (error) {
     return handleApiError(request, error, "apps.promo-engine.bundle");
   }

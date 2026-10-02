@@ -12,8 +12,21 @@
 
 import { getDb, appSettings } from "@promo/db";
 import { eq, and } from "drizzle-orm";
+import { redisDelete, redisGetString, redisSetString } from "./redis.server.js";
+
+// Read on every evaluate; cached 30s (D10) and dropped by setShadowMode.
+const SHADOW_CACHE_TTL_SECONDS = 30;
+const cacheKey = (shopId: string) => `shadow:v1:${shopId}`;
 
 export async function isShadowModeEnabled(shopId: string): Promise<boolean> {
+  const cached = await redisGetString(cacheKey(shopId));
+  if (cached === "1" || cached === "0") return cached === "1";
+  const enabled = await readShadowMode(shopId);
+  await redisSetString(cacheKey(shopId), enabled ? "1" : "0", SHADOW_CACHE_TTL_SECONDS);
+  return enabled;
+}
+
+async function readShadowMode(shopId: string): Promise<boolean> {
   const db = getDb();
   const rows = await db
     .select({ value: appSettings.value })
@@ -38,4 +51,5 @@ export async function setShadowMode(shopId: string, enabled: boolean): Promise<v
       target: [appSettings.shopId, appSettings.key],
       set: { value: JSON.stringify(enabled), updatedAt: new Date() },
     });
+  await redisDelete(cacheKey(shopId));
 }

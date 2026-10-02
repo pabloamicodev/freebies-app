@@ -72,7 +72,13 @@ async function findActiveOldAppDiscount(
   }
 }
 
+// Operator-only cutover tool: invisible to merchants unless ENABLE_MIGRATION_CONSOLE=true.
+function assertMigrationConsoleEnabled() {
+  if (process.env["ENABLE_MIGRATION_CONSOLE"] !== "true") throw new Response("Not found", { status: 404 });
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  assertMigrationConsoleEnabled();
   const { shopId, shopDomain, db, admin } = await getShopContext(request);
   const legacyPreset = getLegacyStorePreset(shopDomain);
   const oldAppDiscountTitle = OLD_APP_DISCOUNT_TITLES[shopDomain.toLowerCase()] ?? null;
@@ -105,6 +111,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
+  assertMigrationConsoleEnabled();
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   const { shopId, shopDomain, db } = context;
   const intent = formData.get("intent") as string;

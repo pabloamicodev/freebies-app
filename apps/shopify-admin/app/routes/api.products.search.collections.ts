@@ -5,18 +5,16 @@
 
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
-import { ApiError, apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
+import { CollectionSearchQuerySchema } from "@promo/shared-types";
+import { ApiError, apiJson, handleApiError, parseQuery } from "../lib/api-response.server.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   try {
     const { admin } = await authenticate.admin(request);
-    const url = new URL(request.url);
-    const q = (url.searchParams.get("q") ?? "").trim();
+    const { q, limit } = parseQuery(request, CollectionSearchQuerySchema, ["q", "limit"]);
     if (q.length > 100) {
-      return apiError(request, { status: 400, code: "QUERY_TOO_LONG", message: "Search query is too long." });
+      throw new ApiError({ status: 400, code: "QUERY_TOO_LONG", message: "Search query is too long." });
     }
-    const rawLimit = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);
-    const limit = Math.max(1, Math.min(Number.isNaN(rawLimit) ? 20 : rawLimit, 50));
 
   const query = `
     query GetCollections($query: String!, $first: Int!) {

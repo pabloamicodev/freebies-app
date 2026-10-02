@@ -7,6 +7,7 @@ import { recordDiscountCodeRedemptions } from "./discount-codes.server.js";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
 vi.mock("./offer-publish-flow.server.js", () => ({ publishShopConfig: vi.fn() }));
+vi.mock("./publish-pending.server.js", () => ({ markPublishPending: vi.fn(async () => undefined) }));
 
 let db: Db;
 let close: () => Promise<void>;
@@ -177,18 +178,83 @@ describe("orders/paid handler", () => {
     expect(publish).toHaveBeenCalledTimes(1);
   });
 
-  it("fails the webhook (so Shopify retries it) when the republish fails", async () => {
+  it("records the redemption before answering and republishes after the response, not inside it", async () => {
     const { publishShopConfig } = await import("./offer-publish-flow.server.js");
+    let release: (value: null) => void = () => undefined;
+    vi.mocked(publishShopConfig).mockReset();
+    vi.mocked(publishShopConfig).mockReturnValue(new Promise((resolve) => (release = resolve)));
+    const { handleDiscountCodeRedemptions } = await import("./webhooks/discount-code-redemption.server.js");
+    const shopId = await seedShop(db, "paid-deferred.myshopify.com");
+    const offerId = await seedOffer(db, shopId);
+    await db.insert(discountCodes).values({ shopId, offerId, code: "DEFER1", usageLimit: 1, shopifySyncedAt: new Date() });
+    const deferred: Promise<void>[] = [];
+
+    // The handler resolves while the republish is still pending: the webhook is not held up by it.
+    await handleDiscountCodeRedemptions(
+      db,
+      shopId,
+      "paid-deferred.myshopify.com",
+      { id: 30, discount_codes: [{ code: "DEFER1" }] },
+      { defer: (work) => void deferred.push(work) },
+    );
+
+    const [row] = await db.select().from(discountCodes).where(eq(discountCodes.code, "DEFER1"));
+    expect(row).toMatchObject({ usageCount: 1, status: "exhausted" });
+    expect(deferred).toHaveLength(1);
+    expect(publishShopConfig).toHaveBeenCalledTimes(1);
+
+    release(null);
+    await Promise.all(deferred);
+  });
+
+  it("does not fail the webhook when the deferred republish fails: the shop is parked as publish-pending for the cron", async () => {
+    const { publishShopConfig } = await import("./offer-publish-flow.server.js");
+    const { markPublishPending } = await import("./publish-pending.server.js");
+    vi.mocked(markPublishPending).mockClear();
+    vi.mocked(publishShopConfig).mockReset();
     vi.mocked(publishShopConfig).mockResolvedValue("Shopify is down");
     const { handleDiscountCodeRedemptions } = await import("./webhooks/discount-code-redemption.server.js");
     const shopId = await seedShop(db, "paid-fail.myshopify.com");
     const offerId = await seedOffer(db, shopId);
     await db.insert(discountCodes).values({ shopId, offerId, code: "LASTONE", usageLimit: 1, shopifySyncedAt: new Date() });
+    const deferred: Promise<void>[] = [];
 
     await expect(
-      handleDiscountCodeRedemptions(db, shopId, "paid-fail.myshopify.com", { id: 10, discount_codes: [{ code: "LASTONE" }] }),
-    ).rejects.toThrow("Shopify is down");
-    // The redemption itself is recorded, and the retry republishes again.
+      handleDiscountCodeRedemptions(
+        db,
+        shopId,
+        "paid-fail.myshopify.com",
+        { id: 10, discount_codes: [{ code: "LASTONE" }] },
+        { defer: (work) => void deferred.push(work) },
+      ),
+    ).resolves.toBeUndefined();
+    await Promise.all(deferred);
+
+    expect(markPublishPending).toHaveBeenCalledWith(shopId);
+    // The redemption itself is recorded, and a redelivery still reports the exhausted offer.
     expect((await recordDiscountCodeRedemptions(db, shopId, { id: 10, discount_codes: [{ code: "LASTONE" }] })).exhaustedOfferIds).toEqual([offerId]);
+  });
+
+  it("also parks the shop when the republish throws", async () => {
+    const { publishShopConfig } = await import("./offer-publish-flow.server.js");
+    const { markPublishPending } = await import("./publish-pending.server.js");
+    vi.mocked(markPublishPending).mockClear();
+    vi.mocked(publishShopConfig).mockReset();
+    vi.mocked(publishShopConfig).mockRejectedValue(new Error("socket hang up"));
+    const { handleDiscountCodeRedemptions } = await import("./webhooks/discount-code-redemption.server.js");
+    const shopId = await seedShop(db, "paid-throw.myshopify.com");
+    const offerId = await seedOffer(db, shopId);
+    await db.insert(discountCodes).values({ shopId, offerId, code: "BOOM1", usageLimit: 1, shopifySyncedAt: new Date() });
+    const deferred: Promise<void>[] = [];
+
+    await handleDiscountCodeRedemptions(
+      db,
+      shopId,
+      "paid-throw.myshopify.com",
+      { id: 40, discount_codes: [{ code: "BOOM1" }] },
+      { defer: (work) => void deferred.push(work) },
+    );
+    await expect(Promise.all(deferred)).resolves.toBeDefined();
+    expect(markPublishPending).toHaveBeenCalledWith(shopId);
   });
 });

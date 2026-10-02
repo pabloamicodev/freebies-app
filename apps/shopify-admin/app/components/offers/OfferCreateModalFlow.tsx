@@ -159,6 +159,26 @@ function SubscriptionSvg() {
   );
 }
 
+function BoosterSvg() {
+  return (
+    <svg
+      width="28"
+      height="28"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="white"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="9" width="18" height="6" rx="3" />
+      <path d="M3 12h11" strokeWidth="6" opacity="0.45" />
+      <path d="M13 3l-2 4h4l-2 4" />
+    </svg>
+  );
+}
+
 function CodesSvg() {
   return (
     <svg
@@ -455,6 +475,18 @@ const OFFER_CATALOG = [
     iconBorder: "rgba(234,88,12,0.22)",
     grad: CODES_GRAD,
     Icon: CodesSvg,
+  },
+  {
+    value: "booster",
+    name: "Booster",
+    tagline: "Surface active offers across the storefront",
+    examples: ["Today Offer widget", "Progress bar toward the next reward"],
+    accent: "#b45309",
+    glow: "rgba(180,83,9,0.18)",
+    iconBg: "rgba(180,83,9,0.10)",
+    iconBorder: "rgba(180,83,9,0.22)",
+    grad: "linear-gradient(135deg, #fbbf24 0%, #b45309 100%)",
+    Icon: BoosterSvg,
   },
 ];
 
@@ -1857,11 +1889,16 @@ export default function OfferCreateModalFlow({
   onClose,
   onChange,
 }: OfferCreateModalFlowProps) {
+  const navigate = useNavigate();
   if (modal === "type") {
     return (
       <Modal1TypeSelector
         onClose={onClose}
         onSelect={(type) => {
+          if (type === "booster") {
+            void navigate("/app/offers/new?type=booster");
+            return;
+          }
           if (
             type === "gift" ||
             type === "bundle" ||

@@ -118,10 +118,18 @@ function enqueue<T>(fn: () => Promise<T>): Promise<T> {
   });
 }
 
+/** Marks our own cart requests so the runtime's fetch patch doesn't re-evaluate for them (per request, not per time window). */
+export const OWN_REQUEST_HEADER = "X-Promo-Engine-Internal";
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
-    headers: { "Content-Type": "application/json", Accept: "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      [OWN_REQUEST_HEADER]: "1",
+      ...init?.headers,
+    },
   });
   if (!response.ok) {
     const body = await response.text();
@@ -180,7 +188,7 @@ export const AjaxCartAdapter = {
         body: JSON.stringify({
           id: line.key,
           quantity: line.quantity,
-          ...(line.properties ? { properties: withPromoMetadata(line.properties, undefined, null) } : {}),
+          ...(line.properties ? { properties: withPromoMetadata(line.properties, null, null) } : {}),
         }),
       }),
     );
@@ -233,6 +241,9 @@ declare global {
       currency?: { active: string; rate: string };
       shop?: string;
       country?: string;
+      customerPrivacy?: {
+        analyticsProcessingAllowed?: () => boolean;
+      };
       analytics?: {
         publish: (name: string, payload: Record<string, unknown>) => void;
       };

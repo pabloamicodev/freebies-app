@@ -2,34 +2,23 @@ import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
 import { getDb, shops, productCache, variantCache } from "@promo/db";
 import { and, desc, eq, ilike, inArray, ne, or } from "drizzle-orm";
-import { apiError, apiJson, handleApiError } from "../lib/api-response.server.js";
-
-const SHOPIFY_PRODUCT_GID = /^gid:\/\/shopify\/Product\/\d+$/;
-const SHOPIFY_VARIANT_GID = /^gid:\/\/shopify\/ProductVariant\/\d+$/;
+import { ProductSearchQuerySchema } from "@promo/shared-types";
+import { apiError, apiJson, handleApiError, parseQuery } from "../lib/api-response.server.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   try {
     const { session } = await authenticate.admin(request);
-    const url = new URL(request.url);
-    const q = (url.searchParams.get("q") ?? "").trim();
-    if (q.length > 100) {
-      return apiError(request, { status: 400, code: "QUERY_TOO_LONG", message: "Search query is too long." });
-    }
-    const idsParam = url.searchParams.get("ids");
-    const ids = idsParam ? [...new Set(idsParam.split(",").filter(Boolean))] : null;
-    if (ids && (ids.length > 200 || ids.some((id) => !SHOPIFY_PRODUCT_GID.test(id) && !SHOPIFY_VARIANT_GID.test(id)))) {
-      return apiError(request, { status: 400, code: "INVALID_PRODUCT_IDS", message: "Product identifiers are invalid." });
-    }
-    if (ids && ids.some((id) => SHOPIFY_PRODUCT_GID.test(id)) && ids.some((id) => SHOPIFY_VARIANT_GID.test(id))) {
-      return apiError(request, {
-        status: 400,
-        code: "MIXED_PRODUCT_ID_TYPES",
-        message: "Product and variant identifiers cannot be mixed.",
-      });
-    }
-    const limitRaw = parseInt(url.searchParams.get("limit") ?? "20", 10);
-    const limit = Math.max(1, Math.min(Number.isNaN(limitRaw) ? 20 : limitRaw, 200));
-    const includeVariants = url.searchParams.get("variants") === "true";
+    const { q, ids, limit, variants: includeVariants } = parseQuery(
+      request,
+      ProductSearchQuerySchema,
+      ["q", "ids", "limit", "variants"],
+      (message) =>
+        message.includes("too long")
+          ? "QUERY_TOO_LONG"
+          : message.includes("mixed")
+            ? "MIXED_PRODUCT_ID_TYPES"
+            : "INVALID_PRODUCT_IDS",
+    );
 
     const db = getDb();
     const shopRows = await db

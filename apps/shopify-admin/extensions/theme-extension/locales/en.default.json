@@ -1,1 +1,18 @@
-{}
+{
+  "widgets": {
+    "close": "Close",
+    "giftOffer": "View free gift offer",
+    "giftSliderClose": "Close gift selection",
+    "giftsUpdating": "Updating gifts",
+    "progress": "Progress: {{ percent }}%",
+    "todayOffers": "Today's offers",
+    "todayDeals": "Today's Deals",
+    "offersAvailable": "{{ count }} offers available",
+    "offerAvailable": "1 offer available",
+    "bundleSearch": "Search products in this step",
+    "bundleAdd": "Add {{ title }}",
+    "bundleRemove": "Remove {{ title }}",
+    "fbtAdd": "Add {{ count }} item(s) to cart for {{ price }}",
+    "volumeTier": "Buy {{ quantity }}+ for {{ price }} each"
+  }
+}

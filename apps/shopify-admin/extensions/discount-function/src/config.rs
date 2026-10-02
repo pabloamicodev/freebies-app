@@ -1,4 +1,6 @@
-use serde::Deserialize;
+pub use crate::page_match::CompiledPageUrlCondition;
+use serde::{Deserialize, Deserializer};
+use serde_json::value::RawValue;
 use std::collections::HashMap;
 
 /// Compiled config — parsed from the `promo_engine.function_config` metafield.
@@ -8,6 +10,7 @@ use std::collections::HashMap;
 #[cfg_attr(test, derive(PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledConfig {
+    #[serde(deserialize_with = "lenient_offers")]
     pub offers: Vec<CompiledOffer>,
     #[serde(default)]
     #[cfg_attr(feature = "code_gate", allow(dead_code))]
@@ -20,6 +23,15 @@ pub struct CompiledConfig {
     pub c3: Option<String>,
 }
 
+/// Offers are parsed one at a time: a malformed offer is skipped and the others still apply.
+fn lenient_offers<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<CompiledOffer>, D::Error> {
+    let raw = Vec::<Box<RawValue>>::deserialize(deserializer)?;
+    Ok(raw
+        .iter()
+        .filter_map(|offer| serde_json::from_str(offer.get()).ok())
+        .collect())
+}
+
 fn default_shipping_scope() -> String {
     "sitewide".to_string()
 }
@@ -28,80 +40,57 @@ fn default_anchor_quantity() -> i64 {
     1
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
-#[serde(rename_all = "camelCase")]
-pub struct CompiledOffer {
-    pub id: String,
-    pub version: i32,
-    pub offer_type: String,
-    #[serde(default)]
-    pub title: Option<String>,
-    pub priority: i32,
-    #[serde(default)]
-    pub stop_lower_priority: bool,
-    #[serde(default)]
-    pub required_product_ids: Vec<String>,
-    #[serde(default)]
-    pub required_variant_ids: Vec<String>,
-    #[serde(default)]
-    pub any_required_product_ids: Vec<String>,
-    #[serde(default)]
-    pub any_required_variant_ids: Vec<String>,
-    #[serde(default)]
-    pub excluded_product_ids: Vec<String>,
-    pub cart_value_threshold_cents: Option<i64>,
-    pub cart_value_max_cents: Option<i64>,
-    pub cart_quantity_threshold: Option<i64>,
-    pub cart_quantity_max: Option<i64>,
-    pub subscription_mode: Option<String>,
-    pub customer_order_count_min: Option<i64>,
-    pub customer_order_count_max: Option<i64>,
-    pub customer_amount_spent_min_cents: Option<i64>,
-    pub customer_amount_spent_max_cents: Option<i64>,
-    #[serde(default)]
-    pub required_customer_tags: Vec<String>,
-    #[serde(default)]
-    pub excluded_customer_tags: Vec<String>,
-    #[serde(default = "default_treat_guest_as_no_tags")]
-    pub treat_guest_as_no_tags: bool,
-    #[serde(default)]
-    pub include_country_codes: Vec<String>,
-    #[serde(default)]
-    pub exclude_country_codes: Vec<String>,
-    #[serde(default = "default_discount_type")]
-    pub discount_type: String,
-    #[serde(default = "default_discount_value")]
-    pub discount_value: f64,
-    #[serde(default = "default_currency_code")]
-    pub currency_code: String,
-    pub currency_overrides: Option<HashMap<String, i64>>,
-    pub max_currency_overrides: Option<HashMap<String, i64>>,
-    #[serde(default)]
-    pub requirements: Vec<CompiledRequirement>,
-    #[serde(default)]
-    pub gift_rewards: Vec<CompiledGiftReward>,
-    #[serde(default)]
-    pub product_rewards: Vec<CompiledProductReward>,
-    #[serde(default)]
-    pub order_rewards: Vec<CompiledOrderReward>,
-    #[serde(default)]
-    pub line_attribute_conditions: Vec<CompiledAttributeCondition>,
-    #[serde(default)]
-    pub cart_attribute_conditions: Vec<CompiledAttributeCondition>,
-    #[serde(default)]
-    pub page_url_conditions: Vec<CompiledPageUrlCondition>,
-    /// Product/order rewards only touch lines whose `_promo_page_url` matches
-    /// every page URL condition (the lines added from the campaign page).
-    #[serde(default)]
-    pub restrict_to_matched_lines: bool,
-    /// The offer does not apply while any non-gift line misses a page URL condition.
-    #[serde(default)]
-    pub reject_unmatched_lines: bool,
-    /// Truncated FNV-1a-64 hashes of this offer's discount codes (code-discount Function only).
-    #[cfg(feature = "code_gate")]
-    #[serde(default)]
-    pub code_hashes: Vec<String>,
+de_struct! {
+    #[derive(Debug, Clone)]
+    #[cfg_attr(test, derive(PartialEq))]
+    pub struct CompiledOffer {
+        "id" => id: String,
+        #[allow(dead_code)]
+        "version" => version: i32,
+        "offerType" => offer_type: String,
+        "title" => title: Option<String> = None,
+        "priority" => priority: i32,
+        "stopLowerPriority" => stop_lower_priority: bool = false,
+        "requiredProductIds" => required_product_ids: Vec<String> = Vec::new(),
+        "requiredVariantIds" => required_variant_ids: Vec<String> = Vec::new(),
+        "anyRequiredProductIds" => any_required_product_ids: Vec<String> = Vec::new(),
+        "anyRequiredVariantIds" => any_required_variant_ids: Vec<String> = Vec::new(),
+        "excludedProductIds" => excluded_product_ids: Vec<String> = Vec::new(),
+        "cartValueThresholdCents" => cart_value_threshold_cents: Option<i64> = None,
+        "cartValueMaxCents" => cart_value_max_cents: Option<i64> = None,
+        "cartQuantityThreshold" => cart_quantity_threshold: Option<i64> = None,
+        "cartQuantityMax" => cart_quantity_max: Option<i64> = None,
+        "subscriptionMode" => subscription_mode: Option<String> = None,
+        "customerOrderCountMin" => customer_order_count_min: Option<i64> = None,
+        "customerOrderCountMax" => customer_order_count_max: Option<i64> = None,
+        "customerAmountSpentMinCents" => customer_amount_spent_min_cents: Option<i64> = None,
+        "customerAmountSpentMaxCents" => customer_amount_spent_max_cents: Option<i64> = None,
+        "requiredCustomerTags" => required_customer_tags: Vec<String> = Vec::new(),
+        "excludedCustomerTags" => excluded_customer_tags: Vec<String> = Vec::new(),
+        "treatGuestAsNoTags" => treat_guest_as_no_tags: bool = default_treat_guest_as_no_tags(),
+        "includeCountryCodes" => include_country_codes: Vec<String> = Vec::new(),
+        "excludeCountryCodes" => exclude_country_codes: Vec<String> = Vec::new(),
+        "discountType" => discount_type: String = default_discount_type(),
+        "discountValue" => discount_value: f64 = default_discount_value(),
+        "currencyCode" => currency_code: String = default_currency_code(),
+        "currencyOverrides" => currency_overrides: Option<HashMap<String, i64>> = None,
+        "maxCurrencyOverrides" => max_currency_overrides: Option<HashMap<String, i64>> = None,
+        "requirements" => requirements: Vec<CompiledRequirement> = Vec::new(),
+        "giftRewards" => gift_rewards: Vec<CompiledGiftReward> = Vec::new(),
+        "productRewards" => product_rewards: Vec<CompiledProductReward> = Vec::new(),
+        "orderRewards" => order_rewards: Vec<CompiledOrderReward> = Vec::new(),
+        "lineAttributeConditions" => line_attribute_conditions: Vec<CompiledAttributeCondition> = Vec::new(),
+        "cartAttributeConditions" => cart_attribute_conditions: Vec<CompiledAttributeCondition> = Vec::new(),
+        "pageUrlConditions" => page_url_conditions: Vec<CompiledPageUrlCondition> = Vec::new(),
+        // Product/order rewards only touch lines whose `_promo_page_url` matches
+        // every page URL condition (the lines added from the campaign page).
+        "restrictToMatchedLines" => restrict_to_matched_lines: bool = false,
+        // The offer does not apply while any non-gift line misses a page URL condition.
+        "rejectUnmatchedLines" => reject_unmatched_lines: bool = false,
+        // Truncated FNV-1a-64 hashes of this offer's discount codes (code-discount Function only).
+        #[cfg(feature = "code_gate")]
+        "codeHashes" => code_hashes: Vec<String> = Vec::new(),
+    }
 }
 
 fn scale_cents(cents: &mut Option<i64>, rate: f64) {
@@ -177,112 +166,90 @@ fn default_subscription_mode() -> String {
     "any".to_string()
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
-#[serde(rename_all = "camelCase")]
-pub struct CompiledAttributeCondition {
-    pub key: String,
-    #[serde(default)]
-    pub value: Option<String>,
-    pub match_mode: String,
-    pub min_matching_quantity: i64,
+de_struct! {
+    #[derive(Debug, Clone)]
+    #[cfg_attr(test, derive(PartialEq))]
+    pub struct CompiledAttributeCondition {
+        "key" => key: String,
+        "value" => value: Option<String> = None,
+        "matchMode" => match_mode: String,
+        "minMatchingQuantity" => min_matching_quantity: i64,
+    }
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
-#[serde(rename_all = "camelCase")]
-pub struct CompiledGiftReward {
-    pub id: String,
-    #[serde(default)]
-    pub target_product_ids: Vec<String>,
-    #[serde(default)]
-    pub target_variant_ids: Vec<String>,
-    pub discount_type: String,
-    pub discount_value: f64,
-    pub max_quantity: i64,
+de_struct! {
+    #[derive(Debug, Clone)]
+    #[cfg_attr(test, derive(PartialEq))]
+    pub struct CompiledGiftReward {
+        "id" => id: String,
+        "targetProductIds" => target_product_ids: Vec<String> = Vec::new(),
+        "targetVariantIds" => target_variant_ids: Vec<String> = Vec::new(),
+        "discountType" => discount_type: String,
+        "discountValue" => discount_value: f64,
+        "maxQuantity" => max_quantity: i64,
+        // Customer-picked ("choose K of N") reward: its free units are capped across all N gifts.
+        "selectable" => selectable: bool = false,
+        // How many gifts the shopper may pick from a selectable reward (default 1).
+        "selectionCount" => selection_count: Option<i64> = None,
+    }
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
-#[serde(rename_all = "camelCase")]
-pub struct CompiledRequirement {
-    pub product_id: Option<String>,
-    pub variant_id: Option<String>,
-    pub track_mode: String,
-    pub min_quantity: i64,
-    pub max_quantity: Option<i64>,
+de_struct! {
+    #[derive(Debug, Clone)]
+    #[cfg_attr(test, derive(PartialEq))]
+    pub struct CompiledRequirement {
+        "productId" => product_id: Option<String> = None,
+        "variantId" => variant_id: Option<String> = None,
+        "trackMode" => track_mode: String,
+        "minQuantity" => min_quantity: i64,
+        "maxQuantity" => max_quantity: Option<i64> = None,
+    }
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
-#[serde(rename_all = "camelCase")]
-pub struct CompiledProductReward {
-    #[serde(default)]
-    pub target_product_ids: Vec<String>,
-    #[serde(default)]
-    pub target_variant_ids: Vec<String>,
-    pub discount_type: String,
-    pub discount_value: f64,
-    pub max_quantity: Option<i64>,
-    pub line_quantity_equals: Option<i64>,
-    pub max_units_total: Option<i64>,
-    #[serde(default)]
-    pub max_units_per_product: Option<i64>,
-    #[serde(default)]
-    pub max_units_per_line: Option<i64>,
-    #[serde(default)]
-    pub max_units_per_variant: Option<i64>,
-    #[serde(default = "default_subscription_mode")]
-    pub subscription_mode: String,
-    #[serde(default = "default_shipping_scope")]
-    pub scope_mode: String,
-    pub required_offer_id: Option<String>,
-    pub required_line_attribute_value: Option<String>,
-    #[serde(default)]
-    pub required_anchor_variant_ids: Vec<String>,
-    #[serde(default = "default_anchor_quantity")]
-    pub required_anchor_min_quantity: i64,
-    #[serde(default)]
-    pub requires_anchor_subscription: bool,
-    #[serde(default)]
-    pub price_tiers: Vec<ProductPriceTier>,
-    #[serde(default)]
-    pub quantity_tiers: Vec<ProductDiscountTier>,
-    #[serde(default = "default_selection_mode")]
-    pub selection_mode: String,
-    #[serde(default = "default_count_rule")]
-    pub count_rule: String,
-    #[serde(default = "default_gift_percentage")]
-    pub discount_percentage_on_gifts: f64,
-    #[serde(default)]
-    pub required_line_attribute: Option<RequiredLineAttribute>,
+de_struct! {
+    #[derive(Debug, Clone)]
+    #[cfg_attr(test, derive(PartialEq))]
+    pub struct CompiledProductReward {
+        "targetProductIds" => target_product_ids: Vec<String> = Vec::new(),
+        "targetVariantIds" => target_variant_ids: Vec<String> = Vec::new(),
+        "discountType" => discount_type: String,
+        "discountValue" => discount_value: f64,
+        "maxQuantity" => max_quantity: Option<i64> = None,
+        "lineQuantityEquals" => line_quantity_equals: Option<i64> = None,
+        "maxUnitsTotal" => max_units_total: Option<i64> = None,
+        "maxUnitsPerProduct" => max_units_per_product: Option<i64> = None,
+        "maxUnitsPerLine" => max_units_per_line: Option<i64> = None,
+        "maxUnitsPerVariant" => max_units_per_variant: Option<i64> = None,
+        "subscriptionMode" => subscription_mode: String = default_subscription_mode(),
+        "scopeMode" => scope_mode: String = default_shipping_scope(),
+        "requiredOfferId" => required_offer_id: Option<String> = None,
+        "requiredLineAttributeValue" => required_line_attribute_value: Option<String> = None,
+        "requiredAnchorVariantIds" => required_anchor_variant_ids: Vec<String> = Vec::new(),
+        "requiredAnchorMinQuantity" => required_anchor_min_quantity: i64 = default_anchor_quantity(),
+        "requiresAnchorSubscription" => requires_anchor_subscription: bool = false,
+        "priceTiers" => price_tiers: Vec<ProductPriceTier> = Vec::new(),
+        "quantityTiers" => quantity_tiers: Vec<ProductDiscountTier> = Vec::new(),
+        "selectionMode" => selection_mode: String = default_selection_mode(),
+        "countRule" => count_rule: String = default_count_rule(),
+        "discountPercentageOnGifts" => discount_percentage_on_gifts: f64 = default_gift_percentage(),
+        "requiredLineAttribute" => required_line_attribute: Option<RequiredLineAttribute> = None,
+        // Quiz bundles only: upper bound (share of the paid lines' subtotal) on the discount derived
+        // from the client-set `_quiz_target_cents`. None means no extra cap.
+        "quizMaxDiscountPercent" => quiz_max_discount_percent: Option<f64> = None,
+    }
 }
 
 fn default_gift_percentage() -> f64 {
     100.0
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
-#[serde(rename_all = "camelCase")]
-pub struct RequiredLineAttribute {
-    pub key: String,
-    pub value: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
-#[serde(rename_all = "camelCase")]
-pub struct CompiledPageUrlCondition {
-    #[serde(default)]
-    pub patterns: Vec<String>,
-    pub match_mode: String,
-    #[serde(default)]
-    pub case_sensitive: bool,
-    pub param_name: Option<String>,
-    pub param_value: Option<String>,
-    /// Some("landing"): match `_promo_landing_url` (session UTM landing) instead of `_promo_page_url`.
-    pub source: Option<String>,
+de_struct! {
+    #[derive(Debug, Clone)]
+    #[cfg_attr(test, derive(PartialEq))]
+    pub struct RequiredLineAttribute {
+        "key" => key: String,
+        "value" => value: String,
+    }
 }
 
 fn default_count_rule() -> String {
@@ -293,45 +260,48 @@ fn default_selection_mode() -> String {
     "all".to_string()
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
-#[serde(rename_all = "camelCase")]
-pub struct ProductPriceTier {
-    pub quantity: i64,
-    pub target_price_per_unit: f64,
+de_struct! {
+    #[derive(Debug, Clone)]
+    #[cfg_attr(test, derive(PartialEq))]
+    pub struct ProductPriceTier {
+        "quantity" => quantity: i64,
+        "targetPricePerUnit" => target_price_per_unit: f64,
+    }
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
-#[serde(rename_all = "camelCase")]
-pub struct ProductDiscountTier {
-    pub minimum_quantity: i64,
-    pub maximum_quantity: Option<i64>,
-    pub discount_type: String,
-    pub discount_value: f64,
-    pub discounted_quantity: Option<i64>,
+de_struct! {
+    #[derive(Debug, Clone)]
+    #[cfg_attr(test, derive(PartialEq))]
+    pub struct ProductDiscountTier {
+        "minimumQuantity" => minimum_quantity: i64,
+        "maximumQuantity" => maximum_quantity: Option<i64> = None,
+        "discountType" => discount_type: String,
+        "discountValue" => discount_value: f64,
+        "discountedQuantity" => discounted_quantity: Option<i64> = None,
+    }
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
-#[serde(rename_all = "camelCase")]
-pub struct CompiledOrderReward {
-    pub discount_type: String,
-    pub discount_value: f64,
-    #[serde(default)]
-    pub subtotal_tiers: Vec<OrderSubtotalDiscountTier>,
+de_struct! {
+    #[derive(Debug, Clone)]
+    #[cfg_attr(test, derive(PartialEq))]
+    pub struct CompiledOrderReward {
+        "discountType" => discount_type: String,
+        "discountValue" => discount_value: f64,
+        "subtotalTiers" => subtotal_tiers: Vec<OrderSubtotalDiscountTier> = Vec::new(),
+    }
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
-#[serde(rename_all = "camelCase")]
-pub struct OrderSubtotalDiscountTier {
-    pub minimum_subtotal_cents: Option<i64>,
-    pub maximum_subtotal_cents: Option<i64>,
-    pub minimum_quantity: Option<i64>,
-    pub maximum_quantity: Option<i64>,
-    pub discount_type: String,
-    pub discount_value: f64,
+de_struct! {
+    #[derive(Debug, Clone)]
+    #[cfg_attr(test, derive(PartialEq))]
+    pub struct OrderSubtotalDiscountTier {
+        "minimumSubtotalCents" => minimum_subtotal_cents: Option<i64> = None,
+        "maximumSubtotalCents" => maximum_subtotal_cents: Option<i64> = None,
+        "minimumQuantity" => minimum_quantity: Option<i64> = None,
+        "maximumQuantity" => maximum_quantity: Option<i64> = None,
+        "discountType" => discount_type: String,
+        "discountValue" => discount_value: f64,
+    }
 }
 
 pub fn is_zero_decimal(currency_code: &str) -> bool {
@@ -384,5 +354,38 @@ mod tests {
         }
         assert_eq!(full.offers.len(), 13);
         assert_eq!(compact, full);
+    }
+    fn parse(offers: &str) -> CompiledConfig {
+        serde_json::from_str(&format!(r#"{{"offers":{offers}}}"#)).unwrap()
+    }
+
+    #[test]
+    fn map_only_deserializer_applies_defaults_and_ignores_unknown_keys() {
+        let config = parse(r#"[{"id":"a","version":1,"offerType":"gift","priority":2,"future":{"x":[1]},
+            "giftRewards":[{"id":"g","discountType":"free","discountValue":100,"maxQuantity":1,"extra":null}]}]"#);
+        let offer = &config.offers[0];
+        assert_eq!((offer.discount_type.as_str(), offer.discount_value), ("free", 100.0));
+        assert!(offer.treat_guest_as_no_tags && offer.title.is_none() && offer.required_product_ids.is_empty());
+        assert_eq!(offer.gift_rewards[0].selection_count, None);
+    }
+
+    #[test]
+    fn malformed_offers_are_skipped_not_fatal() {
+        // missing required `priority`; wrong type for `priority`; array instead of object; a valid one
+        let config = parse(
+            r#"[{"id":"a","version":1,"offerType":"gift"},
+                {"id":"b","version":1,"offerType":"gift","priority":"1"},
+                [1,2,3],
+                {"id":"ok","version":1,"offerType":"gift","priority":1,"cartValueMaxCents":null}]"#,
+        );
+        assert_eq!(config.offers.iter().map(|o| o.id.as_str()).collect::<Vec<_>>(), ["ok"]);
+    }
+
+    #[test]
+    fn nested_required_field_missing_skips_the_whole_offer() {
+        let config = parse(
+            r#"[{"id":"a","version":1,"offerType":"gift","priority":1,"requirements":[{"trackMode":"any"}]}]"#,
+        );
+        assert!(config.offers.is_empty());
     }
 }

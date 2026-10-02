@@ -1,7 +1,19 @@
-import { analyticsEvents, auditLogs, cartMutationLogs, shops, webhookDeliveries, type Db } from "@promo/db";
+import {
+  analyticsEvents,
+  auditLogs,
+  cartMutationLogs,
+  discountCodeRedemptions,
+  gdprExports,
+  shops,
+  webhookDeliveries,
+  type Db,
+} from "@promo/db";
 import { and, eq, inArray, or } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import type { SessionStorageLike } from "./app-uninstalled.server.js";
+
+/** How long a generated customers/data_request export stays downloadable. */
+export const GDPR_EXPORT_RETENTION_DAYS = 30;
 
 export interface CustomerGdprPayload {
   customer?: {
@@ -59,21 +71,52 @@ export async function handleCustomersDataRequest(
     ));
 
   const cartTokens = Array.from(new Set(events.flatMap((event) => event.cartToken ? [event.cartToken] : [])));
-  const mutationLogs = cartTokens.length > 0
-    ? await db
-        .select()
-        .from(cartMutationLogs)
-        .where(and(eq(cartMutationLogs.shopId, shopId), inArray(cartMutationLogs.cartToken, cartTokens)))
-    : [];
+  const [mutationLogs, redemptions] = await Promise.all([
+    cartTokens.length > 0
+      ? db
+          .select()
+          .from(cartMutationLogs)
+          .where(and(eq(cartMutationLogs.shopId, shopId), inArray(cartMutationLogs.cartToken, cartTokens)))
+      : Promise.resolve([]),
+    db
+      .select()
+      .from(discountCodeRedemptions)
+      .where(and(eq(discountCodeRedemptions.shopId, shopId), inArray(discountCodeRedemptions.customerId, customerIds))),
+  ]);
 
-  // Keep the audit trail PII-minimal. The underlying rows remain available for
-  // the compliance export until Shopify sends CUSTOMERS_REDACT; duplicating the
-  // full customer payload here would create an easy-to-miss second PII store.
+  // The export itself: everything this app holds about the customer, as JSON the merchant can
+  // download from the admin and hand to the customer. It expires, and customers/redact deletes it.
+  const requestedAt = new Date();
+  const [stored] = await db
+    .insert(gdprExports)
+    .values({
+      shopId,
+      customerId,
+      requestedAt,
+      expiresAt: new Date(requestedAt.getTime() + GDPR_EXPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000),
+      payload: {
+        exportVersion: 1,
+        shop,
+        requestedAt: requestedAt.toISOString(),
+        customer: { id: customerId, email: customerEmail || null },
+        ordersRequested: payload.orders_requested ?? [],
+        data: {
+          analyticsEvents: events,
+          cartMutationLogs: mutationLogs,
+          discountCodeRedemptions: redemptions,
+        },
+      },
+    })
+    .returning({ id: gdprExports.id });
+
+  // Keep the audit trail PII-minimal: counts and the export id, never the customer payload.
   const exportSummary = {
-    requestedAt: new Date().toISOString(),
+    requestedAt: requestedAt.toISOString(),
+    exportId: stored?.id ?? null,
     orderCount: payload.orders_requested?.length ?? 0,
     analyticsEventCount: events.length,
     cartMutationLogCount: mutationLogs.length,
+    discountCodeRedemptionCount: redemptions.length,
   };
 
   await db.insert(auditLogs).values({
@@ -143,6 +186,16 @@ export async function handleCustomersRedact(
         inArray(auditLogs.entityId, customerIds),
       ));
 
+    // The stored data-request export holds this customer's data too. Redemption rows stay (the
+    // code's usage accounting needs them) but lose the customer link.
+    await tx
+      .delete(gdprExports)
+      .where(and(eq(gdprExports.shopId, shopId), inArray(gdprExports.customerId, customerIds)));
+    await tx
+      .update(discountCodeRedemptions)
+      .set({ customerId: null })
+      .where(and(eq(discountCodeRedemptions.shopId, shopId), inArray(discountCodeRedemptions.customerId, customerIds)));
+
     if (cartTokens.length > 0 || sessionIds.length > 0) {
       const conditions = [
         ...(cartTokens.length > 0 ? [inArray(cartMutationLogs.cartToken, cartTokens)] : []),
@@ -167,10 +220,33 @@ export async function handleShopRedact(
   sessionStorage: SessionStorageLike,
   shopId: string | null,
   shop: string,
+  triggeredAt: string | null = null,
 ): Promise<void> {
   if (!shopId) {
     console.warn(`GDPR SHOP_REDACT: shop not found — ${shop}`);
     return;
+  }
+
+  // Shopify sends shop/redact 48 h after the uninstall. A merchant who reinstalled in between is a
+  // live customer again: wiping their shop row would delete their offers and codes. Redact only a
+  // shop that is still uninstalled and was not reinstalled after the request was issued.
+  const [current] = await db
+    .select({ isActive: shops.isActive, installedAt: shops.installedAt, uninstalledAt: shops.uninstalledAt })
+    .from(shops)
+    .where(eq(shops.id, shopId))
+    .limit(1);
+  if (current) {
+    const issuedAt = triggeredAt ? new Date(triggeredAt) : null;
+    const reinstalledSince =
+      issuedAt !== null && !Number.isNaN(issuedAt.getTime()) && current.installedAt > issuedAt;
+    if (current.isActive || current.uninstalledAt === null || reinstalledSince) {
+      console.warn(`GDPR SHOP_REDACT skipped: shop is active or was reinstalled, shop=${shop}`);
+      Sentry.captureMessage("GDPR shop redact skipped: shop is active or was reinstalled", {
+        level: "warning",
+        tags: { gdpr: "shop_redact_skipped", shop },
+      });
+      return;
+    }
   }
 
   try {

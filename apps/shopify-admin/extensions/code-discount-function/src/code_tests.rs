@@ -136,12 +136,36 @@ fn offer_without_code_hashes_is_not_eligible() {
 }
 
 #[test]
-fn accept_is_emitted_even_when_conditions_fail() {
-    // Cart is $50 but the offer needs $100: code is valid, so it must not show as invalid.
-    let result = run_with(&[offer("o1", &["9e35947c8d25"], 10000)], &["SUMMER10"], "50.00");
+fn accept_is_emitted_only_when_the_offers_conditions_pass() {
+    // Cart is $50 but the offer needs $100: nothing can follow, so the code is not accepted.
+    let offers = [offer("o1", &["9e35947c8d25"], 10000)];
+    let result = run_with(&offers, &["SUMMER10"], "50.00");
+    assert!(accepted(&result).is_empty());
+    assert!(result.operations.is_empty());
+    let result = run_with(&offers, &["SUMMER10"], "150.00");
     assert_eq!(accepted(&result), vec!["SUMMER10"]);
-    assert!(!has_discount(&result));
-    assert_eq!(result.operations.len(), 1);
+    assert!(has_discount(&result));
+}
+
+#[test]
+fn code_is_accepted_when_a_blocked_offer_qualifies_but_a_lower_one_does_not() {
+    // o2 (priority 200) is blocked by o1's stop (priority 100); its conditions still pass,
+    // so its own code is accepted while o1's cart threshold keeps o1 itself out.
+    let stopper = offer("o1", &["e8cf18d732cc"], 0).replace("\"stopLowerPriority\":false", "\"stopLowerPriority\":true");
+    let blocked = offer("o2", &["9e35947c8d25"], 0).replace("\"priority\":100", "\"priority\":200");
+    let result = run_with(&[stopper, blocked], &["SUMMER10", "VIP-2026"], "50.00");
+    let mut codes = accepted(&result);
+    codes.sort();
+    assert_eq!(codes, vec!["SUMMER10", "VIP-2026"]);
+    let discounted: usize = result
+        .operations
+        .iter()
+        .map(|op| match op {
+            CartOperation::ProductDiscountsAdd(add) => add.candidates.len(),
+            _ => 0,
+        })
+        .sum();
+    assert_eq!(discounted, 1, "only the stopper applies");
 }
 
 /// Two lines: one added from an Amazon-UTM landing page, one from elsewhere.
@@ -211,9 +235,9 @@ fn code_with_matching_utm_discounts_only_the_line_added_from_the_landing() {
 }
 
 #[test]
-fn code_without_a_utm_match_is_accepted_but_discounts_nothing() {
+fn code_without_a_utm_match_is_not_accepted_and_discounts_nothing() {
     let result = run_amazon_cart(&["SUMMER10"], "facebook");
-    assert_eq!(accepted(&result), vec!["SUMMER10"]);
+    assert!(accepted(&result).is_empty());
     assert!(!has_discount(&result));
 }
 

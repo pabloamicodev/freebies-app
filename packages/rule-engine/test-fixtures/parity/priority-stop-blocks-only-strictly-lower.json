@@ -1,0 +1,207 @@
+{
+  "name": "priority-stop-blocks-only-strictly-lower",
+  "description": "A stop offer at priority 10 blocks priority 20 but not another priority-10 offer.",
+  "source": {
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "type": "discount",
+        "priority": 10,
+        "stopLowerPriority": true,
+        "conditions": [],
+        "rewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "rewardType": "product_discount",
+            "discountType": "percentage",
+            "value": {
+              "amount": 10,
+              "currencyCode": "USD"
+            },
+            "target": {
+              "productIds": [
+                "gid://shopify/Product/1"
+              ]
+            },
+            "quantity": null,
+            "isAutoAdd": false,
+            "isCustomerSelectable": false,
+            "trackMode": "variant",
+            "sortOrder": 0,
+            "label": null
+          }
+        ]
+      },
+      {
+        "id": "bbbbbbbb-0000-4000-8000-000000000002",
+        "version": 1,
+        "type": "discount",
+        "priority": 10,
+        "stopLowerPriority": false,
+        "conditions": [],
+        "rewards": [
+          {
+            "id": "bbbbbbbb-reward",
+            "rewardType": "product_discount",
+            "discountType": "percentage",
+            "value": {
+              "amount": 10,
+              "currencyCode": "USD"
+            },
+            "target": {
+              "productIds": [
+                "gid://shopify/Product/2"
+              ]
+            },
+            "quantity": null,
+            "isAutoAdd": false,
+            "isCustomerSelectable": false,
+            "trackMode": "variant",
+            "sortOrder": 0,
+            "label": null
+          }
+        ]
+      },
+      {
+        "id": "cccccccc-0000-4000-8000-000000000003",
+        "version": 1,
+        "type": "discount",
+        "priority": 20,
+        "stopLowerPriority": false,
+        "conditions": [],
+        "rewards": [
+          {
+            "id": "cccccccc-reward",
+            "rewardType": "product_discount",
+            "discountType": "percentage",
+            "value": {
+              "amount": 10,
+              "currencyCode": "USD"
+            },
+            "target": {
+              "productIds": [
+                "gid://shopify/Product/3"
+              ]
+            },
+            "quantity": null,
+            "isAutoAdd": false,
+            "isCustomerSelectable": false,
+            "trackMode": "variant",
+            "sortOrder": 0,
+            "label": null
+          }
+        ]
+      }
+    ]
+  },
+  "config": {
+    "c1": "_promo_engine_unused",
+    "c2": "_promo_engine_unused",
+    "c3": "_promo_engine_unused",
+    "customerTags": [],
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "offerType": "discount",
+        "priority": 10,
+        "stopLowerPriority": true,
+        "productRewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "targetProductIds": [
+              "gid://shopify/Product/1"
+            ],
+            "discountType": "percentage",
+            "discountValue": 10
+          }
+        ]
+      },
+      {
+        "id": "bbbbbbbb-0000-4000-8000-000000000002",
+        "version": 1,
+        "offerType": "discount",
+        "priority": 10,
+        "productRewards": [
+          {
+            "id": "bbbbbbbb-reward",
+            "targetProductIds": [
+              "gid://shopify/Product/2"
+            ],
+            "discountType": "percentage",
+            "discountValue": 10
+          }
+        ]
+      },
+      {
+        "id": "cccccccc-0000-4000-8000-000000000003",
+        "version": 1,
+        "offerType": "discount",
+        "priority": 20,
+        "productRewards": [
+          {
+            "id": "cccccccc-reward",
+            "targetProductIds": [
+              "gid://shopify/Product/3"
+            ],
+            "discountType": "percentage",
+            "discountValue": 10
+          }
+        ]
+      }
+    ],
+    "version": "parity",
+    "compiledAt": "2026-01-01T00:00:00.000Z"
+  },
+  "cart": {
+    "currency": "USD",
+    "presentmentCurrencyRate": 1,
+    "country": "US",
+    "customerTags": [],
+    "enteredCodes": [],
+    "lines": [
+      {
+        "id": "l1",
+        "variantId": "gid://shopify/ProductVariant/1",
+        "productId": "gid://shopify/Product/1",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": null
+      },
+      {
+        "id": "l2",
+        "variantId": "gid://shopify/ProductVariant/2",
+        "productId": "gid://shopify/Product/2",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": null
+      },
+      {
+        "id": "l3",
+        "variantId": "gid://shopify/ProductVariant/3",
+        "productId": "gid://shopify/Product/3",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": null
+      }
+    ]
+  },
+  "expected": {
+    "qualifiedOfferIds": [
+      "aaaaaaaa-0000-4000-8000-000000000001",
+      "bbbbbbbb-0000-4000-8000-000000000002"
+    ],
+    "discountedLineIds": {
+      "aaaaaaaa-0000-4000-8000-000000000001": [
+        "l1"
+      ],
+      "bbbbbbbb-0000-4000-8000-000000000002": [
+        "l2"
+      ]
+    }
+  }
+}

@@ -1,4 +1,5 @@
-import { useLoaderData, Form, useActionData } from "react-router";
+import { useLoaderData, Form, useActionData, Link } from "react-router";
+import { supportMailto } from "../lib/support.js";
 import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
@@ -268,7 +269,7 @@ export default function SettingsPage() {
       </div>
 
       {actionData && "success" in actionData && (
-        <div className="b-banner b-banner-green" style={{ marginBottom: 16 }}>
+        <div className="b-banner b-banner-green" role="status" style={{ marginBottom: 16 }}>
           <span className="b-banner-icon">✓</span>
           <div className="b-banner-body">
             <div className="b-banner-title">Settings saved successfully</div>
@@ -289,9 +290,9 @@ export default function SettingsPage() {
         <div className="b-card" style={{ marginBottom: 0 }}>
 
           {/* ── General ───────────────────────────────────────── */}
-          <Section title="General" desc="Manage BOGOS general settings.">
+          <Section title="General" desc="Manage general settings.">
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-              <span className="b-text-sm b-text-bold">BOGOS Status</span>
+              <span className="b-text-sm b-text-bold">Promo Engine status</span>
               <span className={`b-badge ${appEnabled ? "b-badge-green" : "b-badge-gray"}`}>
                 {appEnabled ? "Activated" : "Deactivated"}
               </span>
@@ -306,7 +307,7 @@ export default function SettingsPage() {
               <input type="hidden" name="app_enabled" value={appEnabled ? "on" : ""} />
             </div>
             <p className="b-text-sm b-text-sub" style={{ margin: "0 0 16px" }}>
-              Do not deactivate BOGOS status if you currently have active offers.
+              Do not deactivate Promo Engine if you currently have active offers.
             </p>
 
             <div style={{ marginBottom: 12 }}>
@@ -355,9 +356,11 @@ export default function SettingsPage() {
                   ⚠️ If you want to change the gift logic mechanism, it is recommended to contact support for help.
                 </div>
               </div>
-              <a href="mailto:support@secomapp.com" className="b-btn b-btn-secondary b-btn-sm" style={{ flexShrink: 0, marginLeft: 12 }}>
-                Contact support
-              </a>
+              {supportMailto() && (
+                <a href={supportMailto()!} className="b-btn b-btn-secondary b-btn-sm" style={{ flexShrink: 0, marginLeft: 12 }}>
+                  Contact support
+                </a>
+              )}
             </div>
           </Section>
 
@@ -513,6 +516,11 @@ export default function SettingsPage() {
           </Section>
 
           {/* ── Reset ────────────────────────────────────────── */}
+          {/* ── Privacy ──────────────────────────────────────── */}
+          <Section title="Customer data requests" desc="Download exports for customers who asked Shopify for their data.">
+            <Link to="/app/settings/data-requests" className="b-btn b-btn-secondary">View data requests</Link>
+          </Section>
+
           <Section title="Reset application data" desc="Reset the application to disable it and clean up.">
             <p className="b-text-sm b-text-sub" style={{ margin: "0 0 12px" }}>
               To uninstall or disable the app, remove the app blocks from your theme and contact support if you need a full data cleanup.
@@ -523,12 +531,14 @@ export default function SettingsPage() {
                 <p className="b-banner-text">A full reset stops all offers and removes app-created discount configuration.</p>
               </div>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <a href="mailto:support@secomapp.com" className="b-btn b-btn-secondary">Contact support</a>
-              <a href="mailto:support@secomapp.com?subject=Reset%20application%20data" className="b-btn b-btn-danger">
-                Request reset
-              </a>
-            </div>
+            {supportMailto() && (
+              <div style={{ display: "flex", gap: 8 }}>
+                <a href={supportMailto()!} className="b-btn b-btn-secondary">Contact support</a>
+                <a href={supportMailto("Reset application data")!} className="b-btn b-btn-danger">
+                  Request reset
+                </a>
+              </div>
+            )}
           </Section>
         </div>
 
@@ -538,12 +548,6 @@ export default function SettingsPage() {
         </div>
       </Form>
 
-      {/* Terms */}
-      <div style={{ marginTop: 16, textAlign: "center" }}>
-        <a href="https://secomapp.com/terms" className="b-btn b-btn-plain b-text-sm b-text-sub" style={{ textDecoration: "underline" }}>
-          BOGOS Terms and Conditions ↗
-        </a>
-      </div>
     </div>
   );
 }

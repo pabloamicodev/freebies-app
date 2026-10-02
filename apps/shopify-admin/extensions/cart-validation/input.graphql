@@ -14,7 +14,6 @@ query CartValidationInput {
       lineType: attribute(key: "_promo_engine_line_type") { value }
       offerId: attribute(key: "_promo_engine_offer_id") { value }
       rewardId: attribute(key: "_promo_engine_reward_id") { value }
-      offerVersion: attribute(key: "_promo_engine_offer_version") { value }
       cost {
         amountPerQuantity {
           amount
@@ -26,18 +25,19 @@ query CartValidationInput {
           amount
         }
         discountApplication {
-          metafield(namespace: "promo_engine", key: "function_config") {
+          metafield(namespace: "$app:promo_engine", key: "function_config") {
             value
           }
         }
       }
     }
   }
+  presentmentCurrencyRate
   buyerJourney {
     step
   }
   validationNode: validation {
-    metafield(namespace: "promo_engine", key: "validation_config") {
+    metafield(namespace: "$app:promo_engine", key: "validation_config") {
       value
     }
   }

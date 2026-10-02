@@ -127,6 +127,13 @@
       "when": 1790870829484,
       "tag": "0017_variant_cache_inventory_tracked",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1790939275734,
+      "tag": "0018_wsc_publish_pending_sync_queue_gdpr",
+      "breakpoints": true
     }
   ]
 }

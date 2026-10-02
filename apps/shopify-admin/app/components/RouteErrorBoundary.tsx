@@ -34,7 +34,10 @@ export function RouteErrorBoundary() {
             {devDetail}
           </pre>
         )}
-        <Link to="/app/offers" className="b-btn b-btn-primary">Go to Offers</Link>
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+          <button type="button" className="b-btn b-btn-secondary" onClick={() => window.location.reload()}>Try again</button>
+          <Link to="/app/offers" className="b-btn b-btn-primary">Go to Offers</Link>
+        </div>
       </div>
     </div>
   );

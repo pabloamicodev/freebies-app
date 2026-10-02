@@ -708,12 +708,15 @@ export default function NewBundleOfferPage() {
                       <input
                         id="internalName"
                         className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`}
+                        aria-invalid={fieldErrors.internalName ? true : undefined}
+                        aria-describedby={fieldErrors.internalName ? "internalName-error" : undefined}
                         name="internalName"
                         value={internalName}
                         onChange={(e) => setInternalName(e.target.value)}
                         autoComplete="off"
                         placeholder="Internal use only"
                       />
+                      {fieldErrors.internalName && <div id="internalName-error" className="b-help-error" role="alert">{fieldErrors.internalName}</div>}
                       <div className="b-help">Internal use only</div>
                     </div>
 
@@ -736,12 +739,15 @@ export default function NewBundleOfferPage() {
                           <input
                             id="publicTitle"
                             className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`}
+                            aria-invalid={fieldErrors.publicTitle ? true : undefined}
+                            aria-describedby={fieldErrors.publicTitle ? "publicTitle-error" : undefined}
                             name="publicTitle"
                             value={publicTitle}
                             onChange={(e) => setPublicTitle(e.target.value)}
                             autoComplete="off"
                             placeholder="e.g. Savings bundle"
                           />
+                          {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
                         </div>
                         <div>
                           <label className="b-label" htmlFor="description">
@@ -820,8 +826,8 @@ export default function NewBundleOfferPage() {
                     className="b-card-body"
                     style={{ display: "flex", flexDirection: "column", gap: 14 }}
                   >
-                    <div>
-                      <div className="b-label">Bundle item level</div>
+                    <fieldset className="b-radio-group">
+                      <legend className="b-label">Bundle item level</legend>
                       <div
                         style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}
                       >
@@ -870,7 +876,7 @@ export default function NewBundleOfferPage() {
                           </div>
                         </label>
                       </div>
-                    </div>
+                    </fieldset>
 
                     <div>
                       <button
@@ -1004,12 +1010,15 @@ export default function NewBundleOfferPage() {
                       <input
                         id="internalName"
                         className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`}
+                        aria-invalid={fieldErrors.internalName ? true : undefined}
+                        aria-describedby={fieldErrors.internalName ? "internalName-error" : undefined}
                         name="internalName"
                         value={internalName}
                         onChange={(e) => setInternalName(e.target.value)}
                         autoComplete="off"
                         placeholder="Internal use only"
                       />
+                      {fieldErrors.internalName && <div id="internalName-error" className="b-help-error" role="alert">{fieldErrors.internalName}</div>}
                       <div className="b-help">Internal use only</div>
                     </div>
                     <div
@@ -1030,11 +1039,14 @@ export default function NewBundleOfferPage() {
                           <input
                             id="publicTitle"
                             className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`}
+                            aria-invalid={fieldErrors.publicTitle ? true : undefined}
+                            aria-describedby={fieldErrors.publicTitle ? "publicTitle-error" : undefined}
                             name="publicTitle"
                             value={publicTitle}
                             onChange={(e) => setPublicTitle(e.target.value)}
                             autoComplete="off"
                           />
+                          {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
                         </div>
                         <div>
                           <label className="b-label" htmlFor="description">
@@ -1468,12 +1480,15 @@ export default function NewBundleOfferPage() {
                       <input
                         id="internalName"
                         className={`b-input${fieldErrors.internalName ? " b-input-error" : ""}`}
+                        aria-invalid={fieldErrors.internalName ? true : undefined}
+                        aria-describedby={fieldErrors.internalName ? "internalName-error" : undefined}
                         name="internalName"
                         value={internalName}
                         onChange={(e) => setInternalName(e.target.value)}
                         autoComplete="off"
                         placeholder="Internal use only"
                       />
+                      {fieldErrors.internalName && <div id="internalName-error" className="b-help-error" role="alert">{fieldErrors.internalName}</div>}
                     </div>
                     <div
                       className="b-card"
@@ -1493,11 +1508,14 @@ export default function NewBundleOfferPage() {
                           <input
                             id="publicTitle"
                             className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`}
+                            aria-invalid={fieldErrors.publicTitle ? true : undefined}
+                            aria-describedby={fieldErrors.publicTitle ? "publicTitle-error" : undefined}
                             name="publicTitle"
                             value={publicTitle}
                             onChange={(e) => setPublicTitle(e.target.value)}
                             autoComplete="off"
                           />
+                          {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
                         </div>
                         <div>
                           <label className="b-label" htmlFor="description">
@@ -1554,7 +1572,8 @@ export default function NewBundleOfferPage() {
                 </div>
 
                 {/* Layout selector */}
-                <div className="b-grid-2">
+                <fieldset className="b-radio-group b-grid-2">
+<legend className="b-sr-only">Bundle page layout</legend>
                   <label
                     className="rd-style-091"
                     style={{
@@ -1615,7 +1634,7 @@ export default function NewBundleOfferPage() {
                       Multiple steps on one page
                     </span>
                   </label>
-                </div>
+                </fieldset>
 
                 {/* Estructura del paquete */}
                 <div className="b-card">
@@ -1895,7 +1914,7 @@ export default function NewBundleOfferPage() {
                       <div>
                         <div className="b-checkbox-label">Add a custom discount code</div>
                         <div className="b-checkbox-help">
-                          If unchecked, Bogos will apply its default discount code automatically.
+                          If unchecked, Promo Engine generates the discount code automatically.
                         </div>
                       </div>
                     </label>

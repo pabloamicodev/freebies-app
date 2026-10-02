@@ -26,6 +26,7 @@ const config: Linter.Config[] = [
       "**/test-results/**",
       "**/.shopify/**",
       "**/.react-router/**",
+      "**/.claude/**",
     ],
   },
   // Type-aware rules for source files included in tsconfigs

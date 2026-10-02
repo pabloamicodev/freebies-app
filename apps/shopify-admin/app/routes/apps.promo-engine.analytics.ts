@@ -1,8 +1,10 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { getDb, analyticsEvents, offers, widgets } from "@promo/db";
 import { and, eq, inArray } from "drizzle-orm";
-import { getSignedShop } from "../lib/app-proxy-auth.server.js";
-import { checkRateLimit, getClientIp } from "../lib/rate-limit.server.js";
+import { AnalyticsRequestSchema, analyticsEventName, normalizeAnalyticsRequest } from "@promo/shared-types";
+import { getSignedShopCached } from "../lib/proxy-shop.server.js";
+import { checkRateLimit } from "../lib/rate-limit.server.js";
+import { sanitizeAnalyticsProperties } from "../lib/analytics-properties.server.js";
 import { apiError, apiJson, handleApiError, readJsonBody } from "../lib/api-response.server.js";
 
 // Storefront endpoints get their own Vercel function (a distinct route config
@@ -10,14 +12,8 @@ import { apiError, apiJson, handleApiError, readJsonBody } from "../lib/api-resp
 export const config = { maxDuration: 15 };
 
 const MAX_ANALYTICS_BODY_BYTES = 64 * 1024;
-const PUBLIC_ANALYTICS_EVENTS = new Set([
-  "page_viewed",
-  "product_viewed",
-  "cart_viewed",
-  "checkout_started",
-  "order_placed",
-]);
-const PROMO_ANALYTICS_EVENT = /^promo_engine:[a-z0-9][a-z0-9_:-]{0,79}$/;
+const ANALYTICS_SHOP_LIMIT_PER_MINUTE = 12_000;
+const ANALYTICS_SESSION_LIMIT_PER_MINUTE = 120;
 
 function uuidOrNull(value: unknown): string | null {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
@@ -39,8 +35,14 @@ export async function action({ request }: ActionFunctionArgs) {
     return apiError(request, { status: 405, code: "METHOD_NOT_ALLOWED", message: "Method not allowed.", headers: { Allow: "POST" } });
   }
   try {
-    const { id: shopId, loggedInCustomerId } = await getSignedShop(request);
-    const rateLimit = await checkRateLimit(`analytics:${shopId}:${getClientIp(request)}`, { limit: 300, windowMs: 60_000 });
+    const { id: shopId, loggedInCustomerId } = await getSignedShopCached(request);
+    // Never keyed by IP (it is Shopify's behind the app proxy): shop-wide ceiling first,
+    // per-session budget once the body is parsed.
+    const rateLimit = await checkRateLimit(`analytics:${shopId}`, {
+      limit: ANALYTICS_SHOP_LIMIT_PER_MINUTE,
+      windowMs: 60_000,
+      fixedWindow: true,
+    });
     if (!rateLimit.ok) {
       return apiError(request, {
         status: 429,
@@ -51,40 +53,39 @@ export async function action({ request }: ActionFunctionArgs) {
       });
     }
 
-    const body = await readJsonBody<Record<string, unknown>>(request, {
-      maxBytes: MAX_ANALYTICS_BODY_BYTES,
-      tooLargeMessage: "Analytics payload is too large (max 64 KB).",
-      invalidMessage: "Analytics payload must be valid JSON.",
-    });
+    const parsed = AnalyticsRequestSchema.safeParse(
+      await readJsonBody<unknown>(request, {
+        maxBytes: MAX_ANALYTICS_BODY_BYTES,
+        tooLargeMessage: "Analytics payload is too large (max 64 KB).",
+        invalidMessage: "Analytics payload must be valid JSON.",
+      }),
+    );
+    if (!parsed.success) {
+      return apiError(request, {
+        status: 400,
+        code: "INVALID_ANALYTICS_PAYLOAD",
+        message: parsed.error.issues[0]?.message ?? "Invalid analytics payload.",
+      });
+    }
+    // The web pixel sends a batch ({ events: [...] }); the storefront runtime sends a single event object.
+    const events = normalizeAnalyticsRequest(parsed.data);
+    const eventNames = events.map((event) => analyticsEventName(event)!);
 
-    // The web pixel sends a batch ({ events: [...] }); the storefront runtime
-    // sends a single event object directly — normalize to a list either way.
-    const rawEvents = Array.isArray(body["events"])
-      ? (body["events"] as unknown[])
-      : [body];
-    if (rawEvents.length === 0) {
-      return apiError(request, { status: 400, code: "EMPTY_EVENT_BATCH", message: "No events provided." });
-    }
-    if (rawEvents.length > 20) {
-      return apiError(request, {
-        status: 400,
-        code: "EVENT_BATCH_TOO_LARGE",
-        message: "Too many events in one batch (max 20).",
+    const sessionKey = boundedString(events[0]!["session_id"] ?? events[0]!["sessionId"], 200);
+    if (sessionKey) {
+      const sessionLimit = await checkRateLimit(`analytics:${shopId}:s:${sessionKey}`, {
+        limit: ANALYTICS_SESSION_LIMIT_PER_MINUTE,
+        windowMs: 60_000,
       });
-    }
-    if (rawEvents.some((event) => typeof event !== "object" || event === null || Array.isArray(event))) {
-      return apiError(request, { status: 400, code: "INVALID_EVENT", message: "Every event must be a JSON object." });
-    }
-    const events = rawEvents as Record<string, unknown>[];
-    const eventNames = events.map(readEventName);
-    const invalidEventIndexes = eventNames.flatMap((name, index) => isPublicEventName(name) ? [] : [index]);
-    if (invalidEventIndexes.length > 0) {
-      return apiError(request, {
-        status: 400,
-        code: "INVALID_EVENT_NAME",
-        message: "One or more analytics event names are not accepted.",
-        details: { invalidEventIndexes },
-      });
+      if (!sessionLimit.ok) {
+        return apiError(request, {
+          status: 429,
+          code: "RATE_LIMITED",
+          message: "Too many analytics events.",
+          retryable: true,
+          retryAfterSeconds: sessionLimit.retryAfterSeconds,
+        });
+      }
     }
 
     const trustedCustomerId = loggedInCustomerId && /^\d+$/.test(loggedInCustomerId)
@@ -117,7 +118,6 @@ export async function action({ request }: ActionFunctionArgs) {
       const eventName = eventNames[index]!;
       const rawOfferId = uuidOrNull(event["offer_id"] ?? event["offerId"]);
       const rawWidgetId = uuidOrNull(event["widget_id"] ?? event["widgetId"]);
-      const { customer_id: _customerId, customerId: _customerIdCamel, ...safeProperties } = event;
 
       return {
         shopId,
@@ -127,7 +127,7 @@ export async function action({ request }: ActionFunctionArgs) {
         customerId: trustedCustomerId,
         offerId: rawOfferId && validOfferIds.has(rawOfferId) ? rawOfferId : null,
         widgetId: rawWidgetId && validWidgetIds.has(rawWidgetId) ? rawWidgetId : null,
-        properties: safeProperties,
+        properties: sanitizeAnalyticsProperties(event),
       };
     });
 
@@ -136,15 +136,6 @@ export async function action({ request }: ActionFunctionArgs) {
   } catch (err) {
     return handleApiError(request, err, "apps.promo-engine.analytics");
   }
-}
-
-function readEventName(event: Record<string, unknown>): string | null {
-  const value = event["event"] ?? event["event_name"] ?? event["eventName"];
-  return typeof value === "string" ? value : null;
-}
-
-function isPublicEventName(value: string | null): value is string {
-  return value !== null && (PUBLIC_ANALYTICS_EVENTS.has(value) || PROMO_ANALYTICS_EVENT.test(value));
 }
 
 function boundedString(value: unknown, maxLength: number): string | null {

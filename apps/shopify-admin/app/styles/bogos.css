@@ -4616,3 +4616,91 @@ textarea.b-input-error {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ── Keyboard focus (replaces outline:none on custom controls) ── */
+.switch:focus-visible,
+.b-search-input:focus-visible {
+  outline: 2px solid var(--border-focus, #047857);
+  outline-offset: 2px;
+}
+
+/* ── Narrow screens: 375px pass for wizards, pickers and modals ── */
+@media (max-width: 900px) {
+  .b-template-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .b-settings-section {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .b-page {
+    padding: 16px;
+  }
+  .b-template-grid,
+  .b-logic-cards,
+  .b-support-grid,
+  .b-rec-apps,
+  .ot-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .b-modal-overlay {
+    padding: 8px;
+  }
+  .b-modal {
+    max-height: 94vh;
+  }
+  .b-modal-header,
+  .b-modal-body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .b-modal-footer {
+    padding: 12px 16px;
+    flex-wrap: wrap;
+  }
+  .b-modal-footer .b-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .b-toast {
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    min-width: 0;
+    max-width: none;
+  }
+  .rd-style-002 {
+    min-width: 0;
+    flex-basis: 100%;
+  }
+  .b-picker-row-title,
+  .b-picker-row-sub {
+    overflow-wrap: anywhere;
+  }
+}
+@media (max-width: 480px) {
+  .b-page [style*="grid-template-columns"],
+  .b-modal-body [style*="grid-template-columns"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .b-page .b-input,
+  .b-page .b-select,
+  .b-page .b-textarea {
+    max-width: 100%;
+    font-size: 16px;
+  }
+  .b-table-wrap {
+    overflow-x: auto;
+  }
+}
+
+fieldset.b-radio-group {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+fieldset.b-radio-group > legend {
+  padding: 0;
+}

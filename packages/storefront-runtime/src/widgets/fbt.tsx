@@ -3,6 +3,8 @@ import { useState, useEffect } from "preact/hooks";
 import { h } from "preact";
 import { render } from "preact";
 import { AjaxCartAdapter } from "../cart-adapter.js";
+import { formatMoney } from "../format.js";
+import { t } from "../i18n.js";
 import { emit, PromoEvents, publishAnalytics } from "../event-bus.js";
 
 interface FbtProduct {
@@ -65,11 +67,7 @@ const STYLES = `
 .pe-fbt-added { color: #059669; font-weight: 600; font-size: 14px; }
 `;
 
-function formatPrice(cents: number, currency: string): string {
-  return new Intl.NumberFormat(navigator.language, { style: "currency", currency }).format(
-    cents / 100,
-  );
-}
+const formatPrice = formatMoney;
 
 function FbtWidget({
   config,
@@ -204,7 +202,7 @@ function FbtWidget({
           class="pe-fbt-btn"
           onClick={handleAddAll}
           disabled={adding || selectedProducts.length === 0}
-          aria-label={`Add ${selectedProducts.length} item(s) to cart for ${formatPrice(totalCents, currency)}`}
+          aria-label={t("fbtAdd", { count: selectedProducts.length, price: formatPrice(totalCents, currency) })}
         >
           {adding ? "Adding…" : (config.buttonText || `Add ${selectedProducts.length} to Cart`)}
         </button>
