@@ -12,6 +12,19 @@ import { pathToFileURL } from "node:url";
 import process from "node:process";
 import type { LegacyStorePreset } from "../apps/shopify-admin/app/lib/legacy-store-presets.server.js";
 import { ensureMainCondition } from "../apps/shopify-admin/app/lib/legacy-store-presets.server.js";
+import {
+  E2E_BUNDLE_OFFER_ID,
+  E2E_BUNDLE_OFFER_NAME,
+  E2E_BUNDLE_PRODUCT_HANDLES,
+  E2E_BUNDLE_TIER,
+  E2E_GIFT_ANCHOR_HANDLE,
+  E2E_GIFT_OFFER_NAME,
+  E2E_GIFT_REWARD_HANDLE,
+  E2E_VOLUME_OFFER_ID,
+  E2E_VOLUME_OFFER_NAME,
+  E2E_VOLUME_PRODUCT_HANDLE,
+  E2E_VOLUME_TIERS,
+} from "../apps/shopify-admin/tests/e2e/fixtures/live-offers.js";
 
 const DEV_SHOP = "hpn-test-store.myshopify.com";
 const AMBROSIA_SHOP = "ambrosia-nutraceuticals.myshopify.com";
@@ -161,6 +174,116 @@ export function mapAmbrosiaPresetToDev(
   }));
 }
 
+/**
+ * Buyer-flow gift fixture for gift-offer.spec.ts: adding the anchor auto-adds a
+ * free gift. The anchor is a cheap product no Ambrosia rule targets, so it never
+ * competes with the $85 subtotal rule. The gift limit is the default of one set.
+ */
+export function buildE2EGiftOffer(anchorVariantId: string, giftVariantId: string): SeedOffer {
+  return {
+    key: "e2e-gift-offer",
+    internalName: E2E_GIFT_OFFER_NAME,
+    publicTitle: "Free test gift",
+    description: "Deterministic gift offer for hpn-test-store end-to-end validation.",
+    type: "gift",
+    priority: 1,
+    status: "active",
+    conditions: [
+      {
+        conditionType: "specific_product",
+        operator: "all",
+        value: {
+          requirements: [{ variantId: anchorVariantId, trackMode: "variant", minQuantity: 1 }],
+        },
+      },
+    ],
+    rewards: [
+      {
+        rewardType: "product_gift",
+        discountType: "free",
+        value: { amount: 100, currencyCode: "USD" },
+        target: { variantIds: [giftVariantId] },
+        quantity: 1,
+        isAutoAdd: true,
+        isCustomerSelectable: true,
+        label: null,
+      },
+    ],
+  } as unknown as SeedOffer;
+}
+
+/** Volume tiers for bundle-offer.spec: tiers use the current `minimumQuantity` model. */
+export function buildE2EVolumeOffer(productId: string): SeedOffer & { id: string } {
+  return {
+    id: E2E_VOLUME_OFFER_ID,
+    key: "e2e-volume-offer",
+    internalName: E2E_VOLUME_OFFER_NAME,
+    publicTitle: "Volume discount",
+    description: "Deterministic volume tiers for hpn-test-store widget E2E.",
+    type: "discount",
+    priority: 90,
+    status: "active",
+    conditions: [
+      {
+        conditionType: "cart_quantity",
+        operator: "gte",
+        value: { minQuantity: E2E_VOLUME_TIERS[0].minimumQuantity, includeGiftValues: false },
+      },
+    ],
+    rewards: [
+      {
+        rewardType: "product_discount",
+        discountType: "percentage",
+        value: { amount: 0, currencyCode: "USD", tiers: E2E_VOLUME_TIERS.map((tier) => ({ ...tier })) },
+        target: {
+          scopeMode: "sitewide",
+          scope: "cart",
+          productIds: [productId],
+          selectionMode: "all",
+          countRule: "all",
+          displayType: "quantity_options",
+        },
+        label: null,
+      },
+    ],
+  } as unknown as SeedOffer & { id: string };
+}
+
+export function buildE2EBundleOffer(productIds: string[]): SeedOffer & { id: string } {
+  return {
+    id: E2E_BUNDLE_OFFER_ID,
+    key: "e2e-bundle-offer",
+    internalName: E2E_BUNDLE_OFFER_NAME,
+    publicTitle: "Build your bundle",
+    description: "Deterministic classic bundle for hpn-test-store widget E2E.",
+    type: "bundle",
+    priority: 95,
+    status: "active",
+    conditions: [
+      {
+        conditionType: "cart_quantity",
+        operator: "gte",
+        value: { minQuantity: E2E_BUNDLE_TIER.minimumQuantity, includeGiftValues: false },
+      },
+    ],
+    rewards: [
+      {
+        rewardType: "bundle_discount",
+        discountType: "percentage",
+        value: { amount: 0, currencyCode: "USD", tiers: [{ ...E2E_BUNDLE_TIER }] },
+        target: {
+          scopeMode: "tagged_offer",
+          requiredOfferId: E2E_BUNDLE_OFFER_ID,
+          scope: "cart",
+          productIds,
+          variantIds: [],
+        },
+        label: null,
+      },
+    ],
+  } as unknown as SeedOffer & { id: string };
+}
+
 async function loadEnvironment(): Promise<void> {
   for (const file of [".env", ".env.local"]) {
     try {
@@ -175,7 +298,7 @@ async function loadEnvironment(): Promise<void> {
 async function main(): Promise<void> {
   await loadEnvironment();
   const [
-    { and, eq },
+    { and, eq, inArray },
     {
       closeDb,
       appSettings,
@@ -186,6 +309,10 @@ async function main(): Promise<void> {
       offers,
       shops,
       shopifySessions,
+      bundleDefinitions,
+      bundleSteps,
+      bundleTiers,
+      variantCache,
     },
     { getLegacyStorePreset, validateLegacyStorePreset },
     { validateConditionValue, validateRewardPayload },
@@ -327,15 +454,43 @@ async function main(): Promise<void> {
       return { id: product.id, handle: product.handle, variants };
     };
 
-    const [{ product: anchorProduct, variant: anchorVariant }, frother, otg, giftCard, thirdGift, shirt] =
-      await Promise.all([
+    const [
+      { product: anchorProduct, variant: anchorVariant },
+      frother,
+      otg,
+      giftCard,
+      thirdGift,
+      shirt,
+      giftAnchor,
+    ] = await Promise.all([
         requireProduct("test-product"),
         requirePublished(AMBROSIA_DEV_REWARD_HANDLES.frother),
         requirePublished(AMBROSIA_DEV_REWARD_HANDLES.otg),
         requirePublished(AMBROSIA_DEV_REWARD_HANDLES.giftCard),
         requirePublished(AMBROSIA_DEV_REWARD_HANDLES.thirdGift),
         requirePublished(AMBROSIA_DEV_REWARD_HANDLES.shirt),
+        requirePublished(E2E_GIFT_ANCHOR_HANDLE),
       ]);
+    const volumeProduct = await requirePublished(E2E_VOLUME_PRODUCT_HANDLE);
+    const bundleProducts = await Promise.all(E2E_BUNDLE_PRODUCT_HANDLES.map(requirePublished));
+    // The storefront bundle and volume endpoints read the synced catalog cache, not Shopify.
+    const cachedVariants = await db
+      .select({ gid: variantCache.variantGid })
+      .from(variantCache)
+      .where(
+        and(
+          eq(variantCache.shopId, shop.id),
+          inArray(variantCache.productGid, [volumeProduct.id, ...bundleProducts.map((p) => p.id)]),
+        ),
+      );
+    if (cachedVariants.length === 0) {
+      throw new Error(
+        "The widget fixture products are missing from variant_cache; run a catalog sync for hpn-test-store first.",
+      );
+    }
+    if (frother.handle !== E2E_GIFT_REWARD_HANDLE) {
+      throw new Error("The E2E gift reward must stay the Ambrosia frother stand-in.");
+    }
     if (shirt.variants.length < 4) {
       throw new Error(`${shirt.handle} needs four variants for sale to stand in for the shirt sizes.`);
     }
@@ -472,6 +627,12 @@ async function main(): Promise<void> {
       sellingPlanId,
       anchorVariantMap,
     });
+    mapped.push(buildE2EGiftOffer(giftAnchor.variants[0]!.id, frother.variants[0]!.id));
+    const fixedIdOffers = [
+      buildE2EVolumeOffer(volumeProduct.id),
+      buildE2EBundleOffer(bundleProducts.map((product) => product.id)),
+    ];
+    mapped.push(...fixedIdOffers);
     for (const offer of mapped) {
       for (const condition of offer.conditions) {
         const validation = validateConditionValue(condition.conditionType, condition.value);
@@ -510,16 +671,17 @@ async function main(): Promise<void> {
     });
 
     await db.transaction(async (tx) => {
-      await tx
-        .update(offers)
-        .set({ status: "paused", updatedBy: "ambrosia-e2e-seeder", updatedAt: new Date() })
-        .where(and(eq(offers.shopId, shop.id), eq(offers.internalName, "E2E Gift Offer")));
-
       for (const presetOffer of mapped) {
+        const fixedId = (presetOffer as { id?: string }).id;
         const [existing] = await tx
           .select({ id: offers.id })
           .from(offers)
-          .where(and(eq(offers.shopId, shop.id), eq(offers.internalName, presetOffer.internalName)))
+          .where(
+            and(
+              eq(offers.shopId, shop.id),
+              fixedId ? eq(offers.id, fixedId) : eq(offers.internalName, presetOffer.internalName),
+            ),
+          )
           .limit(1);
         const offerId =
           existing?.id ??
@@ -527,6 +689,7 @@ async function main(): Promise<void> {
             await tx
               .insert(offers)
               .values({
+                ...(fixedId ? { id: fixedId } : {}),
                 shopId: shop.id,
                 type: presetOffer.type,
                 status: presetOffer.status,
@@ -548,6 +711,7 @@ async function main(): Promise<void> {
             .set({
               type: presetOffer.type,
               status: presetOffer.status,
+              internalName: presetOffer.internalName,
               publicTitle: presetOffer.publicTitle,
               description: presetOffer.description,
               priority: presetOffer.priority,
@@ -615,6 +779,50 @@ async function main(): Promise<void> {
           combinesWithShippingDiscounts: true,
           combinesWithOtherAppOffers: true,
         });
+
+        if (fixedId === E2E_BUNDLE_OFFER_ID) {
+          // Steps and tiers cascade from the definition; the storefront bundle endpoint reads them.
+          await tx
+            .delete(bundleDefinitions)
+            .where(and(eq(bundleDefinitions.shopId, shop.id), eq(bundleDefinitions.offerId, offerId)));
+          const [definition] = await tx
+            .insert(bundleDefinitions)
+            .values({
+              shopId: shop.id,
+              offerId,
+              bundleType: "classic",
+              title: presetOffer.publicTitle,
+              description: presetOffer.description,
+              layoutMode: "all_steps_one_page",
+              createBundleProduct: false,
+              config: { productLevel: "product" },
+            })
+            .returning({ id: bundleDefinitions.id });
+          if (!definition) throw new Error("Failed to create the E2E bundle definition.");
+          await tx.insert(bundleSteps).values({
+            shopId: shop.id,
+            bundleId: definition.id,
+            title: "Step 1 — Select products",
+            sourceType: "products",
+            sourceConfig: { productGids: bundleProducts.map((product) => product.id) },
+            minQuantity: 1,
+            maxQuantity: null,
+            searchEnabled: false,
+            sortOptions: [],
+            filterOptions: [],
+            sortOrder: 0,
+          });
+          await tx.insert(bundleTiers).values({
+            shopId: shop.id,
+            bundleId: definition.id,
+            minQuantity: E2E_BUNDLE_TIER.minimumQuantity,
+            maxQuantity: null,
+            label: E2E_BUNDLE_TIER.label,
+            discountType: E2E_BUNDLE_TIER.discountType,
+            value: { amount: E2E_BUNDLE_TIER.discountValue, currencyCode: "USD" },
+            sortOrder: 0,
+          });
+        }
       }
 
       await tx
@@ -634,6 +842,11 @@ async function main(): Promise<void> {
           shop: DEV_SHOP,
           sourceInventory: sourcePreset.offers.length,
           activeOffers: mapped.filter((offer) => offer.status === "active").length,
+          e2eGiftOffer: { anchor: giftAnchor.handle, reward: frother.handle },
+          e2eWidgetFixtures: {
+            volume: volumeProduct.handle,
+            bundle: bundleProducts.map((product) => product.handle),
+          },
           draftOffers: mapped.filter((offer) => offer.status === "draft").length,
           mappedAnchors: Object.keys(anchorVariantMap).length,
           anchorProducts: [...anchorProductIds],

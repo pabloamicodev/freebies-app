@@ -13,10 +13,10 @@
  *   EDGE CASES — unknown ID, empty name, % > 100, end < start, multi-currency
  *                without cart_value condition, direct URL nav
  *
- * Requires the app running locally or in a dev store.
- * Set APP_URL in .env.test (default: http://localhost:3000).
- *
- *   pnpm exec playwright test tests/e2e/offer-lifecycle.spec.ts
+ * Admin suite: run with `pnpm --filter shopify-admin test:e2e:admin`. It needs a logged-in
+ * Shopify admin session (E2E_ADMIN_STORAGE_STATE, see global-setup.ts) because the embedded
+ * app answers 410 Gone to requests made outside the Shopify admin. It is not part of the
+ * storefront gate and has not been validated against the current UI in CI.
  */
 
 import { test, expect, type Page } from "@playwright/test";
@@ -40,7 +40,7 @@ async function hasErrorBanner(page: Page): Promise<boolean> {
  * Uses the cart_value template so it always lands on the detail page directly.
  */
 async function createOffer(page: Page, name: string): Promise<string> {
-  await go(page, "/app/offers/new/gift/cart_value");
+  await go(page, "/app/offers/new/gift/cart-value");
   const nameInput = page.locator('input[name="internalName"]');
   await expect(nameInput).toBeVisible({ timeout: 6000 });
   await nameInput.clear();
@@ -85,20 +85,14 @@ test.describe("CREATE", () => {
     await archiveOffer(page, id);
   });
 
-  test("creates offer from scratch (no template) via new index", async ({ page }) => {
+  test("creates offer from scratch (no template) via the create-offer catalogue", async ({ page }) => {
     await go(page, "/app/offers/new");
-    // Select gift type
-    const giftOption = page.locator('[data-offer-type="gift"], label, .b-type-card')
-      .filter({ hasText: /gift/i }).first();
-    await expect(giftOption).toBeVisible({ timeout: 5000 });
-    await giftOption.click();
-
-    // Fill wizard fields or go straight to scratch template
-    const scratchLink = page.locator("a, button").filter({ hasText: /scratch|blank|start from/i }).first();
-    if (await scratchLink.isVisible({ timeout: 2000 })) {
-      await scratchLink.click();
-      await page.waitForLoadState("networkidle");
-    }
+    // /app/offers/new opens the shared catalogue modal: pick the type, then the template.
+    const catalogue = page.getByRole("dialog", { name: "Create a new offer" });
+    await expect(catalogue).toBeVisible({ timeout: 8000 });
+    await catalogue.getByRole("button", { name: /Gift offer/ }).click();
+    await page.getByRole("button", { name: "Create offer", exact: true }).click();
+    await page.waitForURL(/\/app\/offers\/new\/gift\/scratch/, { timeout: 10000 });
 
     const nameInput = page.locator('input[name="internalName"]').first();
     await expect(nameInput).toBeVisible({ timeout: 6000 });
@@ -132,7 +126,7 @@ test.describe("CREATE", () => {
   });
 
   test("shows error when internal name is empty", async ({ page }) => {
-    await go(page, "/app/offers/new/gift/cart_value");
+    await go(page, "/app/offers/new/gift/cart-value");
     const nameInput = page.locator('input[name="internalName"]');
     await expect(nameInput).toBeVisible({ timeout: 6000 });
     await nameInput.clear(); // ensure empty
@@ -147,7 +141,7 @@ test.describe("CREATE", () => {
   });
 
   test("shows error when public title is empty", async ({ page }) => {
-    await go(page, "/app/offers/new/gift/cart_value");
+    await go(page, "/app/offers/new/gift/cart-value");
     const nameInput = page.locator('input[name="internalName"]');
     await expect(nameInput).toBeVisible({ timeout: 6000 });
     await nameInput.fill(`E2E-NoTitle-${Date.now()}`);

@@ -1,176 +1,126 @@
 /**
- * E2E tests — Gift offer flows.
+ * E2E tests — Gift offer flows against hpn-test-store.
  *
- * Tests the full buyer journey:
- * 1. Gift auto-add when cart value reaches threshold.
- * 2. Gift removal when cart drops below threshold.
- * 3. Gift slider selection.
- * 4. Checkout validation — excess gift quantity blocked.
- *
- * These tests run against a Shopify development store.
- * Set DEV_STORE_URL, DEV_STORE_STOREFRONT_TOKEN in .env.test
+ * Fixture: the active "E2E Gift Offer" (scripts/seed-ambrosia-e2e.ts). Adding its
+ * anchor product auto-adds one free gift; the gift limit is the default of one set.
+ * The anchor is not part of any Ambrosia rule, so the $85 subtotal offer never
+ * competes with it. Carts are driven through the cart API in page context, which
+ * the storefront runtime observes exactly as it observes a theme add-to-cart.
  */
 
 import { test, expect, type Page } from "@playwright/test";
 
-const DEV_STORE = process.env["DEV_STORE_URL"] ?? "https://your-dev-store.myshopify.com";
-const PRODUCT_HANDLE = process.env["E2E_PRODUCT_HANDLE"] ?? "test-product";
-const PRODUCT_URL = `${DEV_STORE}/products/${PRODUCT_HANDLE}`;
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+import { E2E_GIFT_ANCHOR_HANDLE } from "./fixtures/live-offers.js";
+import { firstVariantId } from "./helpers/fixtures.js";
+import {
+  addLines,
+  changeLine,
+  clearCart,
+  getCart,
+  gotoStorefront,
+  waitForPromoEngine,
+  type Cart,
+} from "./helpers/storefront.js";
 
-async function clearCart(page: Page) {
-  await page.goto(`${DEV_STORE}/cart/clear`);
-  await page.waitForURL(/cart/);
+const isGift = (item: Cart["items"][number]) => item.properties?.["_promo_engine_line_type"] === "gift";
+
+let anchorVariant = 0;
+
+async function openAnchorWithEmptyCart(page: Page): Promise<void> {
+  await gotoStorefront(page, `/products/${encodeURIComponent(E2E_GIFT_ANCHOR_HANDLE)}`);
+  await waitForPromoEngine(page);
+  if (!anchorVariant) anchorVariant = await firstVariantId(page, E2E_GIFT_ANCHOR_HANDLE);
+  await clearCart(page);
 }
 
-async function getCartJson(page: Page) {
-  const response = await page.goto(`${DEV_STORE}/cart.js`);
-  const json = await response?.json();
-  return json as {
-    token: string;
-    item_count: number;
-    items: Array<{
-      variant_id: number;
-      quantity: number;
-      properties: Record<string, string>;
-      handle: string;
-    }>;
-  };
+async function waitForGift(page: Page, present: boolean): Promise<Cart> {
+  await expect
+    .poll(async () => (await getCart(page)).items.some(isGift), {
+      message: present ? "gift line must be auto-added" : "gift line must be removed",
+      timeout: 30_000,
+      intervals: [2_000],
+    })
+    .toBe(present);
+  return getCart(page);
 }
-
-async function waitForPromoEngine(page: Page, timeout = 5000) {
-  await page.waitForFunction(() => typeof window.PromoEngine !== "undefined", { timeout });
-}
-
-// ─── Tests ────────────────────────────────────────────────────────────────────
 
 test.describe("Gift offer — auto-add", () => {
-  test.beforeEach(async ({ page }) => {
-    await clearCart(page);
+  test.beforeEach(async ({ page }) => openAnchorWithEmptyCart(page));
+
+  test("auto-adds a fully discounted gift when the qualifying product is added", async ({ page }) => {
+    await addLines(page, [{ id: anchorVariant, quantity: 1 }]);
+    const cart = await waitForGift(page, true);
+
+    const gifts = cart.items.filter(isGift);
+    expect(gifts).toHaveLength(1);
+    expect(gifts[0]?.quantity, "default gift limit is one set").toBe(1);
+    expect(gifts[0]?.properties["_promo_engine_offer_id"]).toBeTruthy();
+    expect(gifts[0]?.original_line_price).toBeGreaterThan(0);
+    expect(gifts[0]?.final_line_price, "gift must be fully discounted").toBe(0);
   });
 
-  test("auto-adds gift when cart value crosses threshold", async ({ page }) => {
-    // Navigate to product page
-    await page.goto(PRODUCT_URL);
-    await expect(page).toHaveTitle(/test product/i);
+  test("does not duplicate the gift when the qualifying quantity grows", async ({ page }) => {
+    await addLines(page, [{ id: anchorVariant, quantity: 1 }]);
+    await waitForGift(page, true);
+    await addLines(page, [{ id: anchorVariant, quantity: 2 }]);
+    await expect
+      .poll(async () => (await getCart(page)).items.find((i) => i.variant_id === anchorVariant)?.quantity, {
+        timeout: 15_000,
+        intervals: [2_000],
+      })
+      .toBe(3);
 
-    // Wait for promo engine to initialize
-    await waitForPromoEngine(page);
-
-    // Add product — assume it has price >= threshold ($50)
-    // In a real test we'd use a specific variant ID
-    await page.locator('[data-testid="add-to-cart"]').click();
-    await page.waitForTimeout(2000); // Wait for auto-add
-
-    // Verify gift was added
-    const cart = await getCartJson(page);
-    const giftLine = cart.items.find(
-      (item) => item.properties["_promo_engine_line_type"] === "gift",
-    );
-
-    expect(giftLine).toBeDefined();
-    expect(giftLine?.properties["_promo_engine_offer_id"]).toBeTruthy();
+    const gifts = (await getCart(page)).items.filter(isGift);
+    expect(gifts.reduce((sum, gift) => sum + gift.quantity, 0)).toBe(1);
   });
 
-  test("removes gift when qualifying product is removed", async ({ page }) => {
-    await page.goto(PRODUCT_URL);
-    await waitForPromoEngine(page);
-    await page.locator('[data-testid="add-to-cart"]').click();
-    await page.waitForTimeout(2000);
+  test("removes the gift when the qualifying product is removed", async ({ page }) => {
+    await addLines(page, [{ id: anchorVariant, quantity: 1 }]);
+    let cart = await waitForGift(page, true);
 
-    // Verify gift is in cart
-    let cart = await getCartJson(page);
-    const hasGift = cart.items.some((i) => i.properties["_promo_engine_line_type"] === "gift");
-    expect(hasGift, "Seeded gift offer must auto-add before removal is tested").toBe(true);
+    const line = cart.items.findIndex((item) => item.variant_id === anchorVariant) + 1;
+    expect(line, "qualifying product must be in the cart").toBeGreaterThan(0);
+    await changeLine(page, line, 0);
 
-    // Remove the qualifying product
-    const qualifyingItem = cart.items.find((i) => !i.properties["_promo_engine_line_type"]);
-    if (qualifyingItem) {
-      await page.goto(
-        `${DEV_STORE}/cart/change?line=1&quantity=0`,
-      );
-      await page.waitForTimeout(2000);
-    }
-
-    // Verify gift was removed
-    cart = await getCartJson(page);
-    const giftStillPresent = cart.items.some(
-      (i) => i.properties["_promo_engine_line_type"] === "gift",
-    );
-    expect(giftStillPresent).toBe(false);
+    cart = await waitForGift(page, false);
+    expect(cart.items.some(isGift)).toBe(false);
   });
 });
 
 test.describe("Gift slider", () => {
-  test("opens when evaluation returns selectable gifts", async ({ page }) => {
-    await clearCart(page);
-    await page.goto(PRODUCT_URL);
-    await waitForPromoEngine(page);
-    await page.locator('[data-testid="add-to-cart"]').click();
-    await page.waitForTimeout(2000);
+  test("opens for selectable gifts or auto-adds the single gift", async ({ page }) => {
+    await openAnchorWithEmptyCart(page);
+    await addLines(page, [{ id: anchorVariant, quantity: 1 }]);
 
-    // Check if gift slider is present
     const slider = page.locator(".pe-slider-overlay");
-    const sliderVisible = await slider.isVisible().catch(() => false);
+    await expect
+      .poll(
+        async () =>
+          (await slider.isVisible().catch(() => false)) || (await getCart(page)).items.some(isGift),
+        { message: "a slider must render or a gift must be auto-added", timeout: 30_000, intervals: [2_000] },
+      )
+      .toBe(true);
 
-    const cartBeforeSelection = await getCartJson(page);
-    const autoAdded = cartBeforeSelection.items.some((item) => item.properties["_promo_engine_line_type"] === "gift");
-    expect(sliderVisible || autoAdded, "Seeded gift offer must render a slider or auto-add a gift").toBe(true);
-    if (sliderVisible) {
-      // Can select a gift
-      const firstGiftCard = page.locator(".pe-gift-card").first();
-      await firstGiftCard.click();
-
-      const confirmBtn = page.locator(".pe-btn-confirm");
-      await expect(confirmBtn).toBeEnabled();
-      await confirmBtn.click();
-      await page.waitForTimeout(1500);
-
-      // Gift should now be in cart
-      const cart = await getCartJson(page);
-      const giftLine = cart.items.find(
-        (i) => i.properties["_promo_engine_line_type"] === "gift",
-      );
-      expect(giftLine).toBeDefined();
+    if (await slider.isVisible().catch(() => false)) {
+      await page.locator(".pe-gift-card").first().click();
+      const confirm = page.locator(".pe-btn-confirm");
+      await expect(confirm).toBeEnabled();
+      await confirm.click();
+      await waitForGift(page, true);
     }
   });
 });
 
 test.describe("Checkout validation", () => {
-  test("checkout succeeds with valid gift in cart", async ({ page }) => {
-    await clearCart(page);
-    await page.goto(PRODUCT_URL);
-    await waitForPromoEngine(page);
-    await page.locator('[data-testid="add-to-cart"]').click();
-    await page.waitForTimeout(2000);
+  test("checkout is reachable with the gift in the cart", async ({ page }) => {
+    await openAnchorWithEmptyCart(page);
+    await addLines(page, [{ id: anchorVariant, quantity: 1 }]);
+    await waitForGift(page, true);
 
-    // Navigate to checkout
-    await page.goto(`${DEV_STORE}/cart`);
-    const checkoutBtn = page.locator('[data-testid="checkout-button"], [name="checkout"]');
-    await checkoutBtn.click();
+    await gotoStorefront(page, "/cart");
+    await page.locator('[name="checkout"]:visible').first().click();
 
-    // Should reach checkout — not blocked
     await expect(page).toHaveURL(/checkout/);
-    await expect(page.locator("text=Cart has been updated")).not.toBeVisible({ timeout: 3000 });
-  });
-
-  test("progress bar updates when cart changes", async ({ page }) => {
-    await clearCart(page);
-    await page.goto(`${DEV_STORE}/cart`);
-
-    const progressBar = page.locator("promo-progress-bar");
-    await expect(progressBar).toBeVisible();
-    const shadowRoot = await progressBar.evaluateHandle((el) => el.shadowRoot);
-    expect(shadowRoot).toBeTruthy();
-  });
-});
-
-test.describe("Cart message", () => {
-  test("cart message renders when offer is active", async ({ page }) => {
-    await page.goto(`${DEV_STORE}/cart`);
-    const cartMessage = page.locator("promo-cart-message");
-    // Just verify the Web Component is mounted — content depends on cart state
-    await page.waitForTimeout(1000);
-    await expect(cartMessage).toHaveCount(1);
+    await expect(page.locator("text=Cart has been updated")).not.toBeVisible({ timeout: 3_000 });
   });
 });

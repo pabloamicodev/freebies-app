@@ -9,8 +9,9 @@
     "build:shopify": "node ../../scripts/shopify-build.mjs",
     "start": "shopify app start",
     "test:e2e": "playwright test",
+    "test:e2e:admin": "playwright test --config playwright.admin.config.ts",
     "test:ui": "playwright test --config playwright.ui.config.ts",
-    "typecheck": "react-router typegen && tsc --noEmit",
+    "typecheck": "react-router typegen && tsc --noEmit && tsc --noEmit -p tests/e2e/tsconfig.json",
     "lint": "eslint app --ext .ts,.tsx"
   },
   "dependencies": {

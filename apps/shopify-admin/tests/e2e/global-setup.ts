@@ -1,142 +1,117 @@
 /**
- * Playwright global setup — authenticates with Shopify admin OAuth.
+ * Playwright global setup.
  *
- * Logs in to the dev store, completes the app OAuth flow, and saves the
- * resulting browser state so tests can reuse it without re-authenticating.
+ * storefront suite (default): unlocks the password-protected hpn-test-store
+ *   Online Store once, saves the cookies, then probes that the seeded offers are
+ *   live so a missing fixture fails here with an actionable message instead of
+ *   as dozens of cryptic assertion errors.
  *
- * Required env vars (set in .env.test or CI secrets):
- *   APP_URL              — deployed app URL, e.g. https://yourapp.vercel.app
- *   DEV_STORE_URL        — Shopify dev store URL, e.g. https://hpn-test-store.myshopify.com
- *   DEV_STORE_PASSWORD   — Online Store password for the protected dev storefront
- *   SHOPIFY_ADMIN_EMAIL  — dev store admin email
- *   SHOPIFY_ADMIN_PASSWORD — dev store admin password
+ * admin suite (E2E_SUITE=admin): the embedded admin only works inside the
+ *   Shopify admin iframe; direct requests to APP_URL answer 410 Gone. A saved
+ *   admin session is required (E2E_ADMIN_STORAGE_STATE, see docs/RUNBOOK.md).
+ *
+ * Env: APP_URL, DEV_STORE_URL, DEV_STORE_PASSWORD, E2E_PRODUCT_HANDLE.
  */
 
 import { chromium } from "@playwright/test";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
-import { buildShopifyOAuthUrl, isStorefrontPasswordUrl } from "../../app/lib/e2e-bootstrap.js";
+import { isStorefrontPasswordUrl } from "../../app/lib/e2e-bootstrap.js";
+import { gotoStorefront } from "./helpers/storefront.js";
+import { assertFixtures } from "./helpers/fixtures.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const AUTH_DIR = path.join(__dirname, ".auth");
+const AUTH_FILE = path.join(AUTH_DIR, "shopify.json");
+const ADMIN_AUTH_FILE = path.join(AUTH_DIR, "admin.json");
 
-const APP_URL = process.env["APP_URL"] ?? "";
-const DEV_STORE_URL = process.env["DEV_STORE_URL"] ?? "";
-const EMAIL = process.env["SHOPIFY_ADMIN_EMAIL"] ?? "";
-const PASSWORD = process.env["SHOPIFY_ADMIN_PASSWORD"] ?? "";
-const STOREFRONT_PASSWORD = process.env["DEV_STORE_PASSWORD"] ?? "";
-const PRODUCT_HANDLE = process.env["E2E_PRODUCT_HANDLE"] ?? "test-product";
+const CHROME_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
-export const AUTH_FILE = path.join(__dirname, ".auth", "shopify.json");
-
-export default async function globalSetup() {
-  if (!APP_URL || !DEV_STORE_URL) {
-    throw new Error("E2E setup requires APP_URL and DEV_STORE_URL.");
+async function adminSetup() {
+  const raw = process.env["E2E_ADMIN_STORAGE_STATE"];
+  if (!raw) {
+    throw new Error(
+      "Admin E2E needs a logged-in Shopify admin session: set E2E_ADMIN_STORAGE_STATE to the " +
+        "base64 of a Playwright storageState JSON for the hpn-test-store admin. Direct requests to " +
+        "APP_URL return 410 Gone because the embedded app only authenticates inside the admin iframe.",
+    );
   }
-
-  const authDir = path.dirname(AUTH_FILE);
-  if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
-
+  fs.mkdirSync(AUTH_DIR, { recursive: true });
+  fs.writeFileSync(ADMIN_AUTH_FILE, Buffer.from(raw, "base64").toString("utf8"));
   const browser = await chromium.launch();
-  const context = await browser.newContext();
-  const page = await context.newPage();
-
-  console.info("[global-setup] Starting Shopify OAuth flow...");
-
   try {
-    if (EMAIL && PASSWORD) {
-      // Start at the explicit login route. Opening APP_URL without Shopify's
-      // embedded query parameters redirects to /app and correctly returns 410.
-      await page.goto(buildShopifyOAuthUrl(APP_URL, DEV_STORE_URL), {
-        waitUntil: "domcontentloaded",
-        timeout: 30_000,
-      });
-
-      if (page.url().includes("accounts.shopify.com") || page.url().includes("/admin/login")) {
-        console.info("[global-setup] Logging in to Shopify...");
-
-        const emailInput = page
-          .locator('input[type="email"], input[name="account[email]"]')
-          .first();
-        if (await emailInput.isVisible({ timeout: 10_000 })) {
-          await emailInput.fill(EMAIL);
-          await page.locator('button[type="submit"]').first().click();
-          await page.waitForTimeout(1000);
-        }
-
-        const passwordInput = page
-          .locator('input[type="password"], input[name="account[password]"]')
-          .first();
-        if (await passwordInput.isVisible({ timeout: 10_000 })) {
-          await passwordInput.fill(PASSWORD);
-          await page.locator('button[type="submit"]').first().click();
-        }
-
-        await page.waitForURL((url) => url.href.startsWith(APP_URL), { timeout: 30_000 });
-        console.info("[global-setup] OAuth complete, landed at:", page.url());
-      }
-
-      await page.waitForLoadState("networkidle", { timeout: 20_000 });
-    } else {
-      if (EMAIL || PASSWORD) {
-        console.info(
-          "[global-setup] Incomplete admin credential pair ignored for storefront-only tests.",
-        );
-      }
-      console.info(
-        "[global-setup] Admin OAuth skipped; storefront tests do not require admin credentials.",
-      );
-    }
-
-    // Development stores are password protected. Unlock the Online Store in
-    // the same browser context so storefront specs inherit storefront_digest.
-    const productUrl = `${DEV_STORE_URL}/products/${encodeURIComponent(PRODUCT_HANDLE)}`;
-    let storefrontResponse = await page.goto(productUrl, {
+    const context = await browser.newContext({ storageState: ADMIN_AUTH_FILE });
+    const page = await context.newPage();
+    const response = await page.goto(`${process.env["APP_URL"]}/app/offers`, {
       waitUntil: "domcontentloaded",
-      timeout: 30_000,
     });
-
-    if (isStorefrontPasswordUrl(page.url(), DEV_STORE_URL)) {
-      if (!STOREFRONT_PASSWORD) {
-        throw new Error(
-          "The development storefront is password protected; set DEV_STORE_PASSWORD.",
-        );
-      }
-
-      const passwordInput = page.locator('input[name="password"]').first();
-      await passwordInput.waitFor({ state: "visible", timeout: 10_000 });
-      await passwordInput.fill(STOREFRONT_PASSWORD);
-      // Theme analytics keep the network busy, so wait for the redirect off /password instead of networkidle.
-      await Promise.all([
-        page
-          .waitForURL((url) => !isStorefrontPasswordUrl(url.toString(), DEV_STORE_URL), { timeout: 20_000 })
-          .catch(() => undefined),
-        page.locator('button[type="submit"], input[type="submit"]').first().click(),
-      ]);
-
-      if (isStorefrontPasswordUrl(page.url(), DEV_STORE_URL)) {
-        throw new Error("DEV_STORE_PASSWORD was rejected by Shopify.");
-      }
-      storefrontResponse = await page.goto(productUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 30_000,
-      });
-    }
-
-    if (storefrontResponse?.status() === 404) {
+    if (response?.status() === 410) {
       throw new Error(
-        `The E2E product ${PRODUCT_HANDLE} is not published to the Online Store sales channel.`,
+        "APP_URL/app/offers answered 410 Gone: admin routes are only reachable through the embedded " +
+          "Shopify admin. The admin specs must drive https://admin.shopify.com/store/<shop>/apps/<app>/app/offers.",
       );
     }
-
-    // Save auth state (cookies + localStorage)
-    await context.storageState({ path: AUTH_FILE });
-    console.info("[global-setup] Auth state saved to", AUTH_FILE);
-  } catch (err) {
-    console.error("[global-setup] Auth failed:", err instanceof Error ? err.message : err);
-    throw err;
   } finally {
     await browser.close();
   }
+}
+
+async function storefrontSetup() {
+  const devStore = (process.env["DEV_STORE_URL"] ?? "").replace(/\/$/, "");
+  const password = process.env["DEV_STORE_PASSWORD"] ?? "";
+  const productHandle = process.env["E2E_PRODUCT_HANDLE"] ?? "test-product";
+
+  fs.mkdirSync(AUTH_DIR, { recursive: true });
+  const browser = await chromium.launch({ args: ["--disable-blink-features=AutomationControlled"] });
+  try {
+    const context = await browser.newContext({ userAgent: CHROME_UA });
+    const page = await context.newPage();
+    const productPath = `/products/${encodeURIComponent(productHandle)}`;
+
+    // The password gate redirects, so go through the raw navigation rather than gotoStorefront.
+    const first = await page.goto(`${devStore}${productPath}`, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
+    if (first?.status() === 429) {
+      await gotoStorefront(page, productPath);
+    }
+
+    if (isStorefrontPasswordUrl(page.url(), devStore)) {
+      if (!password) {
+        throw new Error("The development storefront is password protected; set DEV_STORE_PASSWORD.");
+      }
+      await page.locator('input[name="password"]').first().fill(password);
+      await Promise.all([
+        page
+          .waitForURL((url) => !isStorefrontPasswordUrl(url.toString(), devStore), { timeout: 20_000 })
+          .catch(() => undefined),
+        page.locator('button[type="submit"], input[type="submit"]').first().click(),
+      ]);
+      if (isStorefrontPasswordUrl(page.url(), devStore)) {
+        throw new Error("DEV_STORE_PASSWORD was rejected by Shopify.");
+      }
+      await gotoStorefront(page, productPath);
+    }
+
+    if ((await page.title()).match(/404/i)) {
+      throw new Error(`The E2E product ${productHandle} is not published to the Online Store sales channel.`);
+    }
+
+    await assertFixtures(page);
+    await context.storageState({ path: AUTH_FILE });
+    console.info("[global-setup] storefront unlocked and fixtures verified");
+  } finally {
+    await browser.close();
+  }
+}
+
+export default async function globalSetup() {
+  if (!process.env["APP_URL"] || !process.env["DEV_STORE_URL"]) {
+    throw new Error("E2E setup requires APP_URL and DEV_STORE_URL.");
+  }
+  if (process.env["E2E_SUITE"] === "admin") return adminSetup();
+  return storefrontSetup();
 }

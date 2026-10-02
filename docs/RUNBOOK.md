@@ -19,6 +19,7 @@ Operational procedures for the Promo Engine. Release steps live in `docs/DEPLOY.
 13. [Drift repair pause switch](#drift-repair-pause-switch)
 14. [Cart validation and blockOnFailure](#cart-validation-and-blockonfailure)
 15. [Load testing](#load-testing)
+16. [Live-store E2E](#live-store-e2e)
 
 ## Environments and ownership
 
@@ -374,3 +375,22 @@ Notes for the run:
 - The script mints a fresh random cart token per request, so every request counts against the anonymous shop budget (`EVALUATE_SHOP_LIMIT_PER_MINUTE`, 200 rps at the default): it is the worst case for H6, not the typical one. The known-shopper budget is exercised by repeating a token (`__ITER % 50` cycles are not enough: change the script to reuse the token across iterations to test it).
 - 429s now carry a jittered `Retry-After`; the script should not count them as errors above the cap.
 - Watch Neon connections/CPU, Upstash command rate (about 4 commands per evaluate now: seen lookup, shop counter, token counter, seen mark), Vercel concurrency and Sentry.
+
+## Live-store E2E
+
+Two layers, both required:
+
+- `ci.yml` job **Browser UI**: `pnpm --filter shopify-admin test:ui`. Real wizard code, stubbed loaders, no secrets. Runs on every push and PR.
+- `e2e-live.yml` **Storefront E2E**: buyer flows against `hpn-test-store` (never HPN, TRU, Ambrosia or One Sol). Runs on push to `main`, nightly (05:23 UTC) and `workflow_dispatch` (optional `grep` and `mobile` inputs). It waits for the push's Vercel deployment first because the specs hit the deployed app. Runs queue (`concurrency: e2e-live`): one cart-API budget per IP.
+
+**Fixtures.** The specs need offers that live in the production database under the `hpn-test-store` shop: the 11 `[Ambrosia E2E]` offers, `E2E Gift Offer` (auto-adds a free gift when `test-bundle-product` is added), `E2E Volume Discount` (tiers at 2 and 5 on `test-volume-product`) and `E2E Classic Bundle` (two ebooks, 10% from two items). All are created by `pnpm seed:ambrosia-e2e` and checked by `pnpm verify:ambrosia-e2e`. Both need `DATABASE_URL` and `TOKEN_ENCRYPTION_KEY` and only ever touch `hpn-test-store.myshopify.com`. Run the seed after any reinstall of the test store (a reinstall archives offers).
+
+Global setup probes the live storefront before any spec runs. If a fixture is missing it fails with the repair command instead of dozens of assertion errors.
+
+**GitHub secrets** (environment `e2e`): `DEV_STORE_URL`, `DEV_STORE_PASSWORD`, `APP_URL`, `E2E_PRODUCT_HANDLE`, `E2E_BUNDLE_PRODUCT_HANDLE`, `E2E_VOLUME_PRODUCT_HANDLE`, `E2E_QUALIFYING_VARIANT_ID` (all required). Optional, for a self-healing job that re-seeds each run: `E2E_DATABASE_URL`, `E2E_TOKEN_ENCRYPTION_KEY`. They grant production-database access, so add them only if that trade-off is acceptable; without them the job still runs the probe.
+
+**Bot protection.** Shopify answers bursts of `/cart/*.js` with HTTP 429 and a "Verifying your connection..." page, then keeps the IP blocked for about ten minutes. Measured from a residential IP: four cart calls per second trips it, one call every 2.5 s ran 90 calls clean. `helpers/storefront.ts` spaces cart calls (`E2E_CART_GAP_MS`, default 2000), uses a real Chrome user agent, backs off 10/25/45 s on a 429 and then fails every remaining storefront test immediately with "Shopify bot protection blocked the runner". That is an environment block, not a product failure: wait ten minutes and re-run.
+
+**Widgets.** The test theme has no promo blocks in its templates and the app has no `write_themes` scope, so specs mount the custom elements the block liquid would render (`helpers/widgets.ts`) and drive them through the real `/apps/promo-engine/*` endpoints. Theme-editor placement of the blocks is merchant configuration and is not covered.
+
+**Admin lifecycle suite** (`offer-lifecycle.spec.ts`, `pnpm --filter shopify-admin test:e2e:admin`). The embedded app answers **410 Gone** to any request made outside the Shopify admin iframe, so `APP_URL/app/...` can never authenticate in a headless runner, and a stored cookie jar does not change that. Running it needs a logged-in admin session (`E2E_ADMIN_STORAGE_STATE`, base64 of a Playwright storage state) and specs that drive `https://admin.shopify.com/store/<shop>/apps/<app>/app/...` through the app iframe. That rewrite has not been done, so the suite is not part of any CI gate.

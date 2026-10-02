@@ -11,7 +11,8 @@ import process from "node:process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { mapAmbrosiaPresetToDev } from "./seed-ambrosia-e2e.js";
+import { buildE2EGiftOffer, mapAmbrosiaPresetToDev } from "./seed-ambrosia-e2e.js";
+import { E2E_GIFT_ANCHOR_HANDLE, E2E_GIFT_OFFER_NAME } from "../apps/shopify-admin/tests/e2e/fixtures/live-offers.js";
 
 const DEV_SHOP = "hpn-test-store.myshopify.com";
 const AMBROSIA_SHOP = "ambrosia-nutraceuticals.myshopify.com";
@@ -361,6 +362,40 @@ async function main(): Promise<void> {
         `${row.internalName} draft leaked into Shopify config.`,
       );
     }
+
+    // gift-offer.spec.ts fixture: active, compiled, published, anchored on its dedicated product.
+    const [giftRow] = await db
+      .select()
+      .from(offers)
+      .where(and(eq(offers.shopId, shop.id), eq(offers.internalName, E2E_GIFT_OFFER_NAME)))
+      .limit(1);
+    assert.ok(giftRow, `${E2E_GIFT_OFFER_NAME} is missing; run pnpm seed:ambrosia-e2e.`);
+    assert.equal(giftRow.status, "active", `${E2E_GIFT_OFFER_NAME} must be active.`);
+    assert.equal(giftRow.requiresCode, false, `${E2E_GIFT_OFFER_NAME} must not require a code.`);
+    assert.ok(giftRow.compiledConfig, `${E2E_GIFT_OFFER_NAME} was not compiled.`);
+    assert.ok(
+      published.offers.some((offer) => offer.id === giftRow.id),
+      `${E2E_GIFT_OFFER_NAME} is absent from Shopify's published config.`,
+    );
+    const giftAnchorProduct = await fetchProduct(E2E_GIFT_ANCHOR_HANDLE);
+    const [giftConditions, giftRewards] = await Promise.all([
+      db.select().from(offerConditions).where(eq(offerConditions.offerId, giftRow.id)),
+      db.select().from(offerRewards).where(eq(offerRewards.offerId, giftRow.id)),
+    ]);
+    const expectedGift = buildE2EGiftOffer(
+      giftAnchorProduct.variants.nodes[0]!.id,
+      frother.variants.nodes[0]!.id,
+    );
+    assertJsonEqual(
+      giftConditions.map((c) => ({ conditionType: c.conditionType, operator: c.operator, value: c.value })),
+      expectedGift.conditions,
+      `${E2E_GIFT_OFFER_NAME} conditions`,
+    );
+    assertJsonEqual(
+      giftRewards.map((r) => ({ type: r.rewardType, target: r.target, quantity: r.quantity, auto: r.isAutoAdd })),
+      expectedGift.rewards.map((r) => ({ type: r.rewardType, target: r.target, quantity: r.quantity ?? null, auto: r.isAutoAdd ?? false })),
+      `${E2E_GIFT_OFFER_NAME} rewards`,
+    );
 
     const storefrontResponse = await fetch(
       `https://${DEV_SHOP}/products/${fixture.handles.anchor}`,

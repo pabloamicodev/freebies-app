@@ -2,6 +2,15 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { readFileSync } from "node:fs";
 
+import {
+  addLines,
+  clearCart,
+  getCart,
+  gotoStorefront,
+  waitForPromoEngine,
+  type Cart,
+} from "./helpers/storefront.js";
+
 interface AmbrosiaFixtureRule {
   key: string;
   source: string;
@@ -26,23 +35,6 @@ const rules = fixture.rules.map((rule) => ({
 }));
 const rule = (key: string) => rules.find((candidate) => candidate.key === key)!;
 
-type CartItem = {
-  variant_id: number;
-  quantity: number;
-  original_line_price: number;
-  final_line_price: number;
-  properties: Record<string, string>;
-};
-
-type Cart = { item_count: number; items: CartItem[] };
-
-type AddLine = {
-  id: number;
-  quantity: number;
-  selling_plan?: number;
-  properties?: Record<string, string>;
-};
-
 function landingProperties(source: string): Record<string, string> {
   return {
     __landing_source: source,
@@ -50,41 +42,9 @@ function landingProperties(source: string): Record<string, string> {
   };
 }
 
-async function cartRequest<T>(page: Page, path: string, init?: RequestInit): Promise<T> {
-  return page.evaluate(
-    async ({ path, init }) => {
-      const response = await fetch(path, init);
-      if (!response.ok)
-        throw new Error(`Cart API ${path} failed: ${response.status} ${await response.text()}`);
-      return response.json() as Promise<T>;
-    },
-    { path, init },
-  );
-}
-
-async function clearCart(page: Page): Promise<void> {
-  await cartRequest(page, "/cart/clear.js", { method: "POST" });
-}
-
-async function getCart(page: Page): Promise<Cart> {
-  return cartRequest<Cart>(page, "/cart.js");
-}
-
-async function addLines(page: Page, items: AddLine[]): Promise<Cart> {
-  await cartRequest(page, "/cart/add.js", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ items }),
-  });
-  return getCart(page);
-}
-
 async function openStorefront(page: Page): Promise<void> {
-  await page.goto(`/products/${encodeURIComponent(ANCHOR_HANDLE)}`, {
-    waitUntil: "domcontentloaded",
-  });
-  await expect(page).not.toHaveURL(/\/password(?:\?|$)/);
-  await page.waitForFunction(() => typeof window.PromoEngine !== "undefined");
+  await gotoStorefront(page, `/products/${encodeURIComponent(ANCHOR_HANDLE)}`);
+  await waitForPromoEngine(page);
   await clearCart(page);
 }
 

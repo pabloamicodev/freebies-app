@@ -1,105 +1,118 @@
 /**
- * E2E tests — Multi-currency and market flows.
- * Tests that offers apply correctly in non-default currency/market contexts.
+ * E2E tests — market, currency and customer-context flows against hpn-test-store.
+ *
+ * hpn-test-store has an active Canada market (CAD). The "[Ambrosia E2E] cart-subtotal-free-gift"
+ * fixture ($85 cart value) provides the cart-value progress bar, and the active
+ * "E2E Gift Offer" fixture provides a gift for guests.
  */
 
 import { test, expect, type Page } from "@playwright/test";
 
-const DEV_STORE = process.env["DEV_STORE_URL"] ?? "https://your-dev-store.myshopify.com";
+import { E2E_GIFT_ANCHOR_HANDLE } from "./fixtures/live-offers.js";
+import { firstVariantId } from "./helpers/fixtures.js";
+import {
+  addLines,
+  clearCart,
+  getCart,
+  gotoStorefront,
+  waitForPromoEngine,
+} from "./helpers/storefront.js";
+import { evaluateNow, mountWidget } from "./helpers/widgets.js";
+
 const PRODUCT_HANDLE = process.env["E2E_PRODUCT_HANDLE"] ?? "test-product";
 
-interface EvaluationResponse {
-  cartActions: unknown[];
-  qualifiedOffers: unknown[];
+async function openMarket(page: Page, path: string): Promise<void> {
+  await gotoStorefront(page, path);
+  await waitForPromoEngine(page);
+  await clearCart(page);
 }
 
-interface CartResponse {
-  items: unknown[];
-}
+test.describe("Multi-currency (Canada market)", () => {
+  test("progress bar shows the remaining amount in CAD", async ({ page }) => {
+    // The store has no /en-ca subfolder (that path is a 404); ?country=CA switches the localization cookie.
+    await openMarket(page, "/?country=CA");
+    await expect
+      .poll(() => page.evaluate(() => (window as { Shopify?: { currency?: { active?: string } } }).Shopify?.currency?.active))
+      .toBe("CAD");
 
-async function clearCart(page: Page) {
-  await page.goto(`${DEV_STORE}/cart/clear`);
-  await page.waitForURL(/cart/);
-}
+    const anchor = await firstVariantId(page, E2E_GIFT_ANCHOR_HANDLE);
+    await addLines(page, [{ id: anchor, quantity: 1 }]);
+    const evaluation = await evaluateNow(page);
+    const cartValueBar = evaluation.progressBars.find((bar) => bar.targetCents > 0 && !bar.isGoalReached);
+    expect(cartValueBar, "a cart-value progress bar must be reported below the $85 threshold").toBeDefined();
+    expect(cartValueBar?.messageBeforeGoal).toMatch(/CA\$/);
 
-test.describe("Multi-currency (requires international market configured)", () => {
-  test.beforeEach(async ({ page }) => {
-    await clearCart(page);
+    await mountWidget(page, "promo-progress-bar", { "offer-id": cartValueBar!.offerId, currency: "CAD" });
+    // The runtime skips evaluations for an unchanged cart, so change it to feed the new widget.
+    await addLines(page, [{ id: anchor, quantity: 1 }]);
+    await evaluateNow(page);
+    await expect(page.locator("promo-progress-bar .pe-pb-msg")).toContainText("CA$", { timeout: 15_000 });
   });
 
-  test("progress bar shows remaining amount in local currency", async ({ page }) => {
-    // Navigate with a specific currency context
-    await page.goto(`${DEV_STORE}/en-ca`); // Canadian market
-    await page.waitForTimeout(2000);
+  test("evaluation request carries the Canada market context", async ({ page }) => {
+    await openMarket(page, "/?country=CA");
+    const anchor = await firstVariantId(page, E2E_GIFT_ANCHOR_HANDLE);
 
-    const progressBar = page.locator("promo-progress-bar");
-    await expect(progressBar).toBeVisible();
-
-    const message = await progressBar.evaluate((el) => {
-      return el.shadowRoot?.querySelector(".pe-pb-msg")?.textContent ?? "";
+    const evaluationRequest = page.waitForRequest((request) => request.url().includes("/apps/promo-engine/evaluate"), {
+      timeout: 30_000,
     });
+    await addLines(page, [{ id: anchor, quantity: 1 }]);
+    const request = await evaluationRequest;
 
-    // Should show CAD currency, not USD
-    // This tests that the currency override is respected
-    expect(message).toBeTruthy();
-  });
-
-  test("evaluation uses market-specific threshold", async ({ page }) => {
-    // The evaluation endpoint should receive countryCode from buyer identity
-    await page.goto(`${DEV_STORE}/en-ca`);
-
-    const evalIntercepted = page.waitForResponse(
-      (res) => res.url().includes("/apps/promo-engine/evaluate"),
-    );
-
-    await page.waitForTimeout(3000);
-
-    const response = await evalIntercepted;
-    expect(response.ok()).toBe(true);
-    const body = await response.json() as EvaluationResponse;
+    const payload = request.postDataJSON() as { market?: { countryCode?: string; currencyCode?: string } };
+    expect(payload.market?.countryCode).toBe("CA");
+    expect(payload.market?.currencyCode).toBe("CAD");
+    const response = await request.response();
+    expect(response?.ok()).toBe(true);
+    const body = (await response!.json()) as Record<string, unknown>;
     expect(body).toHaveProperty("cartActions");
     expect(body).toHaveProperty("qualifiedOffers");
   });
 });
 
 test.describe("Customer targeting", () => {
-  test("logged-out customer falls back gracefully for customer tag conditions", async ({ page }) => {
-    await clearCart(page);
-    await page.goto(`${DEV_STORE}/products/${PRODUCT_HANDLE}`);
-    await page.waitForTimeout(2000);
-
-    // Promo engine should still initialize even without a customer
-    const runtimeReady = await page.evaluate(() => typeof window.PromoEngine !== "undefined");
-    expect(runtimeReady).toBe(true);
+  test("logged-out customer still initialises the runtime", async ({ page }) => {
+    await gotoStorefront(page, `/products/${encodeURIComponent(PRODUCT_HANDLE)}`);
+    await waitForPromoEngine(page);
+    expect(
+      await page.evaluate(() => typeof (window as { PromoEngine?: { evaluate?: unknown } }).PromoEngine?.evaluate),
+    ).toBe("function");
   });
 
-  test("guest customer sees gift offers without login requirement", async ({ page }) => {
+  test("guest customer receives gift offers without logging in", async ({ page }) => {
+    await gotoStorefront(page, `/products/${encodeURIComponent(E2E_GIFT_ANCHOR_HANDLE)}`);
+    await waitForPromoEngine(page);
     await clearCart(page);
-    await page.goto(`${DEV_STORE}/products/${PRODUCT_HANDLE}`);
+    const anchor = await firstVariantId(page, E2E_GIFT_ANCHOR_HANDLE);
+    await addLines(page, [{ id: anchor, quantity: 1 }]);
 
-    // Add a product to trigger evaluation
-    const addBtn = page.locator('[data-testid="add-to-cart"], [name="add"]').first();
-    await expect(addBtn).toBeVisible();
-    await addBtn.click();
-    await page.waitForTimeout(2000);
-
-    const cart = await page.goto(`${DEV_STORE}/cart.js`);
-    const cartData = await cart?.json() as CartResponse | undefined;
-    expect(cartData).toHaveProperty("items");
+    await expect
+      .poll(
+        async () =>
+          (await getCart(page)).items.some((item) => item.properties?.["_promo_engine_line_type"] === "gift"),
+        { timeout: 30_000, intervals: [2_000] },
+      )
+      .toBe(true);
   });
 });
 
 test.describe("Accessibility", () => {
-  test("gift slider is keyboard navigable", async ({ page }) => {
-    await page.goto(`${DEV_STORE}/`);
-    await page.waitForTimeout(2000);
+  test("gift slider is a keyboard-operable modal dialog", async ({ page }) => {
+    await gotoStorefront(page, `/products/${encodeURIComponent(PRODUCT_HANDLE)}`);
+    await waitForPromoEngine(page);
+    await clearCart(page);
+    const anchor = await firstVariantId(page, PRODUCT_HANDLE);
+    await addLines(page, [{ id: anchor, quantity: 1 }]);
 
-    // If gift slider is open, check keyboard navigation
-    const slider = page.locator(".pe-slider-overlay");
-    await expect(slider).toBeVisible();
+    const slider = page.locator("dialog.pe-slider-overlay");
+    await expect(slider).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator(".pe-slider-close")).toBeFocused();
+
     await page.keyboard.press("Tab");
     await page.keyboard.press("Tab");
-    const focusedElement = await page.evaluate(() => document.activeElement?.className);
-    expect(focusedElement).toBeTruthy();
+    expect(await page.evaluate(() => !!document.activeElement?.closest("dialog.pe-slider-overlay"))).toBe(true);
+
+    await page.keyboard.press("Escape");
+    await expect(slider).toBeHidden();
   });
 });

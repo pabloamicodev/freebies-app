@@ -19,6 +19,7 @@ const result = await build({
       import {createMemoryRouter, RouterProvider} from 'react-router';
       import Wizard from ${JSON.stringify(join(app, "app/routes/app.offers.new.codes.$template.tsx"))};
       import Shell from ${JSON.stringify(join(app, "app/routes/app.tsx"))};
+      import NewOffer from ${JSON.stringify(join(app, "app/routes/app.offers.new._index.tsx"))};
       import ${JSON.stringify(join(app, "app/styles/bogos.css"))};
       const router = createMemoryRouter([{
         path: '/app', Component: Shell,
@@ -30,7 +31,11 @@ const result = await build({
             await new Promise(resolve => setTimeout(resolve, 400));
             return {error: 'Test validation error'};
           },
-        }, {path: 'offers', element: <h1>All offers</h1>}],
+        }, {
+          path: 'offers/new', Component: NewOffer,
+          loader: ({request}) => ({shopDomain: 'hpn-test-store.myshopify.com', initialType: new URL(request.url).searchParams.get('type') ?? 'type'}),
+        }, {path: 'offers/new/:type/:template', element: <h1>Wizard route</h1>},
+        {path: 'offers', element: <h1>All offers</h1>}],
       }], {initialEntries: [window.location.pathname + window.location.search]});
       createRoot(document.getElementById('root')).render(<RouterProvider router={router}/>);
     `,
@@ -48,7 +53,7 @@ const result = await build({
     builder.onLoad({ filter: /.*/, namespace: "fixture-provider" }, () => ({ contents: "export const AppProvider=({children})=>children; export const NavMenu=()=>null;", loader: "js" }));
     builder.onResolve({ filter: /\?url$/ }, args => ({ path: args.path, namespace: "fixture-css" }));
     builder.onLoad({ filter: /.*/, namespace: "fixture-css" }, () => ({ contents: 'export default "";', loader: "js" }));
-    builder.onLoad({ filter: /[\\/]routes[\\/](app\.offers\.new\.codes\..*|app)\.tsx$/ }, ({ path }) => {
+    builder.onLoad({ filter: /[\\/]routes[\\/](app\.offers\.new\.codes\..*|app\.offers\.new\._index|app)\.tsx$/ }, ({ path }) => {
       let contents = readFileSync(path, "utf8");
       const source = ts.createSourceFile(path, contents, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
       // Remove only server imports/exports, as the app build does. Keep the

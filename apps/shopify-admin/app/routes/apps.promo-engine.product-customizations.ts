@@ -14,6 +14,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const VARIANT_GID = /^gid:\/\/shopify\/ProductVariant\/\d+$/;
 
 interface DiscountTier {
+  minimumQuantity?: number;
   qty?: number;
   requiredQty?: number;
   label?: string;
@@ -84,7 +85,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const originalPriceCents = centsFromPrice(variant?.price ?? 0);
   const tiers = (Array.isArray(value.tiers) ? value.tiers : [])
     .map((tier) => {
-      const minQuantity = tier.qty ?? tier.requiredQty ?? 1;
+      const minQuantity = tier.minimumQuantity ?? tier.qty ?? tier.requiredQty ?? 1;
       const discountType = tier.discountType ?? "percentage";
       const discountValue = Number.isFinite(tier.discountValue) ? tier.discountValue! : 0;
       return {
