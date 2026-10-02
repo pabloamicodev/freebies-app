@@ -359,7 +359,7 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
       state.knownDiscountIds.delete(variables!.id as string);
       return { discountAutomaticDelete: { deletedAutomaticDiscountId: variables!.id, userErrors: [] } };
     }
-    if (query.includes("PromoEngineShopId")) return { shop: { id: "gid://shopify/Shop/1" } };
+    if (query.includes("PromoEngineAppInstallation")) return { currentAppInstallation: { id: "gid://shopify/AppInstallation/1" } };
     if (query.includes("PromoEngineSpecificLinkParams")) {
       for (const m of variables!.metafields as Array<{ ownerId: string; namespace: string; key: string; value: string }>) {
         state.shopMetafieldPushes.push(m);
@@ -1765,13 +1765,13 @@ describe("publishOffersForShop — lock timeouts, retries, manifest and shop met
     for (const push of pushes) expect(push.namespaces).toEqual(["promo_engine", "$app:promo_engine"]);
   });
 
-  it("publishes the specific-link param names as an app-owned shop metafield (default freegifts_code)", async () => {
+  it("publishes the specific-link param names as an app-installation metafield the theme can read (default freegifts_code)", async () => {
     reset();
     await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
     expect(state.shopMetafieldPushes).toEqual([
       {
-        ownerId: "gid://shopify/Shop/1",
-        namespace: "$app:promo_engine",
+        ownerId: "gid://shopify/AppInstallation/1",
+        namespace: "promo_engine",
         key: "specific_link_params",
         type: "json",
         value: JSON.stringify(["freegifts_code"]),

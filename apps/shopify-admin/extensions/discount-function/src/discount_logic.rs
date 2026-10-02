@@ -204,8 +204,20 @@ fn evaluate_product_reward(
     // (`maxQuantity`, default 1) is how many times the gift SET is granted: each target product
     // (or variant, when the reward targets variants) gets at most that many free units, no matter
     // how many anchors or units are in the cart. `maxUnitsTotal` stays a separate cart-wide cap.
-    let set_limit = (reward.scope_mode == "landing" || reward.scope_mode == "tagged_offer")
-        .then(|| reward.max_quantity.unwrap_or(1));
+    // The default of 1 set only applies to free-gift landing rewards: tagged bundles ("buy 3 of A,
+    // 20% off") and landing price/quantity tiers discount every qualifying unit unless a limit is set.
+    let free_landing_gift = reward.scope_mode == "landing"
+        && reward.price_tiers.is_empty()
+        && reward.quantity_tiers.is_empty()
+        && (reward.discount_type == "free"
+            || (reward.discount_type == "percentage" && reward.discount_value >= 100.0));
+    let set_limit = if free_landing_gift {
+        Some(reward.max_quantity.unwrap_or(1))
+    } else if reward.scope_mode == "landing" || reward.scope_mode == "tagged_offer" {
+        reward.max_quantity
+    } else {
+        None
+    };
     let (per_product_cap, per_variant_cap) = match set_limit {
         Some(limit) if !reward.target_variant_ids.is_empty() => (
             reward.max_units_per_product,
@@ -4023,11 +4035,10 @@ mod tests {
         assert_eq!(landing_units(&config, 1, 50), vec![3, 3, 0]);
     }
 
-    #[test]
-    fn tagged_offer_reward_also_defaults_to_one_unit_per_target_product() {
-        let config = landing_cap_config(THREE_PRODUCTS, "")
+    fn tagged_free_units(extra: &str) -> BTreeMap<String, i64> {
+        let config = landing_cap_config(THREE_PRODUCTS, extra)
             .replace(r#""scopeMode":"landing","requiredLineAttributeValue":"lp""#, r#""scopeMode":"tagged_offer","requiredOfferId":"offer-x""#);
-        let tagged: Vec<String> = serde_json::from_str::<Vec<Value>>(&landing_cap_lines(1, 50))
+        let tagged: Vec<String> = serde_json::from_str::<Vec<Value>>(&landing_cap_lines(1, 5))
             .unwrap()
             .into_iter()
             .map(|mut line| {
@@ -4036,9 +4047,31 @@ mod tests {
             })
             .collect();
         let result = run_function_with_input(run, &cart_json(&format!("[{}]", tagged.join(",")), "500.00", &config)).unwrap();
-        let units = free_units_by_line(&result);
-        assert_eq!(units.get("gid://shopify/CartLine/t1"), Some(&1));
-        assert_eq!(units.get("gid://shopify/CartLine/t3"), Some(&1));
+        free_units_by_line(&result)
+    }
+
+    #[test]
+    fn tagged_offer_without_limit_discounts_every_tagged_unit() {
+        // Tagged bundles ("buy 3 of A, 20% off") must not inherit the free-gift default of 1 set.
+        let units = tagged_free_units("");
+        assert_eq!(units.get("gid://shopify/CartLine/t1"), Some(&5));
+        assert_eq!(units.get("gid://shopify/CartLine/t3"), Some(&5));
+    }
+
+    #[test]
+    fn tagged_offer_with_configured_limit_caps_each_target_product() {
+        let units = tagged_free_units(r#","maxQuantity":2"#);
+        assert_eq!(units.get("gid://shopify/CartLine/t1"), Some(&2));
+        assert_eq!(units.get("gid://shopify/CartLine/t3"), Some(&2));
+    }
+
+    #[test]
+    fn landing_price_tiers_do_not_inherit_the_free_gift_default() {
+        let config = landing_cap_config(THREE_PRODUCTS, "").replace(r#""discountType":"free","discountValue":100,
+                "subscriptionMode""#, r#""discountType":"percentage","discountValue":20,
+                "subscriptionMode""#);
+        let result = run_function_with_input(run, &cart_json(&landing_cap_lines(1, 4), "300.00", &config)).unwrap();
+        assert_eq!(free_units_by_line(&result).get("gid://shopify/CartLine/t1"), Some(&4));
     }
 
     fn gift_cart(gifts: &[(&str, &str, &str, i64)], config: &str, reward_id: Option<&str>) -> BTreeMap<String, i64> {

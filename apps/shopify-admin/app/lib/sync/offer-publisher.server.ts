@@ -1265,10 +1265,12 @@ async function pushSpecificLinkParams(
   conditionRows: OfferCondition[],
 ): Promise<void> {
   try {
-    const shop = await shopifyGraphQL<{ shop: { id: string } }>({
+    // Theme Liquid's `app.metafields` only exposes app-data metafields owned by the app
+    // installation (private to this app), so write it there, not on the shop.
+    const installation = await shopifyGraphQL<{ currentAppInstallation: { id: string } }>({
       shopDomain,
       accessToken,
-      query: `query PromoEngineShopId { shop { id } }`,
+      query: `query PromoEngineAppInstallation { currentAppInstallation { id } }`,
     });
     const data = await shopifyGraphQL<{ metafieldsSet: { userErrors: Array<{ message: string }> } }>({
       shopDomain,
@@ -1283,8 +1285,8 @@ async function pushSpecificLinkParams(
       variables: {
         metafields: [
           {
-            ownerId: shop.shop.id,
-            namespace: "$app:promo_engine",
+            ownerId: installation.currentAppInstallation.id,
+            namespace: "promo_engine",
             key: "specific_link_params",
             type: "json",
             value: JSON.stringify(specificLinkParamNames(conditionRows)),

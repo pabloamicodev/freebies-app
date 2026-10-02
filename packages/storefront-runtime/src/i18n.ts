@@ -25,7 +25,10 @@ export type I18nKey = keyof typeof DEFAULTS;
 export function t(key: I18nKey, vars: Record<string, string | number> = {}): string {
   const custom = typeof window !== "undefined" ? window.__promoEngineConfig?.i18n?.[key] : undefined;
   const template = typeof custom === "string" && custom ? custom : DEFAULTS[key];
-  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, name: string) =>
-    name in vars ? String(vars[name]) : m,
-  );
+  // The app embed renders placeholders as __name__ (a literal "{{" inside a Liquid output tag would
+  // end the tag early); the built-in defaults use {{name}}.
+  return template.replace(/\{\{\s*(\w+)\s*\}\}|__(\w+)__/g, (m, braced: string | undefined, underscored: string | undefined) => {
+    const name = braced ?? underscored ?? "";
+    return name in vars ? String(vars[name]) : m;
+  });
 }

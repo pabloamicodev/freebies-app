@@ -94,6 +94,12 @@ describe("t (widget strings)", () => {
     expect(t("close")).toBe("Cerrar");
     expect(t("giftOffer")).toBe("View free gift offer");
   });
+  it("fills the __name__ placeholders the app embed renders through Liquid's t filter", () => {
+    vi.stubGlobal("window", {
+      __promoEngineConfig: { i18n: { fbtAdd: "Agregá __count__ por __price__" } },
+    });
+    expect(t("fbtAdd", { count: 2, price: "$10" })).toBe("Agregá 2 por $10");
+  });
 });
 
 describe("publishAnalytics + Customer Privacy API", () => {

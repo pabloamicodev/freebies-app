@@ -5,7 +5,7 @@
   Injects the runtime config and loads the compiled promo-engine.js bundle.
 
   Settings: debug_mode and cart_debounce_ms.
-  specificLinkParams: app-owned shop metafield promo_engine.specific_link_params (JSON list of query-param
+  specificLinkParams: app-installation metafield promo_engine.specific_link_params (JSON list of query-param
   names used by specific-link conditions); the runtime falls back to ["freegifts_code"] when it is absent.
   i18n: widget strings from locales/*.json (merchant-translatable).
 {% endcomment %}
@@ -38,16 +38,16 @@
       giftOffer: {{ 'widgets.giftOffer' | t | json }},
       giftSliderClose: {{ 'widgets.giftSliderClose' | t | json }},
       giftsUpdating: {{ 'widgets.giftsUpdating' | t | json }},
-      progress: {{ 'widgets.progress' | t: percent: '{{percent}}' | json }},
+      progress: {{ 'widgets.progress' | t: percent: '__percent__' | json }},
       todayOffers: {{ 'widgets.todayOffers' | t | json }},
       todayDeals: {{ 'widgets.todayDeals' | t | json }},
-      offersAvailable: {{ 'widgets.offersAvailable' | t: count: '{{count}}' | json }},
+      offersAvailable: {{ 'widgets.offersAvailable' | t: count: '__count__' | json }},
       offerAvailable: {{ 'widgets.offerAvailable' | t | json }},
       bundleSearch: {{ 'widgets.bundleSearch' | t | json }},
-      bundleAdd: {{ 'widgets.bundleAdd' | t: title: '{{title}}' | json }},
-      bundleRemove: {{ 'widgets.bundleRemove' | t: title: '{{title}}' | json }},
-      fbtAdd: {{ 'widgets.fbtAdd' | t: count: '{{count}}', price: '{{price}}' | json }},
-      volumeTier: {{ 'widgets.volumeTier' | t: quantity: '{{quantity}}', price: '{{price}}' | json }}
+      bundleAdd: {{ 'widgets.bundleAdd' | t: title: '__title__' | json }},
+      bundleRemove: {{ 'widgets.bundleRemove' | t: title: '__title__' | json }},
+      fbtAdd: {{ 'widgets.fbtAdd' | t: count: '__count__', price: '__price__' | json }},
+      volumeTier: {{ 'widgets.volumeTier' | t: quantity: '__quantity__', price: '__price__' | json }}
     }
   };
 </script>
