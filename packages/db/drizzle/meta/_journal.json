@@ -141,6 +141,13 @@
       "when": 1790944323914,
       "tag": "0019_wsc_batch2_gdpr_webhook_code_readd",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791200000000,
+      "tag": "0020_offer_timezone_backfill",
+      "breakpoints": true
     }
   ]
 }
