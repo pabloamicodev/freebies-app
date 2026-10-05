@@ -4,6 +4,7 @@ import { runOfferScheduler } from "../lib/offer-scheduling.server.js";
 import * as Sentry from "@sentry/node";
 import { runCron } from "../lib/cron-run.server.js";
 import { runDiscountCodeSchedule } from "../lib/discount-code-schedule.server.js";
+import { refreshStaleShopTimezones } from "../lib/shop-timezone-refresh.server.js";
 import { reconcileActiveShopDiscountNodes, runDiscountDriftRepair } from "../lib/discount-reconciliation.server.js";
 
 // Must be a literal (the Vercel preset parses it statically); cron-config.test.ts checks it equals CRON_JOBS.
@@ -11,6 +12,11 @@ export const config = { maxDuration: 300 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
   return runCron(request, "offers", async () => {
+    // Before the scheduler so offers pinned to a corrected zone are evaluated with it. Never fails the cron.
+    const timezones = await refreshStaleShopTimezones().catch((error) => {
+      Sentry.captureException(error, { tags: { cron: "offers", stage: "timezone-refresh" } });
+      return { checked: 0, updated: 0 };
+    });
     const reconciliation = await reconcileActiveShopDiscountNodes();
     for (const failure of reconciliation.failures) {
       Sentry.captureMessage("Discount node reconciliation failed", {
@@ -46,6 +52,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       drift.failures.length > 0;
     // These are captureMessage, not thrown exceptions, so runCron's check-in flush is
     // what gets them out before Vercel freezes the function.
-    return { body: { ok: !hasFailures, reconciliation, codeSchedule, drift, ...result }, status: hasFailures ? 207 : 200 };
+    return { body: { ok: !hasFailures, timezones, reconciliation, codeSchedule, drift, ...result }, status: hasFailures ? 207 : 200 };
   });
 }

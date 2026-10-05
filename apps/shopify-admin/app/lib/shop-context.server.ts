@@ -1,6 +1,8 @@
 import { authenticate } from "../shopify.server.js";
 import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
+import { waitUntil } from "@vercel/functions";
+import { adminZoneFetcher, needsTimezoneRefresh, refreshShopTimezone } from "./shop-timezone-refresh.server.js";
 
 export interface ShopContext {
   admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"];
@@ -36,6 +38,10 @@ export async function getShopContext(request: Request): Promise<ShopContext> {
 
   const shopRow = shopRows[0];
   if (!shopRow) throw new Response("Shop not found — re-install the app", { status: 404 });
+
+  if (needsTimezoneRefresh(shopRow.timezone)) {
+    waitUntil(refreshShopTimezone({ shopId: shopRow.id, storedTimezone: shopRow.timezone, fetchZone: adminZoneFetcher(admin) }));
+  }
 
   return {
     admin,

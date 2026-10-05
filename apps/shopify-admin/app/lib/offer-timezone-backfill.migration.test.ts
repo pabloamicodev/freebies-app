@@ -32,4 +32,13 @@ describe("0020_offer_timezone_backfill", () => {
     expect(byId.get(explicit)!.timezone).toBe("Europe/Paris");
     expect(byId.get(nullTz)!.startsAt!.toISOString()).toBe(startsAt.toISOString());
   });
+
+  it("skips shops still on the UTC fallback so NULL keeps following the shop", async () => {
+    const shopId = await seedShop(db, "backfill-utc.myshopify.com");
+    const nullTz = await seedOffer(db, shopId, { timezone: null });
+    const file = readFileSync(resolve(__dirname, "../../../../packages/db/drizzle/0020_offer_timezone_backfill.sql"), "utf8");
+    await db.execute(sql.raw(file));
+    const [row] = await db.select().from(offers).where(eq(offers.id, nullTz));
+    expect(row!.timezone).toBeNull();
+  });
 });

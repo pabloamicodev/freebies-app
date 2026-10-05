@@ -97,6 +97,7 @@ const shopify = shopifyApp({
         let currencyCode = "USD";
         let timezone = "UTC";
         let locale: string | null = null;
+        let zoneFetched = false;
         try {
           const shopData = await shopifyGraphQL<{
             shop: { currencyCode: string; ianaTimezone: string; primaryDomain: { localization: { defaultLocale: string } } };
@@ -107,10 +108,12 @@ const shopify = shopifyApp({
           });
           currencyCode = shopData.shop.currencyCode;
           timezone = shopData.shop.ianaTimezone;
+          zoneFetched = true;
           locale = shopData.shop.primaryDomain?.localization?.defaultLocale ?? null;
         } catch (shopFetchErr) {
           Sentry.captureException(shopFetchErr, { tags: { shop: shopDomain }, extra: { context: "afterAuth-shop-fetch" } });
           console.error("[afterAuth] Could not fetch shop locale, using defaults:", shopFetchErr instanceof Error ? shopFetchErr.message : shopFetchErr);
+          console.warn(`[afterAuth] Storing fallback timezone UTC for ${shopDomain}; the timezone refresh will correct it on the next admin request or offers cron.`);
         }
 
         // Atomic upsert — no TOCTOU race on concurrent installs / reinstalls.
@@ -138,7 +141,8 @@ const shopify = shopifyApp({
               accessTokenEncrypted,
               isActive: true,
               currencyCode,
-              timezone,
+              // A failed fetch must not clobber a zone the refresh already corrected.
+              ...(zoneFetched ? { timezone } : {}),
               locale,
               installedAt,
               uninstalledAt: null,
