@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 
-interface SelectedVariant {
+export interface SelectedVariant {
   id: string;
   title: string;
   price: string | null;
   sku: string | null;
 }
 
-interface SelectedProduct {
+export interface SelectedProduct {
   id: string;
   title: string;
   imageUrl: string | null;
@@ -20,9 +20,11 @@ interface Props {
   /** If true, gids are variant GIDs; if false, product GIDs */
   variantMode?: boolean;
   label?: string;
+  /** Fires with the resolved products so a parent can build summaries/hints without a second fetch. */
+  onLoaded?: (products: SelectedProduct[]) => void;
 }
 
-export function SelectedProductsList({ gids, onRemove, variantMode = true, label }: Props) {
+export function SelectedProductsList({ gids, onRemove, variantMode = true, label, onLoaded }: Props) {
   const [products, setProducts] = useState<SelectedProduct[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -38,6 +40,7 @@ export function SelectedProductsList({ gids, onRemove, variantMode = true, label
       .then((r) => r.json())
       .then((data) => {
         setProducts(data.products ?? []);
+        onLoaded?.(data.products ?? []);
         setLoading(false);
       })
       .catch(() => setLoading(false));

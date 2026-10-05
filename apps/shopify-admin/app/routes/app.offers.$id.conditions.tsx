@@ -10,7 +10,9 @@ import * as Sentry from "@sentry/node";
 import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
-import { SelectedProductsList } from "../components/SelectedProductsList.js";
+import { SelectedProductsList, type SelectedProduct } from "../components/SelectedProductsList.js";
+import { MatchBySelect, ProductConditionNote, pickedItems } from "../components/ProductConditionFields.js";
+import { buildProductConditionValue, readMatchBy, requirementGids, type MatchBy } from "../lib/product-condition.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
@@ -36,7 +38,7 @@ import { DEFAULT_CODE_PAGE_TYPES, readPageTypes } from "../lib/page-types.js";
 import { and, eq } from "drizzle-orm";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { getMarketsForShop } from "../lib/markets.server.js";
-import { conditionSummary } from "../lib/offer-summaries.js";
+import { conditionSummary, conditionTypeLabel } from "../lib/offer-summaries.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -228,30 +230,14 @@ function buildConditionValue(
       }
       case "specific_product":
       case "pack_of_products": {
-        const gidsRaw = (formData.get("requiredVariantGids") as string | null) ?? "";
-        const variantIds = splitCsvList(gidsRaw);
-        if (variantIds.length === 0) {
+        const matchBy: MatchBy = formData.get("matchBy") === "product" ? "product" : "variant";
+        const gids = splitCsvList((formData.get(matchBy === "product" ? "requiredProductGids" : "requiredVariantGids") as string | null) ?? "");
+        if (gids.length === 0) {
           // Return early with validation error rather than inserting an empty condition
           return { error: "Select at least one product before adding this condition." };
         }
         const minQty = parseInt((formData.get("minQtyPerProduct") as string | null) ?? "1", 10) || 1;
-        value = conditionType === "pack_of_products"
-          ? {
-              requirements: variantIds.map((variantId) => ({
-                variantId,
-                trackMode: "variant",
-                quantityPerPack: minQty,
-              })),
-              multiplyByPacks: false,
-            }
-          : {
-              requirements: variantIds.map((variantId) => ({
-                variantId,
-                trackMode: "variant",
-                minQuantity: minQty,
-              })),
-              multiplyByGroups: false,
-            };
+        value = buildProductConditionValue(conditionType, matchBy, gids, minQty);
         break;
       }
       case "line_attribute":
@@ -360,8 +346,8 @@ const MAIN_CONDITION_TYPES = [
   { label: "Cart Value — spend threshold", value: "cart_value" },
   { label: "Cart Quantity — item count threshold", value: "cart_quantity" },
   { label: "Cart Value Multiplier — earn gifts per $ spent", value: "cart_value_multiplier" },
-  { label: "Specific Product — must contain selected products", value: "specific_product" },
-  { label: "Pack of Products — all products must be present", value: "pack_of_products" },
+  { label: "Specific Product — cart must contain every selected variant/product", value: "specific_product" },
+  { label: "Pack of Products — every product in the pack must be present", value: "pack_of_products" },
   { label: "Page URL — restrict to specific storefront pages", value: "page_url" },
   { label: "Store pages — products added from home, collections, product pages…", value: "page_types" },
   { label: "Line attribute — approved legacy property", value: "line_attribute" },
@@ -392,13 +378,15 @@ function deriveConditionEditFields(value: Record<string, unknown>) {
   const excludeMarketIds = Array.isArray(value["excludeMarketIds"]) ? (value["excludeMarketIds"] as string[]) : [];
   let requiredVariantGids: string[] = [];
   let minQtyPerProduct = "1";
+  const matchBy = readMatchBy(value);
+  const requiredProductGids = matchBy === "product" ? requirementGids(value) : [];
   if (Array.isArray(value["requirements"])) {
     const requirements = value["requirements"] as Array<Record<string, unknown>>;
-    requiredVariantGids = requirements.map((r) => String(r["variantId"] ?? "")).filter(Boolean);
+    requiredVariantGids = matchBy === "variant" ? requirementGids(value) : [];
     const firstQty = requirements[0]?.["quantityPerPack"] ?? requirements[0]?.["minQuantity"];
     minQtyPerProduct = typeof firstQty === "number" ? String(firstQty) : "1";
   }
-  return { currencyCode, includeMarketIds, excludeMarketIds, requiredVariantGids, minQtyPerProduct };
+  return { currencyCode, includeMarketIds, excludeMarketIds, requiredVariantGids, requiredProductGids, matchBy, minQtyPerProduct };
 }
 
 export default function OfferConditionsPage() {
@@ -420,6 +408,9 @@ export default function OfferConditionsPage() {
       pickerOpen: false,
       pickerTarget: "required" as "required" | "exclude" | "gift",
       requiredVariantGids: fields?.requiredVariantGids ?? [],
+      requiredProductGids: fields?.requiredProductGids ?? [],
+      matchBy: (fields?.matchBy ?? "variant") as MatchBy,
+      pickedProducts: [] as SelectedProduct[],
       excludeVariantGids: [] as string[],
       currencyCode: fields?.currencyCode ?? "USD",
       minQtyPerProduct: fields?.minQtyPerProduct ?? "1",
@@ -435,6 +426,9 @@ export default function OfferConditionsPage() {
     pickerOpen,
     pickerTarget,
     requiredVariantGids,
+    requiredProductGids,
+    matchBy,
+    pickedProducts,
     excludeVariantGids,
     currencyCode,
     minQtyPerProduct,
@@ -449,6 +443,9 @@ export default function OfferConditionsPage() {
   const setPickerOpen = createFieldSetter(setConditionField, "pickerOpen");
   const setPickerTarget = createFieldSetter(setConditionField, "pickerTarget");
   const setRequiredVariantGids = createFieldSetter(setConditionField, "requiredVariantGids");
+  const setRequiredProductGids = createFieldSetter(setConditionField, "requiredProductGids");
+  const setMatchBy = createFieldSetter(setConditionField, "matchBy");
+  const setPickedProducts = createFieldSetter(setConditionField, "pickedProducts");
   const setExcludeVariantGids = createFieldSetter(setConditionField, "excludeVariantGids");
   const setCurrencyCode = createFieldSetter(setConditionField, "currencyCode");
   const setMinQtyPerProduct = createFieldSetter(setConditionField, "minQtyPerProduct");
@@ -484,6 +481,8 @@ export default function OfferConditionsPage() {
     setIncludeMarketIds(fields.includeMarketIds);
     setExcludeMarketIds(fields.excludeMarketIds);
     setRequiredVariantGids(fields.requiredVariantGids);
+    setRequiredProductGids(fields.requiredProductGids);
+    setMatchBy(fields.matchBy);
     setMinQtyPerProduct(fields.minQtyPerProduct);
   }
 
@@ -500,12 +499,13 @@ export default function OfferConditionsPage() {
       <ProductPicker
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
-        title={pickerTarget === "exclude" ? "Select Products to Exclude" : "Select Required Products"}
-        mode="variants"
+        title={pickerTarget === "exclude" ? "Select Products to Exclude" : matchBy === "product" ? "Select Required Products" : "Select Required Variants"}
+        mode={pickerTarget !== "exclude" && matchBy === "product" ? "products" : "variants"}
         allowMultiple
-        selectedIds={pickerTarget === "exclude" ? excludeVariantGids : requiredVariantGids}
+        selectedIds={pickerTarget === "exclude" ? excludeVariantGids : matchBy === "product" ? requiredProductGids : requiredVariantGids}
         onSelect={(gids) => {
           if (pickerTarget === "exclude") setExcludeVariantGids(gids);
+          else if (matchBy === "product") setRequiredProductGids(gids);
           else setRequiredVariantGids(gids);
         }}
       />
@@ -603,7 +603,7 @@ export default function OfferConditionsPage() {
                       >
                         {c.scope}
                       </span>
-                      <span className="b-text-bold">{c.conditionType}</span>
+                      <span className="b-text-bold">{conditionTypeLabel(c.conditionType)}</span>
                       <span className="b-text-sm b-text-sub">
                         {conditionSummary(c.conditionType, c.value)}
                       </span>
@@ -810,26 +810,40 @@ export default function OfferConditionsPage() {
                   {/* specific_product / pack_of_products — product picker */}
                   {(selectedType === "specific_product" || selectedType === "pack_of_products") && (
                     <div className="b-stack b-stack-3">
+                      <MatchBySelect
+                        id="matchBy"
+                        value={matchBy}
+                        onChange={(next) => {
+                          if (next === "product" && requiredProductGids.length === 0 && requiredVariantGids.length > 0) {
+                            setRequiredProductGids([...new Set(pickedItems(pickedProducts, requiredVariantGids, "variant").flatMap((i) => (i.productId ? [i.productId] : [])))]);
+                          }
+                          setMatchBy(next);
+                        }}
+                      />
+                      <input type="hidden" name="matchBy" value={matchBy} />
                       <p className="b-text-bold" style={{ margin: 0 }}>
                         {selectedType === "specific_product"
-                          ? "Required products"
-                          : "Pack products (all must be present)"}
+                          ? matchBy === "product" ? "Required products" : "Required variants"
+                          : matchBy === "product" ? "Pack products (all must be present)" : "Pack variants (all must be present)"}
                       </p>
                       <button
                         type="button"
                         className="b-btn b-btn-secondary b-btn-sm"
                         onClick={() => { setPickerTarget("required"); setPickerOpen(true); }}
                       >
-                        + Select Products
+                        {matchBy === "product" ? "+ Select Products" : "+ Select Variants"}
                       </button>
                       {/* Resolves real titles/thumbnails instead of showing raw GIDs */}
                       <SelectedProductsList
-                        gids={requiredVariantGids}
-                        onRemove={(gid) => setRequiredVariantGids((prev) => prev.filter((g) => g !== gid))}
+                        gids={matchBy === "product" ? requiredProductGids : requiredVariantGids}
+                        variantMode={matchBy === "variant"}
+                        onLoaded={setPickedProducts}
+                        onRemove={(gid) => (matchBy === "product" ? setRequiredProductGids : setRequiredVariantGids)((prev) => prev.filter((g) => g !== gid))}
                       />
                       <input type="hidden" name="requiredVariantGids" value={requiredVariantGids.join(",")} />
+                      <input type="hidden" name="requiredProductGids" value={requiredProductGids.join(",")} />
                       <div>
-                        <label className="b-label" htmlFor="minQtyPerProduct">Min quantity per product</label>
+                        <label className="b-label" htmlFor="minQtyPerProduct">Min quantity per selected {matchBy === "product" ? "product" : "variant"}</label>
                         <input
                           id="minQtyPerProduct"
                           type="number"
@@ -840,12 +854,12 @@ export default function OfferConditionsPage() {
                           autoComplete="off"
                         />
                       </div>
-                      <p className="b-help">
-                        Every selected product must independently reach this minimum quantity —
-                        {selectedType === "specific_product"
-                          ? " this is an \"all of these\" condition, not \"any one of these\"."
-                          : " missing even one product (a genuine \"pack\") fails the whole condition."}
-                      </p>
+                      <ProductConditionNote
+                        type={selectedType as "specific_product" | "pack_of_products"}
+                        matchBy={matchBy}
+                        minQty={parseInt(minQtyPerProduct, 10) || 1}
+                        items={pickedItems(pickedProducts, matchBy === "product" ? requiredProductGids : requiredVariantGids, matchBy)}
+                      />
                     </div>
                   )}
 

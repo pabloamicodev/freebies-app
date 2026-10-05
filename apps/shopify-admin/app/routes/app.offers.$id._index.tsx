@@ -34,7 +34,11 @@ import type { SubconditionId } from "../components/subconditions/types.js";
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
 import { subconditionsFromRows } from "../lib/subcondition-prefill.js";
 import { pageTypeLabel, readPageTypes } from "../lib/page-types.js";
-import { getCodeNotices, offerRequiresCode } from "../lib/discount-codes.server.js";
+import { codesSummary, conditionSummary as sharedConditionSummary, conditionTypeLabel, rewardSummary } from "../lib/offer-summaries.js";
+import { MatchBySelect, ProductConditionNote, pickedItems } from "../components/ProductConditionFields.js";
+import { buildProductConditionValue, type MatchBy } from "../lib/product-condition.js";
+import type { SelectedProduct } from "../components/SelectedProductsList.js";
+import { countDiscountCodes, getCodeNotices, listDiscountCodes, offerRequiresCode } from "../lib/discount-codes.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
@@ -75,6 +79,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
+    codes: {
+      total: await countDiscountCodes(db, shopId, offerId),
+      active: await countDiscountCodes(db, shopId, offerId, { status: "active" }),
+      samples: (await listDiscountCodes(db, shopId, offerId, { pageSize: 3 })).rows.map((row) => row.code),
+    },
   const { session, shopId, currencyCode: shopCurrencyCode, db } = context;
   const offerId = parseUuidParam(params);
   if (!offerId) throw new Response("Not found", { status: 404 });
@@ -356,24 +365,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   return { success: true };
 };
 
-
-/* ── Condition type display names ───────────────────────── */
-const CONDITION_TYPE_NAMES: Record<string, string> = {
-  cart_value:            "Cart Value",
-  cart_quantity:         "Cart Quantity",
-  cart_value_multiplier: "Cart Value Multiplier",
-  specific_product:      "Specific Product",
-  pack_of_products:      "Pack of Products",
-  customer_tags:         "Customer Tags",
-  order_history_total_spent: "Order History — Total Spent",
-  one_use_per_customer:  "One Use Per Customer",
-  markets:               "Shopify Markets",
-  customer_location:     "Customer Location",
-  sales_channels:        "Sales Channels",
-  page_url:              "Page URL",
-  page_types:            "Store pages",
-  utm_parameters:        "UTM Parameters",
-};
 
 /* ── Currency chips shown on monetary conditions ────────── */
 const CURRENCIES = SUPPORTED_CURRENCIES;
@@ -713,7 +704,10 @@ function ConditionCard({
     void fetcher.submit(fd, { method: "POST" });
   }
 
-  const title = CONDITION_TYPE_NAMES[conditionType] ?? conditionType;
+  const selectedProductIds = Array.isArray(val.productIds) ? (val.productIds as string[]) : [];
+  const matchBy: MatchBy = val.trackMode === "product" ? "product" : "variant";
+  const [pickedProducts, setPickedProducts] = useState<SelectedProduct[]>([]);
+  const title = conditionTypeLabel(conditionType);
 
   return (
     <div style={{
@@ -893,11 +887,11 @@ function ConditionCard({
           <>
             <div style={{ marginBottom: 14 }}>
               <label htmlFor={`condition-${conditionId}-required-products`} style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
-                Required number of products
+                Min quantity per selected {matchBy === "product" ? "product" : "variant"}
               </label>
               <input
                 id={`condition-${conditionId}-required-products`}
-                aria-label="Required number of products"
+                aria-label="Min quantity per selected variant or product"
                 className="b-input"
                 type="number"
                 min="1"
@@ -941,26 +935,20 @@ function ConditionCard({
               </label>
             </div>
 
-            {Boolean(val.giftsMatchProducts) && (
-              <div style={{ paddingLeft: 25, marginBottom: 14 }}>
-                {["variant", "product"].map((mode) => (
-                  <div key={mode} className="b-checkbox-row" style={{ marginBottom: 6 }}>
-                    <input
-                      type="radio"
-                      id={`trackMode-${mode}-${conditionId}`}
-                      aria-label={mode === "variant" ? "Track by variant" : "Track by product"}
-                      name={`trackMode-${conditionId}`}
-                      checked={val.trackMode === mode}
-                      onChange={() => { const next = { ...val, trackMode: mode }; setVal(next); save(next); }}
-                      style={{ accentColor: "var(--blue)", width: 14, height: 14 }}
-                    />
-                    <label htmlFor={`trackMode-${mode}-${conditionId}`} className="b-checkbox-label">
-                      {mode === "variant" ? "Track by variant" : "Track by product"}
-                    </label>
-                  </div>
-                ))}
-              </div>
-            )}
+            <div style={{ marginBottom: 14 }}>
+              <MatchBySelect
+                id={`matchBy-${conditionId}`}
+                value={matchBy}
+                onChange={(next) => {
+                  const seeded = next === "product" && selectedProductIds.length === 0 && selectedVariantIds.length > 0
+                    ? [...new Set(pickedItems(pickedProducts, selectedVariantIds, "variant").flatMap((i) => (i.productId ? [i.productId] : [])))]
+                    : selectedProductIds;
+                  const nextVal = { ...val, trackMode: next, productIds: seeded };
+                  setVal(nextVal);
+                  save(nextVal);
+                }}
+              />
+            </div>
 
             <div style={{ marginBottom: 14 }}>
               <label htmlFor={`condition-${conditionId}-specific-applies-to`} style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
@@ -980,20 +968,29 @@ function ConditionCard({
 
             <div className="b-gift-selector-row" style={{ marginTop: 0 }}>
               <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setProductPickerOpen(true)}>
-                Select products
+                {matchBy === "product" ? "Select products" : "Select variants"}
               </button>
             </div>
             <SelectedProductsList
-              gids={selectedVariantIds}
-              onRemove={(gid) => { const next = { ...val, variantIds: selectedVariantIds.filter((id) => id !== gid) }; setVal(next); save(next); }}
+              gids={matchBy === "product" ? selectedProductIds : selectedVariantIds}
+              variantMode={matchBy === "variant"}
+              onLoaded={setPickedProducts}
+              onRemove={(gid) => {
+                const next = matchBy === "product"
+                  ? { ...val, productIds: selectedProductIds.filter((id) => id !== gid) }
+                  : { ...val, variantIds: selectedVariantIds.filter((id) => id !== gid) };
+                setVal(next);
+                save(next);
+              }}
             />
 
             <ProductPicker
               open={productPickerOpen}
               onClose={() => setProductPickerOpen(false)}
-              title="Select condition products"
-              selectedIds={selectedVariantIds}
-              onSelect={(gids) => { const next = { ...val, variantIds: gids }; setVal(next); save(next); }}
+              title={matchBy === "product" ? "Select condition products" : "Select condition variants"}
+              mode={matchBy === "product" ? "products" : "variants"}
+              selectedIds={matchBy === "product" ? selectedProductIds : selectedVariantIds}
+              onSelect={(gids) => { const next = matchBy === "product" ? { ...val, productIds: gids } : { ...val, variantIds: gids }; setVal(next); save(next); }}
             />
           </>
         )}
@@ -1008,6 +1005,15 @@ function ConditionCard({
           <PageTypesConditionEditor conditionId={conditionId} val={val} update={update} save={save} isCodePromo={isCodePromo} />
         )}
       </div>
+
+            <div className="b-stack b-stack-3" style={{ marginTop: 12 }}>
+              <ProductConditionNote
+                type={conditionType as "specific_product" | "pack_of_products"}
+                matchBy={matchBy}
+                minQty={Number(val.minQtyPerProduct) || 1}
+                items={pickedItems(pickedProducts, matchBy === "product" ? selectedProductIds : selectedVariantIds, matchBy)}
+              />
+            </div>
     </div>
   );
 }
@@ -1083,6 +1089,36 @@ function conditionSummary(conditionType: string, value: ConditionValue, currency
   };
   switch (conditionType) {
     case "cart_value": {
+function OfferCodesCard({ offerId, codes, requiresCode, inert, legacyCode }: {
+  offerId: string;
+  codes: { total: number; active: number; samples: string[] };
+  requiresCode: boolean;
+  inert: boolean;
+  legacyCode: string | null;
+}) {
+  const summary = codesSummary({ ...codes, requiresCode, inert, legacyCode });
+  return (
+    <Link
+      to={`/app/offers/${offerId}/codes`}
+      className="b-card"
+      style={{ display: "block", color: "inherit", textDecoration: "none", cursor: "pointer" }}
+    >
+      <div className="b-card-header" style={{ justifyContent: "space-between" }}>
+        <span>Codes</span>
+        <span className="b-row b-gap-2" style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+          Edit <IconChevronRight />
+        </span>
+      </div>
+      <div className="b-card-body">
+        {summary.lines.map((line) => (
+          <p key={line} className="b-text-sm" style={{ margin: "0 0 6px" }}>{line}</p>
+        ))}
+        {summary.warning && <p className="b-text-sm" style={{ margin: 0, color: "var(--red, #b91c1c)" }}>{summary.warning}</p>}
+      </div>
+    </Link>
+  );
+}
+
       const cents = v.thresholdCents as number ?? 50000;
       const applies = v.appliesTo === "specific_products" ? "specific products" : "any product";
       return [`Spend from ${fmt(cents)} to get 1 gift(s)`, `Applies to ${applies}`];
@@ -1096,10 +1132,14 @@ function conditionSummary(conditionType: string, value: ConditionValue, currency
       const min = v.minQuantity as number ?? 1;
       return [`Buy at least ${min} item(s)`];
     }
-    case "specific_product": {
+    case "specific_product":
+    case "pack_of_products": {
       const qty = v.minQtyPerProduct as number ?? 1;
-      const ids = Array.isArray(v.variantIds) ? (v.variantIds as string[]).length : 0;
-      return [`Buy ${qty} item(s) of products to get 1 gift(s)`, `Applies to ${ids} products selected`];
+      const byProduct = v.trackMode === "product" && Array.isArray(v.productIds) && v.productIds.length > 0;
+      const stored = Array.isArray(v.requirements)
+        ? v
+        : buildProductConditionValue(conditionType, byProduct ? "product" : "variant", ((byProduct ? v.productIds : v.variantIds) as string[] | undefined) ?? [], qty);
+      return [sharedConditionSummary(conditionType, stored), `Min quantity ${qty} each`];
     }
     case "page_url": {
       const mode = (v.matchMode as string | undefined) ?? "starts_with";
@@ -1128,7 +1168,7 @@ function formatStartDate(iso: string | null): string {
    PAGE COMPONENT
    ═══════════════════════════════════════════════════════════ */
 export default function OfferDetailPage() {
-  const { offer, conditions, rewards, policy, shopCurrencyCode, isCodePromo, codeNotices } = useLoaderData<typeof loader>();
+  const { offer, conditions, rewards, policy, shopCurrencyCode, isCodePromo, codeNotices, codes } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const fetcher = useFetcher();
@@ -1374,7 +1414,7 @@ export default function OfferDetailPage() {
                     <div className="b-card-body">
                       {conditions.length > 0 ? conditions.map((condition) => (
                         <p key={condition.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>
-                          {CONDITION_TYPE_NAMES[condition.conditionType] ?? condition.conditionType}
+                          {conditionTypeLabel(condition.conditionType)}
                         </p>
                       )) : <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>No conditions configured.</p>}
                     </div>
@@ -1393,10 +1433,11 @@ export default function OfferDetailPage() {
                     <div className="b-card-body">
                       {rewards.length > 0 ? rewards.map((reward) => (
                         <p key={reward.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>
-                          {reward.rewardType} - {reward.discountType}
+                          {rewardSummary(reward)}
                         </p>
                       )) : <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>No rewards configured.</p>}
                     </div>
+                  <OfferCodesCard offerId={offer.id} codes={codes} requiresCode={isCodePromo} inert={codeNotices.inert} legacyCode={offer.requiredDiscountCode} />
                   </Link>
                 </div>
               </div>

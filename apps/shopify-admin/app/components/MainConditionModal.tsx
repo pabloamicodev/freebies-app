@@ -107,7 +107,7 @@ const INDEPENDENT_OPTIONS: MainConditionOption[] = [
   {
     id: "specific_product",
     name: "Specific Product",
-    desc: "Trigger when a particular product is in the cart — e.g. buy product A, get gift B.",
+    desc: "Trigger when every selected variant or product is in the cart, at the minimum quantity each — e.g. buy A and B, get gift C. Other items can also be in the cart.",
     combinable: false,
     color: "#f59e0b",
     icon: <ISpecificProduct />,
@@ -123,7 +123,7 @@ const INDEPENDENT_OPTIONS: MainConditionOption[] = [
   {
     id: "pack_of_products",
     name: "Product Bundle",
-    desc: "Require a combination of specific products — e.g. buy A and B together to get a gift.",
+    desc: "Require a full set: every selected product must be in the cart (all-of), at the quantity per pack — e.g. A and B together make one pack. Other items can also be in the cart.",
     combinable: false,
     color: "#ef4444",
     icon: <IPackOfProducts />,
