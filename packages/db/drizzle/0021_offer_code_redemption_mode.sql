@@ -1,0 +1,2 @@
+CREATE TYPE "public"."code_redemption_mode" AS ENUM('checkout_code', 'automatic');--> statement-breakpoint
+ALTER TABLE "offers" ADD COLUMN "code_redemption" "code_redemption_mode" DEFAULT 'checkout_code' NOT NULL;

@@ -32,6 +32,10 @@ export const discountTypeEnum = pgEnum("discount_type", [
   "cheapest_item_free", "most_expensive_item_discount",
 ]);
 
+export const codeRedemptionModeEnum = pgEnum("code_redemption_mode", [
+  "checkout_code", "automatic",
+]);
+
 export const offers = pgTable(
   "offers",
   {
@@ -66,6 +70,9 @@ export const offers = pgTable(
     /** GID of this offer's own discountCodeAppCreate node, once created.
      * Only set for offers with `requiredDiscountCode`. */
     codeDiscountId: text("code_discount_id"),
+    /** How a code offer is redeemed. "automatic" runs it through the shared automatic
+     * nodes with no code; its codes and code node are kept but paused. */
+    codeRedemption: codeRedemptionModeEnum("code_redemption").notNull().default("checkout_code"),
     createdBy: text("created_by"),
     updatedBy: text("updated_by"),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
