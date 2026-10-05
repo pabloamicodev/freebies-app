@@ -109,6 +109,7 @@ export async function applyCodeGatesDetailed(
   const locked = entered.length > 0 && (await isShopCodeLocked(shopId));
 
   const [gatedOffers, known] = await Promise.all([
+    // Automatic-mode offers are never gated here: they run on conditions alone.
     // `requiresCode` is set whenever an offer gets a code (and by the 0018 backfill for older
     // ones), so no scan of the codes table is needed to know which offers are gated.
     db
@@ -118,6 +119,7 @@ export async function applyCodeGatesDetailed(
         and(
           eq(offers.shopId, shopId),
           inArray(offers.id, offerIds),
+          eq(offers.codeRedemption, "checkout_code"),
           or(isNotNull(offers.requiredDiscountCode), eq(offers.requiresCode, true)),
         ),
       ),

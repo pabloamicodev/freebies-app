@@ -70,4 +70,10 @@ describe("computeOfferVersion", () => {
     expect(withCodeFields).toBe(withoutCodeFields);
     expect(afterCodeDiscountCreated).toBe(withoutCodeFields);
   });
+
+  it("is unaffected by codeRedemption: getOfferDefinitions omits it, the publisher hashes the full row", () => {
+    const base = computeOfferVersion(offer, conditions, rewards, null);
+    expect(computeOfferVersion({ ...offer, codeRedemption: "automatic" }, conditions, rewards, null)).toBe(base);
+    expect(computeOfferVersion({ ...offer, codeRedemption: "checkout_code" }, conditions, rewards, null)).toBe(base);
+  });
 });

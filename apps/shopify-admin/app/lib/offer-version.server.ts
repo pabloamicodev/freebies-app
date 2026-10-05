@@ -13,6 +13,7 @@ const VOLATILE_KEYS = new Set([
   "requiredDiscountCode",
   "codeDiscountId",
   "requiresCode",
+  "codeRedemption",
 ]);
 
 /**

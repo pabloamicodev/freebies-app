@@ -20,6 +20,7 @@ export async function findShopsWithDueCodeChanges(
     .where(
       and(
         eq(offers.status, "active"),
+        eq(offers.codeRedemption, "checkout_code"),
         or(
           and(
             eq(discountCodes.status, "active"),

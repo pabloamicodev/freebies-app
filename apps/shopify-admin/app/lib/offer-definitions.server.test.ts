@@ -47,6 +47,13 @@ describe("getOfferDefinitions cache", () => {
     expect(redis.set).toHaveBeenCalledWith("od:v1:shop-1", expect.any(String), 30);
   });
 
+  it("hashes the same version whatever the offer's code redemption mode", async () => {
+    const { computeOfferVersion } = await import("./offer-version.server.js");
+    const defs = await getOfferDefinitions("shop-mode", fakeDb([row]));
+    const fullRow = { ...row, requiresCode: true, requiredDiscountCode: null, codeDiscountId: null, codeRedemption: "automatic" };
+    expect(defs[0]!.version).toBe(computeOfferVersion(fullRow, [], [], null));
+  });
+
   it("re-reads the DB after invalidateOfferDefinitions", async () => {
     const db = fakeDb([]);
     await getOfferDefinitions("shop-1", db);

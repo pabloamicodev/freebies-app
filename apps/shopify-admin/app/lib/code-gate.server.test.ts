@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Sentry from "@sentry/node";
 import { eq } from "drizzle-orm";
-import { discountCodes, type Db } from "@promo/db";
+import { discountCodes, offers, type Db } from "@promo/db";
 import { evaluate, type EvaluatorContext, type OfferDefinition } from "@promo/rule-engine";
 import type { EvaluationInput, NormalizedCart } from "@promo/shared-types";
 import {
@@ -220,6 +220,19 @@ describe("applyCodeGates + evaluate: a gift on a code offer follows the applied 
     const [plain] = await applyCodeGates(shopId, db, [giftOffer(plainId)], []);
     expect(plain!.conditions).toHaveLength(1);
     expect((await run(giftOffer(plainId), cart([]))).qualifiedOffers).toHaveLength(1);
+  });
+
+  it("does not gate an automatic offer, even one that keeps its codes and flag", async () => {
+    const offerId = await seedOffer(db, shopId, { requiresCode: true, codeRedemption: "automatic" });
+    await db.insert(discountCodes).values({ shopId, offerId, code: "PAUSEDGATE" });
+
+    const result = await run(giftOffer(offerId), cart([]));
+    expect(result.qualifiedOffers).toHaveLength(1);
+    const [definition] = await applyCodeGates(shopId, db, [giftOffer(offerId)], []);
+    expect(definition!.conditions).toHaveLength(1);
+    expect(definition!.conditions[0]).not.toMatchObject({ id: "code-gate" });
+    await db.update(offers).set({ codeRedemption: "checkout_code" }).where(eq(offers.id, offerId));
+    expect((await run(giftOffer(offerId), cart([]))).qualifiedOffers).toHaveLength(0);
   });
 
   it("ignores codes belonging to another shop", async () => {

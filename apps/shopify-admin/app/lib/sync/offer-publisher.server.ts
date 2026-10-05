@@ -52,6 +52,7 @@ import {
   type CodeDiscountNodeOptions,
   type ShopifyFunctionSummary,
 } from "../discount-node.server.js";
+import { isCheckoutCodeGated } from "../code-redemption.js";
 import { isCodeRedeemable } from "../discount-code-generation.js";
 import { codeHash } from "../code-hash.js";
 import { resolveCodeCollisions } from "../code-preflight.server.js";
@@ -248,8 +249,8 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     codesByOffer.set(row.offerId, [...(codesByOffer.get(row.offerId) ?? []), row]);
   // requiresCode keeps an offer gated even when every code is gone (e.g. a duplicate
   // with no codes yet): it then publishes nothing instead of running without a code.
-  const isCodeOffer = (offer: Offer) =>
-    offer.requiresCode || codesByOffer.has(offer.id) || Boolean(offer.requiredDiscountCode);
+  // Automatic-mode offers keep their codes but run through the shared nodes, gated by conditions only.
+  const isCodeOffer = (offer: Offer) => isCheckoutCodeGated(offer, codesByOffer.has(offer.id));
   const allCodeOffers = allActiveOffers.filter(isCodeOffer);
   const regularOffers = allActiveOffers.filter((offer) => !isCodeOffer(offer));
   // Backend B (opt-in per shop) serves code offers from the code Function's own

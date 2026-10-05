@@ -126,6 +126,13 @@ describe("discount code schedule", () => {
     await db.update(discountCodes).set({ shopifySyncedAt: now }).where(eq(discountCodes.code, "OPENED"));
     expect((await findShopsWithDueCodeChanges(db, now)).map((s) => s.shopId)).not.toContain(shopId);
 
+    // An automatic offer's codes are paused: the cron leaves them alone.
+    await db.update(offers).set({ codeRedemption: "automatic" }).where(eq(offers.id, offerId));
+    await db.insert(discountCodes).values({ shopId, offerId, code: "AUTO-OPENED", startsAt: new Date("2026-05-31") });
+    expect((await findShopsWithDueCodeChanges(db, now)).map((s) => s.shopId)).not.toContain(shopId);
+    await db.update(offers).set({ codeRedemption: "checkout_code" }).where(eq(offers.id, offerId));
+    await db.update(discountCodes).set({ shopifySyncedAt: now }).where(eq(discountCodes.code, "AUTO-OPENED"));
+
     // Expired but still on Shopify.
     await db.update(discountCodes).set({ endsAt: new Date("2026-05-31") }).where(eq(discountCodes.code, "SYNCED"));
     const publish = vi.fn().mockResolvedValue(null);

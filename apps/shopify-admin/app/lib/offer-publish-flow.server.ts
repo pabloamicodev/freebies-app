@@ -16,6 +16,7 @@ import {
 } from "@promo/shared-types";
 import { publishOffersForShop } from "./sync/offer-publisher.server.js";
 import { PAGE_CONDITION_TYPES } from "./sync/compile-config.js";
+import { isCheckoutCodeGated, type CodeRedemptionMode } from "./code-redemption.js";
 import { isCodeRedeemable } from "./discount-code-generation.js";
 import { invalidateOfferDefinitions } from "./offer-definitions.server.js";
 import { normalizeConditionValue } from "./offer-config-normalization.server.js";
@@ -85,7 +86,7 @@ export async function validateOffersPublishable(
   if (offerIds.length === 0) return { ok: true };
 
   const [offerRows, conditionRows, rewardRows, codeRows]: [
-    { id: string; internalName: string; requiredDiscountCode: string | null; requiresCode: boolean }[],
+    { id: string; internalName: string; requiredDiscountCode: string | null; requiresCode: boolean; codeRedemption: CodeRedemptionMode }[],
     OfferCondition[],
     OfferReward[],
     Array<{
@@ -104,6 +105,7 @@ export async function validateOffersPublishable(
         internalName: offers.internalName,
         requiredDiscountCode: offers.requiredDiscountCode,
         requiresCode: offers.requiresCode,
+        codeRedemption: offers.codeRedemption,
       })
       .from(offers)
       .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds))),
@@ -138,8 +140,7 @@ export async function validateOffersPublishable(
 
   for (const offer of offerRows) {
     // Gated by its own codes (or a legacy required checkout code).
-    const isCodeOffer =
-      offer.requiresCode || offersWithCodes.has(offer.id) || Boolean(offer.requiredDiscountCode);
+    const isCodeOffer = isCheckoutCodeGated(offer, offersWithCodes.has(offer.id));
     const conditions = conditionRows.filter((condition) => condition.offerId === offer.id);
     const eligibilityConditions = conditions.filter(
       (condition) => condition.scope === "main" || condition.scope === "sub",
@@ -168,7 +169,8 @@ export async function validateOffersPublishable(
 
     // Shopify applies once-per-customer to the whole code discount, so a node can't carry both
     // kinds of code: the rule would silently be dropped for the once-per-customer ones.
-    const liveCodes = codeRows.filter((row) => row.offerId === offer.id && isCodeRedeemable(row, now));
+    // Automatic offers have no code node (their codes are paused), so the rule can't conflict.
+    const liveCodes = isCodeOffer ? codeRows.filter((row) => row.offerId === offer.id && isCodeRedeemable(row, now)) : [];
     if (liveCodes.some((row) => row.oncePerCustomer) && liveCodes.some((row) => !row.oncePerCustomer)) {
       return {
         ok: false,

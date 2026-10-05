@@ -441,6 +441,14 @@ describe("getCodeNotices (exists and limited reads)", () => {
     expect((await getCodeNotices(db, shopId, gated(offerId))).inert).toBe(true);
   });
 
+  it("is never inert for an automatic offer, even with every code paused", async () => {
+    const offerId = await newOffer({ requiresCode: true, codeRedemption: "automatic" });
+    await createDiscountCode(db, { shopId, offerId, code: "PAUSED-NOTICE" });
+    await setDiscountCodesStatus(db, shopId, offerId, { all: true }, "disabled");
+    expect((await getCodeNotices(db, shopId, { ...gated(offerId), codeRedemption: "automatic" })).inert).toBe(false);
+    expect((await getCodeNotices(db, shopId, { ...gated(offerId), codeRedemption: "checkout_code" })).inert).toBe(true);
+  });
+
   it("treats an expired, not-yet-started or used-up code as not redeemable", async () => {
     const offerId = await newOffer({ requiresCode: true });
     await db.insert(discountCodes).values([

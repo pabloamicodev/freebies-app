@@ -77,7 +77,7 @@ export async function loadOfferDefinitions(shopId: string, db: Db): Promise<Offe
   // requiredDiscountCode/codeDiscountId only matter for publish-time discount
   // routing (offer-publisher.server.ts) — evaluate never reads them, so they're
   // excluded here for the same reason compiledConfig is.
-  const activeOffers: Array<Omit<OfferRow, "shopId" | "compiledConfig" | "functionMetafieldGid" | "createdAt" | "updatedAt" | "updatedBy" | "requiredDiscountCode" | "codeDiscountId" | "requiresCode">> = await db
+  const activeOffers: Array<Omit<OfferRow, "shopId" | "compiledConfig" | "functionMetafieldGid" | "createdAt" | "updatedAt" | "updatedBy" | "requiredDiscountCode" | "codeDiscountId" | "requiresCode" | "codeRedemption">> = await db
     .select({
       id: offers.id,
       type: offers.type,

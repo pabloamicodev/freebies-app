@@ -68,6 +68,7 @@ interface FakeOffer {
   priority: number;
   requiredDiscountCode: string | null;
   requiresCode: boolean;
+  codeRedemption?: "checkout_code" | "automatic";
   codeDiscountId: string | null;
   discountTags: string[];
   compiledConfig: unknown;
@@ -1222,6 +1223,89 @@ describe("publishOffersForShop — offers with their own discount codes", () => 
       state.metafieldPushes.some((p) => p.ownerIds.includes(NODE) && parsedConfig(p.value).offers.length > 0),
     ).toBe(false);
     expect(Object.keys(cartValidationCalls[0]!.offerRules)).toEqual(["regular"]);
+  });
+
+  describe("automatic redemption mode", () => {
+    const gift = (offerId: string, variant: number) => ({
+      id: `gift-${offerId}`,
+      shopId: SHOP_ID,
+      offerId,
+      rewardType: "product_gift",
+      discountType: "free",
+      value: {},
+      target: { variantIds: [`gid://shopify/ProductVariant/${variant}`] },
+      quantity: 1,
+      sortOrder: 0,
+    });
+    const mainCondition = (offerId: string) => ({
+      id: `cond-${offerId}`,
+      shopId: SHOP_ID,
+      offerId,
+      scope: "main",
+      conditionType: "cart_value",
+      operator: "gte",
+      value: { thresholdCents: 1000, currencyCode: "USD" },
+      sortOrder: 0,
+      isEnabled: true,
+    });
+
+    it("puts an automatic offer with codes in the shared config and creates no code node", async () => {
+      state.offers = [makeOffer({ id: "auto", requiresCode: true, codeRedemption: "automatic" }), makeOffer({ id: "regular" })];
+      state.codeRows = [makeCode({ offerId: "auto", code: "AAA" })];
+      state.rewardRows = [gift("auto", 1), gift("regular", 2)];
+      state.conditionRows = [mainCondition("auto")];
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+      const shared = state.metafieldPushes.find((p) => p.ownerIds.includes(CART_DISCOUNT_ID));
+      expect(parsedConfig(shared!.value).offers.map((o) => o.id).sort()).toEqual(["auto", "regular"]);
+      expect(state.createdCodeNodes).toEqual([]);
+      expect(state.addedCodes).toEqual([]);
+    });
+
+    it("neutralizes the offer's existing code node but keeps its codes and node id", async () => {
+      state.offers = [makeOffer({ id: "coded", requiresCode: true, codeDiscountId: NODE, codeRedemption: "automatic" })];
+      state.knownDiscountIds.add(NODE);
+      state.nodeCodes[NODE] = ["AAA"];
+      state.codeRows = [makeCode({ offerId: "coded", code: "AAA", shopifySyncedAt: new Date() })];
+      state.rewardRows = [gift("coded", 1)];
+      state.conditionRows = [mainCondition("coded")];
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+      expect(state.expiredNodes).toEqual([NODE]);
+      expect(state.removedCodes).toEqual([]);
+      expect(state.deletedNodes).toEqual([]);
+      expect(state.codeRows).toHaveLength(1);
+      expect(state.codeRows[0]!.status).toBe("active");
+      expect(state.offers[0]!.codeDiscountId).toBe(NODE);
+      const own = state.metafieldPushes.find((p) => p.ownerIds.includes(NODE));
+      expect(parsedConfig(own!.value).offers).toEqual([]);
+    });
+
+    it("round trip: switching back to checkout_code reopens the same node (endsAt null) and leaves the shared config", async () => {
+      state.offers = [makeOffer({ id: "coded", requiresCode: true, codeDiscountId: NODE, codeRedemption: "automatic" })];
+      state.knownDiscountIds.add(NODE);
+      state.nodeCodes[NODE] = ["AAA"];
+      state.codeRows = [makeCode({ offerId: "coded", code: "AAA", shopifySyncedAt: new Date() })];
+      state.rewardRows = [gift("coded", 1)];
+      state.conditionRows = [mainCondition("coded")];
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+      expect(state.expiredNodes).toEqual([NODE]);
+
+      state.offers[0]!.codeRedemption = "checkout_code";
+      state.metafieldPushes = [];
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+      expect(state.createdCodeNodes).toEqual([]);
+      expect(state.updatedCodeNodes.some((u) => u.id === NODE && u.input["endsAt"] === null)).toBe(true);
+      expect(state.offers[0]!.codeDiscountId).toBe(NODE);
+      const own = state.metafieldPushes.find((p) => p.ownerIds.includes(NODE));
+      expect(parsedConfig(own!.value).offers.map((o) => o.id)).toEqual(["coded"]);
+      const shared = state.metafieldPushes.find((p) => p.ownerIds.includes(CART_DISCOUNT_ID));
+      expect(parsedConfig(shared!.value).offers).toEqual([]);
+    });
   });
 
   it("never publishes a code offer ungated: with no redeemable code and no node it publishes nothing for it", async () => {

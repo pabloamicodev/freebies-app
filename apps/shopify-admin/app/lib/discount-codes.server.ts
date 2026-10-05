@@ -16,6 +16,7 @@ import {
   type BatchSpec,
 } from "./discount-code-generation.js";
 import { isConstraintViolation } from "./unique-offer-name.server.js";
+import { isCheckoutCodeGated, type CodeRedemptionMode } from "./code-redemption.js";
 
 export const DISCOUNT_CODE_INDEX = "discount_codes_shop_code_idx";
 export const CODE_TAKEN_MESSAGE = "That code is already used. Choose a different code.";
@@ -532,7 +533,7 @@ export interface CodeNotices {
 export async function getCodeNotices(
   db: Db,
   shopId: string,
-  offer: { id: string; requiresCode: boolean; requiredDiscountCode: string | null },
+  offer: { id: string; requiresCode: boolean; requiredDiscountCode: string | null; codeRedemption?: CodeRedemptionMode },
   now: Date = new Date(),
 ): Promise<CodeNotices> {
   const own = and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offer.id));
@@ -551,7 +552,7 @@ export async function getCodeNotices(
       .limit(20),
   ]);
   const hasRows = anyRow.length > 0;
-  const gated = offer.requiresCode || Boolean(offer.requiredDiscountCode) || hasRows;
+  const gated = isCheckoutCodeGated(offer, hasRows);
   const live = liveRow.length > 0 || (!hasRows && Boolean(offer.requiredDiscountCode));
   return {
     inert: gated && !live,

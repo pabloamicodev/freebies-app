@@ -12,13 +12,14 @@ interface FakeOfferRow {
   internalName: string;
   requiredDiscountCode: string | null;
   requiresCode?: boolean;
+  codeRedemption?: "checkout_code" | "automatic";
 }
 
 function fakeDb(rows: {
   offerRows: FakeOfferRow[];
   conditionRows?: unknown[];
   rewardRows?: unknown[];
-  codeRows?: Array<{ offerId: string }>;
+  codeRows?: Array<{ offerId: string } & Record<string, unknown>>;
 }): Db {
   const db = {
     select: () => ({
@@ -196,6 +197,47 @@ describe("validateOffersPublishable — required discount code", () => {
     });
 
     expect(await validateOffersPublishable(db, "shop-1", ["offer-1"])).toEqual({ ok: true });
+  });
+
+  it("requires a main condition for an automatic offer: without a code nothing else gates it", async () => {
+    const db = fakeDb({
+      offerRows: [{ id: "offer-1", internalName: "Auto", requiredDiscountCode: null, requiresCode: true, codeRedemption: "automatic" }],
+      rewardRows: [validGiftReward],
+      codeRows: [{ offerId: "offer-1" }],
+    });
+
+    expect((await validateOffersPublishable(db, "shop-1", ["offer-1"])).error).toMatch(/add at least one enabled main condition/);
+  });
+
+  it("publishes an automatic offer with a main condition and skips the mixed once-per-customer check", async () => {
+    const past = new Date("2020-01-01");
+    const db = fakeDb({
+      offerRows: [{ id: "offer-1", internalName: "Auto", requiredDiscountCode: null, requiresCode: true, codeRedemption: "automatic" }],
+      rewardRows: [validGiftReward],
+      conditionRows: [
+        { offerId: "offer-1", scope: "main", isEnabled: true, conditionType: "cart_value", operator: "gte", value: { thresholdCents: 5000, currencyCode: "USD" } },
+      ],
+      codeRows: [
+        { offerId: "offer-1", status: "active", startsAt: past, endsAt: null, usageLimit: null, usageCount: 0, oncePerCustomer: true },
+        { offerId: "offer-1", status: "active", startsAt: past, endsAt: null, usageLimit: null, usageCount: 0, oncePerCustomer: false },
+      ],
+    });
+
+    expect(await validateOffersPublishable(db, "shop-1", ["offer-1"])).toEqual({ ok: true });
+  });
+
+  it("still rejects mixed once-per-customer codes in checkout_code mode", async () => {
+    const past = new Date("2020-01-01");
+    const db = fakeDb({
+      offerRows: [{ id: "offer-1", internalName: "Coded", requiredDiscountCode: null, requiresCode: true, codeRedemption: "checkout_code" }],
+      rewardRows: [validGiftReward],
+      codeRows: [
+        { offerId: "offer-1", status: "active", startsAt: past, endsAt: null, usageLimit: null, usageCount: 0, oncePerCustomer: true },
+        { offerId: "offer-1", status: "active", startsAt: past, endsAt: null, usageLimit: null, usageCount: 0, oncePerCustomer: false },
+      ],
+    });
+
+    expect((await validateOffersPublishable(db, "shop-1", ["offer-1"])).ok).toBe(false);
   });
 
   it("treats a requiresCode offer with no codes as code-gated (no main condition needed, never ungated)", async () => {
