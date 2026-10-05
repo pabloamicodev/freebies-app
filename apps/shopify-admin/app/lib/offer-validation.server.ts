@@ -119,7 +119,7 @@ function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
   return asUtc - date.getTime();
 }
 
-function parseLocalDateTimeInZone(raw: string, timeZone: string): Date | null {
+export function parseLocalDateTimeInZone(raw: string, timeZone: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(raw);
   if (!match) {
     const parsed = new Date(raw);
