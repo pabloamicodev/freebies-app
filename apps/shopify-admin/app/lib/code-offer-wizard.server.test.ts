@@ -192,6 +192,38 @@ describe("code offer wizard: bulk and campaign", () => {
   });
 });
 
+describe("code offer wizard: redemption mode", () => {
+  it("defaults to checkout_code and parses automatic with no code fields needed", () => {
+    const checkout = parseCodeOfferForm(form({ code: "A1" }), context);
+    expect(checkout.ok && checkout.data.redemption).toBe("checkout_code");
+    const automatic = parseCodeOfferForm(form({ codeRedemption: "automatic" }), context);
+    expect(automatic.ok && automatic.data).toMatchObject({ redemption: "automatic", codes: null });
+  });
+
+  it("ignores a bad code or usage fields in automatic mode, but still validates the rest", () => {
+    expect(parseCodeOfferForm(form({ codeRedemption: "automatic", code: "two words", usageLimit: "0", oncePerCustomer: "on" }), context).ok).toBe(true);
+    const bad = parseCodeOfferForm(form({ codeRedemption: "automatic", pageTypes: [] }), context);
+    expect(bad.ok ? null : bad.error).toMatch(/at least one kind of page/);
+  });
+
+  it("inserts an automatic offer with requiresCode=false, no codes, and its page condition and reward", async () => {
+    const result = await create({ codeRedemption: "automatic", code: "IGNORED", usageLimit: "5" });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.data.codesCreated).toBe(0);
+    const { offer, codes, conditions, rewards } = await offerRows(result.data.offerId);
+    expect(offer).toMatchObject({ type: "discount", requiresCode: false, codeRedemption: "automatic" });
+    expect(codes).toHaveLength(0);
+    expect(conditions[0]).toMatchObject({ scope: "main", conditionType: "page_types" });
+    expect(rewards).toHaveLength(1);
+  });
+
+  it("keeps requiresCode=true and codeRedemption=checkout_code for the default mode", async () => {
+    const result = await create({ code: "mode-default" });
+    if (!result.ok) throw new Error(result.error);
+    expect((await offerRows(result.data.offerId)).offer).toMatchObject({ requiresCode: true, codeRedemption: "checkout_code" });
+  });
+});
+
 describe("code offer wizard: collisions", () => {
   it("refuses a code another offer already uses and leaves nothing behind", async () => {
     const other = await seedOffer(db, shopId);

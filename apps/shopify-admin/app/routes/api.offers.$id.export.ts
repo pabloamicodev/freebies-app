@@ -72,7 +72,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
   const headers = [
     "offer_id", "internal_name", "public_title", "type", "status",
-    "priority", "starts_at", "ends_at", "discount_tags", "requires_code",
+    "priority", "starts_at", "ends_at", "discount_tags", "requires_code", "code_redemption",
     "condition_type", "condition_value_threshold_cents",
     "reward_type", "discount_type", "reward_value",
     "gift_variant_gids", "gift_quantity", "is_auto_add", "track_mode",
@@ -103,6 +103,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         offer.endsAt?.toISOString() ?? "",
         (offer.discountTags ?? []).join("|"),
         offer.requiresCode || Boolean(offer.requiredDiscountCode),
+        offer.codeRedemption,
         mainCondition?.conditionType ?? "",
         condValue["thresholdCents"] ?? "",
         reward?.rewardType ?? "",

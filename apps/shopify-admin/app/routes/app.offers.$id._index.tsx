@@ -39,6 +39,7 @@ import { codesSummary, conditionSummary as sharedConditionSummary, conditionType
 import { MatchBySelect, ProductConditionNote, pickedItems } from "../components/ProductConditionFields.js";
 import { buildProductConditionValue, type MatchBy } from "../lib/product-condition.js";
 import type { SelectedProduct } from "../components/SelectedProductsList.js";
+import { isCheckoutCodeGated } from "../lib/code-redemption.js";
 import { countDiscountCodes, getCodeNotices, listDiscountCodes, offerRequiresCode } from "../lib/discount-codes.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -77,7 +78,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     rewards,
     policy: policy[0] ?? null,
     shopCurrencyCode,
-    isCodePromo: Boolean(firstCode) || Boolean(offer.requiredDiscountCode) || offer.requiresCode,
+    isCodePromo: isCheckoutCodeGated(offer, Boolean(firstCode)),
     codeNotices: await getCodeNotices(db, shopId, offer),
     codes: {
       total: await countDiscountCodes(db, shopId, offerId),
@@ -1089,14 +1090,15 @@ function scrollToSection(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function OfferCodesCard({ offerId, codes, requiresCode, inert, legacyCode }: {
+function OfferCodesCard({ offerId, codes, requiresCode, inert, legacyCode, automatic }: {
   offerId: string;
+  automatic: boolean;
   codes: { total: number; active: number; samples: string[] };
   requiresCode: boolean;
   inert: boolean;
   legacyCode: string | null;
 }) {
-  const summary = codesSummary({ ...codes, requiresCode, inert, legacyCode });
+  const summary = codesSummary({ ...codes, requiresCode, inert, legacyCode, automatic });
   return (
     <Link
       to={`/app/offers/${offerId}/codes`}
@@ -1437,7 +1439,7 @@ export default function OfferDetailPage() {
                       )) : <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>No conditions configured.</p>}
                     </div>
                   </Link>
-                  <OfferCodesCard offerId={offer.id} codes={codes} requiresCode={isCodePromo} inert={codeNotices.inert} legacyCode={offer.requiredDiscountCode} />
+                  <OfferCodesCard offerId={offer.id} codes={codes} requiresCode={isCodePromo} inert={codeNotices.inert} legacyCode={offer.requiredDiscountCode} automatic={offer.codeRedemption === "automatic"} />
                   <Link
                     to={`/app/offers/${offer.id}/rewards`}
                     className="b-card"

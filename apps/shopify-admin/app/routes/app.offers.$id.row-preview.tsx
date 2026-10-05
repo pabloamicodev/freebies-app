@@ -126,6 +126,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       requiredDiscountCode: offer.requiredDiscountCode,
       codeCount: codeCountRows[0]?.total ?? 0,
       requiresCode: offer.requiresCode,
+      codeRedemption: offer.codeRedemption,
     },
     headline: rewardRows[0] ? rewardHeadline(rewardRows[0]) : null,
     conditions,

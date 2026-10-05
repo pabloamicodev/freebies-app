@@ -793,17 +793,22 @@ function OfferRowPreviewContent({
     <div className="b-preview">
       <div className="b-preview-header">
         {headline && <span className="b-preview-headline">{headline}</span>}
-        {offer.codeCount > 0 && (
+        {offer.codeRedemption === "automatic" && (
+          <span className="b-badge b-badge-green" title={offer.codeCount > 0 ? `Applies without a code; ${offer.codeCount} code(s) paused` : "Applies without a code"}>
+            Automatic
+          </span>
+        )}
+        {offer.codeRedemption !== "automatic" && offer.codeCount > 0 && (
           <span className="b-badge b-badge-blue" title="This offer only applies while one of its discount codes is entered">
             {offer.codeCount === 1 ? "Requires a discount code" : `${offer.codeCount.toLocaleString("en-US")} discount codes`}
           </span>
         )}
-        {offer.codeCount === 0 && offer.requiresCode && !offer.requiredDiscountCode && (
+        {offer.codeRedemption !== "automatic" && offer.codeCount === 0 && offer.requiresCode && !offer.requiredDiscountCode && (
           <span className="b-badge b-badge-orange" title="This offer needs a discount code and has none, so it is not live">
             Needs a discount code
           </span>
         )}
-        {offer.codeCount === 0 && offer.requiredDiscountCode && (
+        {offer.codeRedemption !== "automatic" && offer.codeCount === 0 && offer.requiredDiscountCode && (
           <span className="b-badge b-badge-blue" title="This offer only activates with this checkout discount code">
             Requires code: {offer.requiredDiscountCode}
           </span>

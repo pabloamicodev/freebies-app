@@ -107,6 +107,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { error: { row: rowNumber, message: "requires_code must be true or false" } };
     }
     const requiresCode = requiresCodeRaw === "true";
+    const codeRedemption = (row["code_redemption"] ?? "").toLowerCase() || "checkout_code";
+    if (codeRedemption !== "checkout_code" && codeRedemption !== "automatic") {
+      return { error: { row: rowNumber, message: "code_redemption must be checkout_code or automatic" } };
+    }
 
     let validatedCondition: { conditionType: ConditionType; value: Record<string, unknown> } | null = null;
     if (row["condition_type"] && row["condition_value_threshold_cents"]) {
@@ -173,6 +177,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           priority,
           timezone: shopTimezone,
           requiresCode,
+          codeRedemption,
           discountTags: row["discount_tags"] ? row["discount_tags"].split("|") : [],
         }).returning({ id: offers.id });
 
@@ -258,6 +263,7 @@ const COLUMNS = [
   { col: "track_mode",    req: false, note: "product | variant" },
   { col: "discount_tags", req: false, note: "Tag strings, pipe-separated" },
   { col: "requires_code", req: false, note: "true | false (offer stays inactive until it has discount codes)" },
+  { col: "code_redemption", req: false, note: "checkout_code (default) | automatic (no code needed, gated by conditions)" },
 ];
 
 const TEMPLATE_CSV = `internal_name,public_title,type,priority,condition_type,condition_value_threshold_cents,reward_type,discount_type,reward_value,gift_variant_gids,gift_quantity,is_auto_add,track_mode,discount_tags

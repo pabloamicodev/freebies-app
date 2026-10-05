@@ -9,7 +9,8 @@ import { useLoaderData, Form, Link, useActionData, useNavigation, useSearchParam
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { waitUntil } from "@vercel/functions";
 import { and, eq, sql } from "drizzle-orm";
-import { discountCodes } from "@promo/db";
+import { PAGE_TYPES } from "@promo/shared-types";
+import { discountCodes, offerCombinationPolicies, offerConditions, offers } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -26,6 +27,9 @@ import {
   setDiscountCodesStatus,
   type CodeSettings,
 } from "../lib/discount-codes.server.js";
+import { automaticModeWarnings, type CodeRedemptionMode } from "../lib/code-redemption.js";
+import { estimateSharedConfigBytes, sharedConfigTooLargeMessage } from "../lib/shared-config-size.server.js";
+import { MAX_METAFIELD_BYTES } from "../lib/sync/offer-publisher.server.js";
 import { retryOriginalCode } from "../lib/code-retry.server.js";
 import { CODE_CHARSETS, isCodeRedeemable, type CodeCharset } from "../lib/discount-code-generation.js";
 import "../styles/bogos.css";
@@ -40,7 +44,7 @@ const INLINE_PUBLISH_LIMIT = 500;
 const STATUS_FILTERS = ["active", "disabled", "exhausted"] as const;
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { shopId, db, timezone: shopTimezone } = await getShopContext(request);
+  const { shopId, db, timezone: shopTimezone, shopDomain } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
   const url = new URL(request.url);
@@ -49,7 +53,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const status = STATUS_FILTERS.find((value) => value === statusParam);
   const page = Math.max(Number(url.searchParams.get("page") ?? "1") || 1, 1);
 
-  const [{ rows, total }, counts] = await Promise.all([
+  const [{ rows, total }, counts, [pageCondition], [policy]] = await Promise.all([
     listDiscountCodes(db, shopId, offerId, { search, status, page, pageSize: PAGE_SIZE }),
     db
       .select({
@@ -60,13 +64,32 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       .from(discountCodes)
       .where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offerId)))
       .groupBy(discountCodes.status),
+    db
+      .select({ value: offerConditions.value })
+      .from(offerConditions)
+      .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.conditionType, "page_types"), eq(offerConditions.isEnabled, true)))
+      .limit(1),
+    db
+      .select({ order: offerCombinationPolicies.combinesWithOrderDiscounts })
+      .from(offerCombinationPolicies)
+      .where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId)))
+      .limit(1),
   ]);
+  // No page-types condition means no page restriction at all.
+  const selectedPageTypes = pageCondition ? ((pageCondition.value as { pageTypes?: string[] }).pageTypes ?? []) : PAGE_TYPES;
+  const automaticWarnings = automaticModeWarnings({
+    combinesWithOrderDiscounts: policy?.order ?? true,
+    pageTypes: selectedPageTypes,
+  });
   const now = new Date();
   const [notices, publishPending] = await Promise.all([getCodeNotices(db, shopId, offer, now), isPublishPending(shopId)]);
   return {
     notices,
     publishPending,
+    shopDomain,
+    automaticWarnings,
     offer: {
+      codeRedemption: offer.codeRedemption,
       id: offer.id,
       internalName: offer.internalName,
       status: offer.status,
@@ -119,7 +142,7 @@ function parseSettings(formData: FormData, timeZone: string): { error: string } 
 }
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session, shopId, db, timezone: shopTimezone } = await getShopContext(request);
+  const { session, shopId, db, timezone: shopTimezone, currencyCode } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
@@ -167,6 +190,26 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     );
     publishLarge = changed > INLINE_PUBLISH_LIMIT;
     message = `${changed.toLocaleString("en-US")} code${changed === 1 ? "" : "s"} ${intent === "activate" ? "activated" : "deactivated"}.`;
+  } else if (intent === "set_redemption_mode") {
+    const mode = String(formData.get("mode") ?? "") as CodeRedemptionMode;
+    if (mode !== "checkout_code" && mode !== "automatic") return { error: "Unknown redemption mode." };
+    if (mode === offer.codeRedemption) return { success: "Already set." };
+    if (mode === "automatic") {
+      // Without a code the conditions are the only gate: an offer with none would apply to every cart.
+      const [mainCondition] = await db
+        .select({ id: offerConditions.id })
+        .from(offerConditions)
+        .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.scope, "main"), eq(offerConditions.isEnabled, true)))
+        .limit(1);
+      if (!mainCondition) return { error: "Add at least one enabled condition first; without a code it would apply to every cart." };
+      const bytes = await estimateSharedConfigBytes(db, shopId, currencyCode, [offerId]);
+      if (bytes > MAX_METAFIELD_BYTES) return { error: sharedConfigTooLargeMessage(bytes) };
+    }
+    await db
+      .update(offers)
+      .set({ codeRedemption: mode, updatedAt: new Date() })
+      .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+    message = mode === "automatic" ? "Offer now applies automatically. Its codes are paused." : "Customers now enter a code at checkout again.";
   } else if (intent === "retry_original") {
     const result = await retryOriginalCode(db, shopId, session.shop, String(formData.get("codeId") ?? ""));
     if (!result.ok) return { error: result.error };
@@ -195,6 +238,26 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (publishError) return { error: publishError };
   return { success: wasActive ? message : `${message} They go live when the offer is published.`, ...(warning ? { warning } : {}) };
 };
+
+function CopyLinkButton({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="b-btn"
+      style={{ padding: "2px 8px", fontSize: 12 }}
+      onClick={() => {
+        void navigator.clipboard.writeText(url).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }, () => undefined);
+      }}
+      title={url}
+    >
+      {copied ? "Copied" : "Copy shareable link"}
+    </button>
+  );
+}
 
 function statusBadge(status: string, live: boolean) {
   if (status === "exhausted") return <span className="b-badge b-badge-orange">Used up</span>;
@@ -243,6 +306,8 @@ export default function OfferCodesPage() {
   const submit = useSubmit();
   const listFormRef = useRef<HTMLFormElement>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmingMode, setConfirmingMode] = useState(false);
+  const automatic = data.offer.codeRedemption === "automatic";
   const pages = Math.max(Math.ceil(data.total / data.pageSize), 1);
   const exportQuery = new URLSearchParams();
   if (data.search) exportQuery.set("q", data.search);
@@ -300,7 +365,55 @@ export default function OfferCodesPage() {
         </div>
       )}
 
-      {data.notices.inert && (
+      <div className="b-banner b-banner-blue b-mb-4" role="status">
+        <div className="b-banner-body" style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <p className="b-banner-text" style={{ margin: 0, flex: 1 }}>
+            {automatic ? (
+              <><strong>Applies automatically.</strong> No code is needed; the offer runs on its conditions alone. Its codes are paused and customers who type them get &quot;invalid&quot;. Switch back any time without losing them.</>
+            ) : (
+              <><strong>Customer enters a code at checkout.</strong> Switch to automatic if you would rather skip the code.</>
+            )}
+          </p>
+          <button type="button" className="b-btn" disabled={busy} onClick={() => setConfirmingMode(true)}>
+            {automatic ? "Require a code at checkout" : "Apply automatically"}
+          </button>
+        </div>
+      </div>
+      <ConfirmDialog
+        open={confirmingMode}
+        ariaLabel="Change redemption mode"
+        title={automatic ? "Require a code at checkout?" : "Apply this offer automatically?"}
+        destructive={false}
+        confirmLabel={automatic ? "Require a code" : "Apply automatically"}
+        message={
+          automatic ? (
+            <p style={{ margin: 0 }}>Customers will need to enter one of this offer&apos;s codes at checkout again. The paused codes become active, with their usage limits and once-per-customer rules enforced.</p>
+          ) : (
+            <div>
+              <p style={{ marginTop: 0 }}>Customers will no longer need a code. This offer will apply to every cart that meets its conditions.</p>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                <li>The codes are paused: customers who type one will get &quot;invalid&quot;. They are kept, so you can switch back.</li>
+                <li>Usage limits, once-per-customer and code dates are not enforced.</li>
+                <li>Combination rules are shared with all automatic offers.</li>
+                <li>If the offer works on all pages, it applies sitewide.</li>
+              </ul>
+              {data.automaticWarnings.map((warning) => (
+                <p key={warning} style={{ marginBottom: 0, color: "var(--red, #b91c1c)" }}>{warning}</p>
+              ))}
+            </div>
+          )
+        }
+        onCancel={() => setConfirmingMode(false)}
+        onConfirm={() => {
+          setConfirmingMode(false);
+          const fd = new FormData();
+          fd.set("intent", "set_redemption_mode");
+          fd.set("mode", automatic ? "checkout_code" : "automatic");
+          void submit(fd, { method: "POST" });
+        }}
+      />
+
+      {!automatic && data.notices.inert && (
         <div className="b-banner b-banner-orange b-mb-4" role="alert">
           <div className="b-banner-body">
             <p className="b-banner-text" style={{ margin: 0 }}>
@@ -327,7 +440,7 @@ export default function OfferCodesPage() {
         </div>
       ))}
 
-      <div className="b-banner b-banner-blue b-mb-4" role="status">
+      {!automatic && <div className="b-banner b-banner-blue b-mb-4" role="status">
         <div className="b-banner-body">
           <p className="b-banner-text" style={{ margin: 0 }}>
             This offer applies only while the customer has one of its codes entered, at checkout or in the cart.
@@ -341,7 +454,7 @@ export default function OfferCodesPage() {
             )}
           </p>
         </div>
-      </div>
+      </div>}
 
       <div className="b-editor-layout">
         <div>
@@ -381,6 +494,7 @@ export default function OfferCodesPage() {
                           <th>Used</th>
                           <th>Starts</th>
                           <th>Ends</th>
+                          {!automatic && <th aria-label="Link" />}
                         </tr>
                       </thead>
                       <tbody>
@@ -392,7 +506,7 @@ export default function OfferCodesPage() {
                               {code.oncePerCustomer && <span className="b-text-sm b-text-sub"> · 1 per customer</span>}
                             </td>
                             <td>
-                              {statusBadge(code.status, code.live)}
+                              {automatic && code.status === "active" ? <span className="b-badge b-badge-gray">Paused (automatic)</span> : statusBadge(code.status, code.live)}
                               {code.status === "disabled" && code.syncNote && (
                                 <div className="b-text-sm b-text-sub" title={code.syncNote}>Disabled: {code.syncNote}</div>
                               )}
@@ -401,6 +515,11 @@ export default function OfferCodesPage() {
                             <td>{code.usageCount.toLocaleString("en-US")}{code.usageLimit ? ` / ${code.usageLimit.toLocaleString("en-US")}` : ""}</td>
                             <td>{formatDate(code.startsAt)}</td>
                             <td>{formatDate(code.endsAt)}</td>
+                            {!automatic && (
+                              <td>
+                                <CopyLinkButton url={`https://${data.shopDomain}/discount/${encodeURIComponent(code.code)}`} />
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>

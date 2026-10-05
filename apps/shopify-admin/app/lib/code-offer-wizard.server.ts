@@ -19,6 +19,7 @@ import {
   type PageType,
 } from "@promo/shared-types";
 import { toStoredAmount } from "./money.js";
+import type { CodeRedemptionMode } from "./code-redemption.js";
 import { compileOfferConfig, serializeFunctionConfig } from "./sync/compile-config.js";
 import { createDiscountCode, createDiscountCodeBatch, validateBatchEntropy, type CodeSettings } from "./discount-codes.server.js";
 import { CODE_CHARSETS, type BatchSpec, type CodeCharset } from "./discount-code-generation.js";
@@ -48,6 +49,7 @@ const CODE_OFFER_CONFIG_MARGIN_BYTES = 300;
 
 /** Exact bytes of the config this draft would publish to its dedicated node. */
 function codeOfferConfigBytes(draft: CodeOfferDraft, reward: RewardDraft, productIds: string[]): number {
+  const automatic = draft.redemption === "automatic";
   const compiled = compileOfferConfig(
     { id: "00000000-0000-4000-8000-000000000000", type: "discount", priority: 100, publicTitle: draft.publicTitle } as never,
     draft.conditions.map((condition, index) => ({
@@ -71,7 +73,7 @@ function codeOfferConfigBytes(draft: CodeOfferDraft, reward: RewardDraft, produc
     ] as never,
     null,
     1,
-    { codePromo: true },
+    { codePromo: !automatic },
   );
   return new TextEncoder().encode(
     serializeFunctionConfig({ offers: [compiled], shippingOffers: [], version: "1", compiledAt: "2026-01-01T00:00:00.000Z" }),
@@ -101,9 +103,12 @@ export interface CodeOfferDraft {
   status: "draft" | "active" | "scheduled";
   startsAt: Date | null;
   endsAt: Date | null;
+  /** "automatic": no codes are created and the offer runs through the shared automatic nodes. */
+  redemption: CodeRedemptionMode;
   codes:
     | { mode: "single"; code: string; settings: CodeSettings }
-    | { mode: "bulk"; spec: BatchSpec; settings: CodeSettings };
+    | { mode: "bulk"; spec: BatchSpec; settings: CodeSettings }
+    | null;
   target: DiscountTarget;
   reward: RewardDraft;
   /** Collections whose products get the discount; expanded to product ids on save. */
@@ -293,9 +298,11 @@ export function parseCodeOfferForm(
   const schedule = parseDateRange(formData, context.timezone);
   if (schedule.error) return fail(schedule.error);
 
-  const codes = parseCodes(formData, context.timezone);
+  const redemption: CodeRedemptionMode = formData.get("codeRedemption") === "automatic" ? "automatic" : "checkout_code";
+  const codes: Result<CodeOfferDraft["codes"]> =
+    redemption === "automatic" ? { ok: true, data: null } : parseCodes(formData, context.timezone);
   if (!codes.ok) return codes;
-  if (codes.data.mode === "bulk") {
+  if (codes.data?.mode === "bulk") {
     const entropyError = validateBatchEntropy(codes.data.spec);
     if (entropyError) return fail(entropyError);
   }
@@ -317,6 +324,7 @@ export function parseCodeOfferForm(
       status: statusForSubmit(String(formData.get("intent") ?? "draft"), startsAt),
       startsAt,
       endsAt: schedule.data!.endsAt,
+      redemption,
       codes: codes.data,
       target: reward.data.target,
       reward: reward.data.reward,
@@ -379,16 +387,21 @@ export async function insertCodeOffer(
           startsAt: draft.startsAt ?? new Date(),
           endsAt: draft.endsAt,
           timezone,
-          requiresCode: true,
+          requiresCode: draft.redemption === "checkout_code",
+          codeRedemption: draft.redemption,
         })
         .returning({ id: offers.id });
       if (!offer) throw new Error("Failed to create offer");
 
-      const codes =
-        draft.codes.mode === "single"
-          ? await createDiscountCode(txDb, { shopId, offerId: offer.id, code: draft.codes.code, ...draft.codes.settings })
-          : await createDiscountCodeBatch(txDb, { shopId, offerId: offer.id, spec: draft.codes.spec, ...draft.codes.settings });
-      if (!codes.ok) throw new CodeCreationError(codes.error);
+      let codesCreated = 0;
+      if (draft.codes) {
+        const codes =
+          draft.codes.mode === "single"
+            ? await createDiscountCode(txDb, { shopId, offerId: offer.id, code: draft.codes.code, ...draft.codes.settings })
+            : await createDiscountCodeBatch(txDb, { shopId, offerId: offer.id, spec: draft.codes.spec, ...draft.codes.settings });
+        if (!codes.ok) throw new CodeCreationError(codes.error);
+        codesCreated = "created" in codes ? codes.created : 1;
+      }
 
       if (draft.conditions.length > 0) {
         await tx.insert(offerConditions).values(
@@ -426,7 +439,7 @@ export async function insertCodeOffer(
         stopLowerPriority: false,
         giftValueCountsForOtherOffers: false,
       });
-      return { offerId: offer.id, codesCreated: "created" in codes ? codes.created : 1 };
+      return { offerId: offer.id, codesCreated };
     });
 
   try {

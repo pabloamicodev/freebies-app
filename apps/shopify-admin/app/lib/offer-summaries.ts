@@ -220,10 +220,15 @@ export interface CodesSummaryInput {
   /** Code-gated but nothing can be redeemed right now, so nothing is published. */
   inert: boolean;
   legacyCode?: string | null;
+  /** Offer runs through the shared automatic nodes; its codes (if any) are paused. */
+  automatic?: boolean;
 }
 
 export function codesSummary(input: CodesSummaryInput): { lines: string[]; warning: string | null } {
-  const { total, active, samples, requiresCode, inert, legacyCode } = input;
+  const { total, active, samples, requiresCode, inert, legacyCode, automatic } = input;
+  if (automatic) {
+    return { lines: [total > 0 ? `Applies automatically — ${total} code${total === 1 ? "" : "s"} paused` : "Applies automatically — no code needed"], warning: null };
+  }
   if (total === 0) {
     if (legacyCode) return { lines: [`Required code: ${legacyCode}`], warning: inert ? "No redeemable code, so this offer is not live." : null };
     if (requiresCode) return { lines: ["Code required — no codes yet"], warning: "Add a code, or this offer is not live." };

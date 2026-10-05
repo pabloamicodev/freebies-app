@@ -38,6 +38,7 @@ import { DEFAULT_CODE_PAGE_TYPES, readPageTypes } from "../lib/page-types.js";
 import { and, eq } from "drizzle-orm";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { getMarketsForShop } from "../lib/markets.server.js";
+import { isCheckoutCodeGated } from "../lib/code-redemption.js";
 import { conditionSummary, conditionTypeLabel } from "../lib/offer-summaries.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
@@ -105,7 +106,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     offer,
     conditions: conditionRows.sort((a, b) => a.sortOrder - b.sortOrder),
     markets,
-    isCodePromo: Boolean(firstCode) || Boolean(offer.requiredDiscountCode) || offer.requiresCode,
+    isCodePromo: isCheckoutCodeGated(offer, Boolean(firstCode)),
   };
 };
 

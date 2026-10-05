@@ -140,6 +140,17 @@ describe("codesSummary", () => {
     expect(codesSummary({ ...base, requiresCode: true, legacyCode: "SAVE10" }).lines).toEqual(["Required code: SAVE10"]);
   });
 
+  it("shows the automatic mode with the paused code count", () => {
+    expect(codesSummary({ ...base, automatic: true })).toEqual({ lines: ["Applies automatically — no code needed"], warning: null });
+    expect(codesSummary({ total: 3, active: 3, samples: ["A"], requiresCode: true, inert: true, automatic: true })).toEqual({
+      lines: ["Applies automatically — 3 codes paused"],
+      warning: null,
+    });
+    expect(codesSummary({ total: 1, active: 1, samples: ["A"], requiresCode: true, inert: false, automatic: true }).lines).toEqual([
+      "Applies automatically — 1 code paused",
+    ]);
+  });
+
   it("shows count, active and up to 3 samples, and an inert warning", () => {
     const summary = codesSummary({ total: 5, active: 4, samples: ["A", "B", "C"], requiresCode: true, inert: false });
     expect(summary.lines).toEqual(["5 codes · 4 active", "A, B, C, …"]);

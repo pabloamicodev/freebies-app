@@ -27,6 +27,7 @@ import {
 } from "../lib/offer-publish-flow.server.js";
 import { insertCodeOffer, parseCodeOfferForm, type DiscountTarget } from "../lib/code-offer-wizard.server.js";
 import { CODE_CHARSETS, type CodeCharset } from "../lib/discount-code-generation.js";
+import { automaticModeWarnings } from "../lib/code-redemption.js";
 import { DEFAULT_CODE_PAGE_TYPES, pageTypeLabel } from "../lib/page-types.js";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { OfferWizardHeader, OfferWizardSection, type WizardAccent } from "../components/offers/OfferWizardLayout.js";
@@ -111,7 +112,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
   // The offer and its codes exist either way; resubmitting would only hit "code already used".
   if (publishError) return { error: `${publishError} It was saved as a draft.`, offerId };
-  return redirect(`/app/offers/${offerId}/codes`);
+  return redirect(parsed.data.redemption === "automatic" ? `/app/offers/${offerId}` : `/app/offers/${offerId}/codes`);
 };
 
 // ─── Client ──────────────────────────────────────────────────────────────────
@@ -330,6 +331,7 @@ export default function NewCodesOfferPage() {
   const copy = TEMPLATE_COPY[template];
 
   // Step 1 — codes
+  const [redemption, setRedemption] = useState<"checkout_code" | "automatic">("checkout_code");
   const [codeMode, setCodeMode] = useState<"single" | "bulk">(template === "bulk" ? "bulk" : "single");
   const [code, setCode] = useState("");
   const [batchCount, setBatchCount] = useState("100");
@@ -372,11 +374,13 @@ export default function NewCodesOfferPage() {
   }, [actionData]);
 
   const isShipping = discountTarget === "shipping";
+  const automatic = redemption === "automatic";
+  const automaticWarnings = automatic ? automaticModeWarnings({ combinesWithOrderDiscounts: combines.order, pageTypes }) : [];
   const filledUtms = UTM_LABELS.filter(([key]) => utm[key].trim());
 
   function validate(): string | null {
-    if (codeMode === "single" && !code.trim()) return "Enter the discount code customers will type.";
-    if (codeMode === "bulk" && !(Number(batchCount) >= 1)) return "Enter how many codes to generate.";
+    if (!automatic && codeMode === "single" && !code.trim()) return "Enter the discount code customers will type.";
+    if (!automatic && codeMode === "bulk" && !(Number(batchCount) >= 1)) return "Enter how many codes to generate.";
     if (!isShipping && !(Number(discountValue) > 0)) return "Enter a discount greater than zero.";
     if (discountTarget === "products" && productIds.length === 0 && collections.length === 0) {
       return "Select at least one product or collection to discount.";
@@ -440,6 +444,7 @@ export default function NewCodesOfferPage() {
         }}
         style={{ display: "flex", flexDirection: "column", gap: 16 }}
       >
+        <input type="hidden" name="codeRedemption" value={redemption} />
         <input type="hidden" name="codeMode" value={codeMode} />
         <input type="hidden" name="discountTarget" value={discountTarget} />
         <input type="hidden" name="productIds" value={JSON.stringify(productIds)} />
@@ -448,6 +453,45 @@ export default function NewCodesOfferPage() {
         {/* ── 1. Codes ── */}
         <OfferWizardSection step={nextStep()} title="Codes" accent={ACCENT}>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <fieldset className="b-radio-group b-grid-2" style={{ gap: 8 }}>
+              <legend className="b-sr-only">How customers get the discount</legend>
+              <RadioCard
+                name="codeRedemptionChoice"
+                value="checkout_code"
+                checked={!automatic}
+                onChange={() => setRedemption("checkout_code")}
+                title="Customer enters a code at checkout"
+                help="The discount applies only while one of the offer's codes is entered."
+              />
+              <RadioCard
+                name="codeRedemptionChoice"
+                value="automatic"
+                checked={automatic}
+                onChange={() => setRedemption("automatic")}
+                title="Apply automatically — no code"
+                help="No code needed. The offer applies to every cart that meets its conditions."
+              />
+            </fieldset>
+
+            {automatic && (
+              <div className="b-banner b-banner-blue" role="status" style={{ margin: 0 }}>
+                <div className="b-banner-body">
+                  <p className="b-banner-text" style={{ margin: 0 }}>
+                    Usage limits, one-use-per-customer and code dates can't be enforced without a code, so they are
+                    not available. The offer is gated only by the pages and conditions below.
+                  </p>
+                </div>
+              </div>
+            )}
+            {automaticWarnings.map((warning) => (
+              <div key={warning} className="b-banner b-banner-orange" role="alert" style={{ margin: 0 }}>
+                <div className="b-banner-body">
+                  <p className="b-banner-text" style={{ margin: 0 }}>{warning}</p>
+                </div>
+              </div>
+            ))}
+
+            {!automatic && (<>
             <fieldset className="b-radio-group b-grid-2" style={{ gap: 8 }}>
 <legend className="b-sr-only">How many codes</legend>
               <RadioCard
@@ -532,6 +576,7 @@ export default function NewCodesOfferPage() {
             <p className="b-help" style={{ margin: 0 }}>
               Leave the dates empty and the codes work whenever the offer is live (see the last step).
             </p>
+            </>)}
           </div>
         </OfferWizardSection>
 
@@ -674,7 +719,7 @@ export default function NewCodesOfferPage() {
                 description="Every condition here must also be true for the code to work. Only conditions checkout can verify are listed."
                 functionEnforcedOnly
                 exclude={["page_types", "utm_parameters"]}
-                isCodePromo
+                isCodePromo={!automatic}
               />
             </OfferWizardSection>
             )}
@@ -721,7 +766,7 @@ export default function NewCodesOfferPage() {
             <div style={{ background: "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 8, padding: "12px 14px" }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Summary</div>
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: "var(--text)", display: "flex", flexDirection: "column", gap: 4 }}>
-                <li>{codeSummary} — {limitSummary}</li>
+                <li>{automatic ? "Applies automatically, no code needed" : `${codeSummary} — ${limitSummary}`}</li>
                 <li>{discountSummary(discountTarget, discountType, discountValue, currencyCode, productIds.length, collections.length)}</li>
                 {(
                   <>
