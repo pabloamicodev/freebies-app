@@ -79,16 +79,16 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     shopCurrencyCode,
     isCodePromo: Boolean(firstCode) || Boolean(offer.requiredDiscountCode) || offer.requiresCode,
     codeNotices: await getCodeNotices(db, shopId, offer),
-  };
-};
-
-export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
     codes: {
       total: await countDiscountCodes(db, shopId, offerId),
       active: await countDiscountCodes(db, shopId, offerId, { status: "active" }),
       samples: (await listDiscountCodes(db, shopId, offerId, { pageSize: 3 })).rows.map((row) => row.code),
     },
+  };
+};
+
+export const action = async ({ request, params }: ActionFunctionArgs) => {
+  const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   const { session, shopId, currencyCode: shopCurrencyCode, db, timezone: shopTimezone } = context;
   const offerId = parseUuidParam(params);
   if (!offerId) throw new Response("Not found", { status: 404 });
@@ -704,6 +704,9 @@ function ConditionCard({
   const [productPickerOpen, setProductPickerOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const selectedVariantIds = Array.isArray(val.variantIds) ? (val.variantIds as string[]) : [];
+  const selectedProductIds = Array.isArray(val.productIds) ? (val.productIds as string[]) : [];
+  const matchBy: MatchBy = val.trackMode === "product" ? "product" : "variant";
+  const [pickedProducts, setPickedProducts] = useState<SelectedProduct[]>([]);
 
   function update(patch: Partial<ConditionValue>) {
     setVal((prev) => ({ ...prev, ...patch }));
@@ -717,9 +720,6 @@ function ConditionCard({
     void fetcher.submit(fd, { method: "POST" });
   }
 
-  const selectedProductIds = Array.isArray(val.productIds) ? (val.productIds as string[]) : [];
-  const matchBy: MatchBy = val.trackMode === "product" ? "product" : "variant";
-  const [pickedProducts, setPickedProducts] = useState<SelectedProduct[]>([]);
   const title = conditionTypeLabel(conditionType);
 
   return (
@@ -1005,6 +1005,15 @@ function ConditionCard({
               selectedIds={matchBy === "product" ? selectedProductIds : selectedVariantIds}
               onSelect={(gids) => { const next = matchBy === "product" ? { ...val, productIds: gids } : { ...val, variantIds: gids }; setVal(next); save(next); }}
             />
+
+            <div className="b-stack b-stack-3" style={{ marginTop: 12 }}>
+              <ProductConditionNote
+                type={conditionType as "specific_product" | "pack_of_products"}
+                matchBy={matchBy}
+                minQty={Number(val.minQtyPerProduct) || 1}
+                items={pickedItems(pickedProducts, matchBy === "product" ? selectedProductIds : selectedVariantIds, matchBy)}
+              />
+            </div>
           </>
         )}
 
@@ -1018,15 +1027,6 @@ function ConditionCard({
           <PageTypesConditionEditor conditionId={conditionId} val={val} update={update} save={save} isCodePromo={isCodePromo} />
         )}
       </div>
-
-            <div className="b-stack b-stack-3" style={{ marginTop: 12 }}>
-              <ProductConditionNote
-                type={conditionType as "specific_product" | "pack_of_products"}
-                matchBy={matchBy}
-                minQty={Number(val.minQtyPerProduct) || 1}
-                items={pickedItems(pickedProducts, matchBy === "product" ? selectedProductIds : selectedVariantIds, matchBy)}
-              />
-            </div>
     </div>
   );
 }
@@ -1089,19 +1089,6 @@ function scrollToSection(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-/* ── Condition summary text from DB value ────────────────── */
-function conditionSummary(conditionType: string, value: ConditionValue, currencyCode = "USD"): string[] {
-  const v = value;
-  const conditionCurrency = (v.currencyCode as string | undefined) ?? currencyCode;
-  const fmt = (cents: number) => {
-    try {
-      return getConditionCurrencyFormatter(conditionCurrency).format(cents / 100);
-    } catch {
-      return `${conditionCurrency} ${(cents / 100).toFixed(2)}`;
-    }
-  };
-  switch (conditionType) {
-    case "cart_value": {
 function OfferCodesCard({ offerId, codes, requiresCode, inert, legacyCode }: {
   offerId: string;
   codes: { total: number; active: number; samples: string[] };
@@ -1132,6 +1119,19 @@ function OfferCodesCard({ offerId, codes, requiresCode, inert, legacyCode }: {
   );
 }
 
+/* ── Condition summary text from DB value ────────────────── */
+function conditionSummary(conditionType: string, value: ConditionValue, currencyCode = "USD"): string[] {
+  const v = value;
+  const conditionCurrency = (v.currencyCode as string | undefined) ?? currencyCode;
+  const fmt = (cents: number) => {
+    try {
+      return getConditionCurrencyFormatter(conditionCurrency).format(cents / 100);
+    } catch {
+      return `${conditionCurrency} ${(cents / 100).toFixed(2)}`;
+    }
+  };
+  switch (conditionType) {
+    case "cart_value": {
       const cents = v.thresholdCents as number ?? 50000;
       const applies = v.appliesTo === "specific_products" ? "specific products" : "any product";
       return [`Spend from ${fmt(cents)} to get 1 gift(s)`, `Applies to ${applies}`];
@@ -1437,6 +1437,7 @@ export default function OfferDetailPage() {
                       )) : <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>No conditions configured.</p>}
                     </div>
                   </Link>
+                  <OfferCodesCard offerId={offer.id} codes={codes} requiresCode={isCodePromo} inert={codeNotices.inert} legacyCode={offer.requiredDiscountCode} />
                   <Link
                     to={`/app/offers/${offer.id}/rewards`}
                     className="b-card"
@@ -1455,7 +1456,6 @@ export default function OfferDetailPage() {
                         </p>
                       )) : <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>No rewards configured.</p>}
                     </div>
-                  <OfferCodesCard offerId={offer.id} codes={codes} requiresCode={isCodePromo} inert={codeNotices.inert} legacyCode={offer.requiredDiscountCode} />
                   </Link>
                 </div>
               </div>
