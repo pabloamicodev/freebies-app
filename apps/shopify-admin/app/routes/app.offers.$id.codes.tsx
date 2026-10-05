@@ -40,7 +40,7 @@ const INLINE_PUBLISH_LIMIT = 500;
 const STATUS_FILTERS = ["active", "disabled", "exhausted"] as const;
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { shopId, db, timezone: shopTimezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
   const url = new URL(request.url);
@@ -71,7 +71,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       internalName: offer.internalName,
       status: offer.status,
       legacyCode: offer.requiredDiscountCode,
-      timezone: offer.timezone ?? "UTC",
+      timezone: offer.timezone ?? shopTimezone,
     },
     codes: rows.map((row) => ({
       id: row.id,
@@ -119,7 +119,7 @@ function parseSettings(formData: FormData, timeZone: string): { error: string } 
 }
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session, shopId, db } = await getShopContext(request);
+  const { session, shopId, db, timezone: shopTimezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
@@ -130,7 +130,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   let warning = "";
 
   if (intent === "add_code" || intent === "generate_batch") {
-    const parsed = parseSettings(formData, offer.timezone ?? "UTC");
+    const parsed = parseSettings(formData, offer.timezone ?? shopTimezone);
     if ("error" in parsed) return { error: parsed.error };
     if (intent === "add_code") {
       const result = await createDiscountCode(db, { shopId, offerId, code: formData.get("code"), ...parsed.settings });

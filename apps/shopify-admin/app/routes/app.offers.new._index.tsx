@@ -105,7 +105,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
-  const { shopId, db } = context;
+  const { shopId, db, timezone } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const offerTypeResult = ensureOneOf(formData.get("offerType") as string | null, SELECTABLE_TYPES, "gift", "Offer type");
@@ -148,6 +148,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           internalName: candidateName,
           publicTitle,
           priority,
+          timezone,
           requiresCode: initialCode !== null,
         })
         .returning({ id: offers.id });

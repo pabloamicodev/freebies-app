@@ -27,6 +27,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { OfferToggle } from "../components/BogosSwitch.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { activationStatus } from "../lib/offer-scheduling.server.js";
 import { getOfferPublishErrors } from "../lib/offer-publish-errors.server.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
@@ -53,7 +54,7 @@ type SortColumn = (typeof SORT_COLUMNS)[number];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const timer = createRouteTimer("app.offers._index");
-  const { shopId, db } = await timer.time("shop_context", () => getShopContext(request));
+  const { shopId, db, timezone: shopTimezone } = await timer.time("shop_context", () => getShopContext(request));
   if (!shopId) {
     timer.done({ shopFound: false });
     return {
@@ -103,6 +104,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           publicTitle: offers.publicTitle,
           priority: offers.priority,
           startsAt: offers.startsAt,
+          timezone: offers.timezone,
           updatedAt: offers.updatedAt,
         })
         .from(offers)
@@ -122,6 +124,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       ...row,
       publishError: publishErrors[row.id] ?? null,
       startsAt: row.startsAt?.toISOString() ?? null,
+      timezone: row.timezone ?? shopTimezone,
       updatedAt: row.updatedAt.toISOString(),
     })),
   );
@@ -258,13 +261,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const validation = await validateOffersPublishable(db, shopId, offerIds);
       if (!validation.ok) return { error: validation.error };
       const previous = await db
-        .select({ id: offers.id, status: offers.status })
+        .select({ id: offers.id, status: offers.status, startsAt: offers.startsAt, endsAt: offers.endsAt })
         .from(offers)
         .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
-      await db
-        .update(offers)
-        .set({ status: "active", updatedAt: new Date() })
-        .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
+      const now = new Date();
+      await db.transaction(async (tx) => {
+        for (const row of previous) {
+          await tx
+            .update(offers)
+            .set({ status: activationStatus(row.startsAt, row.endsAt, now), updatedAt: now })
+            .where(and(eq(offers.shopId, shopId), eq(offers.id, row.id)));
+        }
+      });
       const publishError = await publishShopConfig();
       if (publishError) {
         await db.transaction(async (tx) => {
@@ -292,10 +300,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     case "toggle_status": {
       const offerId = formData.get("offerId") as string;
       const currentStatus = formData.get("currentStatus") as string;
-      const newStatus = currentStatus === "active" ? "paused" : "active";
-      if (newStatus === "active") {
+      let newStatus: OfferStatus = "paused";
+      if (currentStatus !== "active") {
         const validation = await validateOffersPublishable(db, shopId, [offerId]);
         if (!validation.ok) return { error: validation.error };
+        const [dates] = await db
+          .select({ startsAt: offers.startsAt, endsAt: offers.endsAt })
+          .from(offers)
+          .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
+          .limit(1);
+        newStatus = activationStatus(dates?.startsAt ?? null, dates?.endsAt ?? null);
       }
       await db
         .update(offers)
@@ -393,10 +407,10 @@ async function downloadOffersCsv(onError: (message: string) => void) {
   }
 }
 
-function formatDate(iso: string | null) {
+function formatDate(iso: string | null, timeZone: string) {
   if (!iso) return "—";
   const d = new Date(iso);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return d.toLocaleDateString("en-US", { timeZone, month: "short", day: "numeric", year: "numeric", timeZoneName: "short" });
 }
 
 /** "specific_link" -> "Specific link" — for displaying raw condition/reward
@@ -412,6 +426,7 @@ type OfferRow = {
   publicTitle: string;
   priority: number;
   startsAt: string | null;
+  timezone: string;
   updatedAt: string;
   publishError?: string | null;
 };
@@ -661,7 +676,7 @@ function OfferTableRow({
 
         {/* Start date in mono */}
         <td>
-          <span className="b-mono">{formatDate(offer.startsAt ?? offer.updatedAt)}</span>
+          <span className="b-mono">{formatDate(offer.startsAt, offer.timezone)}</span>
         </td>
 
         {/* Status badge */}
@@ -795,7 +810,7 @@ function OfferRowPreviewContent({
         )}
         <span className="b-preview-meta">Priority {offer.priority}</span>
         <span className="b-preview-meta">
-          {formatDate(offer.startsAt)}{offer.endsAt ? ` – ${formatDate(offer.endsAt)}` : " – no end date"}
+          {formatDate(offer.startsAt, offer.timezone)}{offer.endsAt ? ` – ${formatDate(offer.endsAt, offer.timezone)}` : " – no end date"}
         </span>
         <span className="b-preview-meta">
           {redemptionCount === 0 ? "Never redeemed" : `Redeemed ${redemptionCount} time${redemptionCount === 1 ? "" : "s"}`}

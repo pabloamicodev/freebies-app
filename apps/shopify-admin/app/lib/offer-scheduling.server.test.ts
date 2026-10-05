@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  activationStatus,
   executeOfferSchedule,
   planOfferScheduleTransitions,
   type DueOffer,
@@ -94,5 +95,25 @@ describe("offer scheduler", () => {
       expect.objectContaining({ stage: "publish", error: "network timeout" }),
     ]);
     expect(deps.rollbackTransitions).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("activationStatus", () => {
+  const future = new Date("2026-09-25T00:00:00.000Z");
+  const past = new Date("2026-09-20T00:00:00.000Z");
+  it("is active with no dates or a past start", () => {
+    expect(activationStatus(null, null, now)).toBe("active");
+    expect(activationStatus(past, null, now)).toBe("active");
+    expect(activationStatus(past, future, now)).toBe("active");
+  });
+  it("is scheduled for a future start", () => {
+    expect(activationStatus(future, null, now)).toBe("scheduled");
+  });
+  it("is expired once the end has passed, even with a future start", () => {
+    expect(activationStatus(past, past, now)).toBe("expired");
+    expect(activationStatus(null, now, now)).toBe("expired");
+  });
+  it("treats a start exactly now as active", () => {
+    expect(activationStatus(now, null, now)).toBe("active");
   });
 });

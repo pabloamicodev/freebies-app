@@ -5,9 +5,10 @@ import { SUPPORTED_CURRENCIES, validateConditionValue, validateRewardPayload, Co
 import { getShopContext } from "../lib/shop-context.server.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
-import { parseJsonRecord, parseJsonStringArray, parseDateRange } from "../lib/offer-validation.server.js";
+import { parseJsonRecord, parseJsonStringArray, parseDateRange, toZonedLocalInput } from "../lib/offer-validation.server.js";
 import { normalizeConditionValue } from "../lib/offer-config-normalization.server.js";
 import { publishShopConfig, republishIfActive, validateOffersPublishable } from "../lib/offer-publish-flow.server.js";
+import { activationStatus, statusForScheduleSave } from "../lib/offer-scheduling.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies, offerVersions, discountCodes } from "@promo/db";
 import { and, eq, desc, sql } from "drizzle-orm";
@@ -44,11 +45,12 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { shopId, currencyCode: shopCurrencyCode, db } = await getShopContext(request);
+  const { shopId, currencyCode: shopCurrencyCode, db, timezone: shopTimezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   if (!offerId) throw new Response("Not found", { status: 404 });
 
   const offer = await loadOwnedOffer(db, shopId, offerId);
+  const timezone = offer.timezone ?? shopTimezone;
 
   const [conditions, rewards, policy, [firstCode]] = await Promise.all([
     db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId))),
@@ -62,6 +64,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       ...offer,
       startsAt: offer.startsAt?.toISOString() ?? null,
       endsAt: offer.endsAt?.toISOString() ?? null,
+      timezone,
+      startsAtLocal: toZonedLocalInput(offer.startsAt, timezone),
+      endsAtLocal: toZonedLocalInput(offer.endsAt, timezone),
       createdAt: offer.createdAt.toISOString(),
       updatedAt: offer.updatedAt.toISOString(),
     },
@@ -84,7 +89,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       active: await countDiscountCodes(db, shopId, offerId, { status: "active" }),
       samples: (await listDiscountCodes(db, shopId, offerId, { pageSize: 3 })).rows.map((row) => row.code),
     },
-  const { session, shopId, currencyCode: shopCurrencyCode, db } = context;
+  const { session, shopId, currencyCode: shopCurrencyCode, db, timezone: shopTimezone } = context;
   const offerId = parseUuidParam(params);
   if (!offerId) throw new Response("Not found", { status: 404 });
   const intent = formData.get("intent") as string;
@@ -93,15 +98,22 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     case "update": {
       const publicTitle = formData.get("publicTitle") as string;
       const internalName = formData.get("internalName") as string;
-      const dateResult = parseDateRange(formData, offer.timezone ?? "UTC");
+      const timezone = offer.timezone ?? shopTimezone;
+      const datesPosted = formData.has("startsAt") || formData.has("endsAt");
+      const dateResult = datesPosted
+        ? parseDateRange(formData, timezone)
+        : { data: { startsAt: offer.startsAt, endsAt: offer.endsAt }, error: undefined };
       if (dateResult.error) return { error: dateResult.error };
+      const status = offer.status === "paused" ? offer.status : statusForScheduleSave(offer.status, dateResult.data!.startsAt, dateResult.data!.endsAt);
       await db.update(offers).set({
         publicTitle, internalName,
         startsAt: dateResult.data!.startsAt,
         endsAt: dateResult.data!.endsAt,
+        timezone,
+        status,
         updatedAt: new Date(),
       }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-      const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+      const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active" || status === "active");
       if (publishError) return { error: publishError };
       void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "update", before: { publicTitle: offer.publicTitle, internalName: offer.internalName, startsAt: offer.startsAt, endsAt: offer.endsAt }, after: { publicTitle, internalName, startsAt: dateResult.data!.startsAt, endsAt: dateResult.data!.endsAt }, performedBy: session.shop });
       break;
@@ -283,7 +295,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
       // Update status, push to Shopify, then rollback if the push fails.
       const now = new Date();
-      await db.update(offers).set({ status: "active", updatedAt: now }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+      const status = activationStatus(offer.startsAt, offer.endsAt, now);
+      await db.update(offers).set({ status, updatedAt: now }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
       const publishError = await publishShopConfig(shopId, session.shop);
       if (publishError) {
         await db.update(offers).set({ status: offer.status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
@@ -315,7 +328,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           createdBy: session.shop,
         });
       });
-      void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "publish", before: { status: offer.status }, after: { status: "active" }, performedBy: session.shop });
+      void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "publish", before: { status: offer.status }, after: { status }, performedBy: session.shop });
 
       break;
     }
@@ -1158,10 +1171,12 @@ function OfferCodesCard({ offerId, codes, requiresCode, inert, legacyCode }: {
 }
 
 /* ── Start date display ──────────────────────────────────── */
-function formatStartDate(iso: string | null): string {
+function formatStartDate(iso: string | null, timeZone: string, status?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
-  return `Starts ${d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+  const text = d.toLocaleString("en-US", { timeZone, month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
+  if (status === "scheduled") return `Scheduled — starts ${text}`;
+  return `${d.getTime() > Date.now() ? "Starts" : "Started"} ${text}`;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -1177,8 +1192,8 @@ export default function OfferDetailPage() {
   const [detailState, setDetailField] = useObjectState(() => ({
     internalName: offer.internalName,
     publicTitle: offer.publicTitle ?? "",
-    startsAt: offer.startsAt ? new Date(offer.startsAt).toISOString().slice(0, 16) : new Date().toISOString().slice(0, 16),
-    endsAt: offer.endsAt ? new Date(offer.endsAt).toISOString().slice(0, 16) : "",
+    startsAt: offer.startsAtLocal,
+    endsAt: offer.endsAtLocal,
     discountType: firstReward?.discountType ?? "free",
     discountValue: String((firstReward?.value as { amount?: number } | null)?.amount ?? 100),
     receivesAll: firstReward?.isAutoAdd !== false,
@@ -1245,6 +1260,7 @@ export default function OfferDetailPage() {
   }
 
   const canPublish = offer.status === "draft" || offer.status === "paused";
+  const publishLabel = offer.startsAt && new Date(offer.startsAt).getTime() > Date.now() ? "Schedule" : "Publish";
   const hasName = Boolean(internalName.trim());
   const hasConditions = conditions.length > 0;
   const hasRewards = rewards.length > 0;
@@ -1300,8 +1316,10 @@ export default function OfferDetailPage() {
     fd.append("intent", "update");
     fd.append("internalName", internalName);
     fd.append("publicTitle", publicTitle);
-    fd.append("startsAt", startsAt);
-    fd.append("endsAt", endsAt);
+    if (startsAt !== offer.startsAtLocal || endsAt !== offer.endsAtLocal) {
+      fd.append("startsAt", startsAt);
+      fd.append("endsAt", endsAt);
+    }
     void fetcher.submit(fd, { method: "POST" });
   }
 
@@ -1464,7 +1482,7 @@ export default function OfferDetailPage() {
             <div className="b-editor-footer">
               <button type="button" className="b-btn b-btn-secondary" onClick={saveInfo}>Save draft</button>
               {canPublish ? (
-                <button type="button" className="b-btn b-btn-dark" onClick={() => submitAction("publish")}>Publish</button>
+                <button type="button" className="b-btn b-btn-dark" onClick={() => submitAction("publish")}>{publishLabel}</button>
               ) : (
                 <button type="button" className="b-btn b-btn-secondary" onClick={() => submitAction("pause")}>Pause</button>
               )}
@@ -1477,7 +1495,7 @@ export default function OfferDetailPage() {
               <div className="b-card-body">
                 <p className="b-text-sm" style={{ margin: "0 0 6px" }}>Type: {offer.type}</p>
                 <p className="b-text-sm" style={{ margin: "0 0 6px" }}>Status: {offer.status}</p>
-                <p className="b-text-sm" style={{ margin: 0 }}>{formatStartDate(offer.startsAt)}</p>
+                <p className="b-text-sm" style={{ margin: 0 }}>{formatStartDate(offer.startsAt, offer.timezone, offer.status)}</p>
               </div>
             </div>
           </div>
@@ -1891,7 +1909,7 @@ export default function OfferDetailPage() {
                 onClick={() => submitAction("publish")}
                 disabled={fetcher.state !== "idle"}
               >
-                {fetcher.state !== "idle" ? "Publishing…" : "Publish"}
+                {fetcher.state !== "idle" ? "Publishing…" : publishLabel}
               </button>
             ) : (
               <button type="button" className="b-btn b-btn-danger" onClick={() => submitAction("pause")}>
@@ -1912,7 +1930,7 @@ export default function OfferDetailPage() {
               done={hasName}
               details={hasName ? [
                 publicTitle || internalName,
-                formatStartDate(offer.startsAt),
+                formatStartDate(offer.startsAt, offer.timezone, offer.status),
               ].filter(Boolean) as string[] : undefined}
               onClick={() => scrollToSection("section-offer-info")}
             />

@@ -1,9 +1,10 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   offerCombinationPolicies,
   offerConditions,
   offerRewards,
   offers,
+  shops,
   type Db,
 } from "@promo/db";
 import { validateConditionValue, validateRewardPayload } from "@promo/shared-types";
@@ -952,6 +953,7 @@ export async function insertPresetOffer(tx: Tx, shopId: string, presetOffer: Leg
       publicTitle: presetOffer.publicTitle,
       description: presetOffer.description,
       priority: presetOffer.priority,
+      timezone: sql<string>`(select ${shops.timezone} from ${shops} where ${shops.id} = ${shopId})`,
       createdBy: LEGACY_IMPORTER,
       updatedBy: LEGACY_IMPORTER,
     })

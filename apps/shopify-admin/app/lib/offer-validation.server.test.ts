@@ -10,6 +10,7 @@ import {
   parseJsonStringArray,
   ensureOneOf,
   nowInZone,
+  toZonedLocalInput,
 } from "./offer-validation.server.js";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -246,5 +247,33 @@ describe("ensureOneOf", () => {
 
   it("rejects invalid value", () => {
     expect(ensureOneOf("hack", types, "gift", "type").error).toBeTruthy();
+  });
+});
+
+describe("toZonedLocalInput / parseDateRange round trip", () => {
+  it.each([
+    ["America/Argentina/Buenos_Aires", "2026-10-05T21:30:00.000Z", "2026-10-05T18:30"],
+    ["America/New_York", "2026-01-15T15:00:00.000Z", "2026-01-15T10:00"],
+    ["America/New_York", "2026-07-15T14:00:00.000Z", "2026-07-15T10:00"],
+    ["America/New_York", "2026-03-08T16:00:00.000Z", "2026-03-08T12:00"],
+    ["America/New_York", "2026-11-01T17:00:00.000Z", "2026-11-01T12:00"],
+  ])("%s %s prefills as wall-clock and saves back to the same instant", (tz, iso, local) => {
+    const instant = new Date(iso);
+    expect(toZonedLocalInput(instant, tz)).toBe(local);
+    const parsed = parseDateRange(fd({ startsAt: local }), tz);
+    expect(parsed.data!.startsAt!.toISOString()).toBe(instant.toISOString());
+  });
+
+  it("is stable across repeated prefill-save cycles (no 3h drift per blur)", () => {
+    const tz = "America/Argentina/Buenos_Aires";
+    let instant = new Date("2026-10-06T03:00:00.000Z");
+    for (let i = 0; i < 3; i++) {
+      instant = parseDateRange(fd({ startsAt: toZonedLocalInput(instant, tz) }), tz).data!.startsAt!;
+    }
+    expect(instant.toISOString()).toBe("2026-10-06T03:00:00.000Z");
+  });
+
+  it("returns an empty string for a missing date", () => {
+    expect(toZonedLocalInput(null, "UTC")).toBe("");
   });
 });

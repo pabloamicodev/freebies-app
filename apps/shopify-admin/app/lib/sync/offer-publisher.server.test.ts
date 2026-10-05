@@ -659,6 +659,15 @@ describe("publishOffersForShop — code-gated offers", () => {
     expect(parsedConfig(codePush!.value).offers.map((o) => o.id)).toEqual(["code-1"]);
   });
 
+  it("leaves a scheduled offer out of the compiled config until it goes active", async () => {
+    state.offers = [makeOffer({ id: "live-1" }), makeOffer({ id: "later-1", status: "scheduled" })];
+
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+    const sharedPush = state.metafieldPushes.find((p) => p.ownerIds.includes(CART_DISCOUNT_ID));
+    expect(parsedConfig(sharedPush!.value).offers.map((o) => o.id)).toEqual(["live-1"]);
+  });
+
   it("creates and persists a codeDiscountId when the offer doesn't have one yet", async () => {
     const codeOffer = makeOffer({
       id: "code-2",

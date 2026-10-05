@@ -133,8 +133,22 @@ function parseLocalDateTimeInZone(raw: string, timeZone: string): Date | null {
     Number(hour),
     Number(minute),
   ));
-  const offset = getTimeZoneOffsetMs(utcGuess, timeZone);
-  return new Date(utcGuess.getTime() - offset);
+  const first = utcGuess.getTime() - getTimeZoneOffsetMs(utcGuess, timeZone);
+  // Re-evaluate the offset at the candidate instant so inputs near a DST change resolve correctly.
+  return new Date(utcGuess.getTime() - getTimeZoneOffsetMs(new Date(first), timeZone));
+}
+
+/** Inverse of parseLocalDateTimeInZone: an instant as a "YYYY-MM-DDTHH:mm" wall-clock string in `timeZone`. */
+export function toZonedLocalInput(date: Date | string | null | undefined, timeZone: string): string {
+  if (!date) return "";
+  const d = typeof date === "string" ? new Date(date) : date;
+  if (Number.isNaN(d.getTime())) return "";
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).formatToParts(d).map((part) => [part.type, part.value]),
+  );
+  return `${parts["year"]}-${parts["month"]}-${parts["day"]}T${parts["hour"]}:${parts["minute"]}`;
 }
 
 /** Formats "now" as a wall-clock "YYYY-MM-DDTHH:mm" string in the given zone —

@@ -42,6 +42,13 @@ export function statusForSubmit(intent: string, startsAt: Date | null, now = new
   return startsAt && startsAt > now ? "scheduled" : "active";
 }
 
+/** Status an offer takes when it is switched on: a future start must wait for the cron, a past end is already over. */
+export function activationStatus(startsAt: Date | null, endsAt: Date | null, now = new Date()): "scheduled" | "active" | "expired" {
+  if (endsAt && endsAt <= now) return "expired";
+  if (startsAt && startsAt > now) return "scheduled";
+  return "active";
+}
+
 export function statusForScheduleSave(currentStatus: OfferStatus, startsAt: Date | null, endsAt: Date | null, now = new Date()): OfferStatus {
   if (currentStatus === "archived" || currentStatus === "draft") return currentStatus;
   if (endsAt && endsAt <= now) return "expired";

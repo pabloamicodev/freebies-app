@@ -7,6 +7,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { appSettings, offers, type Db } from "@promo/db";
 import { isConstraintViolation } from "./unique-offer-name.server.js";
+import { activationStatus } from "./offer-scheduling.server.js";
 import { publishShopConfig, validateOffersPublishable } from "./offer-publish-flow.server.js";
 
 export const UNINSTALL_ARCHIVE_SETTING = "uninstall_archived_offers.v1";
@@ -61,13 +62,13 @@ export async function recordUninstallArchive(db: Db, shopId: string, offerIds: s
   });
 }
 
-async function stillArchived(db: Db, shopId: string, offerIds: string[]): Promise<string[]> {
+async function stillArchived(db: Db, shopId: string, offerIds: string[]) {
   if (offerIds.length === 0) return [];
   const rows = await db
-    .select({ id: offers.id })
+    .select({ id: offers.id, startsAt: offers.startsAt, endsAt: offers.endsAt })
     .from(offers)
     .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds), eq(offers.status, "archived")));
-  return rows.map((row) => row.id);
+  return rows;
 }
 
 /** Offers archived by the uninstall that are still archived. 0 hides the banner. */
@@ -103,10 +104,11 @@ export async function restoreArchivedOffers(
   const record = await readRecord(db, shopId);
   if (!record) return { restored: 0, failed: 0 };
   const archived = await stillArchived(db, shopId, record.offerIds);
+  const now = new Date();
   let failed = 0;
   const restoredIds: string[] = [];
 
-  for (const offerId of archived) {
+  for (const { id: offerId, startsAt, endsAt } of archived) {
     const validation = await validate(db, shopId, [offerId]);
     if (!validation.ok) {
       failed += 1;
@@ -115,7 +117,7 @@ export async function restoreArchivedOffers(
     try {
       await db
         .update(offers)
-        .set({ status: "active", archivedAt: null, updatedAt: new Date() })
+        .set({ status: activationStatus(startsAt, endsAt, now), archivedAt: null, updatedAt: now })
         .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId), eq(offers.status, "archived")));
       restoredIds.push(offerId);
     } catch (error) {

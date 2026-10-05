@@ -36,7 +36,7 @@ const WIDGET_TYPE_LABEL: Record<string, string> = {
 };
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { shopId, db, timezone: shopTimezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
@@ -122,6 +122,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       priority: offer.priority,
       startsAt: offer.startsAt?.toISOString() ?? null,
       endsAt: offer.endsAt?.toISOString() ?? null,
+      timezone: offer.timezone ?? shopTimezone,
       requiredDiscountCode: offer.requiredDiscountCode,
       codeCount: codeCountRows[0]?.total ?? 0,
       requiresCode: offer.requiresCode,

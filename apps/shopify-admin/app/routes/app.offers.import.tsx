@@ -43,12 +43,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const shopRows = await db
-    .select({ id: shops.id, currencyCode: shops.currencyCode })
+    .select({ id: shops.id, currencyCode: shops.currencyCode, timezone: shops.timezone })
     .from(shops)
     .where(eq(shops.myshopifyDomain, session.shop))
     .limit(1);
   const shopId = shopRows[0]?.id;
   const shopCurrency = shopRows[0]?.currencyCode ?? "USD";
+  const shopTimezone = shopRows[0]?.timezone ?? "UTC";
   if (!shopId) return { error: "Shop not found", created: [], errors: [] };
 
   let parsedRows: string[][];
@@ -170,6 +171,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           type: offerType,
           status: "draft",
           priority,
+          timezone: shopTimezone,
           requiresCode,
           discountTags: row["discount_tags"] ? row["discount_tags"].split("|") : [],
         }).returning({ id: offers.id });

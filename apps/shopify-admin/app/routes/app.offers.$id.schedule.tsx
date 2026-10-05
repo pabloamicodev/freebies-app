@@ -7,7 +7,7 @@ import { useLoaderData, Form, useActionData, useNavigation } from "react-router"
 import { BackButton } from "../components/BackButton.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
-import { parseDateRange } from "../lib/offer-validation.server.js";
+import { parseDateRange, toZonedLocalInput } from "../lib/offer-validation.server.js";
 import { statusForScheduleSave } from "../lib/offer-scheduling.server.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { offers } from "@promo/db";
@@ -17,33 +17,43 @@ import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
-const TIMEZONES = [
-  "UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
-  "America/Sao_Paulo", "Europe/London", "Europe/Paris", "Europe/Berlin", "Asia/Tokyo",
-  "Asia/Singapore", "Australia/Sydney",
-];
+function timezoneOptions(...extra: string[]): string[] {
+  const supported = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
+  return [...new Set(["UTC", ...supported, ...extra])].sort();
+}
+
+function isValidTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { shopId, db, timezone: shopTimezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
+  const timezone = offer.timezone ?? shopTimezone;
   return {
+    timezones: timezoneOptions(timezone, shopTimezone),
     offer: {
       id: offer.id, internalName: offer.internalName, status: offer.status,
-      startsAt: offer.startsAt?.toISOString().slice(0, 16) ?? "",
-      endsAt: offer.endsAt?.toISOString().slice(0, 16) ?? "",
-      timezone: offer.timezone ?? "UTC",
+      startsAt: toZonedLocalInput(offer.startsAt, timezone),
+      endsAt: toZonedLocalInput(offer.endsAt, timezone),
+      timezone,
     },
   };
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session, shopId, db } = await getShopContext(request);
+  const { session, shopId, db, timezone: shopTimezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const offer = await loadOwnedOffer(db, shopId, offerId);
-  const timezone = (formData.get("timezone") as string) || "UTC";
-  if (!TIMEZONES.includes(timezone)) return { error: "Timezone is invalid." };
+  const timezone = (formData.get("timezone") as string) || offer.timezone || shopTimezone;
+  if (!isValidTimeZone(timezone)) return { error: "Timezone is invalid." };
   const proxyFormData = new FormData();
   proxyFormData.set("startsAt", (formData.get("starts_at") as string | null) ?? "");
   proxyFormData.set("endsAt", (formData.get("ends_at") as string | null) ?? "");
@@ -51,14 +61,15 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (dateRange.error) return { error: dateRange.error };
   const { startsAt, endsAt } = dateRange.data!;
 
+  const nextStatus = statusForScheduleSave(offer.status, startsAt, endsAt);
   await db.update(offers).set({
     startsAt,
     endsAt,
-    status: statusForScheduleSave(offer.status, startsAt, endsAt),
+    status: nextStatus,
     timezone,
     updatedAt: new Date(),
   }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-  const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+  const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active" || nextStatus === "active");
   if (publishError) return { error: publishError };
 
   return { success: true };
@@ -75,7 +86,7 @@ function statusBadgeClass(status: string) {
 }
 
 export default function OfferSchedulePage() {
-  const { offer } = useLoaderData<typeof loader>();
+  const { offer, timezones } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
@@ -160,7 +171,7 @@ export default function OfferSchedulePage() {
                       name="timezone"
                       defaultValue={offer.timezone}
                     >
-                      {TIMEZONES.map((tz) => (
+                      {timezones.map((tz) => (
                         <option key={tz} value={tz}>{tz}</option>
                       ))}
                     </select>

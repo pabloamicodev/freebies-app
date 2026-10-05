@@ -191,7 +191,7 @@ describe("reconcileLegacyPreset", () => {
     ]);
     expect(f.transactions()).toBe(2); // one per written offer
     // nothing referencing the paused offer's id
-    expect(JSON.stringify(f.writes.map((w) => w.values))).not.toContain(paused.offer.id);
+    expect(JSON.stringify(f.writes.map((w) => w.values), (_k, v) => (v && typeof v === "object" && "queryChunks" in v ? "[sql]" : v))).not.toContain(paused.offer.id);
     const ops = f.writes.map((w) => `${w.op}:${w.table === offers ? "offers" : w.table === offerConditions ? "conditions" : w.table === offerRewards ? "rewards" : "other"}`);
     expect(ops).toEqual(
       expect.arrayContaining([
