@@ -1367,6 +1367,7 @@ export default function NewUpsellOfferPage() {
         open={productPickerOpen}
         onClose={() => setProductPickerOpen(false)}
         title="Select upsell products"
+        availabilityPolicy="block"
         allowMultiple
         selectedIds={upsellProducts}
         onSelect={(gids) => setUpsellProducts(gids)}

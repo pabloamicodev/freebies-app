@@ -54,6 +54,7 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
         mode="variants"
         allowMultiple
         title="Select gift variants"
+        availabilityPolicy="block"
         selectedIds={pickerIndex === null ? [] : (tiers[pickerIndex]?.variantIds ?? [])}
         onSelect={(ids) => {
           if (pickerIndex !== null) updateTier(pickerIndex, { variantIds: ids });
@@ -66,6 +67,7 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
         mode="variants"
         allowMultiple
         title="Select fallback gifts (used in order)"
+        availabilityPolicy="block"
         selectedIds={fallbackPickerIndex === null ? [] : (tiers[fallbackPickerIndex]?.fallbackVariantIds ?? [])}
         onSelect={(ids) => {
           if (fallbackPickerIndex !== null) updateTier(fallbackPickerIndex, { fallbackVariantIds: ids.slice(0, 5) });

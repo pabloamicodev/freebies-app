@@ -2002,6 +2002,7 @@ export default function NewGiftOfferPage() {
         open={rewardPickerOpen}
         onClose={() => setRewardPickerOpen(false)}
         title="Select gifts"
+        availabilityPolicy="block"
         allowMultiple
         selectedIds={rewardProducts}
         onSelect={(gids) => setRewardProducts(gids)}
@@ -2011,6 +2012,7 @@ export default function NewGiftOfferPage() {
         open={fallbackPickerOpen}
         onClose={() => setFallbackPickerOpen(false)}
         title="Select fallback gifts (used in order)"
+        availabilityPolicy="block"
         allowMultiple
         selectedIds={fallbackProducts}
         onSelect={(gids) => setFallbackProducts(gids.slice(0, 5))}

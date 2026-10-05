@@ -818,6 +818,7 @@ export default function OfferRewardsPage() {
             : "variants"
         }
         allowMultiple={rewardType !== "product_gift"}
+        availabilityPolicy={rewardType === "product_gift" ? "block" : "warn"}
         selectedIds={selectedGiftGids}
         onSelect={setSelectedGiftGids}
       />
@@ -825,6 +826,7 @@ export default function OfferRewardsPage() {
         open={fallbackPickerOpen}
         onClose={() => setFallbackPickerOpen(false)}
         title="Select fallback gifts (used in order)"
+        availabilityPolicy="block"
         mode="variants"
         allowMultiple
         selectedIds={fallbackGids}

@@ -16,11 +16,19 @@ const product = {
   }],
 };
 
+const soldOutProduct = {
+  ...product,
+  id: "gid://shopify/Product/102",
+  title: "Sold out picker product",
+  handle: "sold-out-picker-product",
+  variants: [{ ...product.variants[0]!, id: "gid://shopify/ProductVariant/202", availableForSale: false }],
+};
+
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/products/search?*", async (route) => {
     const query = new URL(route.request().url()).searchParams.get("q") ?? "";
     await route.fulfill({ json: {
-      products: !query || product.title.toLowerCase().includes(query.toLowerCase()) ? [product] : [],
+      products: [product, soldOutProduct].filter((item) => !query || item.title.toLowerCase().includes(query.toLowerCase())),
       cache: { lastSyncedAt: "2026-10-02T12:00:00.000Z" },
     } });
   });
@@ -77,6 +85,17 @@ test("code discounts can select, reopen, cancel and remove products", async ({ p
   await expect(page.locator('input[name="productIds"]')).toHaveValue("[]");
   await expect(page.getByRole("button", { name: `Remove ${product.title}`, exact: true })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
+});
+
+test("code discounts can select a sold-out product and show the restock warning", async ({ page }) => {
+  await page.getByRole("button", { name: "Select products", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Select products", exact: true });
+  const checkbox = dialog.getByRole("checkbox", { name: `Select ${soldOutProduct.title}`, exact: true });
+  await expect(dialog.getByText("Sold out — discount applies when restocked")).toBeVisible();
+  await expect(dialog.getByText("No eligible variants")).toHaveCount(0);
+  await checkbox.check();
+  await dialog.getByRole("button", { name: "Select (1)", exact: true }).click();
+  await expect(page.locator('input[name="productIds"]')).toHaveValue(JSON.stringify([soldOutProduct.id]));
 });
 
 test("collection search Enter keeps editing without submitting the code offer", async ({ page }) => {

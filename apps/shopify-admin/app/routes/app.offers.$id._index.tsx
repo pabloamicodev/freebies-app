@@ -1741,6 +1741,7 @@ export default function OfferDetailPage() {
                 open={giftPickerOpen}
                 onClose={() => setGiftPickerOpen(false)}
                 title="Select gift products"
+                availabilityPolicy="block"
                 selectedIds={giftProductIds}
                 onSelect={(gids) => { setGiftProductIds(gids); saveReward({ variantIds: gids }); }}
               />
@@ -1770,6 +1771,7 @@ export default function OfferDetailPage() {
                   open={fallbackPickerOpen}
                   onClose={() => setFallbackPickerOpen(false)}
                   title="Select fallback gifts (used in order)"
+                  availabilityPolicy="block"
                   allowMultiple
                   selectedIds={fallbackProductIds}
                   onSelect={(gids) => {

@@ -10,6 +10,7 @@ import { useEffect, useCallback, useRef } from "react";
 import { useDebouncedCallback } from "use-debounce";
 import { AccessibleModal } from "./AccessibleModal.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
+import { variantEligibility, type AvailabilityPolicy } from "../lib/picker-eligibility.js";
 
 interface ProductVariant {
   id: string;
@@ -46,7 +47,28 @@ interface ProductPickerProps {
   /** Already selected GIDs (shown as pre-checked). */
   selectedIds?: string[];
   onSelect: (gids: string[]) => void;
+  /** "block": sold-out/subscription-only variants can't be picked (gifts, upsells). "warn": pickable, sold-out flagged. */
+  availabilityPolicy?: AvailabilityPolicy;
 }
+
+const SOLD_OUT_WARNING = "Sold out — discount applies when restocked";
+
+function blockedProductReason(product: Product): string {
+  if (product.status !== "ACTIVE") return "it isn't active in Shopify";
+  const variants = product.variants ?? [];
+  if (variants.length === 0) return "it has no variants";
+  if (variants.every((v) => !v.availableForSale)) {
+    return variants.length === 1 ? "it is sold out in Shopify" : "all its variants are sold out in Shopify";
+  }
+  if (variants.every((v) => v.availableForSale && v.requiresSellingPlan)) return "it is only sold through a subscription";
+  return "its variants are sold out or subscription-only";
+}
+
+function blockedVariantReason(reason: "sold_out" | "subscription_only") {
+  return reason === "sold_out" ? "sold out in Shopify" : "subscription-only";
+}
+
+const RESTOCK_HINT = "Restock it, enable 'Continue selling when out of stock', or choose another product.";
 
 const EMPTY_SELECTED_IDS: string[] = [];
 
@@ -74,6 +96,7 @@ function ProductPickerContent({
   title = "Select Products",
   selectedIds = EMPTY_SELECTED_IDS,
   onSelect,
+  availabilityPolicy = "warn",
 }: ProductPickerProps) {
   const [pickerState, setPickerField] = useObjectState(() => ({
     query: "",
@@ -83,8 +106,9 @@ function ProductPickerContent({
     error: null as string | null,
     selected: new Set(selectedIds),
     expandedProducts: new Set<string>(),
+    notice: null as string | null,
   }));
-  const { query, products, loading, syncing, error, selected, expandedProducts } = pickerState;
+  const { query, products, loading, syncing, error, selected, expandedProducts, notice } = pickerState;
   const setQuery = createFieldSetter(setPickerField, "query");
   const setSelected = createFieldSetter(setPickerField, "selected");
   const setExpandedProducts = createFieldSetter(setPickerField, "expandedProducts");
@@ -264,6 +288,17 @@ function ProductPickerContent({
         </div>
       </div>
 
+      {notice && (
+        <div className="b-banner b-banner-orange" role="status">
+          <div className="b-banner-body">
+            <p className="b-banner-text">{notice}</p>
+          </div>
+          <button type="button" className="b-banner-close" onClick={() => setPickerField("notice", null)} aria-label="Dismiss message">
+            ×
+          </button>
+        </div>
+      )}
+
       <div className="b-picker-list">
         {loading || syncing ? (
           <div className="b-picker-empty" role="status" aria-live="polite">
@@ -289,10 +324,15 @@ function ProductPickerContent({
               const isExpanded = expandedProducts.has(product.id);
               // availableForSale already covers untracked inventory and oversell policy.
               const selectableVariants = product.variants?.filter((variant) =>
-                variant.availableForSale && !variant.requiresSellingPlan,
+                variantEligibility(variant, availabilityPolicy).selectable,
               ) ?? [];
               const variantGids = selectableVariants.map((variant) => variant.id);
               const productSelectable = product.status === "ACTIVE" && variantGids.length > 0;
+              const blockedReason = blockedProductReason(product);
+              const blockedMessage = `${product.title} can't be selected here: ${blockedReason}.${product.status === "ACTIVE" ? ` ${RESTOCK_HINT}` : ""}`;
+              const productSoldOut = availabilityPolicy === "warn" && product.status === "ACTIVE" &&
+                (product.variants?.length ?? 0) > 0 && product.variants.every((v) => !v.availableForSale);
+              const reasonId = `picker-reason-${product.id}`;
               const productSelected =
                 mode === "products"
                   ? selected.has(product.id)
@@ -302,7 +342,11 @@ function ProductPickerContent({
               // variants; clicking elsewhere on the row instead expands/collapses
               // the variant list when there's more than one variant (in "variants" mode).
               const toggleAction = () => {
-                if (!productSelectable) return;
+                if (!productSelectable) {
+                  setPickerField("notice", blockedMessage);
+                  return;
+                }
+                setPickerField("notice", null);
                 if (product.variants?.length === 1 && mode === "variants") {
                   toggleVariant(product.variants[0]!.id);
                 } else {
@@ -311,7 +355,10 @@ function ProductPickerContent({
               };
 
               const rowOnClick = () => {
-                if (!productSelectable) return;
+                if (!productSelectable) {
+                  setPickerField("notice", blockedMessage);
+                  return;
+                }
                 if (mode === "products" || !product.variants?.length || product.variants.length === 1) {
                   toggleAction();
                 } else {
@@ -332,7 +379,9 @@ function ProductPickerContent({
                         id={`picker-check-${product.id}`}
                         type="checkbox"
                         checked={productSelected}
-                        disabled={!productSelectable}
+                        aria-disabled={!productSelectable || undefined}
+                        aria-describedby={productSelectable ? undefined : reasonId}
+                        title={productSelectable ? undefined : `Can't be selected: ${blockedReason}`}
                         onChange={toggleAction}
                       />
                     </span>
@@ -349,8 +398,9 @@ function ProductPickerContent({
                         <span className="b-flex b-items-center b-gap-2">
                           {product.status !== "ACTIVE" && <span className="b-badge b-badge-red">Not active</span>}
                           {!productSelectable && product.status === "ACTIVE" && (
-                            <span className="b-badge b-badge-red">No eligible variants</span>
+                            <span id={reasonId} className="b-badge b-badge-red">No eligible variants: {blockedReason}</span>
                           )}
+                          {productSoldOut && <span className="b-badge b-badge-orange">{SOLD_OUT_WARNING}</span>}
                           {product.vendor && <span className="b-picker-row-sub">{product.vendor}</span>}
                         </span>
                       </div>
@@ -358,7 +408,13 @@ function ProductPickerContent({
                       {/* Variant list — shown when expanded or when product has multiple variants */}
                       {mode === "variants" && product.variants && product.variants.length > 1 && isExpanded && (
                         <ul className="b-list-reset b-picker-variant-list">
-                          {product.variants.map((variant) => (
+                          {product.variants.map((variant) => {
+                            const eligibility = variantEligibility(variant, availabilityPolicy);
+                            const variantReasonId = `picker-variant-reason-${variant.id}`;
+                            const variantMessage = eligibility.reason
+                              ? `${product.title} - ${variant.title} can't be selected here: ${blockedVariantReason(eligibility.reason)}. ${RESTOCK_HINT}`
+                              : "";
+                            return (
                             <li
                               key={variant.id}
                               className="b-picker-variant-row"
@@ -372,16 +428,34 @@ function ProductPickerContent({
                                   id={`picker-variant-${variant.id}`}
                                   type="checkbox"
                                   checked={selected.has(variant.id)}
-                                  disabled={!selectableVariants.some((candidate) => candidate.id === variant.id)}
-                                  onChange={() => toggleVariant(variant.id)}
+                                  aria-disabled={!eligibility.selectable || undefined}
+                                  aria-describedby={eligibility.selectable ? undefined : variantReasonId}
+                                  title={eligibility.reason ? `Can't be selected: ${blockedVariantReason(eligibility.reason)}` : undefined}
+                                  onChange={() => {
+                                    if (!eligibility.selectable) {
+                                      setPickerField("notice", variantMessage);
+                                      return;
+                                    }
+                                    toggleVariant(variant.id);
+                                  }}
                                 />
                               </span>
                               <span className="b-picker-variant-title">{variant.title}</span>
                               <span className="b-picker-row-sub">${variant.price}</span>
                               {variant.sku && <span className="b-picker-row-sub">SKU: {variant.sku}</span>}
-                              {!variant.availableForSale && <span className="b-badge b-badge-red">OOS</span>}
+                              {eligibility.reason === "sold_out" && (
+                                <span id={variantReasonId} className="b-badge b-badge-red">Sold out in Shopify</span>
+                              )}
+                              {eligibility.reason === "subscription_only" && (
+                                <span id={variantReasonId} className="b-badge b-badge-red">Subscription only</span>
+                              )}
+                              {eligibility.warning === "sold_out" && <span className="b-badge b-badge-orange">{SOLD_OUT_WARNING}</span>}
+                              {availabilityPolicy === "warn" && variant.requiresSellingPlan && (
+                                <span className="b-badge b-badge-orange">Subscription only</span>
+                              )}
                             </li>
-                          ))}
+                            );
+                          })}
                         </ul>
                       )}
 
