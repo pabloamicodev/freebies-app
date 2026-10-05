@@ -89,3 +89,52 @@ describe("evaluateSpecificProduct with operator 'any'", () => {
     expect(evaluateSpecificProduct(cart, condition, "any").ok).toBe(true);
   });
 });
+
+describe("evaluateSpecificProduct variant vs product matching", () => {
+  const cart = makeCart([{ variantId: "v1-mint", productId: "p1", quantity: 1 }]);
+
+  it("fails when two variants are required but only one is present", () => {
+    const result = evaluateSpecificProduct(cart, {
+      requirements: [
+        { productId: "p1", variantId: "v1-mint", trackMode: "variant", minQuantity: 1 },
+        { productId: "p1", variantId: "v1-cacao", trackMode: "variant", minQuantity: 1 },
+      ],
+      multiplyByGroups: false,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("product mode passes with any variant of the product", () => {
+    const result = evaluateSpecificProduct(cart, {
+      requirements: [{ productId: "p1", trackMode: "product", minQuantity: 1 }],
+      multiplyByGroups: false,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("variant mode does not pool across variants; product mode does", () => {
+    const split = makeCart([
+      { variantId: "va", productId: "p1", quantity: 1 },
+      { variantId: "vb", productId: "p1", quantity: 1 },
+    ]);
+    expect(evaluateSpecificProduct(split, {
+      requirements: [{ productId: "p1", variantId: "va", trackMode: "variant", minQuantity: 2 }],
+      multiplyByGroups: false,
+    }).ok).toBe(false);
+    expect(evaluateSpecificProduct(split, {
+      requirements: [{ productId: "p1", trackMode: "product", minQuantity: 2 }],
+      multiplyByGroups: false,
+    }).ok).toBe(true);
+  });
+
+  it("is not exclusive: unrelated products in the cart do not fail it", () => {
+    const mixed = makeCart([
+      { variantId: "v1-mint", productId: "p1", quantity: 1 },
+      { variantId: "other", productId: "p9", quantity: 4 },
+    ]);
+    expect(evaluateSpecificProduct(mixed, {
+      requirements: [{ productId: "p1", variantId: "v1-mint", trackMode: "variant", minQuantity: 1 }],
+      multiplyByGroups: false,
+    }).ok).toBe(true);
+  });
+});

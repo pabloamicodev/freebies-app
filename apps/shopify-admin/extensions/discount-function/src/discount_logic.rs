@@ -2608,6 +2608,69 @@ mod tests {
         }
     }
 
+    fn requirement_pooling_config(requirement: &str) -> String {
+        format!(
+            r#"{{"offers":[{{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[{requirement}],
+            "productRewards":[{{
+                "id":"reward-1","rewardType":"product_discount","targetProductIds":[],
+                "targetVariantIds":["gid://shopify/ProductVariant/target"],"discountType":"percentage",
+                "discountValue":25,"subscriptionMode":"any"
+            }}],"orderRewards":[]
+        }}]}}"#
+        )
+    }
+
+    #[test]
+    fn product_mode_requirement_pools_variants_but_variant_mode_does_not() {
+        // Two different variants of the same product, one unit each, plus the reward target.
+        let lines = format!(
+            "[{},{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/mint",
+                "gid://shopify/Product/planta",
+                "30.00",
+                1
+            ),
+            regular_line(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/cacao",
+                "gid://shopify/Product/planta",
+                "30.00",
+                1
+            ),
+            regular_line(
+                "gid://shopify/CartLine/3",
+                "gid://shopify/ProductVariant/target",
+                "gid://shopify/Product/target",
+                "20.00",
+                1
+            ),
+        );
+
+        let by_product = requirement_pooling_config(
+            r#"{"productId":"gid://shopify/Product/planta","trackMode":"product","minQuantity":2}"#,
+        );
+        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &by_product))
+            .expect("should not error");
+        assert!(
+            matches!(result.operations.first(), Some(schema::CartOperation::ProductDiscountsAdd(_))),
+            "product mode should count both variants toward the minimum"
+        );
+
+        let by_variant = requirement_pooling_config(
+            r#"{"variantId":"gid://shopify/ProductVariant/mint","trackMode":"variant","minQuantity":2}"#,
+        );
+        let result = run_function_with_input(run, &cart_json(&lines, "80.00", &by_variant))
+            .expect("should not error");
+        assert!(result.operations.is_empty(), "variant mode must not pool across variants");
+    }
+
     #[test]
     fn bounded_product_tier_discounts_only_the_configured_cheapest_quantity() {
         let config = r#"{"offers":[{

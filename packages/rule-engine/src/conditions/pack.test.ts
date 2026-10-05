@@ -92,4 +92,49 @@ describe("evaluatePack", () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.packCount).toBe(3);
   });
+
+  describe("variant vs product matching", () => {
+    const cart = makeCart([
+      { variantId: "v1-mint", productId: "p1", priceCents: 1000, quantity: 1 },
+      { variantId: "v2", productId: "p2", priceCents: 1000, quantity: 1 },
+    ]);
+
+    it("fails when two variants are required but only one is present", () => {
+      const result = evaluatePack(cart, {
+        requirements: [
+          { trackMode: "variant", variantId: "v1-mint", quantityPerPack: 1 },
+          { trackMode: "variant", variantId: "v1-cacao", quantityPerPack: 1 },
+        ],
+        multiplyByPacks: false,
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("product mode passes with any variant of the product", () => {
+      const result = evaluatePack(cart, {
+        requirements: [
+          { trackMode: "product", productId: "p1", quantityPerPack: 1 },
+          { trackMode: "product", productId: "p2", quantityPerPack: 1 },
+        ],
+        multiplyByPacks: false,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("variant mode does not pool quantity across variants; product mode does", () => {
+      const split = makeCart([
+        { variantId: "va", productId: "p1", priceCents: 1000, quantity: 1 },
+        { variantId: "vb", productId: "p1", priceCents: 1000, quantity: 1 },
+      ]);
+      expect(evaluatePack(split, {
+        requirements: [{ trackMode: "variant", variantId: "va", quantityPerPack: 2 }],
+        multiplyByPacks: false,
+      }).ok).toBe(false);
+      const pooled = evaluatePack(split, {
+        requirements: [{ trackMode: "product", productId: "p1", quantityPerPack: 2 }],
+        multiplyByPacks: false,
+      });
+      expect(pooled.ok).toBe(true);
+    });
+  });
 });

@@ -1128,3 +1128,28 @@ describe("currency comes from the shop, never an implicit USD", () => {
     expect(compile()).toMatchObject({ currencyCode: "USD", orderRewards: [{ discountValue: 5 }] });
   });
 });
+
+describe("compileOfferConfig — product-level requirements", () => {
+  it("passes productId and trackMode through for specific_product and pack_of_products", () => {
+    const result = compileOfferConfig(
+      offer(),
+      [
+        condition("specific_product", {
+          requirements: [{ productId: "gid://shopify/Product/1", trackMode: "product", minQuantity: 2 }],
+        }),
+        condition("pack_of_products", {
+          requirements: [{ productId: "gid://shopify/Product/2", trackMode: "product", quantityPerPack: 3 }],
+        }),
+      ],
+      [],
+      null,
+      1,
+    );
+    expect(result.requirements).toEqual([
+      { productId: "gid://shopify/Product/1", trackMode: "product", minQuantity: 2 },
+      { productId: "gid://shopify/Product/2", trackMode: "product", minQuantity: 3 },
+    ]);
+    expect(result.requiredProductIds).toEqual(["gid://shopify/Product/1", "gid://shopify/Product/2"]);
+    expect(result.requiredVariantIds).toEqual([]);
+  });
+});

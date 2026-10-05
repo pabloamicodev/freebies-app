@@ -49,28 +49,26 @@ export function normalizeConditionValue(conditionType: string, rawValue: unknown
     };
   }
 
-  if (conditionType === "specific_product" && !Array.isArray(value["requirements"]) && Array.isArray(value["variantIds"])) {
-    const minQuantity = Number.isInteger(value["minQtyPerProduct"]) ? Number(value["minQtyPerProduct"]) : 1;
-    return {
-      requirements: (value["variantIds"] as string[]).map((variantId) => ({
-        variantId,
-        trackMode: "variant",
-        minQuantity: Math.max(1, minQuantity),
-      })),
-      multiplyByGroups: value["multiplyByGroups"] === true || value["multiplyGifts"] === true,
-    };
-  }
-
-  if (conditionType === "pack_of_products" && !Array.isArray(value["requirements"]) && Array.isArray(value["variantIds"])) {
-    const quantityPerPack = Number.isInteger(value["minQtyPerProduct"]) ? Number(value["minQtyPerProduct"]) : 1;
-    return {
-      requirements: (value["variantIds"] as string[]).map((variantId) => ({
-        variantId,
-        trackMode: "variant",
-        quantityPerPack: Math.max(1, quantityPerPack),
-      })),
-      multiplyByPacks: value["multiplyByPacks"] === true || value["multiplyGifts"] === true,
-    };
+  if ((conditionType === "specific_product" || conditionType === "pack_of_products") && !Array.isArray(value["requirements"])) {
+    const isPack = conditionType === "pack_of_products";
+    const quantity = Math.max(1, Number.isInteger(value["minQtyPerProduct"]) ? Number(value["minQtyPerProduct"]) : 1);
+    const multiply = isPack
+      ? { multiplyByPacks: value["multiplyByPacks"] === true || value["multiplyGifts"] === true }
+      : { multiplyByGroups: value["multiplyByGroups"] === true || value["multiplyGifts"] === true };
+    const qtyField = isPack ? "quantityPerPack" : "minQuantity";
+    // The inline editor stores product GIDs in productIds when "Any variant of the product" is chosen.
+    if (value["trackMode"] === "product" && Array.isArray(value["productIds"]) && value["productIds"].length > 0) {
+      return {
+        requirements: [...new Set(value["productIds"] as string[])].map((productId) => ({ productId, trackMode: "product", [qtyField]: quantity })),
+        ...multiply,
+      };
+    }
+    if (Array.isArray(value["variantIds"])) {
+      return {
+        requirements: (value["variantIds"] as string[]).map((variantId) => ({ variantId, trackMode: "variant", [qtyField]: quantity })),
+        ...multiply,
+      };
+    }
   }
 
   return value;

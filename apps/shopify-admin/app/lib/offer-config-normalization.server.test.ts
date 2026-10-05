@@ -46,6 +46,28 @@ describe("normalizeConditionValue", () => {
     });
   });
 
+  it("honours the inline editor's product-level choice", () => {
+    expect(normalizeConditionValue("specific_product", {
+      trackMode: "product",
+      productIds: ["gid://shopify/Product/1", "gid://shopify/Product/1", "gid://shopify/Product/2"],
+      variantIds: ["gid://shopify/ProductVariant/9"],
+      minQtyPerProduct: 3,
+    })).toEqual({
+      requirements: [
+        { productId: "gid://shopify/Product/1", trackMode: "product", minQuantity: 3 },
+        { productId: "gid://shopify/Product/2", trackMode: "product", minQuantity: 3 },
+      ],
+      multiplyByGroups: false,
+    });
+    expect(normalizeConditionValue("pack_of_products", {
+      trackMode: "product",
+      productIds: ["gid://shopify/Product/1"],
+    })).toEqual({
+      requirements: [{ productId: "gid://shopify/Product/1", trackMode: "product", quantityPerPack: 1 }],
+      multiplyByPacks: false,
+    });
+  });
+
   it("fails closed for malformed stored JSON", () => {
     expect(normalizeConditionValue("customer_tags", null)).toEqual({
       includeTags: [],
