@@ -1,3 +1,4 @@
+import { resolveDiscountMessage } from "./discount-message.js";
 export interface ValidationResult<T> {
   data: T | null;
   error: string | null;
@@ -14,6 +15,12 @@ export function ok<T>(data: T): ValidationResult<T> {
 export function requiredText(formData: FormData, name: string, label: string): ValidationResult<string> {
   const value = (formData.get(name) as string | null)?.trim() ?? "";
   return value ? ok(value) : fail(`${label} is required.`);
+}
+
+/** The discount message (offers.public_title): empty falls back to the offer name, over-limit is rejected. */
+export function discountMessageText(formData: FormData, internalName: string): ValidationResult<string> {
+  const result = resolveDiscountMessage(formData.get("publicTitle"), internalName);
+  return result.ok ? ok(result.value) : fail(result.error);
 }
 
 export function optionalText(formData: FormData, name: string): string | null {

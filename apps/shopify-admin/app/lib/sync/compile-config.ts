@@ -17,6 +17,7 @@ import {
   type TypedOfferCondition,
 } from "@promo/shared-types";
 import { normalizeConditionValue } from "../offer-config-normalization.server.js";
+import { clampDiscountMessage } from "../discount-message.js";
 
 export interface CompileOfferOptions {
   /** The offer is gated by its own discount codes (the "code promo" default for onlyMatchedLines). */
@@ -396,7 +397,7 @@ export function compileOfferConfig(
     id: offer.id,
     version: versionNumber,
     offerType: offer.type,
-    title: offer.publicTitle?.trim() || undefined,
+    title: clampDiscountMessage(offer.publicTitle) ?? clampDiscountMessage(offer.internalName),
     priority: offer.priority,
     stopLowerPriority: policy?.stopLowerPriority ?? false,
     requiredProductIds: [],
@@ -1058,7 +1059,7 @@ export function compileShippingOfferConfigs(
       return [
         {
           id: `${offer.id}:${reward.id}`,
-          title: offer.publicTitle?.trim() || undefined,
+          title: clampDiscountMessage(offer.publicTitle) ?? clampDiscountMessage(offer.internalName),
           priority: offer.priority * 1000 + rewardIndex,
           // Fixed tiers and subtotal thresholds are in the shop's currency; the shipping wizard stamps a
           // hard-coded "USD" on the reward, so the shop's currency wins and the reward's is only a fallback.

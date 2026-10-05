@@ -216,6 +216,21 @@ describe("compileShippingOfferConfigs", () => {
     expect(result[0]).toMatchObject({ title: "Free shipping over $50" });
   });
 
+  it("emits the discount message as the offer title, clamped, falling back to the offer name", () => {
+    const compile = (overrides: Record<string, unknown>) =>
+      compileOfferConfig(offer(overrides), [], [], null, 1);
+    expect(compile({ publicTitle: "  Spring sale " }).title).toBe("Spring sale");
+    expect(compile({ publicTitle: "x".repeat(100) }).title).toBe("x".repeat(60));
+    expect(compile({ publicTitle: " ", internalName: "Internal name" }).title).toBe("Internal name");
+    expect(compile({}).title).toBeUndefined();
+    const shipping = compileShippingOfferConfigs(
+      offer({ publicTitle: "y".repeat(80) }),
+      [condition("cart_value", { thresholdCents: 5000 })],
+      [shippingReward({ discountType: "free" })],
+    );
+    expect(shipping[0]?.title).toBe("y".repeat(60));
+  });
+
   it("omits the shipping candidate title when there is no public title", () => {
     const result = compileShippingOfferConfigs(
       offer(),

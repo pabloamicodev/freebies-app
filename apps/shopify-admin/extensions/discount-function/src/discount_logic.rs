@@ -3516,6 +3516,47 @@ mod tests {
         assert_eq!(unrestricted, (vec![], 50.0));
     }
 
+    fn product_message(result: &schema::CartLinesDiscountsGenerateRunResult) -> Option<String> {
+        let schema::CartOperation::ProductDiscountsAdd(op) = &result.operations[0] else {
+            panic!("expected ProductDiscountsAdd");
+        };
+        op.candidates[0].message.clone()
+    }
+
+    #[test]
+    fn offer_title_is_the_product_and_order_discount_message() {
+        let titled = format!(r#"{PRODUCT_REWARD},"title":"Spring sale""#);
+        let result = run_function_with_input(
+            run,
+            &landing_and_other_page_payload(&titled, r#"["PRODUCT"]"#),
+        )
+        .expect("product");
+        assert_eq!(product_message(&result).as_deref(), Some("Spring sale"));
+
+        let order_reward = r#""orderRewards":[{"id":"o1","discountType":"percentage","discountValue":10}],"title":"Spring sale""#;
+        let result = run_function_with_input(
+            run,
+            &landing_and_other_page_payload(order_reward, r#"["ORDER"]"#),
+        )
+        .expect("order");
+        let schema::CartOperation::OrderDiscountsAdd(op) = &result.operations[0] else {
+            panic!("expected OrderDiscountsAdd");
+        };
+        assert_eq!(op.candidates[0].message.as_deref(), Some("Spring sale"));
+    }
+
+    #[test]
+    fn empty_offer_title_keeps_the_default_product_message() {
+        let untitled = format!(r#"{PRODUCT_REWARD},"title":"""#);
+        let result = run_function_with_input(
+            run,
+            &landing_and_other_page_payload(&untitled, r#"["PRODUCT"]"#),
+        )
+        .expect("product");
+        assert_ne!(product_message(&result).as_deref(), Some(""));
+        assert!(product_message(&result).is_some());
+    }
+
     fn page_type_condition(types: &[&str]) -> CompiledPageUrlCondition {
         CompiledPageUrlCondition {
             patterns: types.iter().map(|t| t.to_string()).collect(),
