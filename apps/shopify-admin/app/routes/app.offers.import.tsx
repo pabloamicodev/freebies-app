@@ -3,6 +3,7 @@
  * Parses CSV, validates each row, shows diff preview, creates offers in draft.
  */
 
+import { resolveDiscountMessage } from "../lib/discount-message.js";
 import { CSV_PARSE_ERRORS, safeErrorMessage } from "../lib/safe-error.js";
 import { Form, useActionData, useNavigate } from "react-router";
 import { BackButton } from "../components/BackButton.js";
@@ -82,14 +83,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     headerRow.forEach((h, idx) => { row[h] = (values[idx] ?? "").trim(); });
 
     const internalName = row["internal_name"];
-    const publicTitle = row["public_title"];
+    const rawPublicTitle = row["public_title"];
     const offerType = row["type"] as "gift" | "bundle" | "upsell" | "discount" | "booster";
 
     const rowNumber = i + 2; // +1 for header, +1 for 1-based indexing
 
-    if (!internalName || !publicTitle || !offerType) {
-      return { error: { row: rowNumber, message: "Missing required fields: internal_name, public_title, type" } };
+    if (!internalName || !offerType) {
+      return { error: { row: rowNumber, message: "Missing required fields: internal_name, type" } };
     }
+    const message = resolveDiscountMessage(rawPublicTitle, internalName);
+    if (!message.ok) return { error: { row: rowNumber, message: message.error } };
+    const publicTitle = message.value;
 
     if (!VALID_OFFER_TYPES.has(offerType)) {
       return { error: { row: rowNumber, message: `Invalid type "${offerType}". Must be one of: ${VALID_OFFER_TYPE_LABELS}` } };
@@ -249,7 +253,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 const COLUMNS = [
   { col: "internal_name", req: true,  note: "Unique internal identifier" },
-  { col: "public_title",  req: true,  note: "Customer-facing offer name" },
+  { col: "public_title",  req: false, note: "Discount message shown in cart, checkout and orders (max 60 characters; defaults to internal_name)" },
   { col: "type",          req: true,  note: "gift | bundle | upsell | discount | booster" },
   { col: "priority",      req: false, note: "Integer, default 100" },
   { col: "condition_type",req: false, note: "cart_value | cart_quantity" },

@@ -30,6 +30,7 @@ import {
   parseJsonRecord,
   parseJsonStringArray,
   requiredText,
+  discountMessageText,
 } from "./offer-validation.server.js";
 import { statusForSubmit } from "./offer-scheduling.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "./unique-offer-name.server.js";
@@ -293,7 +294,7 @@ export function parseCodeOfferForm(
 ): Result<CodeOfferDraft> {
   const internalName = requiredText(formData, "internalName", "Offer name");
   if (internalName.error) return fail(internalName.error);
-  const publicTitle = requiredText(formData, "publicTitle", "Title customers see");
+  const publicTitle = discountMessageText(formData, internalName.data!);
   if (publicTitle.error) return fail(publicTitle.error);
   const schedule = parseDateRange(formData, context.timezone);
   if (schedule.error) return fail(schedule.error);

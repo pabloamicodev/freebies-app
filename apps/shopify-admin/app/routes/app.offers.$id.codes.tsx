@@ -27,6 +27,8 @@ import {
   setDiscountCodesStatus,
   type CodeSettings,
 } from "../lib/discount-codes.server.js";
+import { DiscountMessageField } from "../components/DiscountMessageField.js";
+import { resolveDiscountMessage } from "../lib/discount-message.js";
 import { automaticModeWarnings, type CodeRedemptionMode } from "../lib/code-redemption.js";
 import { estimateSharedConfigBytes, sharedConfigTooLargeMessage } from "../lib/shared-config-size.server.js";
 import { MAX_METAFIELD_BYTES } from "../lib/sync/offer-publisher.server.js";
@@ -90,6 +92,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     automaticWarnings,
     offer: {
       codeRedemption: offer.codeRedemption,
+      publicTitle: offer.publicTitle,
       id: offer.id,
       internalName: offer.internalName,
       status: offer.status,
@@ -190,6 +193,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     );
     publishLarge = changed > INLINE_PUBLISH_LIMIT;
     message = `${changed.toLocaleString("en-US")} code${changed === 1 ? "" : "s"} ${intent === "activate" ? "activated" : "deactivated"}.`;
+  } else if (intent === "set_discount_message") {
+    const result = resolveDiscountMessage(formData.get("publicTitle"), offer.internalName);
+    if (!result.ok) return { error: result.error };
+    await db
+      .update(offers)
+      .set({ publicTitle: result.value, updatedAt: new Date() })
+      .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+    message = "Discount message saved.";
   } else if (intent === "set_redemption_mode") {
     const mode = String(formData.get("mode") ?? "") as CodeRedemptionMode;
     if (mode !== "checkout_code" && mode !== "automatic") return { error: "Unknown redemption mode." };
@@ -307,6 +318,7 @@ export default function OfferCodesPage() {
   const listFormRef = useRef<HTMLFormElement>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [confirmingMode, setConfirmingMode] = useState(false);
+  const [discountMessage, setDiscountMessage] = useState(data.offer.publicTitle);
   const automatic = data.offer.codeRedemption === "automatic";
   const pages = Math.max(Math.ceil(data.total / data.pageSize), 1);
   const exportQuery = new URLSearchParams();
@@ -412,6 +424,18 @@ export default function OfferCodesPage() {
           void submit(fd, { method: "POST" });
         }}
       />
+
+      {automatic && (
+        <Form method="POST" className="b-editor-section b-mb-4">
+          <input type="hidden" name="intent" value="set_discount_message" />
+          <div className="b-editor-section-body" style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 260 }}>
+              <DiscountMessageField value={discountMessage} onChange={setDiscountMessage} />
+            </div>
+            <button type="submit" className="b-btn" disabled={busy}>Save message</button>
+          </div>
+        </Form>
+      )}
 
       {!automatic && data.notices.inert && (
         <div className="b-banner b-banner-orange b-mb-4" role="alert">

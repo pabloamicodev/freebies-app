@@ -1,3 +1,4 @@
+import { DiscountMessageField } from "../components/DiscountMessageField.js";
 import { useEffect, useMemo, useState } from "react";
 import { safeErrorMessage } from "../lib/safe-error.js";
 import { Form, redirect, useActionData, useLoaderData, useNavigate, useNavigation, useParams } from "react-router";
@@ -10,7 +11,7 @@ import { offerCombinationPolicies, offerConditions, offerRewards, offers } from 
 import { Toast } from "../components/Toast.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
-import { nowInZone, parseDateRange, requiredText } from "../lib/offer-validation.server.js";
+import { discountMessageText, nowInZone, parseDateRange, requiredText } from "../lib/offer-validation.server.js";
 import { statusForSubmit } from "../lib/offer-scheduling.server.js";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
@@ -85,7 +86,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { db, shopId, session, timezone, currencyCode: shopCurrency } = context;
   const internalNameResult = requiredText(formData, "internalName", "Internal name");
   if (internalNameResult.error) return { error: internalNameResult.error };
-  const publicTitleResult = requiredText(formData, "publicTitle", "Public title");
+  const publicTitleResult = discountMessageText(formData, internalNameResult.data!);
   if (publicTitleResult.error) return { error: publicTitleResult.error };
   const dateRange = parseDateRange(formData, timezone);
   if (dateRange.error) return { error: dateRange.error };
@@ -228,6 +229,7 @@ export default function NewShippingOfferPage() {
   const [tiers, setTiers] = useState<TierDraft[]>([
     tierDraft({ minimum: "100", discountValue: "100" }),
   ]);
+  const [publicTitle, setPublicTitle] = useState(template === "global" ? "Shipping savings" : template === "landing" ? "Landing-page shipping offer" : "Quiz bundle shipping offer");
   const [oneTimeDelivery, setOneTimeDelivery] = useState(true);
   const [subscriptionDelivery, setSubscriptionDelivery] = useState(true);
   useEffect(() => {
@@ -307,18 +309,7 @@ export default function NewShippingOfferPage() {
                     defaultValue={title}
                   />
                 </div>
-                <div>
-                  <label className="b-label" htmlFor="shipping-title">
-                    Public title
-                  </label>
-                  <input
-                    id="shipping-title"
-                    className="b-input"
-                    name="publicTitle"
-                    required
-                    defaultValue={template === "global" ? "Shipping savings" : title}
-                  />
-                </div>
+                <DiscountMessageField id="shipping-title" value={publicTitle} onChange={setPublicTitle} />
               </div>
               <div>
                 <label className="b-label" htmlFor="shipping-description">

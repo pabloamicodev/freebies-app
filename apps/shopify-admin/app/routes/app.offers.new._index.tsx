@@ -1,3 +1,4 @@
+import { DISCOUNT_MESSAGE_MAX_LENGTH } from "../lib/discount-message.js";
 import { useActionData, useNavigate, useLoaderData, Form, redirect } from "react-router";
 import { Suspense, lazy, useState } from "react";
 import { Toast } from "../components/Toast.js";
@@ -7,6 +8,7 @@ import { authenticate } from "../shopify.server.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isConstraintViolation, isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
 import { ensureOneOf, parseInteger, requiredText } from "../lib/offer-validation.server.js";
+import { resolveDiscountMessage } from "../lib/discount-message.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerCombinationPolicies, offerConditions, offerRewards, discountCodes } from "@promo/db";
 import { CODE_TAKEN_MESSAGE, DISCOUNT_CODE_INDEX, normalizeTypedCode } from "../lib/discount-codes.server.js";
@@ -127,13 +129,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const formName = (formData.get("internalName") as string)?.trim();
   const formTitle = (formData.get("publicTitle") as string)?.trim();
   const internalName = formName || preset?.internalName || "";
-  const publicTitle = formTitle || preset?.publicTitle || "";
+  const rawTitle = formTitle || preset?.publicTitle || "";
   const priorityResult = parseInteger(formData, "priority", 100, { min: 1, label: "Priority" });
   if (priorityResult.error) return { error: priorityResult.error };
   const priority = priorityResult.data!;
 
   if (!internalName) return { error: requiredText(formData, "internalName", "Internal name").error ?? "Internal name is required." };
-  if (!publicTitle) return { error: requiredText(formData, "publicTitle", "Public title").error ?? "Public title is required." };
+  const messageResult = resolveDiscountMessage(rawTitle, internalName);
+  if (!messageResult.ok) return { error: messageResult.error };
+  const publicTitle = messageResult.value;
 
   // Offer + policy (+ preset condition/reward) created atomically. Unique-name
   // retry wraps the whole tx (a failed insert aborts the Postgres transaction).
@@ -262,7 +266,6 @@ function BoosterDetailsForm() {
   function validate() {
     const errs: { internalName?: string; publicTitle?: string; priority?: string } = {};
     if (!internalName.trim()) errs.internalName = "Internal name is required";
-    if (!publicTitle.trim()) errs.publicTitle = "Public title is required";
     if (isNaN(parseInt(priority, 10))) errs.priority = "Priority must be a number";
     setFieldErrors(errs);
     if (Object.keys(errs).length > 0) {
@@ -322,11 +325,10 @@ function BoosterDetailsForm() {
               }
             </div>
             <div>
-              <label className="b-label" htmlFor="publicTitle">
-                Public title <span style={{ color: "var(--red, #e53e3e)" }}>*</span>
-              </label>
+              <label className="b-label" htmlFor="publicTitle">Discount message (shown in cart, checkout and orders)</label>
               <input
                 id="publicTitle"
+maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                 className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`}
                 aria-invalid={fieldErrors.publicTitle ? true : undefined}
                 aria-describedby={fieldErrors.publicTitle ? "publicTitle-error" : undefined}
@@ -336,6 +338,7 @@ function BoosterDetailsForm() {
                 placeholder="e.g., Free Gift with $50 Purchase"
                 autoComplete="off"
               />
+<div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
               {fieldErrors.publicTitle
                 ? <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>
                 : <div className="b-help">Displayed to customers in widgets and cart messages.</div>

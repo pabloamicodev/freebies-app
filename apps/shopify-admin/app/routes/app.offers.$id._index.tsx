@@ -39,6 +39,8 @@ import { codesSummary, conditionSummary as sharedConditionSummary, conditionType
 import { MatchBySelect, ProductConditionNote, pickedItems } from "../components/ProductConditionFields.js";
 import { buildProductConditionValue, type MatchBy } from "../lib/product-condition.js";
 import type { SelectedProduct } from "../components/SelectedProductsList.js";
+import { DiscountMessageField } from "../components/DiscountMessageField.js";
+import { resolveDiscountMessage } from "../lib/discount-message.js";
 import { isCheckoutCodeGated } from "../lib/code-redemption.js";
 import { countDiscountCodes, getCodeNotices, listDiscountCodes, offerRequiresCode } from "../lib/discount-codes.server.js";
 
@@ -97,8 +99,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const offer = await loadOwnedOffer(db, shopId, offerId);
   switch (intent) {
     case "update": {
-      const publicTitle = formData.get("publicTitle") as string;
       const internalName = formData.get("internalName") as string;
+      const message = resolveDiscountMessage(formData.get("publicTitle"), internalName);
+      if (!message.ok) return { error: message.error };
+      const publicTitle = message.value;
       const timezone = offer.timezone ?? shopTimezone;
       const datesPosted = formData.has("startsAt") || formData.has("endsAt");
       const dateResult = datesPosted
@@ -1389,17 +1393,7 @@ export default function OfferDetailPage() {
                     autoComplete="off"
                   />
                 </div>
-                <div>
-                  <label className="b-label" htmlFor="publicTitle">Offer title</label>
-                  <input
-                    id="publicTitle"
-                    className="b-input"
-                    value={publicTitle}
-                    onChange={(e) => setPublicTitle(e.target.value)}
-                    onBlur={saveInfo}
-                    autoComplete="off"
-                  />
-                </div>
+                <DiscountMessageField value={publicTitle} onChange={setPublicTitle} onBlur={saveInfo} />
                 <div className="b-datetime-row">
                   <div>
                     <label className="b-label" htmlFor="offer-start-time">Start time</label>
@@ -1542,19 +1536,7 @@ export default function OfferDetailPage() {
                 />
                 <div className="b-help">For internal use only, not shown to customers..</div>
               </div>
-              <div>
-                <label className="b-label" htmlFor="publicTitle">Offer title</label>
-                <input
-                  id="publicTitle"
-                  className="b-input"
-                  value={publicTitle}
-                  onChange={(e) => setPublicTitle(e.target.value)}
-                  onBlur={saveInfo}
-                  placeholder="Enter offer title"
-                  autoComplete="off"
-                />
-                <div className="b-help">Shown to customers in the online store.</div>
-              </div>
+              <DiscountMessageField value={publicTitle} onChange={setPublicTitle} onBlur={saveInfo} />
               <div className="b-datetime-row">
                 <div>
                   <label className="b-label" htmlFor="offer-start-time">Start time</label>

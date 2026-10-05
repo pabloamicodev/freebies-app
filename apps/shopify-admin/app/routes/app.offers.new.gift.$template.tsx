@@ -1,3 +1,4 @@
+import { DISCOUNT_MESSAGE_MAX_LENGTH } from "../lib/discount-message.js";
 /**
  * Gift Offer Creation Wizard — dynamic route per template slug
  * Routes: /app/offers/new/gift/bxgy  /bogo  /free-sample  /cart-value  /tiered  /scratch
@@ -18,6 +19,7 @@ import {
   parseJsonStringArray,
   parseMoneyAmount,
   requiredText,
+  discountMessageText,
   nowInZone,
 } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
@@ -185,7 +187,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
   const internalNameResult = requiredText(formData, "internalName", "Internal name");
   if (internalNameResult.error) return { error: internalNameResult.error };
-  const publicTitleResult = requiredText(formData, "publicTitle", "Public title");
+  const publicTitleResult = discountMessageText(formData, internalNameResult.data!);
   if (publicTitleResult.error) return { error: publicTitleResult.error };
   const internalName = internalNameResult.data!;
   const publicTitle = publicTitleResult.data!;
@@ -524,7 +526,6 @@ export default function NewGiftOfferPage() {
   const validate = useCallback(() => {
     const errs: { internalName?: string; publicTitle?: string } = {};
     if (!internalName.trim()) errs.internalName = "Offer name is required";
-    if (!publicTitle.trim()) errs.publicTitle = "Public title is required";
     setFieldErrors(errs);
     if (Object.keys(errs).length > 0) {
       setToastMsg(Object.values(errs)[0]!);
@@ -715,11 +716,10 @@ export default function NewGiftOfferPage() {
                   )}
                 </div>
                 <div>
-                  <label className="b-label" htmlFor="publicTitle">
-                    Public title <span style={{ color: "var(--red, #e53e3e)" }}>*</span>
-                  </label>
+                  <label className="b-label" htmlFor="publicTitle">Discount message (shown in cart, checkout and orders)</label>
                   <input
                     id="publicTitle"
+maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                     className={`b-input${fieldErrors.publicTitle ? " b-input-error" : ""}`}
                     aria-invalid={fieldErrors.publicTitle ? true : undefined}
                     aria-describedby={fieldErrors.publicTitle ? "publicTitle-error" : undefined}
@@ -731,6 +731,7 @@ export default function NewGiftOfferPage() {
                     }}
                     autoComplete="off"
                   />
+<div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
                   {fieldErrors.publicTitle ? (
                     <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>
                   ) : (

@@ -1,3 +1,4 @@
+import { DISCOUNT_MESSAGE_MAX_LENGTH } from "../lib/discount-message.js";
 /**
  * Upsell Offer Creation Wizard — dynamic route per template slug
  * Routes: /app/offers/new/upsell/checkout   → Checkout upsell
@@ -557,14 +558,10 @@ export default function NewUpsellOfferPage() {
                 </div>
 
                 <div>
-                  <label className="b-label" htmlFor="publicTitle">
-                    Upsell title{" "}
-                    <span style={{ fontWeight: 400, color: "var(--text-sub)" }}>
-                      (shown to customers)
-                    </span>
-                  </label>
+                  <label className="b-label" htmlFor="publicTitle">Discount message (shown in cart, checkout and orders)</label>
                   <input
                     id="publicTitle"
+maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                     className="b-input"
                     name="publicTitle"
                     value={publicTitle}
@@ -572,6 +569,7 @@ export default function NewUpsellOfferPage() {
                     autoComplete="off"
                     placeholder="e.g., Complete your order"
                   />
+<div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
                 </div>
 
                 {/* FBT-only: description field */}

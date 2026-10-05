@@ -1,3 +1,4 @@
+import { DISCOUNT_MESSAGE_MAX_LENGTH } from "../lib/discount-message.js";
 /**
  * Discount Codes wizard: an offer that only applies while one of its own codes
  * is entered. Routes: /app/offers/new/codes/single | bulk | campaign.
@@ -390,7 +391,6 @@ export default function NewCodesOfferPage() {
       return "Fill in at least one UTM parameter, or turn off UTM validation.";
     }
     if (!internalName.trim()) return "Give the offer a name.";
-    if (!publicTitle.trim()) return "Enter the title customers see.";
     return null;
   }
 
@@ -735,8 +735,9 @@ export default function NewCodesOfferPage() {
                 <p className="b-help">Only your team sees this.</p>
               </div>
               <div>
-                <label className="b-label" htmlFor="publicTitle">Title customers see</label>
-                <input id="publicTitle" name="publicTitle" className="b-input" value={publicTitle} onChange={(event) => setPublicTitle(event.target.value)} autoComplete="off" />
+                <label className="b-label" htmlFor="publicTitle">Discount message (shown in cart, checkout and orders)</label>
+                <input id="publicTitle" maxLength={DISCOUNT_MESSAGE_MAX_LENGTH} name="publicTitle" className="b-input" value={publicTitle} onChange={(event) => setPublicTitle(event.target.value)} autoComplete="off" />
+<div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
                 <p className="b-help">Shown next to the discount in the cart and at checkout.</p>
               </div>
               <div>
