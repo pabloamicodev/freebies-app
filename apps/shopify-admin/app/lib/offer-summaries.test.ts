@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { collectGids, conditionSummary, rewardHeadline, urlsFromCondition } from "./offer-summaries.js";
+import { ConditionTypeSchema, RewardTypeSchema } from "@promo/shared-types";
+import { codesSummary, collectGids, conditionSummary, conditionTypeLabel, rewardHeadline, rewardSummary, rewardTypeLabel, urlsFromCondition } from "./offer-summaries.js";
 
 describe("collectGids", () => {
   it("collects variant and product GIDs from every target shape", () => {
@@ -89,5 +90,63 @@ describe("rewardHeadline", () => {
     expect(
       rewardHeadline({ rewardType: "shipping_discount", discountType: "fixed_amount", value: { amount: 10, currencyCode: "USD" } }),
     ).toBe("USD 10.00 off");
+  });
+});
+
+describe("conditionSummary product wording", () => {
+  it("says variants (all) for exact-variant requirements and products (any variant) for product mode", () => {
+    expect(conditionSummary("specific_product", {
+      requirements: Array.from({ length: 13 }, (_, i) => ({ variantId: `v${i}`, trackMode: "variant", minQuantity: 1 })),
+    })).toBe("13 variants required (all)");
+    expect(conditionSummary("pack_of_products", {
+      requirements: [{ variantId: "v1", trackMode: "variant", quantityPerPack: 1 }],
+    })).toBe("1 variant required (all)");
+    expect(conditionSummary("specific_product", {
+      requirements: [
+        { productId: "p1", trackMode: "product", minQuantity: 1 },
+        { productId: "p2", trackMode: "product", minQuantity: 1 },
+      ],
+    })).toBe("2 products required (any variant)");
+  });
+});
+
+describe("conditionTypeLabel / rewardTypeLabel", () => {
+  it("labels every condition type", () => {
+    for (const type of ConditionTypeSchema.options) {
+      const label = conditionTypeLabel(type);
+      expect(label).not.toBe(type);
+      expect(label).not.toContain("_");
+    }
+    expect(conditionTypeLabel("pack_of_products")).toBe("Pack of products");
+    expect(conditionTypeLabel("something_new")).toBe("Something new");
+  });
+
+  it("labels every reward type and renders human reward text", () => {
+    for (const type of RewardTypeSchema.options) expect(rewardTypeLabel(type)).not.toContain("_");
+    expect(rewardSummary({ rewardType: "product_discount", discountType: "percentage", value: { amount: 20 } })).toBe("Product discount — 20% off");
+    expect(rewardSummary({ rewardType: "product_gift", discountType: "free", value: {} })).toBe("Free gift");
+    expect(rewardSummary({ rewardType: "shipping_discount", discountType: "free", value: {} })).toBe("Free shipping");
+  });
+});
+
+describe("codesSummary", () => {
+  const base = { total: 0, active: 0, samples: [], requiresCode: false, inert: false };
+
+  it("covers no-code, code-required-without-codes and legacy cases", () => {
+    expect(codesSummary(base).lines).toEqual(["No code needed — applies automatically"]);
+    const required = codesSummary({ ...base, requiresCode: true, inert: true });
+    expect(required.lines).toEqual(["Code required — no codes yet"]);
+    expect(required.warning).toBeTruthy();
+    expect(codesSummary({ ...base, requiresCode: true, legacyCode: "SAVE10" }).lines).toEqual(["Required code: SAVE10"]);
+  });
+
+  it("shows count, active and up to 3 samples, and an inert warning", () => {
+    const summary = codesSummary({ total: 5, active: 4, samples: ["A", "B", "C"], requiresCode: true, inert: false });
+    expect(summary.lines).toEqual(["5 codes · 4 active", "A, B, C, …"]);
+    expect(summary.warning).toBeNull();
+    expect(codesSummary({ total: 1, active: 0, samples: ["A"], requiresCode: true, inert: true })).toEqual({
+      lines: ["1 code · 0 active", "A"],
+      warning: expect.stringContaining("not live"),
+    });
   });
 });

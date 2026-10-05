@@ -4,6 +4,7 @@
 
 import { pageTypeLabel } from "./page-types.js";
 import { fromStoredAmount } from "./money.js";
+import { readMatchBy } from "./product-condition.js";
 
 export function conditionSummary(conditionType: string, value: unknown): string {
   const v = (value ?? {}) as Record<string, unknown>;
@@ -45,7 +46,9 @@ export function conditionSummary(conditionType: string, value: unknown): string 
     case "specific_product":
     case "pack_of_products": {
       const requirements = Array.isArray(v["requirements"]) ? v["requirements"] as unknown[] : [];
-      return `${requirements.length} product${requirements.length === 1 ? "" : "s"} required`;
+      const byProduct = readMatchBy(value) === "product";
+      const noun = byProduct ? "product" : "variant";
+      return `${requirements.length} ${noun}${requirements.length === 1 ? "" : "s"} required (${byProduct ? "any variant" : "all"})`;
     }
     case "page_url": {
       const patterns = Array.isArray(v["patterns"]) ? v["patterns"] as string[] : [];
@@ -150,4 +153,83 @@ export function rewardHeadline(reward: { rewardType: string; discountType: strin
     return `${currency} ${dollars.toFixed(2)} off`;
   }
   return reward.discountType;
+}
+
+const CONDITION_TYPE_LABELS: Record<string, string> = {
+  cart_value: "Cart value",
+  cart_quantity: "Cart quantity",
+  specific_product: "Specific product",
+  cart_value_multiplier: "Cart value multiplier",
+  pack_of_products: "Pack of products",
+  specific_link: "Specific link",
+  order_history_total_spent: "Order history: total spent",
+  order_history_last_order_spent: "Order history: last order spent",
+  order_history_total_orders: "Order history: total orders",
+  one_use_per_customer: "One use per customer",
+  customer_tags: "Customer tags",
+  customer_location: "Customer location",
+  markets: "Shopify Markets",
+  subscription_product_type: "Subscription products",
+  sales_channels: "Sales channels",
+  product_quantity_limits: "Product quantity limits",
+  collection_quantity_limits: "Collection quantity limits",
+  vendor_quantity_limits: "Vendor quantity limits",
+  product_type_quantity_limits: "Product type quantity limits",
+  exclude_products: "Exclude products",
+  exclude_collections: "Exclude collections",
+  exclude_vendors: "Exclude vendors",
+  exclude_types: "Exclude product types",
+  page_url: "Page URL",
+  line_attribute: "Line attribute",
+  cart_attribute: "Cart attribute",
+  discount_code: "Discount code",
+  utm_parameters: "UTM parameters",
+  page_types: "Store pages",
+};
+
+export function conditionTypeLabel(conditionType: string): string {
+  return CONDITION_TYPE_LABELS[conditionType] ?? conditionType.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
+
+const REWARD_TYPE_LABELS: Record<string, string> = {
+  product_gift: "Gift",
+  shipping_discount: "Shipping discount",
+  product_discount: "Product discount",
+  order_discount: "Order discount",
+  bundle_discount: "Bundle discount",
+  upsell_discount: "Upsell discount",
+};
+
+export function rewardTypeLabel(rewardType: string): string {
+  return REWARD_TYPE_LABELS[rewardType] ?? rewardType.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
+
+/** "Product discount — 20% off"; gifts and free shipping already read as a full phrase. */
+export function rewardSummary(reward: { rewardType: string; discountType: string; value: unknown }): string {
+  const headline = rewardHeadline(reward);
+  if (headline === "Free gift" || headline === "Free shipping") return headline;
+  return `${rewardTypeLabel(reward.rewardType)} — ${headline}`;
+}
+
+export interface CodesSummaryInput {
+  total: number;
+  active: number;
+  samples: string[];
+  /** Offer is code-gated (flag, legacy required code, or any code rows). */
+  requiresCode: boolean;
+  /** Code-gated but nothing can be redeemed right now, so nothing is published. */
+  inert: boolean;
+  legacyCode?: string | null;
+}
+
+export function codesSummary(input: CodesSummaryInput): { lines: string[]; warning: string | null } {
+  const { total, active, samples, requiresCode, inert, legacyCode } = input;
+  if (total === 0) {
+    if (legacyCode) return { lines: [`Required code: ${legacyCode}`], warning: inert ? "No redeemable code, so this offer is not live." : null };
+    if (requiresCode) return { lines: ["Code required — no codes yet"], warning: "Add a code, or this offer is not live." };
+    return { lines: ["No code needed — applies automatically"], warning: null };
+  }
+  const lines = [`${total} code${total === 1 ? "" : "s"} · ${active} active`];
+  if (samples.length) lines.push(samples.slice(0, 3).join(", ") + (total > 3 ? ", …" : ""));
+  return { lines, warning: inert ? "No code can be redeemed right now (disabled, used up or expired), so this offer is not live." : null };
 }
