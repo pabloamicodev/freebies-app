@@ -549,7 +549,7 @@ describe("compileOfferConfig", () => {
           rewardType: "order_discount",
           discountType: "percentage",
           value: { amount: 15, currencyCode: "USD" },
-          target: { scope: "cart" },
+          target: { scope: "cart", subscriptionMode: "subscription_only" },
         }),
       ],
       null,
@@ -578,6 +578,7 @@ describe("compileOfferConfig", () => {
       expect.objectContaining({
         discountType: "percentage",
         discountValue: 15,
+        subscriptionMode: "subscription_only",
       }),
     ]);
     expect(result.customerOrderCountMin).toBe(3);

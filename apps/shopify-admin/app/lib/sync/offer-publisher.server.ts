@@ -14,6 +14,7 @@ import {
   type OfferReward,
   type OfferCombinationPolicy,
 } from "@promo/db";
+import { normalizeSubscriptionMode } from "../purchase-type.js";
 import { eq, and, inArray, isNotNull, sql } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { decryptToken } from "../token-crypto.server.js";
@@ -35,6 +36,9 @@ import {
   DELIVERY_DISCOUNT_CLASSES,
   addRedeemCodes,
   codeOwners,
+  ALL_PURCHASE_TYPES,
+  purchaseTypeFlags,
+  type PurchaseTypeFlags,
   createOrFindCodeDiscount,
   deleteCodeDiscountNode,
   ensureCodedShippingNodes,
@@ -656,7 +660,17 @@ function assertConfigFits(value: string): void {
   }
 }
 
-function buildNodeOptions(redeemable: DiscountCode[]): CodeDiscountNodeOptions {
+const PURCHASE_TYPE_REWARDS = new Set(["product_discount", "order_discount", "upsell_discount", "bundle_discount"]);
+
+/** A node only opts out of a purchase type when every reward is a discount that opts out of it. */
+export function nodePurchaseTypes(rewardRows: ReadonlyArray<{ rewardType: string; target: unknown }>): PurchaseTypeFlags {
+  if (rewardRows.some((reward) => !PURCHASE_TYPE_REWARDS.has(reward.rewardType))) return ALL_PURCHASE_TYPES;
+  return purchaseTypeFlags(
+    rewardRows.map((reward) => normalizeSubscriptionMode((reward.target as Record<string, unknown> | null)?.["subscriptionMode"])),
+  );
+}
+
+function buildNodeOptions(redeemable: DiscountCode[], rewardRows: OfferReward[] = []): CodeDiscountNodeOptions {
   // usageLimit / appliesOncePerCustomer are node-wide on Shopify, so they only
   // mirror per-code settings when that's equivalent: one live code for the
   // limit, every live code once-per-customer for the customer rule. Per-code
@@ -664,6 +678,7 @@ function buildNodeOptions(redeemable: DiscountCode[]): CodeDiscountNodeOptions {
   const [only] = redeemable;
   return {
     endsAt: null,
+    purchaseTypes: nodePurchaseTypes(rewardRows),
     usageLimit: redeemable.length === 1 && only?.usageLimit != null ? only.usageLimit : null,
     appliesOncePerCustomer:
       redeemable.length > 0 && redeemable.every((code) => code.oncePerCustomer),
@@ -852,7 +867,7 @@ async function compileCodeOffers(
     // pushing a config below would reopen it.
     if (liveCodes.length === 0) continue;
 
-    const nodeOptions = buildNodeOptions(redeemableCodes);
+    const nodeOptions = buildNodeOptions(redeemableCodes, rewardRows);
     if (!discountId) {
       const [primary] = liveCodes;
       if (!primary) continue;
@@ -977,7 +992,9 @@ async function pushCodeOfferConfigs(
       entry.nodeOptions,
     );
     await pushMetafields(shopDomain, accessToken, [discountId], value);
-    manifest.record(discountId, kind === "delivery" ? "code-delivery" : "code", value);
+    manifest.record(discountId, kind === "delivery" ? "code-delivery" : "code", value, {
+      purchaseTypes: entry.nodeOptions.purchaseTypes,
+    });
 
     // A code can be taken between the pre-flight and the bulk job (a race): treat any
     // per-code failure like a pre-flight collision (regenerate / suffix), then add the

@@ -291,6 +291,7 @@ de_struct! {
     pub struct CompiledOrderReward {
         "discountType" => discount_type: String,
         "discountValue" => discount_value: f64,
+        "subscriptionMode" => subscription_mode: String = default_subscription_mode(),
         "subtotalTiers" => subtotal_tiers: Vec<OrderSubtotalDiscountTier> = Vec::new(),
     }
 }

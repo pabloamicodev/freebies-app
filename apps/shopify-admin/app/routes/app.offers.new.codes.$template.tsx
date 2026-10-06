@@ -34,6 +34,7 @@ import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { OfferWizardHeader, OfferWizardSection, type WizardAccent } from "../components/offers/OfferWizardLayout.js";
 import { OfferConditionsBuilder } from "../components/OfferConditionsBuilder.js";
 import { PageTypeCheckboxes, PAGE_TYPES_HELP, UtmScopeChoice } from "../components/subconditions/forms.js";
+import { PurchaseTypeField } from "../components/PurchaseTypeField.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { SelectedProductsList } from "../components/SelectedProductsList.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
@@ -608,6 +609,8 @@ export default function NewCodesOfferPage() {
                 </div>
               </div>
             )}
+
+            {!isShipping && <PurchaseTypeField idPrefix="code-wizard-purchase-type" />}
 
             {discountTarget === "products" && (
               <div className="b-grid-2">

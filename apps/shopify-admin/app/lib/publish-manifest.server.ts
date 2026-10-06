@@ -17,6 +17,9 @@ export interface ManifestNode {
   hash: string;
   /** False for nodes we deliberately expired / emptied (stale code offers). */
   active: boolean;
+  /** What the node was last published with; absent means both (shared nodes always are). */
+  appliesOnSubscription?: boolean;
+  appliesOnOneTimePurchase?: boolean;
 }
 
 export interface PublishManifest {
@@ -56,8 +59,18 @@ export class ManifestCollector {
   readonly nodes: Record<string, ManifestNode> = {};
   validationHash: string | undefined;
 
-  record(id: string, kind: ManifestNodeKind, json: string, extra: { active?: boolean } = {}): void {
-    this.nodes[id] = { kind, hash: configHash(json), active: extra.active ?? true };
+  record(
+    id: string,
+    kind: ManifestNodeKind,
+    json: string,
+    extra: { active?: boolean; purchaseTypes?: { appliesOnSubscription: boolean; appliesOnOneTimePurchase: boolean } } = {},
+  ): void {
+    this.nodes[id] = {
+      kind,
+      hash: configHash(json),
+      active: extra.active ?? true,
+      ...(extra.purchaseTypes ? extra.purchaseTypes : {}),
+    };
   }
 
   build(): PublishManifest {

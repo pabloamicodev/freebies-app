@@ -91,6 +91,7 @@ export type DriftIssue =
   | "config_mismatch"
   | "inactive_node"
   | "code_count_mismatch"
+  | "purchase_type_mismatch"
   | "validation_mismatch"
   | "validation_missing"
   | "missing_manifest";
@@ -116,12 +117,18 @@ export interface DiscountDriftResult {
   failures: Array<{ shopId: string; error: string }>;
 }
 
+interface PurchaseTypeState {
+  status?: string;
+  appliesOnSubscription?: boolean | null;
+  appliesOnOneTimePurchase?: boolean | null;
+}
+
 interface DriftNode {
   __typename?: string;
   id?: string;
   [alias: `m${number}`]: { value: string } | null | undefined;
-  automaticDiscount?: { status?: string } | null;
-  codeDiscount?: { status?: string; codesCount?: { count: number } | null } | null;
+  automaticDiscount?: PurchaseTypeState | null;
+  codeDiscount?: (PurchaseTypeState & { codesCount?: { count: number } | null }) | null;
 }
 
 interface DriftDeps {
@@ -166,12 +173,12 @@ async function checkShopDrift(
           ... on DiscountAutomaticNode {
             id
             ${metafieldSelections}
-            automaticDiscount { ... on DiscountAutomaticApp { status } }
+            automaticDiscount { ... on DiscountAutomaticApp { status appliesOnSubscription appliesOnOneTimePurchase } }
           }
           ... on DiscountCodeNode {
             id
             ${metafieldSelections}
-            codeDiscount { ... on DiscountCodeApp { status codesCount { count } } }
+            codeDiscount { ... on DiscountCodeApp { status appliesOnSubscription appliesOnOneTimePurchase codesCount { count } } }
           }
         }
       }`,
@@ -203,6 +210,22 @@ async function checkShopDrift(
         nodeId: id,
         detail: `${wrong.namespace} metafield ${wrong.hash ? "differs from the last publish" : "is missing"}`,
       });
+    }
+    // Shopify skips app discounts on selling-plan lines when appliesOnSubscription is false (the
+    // pre-2026-07 default), so an old node needs one republish, which re-sends both flags.
+    const live = node.automaticDiscount ?? node.codeDiscount;
+    const wantsSubscription = expected.appliesOnSubscription ?? true;
+    const wantsOneTime = expected.appliesOnOneTimePurchase ?? true;
+    const wrongFlags = [
+      live?.appliesOnSubscription != null && live.appliesOnSubscription !== wantsSubscription
+        ? `appliesOnSubscription is ${live.appliesOnSubscription}, expected ${wantsSubscription}`
+        : null,
+      live?.appliesOnOneTimePurchase != null && live.appliesOnOneTimePurchase !== wantsOneTime
+        ? `appliesOnOneTimePurchase is ${live.appliesOnOneTimePurchase}, expected ${wantsOneTime}`
+        : null,
+    ].filter((message): message is string => message !== null);
+    if (wrongFlags.length > 0) {
+      findings.push({ ...base, issue: "purchase_type_mismatch", nodeId: id, detail: wrongFlags.join("; ") });
     }
     const status = node.automaticDiscount?.status ?? node.codeDiscount?.status;
     if (expected.active && status && status !== "ACTIVE") {

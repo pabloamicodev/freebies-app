@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addRedeemCodes,
   buildAutomaticDiscountCreateInput,
+  purchaseTypeFlags,
   buildAutomaticDiscountUpdateInput,
   buildCodeDiscountCreateInput,
   buildCodeDiscountUpdateInput,
@@ -17,6 +18,7 @@ import {
   removeRedeemCodes,
   selectFunctionId,
   updateCodeDiscountCombination,
+  syncDiscountCombinationPolicy,
 } from "./discount-node.server.js";
 import { ShopifyOutcomeUnknownError, shopifyGraphQL } from "./shopify-fetch.server.js";
 
@@ -90,6 +92,8 @@ describe("automatic discount inputs", () => {
         shippingDiscounts: false,
       },
       discountClasses: ["SHIPPING"],
+      appliesOnSubscription: true,
+      appliesOnOneTimePurchase: true,
     });
   });
 
@@ -97,7 +101,37 @@ describe("automatic discount inputs", () => {
     expect(buildAutomaticDiscountUpdateInput(combinesWith, CART_DISCOUNT_CLASSES)).toEqual({
       combinesWith,
       discountClasses: ["PRODUCT", "ORDER"],
+      appliesOnSubscription: true,
+      appliesOnOneTimePurchase: true,
     });
+  });
+
+  it("always sends both purchase-type flags on create and update (pre-2026-07 nodes defaulted to no subscriptions)", () => {
+    expect(buildAutomaticDiscountCreateInput("h", "t", CART_DISCOUNT_CLASSES)).toMatchObject({
+      appliesOnSubscription: true,
+      appliesOnOneTimePurchase: true,
+    });
+    expect(buildCodeDiscountCreateInput("h", "C", "t", CART_DISCOUNT_CLASSES)).toMatchObject({
+      appliesOnSubscription: true,
+      appliesOnOneTimePurchase: true,
+    });
+    expect(buildCodeDiscountUpdateInput(combinesWith, CART_DISCOUNT_CLASSES)).toMatchObject({
+      appliesOnSubscription: true,
+      appliesOnOneTimePurchase: true,
+    });
+    expect(
+      buildCodeDiscountUpdateInput(combinesWith, CART_DISCOUNT_CLASSES, {
+        purchaseTypes: { appliesOnSubscription: false, appliesOnOneTimePurchase: true },
+      }),
+    ).toMatchObject({ appliesOnSubscription: false, appliesOnOneTimePurchase: true });
+  });
+
+  it("derives node flags from reward purchase modes", () => {
+    expect(purchaseTypeFlags([])).toEqual({ appliesOnSubscription: true, appliesOnOneTimePurchase: true });
+    expect(purchaseTypeFlags(["any"])).toEqual({ appliesOnSubscription: true, appliesOnOneTimePurchase: true });
+    expect(purchaseTypeFlags(["one_time_only"])).toEqual({ appliesOnSubscription: false, appliesOnOneTimePurchase: true });
+    expect(purchaseTypeFlags(["subscription_only"])).toEqual({ appliesOnSubscription: true, appliesOnOneTimePurchase: false });
+    expect(purchaseTypeFlags(["one_time_only", "subscription_only"])).toEqual({ appliesOnSubscription: true, appliesOnOneTimePurchase: true });
   });
 
   it("includes Shopify error codes and field paths in operational errors", () => {
@@ -473,6 +507,24 @@ describe("updateCodeDiscountCombination", () => {
     const call = shopifyGraphQLMock.mock.calls[0]![0];
     expect(call.query).toContain("discountCodeAppUpdate");
     expect(call.variables).toMatchObject({ id: "gid://shopify/DiscountCodeNode/1" });
+    expect(call.variables!["discount"]).toMatchObject({ appliesOnSubscription: true, appliesOnOneTimePurchase: true });
+  });
+
+  it("re-sends the purchase-type flags when updating the shared automatic nodes", async () => {
+    shopifyGraphQLMock.mockResolvedValueOnce({
+      discountAutomaticAppUpdate: { automaticAppDiscount: { discountId: "gid://shopify/DiscountAutomaticNode/1" }, userErrors: [] },
+    });
+    await syncDiscountCombinationPolicy(
+      "shop.myshopify.com",
+      "token",
+      "gid://shopify/DiscountAutomaticNode/1",
+      { orderDiscounts: true, productDiscounts: true, shippingDiscounts: true },
+      CART_DISCOUNT_CLASSES,
+    );
+    expect(shopifyGraphQLMock.mock.calls[0]![0].variables?.["discount"]).toMatchObject({
+      appliesOnSubscription: true,
+      appliesOnOneTimePurchase: true,
+    });
   });
 
   it("throws when Shopify returns user errors", async () => {

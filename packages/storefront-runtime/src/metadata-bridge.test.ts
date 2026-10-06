@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createLateStamper,
   installPromoMetadataBridge,
   migrateLegacyLanding,
   specificLinkParams,
@@ -136,6 +137,7 @@ describe("installPromoMetadataBridge", () => {
     const nativeFetch = vi.fn().mockResolvedValue(new Response("ok"));
     vi.stubGlobal("window", {
       fetch: nativeFetch,
+      __promoEngineConfig: { cartItemCount: 0 },
       location: { origin: "https://store.example", pathname: "/", search: "" },
     });
     vi.stubGlobal("document", { addEventListener: vi.fn() });
@@ -462,5 +464,72 @@ describe("specificLinkParams when the embed passes null (metafield missing)", ()
     });
     expect(specificLinkParams()).toEqual(["freegifts_code"]);
     expect(() => rememberSpecificLinkParams(["a"])).not.toThrow();
+  });
+});
+
+describe("late stamping of adds that bypass the patches (cached fetch, native submit)", () => {
+  const line = (key: string, properties: Record<string, unknown> | null = null, plan?: number) => ({
+    key,
+    quantity: 2,
+    properties,
+    ...(plan ? { selling_plan_allocation: { selling_plan: { id: plan } } } : {}),
+  });
+
+  function harness(carts: Array<{ items: ReturnType<typeof line>[] }>, page: string | null = "/products/bcaa") {
+    const changeLine = vi.fn(async (change: Record<string, unknown>) => ({
+      items: [line(`${change.id}-stamped`, change.properties as Record<string, unknown>)],
+    }));
+    let call = 0;
+    const stamper = createLateStamper({
+      getCart: async () => carts[Math.min(call++, carts.length - 1)] ?? null,
+      changeLine,
+      pageUrl: () => page ?? undefined,
+    });
+    return { stamper, changeLine };
+  }
+
+  it("stamps a new unstamped subscription line with the current page and keeps its selling plan", async () => {
+    const { stamper, changeLine } = harness([
+      { items: [line("old:1")] },
+      { items: [line("old:1"), line("new:2", { Frequency: "30 days" }, 987)] },
+    ]);
+    await stamper.baseline();
+    expect(await stamper.check()).toBe(1);
+    expect(changeLine).toHaveBeenCalledTimes(1);
+    const sent = changeLine.mock.calls[0]![0] as { id: string; quantity: number; selling_plan: number; properties: Record<string, string> };
+    expect(sent).toMatchObject({ id: "new:2", quantity: 2, selling_plan: 987 });
+    expect(sent.properties.Frequency).toBe("30 days");
+    expect(sent.properties._promo_page_url).toBe("/products/bcaa");
+    expect(JSON.parse(sent.properties._promo_engine_metadata!)).toMatchObject({ _promo_page_url: "/products/bcaa" });
+  });
+
+  it("never relabels lines that were already in the cart when the page loaded", async () => {
+    const { stamper, changeLine } = harness([{ items: [line("old:1"), line("old:2")] }, { items: [line("old:1"), line("old:2")] }]);
+    await stamper.baseline();
+    expect(await stamper.check()).toBe(0);
+    expect(changeLine).not.toHaveBeenCalled();
+  });
+
+  it("leaves new lines that already carry metadata alone, and stamps each new line once", async () => {
+    const stamped = line("new:1", { _promo_engine_metadata: JSON.stringify({ _promo_engine_line_type: "gift" }) });
+    const { stamper, changeLine } = harness([
+      { items: [] },
+      { items: [stamped, line("new:2")] },
+      { items: [stamped, line("new:2-stamped")] },
+    ]);
+    await stamper.baseline();
+    expect(await stamper.check()).toBe(1);
+    expect(changeLine.mock.calls.map((c) => (c[0] as { id: string }).id)).toEqual(["new:2"]);
+    expect(await stamper.check()).toBe(0);
+  });
+
+  it("does nothing when the cart cannot be read or there is no page", async () => {
+    const none = createLateStamper({ getCart: async () => null, changeLine: vi.fn(), pageUrl: () => "/" });
+    await none.baseline();
+    expect(await none.check()).toBe(0);
+    const { stamper, changeLine } = harness([{ items: [] }, { items: [line("new:1")] }], null);
+    await stamper.baseline();
+    expect(await stamper.check()).toBe(0);
+    expect(changeLine).not.toHaveBeenCalled();
   });
 });

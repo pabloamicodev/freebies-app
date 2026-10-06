@@ -598,6 +598,7 @@ export const ProductGiftTargetSchema = z
 export const OrderDiscountTargetSchema = z
   .object({
     scope: z.literal("cart"),
+    subscriptionMode: z.enum(["any", "subscription_only", "one_time_only"]).optional(),
   })
   .strict();
 
@@ -632,6 +633,7 @@ const TAGGED_REWARD_ALLOWLIST = {
   productIds: z.array(z.string()).optional(),
   variantId: z.string().optional(),
   variantIds: z.array(z.string()).optional(),
+  subscriptionMode: z.enum(["any", "subscription_only", "one_time_only"]).optional(),
 };
 
 export const ProductDiscountTargetSchema = z.discriminatedUnion("scopeMode", [

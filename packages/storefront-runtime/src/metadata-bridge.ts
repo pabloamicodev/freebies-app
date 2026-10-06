@@ -393,6 +393,161 @@ function patchXhrCartAdd(): void {
   } as typeof proto.send;
 }
 
+interface CartLineLike {
+  key: string;
+  quantity?: number;
+  properties?: Record<string, unknown> | null;
+  selling_plan_allocation?: { selling_plan?: { id?: number | string } } | null;
+}
+
+interface CartLike {
+  items?: CartLineLike[];
+}
+
+export interface LateStamperDeps {
+  getCart: () => Promise<CartLike | null>;
+  changeLine: (change: Record<string, unknown>) => Promise<CartLike | null>;
+  pageUrl: () => string | undefined;
+}
+
+/**
+ * Safety net for adds that bypass the fetch/XHR/submit patches (a script that cached `window.fetch`
+ * before this bundle ran, a native `form.submit()`, a theme using its own transport): lines that
+ * appear in the cart during this page view with no `_promo_engine_metadata` at all are stamped with
+ * the current page through /cart/change.js. Lines present when the page loaded, and lines that
+ * already carry metadata (a deliberate null page, our own gift lines), are never touched.
+ */
+export function createLateStamper(deps: LateStamperDeps): {
+  baseline: () => Promise<void>;
+  assumeEmpty: () => void;
+  check: () => Promise<number>;
+} {
+  let known: Set<string> | null = null;
+  const remember = (cart: CartLike | null) => {
+    known = new Set((cart?.items ?? []).map((line) => line.key));
+  };
+  return {
+    async baseline() {
+      remember(await deps.getCart());
+    },
+    assumeEmpty() {
+      known = new Set();
+    },
+    async check() {
+      const cart = await deps.getCart();
+      if (!cart) return 0;
+      const before = known;
+      if (!before) {
+        remember(cart);
+        return 0;
+      }
+      const page = deps.pageUrl();
+      let stamped = 0;
+      let latest: CartLike = cart;
+      for (const line of cart.items ?? []) {
+        if (before.has(line.key) || !page) continue;
+        const properties = stringProperties(line.properties ?? {});
+        if (METADATA_PROPERTY in properties) continue;
+        const planId = line.selling_plan_allocation?.selling_plan?.id;
+        const next = await deps.changeLine({
+          id: line.key,
+          quantity: line.quantity ?? 1,
+          properties: withPromoMetadata(properties, page),
+          ...(planId !== undefined ? { selling_plan: planId } : {}),
+        });
+        if (next) {
+          latest = next;
+          stamped += 1;
+        }
+      }
+      remember(latest);
+      return stamped;
+    },
+  };
+}
+
+const CART_MUTATION_PATH = /\/cart\/(?:add|update|change|clear)(?:\.js)?\/?$/;
+
+function installLateStamper(nativeFetch: typeof window.fetch): void {
+  if (typeof PerformanceObserver === "undefined") return;
+  const json = (response: Response) => (response.ok ? (response.json() as Promise<CartLike>) : Promise.resolve(null));
+  const stamper = createLateStamper({
+    getCart: () =>
+      nativeFetch("/cart.js", { credentials: "same-origin", headers: { Accept: "application/json" } })
+        .then(json)
+        .catch(() => null),
+    changeLine: (change) =>
+      nativeFetch("/cart/change.js", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(change),
+      })
+        .then(json)
+        .catch(() => null),
+    pageUrl: browserPageUrl,
+  });
+  // The embed renders the cart count, so an empty cart needs no baseline request.
+  const emptyCart = window.__promoEngineConfig?.cartItemCount === 0;
+  if (emptyCart) stamper.assumeEmpty();
+  const ready = emptyCart ? Promise.resolve() : stamper.baseline().catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let running = false;
+  let rerun = false;
+  const run = () => {
+    if (running) {
+      rerun = true;
+      return;
+    }
+    running = true;
+    void ready
+      .then(() => stamper.check())
+      .catch(() => 0)
+      .then(() => {
+        running = false;
+        if (rerun) {
+          rerun = false;
+          schedule();
+        }
+      });
+  };
+  const schedule = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(run, 400);
+  };
+  try {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        try {
+          if (CART_MUTATION_PATH.test(new URL(entry.name, window.location.origin).pathname)) {
+            schedule();
+            return;
+          }
+        } catch {
+          // Unparseable resource name: not a cart request.
+        }
+      }
+    }).observe({ entryTypes: ["resource"] });
+  } catch {
+    // Resource timing unavailable: the fetch/XHR/submit patches still apply.
+  }
+}
+
+function stampFormInPlace(form: HTMLFormElement): void {
+  const entries: Array<[string, unknown]> = [];
+  new FormData(form).forEach((value, name) => entries.push([name, value]));
+  stampFlat(entries, (name, value) => {
+    let input = Array.from(form.querySelectorAll<HTMLInputElement>("input")).find((el) => el.name === name);
+    if (!input) {
+      input = document.createElement("input");
+      input.type = "hidden";
+      input.name = name;
+      form.append(input);
+    }
+    input.value = value;
+  });
+}
+
 export function installPromoMetadataBridge(): void {
   const state = window as Window & { __promoEngineMetadataBridgeInstalled?: boolean };
   if (state.__promoEngineMetadataBridgeInstalled) return;
@@ -418,26 +573,26 @@ export function installPromoMetadataBridge(): void {
     "submit",
     (event) => {
       const form = event.target;
-      if (
-        !(form instanceof HTMLFormElement) ||
-        !isCartAddRequest(form.action, { method: form.method })
-      )
-        return;
-      const entries: Array<[string, unknown]> = [];
-      new FormData(form).forEach((value, name) => entries.push([name, value]));
-      stampFlat(entries, (name, value) => {
-        let input = Array.from(form.querySelectorAll<HTMLInputElement>("input")).find((el) => el.name === name);
-        if (!input) {
-          input = document.createElement("input");
-          input.type = "hidden";
-          input.name = name;
-          form.append(input);
-        }
-        input.value = value;
-      });
+      if (!(form instanceof HTMLFormElement) || !isCartAddRequest(form.action, { method: form.method })) return;
+      stampFormInPlace(form);
     },
     true,
   );
+
+  // form.submit() never fires a submit event, so a theme or app posting the add form that way was unstamped.
+  if (typeof HTMLFormElement !== "undefined") {
+    const originalSubmit = HTMLFormElement.prototype.submit;
+    HTMLFormElement.prototype.submit = function (this: HTMLFormElement) {
+      try {
+        if (isCartAddRequest(this.action, { method: this.method })) stampFormInPlace(this);
+      } catch (e) {
+        console.warn("[PromoEngine] Cart line metadata packing failed, using request as-is", e);
+      }
+      return originalSubmit.call(this);
+    };
+  }
+
+  installLateStamper(nativeFetch);
 }
 
 if (typeof window !== "undefined" && typeof document !== "undefined") installPromoMetadataBridge();

@@ -614,46 +614,59 @@ fn evaluate_order_offer(
         return vec![];
     }
     // Excluded lines leave the orderSubtotal target, so percentage/fixed values
-    // and tier thresholds all work off the same (eligible) subtotal.
-    let (eligible_lines, excluded_lines): (Vec<&Lines>, Vec<&Lines>) = input
-        .cart()
-        .lines()
-        .iter()
-        .partition(|line| !is_gift_line(line) && !outside_matched_lines(offer, line));
-    let excluded_line_ids: Vec<String> =
-        excluded_lines.iter().map(|line| line.id().clone()).collect();
+    // and tier thresholds all work off the same (eligible) subtotal. A reward's
+    // purchase type (subscriptionMode) removes the lines of the other type too.
     let active_currency = input
         .cart()
         .cost()
         .subtotal_amount()
         .currency_code()
         .to_string();
-    let qualifying_subtotal_cents: i64 = eligible_lines
-        .iter()
-        .map(|line| {
-            to_cents(
-                line.cost().subtotal_amount().amount().as_f64(),
-                &active_currency,
-            )
-        })
-        .sum();
-    let qualifying_quantity: i64 = eligible_lines
-        .iter()
-        .map(|line| i64::from(*line.quantity()))
-        .sum();
 
     offer
         .order_rewards
         .iter()
         .filter_map(|reward| {
+            let (eligible_lines, excluded_lines): (Vec<&Lines>, Vec<&Lines>) =
+                input.cart().lines().iter().partition(|line| {
+                    !is_gift_line(line)
+                        && !outside_matched_lines(offer, line)
+                        && purchase_type_allows(reward.subscription_mode.as_str(), line)
+                });
+            if eligible_lines.is_empty() && reward.subscription_mode != "any" {
+                return None;
+            }
+            let excluded_line_ids: Vec<String> =
+                excluded_lines.iter().map(|line| line.id().clone()).collect();
+            let qualifying_subtotal_cents: i64 = eligible_lines
+                .iter()
+                .map(|line| {
+                    to_cents(
+                        line.cost().subtotal_amount().amount().as_f64(),
+                        &active_currency,
+                    )
+                })
+                .sum();
+            let qualifying_quantity: i64 = eligible_lines
+                .iter()
+                .map(|line| i64::from(*line.quantity()))
+                .sum();
             make_order_candidate(
                 reward,
-                excluded_line_ids.clone(),
+                excluded_line_ids,
                 qualifying_subtotal_cents,
                 qualifying_quantity,
             )
         })
         .collect()
+}
+
+fn purchase_type_allows(mode: &str, line: &Lines) -> bool {
+    match mode {
+        "subscription_only" => line.selling_plan_allocation().is_some(),
+        "one_time_only" => line.selling_plan_allocation().is_none(),
+        _ => true,
+    }
 }
 
 fn make_order_candidate(
@@ -2826,6 +2839,51 @@ mod tests {
             },
             other => panic!("expected OrderDiscountsAdd, got {other:?}"),
         }
+    }
+
+    fn order_mode_config(mode: &str) -> String {
+        format!(r#"{{"offers":[{{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[],"productRewards":[],
+            "orderRewards":[{{"id":"order-1","discountType":"percentage","discountValue":10,"subscriptionMode":"{mode}"}}]
+        }}]}}"#)
+    }
+
+    fn order_mode_excluded(mode: &str, lines: &str) -> Option<Vec<String>> {
+        let payload = cart_json_with_classes(lines, "100.00", &order_mode_config(mode), r#"["ORDER"]"#);
+        let result = run_function_with_input(run, &payload).expect("should not error");
+        match result.operations.first() {
+            Some(schema::CartOperation::OrderDiscountsAdd(op)) => match &op.candidates[0].targets[0] {
+                schema::OrderDiscountCandidateTarget::OrderSubtotal(target) => {
+                    Some(target.excluded_cart_line_ids.clone())
+                }
+            },
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn order_reward_subscription_mode_filters_lines() {
+        let one_time = regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/a", "gid://shopify/Product/a", "50.00", 1);
+        let subscription = regular_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/b", "gid://shopify/Product/b", "50.00", 1).replace(
+            "\"sellingPlanAllocation\": null",
+            "\"sellingPlanAllocation\": { \"sellingPlan\": { \"id\": \"gid://shopify/SellingPlan/monthly\" } }",
+        );
+        let both = format!("[{one_time},{subscription}]");
+        assert_eq!(order_mode_excluded("any", &both), Some(vec![]));
+        assert_eq!(
+            order_mode_excluded("subscription_only", &both),
+            Some(vec!["gid://shopify/CartLine/1".to_string()])
+        );
+        assert_eq!(
+            order_mode_excluded("one_time_only", &both),
+            Some(vec!["gid://shopify/CartLine/2".to_string()])
+        );
+        let only_one_time = format!("[{one_time}]");
+        assert_eq!(order_mode_excluded("subscription_only", &only_one_time), None);
     }
 
     #[test]

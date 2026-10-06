@@ -10,6 +10,7 @@ import { and, eq, inArray, count } from "drizzle-orm";
 import { offerConditions, offerRewards, offerCombinationPolicies, productCache, variantCache, widgets, analyticsEvents, discountCodes } from "@promo/db";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
+import { purchaseTypeLabel } from "../lib/purchase-type.js";
 import { conditionSummary, targetSummaryParts, collectGids, urlsFromCondition, rewardHeadline } from "../lib/offer-summaries.js";
 import type { LoaderFunctionArgs } from "react-router";
 
@@ -104,7 +105,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         rewardType: r.rewardType,
         discountType: r.discountType,
         label: r.label,
-        summary: targetSummaryParts(r.target).join(" · "),
+        summary: [
+          ...targetSummaryParts(r.target),
+          ...(["product_discount", "order_discount", "upsell_discount", "bundle_discount"].includes(r.rewardType)
+            ? [purchaseTypeLabel((r.target as Record<string, unknown> | null)?.["subscriptionMode"])]
+            : []),
+        ].join(" · "),
         productCount: productGidsForReward.length,
         products,
       };

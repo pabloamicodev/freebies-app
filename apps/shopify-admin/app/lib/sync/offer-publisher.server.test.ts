@@ -131,6 +131,7 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
     nodeFunctionIds: {} as Record<string, string>,
     createdCodeNodes: [] as Array<{ code: string; handle: string; classes: string[]; input: Record<string, unknown> }>,
     updatedCodeNodes: [] as Array<{ id: string; input: Record<string, unknown> }>,
+    updatedAutomaticNodes: [] as Array<{ id: string; input: Record<string, unknown> }>,
     expiredNodes: [] as string[],
     deletedNodes: [] as string[],
     addedCodes: [] as Array<{ discountId: string; codes: string[] }>,
@@ -534,6 +535,7 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
       };
     }
     if (query.includes("UpdatePromoEngineDiscountCombination")) {
+      state.updatedAutomaticNodes.push({ id: variables!.id as string, input: variables!.discount as Record<string, unknown> });
       return {
         discountAutomaticAppUpdate: {
           automaticAppDiscount: { discountId: variables!.id },
@@ -624,6 +626,7 @@ describe("publishOffersForShop — code-gated offers", () => {
     state.nodeFunctionIds = {};
     state.createdCodeNodes = [];
     state.updatedCodeNodes = [];
+    state.updatedAutomaticNodes = [];
     state.expiredNodes = [];
     state.deletedNodes = [];
     state.addedCodes = [];
@@ -1350,6 +1353,64 @@ describe("publishOffersForShop — offers with their own discount codes", () => 
     await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
 
     expect(state.updatedCodeNodes.at(-1)?.input).toMatchObject({ usageLimit: null, appliesOncePerCustomer: false });
+  });
+
+  describe("purchase-type flags (Skio / selling-plan lines)", () => {
+    const orderReward = (offerId: string, subscriptionMode?: string) => ({
+      id: `order-${offerId}`,
+      shopId: SHOP_ID,
+      offerId,
+      rewardType: "order_discount",
+      discountType: "percentage",
+      value: { amount: 20, currencyCode: "USD" },
+      target: { scope: "cart", ...(subscriptionMode ? { subscriptionMode } : {}) },
+      quantity: null,
+      sortOrder: 0,
+    });
+    const BOTH = { appliesOnSubscription: true, appliesOnOneTimePurchase: true };
+
+    it("sends both flags on every create and update of the shared nodes and a code node", async () => {
+      state.offers = [makeOffer({ id: "regular" }), makeOffer({ id: "coded" })];
+      state.codeRows = [makeCode({ offerId: "coded", code: "AAA" })];
+      state.updatedAutomaticNodes = [];
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+      expect(state.createdCodeNodes[0]!.input).toMatchObject(BOTH);
+      expect(state.updatedCodeNodes.at(-1)!.input).toMatchObject(BOTH);
+      const shared = state.updatedAutomaticNodes.filter((update) => [CART_DISCOUNT_ID, DELIVERY_DISCOUNT_ID].includes(update.id));
+      expect([...new Set(shared.map((update) => update.id))].sort()).toEqual([CART_DISCOUNT_ID, DELIVERY_DISCOUNT_ID].sort());
+      for (const update of shared) expect(update.input).toMatchObject(BOTH);
+    });
+
+    it("re-sends the flags on the next publish so an existing node created with the old default is corrected", async () => {
+      state.offers = [makeOffer({ id: "regular" })];
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+      state.updatedAutomaticNodes = [];
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+      expect(state.updatedAutomaticNodes.length).toBeGreaterThan(0);
+      for (const update of state.updatedAutomaticNodes) expect(update.input).toMatchObject(BOTH);
+    });
+
+    it("turns subscriptions off on a code node whose discount is one-time only, and on again when it is not", async () => {
+      state.offers = [makeOffer({ id: "coded", codeDiscountId: NODE })];
+      state.knownDiscountIds.add(NODE);
+      state.codeRows = [makeCode({ offerId: "coded", code: "ONE", shopifySyncedAt: new Date() })];
+      state.rewardRows = [orderReward("coded", "one_time_only")];
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+      expect(state.updatedCodeNodes.at(-1)!.input).toMatchObject({ appliesOnSubscription: false, appliesOnOneTimePurchase: true });
+
+      state.rewardRows = [orderReward("coded", "subscription_only")];
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+      expect(state.updatedCodeNodes.at(-1)!.input).toMatchObject({ appliesOnSubscription: true, appliesOnOneTimePurchase: false });
+
+      state.rewardRows = [orderReward("coded")];
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+      expect(state.updatedCodeNodes.at(-1)!.input).toMatchObject(BOTH);
+    });
   });
 
   describe("shipping rewards", () => {

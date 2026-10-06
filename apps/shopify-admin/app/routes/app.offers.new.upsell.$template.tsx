@@ -6,6 +6,8 @@ import { DISCOUNT_MESSAGE_MAX_LENGTH } from "../lib/discount-message.js";
  *         /app/offers/new/upsell/thank-you   → Thank You page upsell
  */
 
+import { PurchaseTypeField } from "../components/PurchaseTypeField.js";
+import { parseSubscriptionMode } from "../lib/purchase-type.js";
 import { Form, useActionData, useLoaderData, useNavigate, useNavigation, redirect, useParams } from "react-router";
 import { useEffect } from "react";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
@@ -240,6 +242,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             | "most_expensive_item_discount",
           value: { amount: rewardAmount, currencyCode: shopCurrency },
           target: {
+            ...(parseSubscriptionMode(formData) === "any" ? {} : { subscriptionMode: parseSubscriptionMode(formData) }),
             scopeMode: "sitewide",
             scope: "cart",
             productIds: upsellProducts.filter((id) => id.includes("/Product/")),
@@ -571,6 +574,8 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                   />
 <div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
                 </div>
+
+                <PurchaseTypeField idPrefix="upsell-wizard-purchase-type" />
 
                 {/* FBT-only: description field */}
                 {isFbt && (

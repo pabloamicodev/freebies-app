@@ -1,3 +1,4 @@
+import { purchaseTypeLabel } from "./purchase-type.js";
 /** One-line human-readable summaries for offer conditions and reward targets.
  * Shared by the conditions/rewards editors and the offers-list row preview
  * so all three describe a given condition/reward the same way. */
@@ -205,10 +206,13 @@ export function rewardTypeLabel(rewardType: string): string {
 }
 
 /** "Product discount — 20% off"; gifts and free shipping already read as a full phrase. */
-export function rewardSummary(reward: { rewardType: string; discountType: string; value: unknown }): string {
+export function rewardSummary(reward: { rewardType: string; discountType: string; value: unknown; target?: unknown }): string {
   const headline = rewardHeadline(reward);
   if (headline === "Free gift" || headline === "Free shipping") return headline;
-  return `${rewardTypeLabel(reward.rewardType)} — ${headline}`;
+  const base = `${rewardTypeLabel(reward.rewardType)} — ${headline}`;
+  if (reward.rewardType === "shipping_discount" || reward.rewardType === "product_gift" || reward.target === undefined) return base;
+  const mode = (reward.target as Record<string, unknown> | null)?.["subscriptionMode"];
+  return `${base} · ${purchaseTypeLabel(mode)}`;
 }
 
 export interface CodesSummaryInput {

@@ -199,11 +199,37 @@ function selectFunction(
   return match ?? null;
 }
 
+/**
+ * Shopify skips an app discount on selling-plan (subscription) lines unless the node has
+ * appliesOnSubscription. The default only flipped to true in API 2026-07, so older nodes can carry
+ * false: always send both flags. Shared nodes stay true/true (the Function filters per offer through
+ * subscriptionMode); per-offer code nodes follow the offer's reward modes.
+ * recurringCycleLimit is deliberately left at Shopify's default (the first billing cycle).
+ */
+export interface PurchaseTypeFlags {
+  appliesOnSubscription: boolean;
+  appliesOnOneTimePurchase: boolean;
+}
+
+export const ALL_PURCHASE_TYPES: PurchaseTypeFlags = {
+  appliesOnSubscription: true,
+  appliesOnOneTimePurchase: true,
+};
+
+export function purchaseTypeFlags(modes: ReadonlyArray<string | null | undefined>): PurchaseTypeFlags {
+  if (modes.length === 0) return ALL_PURCHASE_TYPES;
+  return {
+    appliesOnSubscription: modes.some((mode) => mode !== "one_time_only"),
+    appliesOnOneTimePurchase: modes.some((mode) => mode !== "subscription_only"),
+  };
+}
+
 export function buildAutomaticDiscountCreateInput(
   functionHandle: string,
   title: string,
   discountClasses: readonly DiscountClass[],
   startsAt = new Date().toISOString(),
+  purchaseTypes: PurchaseTypeFlags = ALL_PURCHASE_TYPES,
 ) {
   const combinesWith = normalizeDiscountCombinationPolicy(
     {
@@ -220,16 +246,19 @@ export function buildAutomaticDiscountCreateInput(
     discountClasses: [...discountClasses],
     startsAt,
     combinesWith,
+    ...purchaseTypes,
   };
 }
 
 export function buildAutomaticDiscountUpdateInput(
   combinesWith: DiscountCombinationPolicyInput,
   discountClasses: readonly DiscountClass[],
+  purchaseTypes: PurchaseTypeFlags = ALL_PURCHASE_TYPES,
 ) {
   return {
     combinesWith: normalizeDiscountCombinationPolicy(combinesWith, discountClasses),
     discountClasses: [...discountClasses],
+    ...purchaseTypes,
   };
 }
 
@@ -527,10 +556,13 @@ export interface CodeDiscountNodeOptions {
   appliesOncePerCustomer?: boolean;
   /** Set to expire the node (no code on it works); null reopens it. */
   endsAt?: string | null;
+  /** Defaults to both purchase types. */
+  purchaseTypes?: PurchaseTypeFlags;
 }
 
 function codeNodeOptionFields(options: CodeDiscountNodeOptions) {
   return {
+    ...(options.purchaseTypes ?? ALL_PURCHASE_TYPES),
     ...(options.usageLimit !== undefined ? { usageLimit: options.usageLimit } : {}),
     ...(options.appliesOncePerCustomer !== undefined
       ? { appliesOncePerCustomer: options.appliesOncePerCustomer }

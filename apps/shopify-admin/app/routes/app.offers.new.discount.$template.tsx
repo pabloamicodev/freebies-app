@@ -22,6 +22,8 @@ import {
   nowInZone,
 } from "../lib/offer-validation.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
+import { PurchaseTypeField } from "../components/PurchaseTypeField.js";
+import { parseSubscriptionMode, withSubscriptionMode } from "../lib/purchase-type.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies, type Db } from "@promo/db";
 import { createDiscountCode, normalizeTypedCode } from "../lib/discount-codes.server.js";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
@@ -72,6 +74,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const discountTemplate = formData.get("discountTemplate") as string;
 
   const applyTo = (formData.get("applyTo") as string) || "any_product";
+  const subscriptionMode = parseSubscriptionMode(formData);
   const countRule = formData.get("countRule") === "unique" ? "unique" : "all";
   const displayType =
     formData.get("displayType") === "discount_table" ? "discount_table" : "quantity_options";
@@ -316,8 +319,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           },
           target:
             discountTemplate === "cart"
-              ? { scope: "cart" }
+              ? withSubscriptionMode({ scope: "cart" }, subscriptionMode)
               : {
+                  ...(subscriptionMode === "any" ? {} : { subscriptionMode }),
                   scopeMode: "sitewide",
                   scope: applyTo === "any_product" ? "all_products" : "cart",
                   ...(applyTo === "selected_products"
@@ -875,6 +879,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
 <div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
                         {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
                       </div>
+                      <PurchaseTypeField idPrefix="discount-wizard-purchase-type" />
                       <div>
                         <label className="b-label" htmlFor="description">
                           Discount description
@@ -976,6 +981,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
 <div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
                         {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
                       </div>
+                      <PurchaseTypeField idPrefix="discount-wizard-purchase-type" />
                       <div>
                         <label className="b-label" htmlFor="description">
                           Block description
@@ -1077,6 +1083,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
 <div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
                         {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
                       </div>
+                      <PurchaseTypeField idPrefix="discount-wizard-purchase-type" />
                       <div>
                         <label className="b-label" htmlFor="description">
                           Block description

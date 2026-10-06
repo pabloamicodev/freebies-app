@@ -63,6 +63,21 @@ afterAll(async () => {
   await close();
 });
 
+describe("code offer wizard: purchase type", () => {
+  const targetOf = async (fields: Record<string, string | string[]>) => {
+    const result = await create({ code: `pt${Math.random().toString(36).slice(2, 8)}`, ...fields });
+    if (!result.ok) throw new Error(result.error);
+    return (await offerRows(result.data.offerId)).rewards[0]!.target as Record<string, unknown>;
+  };
+
+  it("defaults to both purchase types and stores a restriction only when one is chosen", async () => {
+    expect(await targetOf({})).toEqual({ scope: "cart" });
+    expect(await targetOf({ subscriptionMode: "one_time_only" })).toEqual({ scope: "cart", subscriptionMode: "one_time_only" });
+    expect(await targetOf({ subscriptionMode: "subscription_only" })).toMatchObject({ subscriptionMode: "subscription_only" });
+    expect(await targetOf({ subscriptionMode: "bogus" })).toEqual({ scope: "cart" });
+  });
+});
+
 describe("code offer wizard: single code", () => {
   it("creates a code-gated discount offer with its code, page rule, reward and policy in one go", async () => {
     const result = await create({ code: "summer10", usageLimit: "50", oncePerCustomer: "on" });

@@ -5,6 +5,7 @@
  * in one transaction.
  */
 
+import { parseSubscriptionMode, withSubscriptionMode } from "./purchase-type.js";
 import {
   offerCombinationPolicies,
   offerConditions,
@@ -212,7 +213,7 @@ function parseReward(formData: FormData, currencyCode: string): Result<{ target:
       ok: true,
       data: {
         target,
-        reward: { rewardType: "order_discount", discountType, value, target: { scope: "cart" } },
+        reward: { rewardType: "order_discount", discountType, value, target: withSubscriptionMode({ scope: "cart" }, parseSubscriptionMode(formData)) },
         productIds: [],
         collectionIds: [],
       },
@@ -236,7 +237,7 @@ function parseReward(formData: FormData, currencyCode: string): Result<{ target:
         rewardType: "product_discount",
         discountType,
         value,
-        target: { scopeMode: "sitewide", productIds: products },
+        target: withSubscriptionMode({ scopeMode: "sitewide", productIds: products }, parseSubscriptionMode(formData)),
       },
       productIds: products,
       collectionIds: collections,

@@ -50,6 +50,9 @@ interface FakeNode {
   codesCount?: number;
   /** Codes the node actually holds, for the node-codes listing (defaults to none). */
   codes?: string[];
+  /** Purchase-type flags Shopify holds; omitted means the node reports both true. */
+  appliesOnSubscription?: boolean;
+  appliesOnOneTimePurchase?: boolean;
 }
 
 /** A tiny stand-in for the part of Shopify the drift check reads, with a publish that can restore it. */
@@ -68,13 +71,17 @@ function fakeShopify(initial: Record<string, FakeNode>, validation: { present: b
             m0: node.value ? { value: node.value } : null,
             m1: appValue ? { value: appValue } : null,
           };
+          const flags = {
+            appliesOnSubscription: node.appliesOnSubscription ?? true,
+            appliesOnOneTimePurchase: node.appliesOnOneTimePurchase ?? true,
+          };
           return node.kind === "automatic"
-            ? { __typename: "DiscountAutomaticNode", id, ...copies, automaticDiscount: { status: node.status } }
+            ? { __typename: "DiscountAutomaticNode", id, ...copies, automaticDiscount: { status: node.status, ...flags } }
             : {
                 __typename: "DiscountCodeNode",
                 id,
                 ...copies,
-                codeDiscount: { status: node.status, codesCount: { count: node.codesCount ?? 0 } },
+                codeDiscount: { status: node.status, ...flags, codesCount: { count: node.codesCount ?? 0 } },
               };
         }),
       };
@@ -215,6 +222,44 @@ describe("runDiscountDriftRepair", () => {
     expect(fake.calls).toContain(`activate:${shop.cart}`);
     expect(onlyMine(publish, shop.shopId)).toHaveLength(1);
     expect(result.unresolved.filter((f) => f.shopId === shop.shopId)).toEqual([]);
+  });
+
+  it("treats a node with appliesOnSubscription=false as drift (it never discounts selling-plan lines) and republishes", async () => {
+    const shop = await seedPublishedShop();
+    const fake = fakeShopify({
+      [shop.cart]: { kind: "automatic", value: shop.cartValue, status: "ACTIVE", appliesOnSubscription: false },
+      [shop.delivery]: { kind: "automatic", value: shop.cartValue, status: "ACTIVE" },
+    });
+    let republished = false;
+    const publish = vi.fn(async (shopId: string, _domain: string) => {
+      if (shopId !== shop.shopId) return;
+      republished = true;
+      fake.nodes[shop.cart]!.appliesOnSubscription = true;
+    });
+
+    const { result } = await run(fake.graphQL, publish);
+
+    expect(republished).toBe(true);
+    expect(onlyMine(publish, shop.shopId)).toHaveLength(1);
+    expect(result.unresolved.filter((f) => f.shopId === shop.shopId)).toEqual([]);
+  });
+
+  it("expects the flags the manifest recorded for a per-offer code node", async () => {
+    const shop = await seedPublishedShop();
+    const codeId = `gid://shopify/DiscountCodeNode/restricted-${counter}`;
+    shop.collector.record(codeId, "code", shop.cartValue, {
+      purchaseTypes: { appliesOnSubscription: false, appliesOnOneTimePurchase: true },
+    });
+    await writePublishManifest(shop.shopId, shop.collector.build());
+    const fake = fakeShopify({
+      [shop.cart]: { kind: "automatic", value: shop.cartValue, status: "ACTIVE" },
+      [shop.delivery]: { kind: "automatic", value: shop.cartValue, status: "ACTIVE" },
+      [codeId]: { kind: "code", value: shop.cartValue, status: "ACTIVE", appliesOnSubscription: false },
+    });
+
+    const { publish } = await run(fake.graphQL);
+
+    expect(onlyMine(publish, shop.shopId)).toHaveLength(0);
   });
 
   describe("kill switch", () => {

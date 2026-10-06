@@ -3,6 +3,8 @@
  * Configure what the customer receives: gift products, discounts, shipping.
  */
 
+import { PurchaseTypeField } from "../components/PurchaseTypeField.js";
+import { normalizeSubscriptionMode, parseSubscriptionMode, withSubscriptionMode } from "../lib/purchase-type.js";
 import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData, useNavigate, useNavigation, useActionData, useSubmit, Form } from "react-router";
 import { NotFound } from "../components/NotFound.js";
@@ -413,6 +415,9 @@ async function buildRewardRecord(
         amount: discountType === "percentage" ? discountValue : toStoredAmount(discountValue, currencyCode),
         currencyCode,
       };
+    }
+    if (rewardType === "order_discount") {
+      target = withSubscriptionMode({ ...target }, parseSubscriptionMode(formData));
     }
     const payloadResult = validateRewardPayload(rewardType, discountType, value, target);
     if (!payloadResult.success)
@@ -1034,6 +1039,14 @@ export default function OfferRewardsPage() {
                         ))}
                       </select>
                     </div>
+                  )}
+
+                  {rewardType === "order_discount" && (
+                    <PurchaseTypeField
+                      key={editingReward?.id ?? "new"}
+                      idPrefix="order-reward-purchase-type"
+                      defaultMode={normalizeSubscriptionMode(editingTarget["subscriptionMode"])}
+                    />
                   )}
 
                   {/* Discount value + currency (only when applicable) */}
@@ -1668,21 +1681,11 @@ export default function OfferRewardsPage() {
                                 />
                                 <p className="b-help">Caps units discounted per distinct variant.</p>
                               </div>
-                              <div>
-                                <label className="b-label" htmlFor="subscriptionMode">
-                                  Purchase type
-                                </label>
-                                <select
-                                  id="subscriptionMode"
-                                  name="subscriptionMode"
-                                  className="b-select"
-                                  defaultValue={typeof editingTarget["subscriptionMode"] === "string" ? editingTarget["subscriptionMode"] : "any"}
-                                >
-                                  <option value="any">Any purchase type</option>
-                                  <option value="one_time_only">One-time purchase only</option>
-                                  <option value="subscription_only">Subscription only</option>
-                                </select>
-                              </div>
+                              <PurchaseTypeField
+                                key={editingReward?.id ?? "new"}
+                                idPrefix="reward-purchase-type"
+                                defaultMode={normalizeSubscriptionMode(editingTarget["subscriptionMode"])}
+                              />
                             </div>
                           )}
 

@@ -347,6 +347,8 @@ export interface CompiledOrderReward {
   id: string;
   discountType: "percentage" | "fixed_amount" | "free";
   discountValue: number;
+  /** Purchase type the reward applies to; absent means "any". */
+  subscriptionMode?: "subscription_only" | "one_time_only";
   subtotalTiers: CompiledSubtotalDiscountTier[];
 }
 
@@ -826,6 +828,10 @@ export function compileOfferConfig(
           Number(value["amount"] ?? 0),
           currencyCode,
         ),
+        ...(target["subscriptionMode"] === "subscription_only" ||
+        target["subscriptionMode"] === "one_time_only"
+          ? { subscriptionMode: target["subscriptionMode"] }
+          : {}),
         subtotalTiers: Array.isArray(value["tiers"])
           ? value["tiers"].flatMap((tier) => {
               if (!tier || typeof tier !== "object") return [];
