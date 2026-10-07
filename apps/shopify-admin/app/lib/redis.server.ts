@@ -13,6 +13,16 @@ const CIRCUIT_BREAKER_MS = 30_000;
 const REST_TIMEOUT_MS = 500;
 let circuitOpenUntil = 0;
 
+// Primary Upstash free-tier quota exhausted: serve from the backup instance until this passes, then probe primary again.
+const PRIMARY_EXHAUSTED_MS = 10 * 60_000;
+const QUOTA_PATTERN = /max.*(request|command|daily|monthly).*limit|limit exceeded|quota/i;
+const QUOTA_CODE = "UPSTASH_QUOTA_EXHAUSTED";
+let primaryExhaustedUntil = 0;
+
+export function getRedisActiveInstance(): "primary" | "backup" {
+  return getBackupRestConfig() && Date.now() < primaryExhaustedUntil ? "backup" : "primary";
+}
+
 export function recordRedisFailure(): void {
   circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_MS;
 }
@@ -32,10 +42,15 @@ interface RestRedisResponse {
   error?: string;
 }
 
+interface RestConfig {
+  url: string;
+  token: string;
+}
+
 class RestRedisClient implements SharedRedisClient {
   constructor(
-    private readonly url: string,
-    private readonly token: string,
+    private readonly primary: RestConfig,
+    private readonly backup: RestConfig | null,
   ) {}
 
   ping(): Promise<unknown> {
@@ -51,10 +66,22 @@ class RestRedisClient implements SharedRedisClient {
   }
 
   private async command(command: Array<string | number>): Promise<unknown> {
-    const response = await fetch(this.url, {
+    if (!this.backup) return this.send(this.primary, command);
+    if (Date.now() < primaryExhaustedUntil) return this.send(this.backup, command);
+    try {
+      return await this.send(this.primary, command);
+    } catch (error) {
+      if ((error as Error & { code?: string }).code !== QUOTA_CODE) throw error;
+      primaryExhaustedUntil = Date.now() + PRIMARY_EXHAUSTED_MS;
+      return this.send(this.backup, command);
+    }
+  }
+
+  private async send({ url, token }: RestConfig, command: Array<string | number>): Promise<unknown> {
+    const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${this.token}`,
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(command),
@@ -63,19 +90,24 @@ class RestRedisClient implements SharedRedisClient {
     });
 
     if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      const isQuota = response.status === 429 || QUOTA_PATTERN.test(body);
       const error = new Error(
-        response.status === 401 || response.status === 403
-          ? "Redis REST authentication failed"
-          : `Redis REST request failed with HTTP ${response.status}`,
+        isQuota
+          ? "Redis REST quota exhausted"
+          : response.status === 401 || response.status === 403
+            ? "Redis REST authentication failed"
+            : `Redis REST request failed with HTTP ${response.status}`,
       );
-      (error as Error & { code: string }).code = `UPSTASH_HTTP_${response.status}`;
+      (error as Error & { code: string }).code = isQuota ? QUOTA_CODE : `UPSTASH_HTTP_${response.status}`;
       throw error;
     }
 
     const payload = (await response.json()) as RestRedisResponse;
     if (payload.error) {
-      const error = new Error("Redis REST command failed");
-      (error as Error & { code: string }).code = "UPSTASH_COMMAND_ERROR";
+      const isQuota = QUOTA_PATTERN.test(payload.error);
+      const error = new Error(isQuota ? "Redis REST quota exhausted" : "Redis REST command failed");
+      (error as Error & { code: string }).code = isQuota ? QUOTA_CODE : "UPSTASH_COMMAND_ERROR";
       throw error;
     }
     if (!("result" in payload)) {
@@ -87,7 +119,13 @@ class RestRedisClient implements SharedRedisClient {
   }
 }
 
-function getRestConfig(): { url: string; token: string } | null {
+function getBackupRestConfig(): RestConfig | null {
+  const url = process.env["BACKUP_KV_REST_API_URL"];
+  const token = process.env["BACKUP_KV_REST_API_TOKEN"];
+  return url && token ? { url, token } : null;
+}
+
+function getRestConfig(): RestConfig | null {
   const pairs = [
     [process.env["UPSTASH_KV_REST_API_URL"], process.env["UPSTASH_KV_REST_API_TOKEN"]],
     [process.env["REDIS_KV_REST_API_URL"], process.env["REDIS_KV_REST_API_TOKEN"]],
@@ -107,7 +145,7 @@ export async function getSharedRedis(): Promise<SharedRedisClient | null> {
 
   const restConfig = getRestConfig();
   if (restConfig) {
-    restRedis ??= new RestRedisClient(restConfig.url, restConfig.token);
+    restRedis ??= new RestRedisClient(restConfig, getBackupRestConfig());
     lastConnectionError = null;
     return restRedis;
   }

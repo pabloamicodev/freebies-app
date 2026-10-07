@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  getRedisActiveInstance,
   getSharedRedis,
   isRedisConfigured,
   recordRedisFailure,
@@ -17,6 +18,8 @@ const redisEnvNames = [
   "UPSTASH_REDIS_REST_TOKEN",
   "KV_REST_API_URL",
   "KV_REST_API_TOKEN",
+  "BACKUP_KV_REST_API_URL",
+  "BACKUP_KV_REST_API_TOKEN",
 ] as const;
 const originalRedisEnv = Object.fromEntries(redisEnvNames.map((name) => [name, process.env[name]]));
 
@@ -124,5 +127,92 @@ describe.sequential("circuit breaker", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe.sequential("REST Redis failover", () => {
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  const quota = () => json({ error: "ERR max daily request limit exceeded" });
+  const clock = new Date("2030-01-01T00:00:00Z").getTime();
+  let tick = 0;
+  const setup = (withBackup = true) => {
+    // primaryExhaustedUntil survives resetSharedRedis, so each test starts well past the previous window.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(clock + tick++ * 3_600_000);
+    delete process.env["REDIS_URL"];
+    process.env["KV_REST_API_URL"] = "https://primary.example.test";
+    process.env["KV_REST_API_TOKEN"] = "p-token";
+    if (withBackup) {
+      process.env["BACKUP_KV_REST_API_URL"] = "https://backup.example.test";
+      process.env["BACKUP_KV_REST_API_TOKEN"] = "b-token";
+    }
+  };
+  const urls = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.map((c) => c[0]);
+
+  afterEach(() => vi.useRealTimers());
+
+  it("retries on backup after a primary quota error and keeps using backup until the window expires", async () => {
+    setup();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(quota())
+      .mockResolvedValueOnce(json({ result: 1 }))
+      .mockResolvedValueOnce(json({ result: 2 }))
+      .mockResolvedValueOnce(json({ result: 3 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = await getSharedRedis();
+
+    expect(await client?.eval("x", 0)).toBe(1);
+    expect(getRedisActiveInstance()).toBe("backup");
+    expect(await client?.eval("x", 0)).toBe(2);
+    expect(urls(fetchMock)).toEqual([
+      "https://primary.example.test",
+      "https://backup.example.test",
+      "https://backup.example.test",
+    ]);
+
+    vi.setSystemTime(Date.now() + 10 * 60_000 + 1);
+    expect(getRedisActiveInstance()).toBe("primary");
+    expect(await client?.eval("x", 0)).toBe(3);
+    expect(urls(fetchMock)[3]).toBe("https://primary.example.test");
+  });
+
+  it("treats HTTP 429 as quota exhaustion", async () => {
+    setup();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 429 }))
+      .mockResolvedValueOnce(json({ result: "ok" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await (await getSharedRedis())?.eval("x", 0)).toBe("ok");
+  });
+
+  it("throws as before when no backup is configured", async () => {
+    setup(false);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(quota()));
+
+    await expect((await getSharedRedis())?.eval("x", 0)).rejects.toThrow("Redis REST quota exhausted");
+    expect(getRedisActiveInstance()).toBe("primary");
+  });
+
+  it("does not switch on non-quota errors", async () => {
+    setup();
+    const fetchMock = vi.fn().mockResolvedValue(json({ error: "ERR syntax" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect((await getSharedRedis())?.eval("x", 0)).rejects.toThrow("Redis REST command failed");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(getRedisActiveInstance()).toBe("primary");
+  });
+
+  it("throws when the backup is also exhausted", async () => {
+    setup();
+    const fetchMock = vi.fn().mockImplementation(async () => quota());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect((await getSharedRedis())?.eval("x", 0)).rejects.toThrow("Redis REST quota exhausted");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

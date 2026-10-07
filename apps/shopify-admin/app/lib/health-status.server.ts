@@ -4,6 +4,8 @@ export interface DependencyHealth {
   status: HealthCheckStatus;
   critical: boolean;
   latencyMs?: number;
+  /** Which Redis instance is serving traffic (backup during quota failover). */
+  instance?: "primary" | "backup";
   /** Stable machine-readable reason; never include exception messages or secrets. */
   reason?: "query_failed" | "connection_failed" | "missing_required_environment";
   /** Allowlisted runtime/network error code such as ECONNREFUSED or ETIMEDOUT. */

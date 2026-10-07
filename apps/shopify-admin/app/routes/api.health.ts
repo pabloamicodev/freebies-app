@@ -5,6 +5,7 @@ import { waitUntil } from "@vercel/functions";
 import * as Sentry from "@sentry/node";
 import {
   getLastRedisConnectionError,
+  getRedisActiveInstance,
   getSharedRedis,
   isRedisConfigured,
   resetSharedRedis,
@@ -44,7 +45,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
         throw getLastRedisConnectionError() ?? new Error("Redis unavailable");
       }
       await redis.ping();
-      checks["redis"] = { status: "ok", critical: false, latencyMs: elapsedMs(redisStartedAt) };
+      checks["redis"] = {
+        status: "ok",
+        critical: false,
+        latencyMs: elapsedMs(redisStartedAt),
+        instance: getRedisActiveInstance(),
+      };
     } catch (error) {
       resetSharedRedis();
       checks["redis"] = {
