@@ -26,7 +26,7 @@ export async function proxyRateLimitResponse(
   const [shopResult, customerResult] = await Promise.all([
     checkRateLimit(`${scope}:${shopId}`, { limit: ceiling, windowMs: 60_000, fixedWindow: true, onRedisUnavailable: "skip" }),
     customerId && /^\d+$/.test(customerId)
-      ? checkRateLimit(`${scope}:${shopId}:c:${customerId}`, { limit, windowMs: 60_000 })
+      ? checkRateLimit(`${scope}:${shopId}:c:${customerId}`, { limit, windowMs: 60_000, fixedWindow: true })
       : Promise.resolve({ ok: true as const }),
   ]);
   const blocked = !shopResult.ok ? shopResult : !customerResult.ok ? customerResult : null;

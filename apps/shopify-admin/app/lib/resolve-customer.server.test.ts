@@ -14,25 +14,17 @@ vi.mock("./shopify-fetch.server.js", () => ({
 let redisStore: Map<string, string> | null = new Map();
 
 const ttlByKey = new Map<string, number>();
-const mockEval = vi.fn(async (script: string, _numKeys: number, ...args: unknown[]) => {
-  if (!redisStore) throw new Error("redis unavailable");
-  const key = args[0] as string;
-  if (script.includes("'GET'")) {
-    return redisStore.get(key) ?? null;
-  }
-  // SET key value EX ttl
-  const value = args[1] as string;
+// redisGetString/redisSetString swallow Redis errors and return null/void, so a null store models both "unavailable" and "throws".
+const mockGet = vi.fn(async (key: string) => redisStore?.get(key) ?? null);
+const mockSet = vi.fn(async (key: string, value: string, ttl: number) => {
+  if (!redisStore) return;
   redisStore.set(key, value);
-  ttlByKey.set(key, Number(args[2]));
-  return "OK";
+  ttlByKey.set(key, ttl);
 });
 
-const mockGetSharedRedis = vi.fn(async () => (redisStore ? { eval: mockEval } : null));
-
 vi.mock("./redis.server.js", () => ({
-  getSharedRedis: () => mockGetSharedRedis(),
-  recordRedisFailure: vi.fn(),
-  resetSharedRedis: vi.fn(),
+  redisGetString: (key: string) => mockGet(key),
+  redisSetString: (key: string, value: string, ttl: number) => mockSet(key, value, ttl),
 }));
 
 // Import AFTER mocks are registered
@@ -61,7 +53,6 @@ describe("resolveCustomer", () => {
     vi.clearAllMocks();
     redisStore = new Map();
     ttlByKey.clear();
-    mockGetSharedRedis.mockImplementation(async () => (redisStore ? { eval: mockEval } : null));
   });
 
   it("returns null without calling the Admin API for an invalid customer id", async () => {
@@ -78,6 +69,8 @@ describe("resolveCustomer", () => {
     expect(result).toMatchObject({ id: "gid://shopify/Customer/123", tags: ["vip"], totalOrders: 3 });
     expect(mockShopifyGraphQL).toHaveBeenCalledTimes(1);
     expect(redisStore?.size).toBe(1);
+    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(mockSet).toHaveBeenCalledTimes(1);
   });
 
   it("cache hit: skips the Admin API call within the TTL window", async () => {
@@ -115,9 +108,7 @@ describe("resolveCustomer", () => {
   });
 
   it("fails open when Redis throws on read/write, still returning the resolved profile", async () => {
-    mockGetSharedRedis.mockResolvedValue({
-      eval: vi.fn().mockRejectedValue(new Error("boom")),
-    });
+    redisStore = null;
     mockShopifyGraphQL.mockResolvedValueOnce(makeQueryResult());
 
     const result = await resolveCustomer(SHOP_DOMAIN, ACCESS_TOKEN, "123");

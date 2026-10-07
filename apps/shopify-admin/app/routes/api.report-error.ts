@@ -25,8 +25,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
   const limits = await Promise.all([
     checkRateLimit("report-error:global", { limit: GLOBAL_LIMIT_PER_MINUTE, windowMs: 60_000, fixedWindow: true, onRedisUnavailable: "memory" }),
-    checkRateLimit(`report-error:shop:${shop}`, { limit: SHOP_LIMIT_PER_MINUTE, windowMs: 60_000 }),
-    checkRateLimit(`report-error:${getClientIp(request)}`, { limit: 10, windowMs: 60_000 }),
+    checkRateLimit(`report-error:shop:${shop}`, { limit: SHOP_LIMIT_PER_MINUTE, windowMs: 60_000, fixedWindow: true }),
+    checkRateLimit(`report-error:${getClientIp(request)}`, { limit: 10, windowMs: 60_000, fixedWindow: true }),
   ]);
   const blocked = limits.find((limit) => !limit.ok);
   if (blocked && !blocked.ok) {

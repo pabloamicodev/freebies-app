@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { getDb, shops } from "@promo/db";
 import { verifyAppProxySignature } from "./app-proxy-auth.server.js";
+import { createMemoryCache } from "./memory-cache.server.js";
 import { redisDelete, redisGetString, redisSetString } from "./redis.server.js";
 
 /**
@@ -13,18 +14,23 @@ export const SHOP_CACHE_TTL_SECONDS = 30;
 
 type CachedShop = Pick<typeof shops.$inferSelect, "id" | "currencyCode" | "accessTokenEncrypted">;
 
+const l1 = createMemoryCache<string>();
 const key = (shopDomain: string) => `shop:v1:${shopDomain}`;
 
 export function invalidateShopCache(shopDomain: string): Promise<void> {
+  l1.delete(key(shopDomain));
   return redisDelete(key(shopDomain)).catch(() => undefined);
 }
 
 export async function loadActiveShop(shopDomain: string) {
   const db = getDb();
-  const cached = await redisGetString(key(shopDomain));
+  const hot = l1.get(key(shopDomain));
+  const cached = hot ?? (await redisGetString(key(shopDomain)));
   if (cached) {
     try {
-      return { ...(JSON.parse(cached) as CachedShop), shopDomain, db };
+      const shop = JSON.parse(cached) as CachedShop;
+      if (hot === undefined) l1.set(key(shopDomain), cached);
+      return { ...shop, shopDomain, db };
     } catch {
       // Corrupt entry: refetch below.
     }
@@ -36,7 +42,9 @@ export async function loadActiveShop(shopDomain: string) {
     .limit(1);
   const shop = rows[0];
   if (!shop) throw new Response("Shop not found or app uninstalled", { status: 404 });
-  await redisSetString(key(shopDomain), JSON.stringify(shop), SHOP_CACHE_TTL_SECONDS);
+  const serialized = JSON.stringify(shop);
+  l1.set(key(shopDomain), serialized);
+  await redisSetString(key(shopDomain), serialized, SHOP_CACHE_TTL_SECONDS);
   return { ...shop, shopDomain, db };
 }
 

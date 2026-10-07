@@ -1,6 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRedisActiveInstance,
+  redisDelete,
+  redisGetString,
+  redisSetString,
   getSharedRedis,
   isRedisConfigured,
   recordRedisFailure,
@@ -130,6 +133,42 @@ describe.sequential("circuit breaker", () => {
   });
 });
 
+describe.sequential("plain key/value commands", () => {
+  const ok = (result: unknown) => new Response(JSON.stringify({ result }), { status: 200, headers: { "Content-Type": "application/json" } });
+  // The circuit breaker is module state; jump past any cool-off left by earlier tests.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2029-01-01T00:00:00Z").getTime() + tick++ * 3_600_000);
+  });
+  afterEach(() => vi.useRealTimers());
+  let tick = 0;
+  const bodies = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.map((c) => JSON.parse(String((c[1] as RequestInit).body)));
+
+  it("sends GET / SET EX / DEL as plain commands, not wrapped in EVAL", async () => {
+    delete process.env["REDIS_URL"];
+    process.env["UPSTASH_KV_REST_API_URL"] = "https://redis.example.test";
+    process.env["UPSTASH_KV_REST_API_TOKEN"] = "test-token";
+    const fetchMock = vi.fn().mockResolvedValueOnce(ok("v")).mockResolvedValueOnce(ok("OK")).mockResolvedValueOnce(ok(1));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await redisGetString("k")).toBe("v");
+    await redisSetString("k", "val", 30);
+    await redisDelete("k");
+
+    expect(bodies(fetchMock)).toEqual([["GET", "k"], ["SET", "k", "val", "EX", 30], ["DEL", "k"]]);
+  });
+
+  it("returns null and opens the circuit when the command fails", async () => {
+    delete process.env["REDIS_URL"];
+    process.env["UPSTASH_KV_REST_API_URL"] = "https://redis.example.test";
+    process.env["UPSTASH_KV_REST_API_TOKEN"] = "test-token";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 500 })));
+
+    expect(await redisGetString("k")).toBeNull();
+    expect(await getSharedRedis()).toBeNull();
+  });
+});
+
 describe.sequential("REST Redis failover", () => {
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -176,6 +215,16 @@ describe.sequential("REST Redis failover", () => {
     expect(getRedisActiveInstance()).toBe("primary");
     expect(await client?.eval("x", 0)).toBe(3);
     expect(urls(fetchMock)[3]).toBe("https://primary.example.test");
+  });
+
+  it("fails over to the backup for plain commands too", async () => {
+    setup();
+    const fetchMock = vi.fn().mockResolvedValueOnce(quota()).mockResolvedValueOnce(json({ result: "from-backup" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await redisGetString("k")).toBe("from-backup");
+    expect(urls(fetchMock)).toEqual(["https://primary.example.test", "https://backup.example.test"]);
+    expect(JSON.parse(String((fetchMock.mock.calls[1]![1] as RequestInit).body))).toEqual(["GET", "k"]);
   });
 
   it("treats HTTP 429 as quota exhaustion", async () => {

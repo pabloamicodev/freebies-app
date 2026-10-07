@@ -9,6 +9,7 @@ vi.mock("./redis.server.js", () => ({
 }));
 vi.mock("@vercel/functions", () => ({ waitUntil: vi.fn() }));
 
+const { resetMemoryCaches } = await import("./memory-cache.server.js");
 const { getOfferDefinitions, invalidateOfferDefinitions } = await import("./offer-definitions.server.js");
 
 function fakeDb(rows: unknown[]) {
@@ -29,6 +30,7 @@ const row = {
 };
 
 beforeEach(() => {
+  resetMemoryCaches();
   store.clear();
   redis.get.mockReset().mockImplementation(async (key: string) => store.get(key) ?? null);
   redis.set.mockReset().mockImplementation(async (key: string, value: string) => void store.set(key, value));
@@ -62,6 +64,32 @@ describe("getOfferDefinitions cache", () => {
     expect(redis.del).toHaveBeenCalledWith("od:v1:shop-1");
     await getOfferDefinitions("shop-1", db);
     expect((db as unknown as { select: ReturnType<typeof vi.fn> }).select.mock.calls.length).toBe(calls * 2);
+  });
+
+  it("serves repeat reads from the in-process L1 without touching Redis", async () => {
+    const db = fakeDb([row]);
+    await getOfferDefinitions("shop-l1", db);
+    redis.get.mockClear();
+    const again = await getOfferDefinitions("shop-l1", db);
+    expect(redis.get).not.toHaveBeenCalled();
+    expect(again[0]!.startsAt).toBeInstanceOf(Date);
+  });
+
+  it("does not extend the L1 TTL on hits", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const db = fakeDb([row]);
+      await getOfferDefinitions("shop-ttl", db);
+      redis.get.mockClear();
+      vi.advanceTimersByTime(6_000);
+      await getOfferDefinitions("shop-ttl", db);
+      vi.advanceTimersByTime(6_000);
+      expect(redis.get).not.toHaveBeenCalled();
+      await getOfferDefinitions("shop-ttl", db);
+      expect(redis.get).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back to the DB when Redis has nothing or the entry is corrupt", async () => {

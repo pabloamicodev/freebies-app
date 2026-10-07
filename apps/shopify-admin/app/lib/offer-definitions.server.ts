@@ -8,6 +8,7 @@ import {
 } from "@promo/db";
 import type { OfferDefinition } from "@promo/rule-engine";
 import { waitUntil } from "@vercel/functions";
+import { createMemoryCache } from "./memory-cache.server.js";
 import { redisDelete, redisGetString, redisSetString } from "./redis.server.js";
 import { computeOfferVersion } from "./offer-version.server.js";
 import { normalizeConditionValue } from "./offer-config-normalization.server.js";
@@ -19,6 +20,7 @@ import { normalizeConditionValue } from "./offer-config-normalization.server.js"
 export const OFFER_DEFINITIONS_TTL_SECONDS = 30;
 const MAX_CACHED_BYTES = 512 * 1024;
 
+const l1 = createMemoryCache<string>();
 const cacheKey = (shopId: string) => `od:v1:${shopId}`;
 
 /**
@@ -26,6 +28,7 @@ const cacheKey = (shopId: string) => `od:v1:${shopId}`;
  * Also registered with waitUntil so an un-awaited call still completes before the function freezes.
  */
 export function invalidateOfferDefinitions(shopId: string): Promise<void> {
+  l1.delete(cacheKey(shopId));
   const pending = redisDelete(cacheKey(shopId)).catch(() => undefined);
   try {
     waitUntil(pending);
@@ -44,10 +47,13 @@ function reviveDates(definitions: OfferDefinition[]): OfferDefinition[] {
 }
 
 export async function getOfferDefinitions(shopId: string, db: Db): Promise<OfferDefinition[]> {
-  const cached = await redisGetString(cacheKey(shopId));
+  const hot = l1.get(cacheKey(shopId));
+  const cached = hot ?? (await redisGetString(cacheKey(shopId)));
   if (cached) {
     try {
-      return reviveDates(JSON.parse(cached) as OfferDefinition[]);
+      const definitions = reviveDates(JSON.parse(cached) as OfferDefinition[]);
+      if (hot === undefined) l1.set(cacheKey(shopId), cached);
+      return definitions;
     } catch {
       // Corrupt entry: fall through and overwrite it.
     }
@@ -55,6 +61,7 @@ export async function getOfferDefinitions(shopId: string, db: Db): Promise<Offer
   const definitions = await loadOfferDefinitions(shopId, db);
   const serialized = JSON.stringify(definitions);
   if (serialized.length <= MAX_CACHED_BYTES) {
+    l1.set(cacheKey(shopId), serialized);
     await redisSetString(cacheKey(shopId), serialized, OFFER_DEFINITIONS_TTL_SECONDS);
   }
   return definitions;

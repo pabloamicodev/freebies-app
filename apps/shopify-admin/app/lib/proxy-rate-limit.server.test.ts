@@ -20,7 +20,7 @@ describe("proxyRateLimitResponse", () => {
 
   it("adds a per-customer limit only for a numeric signed customer id", async () => {
     await proxyRateLimitResponse(req("?logged_in_customer_id=42"), "bundle", "shop-1", 120);
-    expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith("bundle:shop-1:c:42", { limit: 120, windowMs: 60_000 });
+    expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith("bundle:shop-1:c:42", { limit: 120, windowMs: 60_000, fixedWindow: true });
     vi.mocked(checkRateLimit).mockClear();
     await proxyRateLimitResponse(req("?logged_in_customer_id=abc"), "bundle", "shop-1", 120);
     expect(vi.mocked(checkRateLimit)).toHaveBeenCalledTimes(1);

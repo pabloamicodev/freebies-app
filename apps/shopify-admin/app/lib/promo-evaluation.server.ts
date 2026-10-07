@@ -5,6 +5,7 @@ import { and, eq, inArray, count } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { waitUntil } from "@vercel/functions";
 import { checkRateLimit, envLimit, getClientIp, jitteredRetryAfter } from "./rate-limit.server.js";
+import { createMemoryCache } from "./memory-cache.server.js";
 import { redisGetString, redisSetString } from "./redis.server.js";
 import { getOfferDefinitions } from "./offer-definitions.server.js";
 import { applyCodeGatesDetailed, MISSED_CODE_WINDOW_MS } from "./code-gate.server.js";
@@ -150,6 +151,7 @@ export function evaluateLimits(env: NodeJS.ProcessEnv = process.env) {
 }
 
 const SEEN_CART_TTL_SECONDS = 30 * 60;
+const knownCarts = createMemoryCache<true>(60_000);
 const seenCartKey = (shopId: string, cartToken: string) => `evaluate:seen:${shopId}:${cartToken.slice(0, 100)}`;
 
 export async function handleEvaluationRequest(
@@ -182,7 +184,8 @@ export async function handleEvaluationRequest(
   // D10: limits are keyed by shop + the verified customer and by shop + cart token. The client IP is
   // only a secondary key for direct callers (checkout extension): behind the app proxy it is
   // Shopify's egress address, which would merge every visitor into one bucket. The shop-wide
-  // ceiling uses a fixed-window counter (O(1)) because its cap is high.
+  // ceiling and the per-caller limits all use fixed-window counters (INCR + one EXPIRE), the cheapest in Redis
+  // commands; the cost is up to 2x burst at a window edge.
   timer.mark("body");
   const cartToken = parsed.data.cart.token;
   // Codes are a guessing oracle and the per-visitor miss limit is keyed on the cart token, so a
@@ -196,7 +199,11 @@ export async function handleEvaluationRequest(
   }
   const limits = evaluateLimits();
   const clientIp = options.viaAppProxy ? null : getClientIp(request);
-  const known = cartToken ? (await redisGetString(seenCartKey(shop.id, cartToken))) !== null : false;
+  const seenKey = cartToken ? seenCartKey(shop.id, cartToken) : null;
+  const hot = seenKey ? knownCarts.get(seenKey) === true : false;
+  const fromRedis = seenKey && !hot ? (await redisGetString(seenKey)) !== null : false;
+  const known = hot || fromRedis;
+  if (seenKey && fromRedis) knownCarts.set(seenKey, true);
   // Shop-wide ceilings count in Redis only: with Redis down every request would upsert the same hot
   // rate_limits row, so the caps are skipped and the per-caller limits (DB) stay.
   const checks: Array<{ message: string; result: Promise<RateLimitResult> }> = [
@@ -210,11 +217,11 @@ export async function handleEvaluationRequest(
       }),
     },
   ];
-  const caller = { limit: limits.caller, windowMs: 60_000 };
+  const caller = { limit: limits.caller, windowMs: 60_000, fixedWindow: true };
   if (loggedInCustomerId) checks.push({ message: "Too many evaluation requests.", result: checkRateLimit(`evaluate:${shop.id}:c:${loggedInCustomerId}`, caller) });
   if (cartToken) checks.push({ message: "Too many evaluation requests.", result: checkRateLimit(`evaluate:${shop.id}:t:${cartToken}`, caller) });
   if (clientIp && clientIp !== "unknown") {
-    checks.push({ message: "Too many evaluation requests.", result: checkRateLimit(`evaluate:${shop.id}:ip:${clientIp}`, { limit: limits.ip, windowMs: 60_000 }) });
+    checks.push({ message: "Too many evaluation requests.", result: checkRateLimit(`evaluate:${shop.id}:ip:${clientIp}`, { limit: limits.ip, windowMs: 60_000, fixedWindow: true }) });
   }
   const results = await Promise.all(checks.map((check) => check.result));
   timer.mark("ratelimit");
@@ -333,9 +340,10 @@ export async function handleEvaluationRequest(
     });
   }
 
-  if (cartToken && !known) {
+  if (seenKey && !known) {
+    knownCarts.set(seenKey, true);
     try {
-      waitUntil(redisSetString(seenCartKey(shop.id, cartToken), "1", SEEN_CART_TTL_SECONDS));
+      waitUntil(redisSetString(seenKey, "1", SEEN_CART_TTL_SECONDS));
     } catch {
       // waitUntil is unavailable outside the Vercel runtime; the mark is only an optimisation.
     }

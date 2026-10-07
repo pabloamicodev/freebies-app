@@ -54,6 +54,7 @@ const { handleEvaluationRequest } = await import("./promo-evaluation.server.js")
 const { checkRateLimit, getClientIp } = await import("./rate-limit.server.js");
 const { getOfferDefinitions } = await import("./offer-definitions.server.js");
 const { redisGetString, redisSetString } = await import("./redis.server.js");
+const { resetMemoryCaches } = await import("./memory-cache.server.js");
 const { applyCodeGatesDetailed } = await import("./code-gate.server.js");
 const { waitUntil } = await import("@vercel/functions");
 
@@ -93,6 +94,7 @@ const shop = {
 describe("handleEvaluationRequest rate limit keys", () => {
   const keys = () => vi.mocked(checkRateLimit).mock.calls.map((call) => call[0]);
   beforeEach(() => {
+    resetMemoryCaches();
     vi.mocked(checkRateLimit).mockClear().mockResolvedValue({ ok: true });
     vi.mocked(getOfferDefinitions).mockClear();
     vi.mocked(getClientIp).mockClear().mockReturnValue("203.0.113.1");
@@ -124,6 +126,13 @@ describe("handleEvaluationRequest rate limit keys", () => {
     expect(keys()).toEqual(["evaluate:shop:shop-1", "evaluate:shop-1:t:cart-tok-1", "evaluate:shop-1:ip:203.0.113.1"]);
   });
 
+  it("uses fixed-window counters for every per-caller limit (customer, cart token, IP)", async () => {
+    await handleEvaluationRequest(makeRequest("cart-tok-1"), shop, "42");
+    const calls = vi.mocked(checkRateLimit).mock.calls.filter(([key]) => key !== "evaluate:shop:shop-1");
+    expect(calls.map(([key]) => key)).toEqual(["evaluate:shop-1:c:42", "evaluate:shop-1:t:cart-tok-1", "evaluate:shop-1:ip:203.0.113.1"]);
+    for (const [, options] of calls) expect(options).toMatchObject({ windowMs: 60_000, fixedWindow: true });
+  });
+
   it("returns 429 when the shop ceiling is hit, before touching offers", async () => {
     vi.mocked(checkRateLimit).mockResolvedValueOnce({ ok: false, retryAfterSeconds: 10 });
     const response = await handleEvaluationRequest(makeRequest("cart-tok-1"), shop, null, undefined, { viaAppProxy: true });
@@ -143,6 +152,7 @@ describe("handleEvaluationRequest rate limit keys", () => {
 describe("H6: anonymous traffic cannot spend the budget of known shoppers", () => {
   const proxy = { viaAppProxy: true };
   beforeEach(() => {
+    resetMemoryCaches();
     vi.mocked(checkRateLimit).mockReset().mockResolvedValue({ ok: true });
     vi.mocked(redisGetString).mockReset().mockResolvedValue(null);
     vi.mocked(redisSetString).mockClear();
@@ -157,6 +167,16 @@ describe("H6: anonymous traffic cannot spend the budget of known shoppers", () =
     expect(checkRateLimit).toHaveBeenCalledWith("evaluate:shop-known:shop-1", { limit: 36_000, windowMs: 60_000, fixedWindow: true, onRedisUnavailable: "skip" });
     expect(vi.mocked(checkRateLimit).mock.calls.map((call) => call[0])).not.toContain("evaluate:shop:shop-1");
     expect(redisSetString).not.toHaveBeenCalled();
+  });
+
+  it("skips the seen-cart GET on a warm instance once the cart is known", async () => {
+    await handleEvaluationRequest(makeRequest("warm-tok"), shop, null, undefined, proxy);
+    expect(redisGetString).toHaveBeenCalledTimes(1);
+    expect(redisSetString).toHaveBeenCalledTimes(1);
+    await handleEvaluationRequest(makeRequest("warm-tok"), shop, null, undefined, proxy);
+    expect(redisGetString).toHaveBeenCalledTimes(1);
+    expect(redisSetString).toHaveBeenCalledTimes(1);
+    expect(checkRateLimit).toHaveBeenLastCalledWith("evaluate:shop-known:shop-1", expect.anything());
   });
 
   it("sheds an unknown caller on the anonymous budget while a known one is not affected by it", async () => {

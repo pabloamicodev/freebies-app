@@ -34,6 +34,8 @@ function isCircuitOpen(): boolean {
 export interface SharedRedisClient {
   ping(): Promise<unknown>;
   eval(script: string, numberOfKeys: number, ...args: Array<string | number>): Promise<unknown>;
+  /** Plain command (GET/SET/DEL...): billed once, unlike the same command wrapped in EVAL. */
+  command(args: Array<string | number>): Promise<unknown>;
   disconnect(): void;
 }
 
@@ -65,7 +67,7 @@ class RestRedisClient implements SharedRedisClient {
     // Upstash REST is connectionless, so there is no socket to close.
   }
 
-  private async command(command: Array<string | number>): Promise<unknown> {
+  async command(command: Array<string | number>): Promise<unknown> {
     if (!this.backup) return this.send(this.primary, command);
     if (Date.now() < primaryExhaustedUntil) return this.send(this.backup, command);
     try {
@@ -140,6 +142,16 @@ export function isRedisConfigured(): boolean {
   return Boolean(getRestConfig() || process.env["REDIS_URL"]);
 }
 
+// ioredis already has an unrelated `command()` (COMMAND INFO), so it cannot implement the interface directly.
+function adaptIoredis(client: Redis): SharedRedisClient {
+  return {
+    ping: () => client.ping(),
+    eval: (script, numberOfKeys, ...args) => client.eval(script, numberOfKeys, ...args),
+    command: ([name, ...args]) => client.call(String(name), ...args.map(String)),
+    disconnect: () => client.disconnect(),
+  };
+}
+
 export async function getSharedRedis(): Promise<SharedRedisClient | null> {
   if (isCircuitOpen()) return null;
 
@@ -155,7 +167,7 @@ export async function getSharedRedis(): Promise<SharedRedisClient | null> {
     lastConnectionError = null;
     return null;
   }
-  if (redis?.status === "ready") return redis;
+  if (redis?.status === "ready") return adaptIoredis(redis);
   if (connection) return connection;
 
   if (!redis || redis.status === "end") {
@@ -177,7 +189,7 @@ export async function getSharedRedis(): Promise<SharedRedisClient | null> {
     .connect()
     .then(() => {
       lastConnectionError = null;
-      return client;
+      return adaptIoredis(client);
     })
     .catch((error: unknown) => {
       lastConnectionError = sanitizeRedisConnectionError(error);
@@ -234,17 +246,29 @@ async function redisEval(script: string, key: string, ...args: Array<string | nu
   }
 }
 
+async function redisCommand(...args: Array<string | number>): Promise<unknown> {
+  const client = await getSharedRedis();
+  if (!client) return null;
+  try {
+    return await client.command(args);
+  } catch {
+    recordRedisFailure();
+    resetSharedRedis();
+    return null;
+  }
+}
+
 export async function redisGetString(key: string): Promise<string | null> {
-  const value = await redisEval("return redis.call('GET', KEYS[1])", key);
+  const value = await redisCommand("GET", key);
   return typeof value === "string" ? value : null;
 }
 
 export async function redisSetString(key: string, value: string, ttlSeconds: number): Promise<void> {
-  await redisEval("return redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])", key, value, ttlSeconds);
+  await redisCommand("SET", key, value, "EX", ttlSeconds);
 }
 
 export async function redisDelete(key: string): Promise<void> {
-  await redisEval("return redis.call('DEL', KEYS[1])", key);
+  await redisCommand("DEL", key);
 }
 
 /** SET NX PX. true = acquired, false = held elsewhere, null = Redis unavailable. */

@@ -12,16 +12,24 @@
 
 import { getDb, appSettings } from "@promo/db";
 import { eq, and } from "drizzle-orm";
+import { createMemoryCache } from "./memory-cache.server.js";
 import { redisDelete, redisGetString, redisSetString } from "./redis.server.js";
 
 // Read on every evaluate; cached 30s (D10) and dropped by setShadowMode.
 const SHADOW_CACHE_TTL_SECONDS = 30;
+const l1 = createMemoryCache<boolean>();
 const cacheKey = (shopId: string) => `shadow:v1:${shopId}`;
 
 export async function isShadowModeEnabled(shopId: string): Promise<boolean> {
+  const hot = l1.get(cacheKey(shopId));
+  if (hot !== undefined) return hot;
   const cached = await redisGetString(cacheKey(shopId));
-  if (cached === "1" || cached === "0") return cached === "1";
+  if (cached === "1" || cached === "0") {
+    l1.set(cacheKey(shopId), cached === "1");
+    return cached === "1";
+  }
   const enabled = await readShadowMode(shopId);
+  l1.set(cacheKey(shopId), enabled);
   await redisSetString(cacheKey(shopId), enabled ? "1" : "0", SHADOW_CACHE_TTL_SECONDS);
   return enabled;
 }
@@ -51,5 +59,6 @@ export async function setShadowMode(shopId: string, enabled: boolean): Promise<v
       target: [appSettings.shopId, appSettings.key],
       set: { value: JSON.stringify(enabled), updatedAt: new Date() },
     });
+  l1.delete(cacheKey(shopId));
   await redisDelete(cacheKey(shopId));
 }

@@ -6,7 +6,7 @@
 import type { NormalizedCustomer } from "@promo/shared-types";
 import { decryptToken } from "./token-crypto.server.js";
 import { shopifyGraphQL } from "./shopify-fetch.server.js";
-import { getSharedRedis, recordRedisFailure, resetSharedRedis } from "./redis.server.js";
+import { redisGetString, redisSetString } from "./redis.server.js";
 
 // Tags/spend/location rarely change within a shopping session, so a short
 // cache lets repeat cart-evaluation calls for the same customer skip the
@@ -30,17 +30,11 @@ function cacheKeyFor(shopDomain: string, customerId: string): string {
 }
 
 async function readCachedProfile(key: string): Promise<NormalizedCustomer | null | undefined> {
-  const redis = await getSharedRedis();
-  if (!redis) return undefined;
-
+  const raw = await redisGetString(key);
+  if (raw == null) return undefined;
   try {
-    const raw = (await redis.eval("return redis.call('GET', KEYS[1])", 1, key)) as string | null;
-    if (raw == null) return undefined;
-    const cached = JSON.parse(raw) as CachedProfile;
-    return cached.profile;
+    return (JSON.parse(raw) as CachedProfile).profile;
   } catch {
-    recordRedisFailure();
-    resetSharedRedis();
     return undefined;
   }
 }
@@ -50,22 +44,8 @@ async function writeCachedProfile(
   profile: NormalizedCustomer | null,
   ttlSeconds: number = CACHE_TTL_SECONDS,
 ): Promise<void> {
-  const redis = await getSharedRedis();
-  if (!redis) return;
-
-  try {
-    const value: CachedProfile = { profile };
-    await redis.eval(
-      "return redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])",
-      1,
-      key,
-      JSON.stringify(value),
-      ttlSeconds,
-    );
-  } catch {
-    recordRedisFailure();
-    resetSharedRedis();
-  }
+  const value: CachedProfile = { profile };
+  await redisSetString(key, JSON.stringify(value), ttlSeconds);
 }
 
 interface CustomerQueryResult {
