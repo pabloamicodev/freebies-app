@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRedisActiveInstance,
+  getRedisPrimaryBlockedUntil,
   redisDelete,
   redisGetString,
   redisSetString,
@@ -263,5 +264,97 @@ describe.sequential("REST Redis failover", () => {
 
     await expect((await getSharedRedis())?.eval("x", 0)).rejects.toThrow("Redis REST quota exhausted");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  describe("monthly quota", () => {
+    const monthly = () => json({ error: "ERR max requests limit exceeded. Limit: 500000, Usage: 500000" });
+    const DAY = 24 * 3_600_000;
+    // Block state survives between tests, so each one runs in its own later year.
+    const at = (iso: string) => {
+      setup();
+      vi.setSystemTime(new Date(iso));
+    };
+
+    it("blocks primary for 24h when the month reset is further away", async () => {
+      at("2031-03-10T12:00:00Z");
+      const fetchMock = vi.fn().mockResolvedValueOnce(monthly()).mockResolvedValue(json({ result: 1 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      expect(await (await getSharedRedis())?.eval("x", 0)).toBe(1);
+      expect(getRedisPrimaryBlockedUntil()).toBe(new Date(Date.now() + DAY).toISOString());
+      expect(getRedisActiveInstance()).toBe("backup");
+    });
+
+    it("blocks until 00:00 UTC of the 1st when that is sooner than 24h", async () => {
+      at("2032-03-31T23:00:00Z");
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(monthly()).mockResolvedValue(json({ result: 1 })));
+
+      await (await getSharedRedis())?.eval("x", 0);
+      expect(getRedisPrimaryBlockedUntil()).toBe("2032-04-01T00:00:00.000Z");
+    });
+
+    it("rolls December over into January", async () => {
+      at("2033-12-31T22:30:00Z");
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(monthly()).mockResolvedValue(json({ result: 1 })));
+
+      await (await getSharedRedis())?.eval("x", 0);
+      expect(getRedisPrimaryBlockedUntil()).toBe("2034-01-01T00:00:00.000Z");
+    });
+
+    it("probes primary after 24h, re-blocks on another monthly error, and returns after the reset", async () => {
+      at("2035-03-10T12:00:00Z");
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(monthly())
+        .mockResolvedValueOnce(json({ result: "b1" }))
+        .mockResolvedValueOnce(json({ result: "b2" }))
+        .mockResolvedValueOnce(monthly())
+        .mockResolvedValueOnce(json({ result: "b3" }))
+        .mockResolvedValueOnce(json({ result: "b4" }))
+        .mockResolvedValueOnce(json({ result: "p" }));
+      vi.stubGlobal("fetch", fetchMock);
+      const client = await getSharedRedis();
+
+      expect(await client?.eval("x", 0)).toBe("b1");
+      vi.setSystemTime(Date.now() + DAY - 1);
+      expect(await client?.eval("x", 0)).toBe("b2");
+
+      vi.setSystemTime(Date.now() + 2);
+      expect(await client?.eval("x", 0)).toBe("b3");
+      expect(getRedisPrimaryBlockedUntil()).toBe(new Date(Date.now() + DAY).toISOString());
+      expect(await client?.eval("x", 0)).toBe("b4");
+
+      vi.setSystemTime(new Date("2035-04-01T00:00:00Z"));
+      expect(getRedisPrimaryBlockedUntil()).toBeNull();
+      expect(await client?.eval("x", 0)).toBe("p");
+      expect(urls(fetchMock)).toEqual([
+        "https://primary.example.test",
+        "https://backup.example.test",
+        "https://backup.example.test",
+        "https://primary.example.test",
+        "https://backup.example.test",
+        "https://backup.example.test",
+        "https://primary.example.test",
+      ]);
+    });
+
+    it("keeps the 10-minute block for non-monthly 429s", async () => {
+      at("2036-03-10T12:00:00Z");
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(new Response("", { status: 429 })).mockResolvedValue(json({ result: 1 })));
+
+      await (await getSharedRedis())?.eval("x", 0);
+      expect(getRedisPrimaryBlockedUntil()).toBe(new Date(Date.now() + 10 * 60_000).toISOString());
+    });
+
+    it("treats a monthly message in an HTTP 429 body as monthly", async () => {
+      at("2037-03-10T12:00:00Z");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValueOnce(new Response("monthly quota exceeded", { status: 429 })).mockResolvedValue(json({ result: 1 })),
+      );
+
+      await (await getSharedRedis())?.eval("x", 0);
+      expect(getRedisPrimaryBlockedUntil()).toBe(new Date(Date.now() + DAY).toISOString());
+    });
   });
 });

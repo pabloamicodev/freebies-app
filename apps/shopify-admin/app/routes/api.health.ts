@@ -6,6 +6,7 @@ import * as Sentry from "@sentry/node";
 import {
   getLastRedisConnectionError,
   getRedisActiveInstance,
+  getRedisPrimaryBlockedUntil,
   getSharedRedis,
   isRedisConfigured,
   resetSharedRedis,
@@ -50,6 +51,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         critical: false,
         latencyMs: elapsedMs(redisStartedAt),
         instance: getRedisActiveInstance(),
+        primaryBlockedUntil: getRedisPrimaryBlockedUntil(),
       };
     } catch (error) {
       resetSharedRedis();

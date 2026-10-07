@@ -13,11 +13,35 @@ const CIRCUIT_BREAKER_MS = 30_000;
 const REST_TIMEOUT_MS = 500;
 let circuitOpenUntil = 0;
 
-// Primary Upstash free-tier quota exhausted: serve from the backup instance until this passes, then probe primary again.
+// Primary Upstash quota exhausted: serve from the backup instance until this passes, then probe primary again.
+// Short rate/daily limits block for 10 min; the monthly free-tier quota blocks until the next month starts
+// (UTC), capped at 24h so a failed probe costs at most one rejected command per instance per day.
+// State is per-process on purpose: a probe against an exhausted primary isn't billed, whereas a flag shared
+// via Redis would cost a command on every cold start.
 const PRIMARY_EXHAUSTED_MS = 10 * 60_000;
+const MONTHLY_PROBE_MS = 24 * 3_600_000;
 const QUOTA_PATTERN = /max.*(request|command|daily|monthly).*limit|limit exceeded|quota/i;
+const MONTHLY_QUOTA_PATTERN = /max requests limit exceeded|monthly|quota/i;
 const QUOTA_CODE = "UPSTASH_QUOTA_EXHAUSTED";
+const MONTHLY_QUOTA_CODE = "UPSTASH_MONTHLY_QUOTA_EXHAUSTED";
 let primaryExhaustedUntil = 0;
+
+function blockPrimary(monthly: boolean): void {
+  const now = Date.now();
+  if (!monthly) {
+    primaryExhaustedUntil = now + PRIMARY_EXHAUSTED_MS;
+    return;
+  }
+  const d = new Date(now);
+  const nextMonthStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  primaryExhaustedUntil = Math.min(nextMonthStart, now + MONTHLY_PROBE_MS);
+}
+
+export function getRedisPrimaryBlockedUntil(): string | null {
+  return getBackupRestConfig() && Date.now() < primaryExhaustedUntil
+    ? new Date(primaryExhaustedUntil).toISOString()
+    : null;
+}
 
 export function getRedisActiveInstance(): "primary" | "backup" {
   return getBackupRestConfig() && Date.now() < primaryExhaustedUntil ? "backup" : "primary";
@@ -73,8 +97,9 @@ class RestRedisClient implements SharedRedisClient {
     try {
       return await this.send(this.primary, command);
     } catch (error) {
-      if ((error as Error & { code?: string }).code !== QUOTA_CODE) throw error;
-      primaryExhaustedUntil = Date.now() + PRIMARY_EXHAUSTED_MS;
+      const code = (error as Error & { code?: string }).code;
+      if (code !== QUOTA_CODE && code !== MONTHLY_QUOTA_CODE) throw error;
+      blockPrimary(code === MONTHLY_QUOTA_CODE);
       return this.send(this.backup, command);
     }
   }
@@ -101,7 +126,11 @@ class RestRedisClient implements SharedRedisClient {
             ? "Redis REST authentication failed"
             : `Redis REST request failed with HTTP ${response.status}`,
       );
-      (error as Error & { code: string }).code = isQuota ? QUOTA_CODE : `UPSTASH_HTTP_${response.status}`;
+      (error as Error & { code: string }).code = isQuota
+        ? MONTHLY_QUOTA_PATTERN.test(body)
+          ? MONTHLY_QUOTA_CODE
+          : QUOTA_CODE
+        : `UPSTASH_HTTP_${response.status}`;
       throw error;
     }
 
@@ -109,7 +138,11 @@ class RestRedisClient implements SharedRedisClient {
     if (payload.error) {
       const isQuota = QUOTA_PATTERN.test(payload.error);
       const error = new Error(isQuota ? "Redis REST quota exhausted" : "Redis REST command failed");
-      (error as Error & { code: string }).code = isQuota ? QUOTA_CODE : "UPSTASH_COMMAND_ERROR";
+      (error as Error & { code: string }).code = isQuota
+        ? MONTHLY_QUOTA_PATTERN.test(payload.error)
+          ? MONTHLY_QUOTA_CODE
+          : QUOTA_CODE
+        : "UPSTASH_COMMAND_ERROR";
       throw error;
     }
     if (!("result" in payload)) {
