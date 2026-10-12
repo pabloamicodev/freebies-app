@@ -5,7 +5,7 @@ test("a same-page submit preserves embedded parameters and dirty fields after se
   await page.goto(`/app/offers/new/codes/single${query}`);
   await page.getByRole("textbox", { name: "Discount code", exact: true }).fill("LOCALTEST");
   await page.getByRole("textbox", { name: "Offer name", exact: true }).fill("Local navigation test");
-  await page.getByRole("textbox", { name: "Title customers see", exact: true }).fill("Local discount test");
+  await page.getByRole("textbox", { name: "Discount message (shown in cart, checkout and orders)", exact: true }).fill("Local discount test");
   await expect(page.locator("form")).toHaveAttribute("action", `/app/offers/new/codes/single${query}`);
   await page.getByRole("button", { name: "Save draft", exact: true }).click();
   await expect(page.getByText("Test validation error", { exact: true })).toBeVisible();
