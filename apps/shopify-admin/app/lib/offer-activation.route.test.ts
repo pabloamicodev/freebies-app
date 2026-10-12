@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { offerConditions, offerRewards, offers, shops, type Db } from "@promo/db";
+import type * as PromoDb from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
 const ART = "America/Argentina/Buenos_Aires";
@@ -21,7 +22,7 @@ vi.mock("../shopify.server.js", () => ({
   authenticate: { admin: async () => ({ session: { shop: "route-shop.myshopify.com" } }) },
 }));
 vi.mock("@promo/db", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@promo/db")>()),
+  ...(await importOriginal<typeof PromoDb>()),
   getDb: () => ctx.db,
 }));
 vi.mock("./offer-publish-flow.server.js", () => ({

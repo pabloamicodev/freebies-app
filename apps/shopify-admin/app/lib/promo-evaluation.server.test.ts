@@ -173,10 +173,12 @@ describe("H6: anonymous traffic cannot spend the budget of known shoppers", () =
     await handleEvaluationRequest(makeRequest("warm-tok"), shop, null, undefined, proxy);
     expect(redisGetString).toHaveBeenCalledTimes(1);
     expect(redisSetString).toHaveBeenCalledTimes(1);
+    vi.mocked(checkRateLimit).mockClear();
     await handleEvaluationRequest(makeRequest("warm-tok"), shop, null, undefined, proxy);
     expect(redisGetString).toHaveBeenCalledTimes(1);
     expect(redisSetString).toHaveBeenCalledTimes(1);
-    expect(checkRateLimit).toHaveBeenLastCalledWith("evaluate:shop-known:shop-1", expect.anything());
+    expect(checkRateLimit).toHaveBeenCalledWith("evaluate:shop-known:shop-1", expect.anything());
+    expect(vi.mocked(checkRateLimit).mock.calls.map((call) => call[0])).not.toContain("evaluate:shop:shop-1");
   });
 
   it("sheds an unknown caller on the anonymous budget while a known one is not affected by it", async () => {

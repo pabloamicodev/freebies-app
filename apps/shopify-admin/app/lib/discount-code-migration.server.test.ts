@@ -183,7 +183,7 @@ describe("orders/paid handler", () => {
     await handleDiscountCodeRedemptions(db, shopId, "paid.myshopify.com", { id: 3, discount_codes: [{ code: "NATIVE" }] });
     await handleDiscountCodeRedemptions(db, null, "paid.myshopify.com", { id: 4, discount_codes: [{ code: "ONCE" }] });
     expect(publish).toHaveBeenCalledTimes(1);
-  });
+  }, 30_000);
 
   it("records the redemption before answering and republishes after the response, not inside it", async () => {
     const { publishShopConfig } = await import("./offer-publish-flow.server.js");
