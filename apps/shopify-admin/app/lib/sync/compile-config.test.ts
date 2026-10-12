@@ -512,6 +512,28 @@ describe("compileOfferConfig", () => {
     ]);
   });
 
+  it("does not mark a single-variant gift selectable even when flagged customer-selectable", () => {
+    const result = compileOfferConfig(
+      offer({ type: "gift" }),
+      [condition("cart_value", { thresholdCents: 5000 })],
+      [
+        {
+          ...shippingReward({
+            rewardType: "product_gift",
+            discountType: "free",
+            value: { amount: 100, currencyCode: "USD" },
+            target: { variantIds: ["gid://shopify/ProductVariant/11"] },
+            quantity: 1,
+          }),
+          isCustomerSelectable: true,
+        },
+      ],
+      null,
+      3,
+    );
+    expect(result.giftRewards[0]).not.toHaveProperty("selectable");
+  });
+
   it("preserves exact requirements and compiles product and order rewards", () => {
     const result = compileOfferConfig(
       offer(),

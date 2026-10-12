@@ -254,10 +254,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const giftCountResult = parseInteger(formData, "giftCount", 1, { min: 1, label: "Gift count" });
   if (giftCountResult.error) return { error: giftCountResult.error };
   const giftCount = giftCountResult.data!;
-  const isAutoAdd = formData.get("isAutoAdd") === "true";
   const rewardProductsResult = parseJsonStringArray(formData, "rewardProducts");
   if (rewardProductsResult.error) return { error: rewardProductsResult.error };
   const rewardProducts = rewardProductsResult.data!;
+  // One variant (incl. a product with no options) leaves nothing to pick.
+  const isAutoAdd = formData.get("isAutoAdd") === "true" || rewardProducts.length === 1;
   const fallbackProductsResult = parseJsonStringArray(formData, "fallbackProducts");
   if (fallbackProductsResult.error) return { error: fallbackProductsResult.error };
   // A fallback that is also a primary gift would never act as a replacement.

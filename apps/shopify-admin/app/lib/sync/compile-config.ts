@@ -631,11 +631,9 @@ export function compileOfferConfig(
         : [];
       // Fallback variants must be accepted by the Function and cart validation when the
       // storefront swaps them in for a sold-out gift.
-      const variantIds = [
-        ...((target["variantIds"] as string[]) ??
-          (target["variantId"] ? [target["variantId"] as string] : [])),
-        ...fallbackVariantIds,
-      ];
+      const primaryVariantIds =
+        (target["variantIds"] as string[]) ?? (target["variantId"] ? [target["variantId"] as string] : []);
+      const variantIds = [...primaryVariantIds, ...fallbackVariantIds];
       const productIds =
         (target["productIds"] as string[]) ??
         (target["productId"] ? [target["productId"] as string] : []);
@@ -656,7 +654,9 @@ export function compileOfferConfig(
         discountValue: config.discountValue,
         maxQuantity: Math.max(1, reward.quantity ?? 1),
         // Same test the storefront picker uses: an explicit flag, or more than one variant to choose from.
-        ...(reward.isCustomerSelectable || variantIds.length > 1 ? { selectable: true as const } : {}),
+        ...(primaryVariantIds.length > 1 || (reward.isCustomerSelectable && primaryVariantIds.length !== 1)
+          ? { selectable: true as const }
+          : {}),
       });
     }
     if (

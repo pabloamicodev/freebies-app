@@ -35,6 +35,14 @@ import { evaluateCartAttribute, evaluateLineAttribute, evaluateDiscountCode, typ
 /** Gifts a shopper may pick from one picker reward; mirrors the Function default (selection_count.unwrap_or(1)). */
 const PICKER_SELECTION_COUNT = 1;
 
+// A gift with a single variant (including a product with no options: "Default Title") leaves
+// nothing to choose, so it is added automatically whatever the stored selectable/auto-add flags say.
+function isAutoAddGift(reward: { isAutoAdd: boolean; target: unknown }): boolean {
+  const target = reward.target as { variantId?: string; variantIds?: string[] };
+  const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
+  return reward.isAutoAdd || variantIds.length === 1;
+}
+
 export interface OfferDefinition {
   id: string;
   version: number;
@@ -233,7 +241,7 @@ export async function evaluate(
 
       // Generate cart actions for rewards
       for (const reward of offer.rewards.sort((a, b) => a.sortOrder - b.sortOrder)) {
-        if (reward.rewardType === "product_gift" && reward.isAutoAdd) {
+        if (reward.rewardType === "product_gift" && isAutoAddGift(reward)) {
           // Customer explicitly declined this reward (removed the gift line or
           // dismissed the slider without picking) — don't force it back in.
           if (declinedGiftRewards.has(`${offer.id}:${reward.id}`)) continue;
@@ -293,10 +301,10 @@ export async function evaluate(
       for (const reward of giftRewards) {
         const target = reward.target as { variantId?: string; variantIds?: string[]; fallbackVariantIds?: string[] };
         const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
-        if (reward.isAutoAdd && variantIds.length === 1) continue;
+        if (isAutoAddGift(reward) && variantIds.length === 1) continue;
         const allowed = new Set([...variantIds, ...(target.fallbackVariantIds ?? [])]);
         const limit = Math.max(1, reward.quantity ?? 1);
-        const isPicker = reward.isCustomerSelectable || variantIds.length > 1;
+        const isPicker = variantIds.length > 1 || reward.isCustomerSelectable;
         let remainingForReward = isPicker ? PICKER_SELECTION_COUNT * limit : Number.POSITIVE_INFINITY;
         const remainingByVariant = new Map<string, number>();
         for (const gift of existingOfferGifts) {
@@ -472,7 +480,7 @@ function buildGiftSliderPayloads(
       if (reward.rewardType !== "product_gift") return false;
       const target = reward.target as { variantId?: string; variantIds?: string[] };
       const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
-      return reward.isCustomerSelectable || variantIds.length > 1;
+      return variantIds.length !== 1 && (reward.isCustomerSelectable || variantIds.length > 1);
     }) ?? [];
     if (!offer || selectableRewards.length === 0) continue;
 

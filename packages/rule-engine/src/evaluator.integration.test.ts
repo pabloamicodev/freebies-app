@@ -241,6 +241,22 @@ describe("evaluate — cart value condition", () => {
     });
   });
 
+  it("auto-adds a single-variant gift (no-option product) even when flagged customer-selectable", async () => {
+    const offer = makeGiftOffer("offer-1", 5000);
+    offer.rewards[0] = {
+      ...offer.rewards[0]!,
+      target: { variantIds: ["gid://shopify/ProductVariant/201"] },
+      isAutoAdd: false,
+      isCustomerSelectable: true,
+      quantity: 1,
+    };
+    const result = await evaluate(makeInput(makeCart(6000)), { offers: [offer], oneUseStates: [], now: NOW });
+    expect(result.giftSlider).toBeNull();
+    expect(result.cartActions.filter((action) => action.action === "add_line")).toMatchObject([
+      { variantId: "gid://shopify/ProductVariant/201", quantity: 1 },
+    ]);
+  });
+
   it("lists merchant fallbacks as isFallback slider options after the primaries", async () => {
     const offer = makeGiftOffer("offer-1", 5000);
     offer.rewards[0] = {
