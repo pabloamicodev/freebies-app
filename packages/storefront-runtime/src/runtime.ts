@@ -18,6 +18,7 @@ import { debounce, AbortableRequest } from "./debounce.js";
 import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
 import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
 import { giftRewardKey, loadDeclinedGiftRewards, saveDeclinedGiftRewards } from "./declined-gifts.js";
+import { initGiftPrompt } from "./widgets/gift-prompt.js";
 import { initGiftSlider, isSoldOutCartError } from "./widgets/gift-slider.js";
 import { initFbtWidget } from "./widgets/fbt.js";
 import { initBundleBuilder } from "./widgets/bundle-builder.js";
@@ -861,6 +862,7 @@ export class PromoEngineRuntime {
   /** Public API — exposed on window.PromoEngine */
   public readonly api = {
     refreshCart: () => this.debouncedEvaluate.flush(),
+    lastResult: () => this.lastEvaluationResult,
     evaluate: () => this.triggerEvaluation(),
     validateGiftOffer: async (offerId: string) => {
       const result = await this.triggerEvaluation({ force: true, emitResult: false });
@@ -905,6 +907,7 @@ export function initRuntime() {
   window.initFbtWidget = initFbtWidget;
   window.initBundleBuilder = initBundleBuilder;
   initGiftSlider(getOrCreateSessionId());
+  initGiftPrompt();
   runtime.init();
 }
 

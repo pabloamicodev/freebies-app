@@ -471,6 +471,9 @@ function GiftSlider({
     onClose();
   }
 
+  const dismissRef = useRef(handleDismiss);
+  dismissRef.current = handleDismiss;
+
   // Close on backdrop click
   function handleOverlayClick(e: MouseEvent) {
     if (!loading && e.target === e.currentTarget) {
@@ -488,7 +491,15 @@ function GiftSlider({
       else dialog.setAttribute("open", "");
     }
     closeButtonRef.current?.focus();
+    // The dialog's own cancel event is not fired reliably (browsers gate it on user activation), so Escape is also handled at the document.
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      dismissRef.current();
+    };
+    document.addEventListener("keydown", onEscape);
     return () => {
+      document.removeEventListener("keydown", onEscape);
       if (dialogRef.current?.open && typeof dialogRef.current.close === "function") dialogRef.current.close();
       previouslyFocused?.focus();
     };
@@ -529,6 +540,7 @@ function GiftSlider({
           <button
             ref={closeButtonRef}
             type="button"
+            data-promo-gift-close
             class="pe-slider-close"
             onClick={handleDismiss}
             disabled={loading}
@@ -650,6 +662,8 @@ function GiftSlider({
 // ─── Mount / unmount ──────────────────────────────────────────────────────────
 
 let sliderContainer: HTMLDivElement | null = null;
+// Set by a confirmed pick right before its CartChanged, so the close event can tell a pick from a dismissal.
+let confirmedClose = false;
 
 function mountSlider(payload: GiftSliderPayload, sessionId: string, initialSoldOut?: ReadonlySet<string>) {
   injectStyles();
@@ -663,7 +677,8 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string, initialSoldO
   const unmount = () => {
     if (sliderContainer) {
       render(h(Fragment, null), sliderContainer);
-      emit(PromoEvents.GiftSliderClosed);
+      emit(PromoEvents.GiftSliderClosed, { confirmed: confirmedClose });
+      confirmedClose = false;
       publishAnalytics("promo_engine:gift_slider_closed", {
         offer_id: payload.offerId,
         session_id: sessionId,
@@ -762,6 +777,7 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string, initialSoldO
     }
 
     // Notify runtime to re-evaluate
+    confirmedClose = true;
     emit(PromoEvents.CartChanged);
   };
 
@@ -776,7 +792,7 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string, initialSoldO
     }),
     sliderContainer,
   );
-
+  emit(PromoEvents.GiftSliderOpened);
   publishAnalytics("promo_engine:gift_slider_opened", {
     offer_id: payload.offerId,
     session_id: sessionId,
