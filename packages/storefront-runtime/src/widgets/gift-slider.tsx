@@ -1,6 +1,7 @@
 // NOTE: This file uses Preact JSX (class= not className=, style strings not objects).
 // @jsxImportSource preact is required — do not replace with React imports.
 /** @jsxImportSource preact */
+import { loadGiftPrompt } from "./gift-prompt-loader.js";
 import { useState, useEffect, useRef } from "preact/hooks";
 import { h, Fragment } from "preact";
 import { render } from "preact";
@@ -508,6 +509,12 @@ function GiftSlider({
       aria-labelledby="pe-slider-title"
       aria-describedby={payload.subtitle ? "pe-slider-subtitle" : undefined}
       onClick={handleOverlayClick}
+      // The dialog's own cancel event is not fired reliably (browsers gate it on user activation), so Escape is handled on keydown too.
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        handleDismiss();
+      }}
       onCancel={(event) => {
         event.preventDefault();
         handleDismiss();
@@ -529,6 +536,7 @@ function GiftSlider({
           <button
             ref={closeButtonRef}
             type="button"
+            data-promo-gift-close
             class="pe-slider-close"
             onClick={handleDismiss}
             disabled={loading}
@@ -650,6 +658,8 @@ function GiftSlider({
 // ─── Mount / unmount ──────────────────────────────────────────────────────────
 
 let sliderContainer: HTMLDivElement | null = null;
+// Set by a confirmed pick right before its CartChanged, so the close event can tell a pick from a dismissal.
+let confirmedClose = false;
 
 function mountSlider(payload: GiftSliderPayload, sessionId: string, initialSoldOut?: ReadonlySet<string>) {
   injectStyles();
@@ -663,7 +673,8 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string, initialSoldO
   const unmount = () => {
     if (sliderContainer) {
       render(h(Fragment, null), sliderContainer);
-      emit(PromoEvents.GiftSliderClosed);
+      emit(PromoEvents.GiftSliderClosed, { confirmed: confirmedClose });
+      confirmedClose = false;
       publishAnalytics("promo_engine:gift_slider_closed", {
         offer_id: payload.offerId,
         session_id: sessionId,
@@ -762,6 +773,7 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string, initialSoldO
     }
 
     // Notify runtime to re-evaluate
+    confirmedClose = true;
     emit(PromoEvents.CartChanged);
   };
 
@@ -776,7 +788,7 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string, initialSoldO
     }),
     sliderContainer,
   );
-
+  emit(PromoEvents.GiftSliderOpened);
   publishAnalytics("promo_engine:gift_slider_opened", {
     offer_id: payload.offerId,
     session_id: sessionId,
@@ -820,6 +832,7 @@ export function initGiftSlider(sessionId: string) {
     );
     for (const slider of sliders) payloadByOfferId.set(slider.offerId, slider);
     latestPayload = sliders[0] ?? null;
+    if (latestPayload) void loadGiftPrompt();
     const qualifiedOfferIds = new Set([
       ...(Array.isArray(result.qualifiedOffers) ? result.qualifiedOffers.map((o) => o.offerId) : []),
       ...sliders.map((s) => s.offerId),
@@ -888,12 +901,13 @@ export function initGiftSlider(sessionId: string) {
       try {
         const payload = directPayload || !window.PromoEngine?.validateGiftOffer
           ? cachedPayload
-          : await window.PromoEngine.validateGiftOffer(cachedPayload.offerId);
+          // null: a newer evaluation superseded the check (the cart just changed) or the request failed; the picker re-validates on confirm.
+          : (await window.PromoEngine.validateGiftOffer(cachedPayload.offerId)) ?? cachedPayload;
         if (!payload || openingToken !== token) return;
         latestPayload = payload;
         payloadByOfferId.set(payload.offerId, payload);
         const opened = await openSlider(payload, sessionId, () =>
-          openingToken === token && payloadByOfferId.get(payload.offerId) === payload,
+          openingToken === token,
         );
         if (!opened) return;
         activeOfferId = payload.offerId;

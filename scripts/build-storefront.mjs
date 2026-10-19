@@ -26,6 +26,8 @@ try {
 }
 
 // Copy compiled JS to theme extension assets
+mkdirSync(THEME_ASSETS, { recursive: true });
+copyFileSync(join(DIST, "promo-engine-gift-prompt.js"), join(THEME_ASSETS, "promo-engine-gift-prompt.js"));
 const src = join(DIST, "promo-engine.js");
 const dst = join(THEME_ASSETS, "promo-engine.js");
 

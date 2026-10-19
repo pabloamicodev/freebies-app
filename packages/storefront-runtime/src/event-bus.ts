@@ -12,6 +12,7 @@ export const PromoEvents = {
   GiftUpdated: "promo-engine:gift-updated",
   GiftRemoved: "promo-engine:gift-removed",
   GiftSliderRequested: "promo-engine:gift-slider-requested",
+  GiftSliderOpened: "promo-engine:gift-slider-opened",
   GiftSliderClosed: "promo-engine:gift-slider-closed",
   ProductChanged: "promo-engine:product-changed",
   CartMessageRender: "promo-engine:cart-message-render",

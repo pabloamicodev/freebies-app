@@ -861,6 +861,7 @@ export class PromoEngineRuntime {
   /** Public API — exposed on window.PromoEngine */
   public readonly api = {
     refreshCart: () => this.debouncedEvaluate.flush(),
+    lastResult: () => this.lastEvaluationResult,
     evaluate: () => this.triggerEvaluation(),
     validateGiftOffer: async (offerId: string) => {
       const result = await this.triggerEvaluation({ force: true, emitResult: false });
