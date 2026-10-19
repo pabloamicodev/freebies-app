@@ -106,7 +106,8 @@ jobs:
 
   # ── Browser UI (deterministic) ───────────────────────────────────────────────
   # Real wizard/app-shell client code with stubbed loaders and mocked catalog
-  # requests (apps/shopify-admin/tests/ui). Needs no secrets, store or database.
+  # requests (apps/shopify-admin/tests/ui), and the committed storefront bundle on a
+  # fake Dawn-like theme (tests/storefront-fixture). Needs no secrets, store or database.
   ui:
     name: Browser UI
     runs-on: ubuntu-latest
@@ -121,6 +122,8 @@ jobs:
       - run: pnpm --filter shopify-admin exec playwright install --with-deps chromium
       - name: Run browser UI tests
         run: pnpm --filter shopify-admin test:ui
+      - name: Run storefront fixture tests (gift picker on a fake theme)
+        run: pnpm --filter shopify-admin test:fixture
 
   # Live-store buyer-flow E2E (hpn-test-store) lives in e2e-live.yml: it depends on
   # Shopify's storefront bot protection and on seeded store data, so it runs on
