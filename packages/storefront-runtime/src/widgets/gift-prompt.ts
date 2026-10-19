@@ -1,9 +1,9 @@
-// The cart prompt, started next to the picker. Two things for a shopper who has not taken a free gift they are eligible for:
+// The cart prompt asset, loaded by the main bundle once an evaluation returns a gift picker. Two things for a shopper who has not taken a free gift they are eligible for:
 //  - a non-modal "free gift unlocked" button in the theme's cart drawer and on the cart page (data-promo-gift-cta);
 //  - a reminder when they head to checkout: the picker opens once with "Don't forget your free gift" and checkout continues when it closes.
 // Talks to the picker only through events. Accelerated checkout buttons (Shop Pay, Apple Pay, Google Pay) live in iframes and are not intercepted.
 import { emit, on, PromoEvents } from "../event-bus.js";
-import { t } from "../i18n.js";
+
 import type { EvaluationResult, GiftSliderPayload } from "../types.js";
 
 const PROMPT_STYLES = `
@@ -20,6 +20,7 @@ const PROMPT_STYLES = `
 }
 .pe-gift-prompt button:focus-visible, .pe-gift-continue:focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
 `;
+const copy = (key: string, fallback: string) => (window.__promoEngineConfig?.i18n || {})[key] || fallback;
 const FORM = "form[action$='/cart']";
 const CHECKOUT = "button[name=checkout],input[name=checkout],a[href*='/checkout'],.cart__checkout-button";
 const ACCELERATED = ".shopify-payment-button,shopify-accelerated-checkout,shopify-accelerated-checkout-cart,[data-shopify-buttoncontainer]";
@@ -63,7 +64,7 @@ function build(): { row: HTMLElement; button: HTMLButtonElement } {
   button.setAttribute("data-promo-gift-slider-trigger", "");
   button.setAttribute("data-promo-gift-cta", "");
   button.innerHTML = "<span aria-hidden=true>\u{1F381}</span>";
-  button.append(t("giftPrompt"));
+  button.append(copy("giftPrompt", "You unlocked a free gift. Choose it"));
   // Safari does not focus a button on click, and the picker returns focus to whatever was focused when it opened.
   button.onclick = () => button.focus();
   return { row, button };
@@ -121,7 +122,7 @@ function interceptCheckout(event: MouseEvent): void {
     // Without storage the reminder can repeat on the next page: acceptable.
   }
   checkout = control;
-  emit(PromoEvents.GiftSliderRequested, { ...slider, title: t("giftReminder"), subtitle: null });
+  emit(PromoEvents.GiftSliderRequested, { ...slider, title: copy("giftReminder", "Don't forget your free gift"), subtitle: null });
 }
 
 /** Checkout waits for the gift to be in the cart, but never longer than CHECKOUT_WAIT_MS: a slow or failed add must not trap the shopper. */
@@ -150,7 +151,7 @@ function decorateReminder(): void {
   skip.type = "button";
   skip.className = "pe-gift-continue";
   skip.setAttribute("data-promo-gift-reminder-continue", "");
-  skip.textContent = t("giftReminderContinue");
+  skip.textContent = copy("giftReminderContinue", "Continue to checkout without it");
   skip.onclick = () => dialog.querySelector<HTMLElement>("[data-promo-gift-close]")?.click();
 }
 

@@ -11,9 +11,9 @@ import { createRequire } from "node:module";
 // esbuild is a dependency of the runtime package, not the root.
 const { transform } = createRequire(join(process.cwd(), "packages/storefront-runtime/package.json"))("esbuild");
 
-const file = join(process.cwd(), "apps/shopify-admin/extensions/theme-extension/assets/promo-engine.js");
-const code = readFileSync(file, "utf8");
 const problems = [];
+for (const name of ["promo-engine.js", "promo-engine-gift-prompt.js"]) {
+const code = readFileSync(join(process.cwd(), "apps/shopify-admin/extensions/theme-extension/assets", name), "utf8");
 
 const opts = { minify: false, loader: "js", legalComments: "none" };
 try {
@@ -21,9 +21,9 @@ try {
     transform(code, { ...opts, target: "esnext" }),
     transform(code, { ...opts, target: ["es2019", "safari13"] }),
   ]);
-  if (asIs.code !== lowered.code) problems.push("syntax newer than es2019 (esbuild had to lower it)");
+  if (asIs.code !== lowered.code) problems.push(`${name}: syntax newer than es2019 (esbuild had to lower it)`);
 } catch (e) {
-  problems.push(`syntax newer than es2019: ${e.errors?.[0]?.text ?? e.message}`);
+  problems.push(`${name}: syntax newer than es2019: ${e.errors?.[0]?.text ?? e.message}`);
 }
 
 const NEWER_APIS = [
@@ -38,7 +38,8 @@ const NEWER_APIS = [
   [/\.findLast(Index)?\(/, "findLast (ES2023)"],
   [/AbortSignal\.(timeout|any)\(/, "AbortSignal.timeout/any"],
 ];
-for (const [re, label] of NEWER_APIS) if (re.test(code)) problems.push(`uses ${label}`);
+for (const [re, label] of NEWER_APIS) if (re.test(code)) problems.push(`${name} uses ${label}`);
+}
 
 if (problems.length) {
   console.error(`[storefront-es2019] FAIL\n- ${problems.join("\n- ")}`);

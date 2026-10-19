@@ -15,6 +15,8 @@ const DIST = join(process.cwd(), "packages/storefront-runtime/dist");
 const BUDGETS = {
   // Widgets are bundled into the single theme runtime by package.json.
   "promo-engine.js": 30,
+  // Requested by promo-engine.js only once an evaluation returns a gift picker (cart drawer button, cart page button, checkout reminder).
+  "promo-engine-gift-prompt.js": 3,
 };
 
 let failed = false;

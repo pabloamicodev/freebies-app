@@ -1,6 +1,7 @@
 // NOTE: This file uses Preact JSX (class= not className=, style strings not objects).
 // @jsxImportSource preact is required — do not replace with React imports.
 /** @jsxImportSource preact */
+import { loadGiftPrompt } from "./gift-prompt-loader.js";
 import { useState, useEffect, useRef } from "preact/hooks";
 import { h, Fragment } from "preact";
 import { render } from "preact";
@@ -471,9 +472,6 @@ function GiftSlider({
     onClose();
   }
 
-  const dismissRef = useRef(handleDismiss);
-  dismissRef.current = handleDismiss;
-
   // Close on backdrop click
   function handleOverlayClick(e: MouseEvent) {
     if (!loading && e.target === e.currentTarget) {
@@ -491,15 +489,7 @@ function GiftSlider({
       else dialog.setAttribute("open", "");
     }
     closeButtonRef.current?.focus();
-    // The dialog's own cancel event is not fired reliably (browsers gate it on user activation), so Escape is also handled at the document.
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      dismissRef.current();
-    };
-    document.addEventListener("keydown", onEscape);
     return () => {
-      document.removeEventListener("keydown", onEscape);
       if (dialogRef.current?.open && typeof dialogRef.current.close === "function") dialogRef.current.close();
       previouslyFocused?.focus();
     };
@@ -519,6 +509,12 @@ function GiftSlider({
       aria-labelledby="pe-slider-title"
       aria-describedby={payload.subtitle ? "pe-slider-subtitle" : undefined}
       onClick={handleOverlayClick}
+      // The dialog's own cancel event is not fired reliably (browsers gate it on user activation), so Escape is handled on keydown too.
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        handleDismiss();
+      }}
       onCancel={(event) => {
         event.preventDefault();
         handleDismiss();
@@ -836,6 +832,7 @@ export function initGiftSlider(sessionId: string) {
     );
     for (const slider of sliders) payloadByOfferId.set(slider.offerId, slider);
     latestPayload = sliders[0] ?? null;
+    if (latestPayload) void loadGiftPrompt();
     const qualifiedOfferIds = new Set([
       ...(Array.isArray(result.qualifiedOffers) ? result.qualifiedOffers.map((o) => o.offerId) : []),
       ...sliders.map((s) => s.offerId),
@@ -904,12 +901,13 @@ export function initGiftSlider(sessionId: string) {
       try {
         const payload = directPayload || !window.PromoEngine?.validateGiftOffer
           ? cachedPayload
-          : await window.PromoEngine.validateGiftOffer(cachedPayload.offerId);
+          // null: a newer evaluation superseded the check (the cart just changed) or the request failed; the picker re-validates on confirm.
+          : (await window.PromoEngine.validateGiftOffer(cachedPayload.offerId)) ?? cachedPayload;
         if (!payload || openingToken !== token) return;
         latestPayload = payload;
         payloadByOfferId.set(payload.offerId, payload);
         const opened = await openSlider(payload, sessionId, () =>
-          openingToken === token && payloadByOfferId.get(payload.offerId) === payload,
+          openingToken === token,
         );
         if (!opened) return;
         activeOfferId = payload.offerId;

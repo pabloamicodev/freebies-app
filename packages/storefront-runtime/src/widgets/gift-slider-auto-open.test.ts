@@ -288,6 +288,35 @@ describe("gift slider auto-open lifecycle", () => {
     expect(openedOfferIds()).toEqual(["second", "first"]);
   });
 
+  it("opens a requested picker even if a newer evaluation lands while its stock check is in flight", async () => {
+    initGiftSlider("test-session");
+    const stock = () => new Response(JSON.stringify({ variants: [{ id: 1, available: true }] }));
+    vi.stubGlobal("fetch", vi.fn(async () => stock()));
+    evaluate(slider("first"));
+    await vi.advanceTimersByTimeAsync(0);
+    (vi.mocked(render).mock.calls[0]![0] as VNode<{ onClose: () => void }>).props.onClose();
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    emit(PromoEvents.GiftSliderRequested, { offerId: "first" });
+    await vi.advanceTimersByTimeAsync(0);
+    evaluate(slider("first"));
+    finish(stock());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openedOfferIds()).toEqual(["first", "first"]);
+  });
+
+  it("opens a requested picker from the cached offer when the live check was superseded", async () => {
+    initGiftSlider("test-session");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ variants: [{ id: 1, available: true }] }))));
+    Object.assign(window, { PromoEngine: { validateGiftOffer: async () => null } });
+    evaluate(slider("first"));
+    await vi.advanceTimersByTimeAsync(0);
+    (vi.mocked(render).mock.calls[0]![0] as VNode<{ onClose: () => void }>).props.onClose();
+    emit(PromoEvents.GiftSliderRequested, { offerId: "first" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openedOfferIds()).toEqual(["first", "first"]);
+  });
+
   it("tells the prompt when the picker opened and how it closed", async () => {
     initGiftSlider("test-session");
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ variants: [{ id: 1, available: true }] }))));
