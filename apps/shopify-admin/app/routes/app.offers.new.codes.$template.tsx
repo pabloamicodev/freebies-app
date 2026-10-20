@@ -24,7 +24,7 @@ import { nowInZone } from "../lib/offer-validation.server.js";
 import {
   finalizeCreatedOffer,
   publishShopConfig,
-  validateOffersPublishable,
+  validateActivation,
 } from "../lib/offer-publish-flow.server.js";
 import { insertCodeOffer, parseCodeOfferForm, type DiscountTarget } from "../lib/code-offer-wizard.server.js";
 import { CODE_CHARSETS, type CodeCharset } from "../lib/discount-code-generation.js";
@@ -99,7 +99,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   let publishError: string | null;
   if (parsed.data.status === "active" && codesCreated > INLINE_PUBLISH_LIMIT) {
-    const validation = await validateOffersPublishable(db, shopId, [offerId]);
+    const validation = await validateActivation(db, shopId, [offerId]);
     publishError = validation.ok ? null : (validation.error ?? "The offer could not be published.");
     if (publishError) {
       await db

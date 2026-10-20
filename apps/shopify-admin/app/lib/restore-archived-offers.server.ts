@@ -8,7 +8,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { appSettings, offers, type Db } from "@promo/db";
 import { isConstraintViolation } from "./unique-offer-name.server.js";
 import { activationStatus } from "./offer-scheduling.server.js";
-import { publishShopConfig, validateOffersPublishable } from "./offer-publish-flow.server.js";
+import { publishShopConfig, validateActivation } from "./offer-publish-flow.server.js";
 
 export const UNINSTALL_ARCHIVE_SETTING = "uninstall_archived_offers.v1";
 
@@ -85,7 +85,7 @@ export async function dismissRestorableOffers(db: Db, shopId: string): Promise<v
 
 export interface RestoreDeps {
   publish?: (shopId: string, shopDomain: string) => Promise<string | null>;
-  validate?: typeof validateOffersPublishable;
+  validate?: typeof validateActivation;
 }
 
 /**
@@ -99,7 +99,7 @@ export async function restoreArchivedOffers(
 ): Promise<{ restored: number; failed: number }> {
   const { db, shopId, shopDomain } = args;
   const publish = deps.publish ?? publishShopConfig;
-  const validate = deps.validate ?? validateOffersPublishable;
+  const validate = deps.validate ?? validateActivation;
 
   const record = await readRecord(db, shopId);
   if (!record) return { restored: 0, failed: 0 };

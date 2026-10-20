@@ -6,7 +6,7 @@ export const VALIDATION_FUNCTION_HANDLE = "promo-engine-cart-validation";
 export const VALIDATION_METAFIELD_NAMESPACE = "promo_engine";
 export const VALIDATION_APP_METAFIELD_NAMESPACE = "$app:promo_engine";
 export const VALIDATION_METAFIELD_KEY = "validation_config";
-const MAX_VALIDATION_CONFIG_BYTES = 9_500;
+export const MAX_VALIDATION_CONFIG_BYTES = 9_500;
 
 export interface GiftRewardValidationRule {
   maxQuantity: number;
