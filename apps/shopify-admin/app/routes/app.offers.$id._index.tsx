@@ -1899,6 +1899,10 @@ export default function OfferDetailPage() {
                     <input type="checkbox" id="combine-shipping" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} checked={policy?.combinesWithShippingDiscounts ?? false} readOnly />
                     <label htmlFor="combine-shipping" className="b-checkbox-label">Combines with shipping discounts</label>
                   </div>
+                  <div className="b-checkbox-row">
+                    <input type="checkbox" id="combine-gift-offers" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} checked={policy?.canStackWithGiftOffers ?? true} readOnly />
+                    <label htmlFor="combine-gift-offers" className="b-checkbox-label">Can stack with other gift offers</label>
+                  </div>
                   <p style={{ fontSize: 12, color: "var(--text-sub)", margin: 0 }}>
                     To change combination policies, go to the{" "}
                     <Link to={`/app/offers/${offer.id}/combination`} style={{ color: "var(--blue)" }}>Combination settings</Link> page.

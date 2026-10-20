@@ -1225,3 +1225,16 @@ describe("compileOfferConfig — product-level requirements", () => {
     expect(result.requiredVariantIds).toEqual([]);
   });
 });
+
+describe("canStackWithGiftOffers", () => {
+  const compile = (policy: Record<string, unknown> | null) =>
+    compileOfferConfig(offer() as never, [] as never, [] as never, policy as never, 1);
+
+  it("is compiled only when the offer opts out of stacking, so the metafield stays unchanged by default", () => {
+    expect(compile({ canStackWithGiftOffers: false })).toMatchObject({ canStackWithGiftOffers: false });
+    expect(compile({ canStackWithGiftOffers: true })).not.toHaveProperty("canStackWithGiftOffers");
+    expect(compile(null)).not.toHaveProperty("canStackWithGiftOffers");
+    expect(JSON.stringify(compactCompiledOffer(compile({ canStackWithGiftOffers: true })))).not.toContain("canStack");
+    expect(compactCompiledOffer(compile({ canStackWithGiftOffers: false }))).toMatchObject({ canStackWithGiftOffers: false });
+  });
+});

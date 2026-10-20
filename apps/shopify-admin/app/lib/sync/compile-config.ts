@@ -216,6 +216,8 @@ export interface CompiledOffer {
   title?: string;
   priority: number;
   stopLowerPriority: boolean;
+  /** The anchor units that unlock this gift offer cannot unlock another gift offer. Only ever false, so it is absent otherwise. */
+  canStackWithGiftOffers?: false;
   requiredProductIds: string[];
   requiredVariantIds: string[];
   anyRequiredProductIds: string[];
@@ -402,6 +404,7 @@ export function compileOfferConfig(
     title: clampDiscountMessage(offer.publicTitle) ?? clampDiscountMessage(offer.internalName),
     priority: offer.priority,
     stopLowerPriority: policy?.stopLowerPriority ?? false,
+    ...(policy?.canStackWithGiftOffers === false ? { canStackWithGiftOffers: false as const } : {}),
     requiredProductIds: [],
     requiredVariantIds: [],
     anyRequiredProductIds: [],

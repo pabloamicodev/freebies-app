@@ -207,6 +207,7 @@ export const offerCombinationPolicies = pgTable(
     combinesWithShippingDiscounts: boolean("combines_with_shipping_discounts").notNull().default(true),
     combinesWithOtherAppOffers: boolean("combines_with_other_app_offers").notNull().default(true),
     stopLowerPriority: boolean("stop_lower_priority").notNull().default(false),
+    canStackWithGiftOffers: boolean("can_stack_with_gift_offers").notNull().default(true),
     giftValueCountsForOtherOffers: boolean("gift_value_counts_for_other_offers").notNull().default(false),
     maxApplicationsPerCart: integer("max_applications_per_cart"),
     maxApplicationsPerCustomer: integer("max_applications_per_customer"),

@@ -78,6 +78,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     combinesWithOtherAppOffers: formData.get("other_app_offers") === "on",
     stopLowerPriority: formData.get("stop_lower_priority") === "on",
     giftValueCountsForOtherOffers: formData.get("gift_value_counts") === "on",
+    canStackWithGiftOffers: formData.get("can_stack_gift_offers") === "on",
     maxApplicationsPerCart: (() => { const v = parseInt(formData.get("max_per_cart") as string, 10); return Number.isFinite(v) && v > 0 ? v : null; })(),
     maxApplicationsPerCustomer: (() => { const v = parseInt(formData.get("max_per_customer") as string, 10); return Number.isFinite(v) && v > 0 ? v : null; })(),
 
@@ -94,6 +95,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         combinesWithOtherAppOffers: policy.combinesWithOtherAppOffers,
         stopLowerPriority: policy.stopLowerPriority,
         giftValueCountsForOtherOffers: policy.giftValueCountsForOtherOffers,
+        canStackWithGiftOffers: policy.canStackWithGiftOffers,
         maxApplicationsPerCart: policy.maxApplicationsPerCart,
         maxApplicationsPerCustomer: policy.maxApplicationsPerCustomer,
         updatedAt: new Date(),
@@ -241,6 +243,19 @@ export default function OfferCombinationPage() {
                     <div>
                       <div className="b-checkbox-label">Gift value counts for other offers</div>
                       <div className="b-checkbox-help">By default, gift line values don&apos;t count toward the cart value of other offers. Enable this to include them.</div>
+                    </div>
+                  </label>
+
+                  {/* stack with other gift offers */}
+                  <label className="b-checkbox-row">
+                    <input
+                      type="checkbox"
+                      name="can_stack_gift_offers"
+                      defaultChecked={policy?.canStackWithGiftOffers ?? true}
+                    />
+                    <div>
+                      <div className="b-checkbox-label">Can stack with other gift offers</div>
+                      <div className="b-checkbox-help">When off, each qualifying item unlocks only one gift offer: the highest-priority one that qualifies.</div>
                     </div>
                   </label>
 

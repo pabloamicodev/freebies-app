@@ -117,6 +117,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       combinesWithProductDiscounts: policyRows[0]?.combinesWithProductDiscounts ?? true,
       combinesWithShippingDiscounts: policyRows[0]?.combinesWithShippingDiscounts ?? true,
       stopLowerPriority: policyRows[0]?.stopLowerPriority ?? false,
+      canStackWithGiftOffers: policyRows[0]?.canStackWithGiftOffers ?? true,
       maxApplicationsPerCart: policyRows[0]?.maxApplicationsPerCart ?? null,
       maxApplicationsPerCustomer: policyRows[0]?.maxApplicationsPerCustomer ?? null,
     },
