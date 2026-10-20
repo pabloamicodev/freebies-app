@@ -5,6 +5,7 @@ import {
   discountCodeRedemptions,
   gdprExports,
   offerCustomerUsages,
+  offers,
   offerUsageSync,
   shops,
   webhookDeliveries,
@@ -74,7 +75,7 @@ export async function handleCustomersDataRequest(
     ));
 
   const cartTokens = Array.from(new Set(events.flatMap((event) => event.cartToken ? [event.cartToken] : [])));
-  const [mutationLogs, redemptions] = await Promise.all([
+  const [mutationLogs, redemptions, offerUsages] = await Promise.all([
     cartTokens.length > 0
       ? db
           .select()
@@ -85,6 +86,17 @@ export async function handleCustomersDataRequest(
       .select()
       .from(discountCodeRedemptions)
       .where(and(eq(discountCodeRedemptions.shopId, shopId), inArray(discountCodeRedemptions.customerId, customerIds))),
+    db
+      .select({
+        offerId: offerCustomerUsages.offerId,
+        offerName: offers.internalName,
+        orderGid: offerCustomerUsages.orderGid,
+        source: offerCustomerUsages.source,
+        createdAt: offerCustomerUsages.createdAt,
+      })
+      .from(offerCustomerUsages)
+      .innerJoin(offers, eq(offers.id, offerCustomerUsages.offerId))
+      .where(and(eq(offerCustomerUsages.shopId, shopId), inArray(offerCustomerUsages.customerGid, customerIds))),
   ]);
 
   // The export itself: everything this app holds about the customer, as JSON the merchant can
@@ -111,6 +123,7 @@ export async function handleCustomersDataRequest(
             analyticsEvents: events,
             cartMutationLogs: mutationLogs,
             discountCodeRedemptions: redemptions,
+            offerUsages,
           },
         },
       })
@@ -132,6 +145,7 @@ export async function handleCustomersDataRequest(
         analyticsEventCount: events.length,
         cartMutationLogCount: mutationLogs.length,
         discountCodeRedemptionCount: redemptions.length,
+        offerUsageCount: offerUsages.length,
       },
       performedBy: "shopify_webhook",
     });

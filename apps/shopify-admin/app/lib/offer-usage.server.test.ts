@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { discountCodes, offerCustomerUsages, offerUsageSync, offers, shops, type Db } from "@promo/db";
+import { discountCodes, gdprExports, offerCustomerUsages, offerUsageSync, offers, shops, type Db } from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 import type { PushUsage } from "./offer-usage.server.js";
 
@@ -12,7 +12,7 @@ vi.mock("./integration-dispatcher.server.js", () => ({ dispatchIntegrationEvents
 const Sentry = await import("@sentry/node");
 const usage = await import("./offer-usage.server.js");
 const { handleOrderPaid } = await import("./webhooks/order-paid.server.js");
-const { handleCustomersRedact } = await import("./webhooks/gdpr.server.js");
+const { handleCustomersRedact, handleCustomersDataRequest } = await import("./webhooks/gdpr.server.js");
 
 let db: Db;
 let close: () => Promise<void>;
@@ -280,6 +280,22 @@ describe("GDPR", () => {
     expect((await usageRows()).map((r) => r.customerGid)).toEqual(["gid://shopify/Customer/99"]);
     expect(await syncRow()).toBeUndefined();
     expect(await db.select().from(offerUsageSync).where(eq(offerUsageSync.shopId, shopId))).toHaveLength(1);
+  });
+
+  it("customers/data_request exports the customer's usage rows, scoped to the shop", async () => {
+    const offerId = await seedOffer(db, shopId, { publicTitle: "Deal", internalName: "Deal internal" });
+    await usage.recordOfferUsages(db, shopId, order({ discount_applications: [auto("Deal")] }));
+    await usage.recordOfferUsages(db, shopId, order({ customer: { id: 99 }, discount_applications: [auto("Deal")] }));
+    const otherShop = await seedShop(db, `other-${++n}.myshopify.com`);
+    await seedOffer(db, otherShop, { publicTitle: "Deal" });
+    await usage.recordOfferUsages(db, otherShop, order({ discount_applications: [auto("Deal")] }));
+    await handleCustomersDataRequest(db, shopId, "s.myshopify.com", { customer: { id: CUSTOMER } }, `wh-${n}`);
+    const [exp] = await db.select().from(gdprExports).where(eq(gdprExports.shopId, shopId));
+    const exported = (exp!.payload as { data: { offerUsages: Array<Record<string, unknown>> } }).data.offerUsages;
+    expect(exported).toHaveLength(1);
+    expect(exported[0]).toMatchObject({ offerId, offerName: "Deal internal", source: "title" });
+    expect(exported[0]!.orderGid).toContain("gid://shopify/Order/");
+    expect(exported[0]!.createdAt).toBeTruthy();
   });
 
   it("shop deletion cascades to usage and sync rows", async () => {
