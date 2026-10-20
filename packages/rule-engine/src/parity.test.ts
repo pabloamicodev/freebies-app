@@ -59,6 +59,7 @@ interface ConfigReward {
 }
 interface ConfigOffer {
   id: string;
+  requirements?: Array<{ productId?: string; variantId?: string; trackMode: string; minQuantity: number }>;
   excludedProductIds?: string[];
   restrictToMatchedLines?: boolean;
   giftRewards?: ConfigReward[];
@@ -166,23 +167,45 @@ function referenceDiscounts(fixture: Fixture, offer: SourceOffer): Record<string
   // Every limit is the number of times a reward's gift SET is granted: each target product (each
   // target variant, for variant-targeted landing/tagged rewards) gets at most `limit` free units,
   // however high the shopper raises a quantity or however many anchors are present.
-  for (const reward of config.giftRewards ?? []) {
-    const givenByProduct: Record<string, number> = {};
+  const giftRewards = config.giftRewards ?? [];
+  const givenByProduct: Record<string, Record<string, number>> = {};
+  const remainingForReward: Record<string, number> = {};
+  for (const reward of giftRewards) {
+    givenByProduct[reward.id] = {};
     // A picker (choose K of N) grants selectionCount x limit units across ALL its gifts; the lines
     // the shopper added first (cart order) get them.
-    let remainingForReward = reward.selectable ? (reward.selectionCount ?? 1) * (reward.maxQuantity ?? 1) : Number.POSITIVE_INFINITY;
+    remainingForReward[reward.id] = reward.selectable ? (reward.selectionCount ?? 1) * (reward.maxQuantity ?? 1) : Number.POSITIVE_INFINITY;
+  }
+  const grant = (line: FixtureLine, reward: ConfigReward, quantity: number): boolean => {
+    const given = givenByProduct[reward.id]![line.productId] ?? 0;
+    const units = Math.min(quantity, (reward.maxQuantity ?? 1) - given, remainingForReward[reward.id]!);
+    if (units <= 0) return false;
+    givenByProduct[reward.id]![line.productId] = given + units;
+    remainingForReward[reward.id]! -= units;
+    result[line.id] = units;
+    return true;
+  };
+  const targetsVariant = (reward: ConfigReward, line: FixtureLine) =>
+    (reward.targetVariantIds ?? []).length === 0 || reward.targetVariantIds!.includes(line.variantId);
+  // Tagged lines claim the quota first, then untagged lines (a theme adding the gift itself) fill it.
+  // Units that qualify the offer (anchor) never count, and an untagged line serves one reward only.
+  for (const reward of giftRewards) {
     for (const line of fixture.cart.lines) {
       if (line.lineType !== "gift") continue;
       const metadata = line.metadata ?? {};
       if (metadata["_promo_engine_offer_id"] !== offer.id || metadata["_promo_engine_reward_id"] !== reward.id) continue;
-      const targets = reward.targetVariantIds ?? [];
-      if (targets.length > 0 && !targets.includes(line.variantId)) continue;
-      const given = givenByProduct[line.productId] ?? 0;
-      const units = Math.min(line.quantity, (reward.maxQuantity ?? 1) - given, remainingForReward);
-      if (units <= 0) continue;
-      givenByProduct[line.productId] = given + units;
-      remainingForReward -= units;
-      result[line.id] = units;
+      if (targetsVariant(reward, line)) grant(line, reward, line.quantity);
+    }
+  }
+  for (const line of nonGift.filter((candidate) => !candidate.metadata?.["_promo_engine_offer_id"])) {
+    const reserved = Math.max(
+      0,
+      ...(config.requirements ?? [])
+        .filter((requirement) => (requirement.trackMode === "variant" ? requirement.variantId === line.variantId : requirement.productId === line.productId))
+        .map((requirement) => requirement.minQuantity),
+    );
+    for (const reward of giftRewards) {
+      if ((reward.targetVariantIds ?? []).includes(line.variantId) && grant(line, reward, line.quantity - reserved)) break;
     }
   }
 

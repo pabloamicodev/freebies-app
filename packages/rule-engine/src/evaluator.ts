@@ -1,4 +1,5 @@
 import type {
+  NormalizedCartLine,
   EvaluationInput,
   EvaluationResult,
   EvaluatedOffer,
@@ -213,6 +214,14 @@ export async function evaluate(
       const giftRewards = offer.rewards.filter((reward) => reward.rewardType === "product_gift");
       const giftRewardById = new Map(giftRewards.map((reward) => [reward.id, reward]));
       const declinedGiftRewards = new Set(input.declinedGiftRewards ?? []);
+      // A theme may add the gift itself, without our markers: the Function then discounts that
+      // untagged line, so it fulfils the reward and no duplicate is added. Units that qualify the
+      // offer (anchor) never count, and a line serves one reward only.
+      const untaggedUnits = new Map(
+        extractQualifyingLines(input.cart)
+          .filter((line) => !line.properties["_promo_engine_offer_id"])
+          .map((line) => [line, line.quantity - reservedAnchorUnits(offer.conditions, line)] as const),
+      );
 
       // Remove stale/tampered lines even while the offer still qualifies. A
       // gift remains valid while its offer id and reward id still exist and the
@@ -261,12 +270,20 @@ export async function evaluate(
               fulfillingVariantIds.has(gift.variantId),
           );
           const existingQty = existingGifts.reduce((acc, gift) => acc + gift.quantity, 0);
+          let untaggedQty = 0;
+          for (const [line, units] of untaggedUnits) {
+            if (!fulfillingVariantIds.has(line.variantId) || units <= 0) continue;
+            const taken = Math.min(units, qty - existingQty - untaggedQty);
+            if (taken <= 0) break;
+            untaggedUnits.set(line, units - taken);
+            untaggedQty += taken;
+          }
 
-          if (existingQty < qty) {
+          if (existingQty + untaggedQty < qty) {
             cartActions.push({
               action: "add_line",
               variantId,
-              quantity: qty - existingQty,
+              quantity: qty - existingQty - untaggedQty,
               ...(target.fallbackVariantIds?.length ? { fallbackVariantIds: target.fallbackVariantIds } : {}),
               properties: {
                 _promo_engine_line_type: "gift",
@@ -660,6 +677,21 @@ function evaluateCondition(
         message: `Condition type '${cond.conditionType}' is not supported by this evaluator version`,
       });
   }
+}
+
+/** Units of an untagged line that qualify the offer through a specific_product condition. */
+function reservedAnchorUnits(conditions: ConditionDefinition[], line: NormalizedCartLine): number {
+  let reserved = 0;
+  for (const cond of conditions) {
+    if (!cond.isEnabled || cond.conditionType !== "specific_product") continue;
+    const value = (cond.value ?? {}) as SpecificProductConditionValue & { variantIds?: string[]; minQtyPerProduct?: number };
+    for (const requirement of value.requirements ?? []) {
+      const matches = requirement.trackMode === "variant" ? requirement.variantId === line.variantId : requirement.productId === line.productId;
+      if (matches) reserved = Math.max(reserved, requirement.minQuantity);
+    }
+    if (value.variantIds?.includes(line.variantId)) reserved = Math.max(reserved, value.minQtyPerProduct ?? 1);
+  }
+  return reserved;
 }
 
 /** Products the offer ignores everywhere (cart_value / cart_quantity scope filters and

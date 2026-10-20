@@ -869,3 +869,53 @@ describe("evaluate — picker gift quantity reset", () => {
     expect(await actions(picker(1), cartWith(["g1", V1, 1]))).toEqual([]);
   });
 });
+
+describe("evaluate - theme-added (untagged) gift lines", () => {
+  const GIFT = "gid://shopify/ProductVariant/201";
+  const offer = (): OfferDefinition => {
+    const base = makeGiftOffer("offer-1", 0);
+    base.conditions = [
+      {
+        id: "c1",
+        scope: "main",
+        conditionType: "specific_product",
+        operator: "all",
+        value: { requirements: [{ productId: "gid://shopify/Product/1", trackMode: "product", minQuantity: 1 }], multiplyByGroups: false },
+        isEnabled: true,
+        sortOrder: 0,
+      },
+    ];
+    base.rewards[0] = { ...base.rewards[0]!, target: { variantIds: [GIFT] } };
+    return base;
+  };
+  const withLine = (variantId: string, productId: string, quantity: number, properties: Record<string, string> = {}) => {
+    const cart = makeCart(6000);
+    cart.lines.push({ ...cart.lines[0]!, key: "theme", variantId, productId, quantity, priceCents: 1000, properties });
+    return cart;
+  };
+  const adds = async (cart: NormalizedCart) =>
+    (await evaluate(makeInput(cart), { offers: [offer()], oneUseStates: [], now: NOW })).cartActions.filter(
+      (action) => action.action === "add_line",
+    );
+
+  it("does not add a duplicate when an untagged gift line is already in the cart", async () => {
+    expect(await adds(withLine(GIFT, "gid://shopify/Product/9", 1, { _promo_gift: "true" }))).toEqual([]);
+  });
+
+  it("still auto-adds when the gift is absent", async () => {
+    expect(await adds(makeCart(6000))).toMatchObject([{ variantId: GIFT, quantity: 1 }]);
+  });
+
+  it("does not count a line tagged for another offer", async () => {
+    const tagged = { _promo_engine_offer_id: "offer-other", _promo_engine_reward_id: "r" };
+    expect(await adds(withLine(GIFT, "gid://shopify/Product/9", 1, tagged))).toMatchObject([{ variantId: GIFT, quantity: 1 }]);
+  });
+
+  it("never counts the anchor unit as its own gift", async () => {
+    const cart = makeCart(6000);
+    cart.lines[0] = { ...cart.lines[0]!, variantId: GIFT };
+    expect(await adds(cart)).toMatchObject([{ variantId: GIFT, quantity: 1 }]);
+    cart.lines[0] = { ...cart.lines[0]!, quantity: 2 };
+    expect(await adds(cart)).toEqual([]);
+  });
+});

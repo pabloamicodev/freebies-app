@@ -740,7 +740,13 @@ fn reserved_anchor_units(offer: &CompiledOffer, variant_id: &str, product_id: &s
     let required = offer
         .requirements
         .iter()
-        .filter(|r| r.variant_id.as_deref() == Some(variant_id) || r.product_id.as_deref() == Some(product_id))
+        .filter(|r| {
+            if r.track_mode == "variant" {
+                r.variant_id.as_deref() == Some(variant_id)
+            } else {
+                r.product_id.as_deref() == Some(product_id)
+            }
+        })
         .map(|r| r.min_quantity)
         .max()
         .unwrap_or(0);
