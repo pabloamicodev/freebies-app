@@ -103,6 +103,8 @@ interface RuntimeConfig {
 const EVAL_TIMEOUT_MS = 7_000;
 const MAX_RATE_LIMIT_RETRIES = 3;
 const OWN_EVENT_QUIET_MS = 1_500;
+const GIFT_HOLD_MS = 3_000;
+const CART_ADD_RE = /\/cart\/add(\.js)?(\?|$)/;
 
 export class PromoEngineRuntime {
   private config: RuntimeConfig;
@@ -145,26 +147,9 @@ export class PromoEngineRuntime {
 
   init(): void {
     this.log("Promo Engine initialized", this.config);
-    this.detectTheme();
     this.listenForCartChanges();
-    if (this.config.cartItemCount === 0 && !document.querySelector(PROMO_WIDGET_SELECTOR)) {
-      this.log("Skipping boot evaluation — empty cart and no promo widgets on this page");
-      return;
-    }
+    if (this.config.cartItemCount === 0 && !document.querySelector(PROMO_WIDGET_SELECTOR)) return;
     void this.triggerEvaluation();
-  }
-
-  private detectTheme(): void {
-    type ShopifyGlobal = { theme?: { schema_name?: string; name?: string }; shop?: string };
-    const sh = (window as unknown as { Shopify?: ShopifyGlobal }).Shopify;
-    const name = sh?.theme?.schema_name ?? sh?.theme?.name ?? "unknown";
-    this.log(`[PromoEngine] Theme detected: ${name}`);
-
-    // Dawn: exposes <cart-drawer> web component → section rendering works natively
-    // Others: we rely on patchFetch to capture the theme's own section IDs at runtime
-    const hasDawnDrawer = !!document.querySelector("cart-drawer");
-    if (hasDawnDrawer)
-      this.log("[PromoEngine] Cart component: cart-drawer web component (Dawn-style)");
   }
 
   /** Our own cart requests carry OWN_REQUEST_HEADER (checked per request in the fetch patch);
@@ -244,8 +229,9 @@ export class PromoEngineRuntime {
           .catch(() => {});
 
         if (isCartMutation && !isOwn) {
-          this.log(`[PromoEngine] Cart mutation detected (${url}) — scheduling evaluation`);
-          this.debouncedEvaluate.call();
+          // A theme that redirects to checkout right after its add must find our gifts already in the cart.
+          if (CART_ADD_RE.test(url) && this.giftOfferPossible()) await this.settleGifts();
+          else this.debouncedEvaluate.call();
         }
       }
 
@@ -263,6 +249,34 @@ export class PromoEngineRuntime {
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
     const flagged = new WeakSet<XMLHttpRequest>();
+    const adds = new WeakSet<XMLHttpRequest>();
+    const queues = new WeakMap<XMLHttpRequest, string[]>();
+    let releasing = false;
+
+    // Registered at open(), ahead of the theme's own listeners, so a successful add's
+    // completion events can be swallowed until our gifts are in, then replayed in order.
+    function hold(this: XMLHttpRequest, e: Event) {
+      const queue = queues.get(this);
+      if (queue) {
+        e.stopImmediatePropagation();
+        queue.push(e.type);
+        return;
+      }
+      if (releasing || !adds.has(this) || this.readyState !== 4 || this.status < 200 || this.status >= 300 || !runtime.giftOfferPossible()) return;
+      e.stopImmediatePropagation();
+      queues.set(this, [e.type]);
+      void runtime.settleGifts().then(() => {
+        const types = queues.get(this) ?? [];
+        queues.delete(this);
+        releasing = true;
+        try {
+          types.forEach((type) => this.dispatchEvent(new Event(type)));
+        } finally {
+          releasing = false;
+        }
+        runtime.debouncedEvaluate.cancel();
+      });
+    }
 
     XMLHttpRequest.prototype.open = function (
       this: XMLHttpRequest,
@@ -275,6 +289,12 @@ export class PromoEngineRuntime {
         flagged.add(this);
       } else {
         flagged.delete(this);
+      }
+      if (flagged.has(this) && CART_ADD_RE.test(urlStr)) {
+        ["readystatechange", "load", "loadend"].forEach((type) => this.addEventListener(type, hold));
+        adds.add(this);
+      } else {
+        adds.delete(this);
       }
       return (originalOpen as (...args: unknown[]) => void).apply(this, [method, url, ...rest]);
     } as typeof XMLHttpRequest.prototype.open;
@@ -289,6 +309,27 @@ export class PromoEngineRuntime {
       }
       return (originalSend as (...args: unknown[]) => void).apply(this, args);
     } as typeof XMLHttpRequest.prototype.send;
+  }
+
+  /** Unknown until the first evaluation lands, so the very first add is held too. */
+  private giftOfferPossible(): boolean {
+    const result = this.lastEvaluationResult;
+    return !result || [...result.qualifiedOffers, ...result.disqualifiedOffers].some((o) => o.type === "gift");
+  }
+
+  /** Evaluate and apply gifts now; resolves when done or after GIFT_HOLD_MS, whichever comes first, and never rejects. */
+  private settleGifts(): Promise<void> {
+    this.debouncedEvaluate.cancel();
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        console.warn(`[PromoEngine] Gifts not ready after ${GIFT_HOLD_MS} ms — releasing the add-to-cart`);
+        resolve();
+      }, GIFT_HOLD_MS);
+    });
+    return Promise.race([this.triggerEvaluation().then(() => this.evaluationChain), timeout])
+      .catch(() => undefined)
+      .finally(() => clearTimeout(timer));
   }
 
   private async refreshCartUI(): Promise<void> {
@@ -338,13 +379,6 @@ export class PromoEngineRuntime {
       return !!document.querySelector(t.selector);
     });
 
-    this.log(
-      "refreshCartUI — targets:",
-      allTargets.length > 0
-        ? allTargets.map((t) => `${t.sectionId}→${t.selector}`).join(", ")
-        : "none found",
-    );
-
     if (allTargets.length > 0) {
       const sectionIds = [...new Set(allTargets.map((t) => t.sectionId))];
       try {
@@ -357,10 +391,6 @@ export class PromoEngineRuntime {
           const body = (await resp.json()) as Record<string, unknown>;
           const sections = Object.fromEntries(
             Object.entries(body).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-          );
-          this.log(
-            "refreshCartUI — section render response keys:",
-            Object.keys(sections).join(", ") || "none (section IDs not valid for this theme)",
           );
           if (Object.keys(sections).length > 0) {
             let updated = 0;
@@ -396,12 +426,7 @@ export class PromoEngineRuntime {
             }
             if (deferred > 0) this.refreshAfterEditing();
             if (updated === 0 && deferred > 0) return;
-            if (updated > 0) {
-              this.log(
-                `[PromoEngine] Cart UI refreshed via section rendering (${updated} element(s))`,
-              );
-              return;
-            }
+            if (updated > 0) return;
           }
         }
       } catch {
@@ -485,13 +510,6 @@ export class PromoEngineRuntime {
       return this.lastEvaluationResult;
     }
 
-    const qualifyingSubtotal = cart.items_subtotal_price ?? cart.total_price;
-    this.log(
-      "[PromoEngine] Evaluating cart —",
-      cart.items.map((i) => `${i.title} x${i.quantity}`).join(", ") || "empty",
-      `| subtotal: $${(qualifyingSubtotal / 100).toFixed(2)}`,
-    );
-
     // Liquid provides the real Market GID. Currency alone is not a Market id.
     const shopifyGlobal = window.Shopify;
     const market = buildMarketContext(this.config, shopifyGlobal);
@@ -528,16 +546,6 @@ export class PromoEngineRuntime {
       this.lastEvaluationResult = result;
 
       const actions = Array.isArray(result.cartActions) ? result.cartActions : [];
-      if (actions.length > 0) {
-        this.log(
-          "[PromoEngine] Cart actions to apply:",
-          actions
-            .map((a) => `${a.action}(${a.variantId ?? a.lineKey ?? ""}x${a.quantity ?? 0})`)
-            .join(", "),
-        );
-      } else {
-        this.log("[PromoEngine] Evaluation complete — no cart actions");
-      }
 
       this.clearDeclinedGiftsForUnqualifiedOffers(result);
 
@@ -549,6 +557,7 @@ export class PromoEngineRuntime {
         }),
         outcome,
       );
+      emit(PromoEvents.GiftsReady);
       if (actions.length > 0 || this.widgetChangedCart) {
         this.widgetChangedCart = false;
         await this.refreshCartUI();
@@ -863,6 +872,7 @@ export class PromoEngineRuntime {
     refreshCart: () => this.debouncedEvaluate.flush(),
     lastResult: () => this.lastEvaluationResult,
     evaluate: () => this.triggerEvaluation(),
+    whenGiftsReady: () => this.settleGifts(),
     validateGiftOffer: async (offerId: string) => {
       const result = await this.triggerEvaluation({ force: true, emitResult: false });
       return [result?.giftSlider, ...(result?.additionalGiftSliders ?? [])].find((slider) => slider?.offerId === offerId) ?? null;

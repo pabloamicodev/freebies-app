@@ -11,6 +11,7 @@ export const PromoEvents = {
   GiftAdded: "promo-engine:gift-added",
   GiftUpdated: "promo-engine:gift-updated",
   GiftRemoved: "promo-engine:gift-removed",
+  GiftsReady: "promo-engine:gifts-ready",
   GiftSliderRequested: "promo-engine:gift-slider-requested",
   GiftSliderOpened: "promo-engine:gift-slider-opened",
   GiftSliderClosed: "promo-engine:gift-slider-closed",
