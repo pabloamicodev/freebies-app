@@ -186,6 +186,40 @@ describe("compileShippingOfferConfigs", () => {
     });
   });
 
+  it("moves 'subscriptions only' from a free landing gift line to its anchor", () => {
+    const landingReward = (discountType: string, amount: number, extra: Record<string, unknown> = {}) =>
+      ({
+        id: REWARD_ID,
+        rewardType: "product_discount",
+        discountType,
+        value: { amount, currencyCode: "USD" },
+        target: {
+          scopeMode: "landing",
+          productIds: ["gid://shopify/Product/7533558595669"],
+          requiredLineAttributeKey: "__landing_source",
+          requiredLineAttributeValue: "nektar-13-offer",
+          subscriptionMode: "subscription_only",
+          ...extra,
+        },
+        sortOrder: 0,
+      }) as CompileArgs[2][number];
+    const compile = (reward: CompileArgs[2][number]) =>
+      compileOfferConfig(offer({ type: "discount" }), [], [reward], null, 1).productRewards[0];
+
+    for (const reward of [landingReward("free", 10000), landingReward("percentage", 100)]) {
+      expect(compile(reward)).toMatchObject({ subscriptionMode: "any", requiresAnchorSubscription: true });
+    }
+    // A partial landing discount and a sitewide reward still filter the discounted lines themselves.
+    expect(compile(landingReward("percentage", 20))).toMatchObject({
+      subscriptionMode: "subscription_only",
+      requiresAnchorSubscription: false,
+    });
+    expect(compile(landingReward("free", 10000, { scopeMode: "sitewide" }))).toMatchObject({
+      subscriptionMode: "subscription_only",
+      requiresAnchorSubscription: false,
+    });
+  });
+
   it("uses the cart-value condition for a legacy single-value reward", () => {
     const result = compileShippingOfferConfigs(
       offer({ priority: 2 }),

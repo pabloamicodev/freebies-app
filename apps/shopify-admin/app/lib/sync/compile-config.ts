@@ -678,6 +678,18 @@ export function compileOfferConfig(
         (target["productIds"] as string[]) ??
         (target["productId"] ? [target["productId"] as string] : []);
       const currencyCode = rewardCurrency(value["currencyCode"], options.shopCurrencyCode);
+      const subscriptionMode =
+        target["subscriptionMode"] === "subscription_only" || target["subscriptionMode"] === "one_time_only"
+          ? target["subscriptionMode"]
+          : "any";
+      // A free landing gift is a one-time line by nature, so "subscriptions only" can only mean
+      // the anchor the customer buys; applied to the gift line it would never discount anything.
+      const anchorSubscriptionOnly =
+        subscriptionMode === "subscription_only" &&
+        target["scopeMode"] === "landing" &&
+        !hasConfiguredTiers &&
+        (reward.discountType === "free" ||
+          (reward.discountType === "percentage" && configuredAmount >= 100));
       config.productRewards.push({
         id: reward.id,
         targetProductIds,
@@ -700,11 +712,7 @@ export function compileOfferConfig(
         ...(Number.isInteger(target["maxUnitsPerVariant"])
           ? { maxUnitsPerVariant: Number(target["maxUnitsPerVariant"]) }
           : {}),
-        subscriptionMode:
-          target["subscriptionMode"] === "subscription_only" ||
-          target["subscriptionMode"] === "one_time_only"
-            ? target["subscriptionMode"]
-            : "any",
+        subscriptionMode: anchorSubscriptionOnly ? "any" : subscriptionMode,
         scopeMode:
           target["scopeMode"] === "landing" ||
           target["scopeMode"] === "quiz_bundle" ||
@@ -721,7 +729,7 @@ export function compileOfferConfig(
           ? target["requiredAnchorVariantIds"].filter((id): id is string => typeof id === "string")
           : [],
         requiredAnchorMinQuantity: Math.max(1, Number(target["requiredAnchorMinQuantity"] ?? 1)),
-        requiresAnchorSubscription: target["requiresAnchorSubscription"] === true,
+        requiresAnchorSubscription: anchorSubscriptionOnly || target["requiresAnchorSubscription"] === true,
         priceTiers: Array.isArray(target["priceTiers"])
           ? target["priceTiers"].flatMap((tier) => {
               if (!tier || typeof tier !== "object") return [];
