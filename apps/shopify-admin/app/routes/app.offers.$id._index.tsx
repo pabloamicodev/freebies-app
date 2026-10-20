@@ -36,6 +36,7 @@ import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
 import { subconditionsFromRows } from "../lib/subcondition-prefill.js";
 import { pageTypeLabel, readPageTypes } from "../lib/page-types.js";
 import { codesSummary, conditionSummary as sharedConditionSummary, conditionTypeLabel, rewardSummary } from "../lib/offer-summaries.js";
+import { anyOfConflictError } from "../lib/any-of-guard.server.js";
 import { MatchBySelect, MatchRuleField, ProductConditionNote, pickedItems } from "../components/ProductConditionFields.js";
 import { buildProductConditionValue, matchRuleOperator, parseMatchOperator, presenceOnlyValue, readMatchRule, type MatchBy, type MatchRule } from "../lib/product-condition.js";
 import type { SelectedProduct } from "../components/SelectedProductsList.js";
@@ -133,6 +134,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         .limit(1);
       if (!condition) return { error: "Condition not found." };
       const operator = condition.conditionType === "specific_product" ? parseMatchOperator(formData.get("operator")) : null;
+      if (operator === "any") {
+        const conflict = await anyOfConflictError(db, shopId, offerId, conditionId);
+        if (conflict) return { error: conflict };
+      }
       const value = normalizeConditionValue(condition.conditionType, operator === "any" ? presenceOnlyValue(valueResult.data!) : valueResult.data!);
       if (offer.status === "active") {
         const parsedValue = validateConditionValue(condition.conditionType, value);
@@ -175,6 +180,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const valueResult = parseJsonRecord(formData, "conditionValue");
       if (valueResult.error) return { error: valueResult.error };
       const operator = (conditionType === "specific_product" ? parseMatchOperator(formData.get("operator")) : null) ?? "gte";
+      if (operator === "any") {
+        const conflict = await anyOfConflictError(db, shopId, offerId);
+        if (conflict) return { error: conflict };
+      }
       const value = normalizeConditionValue(conditionType, operator === "any" ? presenceOnlyValue(valueResult.data!) : valueResult.data!);
       if (offer.status === "active") {
         const parsedValue = validateConditionValue(conditionType, value);
@@ -716,6 +725,7 @@ function ConditionCard({
   const selectedProductIds = Array.isArray(val.productIds) ? (val.productIds as string[]) : [];
   const matchBy: MatchBy = val.trackMode === "product" ? "product" : "variant";
   const [matchRule, setMatchRule] = useState<MatchRule>(readMatchRule(operator));
+  const [allModeValue, setAllModeValue] = useState<ConditionValue | null>(null);
   const isAnyOf = conditionType === "specific_product" && matchRule === "any";
   const [pickedProducts, setPickedProducts] = useState<SelectedProduct[]>([]);
 
@@ -916,7 +926,9 @@ function ConditionCard({
                   name={`matchRule-${conditionId}`}
                   value={matchRule}
                   onChange={(rule) => {
-                    const next = rule === "any" ? presenceOnlyValue(val) : val;
+                    // Remember the all-of quantity settings so toggling back doesn't lose them.
+                    if (rule === "any") setAllModeValue({ minQtyPerProduct: val.minQtyPerProduct, multiplyGifts: val.multiplyGifts });
+                    const next = rule === "any" ? presenceOnlyValue(val) : { ...val, ...allModeValue };
                     setMatchRule(rule);
                     setVal(next);
                     save(next, rule);

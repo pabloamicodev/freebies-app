@@ -87,7 +87,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const templateRaw = (formData.get("template") as string) || "checkout";
   const triggerType = (formData.get("triggerType") as string) || "always";
-  const triggerOperator = matchRuleOperator(formData.get("triggerMatchRule") === "all" ? "all" : "any");
+  const triggerOperator = matchRuleOperator(formData.get("triggerMatchRule") === "any" ? "any" : "all");
   const upsellMethod = (formData.get("upsellMethod") as string) || "manual";
   const widgetType = (formData.get("widgetType") as string) || "fbt";
   const discountEnabled = formData.get("discountEnabled") === "on";

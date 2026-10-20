@@ -150,3 +150,11 @@ export function productConditionHelp(args: {
     : `Example: with ${shown.join(" and ")}${more} at min ${qty}, the cart needs at least ${needs}.`;
   return { lines, example };
 }
+
+export const ANY_OF_CONFLICT_ERROR =
+  "This offer already has an 'Any of' product condition. They are merged into one set when published, so use 'All of' here or edit the existing one.";
+
+/** The compiler merges every any-of row on an offer into one set, so a second one would silently widen the first. */
+export function hasAnyOfConflict(rows: Array<{ id: string; conditionType: string; operator: string; isEnabled: boolean }>, excludeId?: string): boolean {
+  return rows.some((r) => r.id !== excludeId && r.isEnabled && r.conditionType === "specific_product" && r.operator === "any");
+}

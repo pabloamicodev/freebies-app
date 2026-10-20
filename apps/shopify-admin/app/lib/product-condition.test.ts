@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildProductConditionValue, matchRuleOperator, packVariantHint, parseMatchOperator, presenceOnlyValue, productConditionHelp, readMatchBy, readMatchRule, requirementGids } from "./product-condition.js";
+import { buildProductConditionValue, matchRuleOperator, packVariantHint, parseMatchOperator, presenceOnlyValue, productConditionHelp, readMatchBy, readMatchRule, requirementGids, hasAnyOfConflict } from "./product-condition.js";
 
 describe("match rule", () => {
   it("reads any only from the explicit any operator; gte and a missing operator stay all-of", () => {
@@ -28,6 +28,15 @@ describe("match rule", () => {
       multiplyGifts: false,
       multiplyByGroups: false,
     });
+  });
+
+  it("flags a second enabled any-of specific_product row, but not itself, all-of rows or disabled rows", () => {
+    const any = { id: "a", conditionType: "specific_product", operator: "any", isEnabled: true };
+    expect(hasAnyOfConflict([any])).toBe(true);
+    expect(hasAnyOfConflict([any], "a")).toBe(false);
+    expect(hasAnyOfConflict([{ ...any, operator: "gte" }])).toBe(false);
+    expect(hasAnyOfConflict([{ ...any, isEnabled: false }])).toBe(false);
+    expect(hasAnyOfConflict([{ ...any, conditionType: "pack_of_products" }])).toBe(false);
   });
 
   it("explains any-of in the help text", () => {

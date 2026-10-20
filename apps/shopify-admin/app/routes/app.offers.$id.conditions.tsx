@@ -13,6 +13,7 @@ import { ProductPicker } from "../components/ProductPicker.js";
 import { SelectedProductsList, type SelectedProduct } from "../components/SelectedProductsList.js";
 import { MatchBySelect, MatchRuleField, ProductConditionNote, pickedItems } from "../components/ProductConditionFields.js";
 import { buildProductConditionValue, matchRuleOperator, readMatchBy, readMatchRule, requirementGids, type MatchBy, type MatchRule } from "../lib/product-condition.js";
+import { anyOfConflictError } from "../lib/any-of-guard.server.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
@@ -297,6 +298,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const built = buildConditionValue(conditionType, formData);
     if ("error" in built) return { error: built.error };
     const { value, operator: conditionOperator } = built;
+    if (conditionType === "specific_product" && conditionOperator === "any") {
+      const conflict = await anyOfConflictError(db, shopId, offerId, intent === "update_condition" ? (formData.get("conditionId") as string | null) ?? undefined : undefined);
+      if (conflict) return { error: conflict };
+    }
 
     if (intent === "add_condition") {
       const existingCount = await db.select({ id: offerConditions.id })
@@ -657,7 +662,7 @@ export default function OfferConditionsPage() {
                 <button
                   type="button"
                   className="b-btn b-btn-secondary"
-                  onClick={() => { setEditingId(null); setAddingScope("sub"); setSelectedType(""); setMatchRule("any"); }}
+                  onClick={() => { setEditingId(null); setAddingScope("sub"); setSelectedType(""); setMatchRule("all"); }}
                 >
                   + Add Sub-Condition
                 </button>

@@ -220,7 +220,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const multiplyGifts = formData.get("multiplyGifts") === "on";
   const giftsMatchProd = formData.get("giftsMatchProducts") === "on";
   const trackMode = (formData.get("trackMode") as string) || "product";
-  const matchOperator = matchRuleOperator(formData.get("matchRule") === "all" ? "all" : "any");
+  const matchOperator = matchRuleOperator(formData.get("matchRule") === "any" ? "any" : "all");
   const conditionProductsResult = parseJsonStringArray(formData, "conditionProducts");
   if (conditionProductsResult.error) return { error: conditionProductsResult.error };
   const conditionProducts = conditionProductsResult.data!;
