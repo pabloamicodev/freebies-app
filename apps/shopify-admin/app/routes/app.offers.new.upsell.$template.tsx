@@ -30,6 +30,8 @@ import { offers, offerConditions, offerRewards, offerCombinationPolicies } from 
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { SelectedProductsList } from "../components/SelectedProductsList.js";
+import { MatchRuleField } from "../components/ProductConditionFields.js";
+import { matchRuleOperator, type MatchRule } from "../lib/product-condition.js";
 import { OfferConditionsBuilder } from "../components/OfferConditionsBuilder.js";
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
@@ -85,6 +87,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const templateRaw = (formData.get("template") as string) || "checkout";
   const triggerType = (formData.get("triggerType") as string) || "always";
+  const triggerOperator = matchRuleOperator(formData.get("triggerMatchRule") === "any" ? "any" : "all");
   const upsellMethod = (formData.get("upsellMethod") as string) || "manual";
   const widgetType = (formData.get("widgetType") as string) || "fbt";
   const discountEnabled = formData.get("discountEnabled") === "on";
@@ -173,7 +176,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           offerId: offer.id,
           scope: "main",
           conditionType: hasPositiveTrigger ? "specific_product" : "cart_quantity",
-          operator: "gte",
+          operator: hasPositiveTrigger ? triggerOperator : "gte",
           value: hasPositiveTrigger
             ? { requirements: triggerRequirements, multiplyByGroups: false }
             : { minQuantity: 1, includeGiftValues: false },
@@ -319,6 +322,7 @@ export default function NewUpsellOfferPage() {
     checkoutTarget: "",
     upsellProducts: [] as string[],
     triggerProducts: [] as string[],
+    triggerMatchRule: "any" as MatchRule,
     triggerPickerOpen: false,
     productPickerOpen: false,
     combinesOrderDiscounts: true,
@@ -349,6 +353,7 @@ export default function NewUpsellOfferPage() {
     checkoutTarget,
     upsellProducts,
     triggerProducts,
+    triggerMatchRule,
     triggerPickerOpen,
     productPickerOpen,
     combinesOrderDiscounts,
@@ -376,6 +381,7 @@ export default function NewUpsellOfferPage() {
   const setCheckoutTarget = createFieldSetter(setFormField, "checkoutTarget");
   const setUpsellProducts = createFieldSetter(setFormField, "upsellProducts");
   const setTriggerProducts = createFieldSetter(setFormField, "triggerProducts");
+  const setTriggerMatchRule = createFieldSetter(setFormField, "triggerMatchRule");
   const setTriggerPickerOpen = createFieldSetter(setFormField, "triggerPickerOpen");
   const setProductPickerOpen = createFieldSetter(setFormField, "productPickerOpen");
   const setCombinesOrderDiscounts = createFieldSetter(setFormField, "combinesOrderDiscounts");
@@ -690,6 +696,9 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                     )}
                     {(triggerType === "product_selected" || triggerType === "product_except") && (
                       <div style={{ marginTop: 4 }}>
+                        {triggerType === "product_selected" && (
+                          <MatchRuleField name="triggerMatchRule" value={triggerMatchRule} onChange={setTriggerMatchRule} />
+                        )}
                         <button
                           type="button"
                           className="b-btn b-btn-secondary"
@@ -738,6 +747,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                     )}
                     {triggerType === "product" && (
                       <div style={{ marginTop: 4 }}>
+                        <MatchRuleField name="triggerMatchRule" value={triggerMatchRule} onChange={setTriggerMatchRule} />
                         <button
                           type="button"
                           className="b-btn b-btn-secondary"

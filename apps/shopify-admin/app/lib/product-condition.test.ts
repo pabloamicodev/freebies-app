@@ -1,5 +1,49 @@
 import { describe, expect, it } from "vitest";
-import { buildProductConditionValue, packVariantHint, productConditionHelp, readMatchBy, requirementGids } from "./product-condition.js";
+import { buildProductConditionValue, matchRuleOperator, packVariantHint, parseMatchOperator, presenceOnlyValue, productConditionHelp, readMatchBy, readMatchRule, requirementGids, hasAnyOfConflict } from "./product-condition.js";
+
+describe("match rule", () => {
+  it("reads any only from the explicit any operator; gte and a missing operator stay all-of", () => {
+    expect(readMatchRule("any")).toBe("any");
+    expect(readMatchRule("gte")).toBe("all");
+    expect(readMatchRule(undefined)).toBe("all");
+    expect(matchRuleOperator("any")).toBe("any");
+    expect(matchRuleOperator("all")).toBe("gte");
+  });
+
+  it("only accepts any or gte from a form", () => {
+    expect(parseMatchOperator("any")).toBe("any");
+    expect(parseMatchOperator("gte")).toBe("gte");
+    expect(parseMatchOperator("eq")).toBeNull();
+    expect(parseMatchOperator(null)).toBeNull();
+  });
+
+  it("forces min quantity 1 and no multiplier for any-of values", () => {
+    const built = buildProductConditionValue("specific_product", "variant", ["v1", "v2"], 3);
+    expect(presenceOnlyValue({ ...built, minQtyPerProduct: 4, multiplyGifts: true, multiplyByGroups: true })).toEqual({
+      requirements: [
+        { variantId: "v1", trackMode: "variant", minQuantity: 1 },
+        { variantId: "v2", trackMode: "variant", minQuantity: 1 },
+      ],
+      minQtyPerProduct: 1,
+      multiplyGifts: false,
+      multiplyByGroups: false,
+    });
+  });
+
+  it("flags a second enabled any-of specific_product row, but not itself, all-of rows or disabled rows", () => {
+    const any = { id: "a", conditionType: "specific_product", operator: "any", isEnabled: true };
+    expect(hasAnyOfConflict([any])).toBe(true);
+    expect(hasAnyOfConflict([any], "a")).toBe(false);
+    expect(hasAnyOfConflict([{ ...any, operator: "gte" }])).toBe(false);
+    expect(hasAnyOfConflict([{ ...any, isEnabled: false }])).toBe(false);
+    expect(hasAnyOfConflict([{ ...any, conditionType: "pack_of_products" }])).toBe(false);
+  });
+
+  it("explains any-of in the help text", () => {
+    const { lines } = productConditionHelp({ type: "specific_product", matchBy: "variant", minQty: 1, items: [], rule: "any" });
+    expect(lines[0]).toContain("Any of these");
+  });
+});
 
 describe("product-condition", () => {
   it("defaults to variant and reads product mode", () => {

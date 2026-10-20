@@ -138,3 +138,18 @@ describe("evaluateSpecificProduct variant vs product matching", () => {
     }).ok).toBe(true);
   });
 });
+
+describe("evaluateSpecificProduct operator parity with the compiled config (6 flavors, one in cart)", () => {
+  const flavors = Array.from({ length: 6 }, (_, i) => ({ productId: `p${i}`, variantId: `v${i}`, trackMode: "variant" as const, minQuantity: 1 }));
+  const condition = { requirements: flavors, multiplyByGroups: false };
+  const cart = makeCart([{ variantId: "v3", productId: "p3", quantity: 1 }]);
+
+  it("keeps gte and a missing operator as all-of", () => {
+    expect(evaluateSpecificProduct(cart, condition, "gte").ok).toBe(false);
+    expect(evaluateSpecificProduct(cart, condition, undefined).ok).toBe(false);
+  });
+
+  it("any qualifies on a single flavor", () => {
+    expect(evaluateSpecificProduct(cart, condition, "any").ok).toBe(true);
+  });
+});

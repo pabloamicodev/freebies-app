@@ -5,9 +5,9 @@ import { purchaseTypeLabel } from "./purchase-type.js";
 
 import { pageTypeLabel } from "./page-types.js";
 import { fromStoredAmount } from "./money.js";
-import { readMatchBy } from "./product-condition.js";
+import { readMatchBy, readMatchRule } from "./product-condition.js";
 
-export function conditionSummary(conditionType: string, value: unknown): string {
+export function conditionSummary(conditionType: string, value: unknown, operator?: string): string {
   const v = (value ?? {}) as Record<string, unknown>;
   switch (conditionType) {
     case "cart_value":
@@ -49,6 +49,10 @@ export function conditionSummary(conditionType: string, value: unknown): string 
       const requirements = Array.isArray(v["requirements"]) ? v["requirements"] as unknown[] : [];
       const byProduct = readMatchBy(value) === "product";
       const noun = byProduct ? "product" : "variant";
+      if (conditionType === "specific_product") {
+        const rule = readMatchRule(operator) === "any" ? "Any" : "All";
+        return `${rule} of ${requirements.length} ${noun}${requirements.length === 1 ? "" : "s"}${byProduct ? " (any variant)" : ""}`;
+      }
       return `${requirements.length} ${noun}${requirements.length === 1 ? "" : "s"} required (${byProduct ? "any variant" : "all"})`;
     }
     case "page_url": {

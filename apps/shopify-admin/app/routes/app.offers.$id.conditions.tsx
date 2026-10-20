@@ -11,8 +11,9 @@ import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { SelectedProductsList, type SelectedProduct } from "../components/SelectedProductsList.js";
-import { MatchBySelect, ProductConditionNote, pickedItems } from "../components/ProductConditionFields.js";
-import { buildProductConditionValue, readMatchBy, requirementGids, type MatchBy } from "../lib/product-condition.js";
+import { MatchBySelect, MatchRuleField, ProductConditionNote, pickedItems } from "../components/ProductConditionFields.js";
+import { buildProductConditionValue, matchRuleOperator, readMatchBy, readMatchRule, requirementGids, type MatchBy, type MatchRule } from "../lib/product-condition.js";
+import { anyOfConflictError } from "../lib/any-of-guard.server.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
@@ -237,8 +238,11 @@ function buildConditionValue(
           // Return early with validation error rather than inserting an empty condition
           return { error: "Select at least one product before adding this condition." };
         }
-        const minQty = parseInt((formData.get("minQtyPerProduct") as string | null) ?? "1", 10) || 1;
+        const rule: MatchRule = conditionType === "specific_product" && formData.get("matchRule") === "any" ? "any" : "all";
+        // "any" is presence-only, so it never carries a min quantity.
+        const minQty = rule === "any" ? 1 : parseInt((formData.get("minQtyPerProduct") as string | null) ?? "1", 10) || 1;
         value = buildProductConditionValue(conditionType, matchBy, gids, minQty);
+        conditionOperator = matchRuleOperator(rule);
         break;
       }
       case "line_attribute":
@@ -294,6 +298,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const built = buildConditionValue(conditionType, formData);
     if ("error" in built) return { error: built.error };
     const { value, operator: conditionOperator } = built;
+    if (conditionType === "specific_product" && conditionOperator === "any") {
+      const conflict = await anyOfConflictError(db, shopId, offerId, intent === "update_condition" ? (formData.get("conditionId") as string | null) ?? undefined : undefined);
+      if (conflict) return { error: conflict };
+    }
 
     if (intent === "add_condition") {
       const existingCount = await db.select({ id: offerConditions.id })
@@ -347,7 +355,7 @@ const MAIN_CONDITION_TYPES = [
   { label: "Cart Value — spend threshold", value: "cart_value" },
   { label: "Cart Quantity — item count threshold", value: "cart_quantity" },
   { label: "Cart Value Multiplier — earn gifts per $ spent", value: "cart_value_multiplier" },
-  { label: "Specific Product — cart must contain every selected variant/product", value: "specific_product" },
+  { label: "Specific Product — any of / all of the selected variants or products", value: "specific_product" },
   { label: "Pack of Products — every product in the pack must be present", value: "pack_of_products" },
   { label: "Page URL — restrict to specific storefront pages", value: "page_url" },
   { label: "Store pages — products added from home, collections, product pages…", value: "page_types" },
@@ -373,7 +381,7 @@ const SUB_CONDITION_TYPES = [
 /** Pulls the edit-form-relevant fields out of a condition's stored value —
  * shared by startEditCondition and the initial state below, so the first
  * condition can open pre-filled exactly like a real click would produce. */
-function deriveConditionEditFields(value: Record<string, unknown>) {
+function deriveConditionEditFields(value: Record<string, unknown>, operator?: string) {
   const currencyCode = typeof value["currencyCode"] === "string" ? (value["currencyCode"] as string) : "USD";
   const includeMarketIds = Array.isArray(value["includeMarketIds"]) ? (value["includeMarketIds"] as string[]) : [];
   const excludeMarketIds = Array.isArray(value["excludeMarketIds"]) ? (value["excludeMarketIds"] as string[]) : [];
@@ -387,7 +395,7 @@ function deriveConditionEditFields(value: Record<string, unknown>) {
     const firstQty = requirements[0]?.["quantityPerPack"] ?? requirements[0]?.["minQuantity"];
     minQtyPerProduct = typeof firstQty === "number" ? String(firstQty) : "1";
   }
-  return { currencyCode, includeMarketIds, excludeMarketIds, requiredVariantGids, requiredProductGids, matchBy, minQtyPerProduct };
+  return { currencyCode, includeMarketIds, excludeMarketIds, requiredVariantGids, requiredProductGids, matchBy, matchRule: readMatchRule(operator), minQtyPerProduct };
 }
 
 export default function OfferConditionsPage() {
@@ -401,7 +409,7 @@ export default function OfferConditionsPage() {
     // obvious these rows are clickable and what clicking one reveals —
     // instead of a wall of collapsed summaries with no visible affordance.
     const first = conditions[0];
-    const fields = first ? deriveConditionEditFields((first.value ?? {}) as Record<string, unknown>) : null;
+    const fields = first ? deriveConditionEditFields((first.value ?? {}) as Record<string, unknown>, first.operator) : null;
     return {
       addingScope: (first?.scope as "main" | "sub" | undefined) ?? null,
       editingId: first?.id ?? null,
@@ -411,6 +419,7 @@ export default function OfferConditionsPage() {
       requiredVariantGids: fields?.requiredVariantGids ?? [],
       requiredProductGids: fields?.requiredProductGids ?? [],
       matchBy: (fields?.matchBy ?? "variant") as MatchBy,
+      matchRule: (fields?.matchRule ?? "any") as MatchRule,
       pickedProducts: [] as SelectedProduct[],
       excludeVariantGids: [] as string[],
       currencyCode: fields?.currencyCode ?? "USD",
@@ -429,6 +438,7 @@ export default function OfferConditionsPage() {
     requiredVariantGids,
     requiredProductGids,
     matchBy,
+    matchRule,
     pickedProducts,
     excludeVariantGids,
     currencyCode,
@@ -446,6 +456,7 @@ export default function OfferConditionsPage() {
   const setRequiredVariantGids = createFieldSetter(setConditionField, "requiredVariantGids");
   const setRequiredProductGids = createFieldSetter(setConditionField, "requiredProductGids");
   const setMatchBy = createFieldSetter(setConditionField, "matchBy");
+  const setMatchRule = createFieldSetter(setConditionField, "matchRule");
   const setPickedProducts = createFieldSetter(setConditionField, "pickedProducts");
   const setExcludeVariantGids = createFieldSetter(setConditionField, "excludeVariantGids");
   const setCurrencyCode = createFieldSetter(setConditionField, "currencyCode");
@@ -474,7 +485,7 @@ export default function OfferConditionsPage() {
       return;
     }
     const value = (c.value ?? {}) as Record<string, unknown>;
-    const fields = deriveConditionEditFields(value);
+    const fields = deriveConditionEditFields(value, c.operator);
     setAddingScope(c.scope as "main" | "sub");
     setSelectedType(c.conditionType);
     setEditingId(c.id);
@@ -484,6 +495,7 @@ export default function OfferConditionsPage() {
     setRequiredVariantGids(fields.requiredVariantGids);
     setRequiredProductGids(fields.requiredProductGids);
     setMatchBy(fields.matchBy);
+    setMatchRule(fields.matchRule);
     setMinQtyPerProduct(fields.minQtyPerProduct);
   }
 
@@ -606,7 +618,7 @@ export default function OfferConditionsPage() {
                       </span>
                       <span className="b-text-bold">{conditionTypeLabel(c.conditionType)}</span>
                       <span className="b-text-sm b-text-sub">
-                        {conditionSummary(c.conditionType, c.value)}
+                        {conditionSummary(c.conditionType, c.value, c.operator)}
                       </span>
                       <span className="b-text-sm b-text-sub" style={{ fontWeight: 600 }}>
                         {isEditingThis ? "▲ Hide details" : "Click to view details ▾"}
@@ -643,14 +655,14 @@ export default function OfferConditionsPage() {
                 <button
                   type="button"
                   className="b-btn b-btn-secondary"
-                  onClick={() => { setEditingId(null); setAddingScope("main"); setSelectedType(""); }}
+                  onClick={() => { setEditingId(null); setAddingScope("main"); setSelectedType(""); setMatchRule("any"); }}
                 >
                   + Add Main Condition
                 </button>
                 <button
                   type="button"
                   className="b-btn b-btn-secondary"
-                  onClick={() => { setEditingId(null); setAddingScope("sub"); setSelectedType(""); }}
+                  onClick={() => { setEditingId(null); setAddingScope("sub"); setSelectedType(""); setMatchRule("all"); }}
                 >
                   + Add Sub-Condition
                 </button>
@@ -843,22 +855,28 @@ export default function OfferConditionsPage() {
                       />
                       <input type="hidden" name="requiredVariantGids" value={requiredVariantGids.join(",")} />
                       <input type="hidden" name="requiredProductGids" value={requiredProductGids.join(",")} />
-                      <div>
-                        <label className="b-label" htmlFor="minQtyPerProduct">Min quantity per selected {matchBy === "product" ? "product" : "variant"}</label>
-                        <input
-                          id="minQtyPerProduct"
-                          type="number"
-                          name="minQtyPerProduct"
-                          className="b-input"
-                          value={minQtyPerProduct}
-                          onChange={(e) => setMinQtyPerProduct(e.target.value)}
-                          autoComplete="off"
-                        />
-                      </div>
+                      {selectedType === "specific_product" && (
+                        <MatchRuleField name="matchRule" value={matchRule} onChange={setMatchRule} />
+                      )}
+                      {!(selectedType === "specific_product" && matchRule === "any") && (
+                        <div>
+                          <label className="b-label" htmlFor="minQtyPerProduct">Min quantity per selected {matchBy === "product" ? "product" : "variant"}</label>
+                          <input
+                            id="minQtyPerProduct"
+                            type="number"
+                            name="minQtyPerProduct"
+                            className="b-input"
+                            value={minQtyPerProduct}
+                            onChange={(e) => setMinQtyPerProduct(e.target.value)}
+                            autoComplete="off"
+                          />
+                        </div>
+                      )}
                       <ProductConditionNote
                         type={selectedType as "specific_product" | "pack_of_products"}
                         matchBy={matchBy}
                         minQty={parseInt(minQtyPerProduct, 10) || 1}
+                        rule={matchRule}
                         items={pickedItems(pickedProducts, matchBy === "product" ? requiredProductGids : requiredVariantGids, matchBy)}
                       />
                     </div>

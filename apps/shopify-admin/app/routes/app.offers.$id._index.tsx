@@ -36,8 +36,9 @@ import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
 import { subconditionsFromRows } from "../lib/subcondition-prefill.js";
 import { pageTypeLabel, readPageTypes } from "../lib/page-types.js";
 import { codesSummary, conditionSummary as sharedConditionSummary, conditionTypeLabel, rewardSummary } from "../lib/offer-summaries.js";
-import { MatchBySelect, ProductConditionNote, pickedItems } from "../components/ProductConditionFields.js";
-import { buildProductConditionValue, type MatchBy } from "../lib/product-condition.js";
+import { anyOfConflictError } from "../lib/any-of-guard.server.js";
+import { MatchBySelect, MatchRuleField, ProductConditionNote, pickedItems } from "../components/ProductConditionFields.js";
+import { buildProductConditionValue, matchRuleOperator, parseMatchOperator, presenceOnlyValue, readMatchRule, type MatchBy, type MatchRule } from "../lib/product-condition.js";
 import type { SelectedProduct } from "../components/SelectedProductsList.js";
 import { DiscountMessageField } from "../components/DiscountMessageField.js";
 import { resolveDiscountMessage } from "../lib/discount-message.js";
@@ -136,12 +137,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)))
         .limit(1);
       if (!condition) return { error: "Condition not found." };
-      const value = normalizeConditionValue(condition.conditionType, valueResult.data!);
+      const operator = condition.conditionType === "specific_product" ? parseMatchOperator(formData.get("operator")) : null;
+      if (operator === "any") {
+        const conflict = await anyOfConflictError(db, shopId, offerId, conditionId);
+        if (conflict) return { error: conflict };
+      }
+      const value = normalizeConditionValue(condition.conditionType, operator === "any" ? presenceOnlyValue(valueResult.data!) : valueResult.data!);
       if (offer.status === "active") {
         const parsedValue = validateConditionValue(condition.conditionType, value);
         if (!parsedValue.success) return { error: parsedValue.error.issues[0]?.message ?? "Condition value is invalid." };
       }
-      await db.update(offerConditions).set({ value }).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)));
+      await db.update(offerConditions).set({ value, ...(operator ? { operator } : {}) }).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)));
       const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
       if (publishError) return { error: publishError };
       break;
@@ -177,7 +183,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const scope = scopeResult.data;
       const valueResult = parseJsonRecord(formData, "conditionValue");
       if (valueResult.error) return { error: valueResult.error };
-      const value = normalizeConditionValue(conditionType, valueResult.data!);
+      const operator = (conditionType === "specific_product" ? parseMatchOperator(formData.get("operator")) : null) ?? "gte";
+      if (operator === "any") {
+        const conflict = await anyOfConflictError(db, shopId, offerId);
+        if (conflict) return { error: conflict };
+      }
+      const value = normalizeConditionValue(conditionType, operator === "any" ? presenceOnlyValue(valueResult.data!) : valueResult.data!);
       if (offer.status === "active") {
         const parsedValue = validateConditionValue(conditionType, value);
         if (!parsedValue.success) return { error: parsedValue.error.issues[0]?.message ?? "Condition value is invalid." };
@@ -185,7 +196,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const existing = await db.select({ id: offerConditions.id }).from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
       await db.insert(offerConditions).values({
         shopId, offerId, scope, conditionType,
-        operator: "gte", value, sortOrder: existing.length, isEnabled: true,
+        operator, value, sortOrder: existing.length, isEnabled: true,
       });
       if (offer.status === "active") {
         const publishError = await publishShopConfig(shopId, session.shop);
@@ -697,12 +708,14 @@ function PageTypesConditionEditor({
 function ConditionCard({
   conditionId,
   conditionType,
+  operator,
   initialValue,
   onDelete,
   isCodePromo,
 }: {
   conditionId: string;
   conditionType: string;
+  operator: string;
   initialValue: ConditionValue;
   onDelete: () => void;
   isCodePromo: boolean;
@@ -715,17 +728,21 @@ function ConditionCard({
   const selectedVariantIds = Array.isArray(val.variantIds) ? (val.variantIds as string[]) : [];
   const selectedProductIds = Array.isArray(val.productIds) ? (val.productIds as string[]) : [];
   const matchBy: MatchBy = val.trackMode === "product" ? "product" : "variant";
+  const [matchRule, setMatchRule] = useState<MatchRule>(readMatchRule(operator));
+  const [allModeValue, setAllModeValue] = useState<ConditionValue | null>(null);
+  const isAnyOf = conditionType === "specific_product" && matchRule === "any";
   const [pickedProducts, setPickedProducts] = useState<SelectedProduct[]>([]);
 
   function update(patch: Partial<ConditionValue>) {
     setVal((prev) => ({ ...prev, ...patch }));
   }
 
-  function save(overrideVal?: ConditionValue) {
+  function save(overrideVal?: ConditionValue, rule: MatchRule = matchRule) {
     const fd = new FormData();
     fd.append("intent", "update_condition");
     fd.append("conditionId", conditionId);
     fd.append("conditionValue", JSON.stringify(overrideVal ?? val));
+    if (conditionType === "specific_product") fd.append("operator", matchRuleOperator(rule));
     void fetcher.submit(fd, { method: "POST" });
   }
 
@@ -907,6 +924,23 @@ function ConditionCard({
         {/* ── Specific product ───────────────────────────────── */}
         {(conditionType === "specific_product" || conditionType === "pack_of_products") && (
           <>
+            {conditionType === "specific_product" && (
+              <div style={{ marginBottom: 14 }}>
+                <MatchRuleField
+                  name={`matchRule-${conditionId}`}
+                  value={matchRule}
+                  onChange={(rule) => {
+                    // Remember the all-of quantity settings so toggling back doesn't lose them.
+                    if (rule === "any") setAllModeValue({ minQtyPerProduct: val.minQtyPerProduct, multiplyGifts: val.multiplyGifts });
+                    const next = rule === "any" ? presenceOnlyValue(val) : { ...val, ...allModeValue };
+                    setMatchRule(rule);
+                    setVal(next);
+                    save(next, rule);
+                  }}
+                />
+              </div>
+            )}
+            {!isAnyOf && (
             <div style={{ marginBottom: 14 }}>
               <label htmlFor={`condition-${conditionId}-required-products`} style={{ fontSize: 13, color: "var(--text)", display: "block", marginBottom: 6 }}>
                 Min quantity per selected {matchBy === "product" ? "product" : "variant"}
@@ -923,7 +957,9 @@ function ConditionCard({
                 onBlur={() => save()}
               />
             </div>
+            )}
 
+            {!isAnyOf && (
             <div className="b-checkbox-row" style={{ marginBottom: 10 }}>
               <input
                 type="checkbox"
@@ -942,6 +978,7 @@ function ConditionCard({
                 </div>
               </div>
             </div>
+            )}
 
             <div className="b-checkbox-row" style={{ marginBottom: val.giftsMatchProducts ? 6 : 14 }}>
               <input
@@ -1020,6 +1057,7 @@ function ConditionCard({
                 type={conditionType as "specific_product" | "pack_of_products"}
                 matchBy={matchBy}
                 minQty={Number(val.minQtyPerProduct) || 1}
+                rule={matchRule}
                 items={pickedItems(pickedProducts, matchBy === "product" ? selectedProductIds : selectedVariantIds, matchBy)}
               />
             </div>
@@ -1130,7 +1168,7 @@ function OfferCodesCard({ offerId, codes, requiresCode, inert, legacyCode, autom
 }
 
 /* ── Condition summary text from DB value ────────────────── */
-function conditionSummary(conditionType: string, value: ConditionValue, currencyCode = "USD"): string[] {
+function conditionSummary(conditionType: string, value: ConditionValue, currencyCode = "USD", operator?: string): string[] {
   const v = value;
   const conditionCurrency = (v.currencyCode as string | undefined) ?? currencyCode;
   const fmt = (cents: number) => {
@@ -1162,7 +1200,9 @@ function conditionSummary(conditionType: string, value: ConditionValue, currency
       const stored = Array.isArray(v.requirements)
         ? v
         : buildProductConditionValue(conditionType, byProduct ? "product" : "variant", ((byProduct ? v.productIds : v.variantIds) as string[] | undefined) ?? [], qty);
-      return [sharedConditionSummary(conditionType, stored), `Min quantity ${qty} each`];
+      return conditionType === "specific_product" && readMatchRule(operator) === "any"
+        ? [sharedConditionSummary(conditionType, stored, operator)]
+        : [sharedConditionSummary(conditionType, stored, operator), `Min quantity ${qty} each`];
     }
     case "page_url": {
       const mode = (v.matchMode as string | undefined) ?? "starts_with";
@@ -1355,6 +1395,7 @@ export default function OfferDetailPage() {
     fd.append("conditionType", newCondType);
     fd.append("scope", "main");
     fd.append("conditionValue", JSON.stringify(defaults[newCondType] ?? {}));
+    if (newCondType === "specific_product") fd.append("operator", matchRuleOperator("any"));
     void fetcher.submit(fd, { method: "POST" });
     setAddingCondition(false);
     setNewCondType("");
@@ -1580,6 +1621,7 @@ export default function OfferDetailPage() {
                   key={c.id}
                   conditionId={c.id}
                   conditionType={c.conditionType}
+                  operator={c.operator}
                   initialValue={c.value as ConditionValue}
                   onDelete={() => deleteCondition(c.id)}
                   isCodePromo={isCodePromo}
@@ -1926,7 +1968,7 @@ export default function OfferDetailPage() {
               label="Main condition"
               done={hasConditions}
               details={hasConditions
-                ? mainConditions.flatMap((c) => conditionSummary(c.conditionType, c.value as ConditionValue, shopCurrencyCode))
+                ? mainConditions.flatMap((c) => conditionSummary(c.conditionType, c.value as ConditionValue, shopCurrencyCode, c.operator))
                 : undefined}
               onClick={() => { scrollToSection("section-main-condition"); if (!hasConditions) setAddingCondition(true); }}
             />
