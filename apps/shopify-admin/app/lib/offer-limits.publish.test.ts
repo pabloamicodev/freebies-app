@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { offerCombinationPolicies, offerConditions, offerRewards, type Db } from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 import { validateOffersPublishable } from "./offer-publish-flow.server.js";
+import { setLimitsEnforced } from "./limits-enforced.server.js";
 
 let db: Db;
 let close: () => Promise<void>;
@@ -43,5 +44,21 @@ describe("publish validation of per-customer limits (DL4)", () => {
     expect(u).toEqual({ ok: true });
     const twin = await publishable("Unique Title", "unlimited dup", null);
     expect((await validateOffersPublishable(db, shopId, [twin])).ok).toBe(true);
+  });
+});
+
+describe("one_use_per_customer follows the limits.enforced flag", () => {
+  it("is rejected while the flag is off and accepted once it is on", async () => {
+    const id = await publishable("One Use Title", "one use offer", null);
+    await db.insert(offerConditions).values({
+      shopId, offerId: id, scope: "sub", conditionType: "one_use_per_customer", operator: "eq",
+      value: {}, sortOrder: 1, isEnabled: true,
+    });
+    const off = await validateOffersPublishable(db, shopId, [id]);
+    expect(off.ok).toBe(false);
+    if (!off.ok) expect(off.error).toMatch(/one_use_per_customer is not enforced by Shopify Functions/);
+    await setLimitsEnforced(db, shopId, true);
+    expect(await validateOffersPublishable(db, shopId, [id])).toEqual({ ok: true });
+    await setLimitsEnforced(db, shopId, false);
   });
 });

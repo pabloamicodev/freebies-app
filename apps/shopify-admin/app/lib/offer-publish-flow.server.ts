@@ -28,6 +28,7 @@ import { markPublishPending } from "./publish-pending.server.js";
 import { preflightSharedConfig } from "./shared-config-size.server.js";
 import { insertAuditLog } from "./audit-log.server.js";
 import { limitedTitleError } from "./offer-usage.server.js";
+import { isLimitsEnforced } from "./limits-enforced.server.js";
 
 export interface PublishValidationResult {
   ok: boolean;
@@ -282,8 +283,14 @@ export async function validateOffersPublishable(
       };
     }
 
+    // one_use_per_customer compiles as mpu 1 only while the shop's limits.enforced flag is on.
+    const hasOneUse = eligibilityConditions.some((c) => c.isEnabled && c.conditionType === "one_use_per_customer");
+    const oneUseUnenforced = hasOneUse && !(await isLimitsEnforced(db, shopId));
     const unsupportedFunctionCondition = eligibilityConditions.find(
-      (condition) => condition.isEnabled && !isConditionEnforcedByFunction(condition.conditionType),
+      (condition) =>
+        condition.isEnabled &&
+        (!isConditionEnforcedByFunction(condition.conditionType) ||
+          (oneUseUnenforced && condition.conditionType === "one_use_per_customer")),
     );
     if (unsupportedFunctionCondition) {
       return {

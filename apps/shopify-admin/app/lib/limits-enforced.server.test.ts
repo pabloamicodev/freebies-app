@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { auditLogs, offerCombinationPolicies, offerCustomerUsages, type Db } from "@promo/db";
+import { auditLogs, offerConditions, offerCombinationPolicies, offerCustomerUsages, type Db } from "@promo/db";
 import type * as PromoDb from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
@@ -123,6 +123,20 @@ describe("evaluator offer definitions follow the flag", () => {
     expect(await limits()).toEqual([null, null, false]);
     await flag.setLimitsEnforced(db, shopId, true);
     expect(await limits()).toEqual([2, 3, true]);
+    await flag.setLimitsEnforced(db, shopId, false);
+  });
+});
+
+describe("one_use_per_customer reaches the evaluator only while the flag is on", () => {
+  it("is dropped from the definitions when off and kept when on", async () => {
+    const offerId = await seedOffer(db, shopId, { publicTitle: "OneUse" });
+    await db.insert(offerConditions).values({
+      shopId, offerId, scope: "sub", conditionType: "one_use_per_customer", operator: "eq", value: {}, sortOrder: 0, isEnabled: true,
+    });
+    const types = async () => (await loadOfferDefinitions(shopId, db)).find((d) => d.id === offerId)!.conditions.map((c) => c.conditionType);
+    expect(await types()).toEqual([]);
+    await flag.setLimitsEnforced(db, shopId, true);
+    expect(await types()).toEqual(["one_use_per_customer"]);
     await flag.setLimitsEnforced(db, shopId, false);
   });
 });

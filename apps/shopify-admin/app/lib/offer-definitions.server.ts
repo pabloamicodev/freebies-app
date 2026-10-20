@@ -115,7 +115,9 @@ export async function loadOfferDefinitions(shopId: string, db: Db): Promise<Offe
     : [[], [], []];
 
   // Mirrors the compile gate: until the shop's limits.enforced flag is on, the Function ignores these limits.
-  const anyLimit = policies.some(
+  const anyLimit =
+    conditions.some((condition) => condition.conditionType === "one_use_per_customer") ||
+    policies.some(
     (policy) => (policy.maxApplicationsPerCart ?? 0) > 0 || (policy.maxApplicationsPerCustomer ?? 0) > 0 || policy.requireIdentifiedCustomer,
   );
   const limitsEnforced = anyLimit && (await isLimitsEnforced(db, shopId));
@@ -134,6 +136,7 @@ export async function loadOfferDefinitions(shopId: string, db: Db): Promise<Offe
       endsAt: offer.endsAt,
       conditions: conditions
         .filter((condition) => condition.offerId === offer.id)
+        .filter((condition) => limitsEnforced || condition.conditionType !== "one_use_per_customer")
         .sort((a, b) => a.sortOrder - b.sortOrder)
         .map((condition) => ({
           id: condition.id,
