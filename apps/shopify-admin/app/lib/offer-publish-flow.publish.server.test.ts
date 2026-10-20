@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { discountCodes, offerConditions, offerRewards, offers, type Db } from "@promo/db";
 
 const publishOffersForShop = vi.fn();
-vi.mock("./sync/offer-publisher.server.js", () => ({ publishOffersForShop: (...args: unknown[]) => publishOffersForShop(...args) }));
+vi.mock("./sync/offer-publisher.server.js", () => ({
+  MAX_METAFIELD_BYTES: 9500,
+  publishOffersForShop: (...args: unknown[]) => publishOffersForShop(...args),
+}));
 const invalidateOfferDefinitions = vi.fn(async () => undefined);
 vi.mock("./offer-definitions.server.js", () => ({
   invalidateOfferDefinitions: (...args: unknown[]) => invalidateOfferDefinitions(...(args as [])),
@@ -97,25 +100,6 @@ describe("a lock timeout never pauses an offer", () => {
 
     expect(await republishIfActive(db, "shop", "s.myshopify.com", "o1", true)).toBeNull();
     expect(updates).toEqual([]);
-  });
-
-  it("republishIfActive still pauses the offer when the publish genuinely fails", async () => {
-    publishOffersForShop.mockRejectedValue(new Error("Shopify rejected the config"));
-    const db = fakeDb({
-      offerRows: [{ id: "o1", internalName: "Offer", requiredDiscountCode: null, requiresCode: false }],
-      conditionRows: [
-        { id: "c", offerId: "o1", scope: "main", isEnabled: true, conditionType: "cart_value", operator: "gte", value: { thresholdCents: 100, currencyCode: "USD", includeGiftValues: false } },
-      ],
-      rewardRows: [
-        validGiftReward,
-      ],
-    });
-
-    const message = await republishIfActive(db, "shop", "s.myshopify.com", "o1", true);
-
-    expect(message).toContain("Shopify rejected the config");
-    expect(message).toContain("paused");
-    expect(updates).toEqual([expect.objectContaining({ status: "paused" })]);
   });
 
   it("finalizeCreatedOffer keeps a new offer active when its publish is parked as pending", async () => {

@@ -7,7 +7,7 @@ import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { parseJsonRecord, parseJsonStringArray, parseDateRange, toZonedLocalInput } from "../lib/offer-validation.server.js";
 import { normalizeConditionValue } from "../lib/offer-config-normalization.server.js";
-import { publishShopConfig, republishIfActive, validateOffersPublishable } from "../lib/offer-publish-flow.server.js";
+import { publishShopConfig, republishIfActive, validateActivation } from "../lib/offer-publish-flow.server.js";
 import { activationStatus, statusForScheduleSave } from "../lib/offer-scheduling.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies, offerVersions, discountCodes } from "@promo/db";
@@ -110,6 +110,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         : { data: { startsAt: offer.startsAt, endsAt: offer.endsAt }, error: undefined };
       if (dateResult.error) return { error: dateResult.error };
       const status = offer.status === "paused" ? offer.status : statusForScheduleSave(offer.status, dateResult.data!.startsAt, dateResult.data!.endsAt);
+      if (status === "active" && offer.status !== "active") {
+        const activation = await validateActivation(db, shopId, [offerId]);
+        if (!activation.ok) return { error: activation.error };
+      }
       await db.update(offers).set({
         publicTitle, internalName,
         startsAt: dateResult.data!.startsAt,
@@ -295,7 +299,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
       // Run full Zod validation BEFORE any DB mutation so a failed validation
       // can never leave the offer in status="active" without a working config.
-      const validation = await validateOffersPublishable(db, shopId, [offerId]);
+      const validation = await validateActivation(db, shopId, [offerId]);
       if (!validation.ok) return { error: validation.error };
 
       // Update status, push to Shopify, then rollback if the push fails.

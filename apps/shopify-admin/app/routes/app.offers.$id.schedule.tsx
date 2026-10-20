@@ -9,7 +9,7 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { parseDateRange, toZonedLocalInput } from "../lib/offer-validation.server.js";
 import { statusForScheduleSave } from "../lib/offer-scheduling.server.js";
-import { republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { republishIfActive, validateActivation } from "../lib/offer-publish-flow.server.js";
 import { offers } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -62,6 +62,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { startsAt, endsAt } = dateRange.data!;
 
   const nextStatus = statusForScheduleSave(offer.status, startsAt, endsAt);
+  if (nextStatus === "active" && offer.status !== "active") {
+    const activation = await validateActivation(db, shopId, [offerId]);
+    if (!activation.ok) return { error: activation.error };
+  }
   await db.update(offers).set({
     startsAt,
     endsAt,

@@ -45,6 +45,7 @@ import {
   ensureCodeDiscountNode,
   readCodedShippingNodeIds,
   ensureDiscountNodes,
+  existingDiscountNodeIds,
   expireCodeDiscountNode,
   findCodeDiscountNode,
   findCartDiscountFunction,
@@ -62,7 +63,7 @@ import { codeHash } from "../code-hash.js";
 import { resolveCodeCollisions } from "../code-preflight.server.js";
 import type { CodeCharset } from "../discount-code-generation.js";
 import { isCodeBackendBEnabled } from "../code-backend.server.js";
-import { setOfferPublishErrors, type OfferPublishErrors } from "../offer-publish-errors.server.js";
+import { offerCompileError, setOfferPublishErrors, type OfferPublishErrors } from "../offer-publish-errors.server.js";
 import { buildCartValidationConfig, syncCartValidation } from "../cart-validation.server.js";
 import { computeOfferVersion } from "../offer-version.server.js";
 import {
@@ -415,17 +416,21 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
         const versionConditions = conditionRows.filter((c) => c.offerId === offer.id);
         const rewards = rewardRows.filter((r) => r.offerId === offer.id);
         const policy = policyRows.find((p) => p.offerId === offer.id) ?? null;
-        return {
-          offer: compileOfferConfig(
-            offer,
-            conditions,
-            rewards,
-            policy,
-            computeOfferVersion(offer, versionConditions, rewards, policy),
-            { shopCurrencyCode },
-          ),
-          shippingOffers: compileShippingOfferConfigs(offer, conditions, rewards, { shopCurrencyCode }),
-        };
+        try {
+          return {
+            offer: compileOfferConfig(
+              offer,
+              conditions,
+              rewards,
+              policy,
+              computeOfferVersion(offer, versionConditions, rewards, policy),
+              { shopCurrencyCode },
+            ),
+            shippingOffers: compileShippingOfferConfigs(offer, conditions, rewards, { shopCurrencyCode }),
+          };
+        } catch (error) {
+          throw offerCompileError(offer, error);
+        }
       });
 
     const compiledOffers = await resolveLegacyGiftVariants(
@@ -1239,9 +1244,12 @@ async function neutralizeStaleCodeOffers(
     )
     .map((offer) => offer.codeDiscountId as string);
   if (staleDiscountIds.length === 0) return;
+  // A node deleted in Shopify is already neutralized; writing to it fails with
+  // "Owner does not exist" and would abort the whole shop publish.
+  const liveIds = await existingDiscountNodeIds(shopDomain, accessToken, staleDiscountIds);
 
   const emptyValue = serializeFunctionConfig(emptyFunctionConfig());
-  for (const discountId of staleDiscountIds) {
+  for (const discountId of staleDiscountIds.filter((id) => liveIds.has(id))) {
     await pushMetafields(shopDomain, accessToken, [discountId], emptyValue);
     await expireCodeDiscountNode(shopDomain, accessToken, discountId);
     manifest?.record(discountId, "code", emptyValue, { active: false });

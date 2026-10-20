@@ -2,8 +2,10 @@ import { offers, shops, type Db } from "@promo/db";
 import { and, eq, inArray, isNotNull, lte, or } from "drizzle-orm";
 import {
   publishShopConfig,
-  validateOffersPublishable,
+  recordSystemOfferEvent,
+  validateActivation,
   type PublishValidationResult,
+  type SystemOfferEvent,
 } from "./offer-publish-flow.server.js";
 
 export type OfferStatus = "draft" | "active" | "paused" | "scheduled" | "expired" | "archived";
@@ -35,6 +37,7 @@ export type OfferScheduleDependencies = {
   rollbackTransitions(transitions: OfferScheduleTransition[], now: Date): Promise<void>;
   validateOffers(shopId: string, offerIds: string[]): Promise<PublishValidationResult>;
   publishShop(shopId: string, shopDomain: string): Promise<string | null>;
+  recordEvent(event: SystemOfferEvent): Promise<void>;
 };
 
 export function statusForSubmit(intent: string, startsAt: Date | null, now = new Date()): "draft" | "active" | "scheduled" {
@@ -94,18 +97,30 @@ export async function executeOfferSchedule(
       .map((transition) => transition.id);
     let applicable = shopTransitions;
 
-    if (activationIds.length > 0) {
-      const validation = await dependencies.validateOffers(shopId, activationIds);
-      if (!validation.ok) {
-        failures.push({
-          shopId,
-          shopDomain,
-          stage: "validation",
-          error: validation.error ?? "Offer is not publishable",
-        });
-        applicable = applicable.filter((transition) => transition.to !== "active");
+    // One bad offer must not block the rest of the shop's batch: each is checked on top of the
+    // ones already accepted, so shop-wide limits apply to the set that would really go live.
+    const blocked = new Set<string>();
+    const accepted: string[] = [];
+    for (const id of activationIds) {
+      const validation = await dependencies.validateOffers(shopId, [...accepted, id]);
+      if (validation.ok) {
+        accepted.push(id);
+        continue;
       }
+      const error = validation.error ?? "Offer is not publishable";
+      blocked.add(id);
+      failures.push({ shopId, shopDomain, stage: "validation", error });
+      await dependencies.recordEvent({
+        shopId,
+        offerId: id,
+        action: "schedule_blocked",
+        reason: "validation_error",
+        error,
+        scope: validation.scope,
+        dedupe: true,
+      });
     }
+    applicable = applicable.filter((transition) => !blocked.has(transition.id));
     if (applicable.length === 0) continue;
 
     try {
@@ -127,8 +142,10 @@ export async function executeOfferSchedule(
       await dependencies.rollbackTransitions(applicable, now);
     } catch (error) {
       failures.push({ shopId, shopDomain, stage: "rollback", error: errorMessage(error) });
+      await recordTransitions(dependencies, applicable, "schedule_rollback_failed", `${publishError} Rollback: ${errorMessage(error)}`);
       continue;
     }
+    await recordTransitions(dependencies, applicable, "schedule_rollback", publishError);
 
     const restoreError = await publisherError(dependencies, shopId, shopDomain);
     if (restoreError) {
@@ -193,11 +210,32 @@ export async function runOfferScheduler(db: Db, now = new Date()) {
         }
       });
     },
-    validateOffers: (shopId, offerIds) => validateOffersPublishable(db, shopId, offerIds),
+    validateOffers: (shopId, offerIds) => validateActivation(db, shopId, offerIds),
     publishShop: publishShopConfig,
+    recordEvent: (event) => recordSystemOfferEvent(db, event),
   };
 
   return executeOfferSchedule(dependencies, now);
+}
+
+async function recordTransitions(
+  dependencies: OfferScheduleDependencies,
+  transitions: OfferScheduleTransition[],
+  action: string,
+  error: string,
+): Promise<void> {
+  for (const transition of transitions) {
+    await dependencies.recordEvent({
+      shopId: transition.shopId,
+      offerId: transition.id,
+      action,
+      reason: "publish_error",
+      error,
+      scope: "shop",
+      before: { status: transition.to },
+      after: { status: transition.from },
+    });
+  }
 }
 
 function errorMessage(error: unknown): string {

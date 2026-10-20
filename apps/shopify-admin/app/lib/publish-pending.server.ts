@@ -4,7 +4,7 @@
  * `publishPendingAt` and retried in the background; the offers cron re-runs any shop still flagged
  * (`reconcileActiveShopDiscountNodes`). Offers are never paused because of it.
  */
-import { getDb, shops } from "@promo/db";
+import { getDb, shops, type Db } from "@promo/db";
 import { and, eq, isNull, lte, or } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { waitUntil } from "@vercel/functions";
@@ -22,8 +22,8 @@ export function isLockTimeoutError(err: unknown): boolean {
   return false;
 }
 
-export async function markPublishPending(shopId: string): Promise<void> {
-  await getDb().update(shops).set({ publishPendingAt: new Date() }).where(eq(shops.id, shopId));
+export async function markPublishPending(shopId: string, db: Db = getDb()): Promise<void> {
+  await db.update(shops).set({ publishPendingAt: new Date() }).where(eq(shops.id, shopId));
 }
 
 /** Clears the flag unless a newer request flagged the shop after `startedAt`. */
