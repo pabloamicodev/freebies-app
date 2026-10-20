@@ -22,6 +22,8 @@
     "verify:ambrosia-e2e": "tsx scripts/verify-ambrosia-e2e.ts",
     "fix:offer-timezones": "tsx scripts/fix-offer-timezones.ts",
     "reconcile:legacy-presets": "tsx scripts/reconcile-legacy-presets.ts",
+    "backfill:offer-usage": "tsx scripts/backfill-offer-usage.ts",
+    "limits:review": "tsx scripts/limits-review.ts",
     "test:load": "tsx apps/shopify-admin/tests/load/evaluation.load.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
