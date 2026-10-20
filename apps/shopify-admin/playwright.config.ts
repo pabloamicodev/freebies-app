@@ -3,9 +3,10 @@ import { config } from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 
-config({ path: ".env.test", quiet: true });
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Resolved from this file so the VS Code extension (cwd = repo root) finds it too.
+config({ path: path.join(__dirname, ".env.test"), quiet: true });
 
 // "storefront" (default): buyer flows against the hpn-test-store storefront.
 // "admin": embedded-admin CRUD flows; needs a Shopify admin session (see global-setup.ts).
