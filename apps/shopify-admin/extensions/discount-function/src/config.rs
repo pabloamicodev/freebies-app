@@ -51,6 +51,8 @@ de_struct! {
         "title" => title: Option<String> = None,
         "priority" => priority: i32,
         "stopLowerPriority" => stop_lower_priority: bool = false,
+        // false: the anchor units that unlock this gift offer cannot unlock any other gift offer.
+        "canStackWithGiftOffers" => can_stack_with_gift_offers: bool = true,
         "requiredProductIds" => required_product_ids: Vec<String> = Vec::new(),
         "requiredVariantIds" => required_variant_ids: Vec<String> = Vec::new(),
         "anyRequiredProductIds" => any_required_product_ids: Vec<String> = Vec::new(),

@@ -62,7 +62,7 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
     config.localize(input.presentment_currency_rate().as_f64(), &currency);
 
     let mut offers = config.offers.clone();
-    offers.sort_by_key(|o| o.priority);
+    offers.sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
 
     #[cfg(feature = "code_gate")]
     let (entered, entered_hashes) = entered_codes(&input);
@@ -73,6 +73,8 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
     let mut order_candidates: Vec<schema::OrderDiscountCandidate> = Vec::new();
     // Only offers with a strictly lower priority (higher number) are blocked; equal-priority offers still apply.
     let mut stop_after_priority: Option<i32> = None;
+    // Anchor units already used up by non-stacking gift offers, per cart line.
+    let mut consumed: HashMap<String, i64> = HashMap::new();
 
     for offer in &offers {
         let blocked = stop_after_priority.is_some_and(|stop_at| offer.priority > stop_at);
@@ -100,6 +102,15 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
             }
         }
 
+        let anchors = if has_product_discount && (!offer.can_stack_with_gift_offers || !consumed.is_empty()) {
+            gift_anchors(offer, &input)
+        } else {
+            None
+        };
+        if anchors.as_ref().is_some_and(|a| free_units(a, &consumed) < a.needed) {
+            continue;
+        }
+
         let mut offer_candidates = if has_product_discount {
             evaluate_offer(offer, &input, &config)
         } else {
@@ -122,6 +133,9 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
         if !offer_candidates.is_empty() || !offer_order_candidates.is_empty() {
             if offer.stop_lower_priority {
                 stop_after_priority = Some(offer.priority);
+            }
+            if let Some(anchors) = anchors.as_ref().filter(|_| !offer.can_stack_with_gift_offers) {
+                consume(anchors, &mut consumed);
             }
             candidates.extend(offer_candidates);
             order_candidates.extend(offer_order_candidates);
@@ -210,12 +224,7 @@ fn evaluate_product_reward(
     // how many anchors or units are in the cart. `maxUnitsTotal` stays a separate cart-wide cap.
     // The default of 1 set only applies to free-gift landing rewards: tagged bundles ("buy 3 of A,
     // 20% off") and landing price/quantity tiers discount every qualifying unit unless a limit is set.
-    let free_landing_gift = reward.scope_mode == "landing"
-        && reward.price_tiers.is_empty()
-        && reward.quantity_tiers.is_empty()
-        && (reward.discount_type == "free"
-            || (reward.discount_type == "percentage" && reward.discount_value >= 100.0));
-    let set_limit = if free_landing_gift {
+    let set_limit = if is_free_landing_gift(reward) {
         Some(reward.max_quantity.unwrap_or(1))
     } else if reward.scope_mode == "landing" || reward.scope_mode == "tagged_offer" {
         reward.max_quantity
@@ -438,10 +447,23 @@ fn take_units(applied: &mut HashMap<String, i64>, key: String, cap: i64, wanted:
     units
 }
 
+fn is_free_landing_gift(reward: &CompiledProductReward) -> bool {
+    reward.scope_mode == "landing"
+        && reward.price_tiers.is_empty()
+        && reward.quantity_tiers.is_empty()
+        && (reward.discount_type == "free"
+            || (reward.discount_type == "percentage" && reward.discount_value >= 100.0))
+}
+
 fn landing_anchor_qualifies(reward: &CompiledProductReward, input: &Input) -> bool {
-    let Some(required_source) = reward.required_line_attribute_value.as_deref() else {
-        return false;
-    };
+    landing_anchor_lines(reward, input).is_some_and(|lines| {
+        lines.iter().map(|line| i64::from(*line.quantity())).sum::<i64>()
+            >= reward.required_anchor_min_quantity
+    })
+}
+
+fn landing_anchor_lines<'a>(reward: &CompiledProductReward, input: &'a Input) -> Option<Vec<&'a Lines>> {
+    let required_source = reward.required_line_attribute_value.as_deref()?;
     let anchor_ids: HashSet<&str> = reward
         .required_anchor_variant_ids
         .iter()
@@ -457,7 +479,7 @@ fn landing_anchor_qualifies(reward: &CompiledProductReward, input: &Input) -> bo
         .iter()
         .map(String::as_str)
         .collect();
-    let quantity: i64 = input
+    Some(input
         .cart()
         .lines()
         .iter()
@@ -477,9 +499,91 @@ fn landing_anchor_qualifies(reward: &CompiledProductReward, input: &Input) -> bo
         .filter(|line| {
             !reward.requires_anchor_subscription || line.selling_plan_allocation().is_some()
         })
-        .map(|line| i64::from(*line.quantity()))
-        .sum();
-    quantity >= reward.required_anchor_min_quantity
+        .collect())
+}
+
+/// Cart lines (id, quantity) whose units unlock a gift offer, and how many units unlocking takes.
+struct Anchors {
+    lines: Vec<(String, i64)>,
+    needed: i64,
+}
+
+fn free_units(anchors: &Anchors, consumed: &HashMap<String, i64>) -> i64 {
+    anchors
+        .lines
+        .iter()
+        .map(|(id, quantity)| quantity - consumed.get(id).copied().unwrap_or(0))
+        .sum()
+}
+
+/// Takes the units an unlocked offer needs from its anchors, in cart order.
+fn consume(anchors: &Anchors, consumed: &mut HashMap<String, i64>) {
+    let mut left = anchors.needed;
+    for (id, quantity) in &anchors.lines {
+        let used = consumed.entry(id.clone()).or_insert(0);
+        let taken = left.min(quantity - *used).max(0);
+        *used += taken;
+        left -= taken;
+    }
+}
+
+/// None when the offer is not a gift offer or has no identifiable anchor lines (it then never consumes or is gated).
+fn gift_anchors(offer: &CompiledOffer, input: &Input) -> Option<Anchors> {
+    if !offer.gift_rewards.is_empty() || offer.offer_type == "gift" {
+        return product_gift_anchors(offer, input);
+    }
+    let reward = offer.product_rewards.iter().find(|reward| is_free_landing_gift(reward))?;
+    Some(Anchors {
+        lines: landing_anchor_lines(reward, input)?
+            .into_iter()
+            .map(|line| (line.id().clone(), i64::from(*line.quantity())))
+            .collect(),
+        needed: reward.required_anchor_min_quantity,
+    })
+}
+
+/// The non-gift lines the main condition's product requirements (and page conditions) qualify.
+fn product_gift_anchors(offer: &CompiledOffer, input: &Input) -> Option<Anchors> {
+    let product_lists = [&offer.required_product_ids, &offer.any_required_product_ids];
+    let variant_lists = [&offer.required_variant_ids, &offer.any_required_variant_ids];
+    let has_products = !offer.requirements.is_empty()
+        || product_lists.iter().chain(&variant_lists).any(|ids| !ids.is_empty());
+    if !has_products && offer.page_url_conditions.is_empty() {
+        return None;
+    }
+    let lines = input
+        .cart()
+        .lines()
+        .iter()
+        .filter(|line| *line.quantity() > 0 && !is_gift_line(line))
+        .filter(|line| match offer.subscription_mode.as_deref() {
+            Some("subscription_only") => line.selling_plan_allocation().is_some(),
+            Some("one_time_only") => line.selling_plan_allocation().is_none(),
+            _ => true,
+        })
+        .filter(|line| offer.page_url_conditions.is_empty() || added_from_matching_page(line, offer))
+        .filter(|line| {
+            let Some((variant_id, product_id)) = variant_and_product_id(line) else {
+                return false;
+            };
+            !offer.excluded_product_ids.contains(&product_id)
+                && (!has_products
+                    || offer.requirements.iter().any(|requirement| {
+                        if requirement.track_mode == "variant" {
+                            requirement.variant_id.as_deref() == Some(variant_id.as_str())
+                        } else {
+                            requirement.product_id.as_deref() == Some(product_id.as_str())
+                        }
+                    })
+                    || product_lists.iter().any(|ids| ids.contains(&product_id))
+                    || variant_lists.iter().any(|ids| ids.contains(&variant_id)))
+        })
+        .map(|line| (line.id().clone(), i64::from(*line.quantity())))
+        .collect();
+    Some(Anchors {
+        lines,
+        needed: offer.requirements.iter().map(|requirement| requirement.min_quantity).sum::<i64>().max(1),
+    })
 }
 
 const DEFAULT_QUIZ_MAX_DISCOUNT_PERCENT: f64 = 50.0;
@@ -4860,5 +4964,102 @@ mod tests {
         assert!(discounted_units(&alone, &config).is_empty());
         let two = [theme_line("1", "nektar-sub", "nektar", 2, true, SK_PAGE)];
         assert_eq!(discounted_units(&two, &config), vec![("1".to_string(), 1)]);
+    }
+
+    fn stacking_config(landing: &str, theme: &str) -> String {
+        let landing_offer = landing_cap_config(
+            r#""targetProductIds":["gid://shopify/Product/g13"],"targetVariantIds":[]"#,
+            "",
+        )
+        .replace("ProductVariant/anchor", "ProductVariant/nektar-sub")
+        .replace(r#""lp""#, r#""nektar-13-offer""#);
+        let mut landing_offer: Value = serde_json::from_str(&landing_offer).unwrap();
+        let mut theme_offer: Value = serde_json::from_str(&theme_gift_config()).unwrap();
+        let mut offers = vec![landing_offer["offers"][0].take(), theme_offer["offers"][0].take()];
+        for (offer, id, extra) in [(0, "offer-13", landing), (1, "offer-sk", theme)] {
+            let fields: Value = serde_json::from_str(extra).unwrap();
+            offers[offer]["id"] = id.into();
+            for (key, value) in fields.as_object().unwrap() {
+                offers[offer][key] = value.clone();
+            }
+        }
+        serde_json::json!({ "offers": offers }).to_string()
+    }
+
+    /// A subscription Nektar line carrying both the landing source and the page stamp.
+    fn dual_anchor(id: &str) -> String {
+        let mut line: Value = serde_json::from_str(&theme_line(id, "nektar-sub", "nektar", 1, true, SK_PAGE)).unwrap();
+        line["promoMetadata"] = serde_json::json!({
+            "value": serde_json::json!({ "_promo_page_url": SK_PAGE, "__landing_source": "nektar-13-offer" }).to_string(),
+        });
+        line.to_string()
+    }
+
+    fn stacking_free_lines(anchors: &[&str], config: &str) -> Vec<String> {
+        let mut lines: Vec<String> = anchors.iter().map(|id| dual_anchor(id)).collect();
+        lines.push(scoped_line(
+            "gid://shopify/CartLine/g13", "gid://shopify/ProductVariant/g13", "gid://shopify/Product/g13",
+            "10.00", 1, Some("nektar-13-offer"), None,
+        ));
+        lines.push(theme_line("frother", "frother", "frother-p", 1, false, SK_PAGE));
+        lines.push(theme_line("otg", "otg", "otg-p", 1, false, SK_PAGE));
+        let payload = cart_json(&format!("[{}]", lines.join(",")), "100.00", config);
+        let result = run_function_with_input(run, &payload).unwrap();
+        free_units_by_line(&result)
+            .into_keys()
+            .map(|id| id.trim_start_matches("gid://shopify/CartLine/").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn one_anchor_unlocks_both_gift_offers_when_stacking_is_on() {
+        let config = stacking_config(r#"{"priority":50}"#, r#"{"priority":100}"#);
+        assert_eq!(stacking_free_lines(&["1"], &config), ["frother", "g13", "otg"]);
+    }
+
+    #[test]
+    fn one_anchor_unlocks_only_the_higher_priority_non_stacking_offer() {
+        let config = stacking_config(
+            r#"{"priority":50,"canStackWithGiftOffers":false}"#,
+            r#"{"priority":100,"canStackWithGiftOffers":false}"#,
+        );
+        assert_eq!(stacking_free_lines(&["1"], &config), ["g13"]);
+        let swapped = stacking_config(
+            r#"{"priority":100,"canStackWithGiftOffers":false}"#,
+            r#"{"priority":50,"canStackWithGiftOffers":false}"#,
+        );
+        assert_eq!(stacking_free_lines(&["1"], &swapped), ["frother", "otg"]);
+    }
+
+    #[test]
+    fn equal_priority_non_stacking_offers_resolve_by_offer_id() {
+        let config = stacking_config(
+            r#"{"priority":100,"canStackWithGiftOffers":false}"#,
+            r#"{"priority":100,"canStackWithGiftOffers":false}"#,
+        );
+        assert_eq!(stacking_free_lines(&["1"], &config), ["g13"]);
+    }
+
+    #[test]
+    fn two_anchor_lines_unlock_both_non_stacking_offers() {
+        let config = stacking_config(
+            r#"{"priority":50,"canStackWithGiftOffers":false}"#,
+            r#"{"priority":100,"canStackWithGiftOffers":false}"#,
+        );
+        assert_eq!(stacking_free_lines(&["1", "4"], &config), ["frother", "g13", "otg"]);
+    }
+
+    #[test]
+    fn a_non_stacking_offer_takes_the_anchor_only_from_offers_after_it() {
+        let first = stacking_config(
+            r#"{"priority":50,"canStackWithGiftOffers":false}"#,
+            r#"{"priority":100}"#,
+        );
+        assert_eq!(stacking_free_lines(&["1"], &first), ["g13"]);
+        let last = stacking_config(
+            r#"{"priority":50}"#,
+            r#"{"priority":100,"canStackWithGiftOffers":false}"#,
+        );
+        assert_eq!(stacking_free_lines(&["1"], &last), ["frother", "g13", "otg"]);
     }
 }
