@@ -117,6 +117,7 @@ export async function executeOfferSchedule(
         reason: "validation_error",
         error,
         scope: validation.scope,
+        dedupe: true,
       });
     }
     applicable = applicable.filter((transition) => !blocked.has(transition.id));

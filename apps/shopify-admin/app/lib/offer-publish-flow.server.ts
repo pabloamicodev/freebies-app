@@ -1,6 +1,7 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import {
+  auditLogs,
   offers,
   offerConditions,
   offerRewards,
@@ -51,10 +52,29 @@ export interface SystemOfferEvent {
   scope?: PublishScope;
   before?: Record<string, unknown>;
   after?: Record<string, unknown>;
+  /** Skip when the offer's latest audit row is already this action with the same error (cron repeats). */
+  dedupe?: boolean;
+}
+
+async function isRepeatedEvent(db: Db, event: SystemOfferEvent): Promise<boolean> {
+  const [latest] = await db
+    .select({ action: auditLogs.action, after: auditLogs.after })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.shopId, event.shopId),
+        eq(auditLogs.entityType, "offer"),
+        eq(auditLogs.entityId, event.offerId),
+      ),
+    )
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(1);
+  return latest?.action === event.action && (latest.after as { error?: string } | null)?.error === event.error;
 }
 
 /** Audit row plus Sentry event for a status change or failure the system made on its own. */
 export async function recordSystemOfferEvent(db: Db, event: SystemOfferEvent): Promise<void> {
+  if (event.dedupe && (await isRepeatedEvent(db, event))) return;
   const scope = event.scope ?? "offer";
   await insertAuditLog(db, {
     shopId: event.shopId,
@@ -378,25 +398,68 @@ const isOwnFault = (failure: PublishFailure, offerId: string) =>
 async function keepStatusAndRetry(
   db: Db,
   shopId: string,
-  offerIds: Array<string | undefined>,
+  offerId: string,
   failure: PublishFailure,
 ): Promise<string> {
-  const ids = [...new Set(offerIds.filter((id): id is string => Boolean(id)))];
   await Promise.all([
-    addOfferPublishErrors(db, shopId, ids, failure.message),
+    addOfferPublishErrors(db, shopId, [offerId], failure.message),
     markPublishPending(shopId, db),
   ]);
-  for (const offerId of ids) {
-    await recordSystemOfferEvent(db, {
-      shopId,
-      offerId,
-      action: "publish_failed",
-      reason: "shop_publish_error",
-      error: failure.message,
-      scope: failure.scope,
-    });
-  }
+  await recordSystemOfferEvent(db, {
+    shopId,
+    offerId,
+    action: "publish_failed",
+    reason: "shop_publish_error",
+    error: failure.message,
+    scope: failure.scope,
+  });
   return `${failure.message} The change is saved and the offer keeps its status; publishing to Shopify will be retried automatically.`;
+}
+
+/** Pauses an active offer for its own fault and republishes the shop without it. */
+async function pauseOffer(
+  db: Db,
+  shopId: string,
+  shopDomain: string,
+  offerId: string,
+  reason: string,
+  error: string,
+): Promise<{ rollbackError: string | null; name: string }> {
+  const [row] = await db
+    .update(offers)
+    .set({ status: "paused", updatedAt: new Date() })
+    .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
+    .returning({ name: offers.internalName });
+  const rollbackError = await publishShopConfig(shopId, shopDomain);
+  await addOfferPublishErrors(db, shopId, [offerId], error);
+  await recordSystemOfferEvent(db, {
+    shopId,
+    offerId,
+    action: "system_pause",
+    reason,
+    error,
+    before: { status: "active" },
+    after: { status: "paused" },
+  });
+  return { rollbackError, name: row?.name ?? offerId };
+}
+
+/**
+ * A failure the edited offer did not cause: a different live offer that cannot compile is paused
+ * (its own data is broken and would block the whole shop); anything shop-wide keeps the status.
+ */
+async function resolveForeignFailure(
+  db: Db,
+  shopId: string,
+  shopDomain: string,
+  offerId: string,
+  failure: PublishFailure,
+): Promise<string> {
+  if (failure.scope !== "offer" || !failure.offerId) return keepStatusAndRetry(db, shopId, offerId, failure);
+  const { name, rollbackError } = await pauseOffer(db, shopId, shopDomain, failure.offerId, "compile_error", failure.message);
+  return rollbackError
+    ? `Another offer, "${name}", was paused because ${failure.message} Re-publishing the Shopify configuration also failed: ${rollbackError}`
+    : `Another offer, "${name}", was paused because ${failure.message} It blocked publishing for the whole shop; your change is live.`;
 }
 
 export async function republishIfActive(
@@ -413,29 +476,26 @@ export async function republishIfActive(
   // The edit is already saved. An active offer whose own new state can't be validated or compiled
   // would otherwise ride along with the next unrelated publish, so it is paused; a shop-wide
   // failure (size cap, Shopify, network) is not this offer's fault and never changes its status.
+  // A size or attribute-key overflow found before publishing is blamed on the edited offer: left
+  // active it would block every later publish for the shop.
   const validation = await validateOffersPublishable(db, shopId, [offerId]);
-  const failure: PublishFailure | null = validation.ok
-    ? await tryPublishShop(shopId, shopDomain)
-    : { message: validation.error ?? "Offer is not publishable.", scope: "offer", offerId };
+  const preflight = validation.ok ? await preflightSharedConfig(db, shopId, [offerId]) : null;
+  let reason = "validation_error";
+  let failure: PublishFailure | null;
+  if (!validation.ok) {
+    failure = { message: validation.error ?? "Offer is not publishable.", scope: "offer", offerId };
+  } else if (preflight) {
+    reason = "shop_limit_exceeded";
+    failure = { message: preflight.error, scope: "offer", offerId: preflight.offerId ?? offerId };
+  } else {
+    reason = "compile_error";
+    failure = await tryPublishShop(shopId, shopDomain);
+  }
   if (!failure) return null;
-  if (!isOwnFault(failure, offerId)) return keepStatusAndRetry(db, shopId, [offerId, failure.offerId], failure);
+  if (!isOwnFault(failure, offerId)) return resolveForeignFailure(db, shopId, shopDomain, offerId, failure);
 
   const publishError = failure.message;
-  await db
-    .update(offers)
-    .set({ status: "paused", updatedAt: new Date() })
-    .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-  const rollbackError = await publishShopConfig(shopId, shopDomain);
-  await addOfferPublishErrors(db, shopId, [offerId], publishError);
-  await recordSystemOfferEvent(db, {
-    shopId,
-    offerId,
-    action: "system_pause",
-    reason: validation.ok ? "compile_error" : "validation_error",
-    error: publishError,
-    before: { status: "active" },
-    after: { status: "paused" },
-  });
+  const { rollbackError } = await pauseOffer(db, shopId, shopDomain, offerId, reason, publishError);
   return rollbackError
     ? `${publishError} The offer was paused, but re-publishing the Shopify configuration also failed: ${rollbackError}`
     : `${publishError} The offer was paused so the change can't go live; fix it and activate it again.`;
@@ -479,7 +539,7 @@ export async function finalizeCreatedOffer(
   }
   const failure = await tryPublishShop(shopId, shopDomain);
   if (!failure) return null;
-  if (!isOwnFault(failure, offerId)) return keepStatusAndRetry(db, shopId, [offerId, failure.offerId], failure);
+  if (!isOwnFault(failure, offerId)) return resolveForeignFailure(db, shopId, shopDomain, offerId, failure);
 
   const publishError = failure.message;
   await toDraft("compile_error", publishError);

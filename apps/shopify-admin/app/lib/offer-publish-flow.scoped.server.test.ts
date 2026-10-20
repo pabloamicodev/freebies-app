@@ -13,7 +13,7 @@ vi.mock("./sync/offer-publisher.server.js", async (importOriginal) => ({
 vi.mock("./offer-definitions.server.js", () => ({ invalidateOfferDefinitions: async () => undefined }));
 vi.mock("@sentry/node", () => ({ captureException: vi.fn(), captureMessage: vi.fn() }));
 
-const { finalizeCreatedOffer, republishIfActive, validateActivation } = await import("./offer-publish-flow.server.js");
+const { finalizeCreatedOffer, recordSystemOfferEvent, republishIfActive, validateActivation } = await import("./offer-publish-flow.server.js");
 const { OfferPublishError, getOfferPublishErrors } = await import("./offer-publish-errors.server.js");
 
 const DOMAIN = "scoped-shop.myshopify.com";
@@ -104,18 +104,47 @@ describe("republishIfActive scopes a publish failure", () => {
     expect(rows[0]!.after).toMatchObject({ status: "paused", reason: "compile_error", error: "bad reward" });
   });
 
-  it("does not pause the edited offer when another offer is the one that fails to compile", async () => {
+  it("pauses another live offer that fails to compile, keeps the edited one and stores the error only on the broken one", async () => {
     const edited = await seed("active");
     const other = await seed("active");
-    publishOffersForShop.mockRejectedValue(new OfferPublishError(other, "other is broken"));
+    publishOffersForShop.mockRejectedValueOnce(new OfferPublishError(other, "other is broken")).mockResolvedValue("published");
 
-    await republishIfActive(db, shopId, DOMAIN, edited, true);
+    const message = await republishIfActive(db, shopId, DOMAIN, edited, true);
 
+    expect(message).toContain("Another offer");
     expect(await statusOf(edited)).toBe("active");
-    expect(await statusOf(other)).toBe("active");
+    expect(await statusOf(other)).toBe("paused");
     const errors = await getOfferPublishErrors(shopId, db);
     expect(errors[other]).toBe("other is broken");
-    expect(errors[edited]).toBe("other is broken");
+    expect(errors[edited]).toBeUndefined();
+    expect((await auditFor(other))[0]).toMatchObject({ action: "system_pause", performedBy: "system" });
+    expect(await auditFor(edited)).toEqual([]);
+  });
+
+  it("pauses the edited offer when its change pushes the shop config over a limit", async () => {
+    const heavy = (n: number) => ({
+      conditionType: "specific_product",
+      operator: "any" as const,
+      value: {
+        requirements: Array.from({ length: 80 }, (_, i) => ({
+          variantId: `gid://shopify/ProductVariant/${n}000000${i}`,
+          trackMode: "variant",
+          minQuantity: 1,
+        })),
+      },
+    });
+    await db.update(offers).set({ status: "archived" }).where(eq(offers.shopId, shopId));
+    await seed("active", heavy(1));
+    await seed("active", heavy(2));
+    const edited = await seed("active", heavy(3));
+
+    const message = await republishIfActive(db, shopId, DOMAIN, edited, true);
+
+    expect(message).toContain("paused");
+    expect(await statusOf(edited)).toBe("paused");
+    const [row] = await auditFor(edited);
+    expect(row).toMatchObject({ action: "system_pause" });
+    expect(row!.after).toMatchObject({ reason: "shop_limit_exceeded" });
   });
 
   it("pauses an offer that fails its own validation and audits the reason", async () => {
@@ -128,6 +157,22 @@ describe("republishIfActive scopes a publish failure", () => {
     const [row] = await auditFor(id);
     expect(row).toMatchObject({ action: "system_pause" });
     expect(row!.after).toMatchObject({ reason: "validation_error" });
+  });
+});
+
+describe("recordSystemOfferEvent dedupe", () => {
+  it("writes a repeated block once, and again when the reason changes", async () => {
+    const id = await seed("draft");
+    const event = { shopId, offerId: id, action: "schedule_blocked", reason: "validation_error", dedupe: true };
+    vi.mocked(Sentry.captureMessage).mockClear();
+
+    await recordSystemOfferEvent(db, { ...event, error: "no reward" });
+    await recordSystemOfferEvent(db, { ...event, error: "no reward" });
+    expect(await auditFor(id)).toHaveLength(1);
+    expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+
+    await recordSystemOfferEvent(db, { ...event, error: "no condition" });
+    expect(await auditFor(id)).toHaveLength(2);
   });
 });
 

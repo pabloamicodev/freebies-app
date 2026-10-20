@@ -124,6 +124,18 @@ describe("activation honours the schedule", () => {
     );
   });
 
+  it("list toggle_status rollback does not overwrite a status the cron changed in between", async () => {
+    const id = await seedOffer(db, shopId, { status: "paused" });
+    publishShopConfig.mockImplementationOnce(async () => {
+      await db.update(offers).set({ status: "expired" }).where(eq(offers.id, id));
+      return "Shopify unavailable";
+    });
+
+    await run(list.action, post("/app/offers", { intent: "toggle_status", offerId: id, currentStatus: "paused" }));
+
+    expect((await row(id)).status).toBe("expired");
+  });
+
   it("list toggle_status never turns a scheduled offer live early, whatever the form says", async () => {
     const id = await seedOffer(db, shopId, { status: "scheduled", startsAt: days(3) });
 

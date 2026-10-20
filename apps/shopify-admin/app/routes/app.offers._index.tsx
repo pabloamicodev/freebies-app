@@ -321,7 +321,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         await db
           .update(offers)
           .set({ status: current.status, updatedAt: new Date() })
-          .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+          .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId), eq(offers.status, newStatus)));
         return { error: publishError };
       }
       void insertAuditLog(db, {
