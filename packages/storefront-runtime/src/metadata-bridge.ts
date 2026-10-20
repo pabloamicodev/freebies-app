@@ -393,6 +393,13 @@ function patchXhrCartAdd(): void {
   } as typeof proto.send;
 }
 
+/** /cart/change.js drops the plan of a line it rewrites unless it is sent again; undefined is dropped by JSON.stringify. */
+export function sellingPlanField(
+  line: { selling_plan_allocation?: CartLineLike["selling_plan_allocation"] },
+): { selling_plan: number | string | undefined } {
+  return { selling_plan: line.selling_plan_allocation?.selling_plan?.id };
+}
+
 interface CartLineLike {
   key: string;
   quantity?: number;
@@ -448,12 +455,11 @@ export function createLateStamper(deps: LateStamperDeps): {
         if (before.has(line.key) || !page) continue;
         const properties = stringProperties(line.properties ?? {});
         if (METADATA_PROPERTY in properties) continue;
-        const planId = line.selling_plan_allocation?.selling_plan?.id;
         const next = await deps.changeLine({
           id: line.key,
           quantity: line.quantity ?? 1,
           properties: withPromoMetadata(properties, page),
-          ...(planId !== undefined ? { selling_plan: planId } : {}),
+          ...sellingPlanField(line),
         });
         if (next) {
           latest = next;

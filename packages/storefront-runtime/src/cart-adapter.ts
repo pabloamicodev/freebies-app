@@ -8,6 +8,7 @@
 
 import {
   needsPromoMetadataPacking,
+  sellingPlanField,
   withPromoMetadata,
 } from "./metadata-bridge.js";
 
@@ -24,6 +25,9 @@ export interface CartLineUpdate {
   lineId?: string;
   quantity: number;
   properties?: Record<string, string>;
+  /** Stamp the current page; otherwise the line keeps the page it was added on. */
+  stamp?: boolean;
+  selling_plan_allocation?: CartItem["selling_plan_allocation"];
 }
 
 export interface CartLineRemove {
@@ -67,7 +71,7 @@ export interface CartItem {
   product_type: string;
   tags: string;
   requires_selling_plan: boolean;
-  selling_plan_allocation: unknown;
+  selling_plan_allocation: { selling_plan?: { id?: number | string } } | null;
   available: boolean;
   inventory_quantity: number;
   inventory_policy: string;
@@ -138,6 +142,9 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/** Lines already in the first cart read of this page view; later ones were added by the theme and need this page stamped. */
+let pageLoadLineKeys: string[] | undefined;
+
 export const AjaxCartAdapter = {
   async getCart(): Promise<CartData> {
     const cart = await fetchJson<CartData>(`${window.Shopify?.routes?.root ?? "/"}cart.js`);
@@ -146,6 +153,7 @@ export const AjaxCartAdapter = {
 
   async migrateLegacyMetadata(cart: CartData): Promise<CartData> {
     const migrated = loadMigratedLineKeys();
+    const loaded = (pageLoadLineKeys ??= cart.items.map((item) => item.key));
     let current = cart;
     let migratedCount = 0;
     for (const item of cart.items) {
@@ -156,6 +164,8 @@ export const AjaxCartAdapter = {
         key: item.key,
         quantity: item.quantity,
         properties: item.properties ?? {},
+        stamp: !loaded.includes(item.key),
+        selling_plan_allocation: item.selling_plan_allocation,
       });
       migrated.add(item.key);
       migratedCount++;
@@ -188,7 +198,8 @@ export const AjaxCartAdapter = {
         body: JSON.stringify({
           id: line.key,
           quantity: line.quantity,
-          ...(line.properties ? { properties: withPromoMetadata(line.properties, null, null) } : {}),
+          ...(line.properties ? { properties: withPromoMetadata(line.properties, line.stamp ? undefined : null, null) } : {}),
+          ...sellingPlanField(line),
         }),
       }),
     );
