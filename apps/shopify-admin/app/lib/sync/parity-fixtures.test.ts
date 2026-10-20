@@ -210,6 +210,15 @@ function landingOffer(quantity: number | null): OfferSpec {
   );
 }
 
+const anchorCondition: Cond = [
+  "specific_product",
+  { requirements: [{ productId: P(10), trackMode: "product", minQuantity: 1 }], multiplyByGroups: false },
+  "main",
+];
+const anchorLine = line("a1", 10, null, { unitPrice: "50.00" });
+// What a theme adds on its own: no promo-engine markers, so the Function must recognise it by variant.
+const themeGift = (id: string, n: number, quantity: number): LineSpec => line(id, n, { _promo_gift: "true" }, { quantity });
+
 const SCENARIOS: Scenario[] = [
   {
     name: "page-types-product-restrict",
@@ -699,6 +708,48 @@ const SCENARIOS: Scenario[] = [
     qualified: [A],
     discounted: { [A]: ["g50"] },
     quantities: { [A]: { g50: 1 } },
+  },
+  {
+    name: "gift-theme-untagged-discounted-and-capped",
+    description:
+      "A theme adds the gift lines itself without our markers: each is discounted up to the reward quantity (2 units of one gift in the cart: only 1 is free).",
+    offers: [giftOffer(A, [anchorCondition], 1, [51, 52], "set")],
+    lines: [anchorLine, themeGift("t51", 51, 2), themeGift("t52", 52, 1)],
+    qualified: [A],
+    discounted: { [A]: ["t51", "t52"] },
+    quantities: { [A]: { t51: 1, t52: 1 } },
+  },
+  {
+    name: "gift-theme-untagged-needs-the-offer-to-qualify",
+    description: "Untagged gift variants are charged while the offer does not qualify (no anchor product in the cart).",
+    offers: [giftOffer(A, [anchorCondition], 1, [51, 52], "set")],
+    lines: [themeGift("t51", 51, 1), themeGift("t52", 52, 1)],
+    qualified: [],
+    discounted: {},
+  },
+  {
+    name: "gift-theme-untagged-precedence",
+    description:
+      "Our tagged line claims the quota first so an untagged duplicate is charged, and a line tagged for another offer is never taken.",
+    offers: [giftOffer(A, [anchorCondition], 1, [51, 52], "set")],
+    lines: [
+      anchorLine,
+      themeGift("t51", 51, 1),
+      gift("g51", A, { _promo_engine_reward_id: setRewardId(51) }, { variantId: V(51), productId: P(51) }),
+      gift("g52", B, { _promo_engine_reward_id: setRewardId(52) }, { variantId: V(52), productId: P(52) }),
+    ],
+    qualified: [A],
+    discounted: { [A]: ["g51"] },
+    quantities: { [A]: { g51: 1 } },
+  },
+  {
+    name: "gift-theme-untagged-anchor-extra-unit-is-the-gift",
+    description: "The gift variant is also the anchor and its line holds 2 units: 1 qualifies the offer, only the extra unit is the free gift.",
+    offers: [giftOffer(A, [anchorCondition], 1, [10], "single")],
+    lines: [{ ...anchorLine, quantity: 2 }],
+    qualified: [A],
+    discounted: { [A]: ["a1"] },
+    quantities: { [A]: { a1: 1 } },
   },
 ];
 
