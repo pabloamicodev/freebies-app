@@ -27,7 +27,8 @@ describe("extension app url generator", () => {
 
   it("committed files default to HPN", () => {
     for (const file of TARGETS) {
-      expect(readFileSync(file, "utf8")).toBe(renderAppUrlModule(HOSTS["shopify.app.toml"]));
+      // Windows checkouts with core.autocrlf turn the committed LF into CRLF.
+      expect(readFileSync(file, "utf8").replace(/\r\n/g, "\n")).toBe(renderAppUrlModule(HOSTS["shopify.app.toml"]));
     }
   });
 });
