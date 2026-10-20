@@ -83,14 +83,21 @@ fn function_input(fixture: &Value) -> Value {
         all_tags.extend(string_set(&offer["requiredCustomerTags"]));
         all_tags.extend(string_set(&offer["excludedCustomerTags"]));
     }
-    let buyer_identity = if customer_tags.is_empty() {
+    // `cart.customer`: absent or null is a guest; an object is an identified customer whose optional
+    // `usage` map becomes the `{"v":1,"u":{...}}` metafield.
+    let identified = cart.get("customer").filter(|customer| !customer.is_null());
+    let buyer_identity = if customer_tags.is_empty() && identified.is_none() {
         Value::Null
     } else {
         let has_tags: Vec<Value> = all_tags
             .iter()
             .map(|tag| json!({ "tag": tag, "hasTag": customer_tags.contains(tag) }))
             .collect();
-        json!({ "customer": { "numberOfOrders": 0, "hasTags": has_tags, "amountSpent": { "amount": "0.00" } } })
+        let mut customer = json!({ "numberOfOrders": 0, "hasTags": has_tags, "amountSpent": { "amount": "0.00" } });
+        if let Some(usage) = identified.and_then(|customer| customer.get("usage")) {
+            customer["usage"] = json!({ "value": json!({ "v": 1, "u": usage }).to_string() });
+        }
+        json!({ "customer": customer })
     };
     let entered: Vec<Value> = string_set(&cart["enteredCodes"])
         .into_iter()

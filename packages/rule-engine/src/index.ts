@@ -5,7 +5,7 @@ export { buildCartHash, extractGiftLines, extractQualifyingLines, projectedVolum
 export { evaluateCartValue } from "./conditions/cart-value.js";
 export { evaluateCartQuantity } from "./conditions/cart-quantity.js";
 export { evaluateSpecificProduct } from "./conditions/specific-product.js";
-export { evaluateCustomerTags, evaluateOrderHistory, evaluateOneUsePerCustomer, evaluateSalesChannel, evaluateMarket } from "./conditions/customer.js";
+export { evaluateCustomerTags, evaluateOrderHistory, evaluateSalesChannel, evaluateMarket } from "./conditions/customer.js";
 export { evaluateCartValueMultiplier } from "./conditions/cart-value-multiplier.js";
 export { evaluatePack } from "./conditions/pack.js";
 export { evaluateProductQuantityLimits } from "./conditions/product-quantity-limits.js";

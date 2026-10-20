@@ -12,6 +12,7 @@ import { createMemoryCache } from "./memory-cache.server.js";
 import { redisDelete, redisGetString, redisSetString } from "./redis.server.js";
 import { computeOfferVersion } from "./offer-version.server.js";
 import { normalizeConditionValue } from "./offer-config-normalization.server.js";
+import { isLimitsEnforced } from "./limits-enforced.server.js";
 
 // D10: definitions are cached in Redis for OFFER_DEFINITIONS_TTL_SECONDS (shared across
 // serverless instances) and dropped on publish via invalidateOfferDefinitions. A reader that
@@ -113,6 +114,11 @@ export async function loadOfferDefinitions(shopId: string, db: Db): Promise<Offe
       ])
     : [[], [], []];
 
+  // Mirrors the compile gate: until the shop's limits.enforced flag is on, the Function ignores these limits.
+  const anyLimit = policies.some(
+    (policy) => (policy.maxApplicationsPerCart ?? 0) > 0 || (policy.maxApplicationsPerCustomer ?? 0) > 0 || policy.requireIdentifiedCustomer,
+  );
+  const limitsEnforced = anyLimit && (await isLimitsEnforced(db, shopId));
   const policyByOffer = new Map(policies.map((policy) => [policy.offerId, policy]));
   const offerDefinitions: OfferDefinition[] = activeOffers.map((offer) => {
     const policy = policyByOffer.get(offer.id);
@@ -160,8 +166,9 @@ export async function loadOfferDefinitions(shopId: string, db: Db): Promise<Offe
         combinesWithShippingDiscounts: policy?.combinesWithShippingDiscounts ?? true,
         stopLowerPriority: policy?.stopLowerPriority ?? false,
         canStackWithGiftOffers: policy?.canStackWithGiftOffers ?? true,
-        maxApplicationsPerCart: policy?.maxApplicationsPerCart ?? null,
-        maxApplicationsPerCustomer: policy?.maxApplicationsPerCustomer ?? null,
+        maxApplicationsPerCart: limitsEnforced ? (policy?.maxApplicationsPerCart ?? null) : null,
+        maxApplicationsPerCustomer: limitsEnforced ? (policy?.maxApplicationsPerCustomer ?? null) : null,
+        requireIdentifiedCustomer: limitsEnforced && policy?.requireIdentifiedCustomer === true,
       },
       giftValueCountsForOtherOffers: policy?.giftValueCountsForOtherOffers ?? false,
     };

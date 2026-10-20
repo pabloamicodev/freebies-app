@@ -1,13 +1,13 @@
 import { EvaluationInputSchema, EvaluationResultSchema, type EvaluationInput, type EvaluationResult } from "@promo/shared-types";
 import { evaluate, type OfferDefinition } from "@promo/rule-engine";
-import { analyticsEvents, type Db } from "@promo/db";
-import { and, eq, inArray, count } from "drizzle-orm";
+import type { Db } from "@promo/db";
 import * as Sentry from "@sentry/node";
 import { waitUntil } from "@vercel/functions";
 import { checkRateLimit, envLimit, getClientIp, jitteredRetryAfter } from "./rate-limit.server.js";
 import { createMemoryCache } from "./memory-cache.server.js";
 import { redisGetString, redisSetString } from "./redis.server.js";
 import { getOfferDefinitions } from "./offer-definitions.server.js";
+import { getUsageStates } from "./usage-states.server.js";
 import { applyCodeGatesDetailed, MISSED_CODE_WINDOW_MS } from "./code-gate.server.js";
 import { resolveCustomer } from "./resolve-customer.server.js";
 import { buildUpsells } from "./upsell-enrichment.server.js";
@@ -37,6 +37,7 @@ const CUSTOMER_DEPENDENT_CONDITION_TYPES = new Set<string>([
 
 function needsCustomerProfile(offerDefinitions: OfferDefinition[]): boolean {
   return offerDefinitions.some((offer) =>
+    offer.combinationPolicy.requireIdentifiedCustomer === true ||
     offer.conditions.some(
       (condition) => condition.isEnabled && CUSTOMER_DEPENDENT_CONDITION_TYPES.has(condition.conditionType),
     ),
@@ -260,16 +261,16 @@ export async function handleEvaluationRequest(
 
   // resolveCustomer's Admin API round trip is only needed when some active
   // offer inspects the profile it fetches (tags/spend/location) — skip it
-  // entirely otherwise. getOneUseStates needs a customer id too, but only to
-  // key its own attributed-orders lookup: that's just the verified logged-in
+  // entirely otherwise. getUsageStates needs a customer id too, but only to
+  // key its own usage lookup: that's just the verified logged-in
   // id reconstructed as a GID, so it runs in parallel with resolveCustomer
   // instead of waiting on its (slower, more failure-prone) enriched profile.
   const customerGid = customerGidFromLoggedIn(loggedInCustomerId);
-  const [customer, oneUseStates] = await Promise.all([
+  const [customer, usageStates] = await Promise.all([
     needsCustomerProfile(offerDefinitions)
       ? resolveCustomer(shop.shopDomain, shop.accessTokenEncrypted, loggedInCustomerId)
       : Promise.resolve(null),
-    getOneUseStates(shop.id, shop.db, customerGid, offerDefinitions.map((offer) => offer.id)),
+    getUsageStates(shop.id, shop.db, customerGid, offerDefinitions.map((offer) => offer.id)),
   ]);
   timer.mark("customer");
 
@@ -285,7 +286,7 @@ export async function handleEvaluationRequest(
 
   const result = await evaluate(input, {
     offers: offerDefinitions,
-    oneUseStates,
+    usageStates,
     now: new Date(),
     shopCurrencyCode: shop.currencyCode ?? undefined,
   });
@@ -356,26 +357,3 @@ export async function handleEvaluationRequest(
   return apiJson(request, { ...parsedResult.data, specificLinkParams: collectSpecificLinkParams(offerDefinitions) }, { headers: { "Server-Timing": timer.header() } });
 }
 
-async function getOneUseStates(
-  shopId: string,
-  db: Db,
-  customerId: string | null,
-  offerIds: string[],
-) {
-  if (!customerId || offerIds.length === 0) return [];
-  // Only count offers redeemed in a PAID order (written server-side by the
-  // orders/paid webhook) — never a cart-side event, which a buyer can trigger
-  // by adding the gift and abandoning, or spoof outright.
-  const rows: { offerId: string | null; usedCount: number }[] = await db
-    .select({ offerId: analyticsEvents.offerId, usedCount: count() })
-    .from(analyticsEvents)
-    .where(and(
-      eq(analyticsEvents.shopId, shopId),
-      eq(analyticsEvents.customerId, customerId),
-      inArray(analyticsEvents.offerId, offerIds),
-      eq(analyticsEvents.eventName, "order_placed_attributed"),
-    ))
-    .groupBy(analyticsEvents.offerId);
-
-  return rows.flatMap((row) => row.offerId ? [{ offerId: row.offerId, usedCount: row.usedCount }] : []);
-}

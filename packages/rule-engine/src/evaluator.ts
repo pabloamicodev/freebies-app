@@ -14,7 +14,6 @@ import { evaluateSpecificProduct, type SpecificProductConditionValue } from "./c
 import {
   evaluateCustomerTags,
   evaluateOrderHistory,
-  evaluateOneUsePerCustomer,
   evaluateSalesChannel,
   evaluateMarket,
   type CustomerTagsConditionValue,
@@ -90,18 +89,41 @@ export interface CombinationPolicyDefinition {
   stopLowerPriority: boolean;
   /** false: the cart units that unlock this gift offer cannot unlock another gift offer. Absent means true. */
   canStackWithGiftOffers?: boolean;
+  /** Mirrors the Function's `mpc`: only ever lowers a gift set / unit cap. */
   maxApplicationsPerCart: number | null;
+  /** Mirrors `mpu`: the offer is skipped once the customer has used it this many times. */
   maxApplicationsPerCustomer: number | null;
+  /** Mirrors `ri`: a guest never qualifies. */
+  requireIdentifiedCustomer?: boolean;
 }
 
-export interface OneUseState {
+/** Paid orders in which this customer already got the offer (the `{"v":1,"u":{...}}` metafield, per offer). */
+export interface UsageState {
   offerId: string;
   usedCount: number;
 }
 
+const positive = (value: number | null | undefined): number | undefined =>
+  typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+
+/** The Function's effective `mpu`: the policy limit, or 1 for an enabled `one_use_per_customer` condition (DL6). */
+function effectiveMaxUses(offer: OfferDefinition): number | undefined {
+  const limits = [
+    positive(offer.combinationPolicy.maxApplicationsPerCustomer),
+    offer.conditions.some((c) => c.isEnabled && c.conditionType === "one_use_per_customer") ? 1 : undefined,
+  ].filter((limit): limit is number => limit !== undefined);
+  return limits.length > 0 ? Math.min(...limits) : undefined;
+}
+
+/** `mpc` caps a gift reward's per-product units (sets); it never raises the reward's own limit. */
+export function capPerCart(offer: OfferDefinition, limit: number): number {
+  const max = positive(offer.combinationPolicy.maxApplicationsPerCart);
+  return max === undefined ? limit : Math.min(limit, max);
+}
+
 export interface EvaluatorContext {
   offers: OfferDefinition[];
-  oneUseStates: OneUseState[];
+  usageStates: UsageState[];
   now: Date;
   /** Shop's base currency code — used to determine if a currency conversion is needed. */
   shopCurrencyCode?: string;
@@ -157,16 +179,17 @@ export async function evaluate(
       continue;
     }
 
+    // one_use_per_customer is enforced below as mpu = 1, exactly like the Function.
     // Evaluate enabled conditions in order
     const pageConditions = offer.conditions.filter(
       (c) => (c.scope === "main" || c.scope === "sub") && c.isEnabled && isPageConditionType(c.conditionType),
     );
     const mainConditions = offer.conditions
-      .filter((c) => c.scope === "main" && c.isEnabled && !isPageConditionType(c.conditionType))
+      .filter((c) => c.scope === "main" && c.isEnabled && !isPageConditionType(c.conditionType) && c.conditionType !== "one_use_per_customer")
       .sort((a, b) => a.sortOrder - b.sortOrder);
 
     const subConditions = offer.conditions
-      .filter((c) => c.scope === "sub" && c.isEnabled && !isPageConditionType(c.conditionType))
+      .filter((c) => c.scope === "sub" && c.isEnabled && !isPageConditionType(c.conditionType) && c.conditionType !== "one_use_per_customer")
       .sort((a, b) => a.sortOrder - b.sortOrder);
 
     const currency = {
@@ -185,19 +208,29 @@ export async function evaluate(
     // Only evaluate sub-conditions if main passed
     if (passed) {
       for (const cond of subConditions) {
-        // One-use-per-customer
-        if (cond.conditionType === "one_use_per_customer") {
-          const state = ctx.oneUseStates.find((s) => s.offerId === offer.id);
-          const result = evaluateOneUsePerCustomer(input.customer, {
-            usedCount: state?.usedCount ?? 0,
-          });
-          reasons.push(result.ok ? result.value : result.error);
-          if (!result.ok) passed = false;
-          continue;
-        }
         const result = evaluateCondition(cond, input, currency);
         reasons.push(result.ok ? result.value : result.error);
         if (!result.ok) passed = false;
+      }
+    }
+
+    // Same order as the Function's customer_blocked: identified first, then uses >= mpu. A guest has 0 uses.
+    if (offer.combinationPolicy.requireIdentifiedCustomer && !input.customer) {
+      reasons.push({ conditionType: "require_identified_customer", passed: false, message: "Requires an identified customer" });
+      passed = false;
+    }
+    const maxUses = effectiveMaxUses(offer);
+    if (maxUses !== undefined) {
+      const used = ctx.usageStates.find((s) => s.offerId === offer.id)?.usedCount ?? 0;
+      if (used >= maxUses) {
+        reasons.push({
+          conditionType: "max_applications_per_customer",
+          passed: false,
+          message: `Customer has already used this offer ${used} time(s)`,
+          actual: used,
+          required: maxUses,
+        });
+        passed = false;
       }
     }
 
@@ -279,7 +312,7 @@ export async function evaluate(
           if (declinedGiftRewards.has(`${offer.id}:${reward.id}`)) continue;
           const target = reward.target as { variantId?: string; variantIds?: string[]; fallbackVariantIds?: string[] };
           const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
-          const qty = reward.quantity ?? 1;
+          const qty = capPerCart(offer, reward.quantity ?? 1);
           // A fallback already added for a sold-out gift fulfils the reward too.
           const fulfillingVariantIds = new Set([...variantIds, ...(target.fallbackVariantIds ?? [])]);
 
@@ -343,7 +376,7 @@ export async function evaluate(
         const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
         if (isAutoAddGift(reward) && variantIds.length === 1) continue;
         const allowed = new Set([...variantIds, ...(target.fallbackVariantIds ?? [])]);
-        const limit = Math.max(1, reward.quantity ?? 1);
+        const limit = capPerCart(offer, Math.max(1, reward.quantity ?? 1));
         const isPicker = variantIds.length > 1 || reward.isCustomerSelectable;
         let remainingForReward = isPicker ? PICKER_SELECTION_COUNT * limit : Number.POSITIVE_INFINITY;
         const remainingByVariant = new Map<string, number>();
