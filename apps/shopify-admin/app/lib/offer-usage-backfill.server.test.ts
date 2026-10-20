@@ -32,6 +32,11 @@ const line = (id: number, offerId: string, amount: string) =>
   });
 
 describe("parseBulkOrdersJsonl", () => {
+  it("matches titles that differ only in case or whitespace", () => {
+    const lines = [order(1), app(1, { __typename: "AutomaticDiscountApplication", title: " free  GIFT" })];
+    expect(parseBulkOrdersJsonl(lines, offerRows, codes).rows.map((r) => r.offerId)).toEqual([OFFER_A]);
+  });
+
   it("attributes automatic by title, code by code and gift lines with a discount", () => {
     const lines = [
       order(1),

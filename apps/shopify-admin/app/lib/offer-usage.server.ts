@@ -2,7 +2,7 @@ import { discountCodes, offerCustomerUsages, offers, offerUsageSync, shops, type
 import { and, asc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { z } from "zod";
-import { clampDiscountMessage } from "./discount-message.js";
+import { clampDiscountMessage, normalizeOfferTitle } from "./discount-message.js";
 import { decryptToken } from "./token-crypto.server.js";
 import { shopifyGraphQL } from "./shopify-fetch.server.js";
 
@@ -36,8 +36,10 @@ export type OrderUsagePayload = z.infer<typeof orderUsageSchema>;
 
 export type UsageSource = "title" | "code" | "line";
 
-const offerMessage = (o: { publicTitle: string; internalName: string }) =>
-  clampDiscountMessage(o.publicTitle) ?? clampDiscountMessage(o.internalName);
+const offerMessage = (o: { publicTitle: string; internalName: string }) => {
+  const message = clampDiscountMessage(o.publicTitle) ?? clampDiscountMessage(o.internalName);
+  return message === undefined ? undefined : normalizeOfferTitle(message);
+};
 
 export interface UsageOfferRow {
   id: string;
@@ -50,7 +52,7 @@ export interface UsageOfferRow {
 /** Automatic-discount titles, upper-cased codes and discounted gift-line offer ids found on an order. */
 export function orderUsageSignals(order: OrderUsagePayload) {
   const automaticTitles = new Set(
-    order.discount_applications.flatMap((a) => (a.type === "automatic" && a.title ? [a.title] : [])),
+    order.discount_applications.flatMap((a) => (a.type === "automatic" && a.title ? [normalizeOfferTitle(a.title)] : [])),
   );
   const codes = [
     ...new Set(
@@ -69,7 +71,7 @@ export function orderUsageSignals(order: OrderUsagePayload) {
   return { automaticTitles, codes, discountedLineOfferIds };
 }
 
-/** Pure attribution: automatic offers by exact title, gift lines by offer id, code offers via `codeOfferIds`. */
+/** Pure attribution: automatic offers by normalized title, gift lines by offer id, code offers via `codeOfferIds`. */
 export function matchOrderOffers(
   signals: ReturnType<typeof orderUsageSignals>,
   rows: UsageOfferRow[],

@@ -68,11 +68,11 @@ describe("recordOfferUsages attribution", () => {
     expect(rows[0]).toMatchObject({ offerId: a, customerGid: CUSTOMER_GID, source: "title" });
   });
 
-  it("does not match a title that differs in case, nor archived offers", async () => {
-    await seedOffer(db, shopId, { publicTitle: "Free Mug" });
+  it("matches a title that differs only in case or whitespace, but not archived offers", async () => {
+    const a = await seedOffer(db, shopId, { publicTitle: "Free Mug" });
     await seedOffer(db, shopId, { publicTitle: "Old Deal", status: "archived" });
-    await usage.recordOfferUsages(db, shopId, order({ discount_applications: [auto("free mug"), auto("Old Deal")] }));
-    expect(await usageRows()).toHaveLength(0);
+    await usage.recordOfferUsages(db, shopId, order({ discount_applications: [auto("  free   MUG "), auto("Old Deal")] }));
+    expect((await usageRows()).map((r) => r.offerId)).toEqual([a]);
   });
 
   it("matches a code application by code only, never by title, and ignores other shops' codes", async () => {
@@ -324,6 +324,14 @@ describe("findTitleCollisions", () => {
     await seedOffer(db, shopId, { publicTitle: "Different" });
     const [offerA] = await db.select().from(offers).where(eq(offers.id, a));
     expect(await usage.findTitleCollisions(db, shopId, offerA!)).toEqual([{ id: b, internalName: "twin" }]);
+  });
+
+  it("treats titles that differ only in case or whitespace as a collision, and limitedTitleError blocks it", async () => {
+    const a = await seedOffer(db, shopId, { publicTitle: "Dup Title" });
+    const b = await seedOffer(db, shopId, { publicTitle: "dup  title", internalName: "twin" });
+    const [offerA] = await db.select().from(offers).where(eq(offers.id, a));
+    expect(await usage.findTitleCollisions(db, shopId, offerA!)).toEqual([{ id: b, internalName: "twin" }]);
+    expect(await usage.limitedTitleError(db, shopId, a)).toContain("twin");
   });
 });
 
