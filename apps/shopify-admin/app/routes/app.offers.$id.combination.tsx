@@ -9,6 +9,7 @@ import { PageHeader } from "../components/PageHeader.js";
 import { NotFound } from "../components/NotFound.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
+import { findTitleCollisions } from "../lib/offer-usage.server.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { offerCombinationPolicies, offers } from "@promo/db";
 import { and, eq, inArray, ne } from "drizzle-orm";
@@ -60,7 +61,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     if (!policy.combinesWithShippingDiscounts) restricting.shippingDiscounts.push(entry);
   }
 
-  return { offer, policy: policyRows[0] ?? null, restricting };
+  const policy = policyRows[0] ?? null;
+  const limited = Boolean(policy && ((policy.maxApplicationsPerCart ?? 0) > 0 || (policy.maxApplicationsPerCustomer ?? 0) > 0));
+  const titleCollisions = limited ? await findTitleCollisions(db, shopId, offer) : [];
+
+  return { offer, policy, restricting, titleCollisions };
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
@@ -115,7 +120,7 @@ const RESTRICTION_LABELS = {
 } as const;
 
 export default function OfferCombinationPage() {
-  const { offer, policy, restricting } = useLoaderData<typeof loader>();
+  const { offer, policy, restricting, titleCollisions } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
@@ -129,6 +134,24 @@ export default function OfferCombinationPage() {
     <div className="b-page">
       {/* Header */}
       <PageHeader title="Combination Policy" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
+
+      {titleCollisions.length > 0 && (
+        <div className="b-banner b-banner-orange b-mb-4" role="alert">
+          <span className="b-banner-icon">⚠</span>
+          <div className="b-banner-body">
+            <p className="b-banner-text" style={{ margin: 0, fontWeight: 600 }}>
+              Another offer has the same customer-facing title. Orders are matched to offers by that title, so usage will be counted against all of them:
+            </p>
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+              {titleCollisions.map((o) => (
+                <li key={o.id} className="b-text-sm">
+                  <Link to={`/app/offers/${o.id}`}>{o.internalName}</Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
 
       {restrictionEntries.length > 0 && (
         <div className="b-banner b-banner-orange b-mb-4">

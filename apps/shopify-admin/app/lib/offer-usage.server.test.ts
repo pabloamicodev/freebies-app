@@ -6,8 +6,10 @@ import type { PushUsage } from "./offer-usage.server.js";
 
 vi.mock("@sentry/node", () => ({ captureMessage: vi.fn(), captureException: vi.fn() }));
 vi.mock("./token-crypto.server.js", () => ({ decryptToken: async () => "token" }));
-vi.mock("./sync/analytics-reconcile.server.js", () => ({ reconcileOrderAttribution: vi.fn().mockResolvedValue(undefined) }));
-vi.mock("./integration-dispatcher.server.js", () => ({ dispatchIntegrationEvents: vi.fn().mockResolvedValue(undefined) }));
+const reconcileOrderAttribution = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const dispatchIntegrationEvents = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("./sync/analytics-reconcile.server.js", () => ({ reconcileOrderAttribution }));
+vi.mock("./integration-dispatcher.server.js", () => ({ dispatchIntegrationEvents }));
 
 const Sentry = await import("@sentry/node");
 const usage = await import("./offer-usage.server.js");
@@ -28,6 +30,8 @@ beforeEach(async () => {
   usage.resetUsageScopeWarnings();
   vi.mocked(Sentry.captureMessage).mockClear();
   vi.mocked(Sentry.captureException).mockClear();
+  reconcileOrderAttribution.mockClear();
+  dispatchIntegrationEvents.mockClear();
   await db.delete(offerUsageSync);
 });
 
@@ -242,7 +246,107 @@ describe("metafield push", () => {
   });
 });
 
+describe("drain fairness, stale pushes and the attempt cap", () => {
+  const pendingRow = (shop: string, i: number) => ({ shopId: shop, customerGid: `gid://shopify/Customer/${i}`, pendingSince: new Date(Date.now() - 1_000_000 + i) });
+
+  it("a scope-blocked shop with 300 pending customers does not block another shop, and is cooled down", async () => {
+    const blockedDomain = `blocked-${++n}.myshopify.com`;
+    const blockedShop = await seedShop(db, blockedDomain);
+    await db.insert(offerUsageSync).values(Array.from({ length: 300 }, (_, i) => pendingRow(blockedShop, i)));
+    await db.insert(offerUsageSync).values({ shopId, customerGid: CUSTOMER_GID, pendingSince: new Date() });
+    const p = vi.fn<PushUsage>().mockImplementation(async ({ shopDomain }) => {
+      if (shopDomain === blockedDomain) throw new Error("Access denied");
+    });
+    expect(await usage.drainUsageSync(db, p)).toMatchObject({ synced: 1, blockedShops: 1 });
+    expect((await syncRow())!.pendingSince).toBeNull();
+    expect(p.mock.calls.filter(([a]) => a.shopDomain === blockedDomain)).toHaveLength(1);
+
+    p.mockClear();
+    expect(await usage.drainUsageSync(db, p)).toMatchObject({ synced: 0, blockedShops: 0 });
+    expect(p).not.toHaveBeenCalled();
+    await db.update(offerUsageSync).set({ nextAttemptAt: new Date(Date.now() - 1000) }).where(eq(offerUsageSync.shopId, blockedShop));
+    await usage.drainUsageSync(db, p);
+    expect(p).toHaveBeenCalledTimes(1);
+  });
+
+  it("round-robins shops so a shop with a long backlog cannot fill the batch", async () => {
+    const big = await seedShop(db, `big-${++n}.myshopify.com`);
+    await db.insert(offerUsageSync).values(Array.from({ length: 300 }, (_, i) => pendingRow(big, i)));
+    await db.insert(offerUsageSync).values({ shopId, customerGid: CUSTOMER_GID, pendingSince: new Date() });
+    const p = vi.fn<PushUsage>().mockResolvedValue(undefined);
+    await usage.drainUsageSync(db, p);
+    expect(p.mock.calls.some(([a]) => a.customerGid === CUSTOMER_GID)).toBe(true);
+    expect(p).toHaveBeenCalledTimes(usage.USAGE_SYNC_BATCH);
+  });
+
+  it("re-marks pending when a newer order lands and is pushed first (interleaved stale push)", async () => {
+    await seedOffer(db, shopId, { publicTitle: "A" });
+    await usage.recordOfferUsages(db, shopId, order({ discount_applications: [auto("A")] }));
+    const pushed: string[] = [];
+    const slow = vi.fn<PushUsage>().mockImplementationOnce(async ({ value }) => {
+      pushed.push(value);
+      await usage.recordOfferUsages(db, shopId, order({ discount_applications: [auto("A")] }));
+      await usage.syncCustomerUsageMetafield(db, shopId, CUSTOMER_GID, async ({ value: v }) => {
+        pushed.push(v);
+      });
+    });
+    expect(await usage.syncCustomerUsageMetafield(db, shopId, CUSTOMER_GID, slow)).toBe("stale");
+    expect((await syncRow())!.pendingSince).not.toBeNull();
+    const retry = vi.fn<PushUsage>().mockResolvedValue(undefined);
+    expect(await usage.drainUsageSync(db, retry)).toMatchObject({ synced: 1 });
+    expect(Object.values(JSON.parse(retry.mock.calls[0]![0].value).u)).toEqual([2]);
+    expect(Object.values(JSON.parse(pushed[0]!).u)).toEqual([1]);
+  });
+
+  it("sends one Sentry error when a customer reaches the attempt cap, and keeps the row", async () => {
+    await seedOffer(db, shopId, { publicTitle: "A" });
+    await usage.recordOfferUsages(db, shopId, order({ discount_applications: [auto("A")] }));
+    await db.update(offerUsageSync).set({ attempts: usage.USAGE_SYNC_MAX_ATTEMPTS - 1 }).where(eq(offerUsageSync.shopId, shopId));
+    vi.mocked(Sentry.captureException).mockClear();
+    await usage.syncCustomerUsageMetafield(db, shopId, CUSTOMER_GID, async () => {
+      throw new Error("boom");
+    });
+    const abandoned = vi
+      .mocked(Sentry.captureException)
+      .mock.calls.filter(([, ctx]) => (ctx as { tags: { context: string } }).tags.context === "offer-usage-sync-abandoned");
+    expect(abandoned).toHaveLength(1);
+    expect(abandoned[0]![1]).toMatchObject({ tags: { shopId }, extra: { customerGid: CUSTOMER_GID } });
+    expect(await syncRow()).toMatchObject({ attempts: usage.USAGE_SYNC_MAX_ATTEMPTS });
+  });
+});
+
+describe("findTitleCollisions", () => {
+  it("lists other non-archived automatic offers with the same message", async () => {
+    const a = await seedOffer(db, shopId, { publicTitle: "Same" });
+    const b = await seedOffer(db, shopId, { publicTitle: "Same", internalName: "twin" });
+    await seedOffer(db, shopId, { publicTitle: "Same", status: "archived" });
+    await seedOffer(db, shopId, { publicTitle: "Same", requiresCode: true });
+    await seedOffer(db, shopId, { publicTitle: "Different" });
+    const [offerA] = await db.select().from(offers).where(eq(offers.id, a));
+    expect(await usage.findTitleCollisions(db, shopId, offerA!)).toEqual([{ id: b, internalName: "twin" }]);
+  });
+});
+
 describe("handleOrderPaid", () => {
+  it("a failing usage write does not stop attribution or integrations, and the webhook completes", async () => {
+    await seedOffer(db, shopId, { publicTitle: "Deal" });
+    const broken = new Proxy(db, {
+      get: (target, key, receiver) =>
+        key === "transaction"
+          ? () => {
+              throw new Error("db down");
+            }
+          : Reflect.get(target, key, receiver),
+    });
+    await expect(
+      handleOrderPaid(broken, shopId, "s.myshopify.com", order({ discount_applications: [auto("Deal")] }), { defer: () => undefined }),
+    ).resolves.toBeUndefined();
+    expect(reconcileOrderAttribution).toHaveBeenCalledTimes(1);
+    expect(dispatchIntegrationEvents).toHaveBeenCalledTimes(1);
+    expect(Sentry.captureException).toHaveBeenCalled();
+    expect(await usageRows()).toHaveLength(0);
+  });
+
   it("records usage synchronously and defers the metafield push", async () => {
     await seedOffer(db, shopId, { publicTitle: "Deal" });
     const deferred: Array<Promise<void>> = [];

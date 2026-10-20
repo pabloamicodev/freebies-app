@@ -44,21 +44,6 @@ export async function handleOrderPaid(
   deps: OrderPaidDeps = {},
 ): Promise<void> {
   if (!shopId) return;
-  // The durable fact (one row per order and offer) is written first and is cheap. The metafield push
-  // (an Admin API call) runs after the response; if it is lost, the customer stays pending and the
-  // offers cron retries it.
-  const usage = await recordOfferUsages(db, shopId, order);
-  if (usage && usage.inserted > 0) {
-    const defer = deps.defer ?? ((work: Promise<void>) => waitUntil(work));
-    defer(
-      syncCustomerUsageMetafield(db, shopId, usage.customerGid, deps.push).then(
-        () => undefined,
-        (err) => {
-          Sentry.captureException(err, { tags: { shopId, context: "offer-usage-sync" } });
-        },
-      ),
-    );
-  }
   // Offer attribution comes from LINE ITEM properties — the runtime tags each
   // gift/bundle/upsell line with `_promo_engine_offer_id` when it adds it to
   // the cart. note_attributes (cart-level) are never written by anything and
@@ -113,4 +98,23 @@ export async function handleOrderPaid(
         timestamp: new Date().toISOString(),
     }),
   ]);
+  // Usage runs last and never fails the webhook: a redelivery is idempotent and must not lose the
+  // attribution / integrations above. The metafield push runs after the response; if it is lost the
+  // customer stays pending and the offers cron retries it.
+  try {
+    const usage = await recordOfferUsages(db, shopId, order);
+    if (usage && usage.inserted > 0) {
+      const defer = deps.defer ?? ((work: Promise<void>) => waitUntil(work));
+      defer(
+        syncCustomerUsageMetafield(db, shopId, usage.customerGid, deps.push).then(
+          () => undefined,
+          (err) => {
+            Sentry.captureException(err, { tags: { shopId, context: "offer-usage-sync" } });
+          },
+        ),
+      );
+    }
+  } catch (err) {
+    Sentry.captureException(err, { tags: { shopId, context: "offer-usage-record" } });
+  }
 }

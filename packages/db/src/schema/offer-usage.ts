@@ -33,6 +33,8 @@ export const offerUsageSync = pgTable(
     pendingSince: timestamp("pending_since", { withTimezone: true }),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     attempts: integer("attempts").notNull().default(0),
+    /** Cooldown: set while the shop lacks write_customers so its backlog cannot crowd out other shops. */
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
   },
   (t) => [
     primaryKey({ columns: [t.shopId, t.customerGid] }),

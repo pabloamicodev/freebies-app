@@ -1,5 +1,5 @@
 import { discountCodes, offerCustomerUsages, offers, offerUsageSync, shops, type Db } from "@promo/db";
-import { and, asc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { z } from "zod";
 import { clampDiscountMessage } from "./discount-message.js";
@@ -191,7 +191,25 @@ export const pushUsageMetafield: PushUsage = async ({ shopDomain, accessToken, c
 const MISSING_SCOPE = /access denied|ACCESS_DENIED|required access|write_customers/i;
 const warnedShops = new Set<string>();
 
-export type UsageSyncOutcome = "synced" | "skipped" | "missing-scope" | "failed";
+export type UsageSyncOutcome = "synced" | "skipped" | "missing-scope" | "failed" | "stale";
+
+export const USAGE_SCOPE_COOLDOWN_MS = 60 * 60 * 1000;
+
+async function currentUsageValue(db: Db, shopId: string, customerGid: string): Promise<string> {
+  const rows = await db
+    .select({ offerId: offerCustomerUsages.offerId, count: sql<number>`count(*)::int` })
+    .from(offerCustomerUsages)
+    .innerJoin(offers, eq(offers.id, offerCustomerUsages.offerId))
+    .where(
+      and(
+        eq(offerCustomerUsages.shopId, shopId),
+        eq(offerCustomerUsages.customerGid, customerGid),
+        ne(offers.status, "archived"),
+      ),
+    )
+    .groupBy(offerCustomerUsages.offerId);
+  return encodeUsageValue(new Map(rows.map((r) => [r.offerId, r.count])));
+}
 
 /**
  * Pushes the customer's per-offer counts (recomputed from the table, never incremented) to their app
@@ -217,19 +235,7 @@ export async function syncCustomerUsageMetafield(
     .limit(1);
   if (!shop?.isActive) return "skipped";
 
-  const rows = await db
-    .select({ offerId: offerCustomerUsages.offerId, count: sql<number>`count(*)::int` })
-    .from(offerCustomerUsages)
-    .innerJoin(offers, eq(offers.id, offerCustomerUsages.offerId))
-    .where(
-      and(
-        eq(offerCustomerUsages.shopId, shopId),
-        eq(offerCustomerUsages.customerGid, customerGid),
-        ne(offers.status, "archived"),
-      ),
-    )
-    .groupBy(offerCustomerUsages.offerId);
-  const value = encodeUsageValue(new Map(rows.map((r) => [r.offerId, r.count])));
+  const value = await currentUsageValue(db, shopId, customerGid);
 
   const key = and(eq(offerUsageSync.shopId, shopId), eq(offerUsageSync.customerGid, customerGid));
   try {
@@ -246,18 +252,34 @@ export async function syncCustomerUsageMetafield(
           extra: { message },
         });
       }
+      await db
+        .update(offerUsageSync)
+        .set({ nextAttemptAt: new Date(Date.now() + USAGE_SCOPE_COOLDOWN_MS) })
+        .where(and(eq(offerUsageSync.shopId, shopId), sql`${offerUsageSync.pendingSince} is not null`));
       return "missing-scope";
     }
-    await db
+    const [updated] = await db
       .update(offerUsageSync)
       .set({ attempts: sql`${offerUsageSync.attempts} + 1` })
-      .where(key);
+      .where(key)
+      .returning({ attempts: offerUsageSync.attempts });
     Sentry.captureException(error, { tags: { shopId, context: "offer-usage-sync" } });
+    if (updated?.attempts === USAGE_SYNC_MAX_ATTEMPTS) {
+      Sentry.captureException(new Error("Offer usage sync abandoned after the maximum attempts"), {
+        tags: { shopId, context: "offer-usage-sync-abandoned" },
+        extra: { customerGid },
+      });
+    }
     return "failed";
+  }
+  // A concurrent sync may have pushed newer counts before this push landed; if the counts moved, this push is stale.
+  if ((await currentUsageValue(db, shopId, customerGid)) !== value) {
+    await db.update(offerUsageSync).set({ pendingSince: sql`now()` }).where(key);
+    return "stale";
   }
   await db
     .update(offerUsageSync)
-    .set({ pendingSince: null, syncedAt: new Date(), attempts: 0 })
+    .set({ pendingSince: null, syncedAt: new Date(), attempts: 0, nextAttemptAt: null })
     .where(and(key, sql`${offerUsageSync.pendingSince}::text = ${pending.since}`));
   return "synced";
 }
@@ -269,11 +291,27 @@ export async function drainUsageSync(
   now: () => number = Date.now,
 ): Promise<{ synced: number; failed: number; blockedShops: number }> {
   const started = now();
-  const candidates = await db
-    .select({ shopId: offerUsageSync.shopId, customerGid: offerUsageSync.customerGid })
+  // Round-robin per shop (each shop's oldest first), so one shop's backlog cannot crowd out the others.
+  const ranked = db
+    .select({
+      shopId: offerUsageSync.shopId,
+      customerGid: offerUsageSync.customerGid,
+      pendingSince: offerUsageSync.pendingSince,
+      rank: sql<number>`row_number() over (partition by ${offerUsageSync.shopId} order by ${offerUsageSync.pendingSince})`.as("rank"),
+    })
     .from(offerUsageSync)
-    .where(and(sql`${offerUsageSync.pendingSince} is not null`, lt(offerUsageSync.attempts, USAGE_SYNC_MAX_ATTEMPTS)))
-    .orderBy(asc(offerUsageSync.pendingSince))
+    .where(
+      and(
+        sql`${offerUsageSync.pendingSince} is not null`,
+        lt(offerUsageSync.attempts, USAGE_SYNC_MAX_ATTEMPTS),
+        or(sql`${offerUsageSync.nextAttemptAt} is null`, sql`${offerUsageSync.nextAttemptAt} <= now()`),
+      ),
+    )
+    .as("ranked");
+  const candidates = await db
+    .select({ shopId: ranked.shopId, customerGid: ranked.customerGid })
+    .from(ranked)
+    .orderBy(asc(ranked.rank), asc(ranked.pendingSince))
     .limit(USAGE_SYNC_BATCH * 4);
   const blocked = new Set<string>();
   let attempted = 0;
@@ -294,4 +332,21 @@ export async function drainUsageSync(
 /** Test hook: the once-per-shop warning is process state. */
 export function resetUsageScopeWarnings(): void {
   warnedShops.clear();
+}
+
+/** Other non-archived automatic offers whose discount title equals this offer's: their orders cannot be told apart. */
+export async function findTitleCollisions(
+  db: Db,
+  shopId: string,
+  offer: { id: string; publicTitle: string; internalName: string },
+): Promise<Array<{ id: string; internalName: string }>> {
+  const message = offerMessage(offer);
+  if (!message) return [];
+  const rows = await db
+    .select({ id: offers.id, internalName: offers.internalName, publicTitle: offers.publicTitle, requiresCode: offers.requiresCode, requiredDiscountCode: offers.requiredDiscountCode })
+    .from(offers)
+    .where(and(eq(offers.shopId, shopId), ne(offers.status, "archived"), ne(offers.id, offer.id)));
+  return rows
+    .filter((o) => !o.requiresCode && !o.requiredDiscountCode && offerMessage(o) === message)
+    .map(({ id, internalName }) => ({ id, internalName }));
 }
