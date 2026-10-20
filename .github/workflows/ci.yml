@@ -64,7 +64,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Validate complete Shopify app bundle
         run: pnpm shopify:build
-      - name: Check binary sizes (<= 249000 B)
+      - name: Check uploaded binary sizes (<= 256 KiB, trampoline included)
         run: node scripts/check-wasm-sizes.mjs
       - name: Instruction budget
         run: bash scripts/check-instruction-budget.sh

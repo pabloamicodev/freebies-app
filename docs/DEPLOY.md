@@ -36,7 +36,7 @@ Env vars (Shopify client id/secret, `DATABASE_URL`, `CRON_SECRET`, …) are per 
 - `pnpm audit --audit-level=high` (overrides for transitive advisories live in the root `package.json` `pnpm.overrides`; pnpm 9 ignores `pnpm-workspace.yaml` overrides).
 - `scripts/check-migration-safety.mjs`: expand-only migrations.
 - `scripts/check-function-query-cost.mjs`: every Function `input_query` has cost <= 30 (leaf 1, `__typename` 0, `metafield` 3, `hasTags` 3).
-- `scripts/check-wasm-sizes.mjs`: built wasm <= 249000 B. `scripts/check-instruction-budget.sh`: at least one `instruction_budget` Rust test must run.
+- `scripts/check-wasm-sizes.mjs`: the module the CLI uploads (trampoline included, ~12 KB) must be <= 256 KiB; the build commands keep the pre-trampoline module <= 249000 B. `scripts/check-instruction-budget.sh`: at least one `instruction_budget` Rust test must run.
 - `scripts/check-storefront-freshness.mjs`: rebuilds the storefront runtime and fails if the committed `theme-extension/assets/promo-engine.js` differs (fix: `pnpm build:storefront`).
 - Load test: `scripts/load/evaluate.k6.js` (hpn-test-store only).
 

@@ -1,12 +1,14 @@
 /**
- * CI guard: every built Function wasm must stay <= 249000 B. Shopify's upload limit is 256 KB and the CLI adds a
- * ~13 KB trampoline, which is why the extensions' build commands use the same number (docs/DEPLOY.md).
+ * CI guard: every Function wasm the CLI will upload must stay within Shopify's 256 KiB module limit.
+ * After `pnpm shopify:build` the file already includes the CLI's ~12 KB trampoline, so it is checked against the
+ * real upload limit. The extensions' build commands separately keep the pre-trampoline module <= 249000 B, which
+ * leaves room for that trampoline (docs/DEPLOY.md).
  * Usage: node scripts/check-wasm-sizes.mjs   (after `pnpm shopify:build`)
  */
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-const LIMIT = 249_000;
+const LIMIT = 256 * 1024;
 const root = join(process.cwd(), "apps/shopify-admin/extensions");
 let found = 0;
 let failed = false;
