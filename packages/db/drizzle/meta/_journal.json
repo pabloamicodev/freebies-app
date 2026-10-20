@@ -176,6 +176,13 @@
       "when": 1792509909093,
       "tag": "0027_offer_usage_sync_next_attempt",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792510000000,
+      "tag": "0028_offer_require_identified_customer",
+      "breakpoints": true
     }
   ]
 }

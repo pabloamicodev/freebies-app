@@ -211,6 +211,7 @@ export const offerCombinationPolicies = pgTable(
     giftValueCountsForOtherOffers: boolean("gift_value_counts_for_other_offers").notNull().default(false),
     maxApplicationsPerCart: integer("max_applications_per_cart"),
     maxApplicationsPerCustomer: integer("max_applications_per_customer"),
+    requireIdentifiedCustomer: boolean("require_identified_customer").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
