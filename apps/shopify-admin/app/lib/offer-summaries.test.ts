@@ -97,7 +97,7 @@ describe("conditionSummary product wording", () => {
   it("says variants (all) for exact-variant requirements and products (any variant) for product mode", () => {
     expect(conditionSummary("specific_product", {
       requirements: Array.from({ length: 13 }, (_, i) => ({ variantId: `v${i}`, trackMode: "variant", minQuantity: 1 })),
-    })).toBe("13 variants required (all)");
+    })).toBe("All of 13 variants");
     expect(conditionSummary("pack_of_products", {
       requirements: [{ variantId: "v1", trackMode: "variant", quantityPerPack: 1 }],
     })).toBe("1 variant required (all)");
@@ -106,7 +106,14 @@ describe("conditionSummary product wording", () => {
         { productId: "p1", trackMode: "product", minQuantity: 1 },
         { productId: "p2", trackMode: "product", minQuantity: 1 },
       ],
-    })).toBe("2 products required (any variant)");
+    })).toBe("All of 2 products (any variant)");
+  });
+
+  it("shows the operator: any is Any of N, gte or a missing operator is All of N", () => {
+    const requirements = Array.from({ length: 6 }, (_, i) => ({ variantId: `v${i}`, trackMode: "variant", minQuantity: 1 }));
+    expect(conditionSummary("specific_product", { requirements }, "any")).toBe("Any of 6 variants");
+    expect(conditionSummary("specific_product", { requirements }, "gte")).toBe("All of 6 variants");
+    expect(conditionSummary("specific_product", { requirements })).toBe("All of 6 variants");
   });
 });
 

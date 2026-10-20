@@ -2621,6 +2621,77 @@ mod tests {
         }
     }
 
+    fn flavor_trigger_config(trigger_fields: &str) -> String {
+        format!(
+            r#"{{"offers":[{{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            {trigger_fields},
+            "productRewards":[{{
+                "id":"reward-1","rewardType":"product_discount","targetProductIds":[],
+                "targetVariantIds":["gid://shopify/ProductVariant/target"],"discountType":"percentage",
+                "discountValue":25,"subscriptionMode":"any"
+            }}],"orderRewards":[]
+        }}]}}"#
+        )
+    }
+
+    fn flavor_cart(flavor: Option<u32>) -> String {
+        let mut lines = Vec::new();
+        if let Some(n) = flavor {
+            lines.push(regular_line(
+                "gid://shopify/CartLine/1",
+                &format!("gid://shopify/ProductVariant/flavor-{n}"),
+                &format!("gid://shopify/Product/flavor-{n}"),
+                "30.00",
+                1,
+            ));
+        }
+        lines.push(regular_line(
+            "gid://shopify/CartLine/2",
+            "gid://shopify/ProductVariant/target",
+            "gid://shopify/Product/target",
+            "20.00",
+            1,
+        ));
+        format!("[{}]", lines.join(","))
+    }
+
+    #[test]
+    fn any_of_trigger_qualifies_on_one_of_six_flavors_while_all_of_requires_every_one() {
+        let ids: Vec<String> = (0..6).map(|n| format!("gid://shopify/ProductVariant/flavor-{n}")).collect();
+        let any_of = flavor_trigger_config(&format!(
+            r#""requirements":[],"anyRequiredVariantIds":{}"#,
+            serde_json::to_string(&ids).unwrap()
+        ));
+        let all_of = flavor_trigger_config(&format!(
+            r#""requirements":{}"#,
+            serde_json::to_string(
+                &ids.iter()
+                    .map(|id| serde_json::json!({"variantId": id, "trackMode": "variant", "minQuantity": 1}))
+                    .collect::<Vec<_>>()
+            )
+            .unwrap()
+        ));
+
+        let one_flavor = flavor_cart(Some(3));
+        let none = flavor_cart(None);
+
+        let result = run_function_with_input(run, &cart_json(&one_flavor, "50.00", &any_of)).expect("should not error");
+        assert!(
+            matches!(result.operations.first(), Some(schema::CartOperation::ProductDiscountsAdd(_))),
+            "any-of must qualify on a single flavor"
+        );
+
+        let result = run_function_with_input(run, &cart_json(&none, "20.00", &any_of)).expect("should not error");
+        assert!(result.operations.is_empty(), "any-of must not qualify with no flavor in the cart");
+
+        let result = run_function_with_input(run, &cart_json(&one_flavor, "50.00", &all_of)).expect("should not error");
+        assert!(result.operations.is_empty(), "all-of still needs every flavor");
+    }
+
     fn requirement_pooling_config(requirement: &str) -> String {
         format!(
             r#"{{"offers":[{{
