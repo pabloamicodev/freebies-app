@@ -45,6 +45,7 @@ import {
   ensureCodeDiscountNode,
   readCodedShippingNodeIds,
   ensureDiscountNodes,
+  existingDiscountNodeIds,
   expireCodeDiscountNode,
   findCodeDiscountNode,
   findCartDiscountFunction,
@@ -1239,9 +1240,12 @@ async function neutralizeStaleCodeOffers(
     )
     .map((offer) => offer.codeDiscountId as string);
   if (staleDiscountIds.length === 0) return;
+  // A node deleted in Shopify is already neutralized; writing to it fails with
+  // "Owner does not exist" and would abort the whole shop publish.
+  const liveIds = await existingDiscountNodeIds(shopDomain, accessToken, staleDiscountIds);
 
   const emptyValue = serializeFunctionConfig(emptyFunctionConfig());
-  for (const discountId of staleDiscountIds) {
+  for (const discountId of staleDiscountIds.filter((id) => liveIds.has(id))) {
     await pushMetafields(shopDomain, accessToken, [discountId], emptyValue);
     await expireCodeDiscountNode(shopDomain, accessToken, discountId);
     manifest?.record(discountId, "code", emptyValue, { active: false });

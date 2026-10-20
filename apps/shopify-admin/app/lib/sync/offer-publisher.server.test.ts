@@ -713,6 +713,19 @@ describe("publishOffersForShop — code-gated offers", () => {
     expect(parsedConfig(stalePush!.value).offers).toEqual([]);
   });
 
+  it("skips a stale code node already deleted in Shopify instead of failing the publish", async () => {
+    const GONE = "gid://shopify/DiscountCodeNode/deleted-in-shopify";
+    state.offers = [
+      makeOffer({ id: "code-gone", status: "paused", requiredDiscountCode: "OLDCODE", codeDiscountId: GONE }),
+      makeOffer({ id: "regular-gone" }),
+    ];
+
+    await expect(publishOffersForShop(SHOP_ID, SHOP_DOMAIN)).resolves.toBe("published");
+
+    expect(state.metafieldPushes.some((p) => p.ownerIds.includes(GONE))).toBe(false);
+    expect(state.expiredNodes).not.toContain(GONE);
+  });
+
   it("empties a code offer's own node after it goes inactive on a later, separate publish call — not just when the DB was pre-seeded as already stale", async () => {
     const codeOffer = makeOffer({
       id: "code-5",
