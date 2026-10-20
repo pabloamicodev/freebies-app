@@ -241,7 +241,12 @@ export async function validateOffersPublishable(
       };
     }
 
-    if (policyRows.some((p) => p.offerId === offer.id && (p.maxApplicationsPerCustomer ?? 0) > 0)) {
+    // one_use_per_customer compiles as mpu 1 only while the shop's limits.enforced flag is on, and the
+    // unique-title gate (attribution is by title) only matters then too: while off, nothing changes.
+    const hasOneUse = eligibilityConditions.some((c) => c.isEnabled && c.conditionType === "one_use_per_customer");
+    const hasPerCustomerLimit = policyRows.some((p) => p.offerId === offer.id && (p.maxApplicationsPerCustomer ?? 0) > 0);
+    const limitsOn = hasOneUse || hasPerCustomerLimit ? await isLimitsEnforced(db, shopId) : false;
+    if (limitsOn) {
       const titleError = await limitedTitleError(db, shopId, offer.id);
       if (titleError) return { ok: false, error: `Cannot publish "${offer.internalName}": ${titleError}` };
     }
@@ -283,9 +288,7 @@ export async function validateOffersPublishable(
       };
     }
 
-    // one_use_per_customer compiles as mpu 1 only while the shop's limits.enforced flag is on.
-    const hasOneUse = eligibilityConditions.some((c) => c.isEnabled && c.conditionType === "one_use_per_customer");
-    const oneUseUnenforced = hasOneUse && !(await isLimitsEnforced(db, shopId));
+    const oneUseUnenforced = hasOneUse && !limitsOn;
     const unsupportedFunctionCondition = eligibilityConditions.find(
       (condition) =>
         condition.isEnabled &&

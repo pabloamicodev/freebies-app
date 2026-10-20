@@ -351,22 +351,23 @@ function pickShippingOffer(
   identified: boolean,
 ): string | undefined {
   return offers
-    .filter((offer) => !(offer.ri && !identified) && !(offer.mpu !== undefined && (usage[offer.id] ?? 0) >= offer.mpu))
+    // Compiled shipping ids are `offerId:rewardId`; usage is keyed by the bare offer id.
+    .filter((offer) => !(offer.ri && !identified) && !(offer.mpu !== undefined && (usage[offer.id.split(":")[0]!] ?? 0) >= offer.mpu))
     .sort((a, b) => a.priority - b.priority)[0]?.id;
 }
 
 describe("shipping usage limits (mirrors delivery_discount_logic tests)", () => {
   const offers = [
-    { id: "limited", priority: 1, mpu: 2 },
-    { id: "fallback", priority: 2 },
+    { id: "limited:reward-1", priority: 1, mpu: 2 },
+    { id: "fallback:reward-2", priority: 2 },
   ];
   it("an exhausted mpu falls through to the next-priority offer", () => {
-    expect(pickShippingOffer(offers, { limited: 1 }, true)).toBe("limited");
-    expect(pickShippingOffer(offers, { limited: 2 }, true)).toBe("fallback");
-    expect(pickShippingOffer(offers, { limited: 5 }, true)).toBe("fallback");
+    expect(pickShippingOffer(offers, { limited: 1 }, true)).toBe("limited:reward-1");
+    expect(pickShippingOffer(offers, { limited: 2 }, true)).toBe("fallback:reward-2");
+    expect(pickShippingOffer(offers, { limited: 5 }, true)).toBe("fallback:reward-2");
   });
   it("a guest and a missing key count as 0 uses; ri blocks a guest only", () => {
-    expect(pickShippingOffer(offers, {}, false)).toBe("limited");
+    expect(pickShippingOffer(offers, {}, false)).toBe("limited:reward-1");
     expect(pickShippingOffer([{ id: "vip", priority: 1, ri: true }], {}, false)).toBeUndefined();
     expect(pickShippingOffer([{ id: "vip", priority: 1, ri: true }], {}, true)).toBe("vip");
   });

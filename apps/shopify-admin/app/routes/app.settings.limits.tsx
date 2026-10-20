@@ -1,32 +1,50 @@
 /**
  * Offer limits rollout: the per-shop `limits.enforced` flag. Until it is on, per-cart and per-customer
- * limits are saved but the Functions ignore them. Only the shop owner can flip it; every change is audited
- * and republishes the shop's offers so the Functions pick it up.
+ * limits are saved but the Functions ignore them. Only shops in LIMITS_TOGGLE_SHOPS can flip it; every change
+ * is audited and republishes the shop's offers so the Functions pick it up. Turning it on is refused while
+ * limited automatic offers share a discount title (orders are attributed by title).
  */
 
 import { useLoaderData, useActionData, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { canToggleLimits, isLimitsEnforced, setLimitsEnforced } from "../lib/limits-enforced.server.js";
+import { listLimitedTitleCollisions } from "../lib/offer-usage.server.js";
+import { invalidateOfferDefinitions } from "../lib/offer-definitions.server.js";
 import { publishShopConfig } from "../lib/offer-publish-flow.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { shopId, db, session } = await getShopContext(request);
-  return { enforced: await isLimitsEnforced(db, shopId), canToggle: canToggleLimits(session) };
+  const { shopId, db, shopDomain } = await getShopContext(request);
+  return { enforced: await isLimitsEnforced(db, shopId), canToggle: canToggleLimits(shopDomain) };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   const { shopId, shopDomain, db, session } = context;
-  if (!canToggleLimits(session)) return { error: "Only the shop owner can change this setting." };
+  if (!canToggleLimits(shopDomain)) return { error: "This setting is not available for this shop." };
   const enabled = formData.get("limits_enforced") === "on";
+  const previous = await isLimitsEnforced(db, shopId);
+  if (enabled === previous) return { success: true };
   const performedBy = session.onlineAccessInfo?.associated_user?.email ?? session.id;
+  if (enabled) {
+    const collisions = await listLimitedTitleCollisions(db, shopId);
+    if (collisions.length > 0) {
+      const list = collisions.map((c) => `"${c.title}": ${c.offers.join(", ")}`).join("; ");
+      return { error: `Limits cannot be enforced yet: limited automatic offers share a discount title (${list}). Give each a unique public title first.` };
+    }
+  }
   await setLimitsEnforced(db, shopId, enabled, performedBy);
+  await invalidateOfferDefinitions(shopId);
   const publishError = await publishShopConfig(shopId, shopDomain);
-  if (publishError) return { error: `Saved, but republishing to Shopify failed: ${publishError}` };
+  if (publishError) {
+    // The Function config is still the old one: put the flag back so the evaluator keeps matching it.
+    await setLimitsEnforced(db, shopId, previous, performedBy);
+    await invalidateOfferDefinitions(shopId);
+    return { error: `Republishing to Shopify failed, so the setting was reverted: ${publishError}` };
+  }
   return { success: true };
 };
 
@@ -72,11 +90,10 @@ export default function LimitsSettingsPage() {
                   name="limits_enforced"
                   defaultChecked={enforced}
                   disabled={!canToggle}
-                  aria-label="Enforce offer limits"
                 />
                 <label htmlFor="limits_enforced" className="b-checkbox-label">Enforce limits</label>
               </div>
-              {!canToggle && <p className="b-text-sm b-text-sub">Only the shop owner can change this.</p>}
+              {!canToggle && <p className="b-text-sm b-text-sub">Not available for this shop.</p>}
             </div>
           </div>
         </div>

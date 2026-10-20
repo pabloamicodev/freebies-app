@@ -37,7 +37,6 @@ const CUSTOMER_DEPENDENT_CONDITION_TYPES = new Set<string>([
 
 function needsCustomerProfile(offerDefinitions: OfferDefinition[]): boolean {
   return offerDefinitions.some((offer) =>
-    offer.combinationPolicy.requireIdentifiedCustomer === true ||
     offer.conditions.some(
       (condition) => condition.isEnabled && CUSTOMER_DEPENDENT_CONDITION_TYPES.has(condition.conditionType),
     ),
@@ -287,6 +286,7 @@ export async function handleEvaluationRequest(
   const result = await evaluate(input, {
     offers: offerDefinitions,
     usageStates,
+    identifiedCustomer: customerGid !== null,
     now: new Date(),
     shopCurrencyCode: shop.currencyCode ?? undefined,
   });

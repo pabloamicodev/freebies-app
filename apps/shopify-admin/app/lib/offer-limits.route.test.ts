@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { offerCombinationPolicies, offerRewards, type Db } from "@promo/db";
 import type * as PromoDb from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
+import { setLimitsEnforced } from "./limits-enforced.server.js";
 
 const ctx = vi.hoisted(() => ({ db: null as unknown, shopId: "", scope: "read_products" as string | null }));
 
@@ -79,7 +80,8 @@ describe("combination limits action", () => {
     expect(await policy(id)).toMatchObject({ maxApplicationsPerCart: null, maxApplicationsPerCustomer: 1 });
   });
 
-  it("requires a unique public title for a per-customer limit on an automatic offer", async () => {
+  it("with limits enforced, requires a unique public title for a per-customer limit on an automatic offer", async () => {
+    await setLimitsEnforced(db, shopId, true);
     await seedOffer(db, shopId, { publicTitle: "Dup Title", internalName: "first dup" });
     const b = await seedOffer(db, shopId, { publicTitle: "Dup Title", internalName: "second dup" });
     const res = await post(b, { max_per_customer: "1" });
@@ -89,6 +91,17 @@ describe("combination limits action", () => {
 
     const blank = await seedOffer(db, shopId, { publicTitle: "  " });
     expect((await post(blank, { max_per_customer: "1" })).error).toMatch(/unique customer-facing title/);
+    await setLimitsEnforced(db, shopId, false);
+  });
+
+  it("with limits not enforced, a colliding title saves with a non-blocking warning", async () => {
+    await seedOffer(db, shopId, { publicTitle: "Warn Title", internalName: "warn first" });
+    const b = await seedOffer(db, shopId, { publicTitle: "Warn Title", internalName: "warn second" });
+    const res = (await post(b, { max_per_customer: "1" })) as { success?: boolean; warning?: string | null; error?: string };
+    expect(res.error).toBeUndefined();
+    expect(res.success).toBe(true);
+    expect(res.warning).toMatch(/unique customer-facing title/);
+    expect((await policy(b))?.maxApplicationsPerCustomer).toBe(1);
   });
 
   it("does not count archived offers and does not require a title for code offers", async () => {

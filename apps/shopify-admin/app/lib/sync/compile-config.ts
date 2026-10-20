@@ -406,7 +406,7 @@ const positiveInt = (value: number | null | undefined) =>
 
 /**
  * The Function-side usage limits (FIX-limits-04). Empty unless the shop's `limits.enforced` flag is on, so
- * flag-off compiled bytes are identical to before. `one_use_per_customer` is mpu=1 (DL6); mpc is meaningless
+ * flag-off compiled bytes are identical to before. `one_use_per_customer` is mpu=1 plus ri (DL6, D3); mpc is meaningless
  * for order and shipping rewards, which apply once per order.
  */
 export function compileOfferLimits(
@@ -427,7 +427,7 @@ export function compileOfferLimits(
   return {
     ...(mpc !== undefined ? { mpc } : {}),
     ...(mpu.length > 0 ? { mpu: Math.min(...mpu) } : {}),
-    ...(policy?.requireIdentifiedCustomer ? { ri: true as const } : {}),
+    ...(policy?.requireIdentifiedCustomer || oneUse ? { ri: true as const } : {}),
   };
 }
 

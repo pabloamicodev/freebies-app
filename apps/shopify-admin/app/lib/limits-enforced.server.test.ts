@@ -1,13 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { auditLogs, offerConditions, offerCombinationPolicies, offerCustomerUsages, type Db } from "@promo/db";
+import { auditLogs, offerConditions, offerCombinationPolicies, offerCustomerUsages, offers, type Db } from "@promo/db";
 import type * as PromoDb from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
 const ctx = vi.hoisted(() => ({
   db: null as unknown,
   shopId: "",
-  owner: true,
   publishError: null as string | null,
   published: 0,
 }));
@@ -17,7 +16,7 @@ vi.mock("./shop-context.server.js", () => ({
     db: ctx.db,
     shopId: ctx.shopId,
     shopDomain: "limits-flag.myshopify.com",
-    session: { id: "offline_x", shop: "limits-flag.myshopify.com", onlineAccessInfo: ctx.owner ? { associated_user: { account_owner: true, email: "o@x.com" } } : null },
+    session: { id: "offline_x", shop: "limits-flag.myshopify.com", onlineAccessInfo: null },
   }),
 }));
 vi.mock("@promo/db", async (importOriginal) => ({ ...(await importOriginal<typeof PromoDb>()), getDb: () => ctx.db }));
@@ -40,12 +39,14 @@ let close: () => Promise<void>;
 let shopId: string;
 
 beforeAll(async () => {
+  vi.stubEnv("LIMITS_TOGGLE_SHOPS", "Limits-Flag.myshopify.com, other.myshopify.com");
   ({ db, close } = await createTestDb());
   ctx.db = db;
   shopId = await seedShop(db, "limits-flag.myshopify.com");
   ctx.shopId = shopId;
 }, 60_000);
 afterAll(async () => {
+  vi.unstubAllEnvs();
   await close();
 });
 
@@ -61,48 +62,63 @@ describe("limits.enforced flag", () => {
     expect(await flag.isLimitsEnforced(db, shopId)).toBe(false);
   });
 
-  it("only the account owner (or the operator opt-in) may toggle", () => {
-    expect(flag.canToggleLimits({ onlineAccessInfo: { associated_user: { account_owner: true } } })).toBe(true);
-    expect(flag.canToggleLimits({ onlineAccessInfo: { associated_user: { account_owner: false } } })).toBe(false);
-    expect(flag.canToggleLimits({ onlineAccessInfo: null })).toBe(false);
-    vi.stubEnv("LIMITS_TOGGLE_ENABLED", "true");
-    expect(flag.canToggleLimits({ onlineAccessInfo: null })).toBe(true);
-    vi.unstubAllEnvs();
+  it("only shops in LIMITS_TOGGLE_SHOPS may toggle, and nobody when it is unset", () => {
+    expect(flag.canToggleLimits("limits-flag.myshopify.com")).toBe(true);
+    expect(flag.canToggleLimits("OTHER.myshopify.com")).toBe(true);
+    expect(flag.canToggleLimits("stranger.myshopify.com")).toBe(false);
+    vi.stubEnv("LIMITS_TOGGLE_SHOPS", "");
+    expect(flag.canToggleLimits("limits-flag.myshopify.com")).toBe(false);
+    vi.stubEnv("LIMITS_TOGGLE_SHOPS", "Limits-Flag.myshopify.com, other.myshopify.com");
   });
 });
 
 describe("settings route", () => {
-  it("an owner turns it on: saved, audited and republished", async () => {
-    ctx.owner = true;
+  it("an allow-listed shop turns it on: saved, audited and republished", async () => {
     ctx.published = 0;
     expect(await post({ limits_enforced: "on" })).toEqual({ success: true });
     expect(await flag.isLimitsEnforced(db, shopId)).toBe(true);
     expect(ctx.published).toBe(1);
     const [audit] = await db.select().from(auditLogs).where(and(eq(auditLogs.shopId, shopId), eq(auditLogs.action, "limits_enforced_changed")));
-    expect(audit).toMatchObject({ entityId: "limits.enforced", before: false, after: true, performedBy: "o@x.com" });
+    expect(audit).toMatchObject({ entityId: "limits.enforced", before: false, after: true, performedBy: "offline_x" });
     expect(await call(route.loader, new Request("http://localhost/"))).toEqual({ enforced: true, canToggle: true });
   });
 
-  it("an owner turns it off by leaving the box unchecked", async () => {
+  it("turns it off by leaving the box unchecked", async () => {
     await post({});
     expect(await flag.isLimitsEnforced(db, shopId)).toBe(false);
   });
 
-  it("a non-owner cannot change it", async () => {
-    ctx.owner = false;
+  it("a shop outside the allow-list cannot change it", async () => {
+    vi.stubEnv("LIMITS_TOGGLE_SHOPS", "someone-else.myshopify.com");
     ctx.published = 0;
     const res = await post({ limits_enforced: "on" });
-    expect(res["error"]).toMatch(/shop owner/);
+    expect(res["error"]).toMatch(/not available/);
     expect(await flag.isLimitsEnforced(db, shopId)).toBe(false);
     expect(ctx.published).toBe(0);
-    ctx.owner = true;
+    vi.stubEnv("LIMITS_TOGGLE_SHOPS", "Limits-Flag.myshopify.com, other.myshopify.com");
   });
 
-  it("reports a failed republish", async () => {
+  it("a failed republish reverts the flag, audits the revert and reports the error", async () => {
     ctx.publishError = "boom";
-    expect((await post({ limits_enforced: "on" }))["error"]).toMatch(/republishing.*boom/);
+    const res = await post({ limits_enforced: "on" });
+    expect(res["error"]).toMatch(/reverted.*boom/);
+    expect(await flag.isLimitsEnforced(db, shopId)).toBe(false);
+    const rows = await db.select().from(auditLogs).where(and(eq(auditLogs.shopId, shopId), eq(auditLogs.action, "limits_enforced_changed")));
+    expect(rows.slice(-2).map((r) => r.after)).toEqual([true, false]);
     ctx.publishError = null;
-    await post({});
+  });
+
+  it("refuses to turn it on while limited automatic offers share a discount title", async () => {
+    const a = await seedOffer(db, shopId, { publicTitle: "Clash  Title", internalName: "clash a" });
+    await seedOffer(db, shopId, { publicTitle: "clash title", internalName: "clash b" });
+    await db.insert(offerCombinationPolicies).values({ shopId, offerId: a, maxApplicationsPerCustomer: 1 });
+    ctx.published = 0;
+    const res = await post({ limits_enforced: "on" });
+    expect(res["error"]).toMatch(/share a discount title.*clash a, clash b/);
+    expect(await flag.isLimitsEnforced(db, shopId)).toBe(false);
+    expect(ctx.published).toBe(0);
+    await db.delete(offerCombinationPolicies).where(eq(offerCombinationPolicies.offerId, a));
+    await db.update(offers).set({ status: "archived" }).where(eq(offers.shopId, shopId));
   });
 });
 

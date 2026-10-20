@@ -958,14 +958,24 @@ describe("evaluate: usage limits mirror the Function (mpu, ri, mpc)", () => {
     expect(await qualified(offer, null, CUSTOMER)).toBe(true);
   });
 
-  it("one_use_per_customer is mpu 1: a guest qualifies, a repeat customer does not", async () => {
+  it("one_use_per_customer is mpu 1 plus ri: a guest does not qualify, a first-time customer does, a repeat one does not", async () => {
     const offer = makeGiftOffer("offer-1", 1000);
     offer.conditions.push({
       id: "cond-1use", scope: "main", conditionType: "one_use_per_customer",
       operator: "eq", value: {}, isEnabled: true, sortOrder: 1,
     });
-    expect(await qualified(offer, null, null)).toBe(true);
+    expect(await qualified(offer, null, null)).toBe(false);
+    expect(await qualified(offer, 0, CUSTOMER)).toBe(true);
     expect(await qualified(offer, 1, CUSTOMER)).toBe(false);
+  });
+
+  it("ri uses the verified logged-in id: a failed profile fetch does not fail closed", async () => {
+    const offer = withPolicy({ requireIdentifiedCustomer: true });
+    const run = async (identifiedCustomer: boolean) =>
+      (await evaluate(makeInput(makeCart(2000), { customer: null }), { offers: [offer], usageStates: [], identifiedCustomer, now: NOW }))
+        .qualifiedOffers.length === 1;
+    expect(await run(true)).toBe(true);
+    expect(await run(false)).toBe(false);
   });
 
   it("mpc lowers the auto-added gift quantity and never raises it", async () => {

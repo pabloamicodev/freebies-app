@@ -1,4 +1,4 @@
-import { discountCodes, offerCustomerUsages, offers, offerUsageSync, shops, type Db } from "@promo/db";
+import { discountCodes, offerCombinationPolicies, offerConditions, offerCustomerUsages, offers, offerUsageSync, shops, type Db } from "@promo/db";
 import { and, asc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { z } from "zod";
@@ -395,4 +395,34 @@ export async function limitedTitleError(db: Db, shopId: string, offerId: string)
   return collisions.length > 0
     ? `${LIMITED_TITLE_REQUIRED_ERROR} Same title as: ${collisions.map((c) => c.internalName).join(", ")}.`
     : null;
+}
+
+/** Groups of non-archived automatic offers sharing a discount title where at least one is limited (mpu or one_use). */
+export async function listLimitedTitleCollisions(db: Db, shopId: string): Promise<Array<{ title: string; offers: string[] }>> {
+  const rows = await db
+    .select({
+      id: offers.id,
+      internalName: offers.internalName,
+      publicTitle: offers.publicTitle,
+      requiresCode: offers.requiresCode,
+      requiredDiscountCode: offers.requiredDiscountCode,
+    })
+    .from(offers)
+    .where(and(eq(offers.shopId, shopId), ne(offers.status, "archived")));
+  const automatic = rows.filter((o) => !o.requiresCode && !o.requiredDiscountCode);
+  if (automatic.length < 2) return [];
+  const ids = automatic.map((o) => o.id);
+  const [policies, oneUse] = await Promise.all([
+    db.select({ offerId: offerCombinationPolicies.offerId, mpu: offerCombinationPolicies.maxApplicationsPerCustomer }).from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), inArray(offerCombinationPolicies.offerId, ids))),
+    db.select({ offerId: offerConditions.offerId }).from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.conditionType, "one_use_per_customer"), eq(offerConditions.isEnabled, true), inArray(offerConditions.offerId, ids))),
+  ]);
+  const limited = new Set([...policies.filter((p) => (p.mpu ?? 0) > 0).map((p) => p.offerId), ...oneUse.map((c) => c.offerId)]);
+  const groups = new Map<string, typeof automatic>();
+  for (const offer of automatic) {
+    const key = offerMessage(offer);
+    if (key) groups.set(key, [...(groups.get(key) ?? []), offer]);
+  }
+  return [...groups.entries()]
+    .filter(([, group]) => group.length > 1 && group.some((o) => limited.has(o.id)))
+    .map(([title, group]) => ({ title, offers: group.map((o) => o.internalName).sort() }));
 }

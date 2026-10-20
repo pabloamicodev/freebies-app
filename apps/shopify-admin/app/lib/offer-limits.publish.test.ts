@@ -30,20 +30,44 @@ async function publishable(title: string, internalName: string, limit: number | 
 }
 
 describe("publish validation of per-customer limits (DL4)", () => {
-  it("blocks a limited automatic offer whose title collides", async () => {
+  it("while limits are not enforced, a colliding title does not block publishing", async () => {
+    await publishable("Flag Off Title", "flag off twin", null);
+    const id = await publishable("Flag Off Title", "flag off limited", 1);
+    expect(await validateOffersPublishable(db, shopId, [id])).toEqual({ ok: true });
+  });
+
+  it("with limits enforced, blocks a limited automatic offer whose title collides", async () => {
+    await setLimitsEnforced(db, shopId, true);
     await publishable("Same Title", "unlimited twin", null);
     const id = await publishable("Same Title", "limited one", 1);
     const res = await validateOffersPublishable(db, shopId, [id]);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toMatch(/unique customer-facing title/);
+    await setLimitsEnforced(db, shopId, false);
+  });
+
+  it("with limits enforced, a one_use_per_customer offer needs a unique title too", async () => {
+    await setLimitsEnforced(db, shopId, true);
+    await publishable("One Use Dup", "one use twin", null);
+    const id = await publishable("One Use Dup", "one use limited", null);
+    await db.insert(offerConditions).values({
+      shopId, offerId: id, scope: "sub", conditionType: "one_use_per_customer", operator: "eq",
+      value: {}, sortOrder: 1, isEnabled: true,
+    });
+    const res = await validateOffersPublishable(db, shopId, [id]);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/unique customer-facing title/);
+    await setLimitsEnforced(db, shopId, false);
   });
 
   it("allows a limited offer with a unique title and an unlimited offer with a colliding one", async () => {
+    await setLimitsEnforced(db, shopId, true);
     const unique = await publishable("Unique Title", "limited unique", 2);
     const u = await validateOffersPublishable(db, shopId, [unique]);
     expect(u).toEqual({ ok: true });
     const twin = await publishable("Unique Title", "unlimited dup", null);
     expect((await validateOffersPublishable(db, shopId, [twin])).ok).toBe(true);
+    await setLimitsEnforced(db, shopId, false);
   });
 });
 

@@ -1290,10 +1290,10 @@ describe("usage limits (mpc, mpu, ri) behind the per-shop limits.enforced flag",
     expect(compileOfferLimits(everything, [], [reward("order_discount"), reward("bundle_discount")], true).mpc).toBe(2);
   });
 
-  it("an enabled one_use_per_customer condition is mpu 1, and the lower limit wins", () => {
+  it("an enabled one_use_per_customer condition is mpu 1 plus ri, and the lower limit wins", () => {
     const oneUse = condition("one_use_per_customer", {}, "eq");
-    expect(compileOfferLimits(null, [oneUse], [reward("product_gift")], true)).toEqual({ mpu: 1 });
-    expect(compileOfferLimits(policy({ maxApplicationsPerCustomer: 5 }), [oneUse], [reward("product_gift")], true)).toEqual({ mpu: 1 });
+    expect(compileOfferLimits(null, [oneUse], [reward("product_gift")], true)).toEqual({ mpu: 1, ri: true });
+    expect(compileOfferLimits(policy({ maxApplicationsPerCustomer: 5 }), [oneUse], [reward("product_gift")], true)).toEqual({ mpu: 1, ri: true });
     expect(compileOfferLimits(policy({ maxApplicationsPerCustomer: 1 }), [], [reward("product_gift")], true)).toEqual({ mpu: 1 });
     expect(compileOfferLimits(null, [{ ...oneUse, isEnabled: false }], [reward("product_gift")], true)).toEqual({});
     expect(compileOfferLimits(null, [oneUse], [reward("product_gift")], false)).toEqual({});

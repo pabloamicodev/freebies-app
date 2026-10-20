@@ -32,9 +32,11 @@ pub fn run(input: Input) -> Result<schema::CartDeliveryOptionsDiscountsGenerateR
             .map(|metafield| metafield.value().as_str()),
     );
     config.shipping_offers.retain(|offer| {
+        // Compiled shipping ids are `offerId:rewardId`; usage is keyed by the bare offer id.
+        let offer_id = offer.id.split(':').next().unwrap_or(&offer.id);
         !crate::usage::customer_blocked(
             &usage,
-            &offer.id,
+            offer_id,
             offer.max_per_customer,
             offer.require_identified,
             customer.is_some(),
@@ -1501,6 +1503,18 @@ mod tests {
         assert_eq!(discount_pct(&run_with_usage(&config, &[], Some(Some(&used(1))))), Some(100.0));
         assert_eq!(discount_pct(&run_with_usage(&config, &[], Some(Some(&used(2))))), Some(10.0));
         assert_eq!(discount_pct(&run_with_usage(&config, &[], Some(Some(&used(5))))), Some(10.0));
+    }
+
+    #[test]
+    fn usage_is_looked_up_by_the_offer_id_before_the_reward_suffix() {
+        let config = shipping_config(&format!(
+            "[{},{}]",
+            coded_offer("limited:reward-1", 1, 100.0, r#""mpu":2,"#),
+            coded_offer("fallback:reward-2", 2, 10.0, "")
+        ));
+        let used = |count: i64| format!(r#"{{"v":1,"u":{{"limited":{count}}}}}"#);
+        assert_eq!(discount_pct(&run_with_usage(&config, &[], Some(Some(&used(1))))), Some(100.0));
+        assert_eq!(discount_pct(&run_with_usage(&config, &[], Some(Some(&used(2))))), Some(10.0));
     }
 
     #[test]

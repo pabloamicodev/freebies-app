@@ -10,6 +10,7 @@ import { NotFound } from "../components/NotFound.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { findTitleCollisions, limitedTitleError } from "../lib/offer-usage.server.js";
+import { isLimitsEnforced } from "../lib/limits-enforced.server.js";
 import { MAX_LIMIT, REQUIRE_CUSTOMER_HELP, hasWriteCustomersScope, isOrderLevelOnly, limitHelp, parseLimit } from "../lib/limit-help.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { offerCombinationPolicies, offerRewards, offers } from "@promo/db";
@@ -87,9 +88,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (perCart === null || perCustomer === null) {
     return { error: `Limits must be whole numbers between 1 and ${MAX_LIMIT}, or blank for unlimited.` };
   }
+  // The unique-title rule only matters once limits are enforced for the shop; until then it is a warning.
+  let titleWarning: string | null = null;
   if (perCustomer !== undefined) {
     const titleError = await limitedTitleError(db, shopId, offerId);
-    if (titleError) return { error: titleError };
+    if (titleError) {
+      if (await isLimitsEnforced(db, shopId)) return { error: titleError };
+      titleWarning = titleError;
+    }
   }
 
   const policy = {
@@ -129,7 +135,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
   if (publishError) return { error: publishError };
 
-  return { success: true };
+  return { success: true, warning: titleWarning };
 };
 
 const RESTRICTION_LABELS = {
@@ -379,6 +385,11 @@ export default function OfferCombinationPage() {
                     <div className="b-banner b-banner-green" role="status">
                       <span className="b-banner-icon">✓</span>
                       <p className="b-banner-text" style={{ margin: 0 }}>Combination policy saved.</p>
+                    </div>
+                  )}
+                  {actionData && "warning" in actionData && actionData.warning && (
+                    <div className="b-banner" role="status">
+                      <p className="b-banner-text" style={{ margin: 0 }}>Not enforced yet, and it will block publishing once limits are enforced for this shop: {actionData.warning}</p>
                     </div>
                   )}
 

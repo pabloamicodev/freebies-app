@@ -1,6 +1,6 @@
 {
   "name": "limits-per-cart-picker",
-  "description": "Picker of 3 with selectionCount 2, maxQuantity 3 and mpc 1: 2 free units in total across the options.",
+  "description": "Future shape, not produced by compile yet: a picker with selectionCount 2, maxQuantity 3 and mpc 1 gives 2 free units in total across the options.",
   "source": {
     "offers": [
       {

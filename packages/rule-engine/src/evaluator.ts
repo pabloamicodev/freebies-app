@@ -106,11 +106,14 @@ export interface UsageState {
 const positive = (value: number | null | undefined): number | undefined =>
   typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 
+const hasOneUse = (offer: OfferDefinition) =>
+  offer.conditions.some((c) => c.isEnabled && c.conditionType === "one_use_per_customer");
+
 /** The Function's effective `mpu`: the policy limit, or 1 for an enabled `one_use_per_customer` condition (DL6). */
 function effectiveMaxUses(offer: OfferDefinition): number | undefined {
   const limits = [
     positive(offer.combinationPolicy.maxApplicationsPerCustomer),
-    offer.conditions.some((c) => c.isEnabled && c.conditionType === "one_use_per_customer") ? 1 : undefined,
+    hasOneUse(offer) ? 1 : undefined,
   ].filter((limit): limit is number => limit !== undefined);
   return limits.length > 0 ? Math.min(...limits) : undefined;
 }
@@ -124,6 +127,8 @@ export function capPerCart(offer: OfferDefinition, limit: number): number {
 export interface EvaluatorContext {
   offers: OfferDefinition[];
   usageStates: UsageState[];
+  /** A verified logged-in customer exists even when their profile could not be fetched (`input.customer` null). */
+  identifiedCustomer?: boolean;
   now: Date;
   /** Shop's base currency code — used to determine if a currency conversion is needed. */
   shopCurrencyCode?: string;
@@ -215,7 +220,9 @@ export async function evaluate(
     }
 
     // Same order as the Function's customer_blocked: identified first, then uses >= mpu. A guest has 0 uses.
-    if (offer.combinationPolicy.requireIdentifiedCustomer && !input.customer) {
+    // one_use_per_customer implies ri (D3): a guest with a new email must not get a one-use offer.
+    const identified = input.customer !== null || ctx.identifiedCustomer === true;
+    if ((offer.combinationPolicy.requireIdentifiedCustomer || hasOneUse(offer)) && !identified) {
       reasons.push({ conditionType: "require_identified_customer", passed: false, message: "Requires an identified customer" });
       passed = false;
     }
