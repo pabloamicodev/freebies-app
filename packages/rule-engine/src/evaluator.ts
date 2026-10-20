@@ -27,6 +27,7 @@ import { evaluateSubscriptionCondition, type SubscriptionConditionValue } from "
 import { evaluatePageConditionGroup, isPageConditionType } from "./page-match.js";
 import { evaluateCountry, type CountryConditionValue } from "./conditions/country.js";
 import { applyPriority } from "./priority-resolver.js";
+import { consumeAnchors, freeUnits, giftAnchors } from "./gift-anchors.js";
 import { evaluateCartAttribute, evaluateLineAttribute, evaluateDiscountCode, type CartAttributeConditionValue, type LineAttributeConditionValue, type DiscountCodeConditionValue } from "./conditions/attributes.js";
 
 /**
@@ -87,6 +88,8 @@ export interface CombinationPolicyDefinition {
   combinesWithProductDiscounts: boolean;
   combinesWithShippingDiscounts: boolean;
   stopLowerPriority: boolean;
+  /** false: the cart units that unlock this gift offer cannot unlock another gift offer. Absent means true. */
+  canStackWithGiftOffers?: boolean;
   maxApplicationsPerCart: number | null;
   maxApplicationsPerCustomer: number | null;
 }
@@ -122,7 +125,11 @@ export async function evaluate(
 
   // ── Step 1: Evaluate each offer ───────────────────────────────────────────
 
-  for (const offer of ctx.offers) {
+  // Priority order, ties by id: a non-stacking gift offer takes its anchor units before lower offers see them.
+  const consumedAnchorUnits = new Map<string, number>();
+  const orderedOffers = [...ctx.offers].sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+  for (const offer of orderedOffers) {
     const reasons: EligibilityReason[] = [];
     let passed = true;
 
@@ -203,6 +210,22 @@ export async function evaluate(
       );
       reasons.push(...pageResult.reasons);
       if (!pageResult.passed) passed = false;
+    }
+
+    if (passed) {
+      const stacks = offer.combinationPolicy.canStackWithGiftOffers !== false;
+      const anchors =
+        stacks && consumedAnchorUnits.size === 0 ? null : giftAnchors(offer, input.cart, offerExcludedProductIds(offer.conditions));
+      if (anchors && freeUnits(anchors, consumedAnchorUnits) < anchors.needed) {
+        reasons.push({
+          conditionType: "gift_anchor_consumed",
+          passed: false,
+          message: "Its qualifying items already unlock another gift offer",
+        });
+        passed = false;
+      } else if (anchors && !stacks) {
+        consumeAnchors(anchors, consumedAnchorUnits);
+      }
     }
 
     const cartActions: CartAction[] = [];

@@ -159,6 +159,7 @@ export async function loadOfferDefinitions(shopId: string, db: Db): Promise<Offe
         combinesWithProductDiscounts: policy?.combinesWithProductDiscounts ?? true,
         combinesWithShippingDiscounts: policy?.combinesWithShippingDiscounts ?? true,
         stopLowerPriority: policy?.stopLowerPriority ?? false,
+        canStackWithGiftOffers: policy?.canStackWithGiftOffers ?? true,
         maxApplicationsPerCart: policy?.maxApplicationsPerCart ?? null,
         maxApplicationsPerCustomer: policy?.maxApplicationsPerCustomer ?? null,
       },

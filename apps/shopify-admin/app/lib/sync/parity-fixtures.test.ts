@@ -53,6 +53,8 @@ interface OfferSpec {
   type: "discount" | "gift" | "upsell";
   priority?: number;
   stopLowerPriority?: boolean;
+  /** false: the cart units that unlock this gift offer cannot unlock another gift offer. */
+  canStack?: false;
   codePromo?: boolean;
   conditions: Cond[];
   rewards: Array<Record<string, unknown>>;
@@ -218,6 +220,64 @@ const anchorCondition: Cond = [
 const anchorLine = line("a1", 10, null, { unitPrice: "50.00" });
 // What a theme adds on its own: no promo-engine markers, so the Function must recognise it by variant.
 const themeGift = (id: string, n: number, quantity: number): LineSpec => line(id, n, { _promo_gift: "true" }, { quantity });
+
+const secondAnchorLine = line("a2", 10, null, { unitPrice: "50.00" });
+const giftFor = (id: string, offerId: string, n: number) =>
+  gift(id, offerId, {}, { variantId: V(n), productId: P(n) });
+
+function stackingScenarios(): Scenario[] {
+  const pair = (canStack: false | undefined): OfferSpec[] => [
+    { ...giftOffer(A, [anchorCondition], 1, [51]), priority: 10, ...(canStack === false ? { canStack } : {}) },
+    { ...giftOffer(B, [anchorCondition], 1, [52]), priority: 20, ...(canStack === false ? { canStack } : {}) },
+  ];
+  const gifts = [giftFor("g51", A, 51), giftFor("g52", B, 52)];
+  return [
+    {
+      name: "gift-stacking-on-one-anchor-unlocks-both",
+      description: "Default (can stack): one anchor line qualifies two gift offers, as before the per-offer setting existed.",
+      offers: pair(undefined),
+      lines: [anchorLine, ...gifts],
+      qualified: [A, B],
+      discounted: { [A]: ["g51"], [B]: ["g52"] },
+    },
+    {
+      name: "gift-no-stack-one-anchor-unlocks-only-higher-priority",
+      description: "Both offers cannot stack: the single anchor unit unlocks only the higher-priority offer; the other offer's gift is charged.",
+      offers: pair(false),
+      lines: [anchorLine, ...gifts],
+      qualified: [A],
+      discounted: { [A]: ["g51"] },
+    },
+    {
+      name: "gift-no-stack-two-anchors-unlock-both",
+      description: "Two anchor lines: the first is consumed by the higher-priority offer, the second unlocks the other one.",
+      offers: pair(false),
+      lines: [anchorLine, secondAnchorLine, ...gifts],
+      qualified: [A, B],
+      discounted: { [A]: ["g51"], [B]: ["g52"] },
+    },
+    {
+      name: "gift-no-stack-landing-gift-takes-the-anchor-first",
+      description: "A free landing gift (priority 10) and a product gift (priority 20) share one anchor line: the landing offer consumes it.",
+      offers: [
+        { ...landingOffer(null), priority: 10, canStack: false },
+        {
+          ...giftOffer(
+            B,
+            [["specific_product", { requirements: [{ productId: P(1), trackMode: "product", minQuantity: 1 }], multiplyByGroups: false }, "main"]],
+            1,
+            [52],
+          ),
+          priority: 20,
+          canStack: false,
+        },
+      ],
+      lines: [landingLine("anchor", 1, 1), landingLine("target2", 2, 1), landingLine("target3", 3, 1), giftFor("g52", B, 52)],
+      qualified: [A],
+      discounted: { [A]: ["target2", "target3"] },
+    },
+  ];
+}
 
 const SCENARIOS: Scenario[] = [
   {
@@ -751,6 +811,7 @@ const SCENARIOS: Scenario[] = [
     discounted: { [A]: ["a1"] },
     quantities: { [A]: { a1: 1 } },
   },
+  ...stackingScenarios(),
 ];
 
 function build(scenario: Scenario) {
@@ -767,7 +828,7 @@ function build(scenario: Scenario) {
         sortOrder: index,
       })) as never,
       spec.rewards.map((reward) => ({ ...reward, target: reward["target"] ?? {} })) as never,
-      { stopLowerPriority: spec.stopLowerPriority ?? false } as never,
+      { stopLowerPriority: spec.stopLowerPriority ?? false, canStackWithGiftOffers: spec.canStack ?? true } as never,
       1,
       { codePromo: spec.codePromo === true },
     ),
@@ -785,6 +846,7 @@ function build(scenario: Scenario) {
         type: spec.type,
         priority: spec.priority ?? 100,
         stopLowerPriority: spec.stopLowerPriority ?? false,
+        ...(spec.canStack === false ? { canStackWithGiftOffers: false } : {}),
         conditions: spec.conditions.map(([conditionType, value, scope], index) => ({
           conditionType,
           value,

@@ -29,6 +29,7 @@ interface SourceOffer {
   type: string;
   priority: number;
   stopLowerPriority: boolean;
+  canStackWithGiftOffers?: boolean;
   conditions: Array<Omit<ConditionDefinition, "id" | "isEnabled">>;
   rewards: Array<Omit<RewardDefinition, "sortOrder"> & { sortOrder?: number }>;
 }
@@ -147,6 +148,7 @@ function toOffers(fixture: Fixture): OfferDefinition[] {
       combinesWithProductDiscounts: true,
       combinesWithShippingDiscounts: true,
       stopLowerPriority: offer.stopLowerPriority,
+      canStackWithGiftOffers: offer.canStackWithGiftOffers ?? true,
       maxApplicationsPerCart: null,
       maxApplicationsPerCustomer: null,
     },
