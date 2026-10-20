@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -80,6 +80,31 @@ describe("check-migration-safety", () => {
 
   it("flags an index on an existing table even when a different table is created in the same file", () => {
     expect(check('CREATE TABLE "t" ("id" uuid);\nCREATE INDEX "i" ON "offers" ("x");').status).toBe(1);
+  });
+
+  describe("journal order", () => {
+    const journalDir = (whens: number[]) => {
+      const dir = mkdtempSync(join(tmpdir(), "mig-j-"));
+      mkdirSync(join(dir, "meta"));
+      writeFileSync(
+        join(dir, "meta", "_journal.json"),
+        JSON.stringify({ entries: whens.map((when, i) => ({ idx: 18 + i, tag: `00${18 + i}_x`, when })) }),
+      );
+      return dir;
+    };
+    const checkJournal = (whens: number[]) => run("check-migration-safety.mjs", ["--dir", journalDir(whens), "--grandfathered", "17"]);
+
+    it("accepts strictly increasing when values", () => {
+      expect(checkJournal([100, 200, 300]).status).toBe(0);
+    });
+
+    it("fails when a later migration has an earlier or equal when, naming it", () => {
+      const result = checkJournal([100, 300, 200]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("0020_x");
+      expect(result.stderr).toContain("raise its");
+      expect(checkJournal([100, 100]).status).toBe(1);
+    });
   });
 
   it("ignores statements inside comments", () => {

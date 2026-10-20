@@ -1,0 +1,1 @@
+ALTER TABLE "offer_usage_sync" ADD COLUMN "next_attempt_at" timestamp with time zone;

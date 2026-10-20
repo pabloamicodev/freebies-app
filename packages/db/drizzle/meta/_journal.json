@@ -162,6 +162,20 @@
       "when": 1791227233703,
       "tag": "0022_offer_can_stack_with_gift_offers",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792504961599,
+      "tag": "0026_offer_customer_usages",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1792509909093,
+      "tag": "0027_offer_usage_sync_next_attempt",
+      "breakpoints": true
     }
   ]
 }

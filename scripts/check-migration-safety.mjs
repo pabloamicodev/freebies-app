@@ -8,7 +8,7 @@
  * Usage: node scripts/check-migration-safety.mjs [--dir packages/db/drizzle] [--grandfathered 17]
  * Files numbered <= --grandfathered predate the guard and are skipped.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const RULES = [
@@ -75,6 +75,28 @@ for (const file of readdirSync(dir).filter((name) => /^\d{4}_.+\.sql$/.test(name
   console.error(
     `[migration-safety] ${file}: ${risks.join(", ")}\n  Use expand/contract (docs/RUNBOOK.md) or add "-- destructive-ok: <reason>" (or "-- backfill-ok: <reason>" for an index, UPDATE or DELETE).`,
   );
+}
+/**
+ * Drizzle applies a migration only when its journal `when` is greater than the last applied one, so an
+ * entry whose `when` does not exceed every earlier entry is silently skipped on databases that already ran a later one.
+ */
+const journalPath = join(dir, "meta", "_journal.json");
+if (existsSync(journalPath)) {
+  let max = 0;
+  let maxTag = "";
+  const entries = [...JSON.parse(readFileSync(journalPath, "utf8")).entries].sort((a, b) => a.idx - b.idx);
+  for (const entry of entries) {
+    if (entry.idx > grandfathered && entry.when <= max) {
+      failed = true;
+      console.error(
+        `[migration-safety] journal: ${entry.tag} (idx ${entry.idx}) has when=${entry.when}, not greater than ${maxTag} (when=${max}). Drizzle would skip it on databases that already applied a later migration; raise its "when" above ${max} in meta/_journal.json.`,
+      );
+    }
+    if (entry.when > max) {
+      max = entry.when;
+      maxTag = entry.tag;
+    }
+  }
 }
 if (failed) process.exit(1);
 console.info("[migration-safety] ok");
