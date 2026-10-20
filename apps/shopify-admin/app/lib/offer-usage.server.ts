@@ -350,3 +350,19 @@ export async function findTitleCollisions(
     .filter((o) => !o.requiresCode && !o.requiredDiscountCode && offerMessage(o) === message)
     .map(({ id, internalName }) => ({ id, internalName }));
 }
+
+export const LIMITED_TITLE_REQUIRED_ERROR =
+  "Offers with a customer limit need a unique customer-facing title, it's how orders are matched. Set a public title that no other non-archived automatic offer uses.";
+
+/** DL4: a per-customer limit on an automatic offer needs its own customer-facing title. Null = ok. */
+export async function limitedTitleError(db: Db, shopId: string, offerId: string): Promise<string | null> {
+  const [offer] = await db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1);
+  if (!offer) return null;
+  const [code] = await db.select({ id: discountCodes.id }).from(discountCodes).where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offerId))).limit(1);
+  if (offer.requiresCode || offer.requiredDiscountCode || code) return null;
+  if (!offer.publicTitle.trim()) return LIMITED_TITLE_REQUIRED_ERROR;
+  const collisions = await findTitleCollisions(db, shopId, offer);
+  return collisions.length > 0
+    ? `${LIMITED_TITLE_REQUIRED_ERROR} Same title as: ${collisions.map((c) => c.internalName).join(", ")}.`
+    : null;
+}

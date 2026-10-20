@@ -253,8 +253,8 @@ export function OrderHistoryForm({ value, onChange }: SubFormProps) {
       </>}
       <div className="b-help">
         Checked against the customer's real Shopify order history at checkout, so it can't be
-        spoofed from the browser. Guests (no account) always fail — they have no order history to
-        check. "One use per customer" is a separate mode: it limits each customer to one redemption
+        spoofed from the browser. Guests who type an email Shopify already knows are recognised and checked like any
+        customer; a guest with a brand-new email has no history and fails. "One use per customer" is a separate mode: it limits each customer to one redemption
         of this offer instead of comparing spend or order count.
       </div>
     </div>

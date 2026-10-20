@@ -5,6 +5,7 @@ import {
   offers,
   offerConditions,
   offerRewards,
+  offerCombinationPolicies,
   discountCodes,
   type Db,
   type OfferCondition,
@@ -26,6 +27,7 @@ import { OfferPublishError, addOfferPublishErrors } from "./offer-publish-errors
 import { markPublishPending } from "./publish-pending.server.js";
 import { preflightSharedConfig } from "./shared-config-size.server.js";
 import { insertAuditLog } from "./audit-log.server.js";
+import { limitedTitleError } from "./offer-usage.server.js";
 
 export interface PublishValidationResult {
   ok: boolean;
@@ -151,7 +153,7 @@ export async function validateOffersPublishable(
 ): Promise<PublishValidationResult> {
   if (offerIds.length === 0) return { ok: true };
 
-  const [offerRows, conditionRows, rewardRows, codeRows]: [
+  const [offerRows, conditionRows, rewardRows, codeRows, policyRows]: [
     { id: string; internalName: string; requiredDiscountCode: string | null; requiresCode: boolean; codeRedemption: CodeRedemptionMode }[],
     OfferCondition[],
     OfferReward[],
@@ -164,6 +166,7 @@ export async function validateOffersPublishable(
       usageCount: number;
       oncePerCustomer: boolean;
     }>,
+    Array<{ offerId: string; maxApplicationsPerCustomer: number | null }>,
   ] = await Promise.all([
     db
       .select({
@@ -195,6 +198,10 @@ export async function validateOffersPublishable(
       })
       .from(discountCodes)
       .where(and(eq(discountCodes.shopId, shopId), inArray(discountCodes.offerId, offerIds))),
+    db
+      .select({ offerId: offerCombinationPolicies.offerId, maxApplicationsPerCustomer: offerCombinationPolicies.maxApplicationsPerCustomer })
+      .from(offerCombinationPolicies)
+      .where(and(eq(offerCombinationPolicies.shopId, shopId), inArray(offerCombinationPolicies.offerId, offerIds))),
   ]);
   const offersWithCodes = new Set(codeRows.map((row) => row.offerId));
   const now = new Date();
@@ -231,6 +238,11 @@ export async function validateOffersPublishable(
         ok: false,
         error: `Cannot publish "${offer.internalName}": add at least one reward.`,
       };
+    }
+
+    if (policyRows.some((p) => p.offerId === offer.id && (p.maxApplicationsPerCustomer ?? 0) > 0)) {
+      const titleError = await limitedTitleError(db, shopId, offer.id);
+      if (titleError) return { ok: false, error: `Cannot publish "${offer.internalName}": ${titleError}` };
     }
 
     // Shopify applies once-per-customer to the whole code discount, so a node can't carry both
