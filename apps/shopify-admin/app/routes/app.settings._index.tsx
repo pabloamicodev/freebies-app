@@ -515,6 +515,10 @@ export default function SettingsPage() {
             />
           </Section>
 
+          <Section title="Offer limits" desc="Turn on enforcement of per-cart and per-customer offer limits at checkout.">
+            <Link to="/app/settings/limits" className="b-btn b-btn-secondary">Manage offer limits</Link>
+          </Section>
+
           {/* ── Reset ────────────────────────────────────────── */}
           {/* ── Privacy ──────────────────────────────────────── */}
           <Section title="Customer data requests" desc="Download exports for customers who asked Shopify for their data.">
