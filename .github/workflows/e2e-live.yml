@@ -108,6 +108,10 @@ jobs:
           E2E_GREP: ${{ inputs.grep }}
         run: pnpm --filter shopify-admin test:e2e ${E2E_GREP:+--grep "$E2E_GREP"}
 
+      - name: Explain failure
+        if: failure()
+        run: echo "::error::E2E failed. If the log says 'PromoEngine.evaluate() returned no result', the quoted HTTP status/body is the cause (429 or Cloudflare challenge = wait and re-run; 401/403/404 = APP_URL or app proxy). See docs/RUNBOOK.md, Live-store E2E."
+
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v4
