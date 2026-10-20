@@ -5,7 +5,7 @@
  * block liquid would and drive them through the real evaluation endpoint.
  */
 
-import type { Page } from "@playwright/test";
+import type { Page, Response } from "@playwright/test";
 
 export type Evaluation = {
   qualifiedOffers: Array<{ offerId: string; type: string; qualified: boolean }>;
@@ -20,12 +20,48 @@ export type Evaluation = {
   giftSlider: { offerId?: string } | null;
 };
 
-/** Runs a real evaluation; the runtime also applies its cart actions and notifies mounted widgets. */
+const EVALUATE_ATTEMPTS = 4;
+const EVALUATE_PATH = "/apps/promo-engine/evaluate";
+
+/**
+ * Runs a real evaluation; the runtime also applies its cart actions and notifies mounted widgets.
+ * PromoEngine.evaluate() resolves null when a newer evaluation aborted it (the cart mutation just
+ * made schedules one), on HTTP 429/503 (it re-schedules itself) and on any endpoint error, so retry
+ * a bounded number of times, fall back to the runtime's last result, and name the HTTP reason if
+ * it never produces one.
+ */
 export async function evaluateNow(page: Page): Promise<Evaluation> {
-  return page.evaluate(async () => {
-    const api = (window as unknown as { PromoEngine: { evaluate: () => Promise<unknown> } }).PromoEngine;
-    return (await api.evaluate()) as Evaluation;
-  });
+  const replies: string[] = [];
+  const onResponse = async (response: Response) => {
+    if (!response.url().includes(EVALUATE_PATH)) return;
+    const body = response.ok() ? "" : ` ${(await response.text().catch(() => "")).slice(0, 160).replace(/\s+/g, " ")}`;
+    replies.push(`HTTP ${response.status()}${body}`);
+  };
+  page.on("response", onResponse);
+  try {
+    for (let attempt = 1; attempt <= EVALUATE_ATTEMPTS; attempt++) {
+      await page.waitForFunction(() => typeof (window as { PromoEngine?: unknown }).PromoEngine !== "undefined", undefined, {
+        timeout: 15_000,
+      });
+      const result = await page.evaluate(async () => {
+        const api = (
+          window as unknown as { PromoEngine: { evaluate: () => Promise<unknown>; lastResult: () => unknown } }
+        ).PromoEngine;
+        return (await api.evaluate()) ?? api.lastResult();
+      });
+      if (result) return result as Evaluation;
+      await page.waitForTimeout(2_000 * attempt);
+    }
+  } finally {
+    page.off("response", onResponse);
+  }
+  const reason =
+    replies.length > 0
+      ? replies.slice(-3).join("; ")
+      : "no request reached the evaluate endpoint (runtime not initialised, cart fetch failed or evaluation aborted)";
+  throw new Error(
+    `PromoEngine.evaluate() returned no result after ${EVALUATE_ATTEMPTS} attempts on ${page.url()}. Evaluate endpoint replies: ${reason}.`,
+  );
 }
 
 export async function mountWidget(
