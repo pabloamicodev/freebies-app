@@ -1,0 +1,3 @@
+# Golden fixtures and generated files are compared byte for byte; keep LF on every OS.
+packages/rule-engine/test-fixtures/** text eol=lf
+apps/shopify-admin/extensions/*/src/app-url.ts text eol=lf
