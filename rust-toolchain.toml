@@ -1,0 +1,5 @@
+# Pinned so CI builds the same wasm that ships: newer rustc releases grew the discount Functions ~12 KB past the 249000 B budget.
+[toolchain]
+channel = "1.95.0"
+targets = ["wasm32-wasip1"]
+profile = "minimal"
