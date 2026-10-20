@@ -316,3 +316,136 @@ describe("init guard, bfcache and per-request guard", () => {
     expect(h.count(/\/cart\.js$/)).toBe(1);
   });
 });
+
+let cartVersion = 0;
+
+describe("gift hold on theme add-to-cart", () => {
+  const giftAction = { action: "add_line", variantId: "gid://shopify/ProductVariant/55", quantity: 1, properties: GIFT_PROPS };
+  const isOwn = (init?: RequestInit) => Boolean((init?.headers as Record<string, string> | undefined)?.[OWN_REQUEST_HEADER]);
+
+  function setup(offerType = "gift") {
+    let actions: unknown[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const h = harness([
+      [/cart\/add/, (init) => (isOwn(init) ? gate.then(() => json({})) : json({ items: [{ id: 1 }] }))],
+      [/cart\.js/, () => json({ ...emptyCart, total_price: ++cartVersion })],
+      [/evaluate/, () => json(okResult({ qualifiedOffers: [{ offerId: "o1", type: offerType }], cartActions: actions }))],
+    ]);
+    initRuntime();
+    vi.stubGlobal("fetch", h.win.fetch);
+    const api = (h.win as unknown as { PromoEngine: { evaluate: () => Promise<unknown>; whenGiftsReady: () => Promise<void> } }).PromoEngine;
+    const giftAdds = () => h.calls.filter((c) => /cart\/add/.test(c.url) && isOwn(c.init)).length;
+    return { h, api, release, giftAdds, armGift: () => void (actions = [giftAction]) };
+  }
+  const themeAdd = (h: ReturnType<typeof harness>) => h.win.fetch("/cart/add.js", { method: "POST", body: "{}" });
+
+  it("resolves the theme add only after our gift add completed, with the original response", async () => {
+    const t = setup();
+    await t.api.evaluate();
+    t.armGift();
+    let settled = false;
+    const added = themeAdd(t.h).then((r) => ((settled = true), r));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(t.giftAdds()).toBe(1);
+    expect(settled).toBe(false);
+    t.release();
+    const response = await added;
+    expect(await response.json()).toEqual({ items: [{ id: 1 }] });
+    expect(t.h.win.dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "promo-engine:gifts-ready" }));
+  });
+
+  it("does not re-trigger on its own gift add", async () => {
+    const t = setup();
+    await t.api.evaluate();
+    t.armGift();
+    const added = themeAdd(t.h);
+    await vi.advanceTimersByTimeAsync(0);
+    t.release();
+    await added;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(t.giftAdds()).toBe(1);
+    expect(t.h.count(/evaluate/)).toBe(2);
+  });
+
+  it("releases the theme add with the original response after 3 s and warns", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const t = setup();
+    await t.api.evaluate();
+    t.armGift();
+    let settled = false;
+    const added = themeAdd(t.h).then((r) => ((settled = true), r));
+    await vi.advanceTimersByTimeAsync(2_900);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await (await added).json()).toEqual({ items: [{ id: 1 }] });
+    expect(warn).toHaveBeenCalled();
+    t.release();
+    warn.mockRestore();
+  });
+
+  it("does not hold when no gift offer applies", async () => {
+    const t = setup("discount");
+    await t.api.evaluate();
+    t.armGift();
+    await themeAdd(t.h);
+    expect(t.h.count(/evaluate/)).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(t.h.count(/evaluate/)).toBe(2);
+    t.release();
+  });
+
+  it("whenGiftsReady waits for pending gift mutations", async () => {
+    const t = setup();
+    t.armGift();
+    let ready = false;
+    const pending = t.api.whenGiftsReady().then(() => (ready = true));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(ready).toBe(false);
+    t.release();
+    await pending;
+    expect(t.giftAdds()).toBe(1);
+  });
+});
+
+describe("gift hold on XHR add-to-cart", () => {
+  it("replays the completion events only after our gift add completed", async () => {
+    vi.resetModules();
+    const fresh = await import("./runtime.js");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const h = harness([
+      [/cart\/add/, (init) => ((init?.headers as Record<string, string> | undefined)?.[OWN_REQUEST_HEADER] ? gate.then(() => json({})) : json({}))],
+      [/cart\.js/, () => json({ ...emptyCart, total_price: ++cartVersion })],
+      [/evaluate/, () => json(okResult({ qualifiedOffers: [{ offerId: "o1", type: "gift" }], cartActions: [
+        { action: "add_line", variantId: "gid://shopify/ProductVariant/55", quantity: 1, properties: GIFT_PROPS },
+      ] }))],
+    ]);
+    class FakeXhr extends EventTarget {
+      readyState = 0;
+      status = 0;
+      open(_method: string, _url: string, _async?: boolean) {}
+      send() {
+        setTimeout(() => {
+          this.readyState = 4;
+          this.status = 200;
+          for (const type of ["readystatechange", "load", "loadend"]) this.dispatchEvent(new Event(type));
+        }, 10);
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", FakeXhr);
+    fresh.initRuntime();
+    vi.stubGlobal("fetch", h.win.fetch);
+
+    const xhr = new FakeXhr();
+    const seen: string[] = [];
+    xhr.open("POST", "/cart/add.js", true);
+    for (const type of ["readystatechange", "load", "loadend"]) xhr.addEventListener(type, () => seen.push(type));
+    xhr.send();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(seen).toEqual([]);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seen).toEqual(["readystatechange", "load", "loadend"]);
+  });
+});
