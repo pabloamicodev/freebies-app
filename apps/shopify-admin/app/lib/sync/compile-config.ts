@@ -29,6 +29,8 @@ export interface CompileOfferOptions {
    * a zero-decimal shop (JPY, KRW) read as USD turns 500 yen into 5 and every fixed amount wrong.
    */
   shopCurrencyCode?: string;
+  /** Per-shop `limits.enforced` flag: only then are mpc/mpu/ri compiled from the combination policy. */
+  limitsEnforced?: boolean;
 }
 
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
@@ -188,6 +190,10 @@ export interface CompiledShippingOffer {
   id: string;
   /** Customer-facing shipping discount name, emitted as the candidate message. */
   title?: string;
+  /** Max paid orders per customer that may use this offer (Function: uses >= mpu skips it). */
+  mpu?: number;
+  /** Requires an identified customer; a guest never qualifies. Only ever true. */
+  ri?: true;
   priority: number;
   /** Currency of fixed-amount tiers and subtotal thresholds; the Function defaults to USD. */
   currencyCode?: string;
@@ -214,6 +220,12 @@ export interface CompiledOffer {
   offerType: string;
   /** Customer-facing discount name shown in cart and checkout. */
   title?: string;
+  /** Max applications per cart (units, sets or bundles, by reward shape). Only lowers existing caps. */
+  mpc?: number;
+  /** Max paid orders per customer that may use this offer (Function: uses >= mpu skips it). */
+  mpu?: number;
+  /** Requires an identified customer; a guest never qualifies. Only ever true. */
+  ri?: true;
   priority: number;
   stopLowerPriority: boolean;
   /** The anchor units that unlock this gift offer cannot unlock another gift offer. Only ever false, so it is absent otherwise. */
@@ -388,6 +400,36 @@ type OfferRow = typeof OffersTable.$inferSelect;
 type ConditionRow = typeof ConditionsTable.$inferSelect;
 type RewardRow = typeof RewardsTable.$inferSelect;
 type PolicyRow = typeof PoliciesTable.$inferSelect;
+
+const positiveInt = (value: number | null | undefined) =>
+  typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+
+/**
+ * The Function-side usage limits (FIX-limits-04). Empty unless the shop's `limits.enforced` flag is on, so
+ * flag-off compiled bytes are identical to before. `one_use_per_customer` is mpu=1 plus ri (DL6, D3); mpc is meaningless
+ * for order and shipping rewards, which apply once per order.
+ */
+export function compileOfferLimits(
+  policy: PolicyRow | null,
+  conditions: ConditionRow[],
+  rewards: RewardRow[],
+  enforced: boolean | undefined,
+): { mpc?: number; mpu?: number; ri?: true } {
+  if (!enforced) return {};
+  const oneUse = conditions.some((c) => c.isEnabled && c.conditionType === "one_use_per_customer");
+  const mpu = [positiveInt(policy?.maxApplicationsPerCustomer), oneUse ? 1 : undefined].filter(
+    (v): v is number => v !== undefined,
+  );
+  const perCartApplies = rewards.some(
+    (r) => r.rewardType !== "order_discount" && r.rewardType !== "shipping_discount",
+  );
+  const mpc = perCartApplies ? positiveInt(policy?.maxApplicationsPerCart) : undefined;
+  return {
+    ...(mpc !== undefined ? { mpc } : {}),
+    ...(mpu.length > 0 ? { mpu: Math.min(...mpu) } : {}),
+    ...(policy?.requireIdentifiedCustomer || oneUse ? { ri: true as const } : {}),
+  };
+}
 
 export function compileOfferConfig(
   offer: OfferRow,
@@ -609,6 +651,9 @@ export function compileOfferConfig(
       case "utm_parameters":
       case "page_types":
         applyPageCondition(config, compilePageCondition(typedCondition, offer, options)!);
+        break;
+      case "one_use_per_customer":
+        // Compiled as mpu = 1 by compileOfferLimits, behind the shop's limits.enforced flag.
         break;
       default:
         // Only conditions the publish flow already validated as Function-enforced
@@ -924,6 +969,8 @@ export function compileOfferConfig(
   config.giftVariantIds = [...new Set(config.giftVariantIds)];
   config.giftProductIds = [...new Set(config.giftProductIds)];
 
+  Object.assign(config, compileOfferLimits(policy, conditions, rewards, options.limitsEnforced));
+
   return config;
 }
 
@@ -979,8 +1026,15 @@ export function compileShippingOfferConfigs(
   offer: OfferRow,
   conditions: ConditionRow[],
   rewards: RewardRow[],
-  options: { codeHashes?: string[]; acceptCodes?: boolean; shopCurrencyCode?: string } = {},
+  options: {
+    codeHashes?: string[];
+    acceptCodes?: boolean;
+    shopCurrencyCode?: string;
+    limitsEnforced?: boolean;
+    policy?: PolicyRow | null;
+  } = {},
 ): CompiledShippingOffer[] {
+  const { mpu, ri } = compileOfferLimits(options.policy ?? null, conditions, rewards, options.limitsEnforced);
   const enabledConditions = conditions.filter(
     (condition) => condition.isEnabled && (condition.scope === "main" || condition.scope === "sub"),
   );
@@ -1077,6 +1131,8 @@ export function compileShippingOfferConfigs(
         {
           id: `${offer.id}:${reward.id}`,
           title: clampDiscountMessage(offer.publicTitle) ?? clampDiscountMessage(offer.internalName),
+          ...(mpu !== undefined ? { mpu } : {}),
+          ...(ri ? { ri } : {}),
           priority: offer.priority * 1000 + rewardIndex,
           // Fixed tiers and subtotal thresholds are in the shop's currency; the shipping wizard stamps a
           // hard-coded "USD" on the reward, so the shop's currency wins and the reward's is only a fallback.

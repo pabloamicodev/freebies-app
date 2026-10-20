@@ -17,3 +17,8 @@ export function clampDiscountMessage(value: string | null | undefined): string |
   const trimmed = value?.trim();
   return trimmed ? Array.from(trimmed).slice(0, DISCOUNT_MESSAGE_MAX_LENGTH).join("") : undefined;
 }
+
+/** The one title comparison key: NFKC, trimmed, inner whitespace collapsed, locale-independent lowercase. Never for display. */
+export function normalizeOfferTitle(s: string): string {
+  return s.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}

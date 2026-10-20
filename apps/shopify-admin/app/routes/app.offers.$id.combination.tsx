@@ -9,9 +9,11 @@ import { PageHeader } from "../components/PageHeader.js";
 import { NotFound } from "../components/NotFound.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
-import { findTitleCollisions } from "../lib/offer-usage.server.js";
+import { findTitleCollisions, limitedTitleError } from "../lib/offer-usage.server.js";
+import { isLimitsEnforced } from "../lib/limits-enforced.server.js";
+import { MAX_LIMIT, REQUIRE_CUSTOMER_HELP, hasWriteCustomersScope, isOrderLevelOnly, limitHelp, parseLimit } from "../lib/limit-help.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
-import { offerCombinationPolicies, offers } from "@promo/db";
+import { offerCombinationPolicies, offerRewards, offers } from "@promo/db";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
@@ -23,13 +25,14 @@ interface RestrictingOffer {
 }
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { shopId, db, session } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
-  const [policyRows, activeOffers] = await Promise.all([
+  const [policyRows, activeOffers, rewardRows] = await Promise.all([
     db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId))).limit(1),
     db.select({ id: offers.id, internalName: offers.internalName }).from(offers).where(and(eq(offers.shopId, shopId), eq(offers.status, "active"), ne(offers.id, offerId))),
+    db.select({ rewardType: offerRewards.rewardType }).from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))),
   ]);
 
   // Shopify's combinesWith lives on the app's single discount node, so
@@ -65,7 +68,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const limited = Boolean(policy && ((policy.maxApplicationsPerCart ?? 0) > 0 || (policy.maxApplicationsPerCustomer ?? 0) > 0));
   const titleCollisions = limited ? await findTitleCollisions(db, shopId, offer) : [];
 
-  return { offer, policy, restricting, titleCollisions };
+  const help = limitHelp(offer.type, rewardRows.map((x) => x.rewardType));
+  // The stored session scope can be stale (granted scopes change without a new offline token), so it is a hint only.
+  const missingCustomerScope = (policy?.maxApplicationsPerCustomer ?? 0) > 0 && !hasWriteCustomersScope(session.scope);
+
+  return { offer, policy, restricting, titleCollisions, help, missingCustomerScope };
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
@@ -73,6 +80,23 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const offer = await loadOwnedOffer(db, shopId, offerId);
+
+  const rewardRows = await db.select({ rewardType: offerRewards.rewardType }).from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
+  // The per-cart field is hidden for order/shipping-only offers (DL5); ignore anything posted for it.
+  const perCart = isOrderLevelOnly(rewardRows.map((x) => x.rewardType)) ? undefined : parseLimit(formData.get("max_per_cart"));
+  const perCustomer = parseLimit(formData.get("max_per_customer"));
+  if (perCart === null || perCustomer === null) {
+    return { error: `Limits must be whole numbers between 1 and ${MAX_LIMIT}, or blank for unlimited.` };
+  }
+  // The unique-title rule only matters once limits are enforced for the shop; until then it is a warning.
+  let titleWarning: string | null = null;
+  if (perCustomer !== undefined) {
+    const titleError = await limitedTitleError(db, shopId, offerId);
+    if (titleError) {
+      if (await isLimitsEnforced(db, shopId)) return { error: titleError };
+      titleWarning = titleError;
+    }
+  }
 
   const policy = {
     shopId,
@@ -84,9 +108,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     stopLowerPriority: formData.get("stop_lower_priority") === "on",
     giftValueCountsForOtherOffers: formData.get("gift_value_counts") === "on",
     canStackWithGiftOffers: formData.get("can_stack_gift_offers") === "on",
-    maxApplicationsPerCart: (() => { const v = parseInt(formData.get("max_per_cart") as string, 10); return Number.isFinite(v) && v > 0 ? v : null; })(),
-    maxApplicationsPerCustomer: (() => { const v = parseInt(formData.get("max_per_customer") as string, 10); return Number.isFinite(v) && v > 0 ? v : null; })(),
-
+    maxApplicationsPerCart: perCart ?? null,
+    maxApplicationsPerCustomer: perCustomer ?? null,
+    requireIdentifiedCustomer: formData.get("require_identified_customer") === "on",
   };
 
   await db.insert(offerCombinationPolicies)
@@ -103,6 +127,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         canStackWithGiftOffers: policy.canStackWithGiftOffers,
         maxApplicationsPerCart: policy.maxApplicationsPerCart,
         maxApplicationsPerCustomer: policy.maxApplicationsPerCustomer,
+        requireIdentifiedCustomer: policy.requireIdentifiedCustomer,
         updatedAt: new Date(),
       },
     });
@@ -110,7 +135,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
   if (publishError) return { error: publishError };
 
-  return { success: true };
+  return { success: true, warning: titleWarning };
 };
 
 const RESTRICTION_LABELS = {
@@ -120,7 +145,7 @@ const RESTRICTION_LABELS = {
 } as const;
 
 export default function OfferCombinationPage() {
-  const { offer, policy, restricting, titleCollisions } = useLoaderData<typeof loader>();
+  const { offer, policy, restricting, titleCollisions, help, missingCustomerScope } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
@@ -134,6 +159,15 @@ export default function OfferCombinationPage() {
     <div className="b-page">
       {/* Header */}
       <PageHeader title="Combination Policy" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
+
+      {missingCustomerScope && (
+        <div className="b-banner b-banner-orange b-mb-4" role="status">
+          <span className="b-banner-icon" aria-hidden="true">⚠</span>
+          <p className="b-banner-text" style={{ margin: 0 }}>
+            Per-customer limits need the &quot;write customers&quot; permission, which this store may not have approved yet. Open the app from your Shopify admin and approve the updated permissions so customer usage can be recorded. If you already approved it, you can ignore this notice.
+          </p>
+        </div>
+      )}
 
       {titleCollisions.length > 0 && (
         <div className="b-banner b-banner-orange b-mb-4" role="alert">
@@ -284,43 +318,78 @@ export default function OfferCombinationPage() {
 
                   <hr className="b-divider" />
 
-                  {/* max applications per cart */}
-                  <div>
-                    <label className="b-label" htmlFor="max_per_cart">Max applications per cart</label>
-                    <input
-                      id="max_per_cart"
-                      className="b-input"
-                      type="number"
-                      name="max_per_cart"
-                      min={1}
-                      defaultValue={policy?.maxApplicationsPerCart?.toString() ?? ""}
-                      placeholder="Unlimited"
-                      style={{ maxWidth: 200 }}
-                    />
-                    <p className="b-help">Limit how many times this offer can apply in a single cart. Leave blank for unlimited.</p>
-                  </div>
+                  {help.showPerCart ? (
+                    <div>
+                      <label className="b-label" htmlFor="max_per_cart">Max per cart</label>
+                      <input
+                        id="max_per_cart"
+                        className="b-input"
+                        type="number"
+                        name="max_per_cart"
+                        min={1}
+                        max={MAX_LIMIT}
+                        step={1}
+                        inputMode="numeric"
+                        defaultValue={policy?.maxApplicationsPerCart?.toString() ?? ""}
+                        placeholder="Unlimited"
+                        aria-describedby="max_per_cart_help"
+                        style={{ maxWidth: 200 }}
+                      />
+                      <p className="b-help" id="max_per_cart_help">{help.perCart}</p>
+                    </div>
+                  ) : (
+                    <p className="b-help" style={{ margin: 0 }}>{help.perCart}</p>
+                  )}
 
-                  {/* max applications per customer */}
                   <div>
-                    <label className="b-label" htmlFor="max_per_customer">Max applications per customer</label>
+                    <label className="b-label" htmlFor="max_per_customer">Max per customer</label>
                     <input
                       id="max_per_customer"
                       className="b-input"
                       type="number"
                       name="max_per_customer"
                       min={1}
+                      max={MAX_LIMIT}
+                      step={1}
+                      inputMode="numeric"
                       defaultValue={policy?.maxApplicationsPerCustomer?.toString() ?? ""}
                       placeholder="Unlimited"
+                      aria-describedby="max_per_customer_help"
                       style={{ maxWidth: 200 }}
                     />
-                    <p className="b-help">Limit how many times a single customer can benefit from this offer. Leave blank for unlimited.</p>
+                    <p className="b-help" id="max_per_customer_help">{help.perCustomer}</p>
                   </div>
+
+                  <label className="b-checkbox-row">
+                    <input
+                      type="checkbox"
+                      name="require_identified_customer"
+                      defaultChecked={policy?.requireIdentifiedCustomer ?? false}
+                      aria-describedby="require_identified_customer_help"
+                    />
+                    <div>
+                      <div className="b-checkbox-label">Require an identified customer</div>
+                      <div className="b-checkbox-help" id="require_identified_customer_help">{REQUIRE_CUSTOMER_HELP}</div>
+                    </div>
+                  </label>
+
+                  {actionData && "error" in actionData && (
+                    <div className="b-banner b-banner-red" role="alert">
+                      <span className="b-banner-icon" aria-hidden="true">!</span>
+                      <p className="b-banner-text" style={{ margin: 0 }}>{actionData.error}</p>
+                    </div>
+                  )}
 
                   {/* Feedback */}
                   {actionData && "success" in actionData && (
                     <div className="b-banner b-banner-green" role="status">
                       <span className="b-banner-icon">✓</span>
                       <p className="b-banner-text" style={{ margin: 0 }}>Combination policy saved.</p>
+                    </div>
+                  )}
+                  {actionData && "warning" in actionData && actionData.warning && (
+                    <div className="b-banner" role="status">
+                      <p className="b-banner-text" style={{ margin: 0 }}>Not enforced yet, and it will block publishing once limits are enforced for this shop: {actionData.warning}</p>
                     </div>
                   )}
 

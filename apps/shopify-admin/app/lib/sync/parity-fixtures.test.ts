@@ -162,6 +162,12 @@ interface Scenario {
   qualified: string[];
   discounted: Record<string, string[]>;
   quantities?: Record<string, Record<string, number>>;
+  /** Combination-policy limits (mpc/mpu/ri): compiled with the per-shop `limits.enforced` flag on. */
+  limits?: { mpc?: number; mpu?: number; ri?: true };
+  /** Absent: a guest. An object: an identified customer, `usage` its per-offer use counts. */
+  customer?: { usage?: Record<string, number> };
+  /** Compiled gift-reward keys no source field produces yet (selectionCount), set by hand. */
+  giftRewardPatch?: Record<string, unknown>;
 }
 
 const gift = (id: string, offerId: string, metadata: Record<string, string> = {}, extra: Partial<LineSpec> = {}): LineSpec =>
@@ -275,6 +281,181 @@ function stackingScenarios(): Scenario[] {
       lines: [landingLine("anchor", 1, 1), landingLine("target2", 2, 1), landingLine("target3", 3, 1), giftFor("g52", B, 52)],
       qualified: [A],
       discounted: { [A]: ["target2", "target3"] },
+    },
+  ];
+}
+
+const productPage = pageTypes(["product"]);
+const unitLine = (id: string, n: number, quantity: number): LineSpec => line(id, n, page(`/products/${id}`), { quantity });
+const giftUnits = (id: string, n: number, quantity: number): LineSpec =>
+  gift(id, A, {}, { variantId: V(n), productId: P(n), quantity });
+const productRewardOffer = (reward: { quantity?: number | null; discountType?: string; amount?: number; value?: Record<string, unknown>; target?: Record<string, unknown> }): OfferSpec =>
+  discountOffer(A, [productPage], reward.target ?? {}, {
+    rewards: [
+      {
+        id: "dddddddd-0000-4000-8000-000000000005",
+        rewardType: "product_discount",
+        discountType: reward.discountType ?? "percentage",
+        value: { amount: reward.amount ?? 10, currencyCode: "USD", ...reward.value },
+        target: reward.target ?? {},
+        quantity: reward.quantity ?? null,
+        isAutoAdd: false,
+        isCustomerSelectable: false,
+        trackMode: "variant",
+        sortOrder: 0,
+        label: null,
+      },
+    ],
+  });
+const quizLine = (id: string, n: number, bundle: string): LineSpec =>
+  line(id, n, page(`/products/${id}`, { _quiz_bundle_id: bundle, _quiz_expected_paid_count: "2" }), { unitPrice: "20.00" });
+const limitsAnchor = line("l1", 1, page("/products/l1"));
+
+function limitsScenarios(): Scenario[] {
+  const giftA = (quantity = 1): OfferSpec => giftOffer(A, [productPage], quantity, [50]);
+  const giftLine = (quantity = 1) => giftUnits("g1", 50, quantity);
+  return [
+    {
+      name: "limits-per-customer-below-the-limit",
+      description: "mpu 2 with 1 prior use: the offer still applies.",
+      offers: [giftA()],
+      limits: { mpu: 2 },
+      customer: { usage: { [A]: 1 } },
+      lines: [limitsAnchor, giftLine()],
+      qualified: [A],
+      discounted: { [A]: ["g1"] },
+      quantities: { [A]: { g1: 1 } },
+    },
+    {
+      name: "limits-per-customer-at-the-limit",
+      description: "mpu 2 with 2 prior uses: the offer is skipped (uses >= mpu).",
+      offers: [giftA()],
+      limits: { mpu: 2 },
+      customer: { usage: { [A]: 2 } },
+      lines: [limitsAnchor, giftLine()],
+      qualified: [],
+      discounted: {},
+    },
+    {
+      name: "limits-per-customer-guest-counts-zero",
+      description: "A guest has no usage: mpu 1 still applies.",
+      offers: [giftA()],
+      limits: { mpu: 1 },
+      lines: [limitsAnchor, giftLine()],
+      qualified: [A],
+      discounted: { [A]: ["g1"] },
+      quantities: { [A]: { g1: 1 } },
+    },
+    {
+      name: "limits-per-customer-no-usage-key-counts-zero",
+      description: "A customer whose usage has no entry for this offer has 0 uses.",
+      offers: [giftA()],
+      limits: { mpu: 1 },
+      customer: { usage: { [B]: 5 } },
+      lines: [limitsAnchor, giftLine()],
+      qualified: [A],
+      discounted: { [A]: ["g1"] },
+      quantities: { [A]: { g1: 1 } },
+    },
+    {
+      name: "limits-require-identified-guest-does-not-apply",
+      description: "ri with no customer: the offer never qualifies.",
+      offers: [giftA()],
+      limits: { ri: true },
+      lines: [limitsAnchor, giftLine()],
+      qualified: [],
+      discounted: {},
+    },
+    {
+      name: "limits-require-identified-customer-applies",
+      description: "ri with an identified customer: the offer applies.",
+      offers: [giftA()],
+      limits: { ri: true },
+      customer: {},
+      lines: [limitsAnchor, giftLine()],
+      qualified: [A],
+      discounted: { [A]: ["g1"] },
+      quantities: { [A]: { g1: 1 } },
+    },
+    {
+      name: "limits-per-cart-gift-max-quantity-2",
+      description: "Gift with maxQuantity 2 and mpc 1: one free unit.",
+      offers: [giftA(2)],
+      limits: { mpc: 1 },
+      lines: [limitsAnchor, giftLine(2)],
+      qualified: [A],
+      discounted: { [A]: ["g1"] },
+      quantities: { [A]: { g1: 1 } },
+    },
+    {
+      name: "limits-per-cart-picker-production-shape",
+      description: "Picker of 3 as compile emits it today (no selectionCount, so 1 pick), maxQuantity 3 and mpc 1: 1 free unit in total.",
+      offers: [giftOffer(A, [productPage], 3, [50, 51, 52], "picker")],
+      limits: { mpc: 1 },
+      lines: [limitsAnchor, giftUnits("g50", 50, 3), giftUnits("g51", 51, 3), giftUnits("g52", 52, 3)],
+      qualified: [A],
+      discounted: { [A]: ["g50"] },
+      quantities: { [A]: { g50: 1 } },
+    },
+    {
+      name: "limits-per-cart-picker",
+      description: "Future shape, not produced by compile yet: a picker with selectionCount 2, maxQuantity 3 and mpc 1 gives 2 free units in total across the options.",
+      offers: [giftOffer(A, [productPage], 3, [50, 51, 52], "picker")],
+      limits: { mpc: 1 },
+      giftRewardPatch: { selectionCount: 2 },
+      lines: [limitsAnchor, giftUnits("g50", 50, 3), giftUnits("g51", 51, 3), giftUnits("g52", 52, 3)],
+      qualified: [A],
+      discounted: { [A]: ["g50", "g51"] },
+      quantities: { [A]: { g50: 1, g51: 1 } },
+    },
+    {
+      name: "limits-per-cart-plain-units",
+      description: "Per-unit product discount with mpc 4 over lines of 3 and 2: 3 and 1 units.",
+      offers: [productRewardOffer({})],
+      limits: { mpc: 4 },
+      lines: [unitLine("l1", 1, 3), unitLine("l2", 2, 2)],
+      qualified: [A],
+      discounted: { [A]: ["l1", "l2"] },
+      quantities: { [A]: { l1: 3, l2: 1 } },
+    },
+    {
+      name: "limits-per-cart-quantity-tier",
+      description: "Quantity tier of 2 with no discountedQuantity and mpc 2 over 7 units: 2 bundles = 4 units.",
+      offers: [productRewardOffer({ value: { tiers: [{ minimumQuantity: 2, discountType: "percentage", discountValue: 10 }] } })],
+      limits: { mpc: 2 },
+      lines: [unitLine("l1", 1, 7)],
+      qualified: [A],
+      discounted: { [A]: ["l1"] },
+      quantities: { [A]: { l1: 4 } },
+    },
+    {
+      name: "limits-per-cart-price-tier",
+      description: "Price tier of 3 and mpc 1 over 5 units: one pack = 3 units.",
+      offers: [productRewardOffer({ target: { priceTiers: [{ quantity: 3, targetPricePerUnit: 8 }] } })],
+      limits: { mpc: 1 },
+      lines: [unitLine("l1", 1, 5)],
+      qualified: [A],
+      discounted: { [A]: ["l1"] },
+      quantities: { [A]: { l1: 3 } },
+    },
+    {
+      name: "limits-per-cart-quiz-bundles",
+      description: "Two complete quiz bundles with mpc 1: only the first bundle is discounted.",
+      offers: [productRewardOffer({ discountType: "fixed_price", amount: 3000, target: { scopeMode: "quiz_bundle" } })],
+      limits: { mpc: 1 },
+      lines: [quizLine("q1", 1, "b1"), quizLine("q2", 2, "b1"), quizLine("q3", 3, "b2"), quizLine("q4", 4, "b2")],
+      qualified: [A],
+      discounted: { [A]: ["q1", "q2"] },
+    },
+    {
+      name: "limits-per-cart-never-raises-the-cap",
+      description: "maxQuantity 2 with a larger mpc of 5 over 4 units: still 2.",
+      offers: [productRewardOffer({ quantity: 2 })],
+      limits: { mpc: 5 },
+      lines: [unitLine("l1", 1, 4)],
+      qualified: [A],
+      discounted: { [A]: ["l1"] },
+      quantities: { [A]: { l1: 2 } },
     },
   ];
 }
@@ -812,6 +993,7 @@ const SCENARIOS: Scenario[] = [
     quantities: { [A]: { a1: 1 } },
   },
   ...stackingScenarios(),
+  ...limitsScenarios(),
 ];
 
 function build(scenario: Scenario) {
@@ -828,11 +1010,20 @@ function build(scenario: Scenario) {
         sortOrder: index,
       })) as never,
       spec.rewards.map((reward) => ({ ...reward, target: reward["target"] ?? {} })) as never,
-      { stopLowerPriority: spec.stopLowerPriority ?? false, canStackWithGiftOffers: spec.canStack ?? true } as never,
+      {
+        stopLowerPriority: spec.stopLowerPriority ?? false,
+        canStackWithGiftOffers: spec.canStack ?? true,
+        maxApplicationsPerCart: scenario.limits?.mpc ?? null,
+        maxApplicationsPerCustomer: scenario.limits?.mpu ?? null,
+        requireIdentifiedCustomer: scenario.limits?.ri === true,
+      } as never,
       1,
-      { codePromo: spec.codePromo === true },
+      { codePromo: spec.codePromo === true, limitsEnforced: scenario.limits !== undefined },
     ),
   );
+  if (scenario.giftRewardPatch) {
+    for (const offer of compiled) Object.assign(offer.giftRewards[0]!, scenario.giftRewardPatch);
+  }
   const config = JSON.parse(
     serializeFunctionConfig({ offers: compiled, shippingOffers: [], version: "parity", compiledAt: "2026-01-01T00:00:00.000Z" }),
   ) as unknown;
@@ -865,6 +1056,7 @@ function build(scenario: Scenario) {
       customerTags: [] as string[],
       enteredCodes: [] as string[],
       lines: scenario.lines,
+      ...(scenario.customer ? { customer: scenario.customer } : {}),
     },
     expected: {
       qualifiedOfferIds: scenario.qualified,

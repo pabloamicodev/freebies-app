@@ -140,7 +140,7 @@ const input = (c: NormalizedCart): EvaluationInput => ({
 
 async function run(definition: OfferDefinition, c: NormalizedCart) {
   const gated = await applyCodeGates(shopId, db, [definition], c.discountCodes, NOW);
-  const ctx: EvaluatorContext = { offers: gated, oneUseStates: [], now: NOW };
+  const ctx: EvaluatorContext = { offers: gated, usageStates: [], now: NOW };
   return evaluate(input(c), ctx);
 }
 

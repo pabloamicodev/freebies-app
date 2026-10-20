@@ -1,8 +1,8 @@
-import { discountCodes, offerCustomerUsages, offers, offerUsageSync, shops, type Db } from "@promo/db";
+import { discountCodes, offerCombinationPolicies, offerConditions, offerCustomerUsages, offers, offerUsageSync, shops, type Db } from "@promo/db";
 import { and, asc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { z } from "zod";
-import { clampDiscountMessage } from "./discount-message.js";
+import { clampDiscountMessage, normalizeOfferTitle } from "./discount-message.js";
 import { decryptToken } from "./token-crypto.server.js";
 import { shopifyGraphQL } from "./shopify-fetch.server.js";
 
@@ -17,7 +17,7 @@ const USAGE_SYNC_BUDGET_MS = 120_000;
 const allocations = z.array(z.object({ amount: z.string() })).default([]);
 
 /** Only what usage attribution reads from the orders/paid payload; validated at the webhook boundary. */
-const orderUsageSchema = z.object({
+export const orderUsageSchema = z.object({
   admin_graphql_api_id: z.string().min(1),
   customer: z.object({ id: z.union([z.number(), z.string()]) }).nullish(),
   discount_applications: z
@@ -32,21 +32,27 @@ const orderUsageSchema = z.object({
     )
     .default([]),
 });
-type OrderUsagePayload = z.infer<typeof orderUsageSchema>;
+export type OrderUsagePayload = z.infer<typeof orderUsageSchema>;
 
 export type UsageSource = "title" | "code" | "line";
 
-const offerMessage = (o: { publicTitle: string; internalName: string }) =>
-  clampDiscountMessage(o.publicTitle) ?? clampDiscountMessage(o.internalName);
+const offerMessage = (o: { publicTitle: string; internalName: string }) => {
+  const message = clampDiscountMessage(o.publicTitle) ?? clampDiscountMessage(o.internalName);
+  return message === undefined ? undefined : normalizeOfferTitle(message);
+};
 
-/** Offers (and how) that discounted this order. Every offer of a title collision is counted (fails closed). */
-export async function attributeOrderOffers(
-  db: Db,
-  shopId: string,
-  order: OrderUsagePayload,
-): Promise<Map<string, UsageSource>> {
+export interface UsageOfferRow {
+  id: string;
+  publicTitle: string;
+  internalName: string;
+  requiresCode: boolean;
+  requiredDiscountCode: string | null;
+}
+
+/** Automatic-discount titles, upper-cased codes and discounted gift-line offer ids found on an order. */
+export function orderUsageSignals(order: OrderUsagePayload) {
   const automaticTitles = new Set(
-    order.discount_applications.flatMap((a) => (a.type === "automatic" && a.title ? [a.title] : [])),
+    order.discount_applications.flatMap((a) => (a.type === "automatic" && a.title ? [normalizeOfferTitle(a.title)] : [])),
   );
   const codes = [
     ...new Set(
@@ -62,11 +68,44 @@ export async function attributeOrderOffers(
         : [],
     ),
   );
-  const result = new Map<string, UsageSource>();
-  if (automaticTitles.size === 0 && codes.length === 0 && discountedLineOfferIds.size === 0) return result;
+  return { automaticTitles, codes, discountedLineOfferIds };
+}
 
+/** Pure attribution: automatic offers by normalized title, gift lines by offer id, code offers via `codeOfferIds`. */
+export function matchOrderOffers(
+  signals: ReturnType<typeof orderUsageSignals>,
+  rows: UsageOfferRow[],
+  codeOfferIds: Iterable<string>,
+): { result: Map<string, UsageSource>; titleMatches: string[] } {
+  const result = new Map<string, UsageSource>();
+  const titleMatches: string[] = [];
+  for (const row of rows) {
+    if (!row.requiresCode && !row.requiredDiscountCode) {
+      const message = offerMessage(row);
+      if (message && signals.automaticTitles.has(message)) {
+        result.set(row.id, "title");
+        titleMatches.push(row.id);
+      }
+    }
+    if (!result.has(row.id) && signals.discountedLineOfferIds.has(row.id)) result.set(row.id, "line");
+  }
+  for (const id of codeOfferIds) result.set(id, "code");
+  return { result, titleMatches };
+}
+
+/** Offers (and how) that discounted this order. Every offer of a title collision is counted (fails closed). */
+export async function attributeOrderOffers(
+  db: Db,
+  shopId: string,
+  order: OrderUsagePayload,
+): Promise<Map<string, UsageSource>> {
+  const signals = orderUsageSignals(order);
+  const { automaticTitles, codes, discountedLineOfferIds } = signals;
+  if (automaticTitles.size === 0 && codes.length === 0 && discountedLineOfferIds.size === 0) return new Map();
+
+  let rows: UsageOfferRow[] = [];
   if (automaticTitles.size > 0 || discountedLineOfferIds.size > 0) {
-    const rows = await db
+    rows = await db
       .select({
         id: offers.id,
         publicTitle: offers.publicTitle,
@@ -76,31 +115,22 @@ export async function attributeOrderOffers(
       })
       .from(offers)
       .where(and(eq(offers.shopId, shopId), ne(offers.status, "archived")));
-    const matched: string[] = [];
-    for (const row of rows) {
-      if (!row.requiresCode && !row.requiredDiscountCode) {
-        const message = offerMessage(row);
-        if (message && automaticTitles.has(message)) {
-          result.set(row.id, "title");
-          matched.push(row.id);
-        }
-      }
-      if (!result.has(row.id) && discountedLineOfferIds.has(row.id)) result.set(row.id, "line");
-    }
-    if (matched.length > 1) {
-      Sentry.captureMessage("Automatic offers share a discount title; the order counts against all of them", {
-        level: "warning",
-        tags: { shopId, context: "offer-usage-title-collision" },
-        extra: { offerIds: matched },
-      });
-    }
   }
+  let codeOfferIds: string[] = [];
   if (codes.length > 0) {
-    const rows = await db
+    const codeRows = await db
       .select({ offerId: discountCodes.offerId })
       .from(discountCodes)
       .where(and(eq(discountCodes.shopId, shopId), inArray(discountCodes.code, codes)));
-    for (const row of rows) result.set(row.offerId, "code");
+    codeOfferIds = codeRows.map((r) => r.offerId);
+  }
+  const { result, titleMatches } = matchOrderOffers(signals, rows, codeOfferIds);
+  if (titleMatches.length > 1) {
+    Sentry.captureMessage("Automatic offers share a discount title; the order counts against all of them", {
+      level: "warning",
+      tags: { shopId, context: "offer-usage-title-collision" },
+      extra: { offerIds: titleMatches },
+    });
   }
   return result;
 }
@@ -349,4 +379,50 @@ export async function findTitleCollisions(
   return rows
     .filter((o) => !o.requiresCode && !o.requiredDiscountCode && offerMessage(o) === message)
     .map(({ id, internalName }) => ({ id, internalName }));
+}
+
+export const LIMITED_TITLE_REQUIRED_ERROR =
+  "Offers with a customer limit need a unique customer-facing title, it's how orders are matched. Set a public title that no other non-archived automatic offer uses.";
+
+/** DL4: a per-customer limit on an automatic offer needs its own customer-facing title. Null = ok. */
+export async function limitedTitleError(db: Db, shopId: string, offerId: string): Promise<string | null> {
+  const [offer] = await db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1);
+  if (!offer) return null;
+  const [code] = await db.select({ id: discountCodes.id }).from(discountCodes).where(and(eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offerId))).limit(1);
+  if (offer.requiresCode || offer.requiredDiscountCode || code) return null;
+  if (!offer.publicTitle.trim()) return LIMITED_TITLE_REQUIRED_ERROR;
+  const collisions = await findTitleCollisions(db, shopId, offer);
+  return collisions.length > 0
+    ? `${LIMITED_TITLE_REQUIRED_ERROR} Same title as: ${collisions.map((c) => c.internalName).join(", ")}.`
+    : null;
+}
+
+/** Groups of non-archived automatic offers sharing a discount title where at least one is limited (mpu or one_use). */
+export async function listLimitedTitleCollisions(db: Db, shopId: string): Promise<Array<{ title: string; offers: string[] }>> {
+  const rows = await db
+    .select({
+      id: offers.id,
+      internalName: offers.internalName,
+      publicTitle: offers.publicTitle,
+      requiresCode: offers.requiresCode,
+      requiredDiscountCode: offers.requiredDiscountCode,
+    })
+    .from(offers)
+    .where(and(eq(offers.shopId, shopId), ne(offers.status, "archived")));
+  const automatic = rows.filter((o) => !o.requiresCode && !o.requiredDiscountCode);
+  if (automatic.length < 2) return [];
+  const ids = automatic.map((o) => o.id);
+  const [policies, oneUse] = await Promise.all([
+    db.select({ offerId: offerCombinationPolicies.offerId, mpu: offerCombinationPolicies.maxApplicationsPerCustomer }).from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), inArray(offerCombinationPolicies.offerId, ids))),
+    db.select({ offerId: offerConditions.offerId }).from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.conditionType, "one_use_per_customer"), eq(offerConditions.isEnabled, true), inArray(offerConditions.offerId, ids))),
+  ]);
+  const limited = new Set([...policies.filter((p) => (p.mpu ?? 0) > 0).map((p) => p.offerId), ...oneUse.map((c) => c.offerId)]);
+  const groups = new Map<string, typeof automatic>();
+  for (const offer of automatic) {
+    const key = offerMessage(offer);
+    if (key) groups.set(key, [...(groups.get(key) ?? []), offer]);
+  }
+  return [...groups.entries()]
+    .filter(([, group]) => group.length > 1 && group.some((o) => limited.has(o.id)))
+    .map(([title, group]) => ({ title, offers: group.map((o) => o.internalName).sort() }));
 }

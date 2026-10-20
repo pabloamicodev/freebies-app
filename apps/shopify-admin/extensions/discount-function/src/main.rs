@@ -6,6 +6,7 @@ mod de;
 mod config;
 mod discount_logic;
 mod page_match;
+mod usage;
 #[cfg(test)]
 mod parity_tests;
 

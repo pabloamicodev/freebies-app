@@ -20,6 +20,7 @@ Operational procedures for the Promo Engine. Release steps live in `docs/DEPLOY.
 14. [Cart validation and blockOnFailure](#cart-validation-and-blockonfailure)
 15. [Load testing](#load-testing)
 16. [Live-store E2E](#live-store-e2e)
+17. [Offer limits: review and usage backfill](#offer-limits-review-and-usage-backfill)
 
 ## Environments and ownership
 
@@ -403,3 +404,13 @@ Global setup probes the live storefront before any spec runs. If a fixture is mi
 - The drift cron (every 5 min, `purchase_type_mismatch`) reads both flags and republishes a shop whose live node differs from what the last publish recorded in the manifest, so old nodes self-heal.
 - Merchant control: "Apply to: One-time purchases / Subscriptions" on the code wizard, discount wizard, upsell wizard and the rewards editor (product and order rewards) maps to `target.subscriptionMode` (`any` | `subscription_only` | `one_time_only`). Order rewards honour it in the Function by excluding lines of the other type from the order-subtotal target.
 - Page-origin stamping: lines without `_promo_engine_metadata` are skipped by `onlyMatchedLines` offers. The bridge patches fetch/XHR/form submit/`form.submit()`, and a late stamper (resource-timing observer on /cart/add|update|change) stamps lines that appeared during the page view without metadata via `/cart/change.js`. Lines already in the cart at page load are never relabelled. The app embed targets `body`, so scripts that cache `window.fetch` in the head before it runs are covered only by the late stamper.
+
+## Offer limits: review and usage backfill
+
+Per-customer limits only count orders the app recorded, so offers that already had a limit set need their history loaded before limits are enforced. Both scripts load `.env`/`.env.local` from the cwd (or `--env <file>`) and never print tokens; the backfill handles customer and order GIDs only (no emails).
+
+1. Review (read-only SELECTs): `pnpm exec tsx scripts/limits-review.ts [--shop <domain>]`. Prints offers with a per-cart or per-customer limit, live `one_use_per_customer` offers, and title collisions among limited automatic offers. Resolve collisions first (limited automatic offers need a unique discount title) and have the owner confirm which limits to keep.
+2. Backfill dry-run (default, no writes): `pnpm exec tsx scripts/backfill-offer-usage.ts --shop <domain>`. Runs a read-only Shopify bulk orders query (it still takes the shop's single bulk-query slot and fails if another bulk query is running; needs `read_orders`; orders older than 60 days need `read_all_orders`) for offers with a per-customer limit, and prints per-offer order and customer counts. Options: `--offer <id>`, `--since <YYYY-MM-DD>` (default: oldest limited offer's creation date), `--batch <rows>`, `--poll-seconds <n>`.
+3. Check the counts look sane, then `--apply`: inserts rows with `ON CONFLICT DO NOTHING` (source `backfill`, safe to re-run) and marks the affected customers pending; the usage-sync cron then pushes their metafields (needs `write_customers`).
+4. Order: HPN, then Ambrosia, then OneSol. Production is one shared Neon database serving all three apps, so `--shop <domain>` is the scope of every step; always pass it. Verify the dry-run and the apply on one shop before moving to the next.
+5. Enforcement is a per-shop flag (`limits.enforced`) at Settings > Offer limits (`/app/settings/limits`). It is only available to shops listed in the env var `LIMITS_TOGGLE_SHOPS` (comma-separated myshopify domains; unset means nobody), every change is audited, and turning it on is refused while limited automatic offers share a discount title. While it is off, limits are stored but ignored, `one_use_per_customer` cannot be published, and the unique-title rule is only a warning. With it on, `one_use_per_customer` compiles as max 1 use per customer and requires an identified customer.

@@ -37,24 +37,25 @@ struct VolumeDiscountGroup {
 }
 
 pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> {
-    let has_product_discount = input
-        .discount()
-        .discount_classes()
-        .iter()
-        .any(|class| matches!(class, schema::DiscountClass::Product));
-    let has_order_discount = input
-        .discount()
-        .discount_classes()
-        .iter()
-        .any(|class| matches!(class, schema::DiscountClass::Order));
-    if !has_product_discount && !has_order_discount {
-        return Ok(schema::CartLinesDiscountsGenerateRunResult { operations: vec![] });
-    }
-
     let mut config = match parse_config(&input) {
         Some(c) => c,
         None => return Ok(schema::CartLinesDiscountsGenerateRunResult { operations: vec![] }),
     };
+    // The node's classes travel in the config (`dc`); absent means product + order.
+    let has_class = |class: char| config.dc.as_deref().is_none_or(|classes| classes.contains(class));
+    let (has_product_discount, has_order_discount) = (has_class('p'), has_class('o'));
+    if !has_product_discount && !has_order_discount {
+        return Ok(schema::CartLinesDiscountsGenerateRunResult { operations: vec![] });
+    }
+    config.usage = crate::usage::parse(
+        input
+            .cart()
+            .buyer_identity()
+            .as_ref()
+            .and_then(|identity| identity.customer())
+            .and_then(|customer| customer.usage())
+            .map(|metafield| metafield.value().as_str()),
+    );
     let currency = input.cart().cost().subtotal_amount().currency_code().to_string();
     LINE_METADATA.with(|cache| cache.borrow_mut().clear());
     PAGE_MATCH.with(|cache| cache.borrow_mut().clear());
@@ -213,7 +214,7 @@ fn evaluate_product_reward(
     offer: &CompiledOffer,
 ) -> Vec<schema::ProductDiscountCandidate> {
     if reward.scope_mode == "quiz_bundle" {
-        return evaluate_quiz_bundle_reward(reward, input);
+        return evaluate_quiz_bundle_reward(reward, input, offer);
     }
     if reward.scope_mode == "landing" && !landing_anchor_qualifies(reward, input) {
         return vec![];
@@ -230,7 +231,8 @@ fn evaluate_product_reward(
         reward.max_quantity
     } else {
         None
-    };
+    }
+    .map(|limit| cap_per_cart(offer, limit));
     let (per_product_cap, per_variant_cap) = match set_limit {
         Some(limit) if !reward.target_variant_ids.is_empty() => (
             reward.max_units_per_product,
@@ -339,16 +341,12 @@ fn evaluate_product_reward(
         return vec![];
     }
 
-    let tier_target_price = if reward.price_tiers.is_empty() {
-        None
-    } else {
-        reward
-            .price_tiers
-            .iter()
-            .filter(|tier| total_quantity >= tier.quantity)
-            .max_by_key(|tier| tier.quantity)
-            .map(|tier| tier.target_price_per_unit)
-    };
+    let price_tier = reward
+        .price_tiers
+        .iter()
+        .filter(|tier| total_quantity >= tier.quantity)
+        .max_by_key(|tier| tier.quantity);
+    let tier_target_price = price_tier.map(|tier| tier.target_price_per_unit);
     if !reward.price_tiers.is_empty() && tier_target_price.is_none() {
         return vec![];
     }
@@ -379,6 +377,15 @@ fn evaluate_product_reward(
             }
         })
         .unwrap_or(i64::MAX);
+    // Per cart: one application is one discounted unit, or one pack of the matched tier. Landing
+    // sets are already capped per product above.
+    if let (Some(max), None) = (offer.max_per_cart, set_limit) {
+        let pack = quantity_tier
+            .map(|tier| tier.discounted_quantity.unwrap_or(tier.minimum_quantity))
+            .or(price_tier.map(|tier| tier.quantity))
+            .unwrap_or(1);
+        remaining = remaining.min(max.saturating_mul(pack));
+    }
     let mut candidates = Vec::new();
     let mut applied_by_product: HashMap<String, i64> = HashMap::new();
     let mut applied_by_variant: HashMap<String, i64> = HashMap::new();
@@ -437,6 +444,11 @@ fn evaluate_product_reward(
         ));
     }
     candidates
+}
+
+/// Per-cart cap (`mpc`): only ever lowers a limit that already exists.
+fn cap_per_cart(offer: &CompiledOffer, limit: i64) -> i64 {
+    offer.max_per_cart.map_or(limit, |max| limit.min(max))
 }
 
 /// Grants up to `wanted` units against a per-key cap, remembering what was granted.
@@ -598,6 +610,7 @@ struct QuizGroup<'a> {
 fn evaluate_quiz_bundle_reward(
     reward: &CompiledProductReward,
     input: &Input,
+    offer: &CompiledOffer,
 ) -> Vec<schema::ProductDiscountCandidate> {
     let target_product_ids: HashSet<&str> = reward
         .target_product_ids
@@ -643,6 +656,7 @@ fn evaluate_quiz_bundle_reward(
     let bundle_price_configured = reward.discount_type == "fixed_price" && reward.discount_value > 0.0;
     let currency = input.cart().cost().subtotal_amount().currency_code().to_string();
     let mut candidates = vec![];
+    let mut bundles = 0;
     for (_bundle_id, group) in groups {
         let Some(expected_paid_count) = group.expected_paid_count else {
             continue;
@@ -650,6 +664,10 @@ fn evaluate_quiz_bundle_reward(
         if group.paid.len() < expected_paid_count {
             continue;
         }
+        if offer.max_per_cart.is_some_and(|max| bundles >= max) {
+            break;
+        }
+        bundles += 1;
         // Free gifts follow the same set rule: at most `maxQuantity` (default 1) units per gift product.
         let mut gift_units_by_product: HashMap<String, i64> = HashMap::new();
         for line in group.gifts {
@@ -657,7 +675,7 @@ fn evaluate_quiz_bundle_reward(
             let quantity = take_units(
                 &mut gift_units_by_product,
                 product_id,
-                reward.max_quantity.unwrap_or(1),
+                cap_per_cart(offer, reward.max_quantity.unwrap_or(1)),
                 i64::from(*line.quantity()),
             );
             if quantity <= 0 {
@@ -917,10 +935,11 @@ fn evaluate_gift_offer(
                     if !target_matches {
                         continue;
                     }
+                    let limit = cap_per_cart(offer, reward.max_quantity);
                     let mut quantity = take_units(
                         &mut applied_by_product,
                         reward.id.clone() + &product_id,
-                        reward.max_quantity,
+                        limit,
                         line_quantity,
                     );
                     // A picker (choose K of N) grants selectionCount x limit units across ALL its
@@ -930,7 +949,7 @@ fn evaluate_gift_offer(
                         quantity = take_units(
                             &mut applied_by_reward,
                             reward.id.clone(),
-                            reward.selection_count.unwrap_or(1) * reward.max_quantity,
+                            reward.selection_count.unwrap_or(1) * limit,
                             quantity,
                         );
                     }
@@ -1016,7 +1035,7 @@ fn evaluate_discount_offer(
             match most_expensive {
                 Some(line) => vec![make_candidate(
                     line.id().clone(),
-                    *line.quantity() as i64,
+                    cap_per_cart(offer, i64::from(*line.quantity())),
                     &offer.discount_type,
                     offer.discount_value,
                     "Most expensive item discount",
@@ -1024,18 +1043,25 @@ fn evaluate_discount_offer(
                 None => vec![],
             }
         }
-        "percentage" | "fixed_amount" => eligible
-            .iter()
-            .map(|line| {
-                make_candidate(
+        "percentage" | "fixed_amount" => {
+            let mut left = cap_per_cart(offer, i64::MAX);
+            let mut candidates = Vec::new();
+            for line in eligible {
+                if left <= 0 {
+                    break;
+                }
+                let quantity = i64::from(*line.quantity()).min(left);
+                left -= quantity;
+                candidates.push(make_candidate(
                     line.id().clone(),
-                    *line.quantity() as i64,
+                    quantity,
                     &offer.discount_type,
                     offer.discount_value,
                     "Discount applied",
-                )
-            })
-            .collect(),
+                ));
+            }
+            candidates
+        }
         _ => vec![],
     }
 }
@@ -1059,6 +1085,20 @@ fn is_eligible_line(
 /// current cart at checkout time — the merchant may have edited the offer, or
 /// the cart may have changed, since the storefront runtime's own evaluation.
 fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledConfig) -> bool {
+    let identified = input
+        .cart()
+        .buyer_identity()
+        .as_ref()
+        .is_some_and(|identity| identity.customer().is_some());
+    if crate::usage::customer_blocked(
+        &config.usage,
+        &offer.id,
+        offer.max_per_customer,
+        offer.require_identified,
+        identified,
+    ) {
+        return false;
+    }
     let active_currency = input
         .cart()
         .cost()
@@ -1366,7 +1406,7 @@ fn best_candidate_per_line(
             let quantity = f64::from(target.quantity.unwrap_or(1));
             let saving = match &candidate.value {
                 schema::ProductDiscountCandidateValue::Percentage(pct) => {
-                    pct.value.0 * lines[index].cost().amount_per_quantity().amount().as_f64() * quantity
+                    pct.value.0 * line_price(&lines[index]) * quantity
                 }
                 schema::ProductDiscountCandidateValue::FixedAmount(fixed) => fixed.amount.0 * quantity * 100.0,
             };
@@ -1472,7 +1512,7 @@ fn round_to_cents(value: f64) -> f64 {
 /// exclusion, quiz-bundle restriction) — one shared body instead of a
 /// duplicated closure per call site matters for the wasm size budget.
 fn line_price(line: &Lines) -> f64 {
-    line.cost().amount_per_quantity().amount().as_f64()
+    line.cost().subtotal_amount().amount().as_f64() / f64::from((*line.quantity()).max(1))
 }
 
 fn is_one_of(line: &Lines, product_ids: &HashSet<&str>, variant_ids: &HashSet<&str>) -> bool {
@@ -1778,10 +1818,18 @@ mod tests {
         discount_classes: &str,
     ) -> String {
         let packed_lines = pack_legacy_metadata(lines_json);
+        // The node's classes travel in the config as `dc` ("p" product, "o" order).
+        let mut config: Value = serde_json::from_str(config_json).unwrap();
+        config["dc"] = Value::String(
+            [("PRODUCT", 'p'), ("ORDER", 'o')]
+                .into_iter()
+                .filter(|(class, _)| discount_classes.contains(class))
+                .map(|(_, letter)| letter)
+                .collect(),
+        );
         format!(
             r#"{{
                 "discount": {{
-                    "discountClasses": {discount_classes},
                     "metafield": {{ "value": {config} }}
                 }},
                 "cart": {{
@@ -1791,7 +1839,7 @@ mod tests {
                 "presentmentCurrencyRate": "1.0",
                 "localization": {{ "country": {{ "isoCode": "US" }} }}
             }}"#,
-            config = serde_json::to_string(config_json).unwrap(),
+            config = serde_json::to_string(&config.to_string()).unwrap(),
             lines = packed_lines,
             subtotal = subtotal,
         )
@@ -1808,7 +1856,6 @@ mod tests {
         format!(
             r#"{{
                 "discount": {{
-                    "discountClasses": ["PRODUCT"],
                     "metafield": {{ "value": {config} }}
                 }},
                 "cart": {{
@@ -1895,12 +1942,12 @@ mod tests {
     }
 
     fn regular_line(id: &str, variant_id: &str, product_id: &str, price: &str, qty: i64) -> String {
+        let subtotal = format!("{:.2}", price.parse::<f64>().unwrap() * qty as f64);
         format!(
             r#"{{
                 "id": "{id}", "quantity": {qty},
                 "cost": {{
-                    "amountPerQuantity": {{ "amount": "{price}", "currencyCode": "USD" }},
-                    "subtotalAmount": {{ "amount": "{price}", "currencyCode": "USD" }}
+                    "subtotalAmount": {{ "amount": "{subtotal}", "currencyCode": "USD" }}
                 }},
                 "merchandise": {{ "__typename": "ProductVariant", "id": "{variant_id}", "product": {{ "id": "{product_id}", "volumeDiscountTiers": null }} }},
                 "sellingPlanAllocation": null,
@@ -1926,7 +1973,6 @@ mod tests {
             r#"{{
                 "id": "{id}", "quantity": {qty},
                 "cost": {{
-                    "amountPerQuantity": {{ "amount": "{price}", "currencyCode": "USD" }},
                     "subtotalAmount": {{ "amount": "{price}", "currencyCode": "USD" }}
                 }},
                 "merchandise": {{ "__typename": "ProductVariant", "id": "{variant_id}", "product": {{ "id": "{product_id}", "volumeDiscountTiers": null }} }},
@@ -1954,7 +2000,6 @@ mod tests {
             r#"{{
                 "id": "{id}", "quantity": {qty},
                 "cost": {{
-                    "amountPerQuantity": {{ "amount": "{price}", "currencyCode": "USD" }},
                     "subtotalAmount": {{ "amount": "{price}", "currencyCode": "USD" }}
                 }},
                 "merchandise": {{ "__typename": "ProductVariant", "id": "{variant_id}", "product": {{ "id": "{product_id}", "volumeDiscountTiers": null }} }},
@@ -1973,7 +2018,7 @@ mod tests {
         id: &str,
         variant_id: &str,
         product_id: &str,
-        unit_price: &str,
+        _unit_price: &str,
         subtotal: &str,
         qty: i64,
         tiers_json: &str,
@@ -1983,7 +2028,6 @@ mod tests {
             r#"{{
                 "id": "{id}", "quantity": {qty},
                 "cost": {{
-                    "amountPerQuantity": {{ "amount": "{unit_price}", "currencyCode": "USD" }},
                     "subtotalAmount": {{ "amount": "{subtotal}", "currencyCode": "USD" }},
                     "totalAmount": {{ "amount": "{subtotal}", "currencyCode": "USD" }}
                 }},
@@ -2034,7 +2078,6 @@ mod tests {
             r#"{{
                 "id": "{id}", "quantity": {qty},
                 "cost": {{
-                    "amountPerQuantity": {{ "amount": "{price}", "currencyCode": "USD" }},
                     "subtotalAmount": {{ "amount": "{subtotal:.2}", "currencyCode": "USD" }},
                     "totalAmount": {{ "amount": "{subtotal:.2}", "currencyCode": "USD" }}
                 }},
@@ -5061,5 +5104,195 @@ mod tests {
             r#"{"priority":100,"canStackWithGiftOffers":false}"#,
         );
         assert_eq!(stacking_free_lines(&["1"], &last), ["frother", "g13", "otg"]);
+    }
+
+    // ---- per-customer usage and per-cart caps (`mpu`, `ri`, `mpc`) ----
+
+    fn with_fields(config: &str, fields: &str) -> String {
+        config.replace(r#""id":"offer-1","#, &format!(r#""id":"offer-1",{fields},"#))
+    }
+
+    /// Gift cart for `strict_gift_offer_config`. `customer`: None = guest, Some(None) = customer
+    /// without the usage metafield, Some(Some(raw)) = customer with that metafield value.
+    fn gift_units_for(config: &str, customer: Option<Option<&str>>) -> BTreeMap<String, i64> {
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            gift_line_with_metadata(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/gift-v1",
+                "gid://shopify/Product/gift-p1",
+                ("offer-1", "reward-1", "3"),
+                "20.00",
+                1,
+            ),
+        );
+        let mut payload: Value = serde_json::from_str(&cart_json(&lines, "120.00", config)).unwrap();
+        if let Some(usage) = customer {
+            let mut customer = serde_json::json!({
+                "numberOfOrders": 0, "hasTags": [], "amountSpent": { "amount": "0.00" }
+            });
+            if let Some(raw) = usage {
+                customer["usage"] = serde_json::json!({ "value": raw });
+            }
+            payload["cart"]["buyerIdentity"] = serde_json::json!({ "customer": customer });
+        }
+        free_units_by_line(&run_function_with_input(run, &payload.to_string()).unwrap())
+    }
+
+    fn gift_applies(fields: &str, customer: Option<Option<&str>>) -> bool {
+        let config = with_fields(strict_gift_offer_config(), fields);
+        gift_units_for(&config, customer).get("gid://shopify/CartLine/2") == Some(&1)
+    }
+
+    #[test]
+    fn absent_limit_fields_ignore_usage_and_guests() {
+        assert!(gift_applies(r#""x":1"#, None));
+        assert!(gift_applies(r#""x":1"#, Some(Some(r#"{"v":1,"u":{"offer-1":99}}"#))));
+        let config: CompiledConfig = serde_json::from_str(strict_gift_offer_config()).unwrap();
+        let offer = &config.offers[0];
+        assert_eq!((offer.max_per_cart, offer.max_per_customer, offer.require_identified), (None, None, false));
+        assert_eq!(config.dc, None);
+    }
+
+    #[test]
+    fn per_customer_limit_applies_below_and_not_at_the_limit() {
+        let check = |count: i64| {
+            let raw = format!(r#"{{"v":1,"u":{{"offer-1":{count}}}}}"#);
+            gift_applies(r#""mpu":2"#, Some(Some(raw.as_str())))
+        };
+        assert!(check(0) && check(1));
+        assert!(!check(2) && !check(3));
+    }
+
+    #[test]
+    fn missing_key_missing_metafield_and_null_customer_count_as_zero_uses() {
+        assert!(gift_applies(r#""mpu":1"#, Some(Some(r#"{"v":1,"u":{"other-offer":5}}"#))));
+        assert!(gift_applies(r#""mpu":1"#, Some(Some(r#"{"v":1,"u":{}}"#))));
+        assert!(gift_applies(r#""mpu":1"#, Some(None)));
+        assert!(gift_applies(r#""mpu":1"#, None));
+    }
+
+    #[test]
+    fn unreadable_usage_fails_open() {
+        for raw in ["not json", r#"{"v":2,"u":{"offer-1":9}}"#, r#"{"u":{"offer-1":9}}"#, r#"{"v":1,"u":[1]}"#] {
+            assert!(gift_applies(r#""mpu":1"#, Some(Some(raw))), "{raw}");
+        }
+    }
+
+    #[test]
+    fn require_identified_blocks_a_null_customer_only() {
+        assert!(!gift_applies(r#""mpu":1,"ri":true"#, None));
+        assert!(!gift_applies(r#""ri":true"#, None));
+        assert!(gift_applies(r#""ri":true"#, Some(None)));
+        assert!(gift_applies(r#""mpu":1,"ri":true"#, Some(Some(r#"{"v":1,"u":{}}"#))));
+        assert!(!gift_applies(r#""mpu":1,"ri":true"#, Some(Some(r#"{"v":1,"u":{"offer-1":1}}"#))));
+    }
+
+    #[test]
+    fn discount_classes_come_from_the_config() {
+        let lines = format!(
+            "[{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/a", "gid://shopify/Product/a", "40.00", 1)
+        );
+        let config = r#"{"offers":[{"id":"offer-1","version":1,"offerType":"discount","priority":1,"currencyCode":"USD","discountType":"percentage","discountValue":10}]}"#;
+        let discounted = |payload: String| free_units_by_line(&run_function_with_input(run, &payload).unwrap()).len();
+        // cart_json_with_customer writes no `dc`: both classes, so the product discount applies.
+        assert_eq!(discounted(cart_json_with_customer(&lines, "40.00", config, 0, "0.00")), 1);
+        assert_eq!(discounted(cart_json_with_classes(&lines, "40.00", config, r#"["PRODUCT"]"#)), 1);
+        assert_eq!(discounted(cart_json_with_classes(&lines, "40.00", config, r#"["ORDER"]"#)), 0);
+    }
+
+    fn legacy_discount_units(fields: &str, quantities: &[i64]) -> Vec<i64> {
+        let config = format!(
+            r#"{{"offers":[{{"id":"offer-1",{fields}"version":1,"offerType":"discount","priority":1,"currencyCode":"USD","discountType":"percentage","discountValue":10}}]}}"#
+        );
+        let lines: Vec<String> = quantities
+            .iter()
+            .enumerate()
+            .map(|(index, quantity)| {
+                regular_line(
+                    &format!("gid://shopify/CartLine/{index}"),
+                    &format!("gid://shopify/ProductVariant/v{index}"),
+                    &format!("gid://shopify/Product/p{index}"),
+                    "10.00",
+                    *quantity,
+                )
+            })
+            .collect();
+        let payload = cart_json(&format!("[{}]", lines.join(",")), "100.00", &config);
+        let units = free_units_by_line(&run_function_with_input(run, &payload).unwrap());
+        (0..quantities.len())
+            .map(|index| units.get(&format!("gid://shopify/CartLine/{index}")).copied().unwrap_or(0))
+            .collect()
+    }
+
+    #[test]
+    fn per_cart_cap_limits_units_of_a_plain_discount() {
+        assert_eq!(legacy_discount_units("", &[3, 2]), [3, 2]);
+        assert_eq!(legacy_discount_units(r#""mpc":4,"#, &[3, 2]), [3, 1]);
+        assert_eq!(legacy_discount_units(r#""mpc":1,"#, &[3, 2]), [1, 0]);
+        assert_eq!(legacy_discount_units(r#""mpc":50,"#, &[3, 2]), [3, 2], "never raises");
+    }
+
+    fn reward_units(reward_extra: &str, offer_fields: &str, quantity: i64) -> i64 {
+        let config = format!(
+            r#"{{"offers":[{{"id":"offer-1",{offer_fields}"version":1,"offerType":"discount","priority":1,"currencyCode":"USD",
+            "productRewards":[{{"id":"r","targetProductIds":[],"targetVariantIds":[],"discountType":"percentage","discountValue":10{reward_extra}}}]}}]}}"#
+        );
+        let line = regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "10.00", quantity);
+        let payload = cart_json(&format!("[{line}]"), "100.00", &config);
+        free_units_by_line(&run_function_with_input(run, &payload).unwrap()).values().sum()
+    }
+
+    #[test]
+    fn per_cart_cap_counts_tier_packs_and_lowers_but_never_raises_a_unit_cap() {
+        assert_eq!(reward_units("", "", 7), 7);
+        assert_eq!(reward_units("", r#""mpc":3,"#, 7), 3);
+        let quantity_tier = r#","quantityTiers":[{"minimumQuantity":2,"discountType":"percentage","discountValue":20}]"#;
+        assert_eq!(reward_units(quantity_tier, "", 7), 7);
+        assert_eq!(reward_units(quantity_tier, r#""mpc":2,"#, 7), 4);
+        let discounted_pack = r#","quantityTiers":[{"minimumQuantity":2,"discountType":"percentage","discountValue":20,"discountedQuantity":2}]"#;
+        assert_eq!(reward_units(discounted_pack, r#""mpc":5,"#, 7), 2, "a pack cap already below mpc stays");
+        let price_tier = r#","priceTiers":[{"quantity":3,"targetPricePerUnit":8}]"#;
+        assert_eq!(reward_units(price_tier, "", 7), 7);
+        assert_eq!(reward_units(price_tier, r#""mpc":1,"#, 7), 3);
+        assert_eq!(reward_units(r#","maxUnitsTotal":2"#, r#""mpc":9,"#, 7), 2);
+        assert_eq!(reward_units(r#","maxUnitsTotal":9"#, r#""mpc":2,"#, 7), 2);
+    }
+
+    #[test]
+    fn per_cart_cap_lowers_gift_sets_and_picker_totals() {
+        let reward2 = [("g2", "gift-v2", "gift-p2", 3)];
+        let capped = with_fields(strict_gift_offer_config(), r#""mpc":1"#);
+        assert_eq!(gift_cart(&reward2, strict_gift_offer_config(), None).values().sum::<i64>(), 2);
+        assert_eq!(gift_cart(&reward2, &capped, None).values().sum::<i64>(), 1);
+        let loose = with_fields(strict_gift_offer_config(), r#""mpc":9"#);
+        assert_eq!(gift_cart(&reward2, &loose, None).values().sum::<i64>(), 2, "never raises");
+
+        let picker = picker_config(r#","selectionCount":2,"maxQuantity":3"#);
+        let gifts = [("g1", "gift-v1", "gift-p1", 3), ("g2", "gift-v2", "gift-p2", 3), ("g3", "gift-v3", "gift-p3", 3)];
+        assert_eq!(gift_cart(&gifts, &picker, Some("pick")).values().sum::<i64>(), 6);
+        let capped_picker = with_fields(&picker, r#""mpc":1"#);
+        assert_eq!(gift_cart(&gifts, &capped_picker, Some("pick")).values().sum::<i64>(), 2);
+    }
+
+    #[test]
+    fn per_cart_cap_limits_quiz_bundles() {
+        let bundle = |id: &str, bundle_id: &str| {
+            scoped_line(
+                &format!("gid://shopify/CartLine/{id}"), "gid://shopify/ProductVariant/p1", "gid://shopify/Product/p1",
+                "50.00", 1, None, Some((bundle_id, "3000", "1", false)),
+            )
+        };
+        let lines = format!("[{},{}]", bundle("1", "bundle-a"), bundle("2", "bundle-b"));
+        let discounted = |config: &str| {
+            let payload = cart_json(&lines, "100.00", config);
+            free_units_by_line(&run_function_with_input(run, &payload).unwrap()).len()
+        };
+        let config = quiz_config("fixed_price", "30");
+        assert_eq!(discounted(&config), 2);
+        assert_eq!(discounted(&with_fields(&config, r#""mpc":1"#)), 1);
+        assert_eq!(discounted(&with_fields(&config, r#""mpc":5"#)), 2);
     }
 }

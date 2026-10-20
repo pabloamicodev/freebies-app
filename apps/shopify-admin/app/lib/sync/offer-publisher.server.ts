@@ -68,6 +68,7 @@ import { buildCartValidationConfig, syncCartValidation } from "../cart-validatio
 import { computeOfferVersion } from "../offer-version.server.js";
 import {
   compileOfferConfig,
+  compileOfferLimits,
   compileDiscountCombinationPolicy,
   compileShippingOfferConfigs,
   serializeFunctionConfig,
@@ -76,6 +77,7 @@ import {
 } from "./compile-config.js";
 import { buildAttributeQueryVariables } from "./attribute-query-variables.js";
 import { isShadowModeEnabled } from "../shadow-mode.server.js";
+import { isLimitsEnforced } from "../limits-enforced.server.js";
 import { invalidateOfferDefinitions } from "../offer-definitions.server.js";
 import { syncMarketsForShop } from "./market-sync.server.js";
 import { resolveMarketConditionsToCountries } from "./market-condition-resolution.server.js";
@@ -167,6 +169,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     );
   }
   const shopCurrencyCode = shopRow.currencyCode;
+  const limitsEnforced = await isLimitsEnforced(db, shopId);
 
   const accessToken = await decryptToken(shopRow.accessTokenEncrypted);
   // Self-heals if afterAuth's registration failed or hasn't run yet (e.g. the
@@ -287,6 +290,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     codeOffers,
     codesByOffer,
     shopCurrencyCode,
+    limitsEnforced,
   );
   const compiledBackendB = await compileBackendBOffers(
     shopId,
@@ -295,6 +299,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     backendBOffers,
     codesByOffer,
     shopCurrencyCode,
+    limitsEnforced,
   );
   const codeOfferConfigs = [
     ...compiledCodeOffers.map((entry) => entry.compiledOffer),
@@ -424,9 +429,9 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
               rewards,
               policy,
               computeOfferVersion(offer, versionConditions, rewards, policy),
-              { shopCurrencyCode },
+              { shopCurrencyCode, limitsEnforced },
             ),
-            shippingOffers: compileShippingOfferConfigs(offer, conditions, rewards, { shopCurrencyCode }),
+            shippingOffers: compileShippingOfferConfigs(offer, conditions, rewards, { shopCurrencyCode, limitsEnforced, policy }),
           };
         } catch (error) {
           throw offerCompileError(offer, error);
@@ -675,7 +680,12 @@ export function nodePurchaseTypes(rewardRows: ReadonlyArray<{ rewardType: string
   );
 }
 
-function buildNodeOptions(redeemable: DiscountCode[], rewardRows: OfferReward[] = []): CodeDiscountNodeOptions {
+/** `maxUsesPerCustomer` is the compiled mpu: a limit of 1 also sets Shopify's native once-per-customer (DL7). */
+export function buildNodeOptions(
+  redeemable: DiscountCode[],
+  rewardRows: OfferReward[] = [],
+  maxUsesPerCustomer?: number,
+): CodeDiscountNodeOptions {
   // usageLimit / appliesOncePerCustomer are node-wide on Shopify, so they only
   // mirror per-code settings when that's equivalent: one live code for the
   // limit, every live code once-per-customer for the customer rule. Per-code
@@ -686,7 +696,7 @@ function buildNodeOptions(redeemable: DiscountCode[], rewardRows: OfferReward[] 
     purchaseTypes: nodePurchaseTypes(rewardRows),
     usageLimit: redeemable.length === 1 && only?.usageLimit != null ? only.usageLimit : null,
     appliesOncePerCustomer:
-      redeemable.length > 0 && redeemable.every((code) => code.oncePerCustomer),
+      redeemable.length > 0 && (maxUsesPerCustomer === 1 || redeemable.every((code) => code.oncePerCustomer)),
   };
 }
 
@@ -762,6 +772,7 @@ async function compileCodeOffers(
   codeOffers: Offer[],
   codesByOffer: Map<string, DiscountCode[]>,
   shopCurrencyCode?: string,
+  limitsEnforced?: boolean,
 ): Promise<CompiledCodeOffer[]> {
   const db = getDb();
   const now = new Date();
@@ -872,7 +883,7 @@ async function compileCodeOffers(
     // pushing a config below would reopen it.
     if (liveCodes.length === 0) continue;
 
-    const nodeOptions = buildNodeOptions(redeemableCodes, rewardRows);
+    const nodeOptions = buildNodeOptions(redeemableCodes, rewardRows, compileOfferLimits(policy, conditionRows, rewardRows, limitsEnforced).mpu);
     if (!discountId) {
       const [primary] = liveCodes;
       if (!primary) continue;
@@ -913,7 +924,7 @@ async function compileCodeOffers(
       rewardRows,
       policy,
       computeOfferVersion(offer, conditionRows, rewardRows, policy),
-      { codePromo: true, shopCurrencyCode },
+      { codePromo: true, shopCurrencyCode, limitsEnforced },
     );
     const [resolvedOffer] = await resolveLegacyGiftVariants(shopId, [compiledOffer]);
     const finalCompiledOffer = resolvedOffer ?? compiledOffer;
@@ -925,13 +936,15 @@ async function compileCodeOffers(
       compiledOffer: finalCompiledOffer,
       shippingOffers:
         kind === "delivery"
-          ? compileShippingOfferConfigs(offer, functionConditionRows, rewardRows, { shopCurrencyCode })
+          ? compileShippingOfferConfigs(offer, functionConditionRows, rewardRows, { shopCurrencyCode, limitsEnforced, policy })
           : [],
       gatedShippingOffers:
         kind === "cart" && rewardRows.some((reward) => reward.rewardType === "shipping_discount")
           ? compileShippingOfferConfigs(offer, functionConditionRows, rewardRows, {
               codeHashes: [...new Set(liveCodes.map(codeHash))].sort(),
               shopCurrencyCode,
+              limitsEnforced,
+              policy,
             })
           : [],
       conditionRows,
@@ -1071,6 +1084,7 @@ async function compileBackendBOffers(
   codeOffers: Offer[],
   codesByOffer: Map<string, DiscountCode[]>,
   shopCurrencyCode?: string,
+  limitsEnforced?: boolean,
 ): Promise<CompiledBackendBOffer[]> {
   const db = getDb();
   const now = new Date();
@@ -1126,7 +1140,7 @@ async function compileBackendBOffers(
       rewardRows,
       policy,
       computeOfferVersion(offer, conditionRows, rewardRows, policy),
-      { codePromo: true, codeHashes: [...new Set(codes.map(codeHash))].sort(), shopCurrencyCode },
+      { codePromo: true, codeHashes: [...new Set(codes.map(codeHash))].sort(), shopCurrencyCode, limitsEnforced },
     );
     const [resolved] = await resolveLegacyGiftVariants(shopId, [compiled]);
     const hashes = [...new Set(codes.map(codeHash))].sort();
@@ -1139,6 +1153,8 @@ async function compileBackendBOffers(
         codeHashes: hashes,
         acceptCodes: true,
         shopCurrencyCode,
+        limitsEnforced,
+        policy,
       }),
       conditionRows,
     });

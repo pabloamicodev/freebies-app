@@ -21,6 +21,12 @@ pub struct CompiledConfig {
     #[serde(default)]
     #[cfg_attr(feature = "code_gate", allow(dead_code))]
     pub c3: Option<String>,
+    /// Discount classes this node was created with ("p" product, "o" order); absent means both.
+    #[serde(default)]
+    pub dc: Option<String>,
+    /// Not part of the payload: the buyer's per-offer use counts, filled from the customer metafield.
+    #[serde(skip)]
+    pub usage: crate::usage::Usage,
 }
 
 /// Offers are parsed one at a time: a malformed offer is skipped and the others still apply.
@@ -51,6 +57,12 @@ de_struct! {
         "title" => title: Option<String> = None,
         "priority" => priority: i32,
         "stopLowerPriority" => stop_lower_priority: bool = false,
+        // Max discounted units/sets/bundles per cart; only ever lowers an existing cap.
+        "mpc" => max_per_cart: Option<i64> = None,
+        // Max paid orders per customer that may have used this offer (read from the usage metafield).
+        "mpu" => max_per_customer: Option<i64> = None,
+        // The offer needs an identified customer (a guest never qualifies).
+        "ri" => require_identified: bool = false,
         // false: the anchor units that unlock this gift offer cannot unlock any other gift offer.
         "canStackWithGiftOffers" => can_stack_with_gift_offers: bool = true,
         "requiredProductIds" => required_product_ids: Vec<String> = Vec::new(),

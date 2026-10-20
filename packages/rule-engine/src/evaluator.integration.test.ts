@@ -119,7 +119,7 @@ describe("evaluate — cart value condition", () => {
   it("qualifies gift offer when cart meets threshold", async () => {
     const ctx: EvaluatorContext = {
       offers: [makeGiftOffer("offer-1", 5000)],
-      oneUseStates: [],
+      usageStates: [],
       now: NOW,
     };
     const result = await evaluate(makeInput(makeCart(5000)), ctx);
@@ -130,7 +130,7 @@ describe("evaluate — cart value condition", () => {
   it("disqualifies when cart is below threshold", async () => {
     const ctx: EvaluatorContext = {
       offers: [makeGiftOffer("offer-1", 5000)],
-      oneUseStates: [],
+      usageStates: [],
       now: NOW,
     };
     const result = await evaluate(makeInput(makeCart(4999)), ctx);
@@ -141,7 +141,7 @@ describe("evaluate — cart value condition", () => {
   it("generates add_line action for auto-add gift", async () => {
     const ctx: EvaluatorContext = {
       offers: [makeGiftOffer("offer-1", 5000)],
-      oneUseStates: [],
+      usageStates: [],
       now: NOW,
     };
     const result = await evaluate(makeInput(makeCart(6000)), ctx);
@@ -155,7 +155,7 @@ describe("evaluate — cart value condition", () => {
   it("does not auto-add a gift reward the customer explicitly declined", async () => {
     const ctx: EvaluatorContext = {
       offers: [makeGiftOffer("offer-1", 5000)],
-      oneUseStates: [],
+      usageStates: [],
       now: NOW,
     };
     const result = await evaluate(
@@ -169,7 +169,7 @@ describe("evaluate — cart value condition", () => {
   it("still auto-adds a gift reward declined for a different offer", async () => {
     const ctx: EvaluatorContext = {
       offers: [makeGiftOffer("offer-1", 5000)],
-      oneUseStates: [],
+      usageStates: [],
       now: NOW,
     };
     const result = await evaluate(
@@ -207,7 +207,7 @@ describe("evaluate — cart value condition", () => {
         },
       ],
     });
-    const result = await evaluate(makeInput(cart), { offers: [offer], oneUseStates: [], now: NOW });
+    const result = await evaluate(makeInput(cart), { offers: [offer], usageStates: [], now: NOW });
     // Neither removed as a tampered gift nor topped up with the sold-out primary.
     expect(result.cartActions).toEqual([]);
   });
@@ -228,7 +228,7 @@ describe("evaluate — cart value condition", () => {
     };
     const result = await evaluate(makeInput(makeCart(6000)), {
       offers: [offer],
-      oneUseStates: [],
+      usageStates: [],
       now: NOW,
     });
 
@@ -250,7 +250,7 @@ describe("evaluate — cart value condition", () => {
       isCustomerSelectable: true,
       quantity: 1,
     };
-    const result = await evaluate(makeInput(makeCart(6000)), { offers: [offer], oneUseStates: [], now: NOW });
+    const result = await evaluate(makeInput(makeCart(6000)), { offers: [offer], usageStates: [], now: NOW });
     expect(result.giftSlider).toBeNull();
     expect(result.cartActions.filter((action) => action.action === "add_line")).toMatchObject([
       { variantId: "gid://shopify/ProductVariant/201", quantity: 1 },
@@ -269,7 +269,7 @@ describe("evaluate — cart value condition", () => {
       isAutoAdd: false,
       isCustomerSelectable: true,
     };
-    const result = await evaluate(makeInput(makeCart(6000)), { offers: [offer], oneUseStates: [], now: NOW });
+    const result = await evaluate(makeInput(makeCart(6000)), { offers: [offer], usageStates: [], now: NOW });
     expect(result.giftSlider?.selectableGifts.map((g) => [g.variantId, !!g.isFallback])).toEqual([
       ["gid://shopify/ProductVariant/201", false],
       ["gid://shopify/ProductVariant/202", false],
@@ -291,7 +291,7 @@ describe("evaluate — cart value condition", () => {
       };
       return offer;
     });
-    const result = await evaluate(makeInput(makeCart(6000)), { offers: offers, oneUseStates: [], now: NOW });
+    const result = await evaluate(makeInput(makeCart(6000)), { offers: offers, usageStates: [], now: NOW });
     expect([result.giftSlider, ...(result.additionalGiftSliders ?? [])].map((s) => s?.offerId)).toEqual(["offer-1", "offer-2"]);
     expect(result.additionalGiftSliders?.[0]?.selectableGifts.at(-1)).toMatchObject({
       variantId: "gid://shopify/ProductVariant/199",
@@ -322,14 +322,14 @@ describe("evaluate — cart value condition", () => {
     };
     const offers = [gated("offer-1", ""), gated("offer-2", "WELCOME")];
     const cart = makeCart(6000);
-    const closed = await evaluate(makeInput(cart), { offers, oneUseStates: [], now: NOW });
+    const closed = await evaluate(makeInput(cart), { offers, usageStates: [], now: NOW });
     expect(closed.giftSlider).toBeNull();
     expect(closed.additionalGiftSliders ?? []).toEqual([]);
     expect(closed.qualifiedOffers).toEqual([]);
 
     const open = await evaluate(makeInput(cart, { cart: { ...cart, discountCodes: ["welcome"] } }), {
       offers,
-      oneUseStates: [],
+      usageStates: [],
       now: NOW,
     });
     expect([open.giftSlider, ...(open.additionalGiftSliders ?? [])].map((s) => s?.offerId)).toEqual(["offer-2"]);
@@ -344,7 +344,7 @@ describe("evaluate — cart value condition", () => {
         fallbackVariantIds: ["gid://shopify/ProductVariant/backup"],
       },
     };
-    const result = await evaluate(makeInput(makeCart(6000)), { offers: [offer], oneUseStates: [], now: NOW });
+    const result = await evaluate(makeInput(makeCart(6000)), { offers: [offer], usageStates: [], now: NOW });
     expect(result.cartActions[0]).toMatchObject({
       action: "add_line",
       variantId: "gid://shopify/ProductVariant/gift-offer-1",
@@ -381,13 +381,13 @@ describe("evaluate — cart value condition", () => {
         _promo_engine_offer_version: "0",
       },
     });
-    const result = await evaluate(makeInput(cart), { offers: [makeGiftOffer("offer-1", 5000)], oneUseStates: [], now: NOW });
+    const result = await evaluate(makeInput(cart), { offers: [makeGiftOffer("offer-1", 5000)], usageStates: [], now: NOW });
     expect(result.cartActions.filter((action) => action.action === "remove_line" || action.action === "add_line")).toEqual([]);
   });
 
   it("removes a gift whose variant is no longer on the reward's allow-list", async () => {
     const cart = giftLineWith({ variantId: "gid://shopify/ProductVariant/not-allowed" });
-    const result = await evaluate(makeInput(cart), { offers: [makeGiftOffer("offer-1", 5000)], oneUseStates: [], now: NOW });
+    const result = await evaluate(makeInput(cart), { offers: [makeGiftOffer("offer-1", 5000)], usageStates: [], now: NOW });
     expect(result.cartActions).toEqual(expect.arrayContaining([
       expect.objectContaining({ action: "remove_line", lineKey: "existing-gift", reason: "stale_or_invalid_gift" }),
       expect.objectContaining({ action: "add_line", variantId: "gid://shopify/ProductVariant/gift-offer-1" }),
@@ -431,7 +431,7 @@ describe("evaluate — cart value condition", () => {
 
     const ctx: EvaluatorContext = {
       offers: [makeGiftOffer("offer-1", 5000)],
-      oneUseStates: [],
+      usageStates: [],
       now: NOW,
     };
 
@@ -452,7 +452,7 @@ describe("evaluate — cart value condition", () => {
       isEnabled: true,
       sortOrder: 1,
     });
-    const ctx: EvaluatorContext = { offers: [offer], oneUseStates: [], now: NOW };
+    const ctx: EvaluatorContext = { offers: [offer], usageStates: [], now: NOW };
 
     const result = await evaluate(makeInput(makeCart(2000)), ctx);
 
@@ -471,7 +471,7 @@ describe("evaluate — schedule", () => {
   it("disqualifies expired offer", async () => {
     const expiredOffer = makeGiftOffer("offer-expired", 5000);
     expiredOffer.endsAt = new Date("2026-01-01T00:00:00Z"); // before NOW
-    const ctx: EvaluatorContext = { offers: [expiredOffer], oneUseStates: [], now: NOW };
+    const ctx: EvaluatorContext = { offers: [expiredOffer], usageStates: [], now: NOW };
     const result = await evaluate(makeInput(makeCart(10000)), ctx);
     expect(result.qualifiedOffers).toHaveLength(0);
     const reason = result.disqualifiedOffers[0]?.reasons.find((r) => r.conditionType === "schedule");
@@ -481,7 +481,7 @@ describe("evaluate — schedule", () => {
   it("disqualifies not-yet-started offer", async () => {
     const futureOffer = makeGiftOffer("offer-future", 5000);
     futureOffer.startsAt = new Date("2027-01-01T00:00:00Z"); // after NOW
-    const ctx: EvaluatorContext = { offers: [futureOffer], oneUseStates: [], now: NOW };
+    const ctx: EvaluatorContext = { offers: [futureOffer], usageStates: [], now: NOW };
     const result = await evaluate(makeInput(makeCart(10000)), ctx);
     expect(result.qualifiedOffers).toHaveLength(0);
   });
@@ -494,7 +494,7 @@ describe("evaluate — priority and stop-lower-priority", () => {
         makeGiftOffer("offer-a", 5000, 10),
         makeGiftOffer("offer-b", 3000, 20),
       ],
-      oneUseStates: [],
+      usageStates: [],
       now: NOW,
     };
     const result = await evaluate(makeInput(makeCart(6000)), ctx);
@@ -507,7 +507,7 @@ describe("evaluate — priority and stop-lower-priority", () => {
         makeGiftOffer("offer-a", 5000, 10, { stopLowerPriority: true }),
         makeGiftOffer("offer-b", 3000, 20),
       ],
-      oneUseStates: [],
+      usageStates: [],
       now: NOW,
     };
     const result = await evaluate(makeInput(makeCart(6000)), ctx);
@@ -528,7 +528,7 @@ describe("evaluate — customer tag sub-condition", () => {
       isEnabled: true,
       sortOrder: 1,
     });
-    const ctx: EvaluatorContext = { offers: [offer], oneUseStates: [], now: NOW };
+    const ctx: EvaluatorContext = { offers: [offer], usageStates: [], now: NOW };
     const result = await evaluate(
       makeInput(makeCart(2000), {
         customer: {
@@ -553,7 +553,7 @@ describe("evaluate — customer tag sub-condition", () => {
       isEnabled: true,
       sortOrder: 1,
     });
-    const ctx: EvaluatorContext = { offers: [offer], oneUseStates: [], now: NOW };
+    const ctx: EvaluatorContext = { offers: [offer], usageStates: [], now: NOW };
     const result = await evaluate(makeInput(makeCart(2000)), ctx); // no customer
     expect(result.qualifiedOffers).toHaveLength(0);
   });
@@ -573,7 +573,7 @@ describe("evaluate — one-use-per-customer", () => {
     });
     const ctx: EvaluatorContext = {
       offers: [offer],
-      oneUseStates: [{ offerId: "offer-1use", usedCount: 0 }],
+      usageStates: [{ offerId: "offer-1use", usedCount: 0 }],
       now: NOW,
     };
     const result = await evaluate(
@@ -602,7 +602,7 @@ describe("evaluate — one-use-per-customer", () => {
     });
     const ctx: EvaluatorContext = {
       offers: [offer],
-      oneUseStates: [{ offerId: "offer-1use", usedCount: 1 }],
+      usageStates: [{ offerId: "offer-1use", usedCount: 1 }],
       now: NOW,
     };
     const result = await evaluate(
@@ -638,7 +638,7 @@ describe("evaluate — page_url matches the page lines were added from", () => {
     if (page) cart.lines[0]!.properties = { _promo_page_url: page };
     return cart;
   };
-  const ctx = (): EvaluatorContext => ({ offers: [offer()], oneUseStates: [], now: NOW });
+  const ctx = (): EvaluatorContext => ({ offers: [offer()], usageStates: [], now: NOW });
 
   it("qualifies when a line was added from the landing, even after browsing away", async () => {
     const result = await evaluate(
@@ -682,7 +682,7 @@ describe("evaluate — page_types / utm_parameters scope / rejectUnmatchedLines"
     return cart;
   };
   const qualifies = async (offer: OfferDefinition, cart: NormalizedCart) =>
-    (await evaluate(makeInput(cart), { offers: [offer], oneUseStates: [], now: NOW })).qualifiedOffers
+    (await evaluate(makeInput(cart), { offers: [offer], usageStates: [], now: NOW })).qualifiedOffers
       .length === 1;
 
   it("page_types qualifies when any line was added from a selected page type", async () => {
@@ -747,20 +747,20 @@ describe("evaluate — discount code condition (gate an automatic offer behind a
   }
 
   it("qualifies once the customer enters the configured code (case-insensitive)", async () => {
-    const ctx: EvaluatorContext = { offers: [offerWithDiscountCode("PRIME2026")], oneUseStates: [], now: NOW };
+    const ctx: EvaluatorContext = { offers: [offerWithDiscountCode("PRIME2026")], usageStates: [], now: NOW };
     const cart = makeCart(1000, { discountCodes: ["prime2026"] });
     const result = await evaluate(makeInput(cart), ctx);
     expect(result.qualifiedOffers).toHaveLength(1);
   });
 
   it("does not qualify without the code, even if every other condition passes", async () => {
-    const ctx: EvaluatorContext = { offers: [offerWithDiscountCode("PRIME2026")], oneUseStates: [], now: NOW };
+    const ctx: EvaluatorContext = { offers: [offerWithDiscountCode("PRIME2026")], usageStates: [], now: NOW };
     const result = await evaluate(makeInput(makeCart(1000)), ctx);
     expect(result.qualifiedOffers).toHaveLength(0);
   });
 
   it("does not qualify for an unrelated code — copying it onto another offer/page doesn't help", async () => {
-    const ctx: EvaluatorContext = { offers: [offerWithDiscountCode("PRIME2026")], oneUseStates: [], now: NOW };
+    const ctx: EvaluatorContext = { offers: [offerWithDiscountCode("PRIME2026")], usageStates: [], now: NOW };
     const cart = makeCart(1000, { discountCodes: ["SUMMER2026"] });
     const result = await evaluate(makeInput(cart), ctx);
     expect(result.qualifiedOffers).toHaveLength(0);
@@ -780,7 +780,7 @@ describe("evaluate � decisions D1/priority/location", () => {
   });
   const market = (countryCode: string) => ({ id: "gid://shopify/Market/1", handle: "m", currencyCode: "USD", countryCode, primaryLocale: "en" });
   const run = async (input: EvaluationInput) =>
-    (await evaluate(input, { offers: [countryOffer()], oneUseStates: [], now: NOW })).qualifiedOffers.length;
+    (await evaluate(input, { offers: [countryOffer()], usageStates: [], now: NOW })).qualifiedOffers.length;
 
   it("customer_location uses the cart's market country over the customer's own", async () => {
     expect(await run(makeInput(makeCart(2000), { market: market("US"), customer: customer("CA") }))).toBe(1);
@@ -795,7 +795,7 @@ describe("evaluate � decisions D1/priority/location", () => {
         makeGiftOffer("b", 1000, 10),
         makeGiftOffer("c", 1000, 20),
       ],
-      oneUseStates: [],
+      usageStates: [],
       now: NOW,
     });
     expect(result.qualifiedOffers.map((offer) => offer.offerId).sort()).toEqual(["a", "b"]);
@@ -813,7 +813,7 @@ describe("evaluate � decisions D1/priority/location", () => {
       return cart;
     };
     const qualifies = async (cart: NormalizedCart) =>
-      (await evaluate(makeInput(cart), { offers: [offer], oneUseStates: [], now: NOW })).qualifiedOffers.length === 1;
+      (await evaluate(makeInput(cart), { offers: [offer], usageStates: [], now: NOW })).qualifiedOffers.length === 1;
     expect(await qualifies(cartOf("/products/a", "/?utm_source=amazon"))).toBe(false);
     expect(await qualifies(cartOf("/products/a?utm_source=amazon"))).toBe(true);
   });
@@ -848,7 +848,7 @@ describe("evaluate — picker gift quantity reset", () => {
     return cart;
   };
   const actions = async (offer: OfferDefinition, cart: NormalizedCart) =>
-    (await evaluate(makeInput(cart), { offers: [offer], oneUseStates: [], now: NOW })).cartActions.filter(
+    (await evaluate(makeInput(cart), { offers: [offer], usageStates: [], now: NOW })).cartActions.filter(
       (action) => action.action === "update_line" || action.action === "remove_line",
     );
 
@@ -894,7 +894,7 @@ describe("evaluate - theme-added (untagged) gift lines", () => {
     return cart;
   };
   const adds = async (cart: NormalizedCart) =>
-    (await evaluate(makeInput(cart), { offers: [offer()], oneUseStates: [], now: NOW })).cartActions.filter(
+    (await evaluate(makeInput(cart), { offers: [offer()], usageStates: [], now: NOW })).cartActions.filter(
       (action) => action.action === "add_line",
     );
 
@@ -917,5 +917,76 @@ describe("evaluate - theme-added (untagged) gift lines", () => {
     expect(await adds(cart)).toMatchObject([{ variantId: GIFT, quantity: 1 }]);
     cart.lines[0] = { ...cart.lines[0]!, quantity: 2 };
     expect(await adds(cart)).toEqual([]);
+  });
+});
+
+describe("evaluate: usage limits mirror the Function (mpu, ri, mpc)", () => {
+  const CUSTOMER = {
+    id: "c1", email: null, tags: [],
+    totalSpentCents: 0, totalOrders: 1, lastOrderSpentCents: null,
+    countryCode: null, isFirstTimeCustomer: false,
+  };
+  const withPolicy = (policy: Partial<OfferDefinition["combinationPolicy"]>) => {
+    const offer = makeGiftOffer("offer-1", 1000);
+    offer.combinationPolicy = { ...offer.combinationPolicy, ...policy };
+    return offer;
+  };
+  const qualified = async (offer: OfferDefinition, usedCount: number | null, customer: typeof CUSTOMER | null) =>
+    (
+      await evaluate(makeInput(makeCart(2000), { customer }), {
+        offers: [offer],
+        usageStates: usedCount === null ? [] : [{ offerId: "offer-1", usedCount }],
+        now: NOW,
+      })
+    ).qualifiedOffers.length === 1;
+
+  it("mpu 2: one use applies, two do not", async () => {
+    const offer = withPolicy({ maxApplicationsPerCustomer: 2 });
+    expect(await qualified(offer, 1, CUSTOMER)).toBe(true);
+    expect(await qualified(offer, 2, CUSTOMER)).toBe(false);
+  });
+
+  it("a guest and a customer with no usage entry both count as 0 uses", async () => {
+    const offer = withPolicy({ maxApplicationsPerCustomer: 1 });
+    expect(await qualified(offer, null, null)).toBe(true);
+    expect(await qualified(offer, null, CUSTOMER)).toBe(true);
+  });
+
+  it("require identified: a guest never qualifies, a customer does", async () => {
+    const offer = withPolicy({ requireIdentifiedCustomer: true });
+    expect(await qualified(offer, null, null)).toBe(false);
+    expect(await qualified(offer, null, CUSTOMER)).toBe(true);
+  });
+
+  it("one_use_per_customer is mpu 1 plus ri: a guest does not qualify, a first-time customer does, a repeat one does not", async () => {
+    const offer = makeGiftOffer("offer-1", 1000);
+    offer.conditions.push({
+      id: "cond-1use", scope: "main", conditionType: "one_use_per_customer",
+      operator: "eq", value: {}, isEnabled: true, sortOrder: 1,
+    });
+    expect(await qualified(offer, null, null)).toBe(false);
+    expect(await qualified(offer, 0, CUSTOMER)).toBe(true);
+    expect(await qualified(offer, 1, CUSTOMER)).toBe(false);
+  });
+
+  it("ri uses the verified logged-in id: a failed profile fetch does not fail closed", async () => {
+    const offer = withPolicy({ requireIdentifiedCustomer: true });
+    const run = async (identifiedCustomer: boolean) =>
+      (await evaluate(makeInput(makeCart(2000), { customer: null }), { offers: [offer], usageStates: [], identifiedCustomer, now: NOW }))
+        .qualifiedOffers.length === 1;
+    expect(await run(true)).toBe(true);
+    expect(await run(false)).toBe(false);
+  });
+
+  it("mpc lowers the auto-added gift quantity and never raises it", async () => {
+    const quantityFor = async (quantity: number, mpc: number | null) => {
+      const offer = withPolicy({ maxApplicationsPerCart: mpc });
+      offer.rewards[0] = { ...offer.rewards[0]!, quantity };
+      const result = await evaluate(makeInput(makeCart(2000)), { offers: [offer], usageStates: [], now: NOW });
+      return result.cartActions.find((action) => action.action === "add_line")?.quantity;
+    };
+    expect(await quantityFor(2, 1)).toBe(1);
+    expect(await quantityFor(2, 5)).toBe(2);
+    expect(await quantityFor(2, null)).toBe(2);
   });
 });

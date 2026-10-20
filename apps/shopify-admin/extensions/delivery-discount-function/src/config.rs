@@ -30,6 +30,8 @@ de_struct! {
         "id" => id: String,
         "title" => title: Option<String> = None,
         "priority" => priority: i32,
+        "mpu" => max_per_customer: Option<i64> = None,
+        "ri" => require_identified: bool = false,
         "tiers" => tiers: Vec<ShippingTier>,
         "targetGroupTypes" => target_group_types: Option<Vec<String>> = None,
         "scopeMode" => scope_mode: String = default_shipping_scope(),

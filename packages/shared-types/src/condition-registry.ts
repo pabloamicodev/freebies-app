@@ -27,7 +27,7 @@ export const CONDITION_REGISTRY: Record<ConditionType, { enforcedByFunction: boo
   order_history_total_spent: { enforcedByFunction: true },
   order_history_last_order_spent: { enforcedByFunction: false },
   order_history_total_orders: { enforcedByFunction: true },
-  one_use_per_customer: { enforcedByFunction: false },
+  one_use_per_customer: { enforcedByFunction: true },
   customer_tags: { enforcedByFunction: true },
   customer_location: { enforcedByFunction: true },
   markets: { enforcedByFunction: true },

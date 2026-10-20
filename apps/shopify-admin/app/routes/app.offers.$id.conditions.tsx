@@ -1088,8 +1088,8 @@ export default function OfferConditionsPage() {
                     </div>
                     <p className="b-help">
                       Checked against the customer's real Shopify order history at checkout, so it
-                      can't be spoofed from the browser. Guests (no account) always fail — they have
-                      no order history to compare.
+                      can't be spoofed from the browser. Guests who type an email Shopify already knows are
+                      recognised and checked like any customer; a guest with a brand-new email has no history and fails.
                     </p>
                     </>
                   )}
@@ -1127,9 +1127,9 @@ export default function OfferConditionsPage() {
 
                   {selectedType === "one_use_per_customer" && (
                     <p className="b-help">
-                      No fields to set — this simply limits each logged-in customer to one
+                      No fields to set — this simply limits each customer to one
                       redemption of this offer, checked against their real order history at
-                      checkout. Guests (no account) always fail, since there's no history to check.
+                      checkout. Guests who type an email Shopify already knows are recognised; a guest with a brand-new email has no history and fails.
                     </p>
                   )}
 

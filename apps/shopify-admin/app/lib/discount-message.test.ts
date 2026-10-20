@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DISCOUNT_MESSAGE_MAX_LENGTH, clampDiscountMessage, resolveDiscountMessage } from "./discount-message.js";
+import { DISCOUNT_MESSAGE_MAX_LENGTH, clampDiscountMessage, normalizeOfferTitle, resolveDiscountMessage } from "./discount-message.js";
 import { discountMessageText } from "./offer-validation.server.js";
 
 describe("resolveDiscountMessage", () => {
@@ -36,5 +36,15 @@ describe("discountMessageText (form validation)", () => {
   it("rejects over-limit input and falls back on empty input", () => {
     expect(discountMessageText(form("z".repeat(61)), "Name").error).toMatch(/at most 60/);
     expect(discountMessageText(form(""), "Name")).toEqual({ data: "Name", error: null });
+  });
+});
+
+describe("normalizeOfferTitle", () => {
+  const ch = String.fromCharCode;
+  it("lowercases and trims", () => expect(normalizeOfferTitle("  Free Mug ")).toBe("free mug"));
+  it("collapses inner whitespace", () => expect(normalizeOfferTitle(`a ${ch(9)}  b${ch(10)} c`)).toBe("a b c"));
+  it("applies NFKC to full-width letters and non-breaking spaces", () => {
+    expect(normalizeOfferTitle(ch(0xff26, 0xff52, 0xff45, 0xff45))).toBe("free");
+    expect(normalizeOfferTitle(`Free${ch(0xa0)}Mug`)).toBe("free mug");
   });
 });

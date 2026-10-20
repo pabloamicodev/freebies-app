@@ -17,10 +17,31 @@ pub fn run(input: Input) -> Result<schema::CartDeliveryOptionsDiscountsGenerateR
         return Ok(empty_result());
     }
 
-    let config = match parse_config(&input) {
+    let mut config = match parse_config(&input) {
         Some(c) => c,
         None => return Ok(empty_result()),
     };
+    let customer = input
+        .cart()
+        .buyer_identity()
+        .as_ref()
+        .and_then(|identity| identity.customer());
+    let usage = crate::usage::parse(
+        customer
+            .and_then(|customer| customer.usage())
+            .map(|metafield| metafield.value().as_str()),
+    );
+    config.shipping_offers.retain(|offer| {
+        // Compiled shipping ids are `offerId:rewardId`; usage is keyed by the bare offer id.
+        let offer_id = offer.id.split(':').next().unwrap_or(&offer.id);
+        !crate::usage::customer_blocked(
+            &usage,
+            offer_id,
+            offer.max_per_customer,
+            offer.require_identified,
+            customer.is_some(),
+        )
+    });
     if config.shipping_offers.is_empty() {
         return Ok(empty_result());
     }
@@ -1450,5 +1471,83 @@ mod tests {
         // A fixed amount that rounds to zero in a zero-decimal currency is no discount.
         let tiny = one_tier_offer(0, "fixed_amount", 0.001, "");
         assert!(run_currency("JPY", "149.37", "9000", &tiny).operations.is_empty());
+    }
+
+    /// `customer`: None = guest, Some(None) = customer without the usage metafield.
+    fn run_with_usage(config: &str, codes: &[&str], customer: Option<Option<&str>>) -> schema::CartDeliveryOptionsDiscountsGenerateRunResult {
+        let codes_json = format!(
+            "[{}]",
+            codes.iter().map(|c| format!(r#"{{"code":"{c}"}}"#)).collect::<Vec<_>>().join(",")
+        );
+        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let mut value: serde_json::Value =
+            serde_json::from_str(&payload_full(r#"["SHIPPING"]"#, "10.00", config, &groups, "[]", &codes_json)).unwrap();
+        if let Some(usage) = customer {
+            let mut customer = serde_json::json!({});
+            if let Some(raw) = usage {
+                customer["usage"] = serde_json::json!({ "value": raw });
+            }
+            value["cart"]["buyerIdentity"] = serde_json::json!({ "customer": customer });
+        }
+        run_function_with_input(super::run, &value.to_string()).expect("should not error")
+    }
+
+    #[test]
+    fn per_customer_limit_skips_an_exhausted_shipping_offer() {
+        let config = shipping_config(&format!(
+            "[{},{}]",
+            coded_offer("limited", 1, 100.0, r#""mpu":2,"#),
+            coded_offer("fallback", 2, 10.0, "")
+        ));
+        let used = |count: i64| format!(r#"{{"v":1,"u":{{"limited":{count}}}}}"#);
+        assert_eq!(discount_pct(&run_with_usage(&config, &[], Some(Some(&used(1))))), Some(100.0));
+        assert_eq!(discount_pct(&run_with_usage(&config, &[], Some(Some(&used(2))))), Some(10.0));
+        assert_eq!(discount_pct(&run_with_usage(&config, &[], Some(Some(&used(5))))), Some(10.0));
+    }
+
+    #[test]
+    fn usage_is_looked_up_by_the_offer_id_before_the_reward_suffix() {
+        let config = shipping_config(&format!(
+            "[{},{}]",
+            coded_offer("limited:reward-1", 1, 100.0, r#""mpu":2,"#),
+            coded_offer("fallback:reward-2", 2, 10.0, "")
+        ));
+        let used = |count: i64| format!(r#"{{"v":1,"u":{{"limited":{count}}}}}"#);
+        assert_eq!(discount_pct(&run_with_usage(&config, &[], Some(Some(&used(1))))), Some(100.0));
+        assert_eq!(discount_pct(&run_with_usage(&config, &[], Some(Some(&used(2))))), Some(10.0));
+    }
+
+    #[test]
+    fn missing_key_missing_metafield_null_customer_and_unreadable_usage_count_as_zero() {
+        let config = shipping_config(&format!("[{}]", coded_offer("limited", 1, 100.0, r#""mpu":1,"#)));
+        for customer in [
+            Some(Some(r#"{"v":1,"u":{"other":3}}"#)),
+            Some(Some("garbage")),
+            Some(Some(r#"{"v":9,"u":{"limited":3}}"#)),
+            Some(None),
+            None,
+        ] {
+            assert_eq!(discount_pct(&run_with_usage(&config, &[], customer)), Some(100.0), "{customer:?}");
+        }
+    }
+
+    #[test]
+    fn require_identified_blocks_a_null_customer_for_shipping() {
+        let config = shipping_config(&format!("[{}]", coded_offer("vip", 1, 100.0, r#""ri":true,"#)));
+        assert_eq!(discount_pct(&run_with_usage(&config, &[], None)), None);
+        assert_eq!(discount_pct(&run_with_usage(&config, &[], Some(None))), Some(100.0));
+    }
+
+    #[test]
+    fn an_exhausted_shipping_code_is_not_accepted() {
+        let config = shipping_config(&format!(
+            "[{}]",
+            coded_offer("g", 1, 100.0, r#""codeHashes":["9e35947c8d25"],"acceptCodes":true,"mpu":1,"#)
+        ));
+        let fresh = run_with_usage(&config, &["SUMMER10"], Some(Some(r#"{"v":1,"u":{}}"#)));
+        assert_eq!(accepted(&fresh), ["SUMMER10"]);
+        let exhausted = run_with_usage(&config, &["SUMMER10"], Some(Some(r#"{"v":1,"u":{"g":1}}"#)));
+        assert!(accepted(&exhausted).is_empty());
+        assert_eq!(discount_pct(&exhausted), None);
     }
 }

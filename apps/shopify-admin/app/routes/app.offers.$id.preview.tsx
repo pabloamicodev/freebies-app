@@ -120,6 +120,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       canStackWithGiftOffers: policyRows[0]?.canStackWithGiftOffers ?? true,
       maxApplicationsPerCart: policyRows[0]?.maxApplicationsPerCart ?? null,
       maxApplicationsPerCustomer: policyRows[0]?.maxApplicationsPerCustomer ?? null,
+      requireIdentifiedCustomer: policyRows[0]?.requireIdentifiedCustomer === true,
     },
     giftValueCountsForOtherOffers: policyRows[0]?.giftValueCountsForOtherOffers ?? false,
   };
@@ -188,7 +189,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const result = await evaluate(simulatedInput, {
     offers: [offerDef],
-    oneUseStates: [],
+    usageStates: [],
     now: new Date(),
   });
 

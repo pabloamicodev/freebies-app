@@ -126,37 +126,6 @@ export function evaluateOrderHistory(
   return passed ? ok(reason) : err(reason);
 }
 
-// ─── One Use Per Customer ─────────────────────────────────────────────────────
-
-export interface OneUsePerCustomerState {
-  /** How many times has this customer already used this offer (completed orders). */
-  usedCount: number;
-}
-
-export function evaluateOneUsePerCustomer(
-  customer: NormalizedCustomer | null,
-  state: OneUsePerCustomerState,
-): Result<EligibilityReason, EligibilityReason> {
-  if (!customer) {
-    return err({
-      conditionType: "one_use_per_customer",
-      passed: false,
-      message: "One-use-per-customer requires a logged-in customer",
-    });
-  }
-
-  const passed = state.usedCount === 0;
-  return passed
-    ? ok({ conditionType: "one_use_per_customer", passed: true, message: "First use for this customer" })
-    : err({
-        conditionType: "one_use_per_customer",
-        passed: false,
-        message: `Customer has already used this offer ${state.usedCount} time(s)`,
-        actual: state.usedCount,
-        required: 0,
-      });
-}
-
 // ─── Sales Channel ────────────────────────────────────────────────────────────
 
 export function evaluateSalesChannel(

@@ -37,7 +37,8 @@ interface Fixture {
   name: string;
   source: { offers: SourceOffer[] };
   config: { offers: ConfigOffer[] };
-  cart: { currency: string; country: string | null; lines: FixtureLine[] };
+  /** `customer`: absent or null is a guest; an object is an identified customer, `usage` its per-offer use counts. */
+  cart: { currency: string; country: string | null; lines: FixtureLine[]; customer?: { usage?: Record<string, number> } | null };
   expected: {
     qualifiedOfferIds: string[];
     discountedLineIds: Record<string, string[]>;
@@ -52,6 +53,10 @@ interface ConfigReward {
   selectable?: boolean;
   selectionCount?: number;
   maxUnitsTotal?: number;
+  discountType?: string;
+  discountValue?: number;
+  quantityTiers?: Array<{ minimumQuantity: number; maximumQuantity?: number; discountedQuantity?: number }>;
+  priceTiers?: Array<{ quantity: number }>;
   scopeMode?: string;
   requiredLineAttributeValue?: string;
   requiredAnchorVariantIds?: string[];
@@ -60,6 +65,9 @@ interface ConfigReward {
 }
 interface ConfigOffer {
   id: string;
+  mpc?: number;
+  mpu?: number;
+  ri?: true;
   requirements?: Array<{ productId?: string; variantId?: string; trackMode: string; minQuantity: number }>;
   excludedProductIds?: string[];
   restrictToMatchedLines?: boolean;
@@ -115,7 +123,18 @@ function toInput(fixture: Fixture): EvaluationInput {
   return {
     shopDomain: "parity.myshopify.com",
     cart: toCart(fixture),
-    customer: null,
+    customer: fixture.cart.customer
+      ? {
+          id: "gid://shopify/Customer/1",
+          email: null,
+          tags: [],
+          totalSpentCents: 0,
+          totalOrders: 0,
+          lastOrderSpentCents: null,
+          countryCode: null,
+          isFirstTimeCustomer: false,
+        }
+      : null,
     market: fixture.cart.country
       ? {
           id: "gid://shopify/Market/1",
@@ -133,7 +152,9 @@ function toInput(fixture: Fixture): EvaluationInput {
 }
 
 function toOffers(fixture: Fixture): OfferDefinition[] {
-  return fixture.source.offers.map((offer) => ({
+  return fixture.source.offers.map((offer) => {
+    const limits = fixture.config.offers.find((candidate) => candidate.id === offer.id);
+    return {
     id: offer.id,
     version: offer.version,
     type: offer.type,
@@ -149,14 +170,41 @@ function toOffers(fixture: Fixture): OfferDefinition[] {
       combinesWithShippingDiscounts: true,
       stopLowerPriority: offer.stopLowerPriority,
       canStackWithGiftOffers: offer.canStackWithGiftOffers ?? true,
-      maxApplicationsPerCart: null,
-      maxApplicationsPerCustomer: null,
+      maxApplicationsPerCart: limits?.mpc ?? null,
+      maxApplicationsPerCustomer: limits?.mpu ?? null,
+      requireIdentifiedCustomer: limits?.ri === true,
     },
     giftValueCountsForOtherOffers: false,
-  }));
+    };
+  });
 }
 
+const usageStatesOf = (fixture: Fixture) =>
+  Object.entries(fixture.cart.customer?.usage ?? {}).map(([offerId, usedCount]) => ({ offerId, usedCount }));
+
+const capByCart = (config: ConfigOffer, limit: number) => (config.mpc === undefined ? limit : Math.min(limit, config.mpc));
+
 /** Units of each line the offer discounts, following the Function's targeting rules. */
+/** Quiz bundles: complete groups in bundle-id order, at most mpc of them, every paid line of a group discounted. */
+function quizBundles(fixture: Fixture, config: ConfigOffer, reward: ConfigReward, result: Record<string, number>): void {
+  const groups = new Map<string, FixtureLine[]>();
+  for (const line of fixture.cart.lines) {
+    const id = line.metadata?.["_quiz_bundle_id"];
+    if (id) groups.set(id, [...(groups.get(id) ?? []), line]);
+  }
+  let bundles = 0;
+  for (const id of [...groups.keys()].sort()) {
+    const paid = groups.get(id)!.filter((line) => line.metadata?.["_quiz_free_gift"] !== "true");
+    const expected = Number(paid[0]?.metadata?.["_quiz_expected_paid_count"]);
+    if (!(paid.length >= expected)) continue;
+    if (config.mpc !== undefined && bundles >= config.mpc) break;
+    bundles += 1;
+    const current = paid.reduce((sum, line) => sum + Number(line.unitPrice) * line.quantity, 0);
+    if (current - (reward.discountValue ?? 0) <= 0) continue;
+    for (const line of paid) result[line.id] = line.quantity;
+  }
+}
+
 function referenceDiscounts(fixture: Fixture, offer: SourceOffer): Record<string, number> {
   const config = fixture.config.offers.find((candidate) => candidate.id === offer.id)!;
   const excluded = new Set(config.excludedProductIds ?? []);
@@ -176,11 +224,13 @@ function referenceDiscounts(fixture: Fixture, offer: SourceOffer): Record<string
     givenByProduct[reward.id] = {};
     // A picker (choose K of N) grants selectionCount x limit units across ALL its gifts; the lines
     // the shopper added first (cart order) get them.
-    remainingForReward[reward.id] = reward.selectable ? (reward.selectionCount ?? 1) * (reward.maxQuantity ?? 1) : Number.POSITIVE_INFINITY;
+    remainingForReward[reward.id] = reward.selectable
+      ? (reward.selectionCount ?? 1) * capByCart(config, reward.maxQuantity ?? 1)
+      : Number.POSITIVE_INFINITY;
   }
   const grant = (line: FixtureLine, reward: ConfigReward, quantity: number): boolean => {
     const given = givenByProduct[reward.id]![line.productId] ?? 0;
-    const units = Math.min(quantity, (reward.maxQuantity ?? 1) - given, remainingForReward[reward.id]!);
+    const units = Math.min(quantity, capByCart(config, reward.maxQuantity ?? 1) - given, remainingForReward[reward.id]!);
     if (units <= 0) return false;
     givenByProduct[reward.id]![line.productId] = given + units;
     remainingForReward[reward.id]! -= units;
@@ -212,6 +262,10 @@ function referenceDiscounts(fixture: Fixture, offer: SourceOffer): Record<string
   }
 
   for (const reward of config.productRewards ?? []) {
+    if (reward.scopeMode === "quiz_bundle") {
+      quizBundles(fixture, config, reward, result);
+      continue;
+    }
     const landing = reward.scopeMode === "landing";
     const setScoped = landing || reward.scopeMode === "tagged_offer";
     if (landing) {
@@ -232,11 +286,25 @@ function referenceDiscounts(fixture: Fixture, offer: SourceOffer): Record<string
         return (products.length === 0 && variants.length === 0) || products.includes(line.productId) || variants.includes(line.variantId);
       })
       .sort((a, b) => (a.id < b.id ? -1 : 1));
-    const limit = reward.maxQuantity ?? 1;
+    const total = eligible.reduce((sum, line) => sum + line.quantity, 0);
+    const quantityTier = (reward.quantityTiers ?? [])
+      .filter((tier) => total >= tier.minimumQuantity && (tier.maximumQuantity === undefined || total <= tier.maximumQuantity))
+      .sort((a, b) => b.minimumQuantity - a.minimumQuantity)[0];
+    const priceTier = (reward.priceTiers ?? []).filter((tier) => total >= tier.quantity).sort((a, b) => b.quantity - a.quantity)[0];
+    if ((reward.quantityTiers ?? []).length > 0 && !quantityTier) continue;
+    if ((reward.priceTiers ?? []).length > 0 && !priceTier) continue;
+    const limit = capByCart(config, reward.maxQuantity ?? 1);
     const byVariant = (reward.targetVariantIds ?? []).length > 0;
     const given: Record<string, number> = {};
     let remainingTotal =
-      reward.maxUnitsTotal ?? (setScoped ? Number.POSITIVE_INFINITY : (reward.maxQuantity ?? Number.POSITIVE_INFINITY));
+      quantityTier?.discountedQuantity ??
+      reward.maxUnitsTotal ??
+      (setScoped ? Number.POSITIVE_INFINITY : (reward.maxQuantity ?? Number.POSITIVE_INFINITY));
+    // Per cart: one application is a unit, or one pack of the matched tier; set-scoped limits were capped above.
+    if (config.mpc !== undefined && !setScoped) {
+      const pack = quantityTier ? (quantityTier.discountedQuantity ?? quantityTier.minimumQuantity) : (priceTier?.quantity ?? 1);
+      remainingTotal = Math.min(remainingTotal, config.mpc * pack);
+    }
     for (const line of eligible) {
       const key = byVariant ? line.variantId : line.productId;
       let units = Math.min(line.quantity, remainingTotal);
@@ -256,7 +324,7 @@ describe("golden parity fixtures", () => {
   });
 
   it.each(fixtures.map((fixture) => [fixture.name, fixture] as const))("%s", async (_name, fixture) => {
-    const result = await evaluate(toInput(fixture), { offers: toOffers(fixture), oneUseStates: [], now: NOW });
+    const result = await evaluate(toInput(fixture), { offers: toOffers(fixture), usageStates: usageStatesOf(fixture), now: NOW });
     expect(result.qualifiedOffers.map((offer) => offer.offerId).sort()).toEqual([...fixture.expected.qualifiedOfferIds].sort());
 
     const discountedLineIds: Record<string, string[]> = {};
@@ -273,5 +341,34 @@ describe("golden parity fixtures", () => {
     for (const [offerId, quantities] of Object.entries(fixture.expected.discountedQuantities ?? {})) {
       expect(discountedQuantities[offerId]).toEqual(quantities);
     }
+  });
+});
+
+/** Reference of the delivery Function's offer selection (delivery_discount_logic::run): blocked offers drop out, the best priority wins. */
+function pickShippingOffer(
+  offers: Array<{ id: string; priority: number; mpu?: number; ri?: true }>,
+  usage: Record<string, number>,
+  identified: boolean,
+): string | undefined {
+  return offers
+    // Compiled shipping ids are `offerId:rewardId`; usage is keyed by the bare offer id.
+    .filter((offer) => !(offer.ri && !identified) && !(offer.mpu !== undefined && (usage[offer.id.split(":")[0]!] ?? 0) >= offer.mpu))
+    .sort((a, b) => a.priority - b.priority)[0]?.id;
+}
+
+describe("shipping usage limits (mirrors delivery_discount_logic tests)", () => {
+  const offers = [
+    { id: "limited:reward-1", priority: 1, mpu: 2 },
+    { id: "fallback:reward-2", priority: 2 },
+  ];
+  it("an exhausted mpu falls through to the next-priority offer", () => {
+    expect(pickShippingOffer(offers, { limited: 1 }, true)).toBe("limited:reward-1");
+    expect(pickShippingOffer(offers, { limited: 2 }, true)).toBe("fallback:reward-2");
+    expect(pickShippingOffer(offers, { limited: 5 }, true)).toBe("fallback:reward-2");
+  });
+  it("a guest and a missing key count as 0 uses; ri blocks a guest only", () => {
+    expect(pickShippingOffer(offers, {}, false)).toBe("limited:reward-1");
+    expect(pickShippingOffer([{ id: "vip", priority: 1, ri: true }], {}, false)).toBeUndefined();
+    expect(pickShippingOffer([{ id: "vip", priority: 1, ri: true }], {}, true)).toBe("vip");
   });
 });
