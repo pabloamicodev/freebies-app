@@ -27,6 +27,8 @@ import { offers, offerConditions, offerRewards, offerCombinationPolicies } from 
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { SelectedProductsList } from "../components/SelectedProductsList.js";
+import { MatchRuleField } from "../components/ProductConditionFields.js";
+import { matchRuleOperator, presenceOnlyValue, type MatchRule } from "../lib/product-condition.js";
 import { SubconditionModal } from "../components/SubconditionModal.js";
 import { SubconditionCard } from "../components/SubconditionCard.js";
 import type { MainConditionType } from "../components/MainConditionModal.js";
@@ -218,13 +220,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const multiplyGifts = formData.get("multiplyGifts") === "on";
   const giftsMatchProd = formData.get("giftsMatchProducts") === "on";
   const trackMode = (formData.get("trackMode") as string) || "product";
+  const matchOperator = matchRuleOperator(formData.get("matchRule") === "all" ? "all" : "any");
   const conditionProductsResult = parseJsonStringArray(formData, "conditionProducts");
   if (conditionProductsResult.error) return { error: conditionProductsResult.error };
   const conditionProducts = conditionProductsResult.data!;
 
   let conditionValue: Record<string, unknown>;
   if (conditionType === "specific_product") {
-    conditionValue = {
+    const specificProductValue = {
       minQtyPerProduct: minQty,
       multiplyGifts,
       giftsMatchProducts: giftsMatchProd,
@@ -232,6 +235,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       appliesTo: "specific_products",
       variantIds: conditionProducts,
     };
+    conditionValue = matchOperator === "any" ? presenceOnlyValue(specificProductValue) : specificProductValue;
   } else if (conditionType === "cart_quantity") {
     conditionValue = { minQuantity: minQty, appliesTo, includeGiftValues: false };
   } else {
@@ -319,7 +323,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           offerId: offer.id,
           scope: "main",
           conditionType,
-          operator: "gte",
+          operator: conditionType === "specific_product" ? matchOperator : "gte",
           value: conditionValue,
           sortOrder: 0,
           isEnabled: true,
@@ -423,6 +427,7 @@ export default function NewGiftOfferPage() {
     multiplyGifts: false,
     giftsMatchProducts: preset?.giftsMatchProducts ?? false,
     trackMode: "product",
+    matchRule: "any" as MatchRule,
     conditionProducts: [] as string[],
     condPickerOpen: false,
     subModalOpen: false,
@@ -462,6 +467,7 @@ export default function NewGiftOfferPage() {
     multiplyGifts,
     giftsMatchProducts,
     trackMode,
+    matchRule,
     conditionProducts,
     condPickerOpen,
     subModalOpen,
@@ -501,6 +507,7 @@ export default function NewGiftOfferPage() {
   const setMultiplyGifts = createFieldSetter(setFormField, "multiplyGifts");
   const setGiftsMatchProducts = createFieldSetter(setFormField, "giftsMatchProducts");
   const setTrackMode = createFieldSetter(setFormField, "trackMode");
+  const setMatchRule = createFieldSetter(setFormField, "matchRule");
   const setConditionProducts = createFieldSetter(setFormField, "conditionProducts");
   const setCondPickerOpen = createFieldSetter(setFormField, "condPickerOpen");
   const setSubModalOpen = createFieldSetter(setFormField, "subModalOpen");
@@ -1066,6 +1073,8 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                     {/* specific_product */}
                     {conditionType === "specific_product" && (
                       <>
+                        <MatchRuleField name="matchRule" value={matchRule} onChange={setMatchRule} />
+                        {matchRule === "all" && (
                         <div>
                           <label className="b-label" htmlFor="gift-required-product-quantity">
                             Required product quantity
@@ -1083,6 +1092,8 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                             autoComplete="off"
                           />
                         </div>
+                        )}
+                        {matchRule === "all" && (
                         <label
                           className="b-checkbox-row"
                           htmlFor="gift-multiply-gifts"
@@ -1105,6 +1116,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                             </div>
                           </div>
                         </label>
+                        )}
                         <label
                           className="b-checkbox-row"
                           htmlFor="gift-match-products"
@@ -1376,6 +1388,8 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
 
                   {selectedMainCond === "specific_product" && (
                     <>
+                      <MatchRuleField name="matchRule" value={matchRule} onChange={setMatchRule} />
+                      {matchRule === "all" && (
                       <div>
                         <label className="b-label" htmlFor="scratch-gift-min-qty-sp">
                           Required product quantity
@@ -1393,6 +1407,8 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                           autoComplete="off"
                         />
                       </div>
+                      )}
+                      {matchRule === "all" && (
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input
                           type="checkbox"
@@ -1402,6 +1418,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                         />
                         <div className="b-checkbox-label">Multiply gifts by product quantity</div>
                       </label>
+                      )}
                       <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 10 }}>
                         <input
                           type="checkbox"

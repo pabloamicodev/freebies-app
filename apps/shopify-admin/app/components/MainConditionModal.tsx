@@ -107,7 +107,7 @@ const INDEPENDENT_OPTIONS: MainConditionOption[] = [
   {
     id: "specific_product",
     name: "Specific Product",
-    desc: "Trigger when every selected variant or product is in the cart, at the minimum quantity each — e.g. buy A and B, get gift C. Other items can also be in the cart.",
+    desc: "Trigger when any of, or all of, the selected variants or products are in the cart — e.g. buy any flavor, or buy A and B, get gift C. Other items can also be in the cart.",
     combinable: false,
     color: "#f59e0b",
     icon: <ISpecificProduct />,

@@ -5,6 +5,38 @@
 export type MatchBy = "variant" | "product";
 export type ProductConditionType = "specific_product" | "pack_of_products";
 
+/** Stored as the condition's operator: "any" is any-of; a missing operator or "gte" is all-of. */
+export type MatchRule = "all" | "any";
+
+export const MATCH_RULE_LABELS: Record<MatchRule, string> = {
+  any: "Any of these",
+  all: "All of these",
+};
+
+export function readMatchRule(operator: unknown): MatchRule {
+  return operator === "any" ? "any" : "all";
+}
+
+/** "Any of" is presence-only (engine ignores quantity), so the saved value must not promise otherwise. */
+export function presenceOnlyValue(value: Record<string, unknown>): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...value };
+  for (const key of ["minQtyPerProduct", "minQuantity"]) if (key in next) next[key] = 1;
+  for (const key of ["multiplyGifts", "multiplyByGroups"]) if (key in next) next[key] = false;
+  if (Array.isArray(next["requirements"])) {
+    next["requirements"] = (next["requirements"] as Array<Record<string, unknown>>).map((r) => ({ ...r, minQuantity: 1 }));
+  }
+  return next;
+}
+
+export function matchRuleOperator(rule: MatchRule): "any" | "gte" {
+  return rule === "any" ? "any" : "gte";
+}
+
+/** Null when the form didn't submit a match rule, so an update leaves the stored operator alone. */
+export function parseMatchOperator(raw: unknown): "any" | "gte" | null {
+  return raw === "any" || raw === "gte" ? raw : null;
+}
+
 export const MATCH_BY_LABELS: Record<MatchBy, string> = {
   variant: "Exact variants (SKUs)",
   product: "Any variant of the product",
@@ -81,9 +113,22 @@ export function productConditionHelp(args: {
   matchBy: MatchBy;
   minQty: number;
   items: PickedItem[];
+  rule?: MatchRule;
 }): { lines: string[]; example: string | null } {
   const { type, matchBy, items } = args;
   const qty = Math.max(1, args.minQty || 1);
+  const noun = matchBy === "variant" ? "variant" : "product";
+  if (type === "specific_product" && args.rule === "any") {
+    const names = items.map((item) => itemName(item, matchBy));
+    return {
+      lines: [
+        `Any of these: one ${noun} in the cart is enough. It counts at quantity 1; the min quantity and gift multiplier don't apply.`,
+        "Other products can also be in the cart; this doesn't require the cart to contain only these.",
+        "Which items get the discount is set in Rewards.",
+      ],
+      example: names.length === 0 ? null : `Example: the cart needs at least one of ${names.slice(0, 3).join(", ")}${names.length > 3 ? ` and ${names.length - 3} more` : ""}.`,
+    };
+  }
   const lines = [
     matchBy === "variant"
       ? "Exact variants: each pick is one specific variant (SKU). Other variants of the same product don't count toward it."

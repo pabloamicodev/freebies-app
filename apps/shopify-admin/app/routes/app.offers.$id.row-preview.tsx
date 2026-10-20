@@ -83,7 +83,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       scope: c.scope,
       conditionType: c.conditionType,
       isEnabled: c.isEnabled,
-      summary: conditionSummary(c.conditionType, c.value),
+      summary: conditionSummary(c.conditionType, c.value, c.operator),
     }));
 
   const urls = [...new Set(conditionRows.flatMap((c) => urlsFromCondition(c.conditionType, c.value)))];
