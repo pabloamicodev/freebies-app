@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validateRewardPayload, FUNCTION_ENFORCED_CONDITION_TYPES } from "@promo/shared-types";
 import {
   compileOfferConfig,
+  compileOfferLimits,
   compactCompiledOffer,
   compileDiscountCombinationPolicy,
   compileShippingOfferConfigs,
@@ -1236,5 +1237,80 @@ describe("canStackWithGiftOffers", () => {
     expect(compile(null)).not.toHaveProperty("canStackWithGiftOffers");
     expect(JSON.stringify(compactCompiledOffer(compile({ canStackWithGiftOffers: true })))).not.toContain("canStack");
     expect(compactCompiledOffer(compile({ canStackWithGiftOffers: false }))).toMatchObject({ canStackWithGiftOffers: false });
+  });
+});
+
+describe("usage limits (mpc, mpu, ri) behind the per-shop limits.enforced flag", () => {
+  type Policy = NonNullable<Parameters<typeof compileOfferConfig>[3]>;
+  const policy = (overrides: Partial<Policy> = {}) =>
+    ({
+      stopLowerPriority: false,
+      combinesWithOrderDiscounts: true,
+      combinesWithShippingDiscounts: true,
+      combinesWithProductDiscounts: true,
+      maxApplicationsPerCart: null,
+      maxApplicationsPerCustomer: null,
+      requireIdentifiedCustomer: false,
+      ...overrides,
+    }) as Policy;
+  const reward = (rewardType: string) =>
+    ({ id: REWARD_ID, rewardType, discountType: "percentage", value: { amount: 10 }, target: {}, sortOrder: 0 }) as CompileArgs[2][number];
+  const bytes = (p: Policy | null, rewards: CompileArgs[2], limitsEnforced?: boolean, conditions: CompileArgs[1] = []) =>
+    serializeFunctionConfig({
+      offers: [compileOfferConfig(offer(), conditions, rewards, p, 1, { limitsEnforced })],
+      shippingOffers: [],
+      version: "v",
+      compiledAt: "t",
+    });
+  const everything = policy({ maxApplicationsPerCart: 2, maxApplicationsPerCustomer: 3, requireIdentifiedCustomer: true });
+
+  it("flag off: the compiled bytes are identical to an offer with no limits", () => {
+    const rewards = [reward("product_discount")];
+    expect(bytes(everything, rewards, false)).toBe(bytes(policy(), rewards, false));
+    expect(bytes(everything, rewards)).toBe(bytes(null, rewards));
+    expect(bytes(everything, rewards)).not.toMatch(/"(mpc|mpu|ri)"/);
+  });
+
+  it("flag on with empty limits: the compiled bytes are identical too", () => {
+    const rewards = [reward("product_discount")];
+    expect(bytes(policy(), rewards, true)).toBe(bytes(null, rewards, false));
+  });
+
+  it("flag on: emits only the limits that are set", () => {
+    expect(compileOfferLimits(everything, [], [reward("product_gift")], true)).toEqual({ mpc: 2, mpu: 3, ri: true });
+    expect(compileOfferLimits(policy({ maxApplicationsPerCustomer: 1 }), [], [reward("product_gift")], true)).toEqual({ mpu: 1 });
+    expect(compileOfferLimits(policy({ maxApplicationsPerCart: 0, maxApplicationsPerCustomer: -1 }), [], [reward("product_gift")], true)).toEqual({});
+    const json = JSON.parse(bytes(everything, [reward("product_gift")], true));
+    expect(json.offers[0]).toMatchObject({ mpc: 2, mpu: 3, ri: true });
+  });
+
+  it("mpc is never emitted for order-only or shipping-only offers", () => {
+    expect(compileOfferLimits(everything, [], [reward("order_discount")], true)).toEqual({ mpu: 3, ri: true });
+    expect(compileOfferLimits(everything, [], [reward("shipping_discount")], true)).toEqual({ mpu: 3, ri: true });
+    expect(compileOfferLimits(everything, [], [reward("order_discount"), reward("bundle_discount")], true).mpc).toBe(2);
+  });
+
+  it("an enabled one_use_per_customer condition is mpu 1, and the lower limit wins", () => {
+    const oneUse = condition("one_use_per_customer", {}, "eq");
+    expect(compileOfferLimits(null, [oneUse], [reward("product_gift")], true)).toEqual({ mpu: 1 });
+    expect(compileOfferLimits(policy({ maxApplicationsPerCustomer: 5 }), [oneUse], [reward("product_gift")], true)).toEqual({ mpu: 1 });
+    expect(compileOfferLimits(policy({ maxApplicationsPerCustomer: 1 }), [], [reward("product_gift")], true)).toEqual({ mpu: 1 });
+    expect(compileOfferLimits(null, [{ ...oneUse, isEnabled: false }], [reward("product_gift")], true)).toEqual({});
+    expect(compileOfferLimits(null, [oneUse], [reward("product_gift")], false)).toEqual({});
+  });
+
+  it("shipping offers carry mpu and ri, never mpc, and only with the flag", () => {
+    const compile = (limitsEnforced: boolean) =>
+      compileShippingOfferConfigs(offer(), [], [shippingReward()], { limitsEnforced, policy: everything });
+    expect(compile(true)[0]).toMatchObject({ mpu: 3, ri: true });
+    expect(compile(true)[0]).not.toHaveProperty("mpc");
+    const off = serializeFunctionConfig({ offers: [], shippingOffers: compile(false), version: "v", compiledAt: "t" });
+    const none = serializeFunctionConfig({
+      offers: [],
+      shippingOffers: compileShippingOfferConfigs(offer(), [], [shippingReward()]),
+      version: "v",
+      compiledAt: "t",
+    });
+    expect(off).toBe(none);
   });
 });

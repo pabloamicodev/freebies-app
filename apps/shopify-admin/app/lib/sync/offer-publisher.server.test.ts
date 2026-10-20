@@ -10,6 +10,7 @@ import { CART_FUNCTION_TITLE, MAX_CODED_SHIPPING_NODES, ensureCodedShippingNodes
 import {
   neutralizeCodeDiscountNode,
   FUNCTION_CONFIG_NAMESPACES,
+  buildNodeOptions,
   packCodedShippingOffers,
   publishOffersForShop,
   specificLinkParamNames,
@@ -2242,3 +2243,22 @@ describe("publishOffersForShop — requiresCode keeps an offer from ever running
 // Referenced only for documentation/clarity above — confirms the real title
 // constant this suite's fake FindDiscountFunction response mirrors.
 void CART_FUNCTION_TITLE;
+
+describe("buildNodeOptions", () => {
+  const codes = (...once: boolean[]) => once.map((oncePerCustomer) => ({ oncePerCustomer, usageLimit: null })) as never;
+
+  it("a compiled per-customer limit of 1 sets Shopify's native once-per-customer (DL7)", () => {
+    expect(buildNodeOptions(codes(false, false), [], 1).appliesOncePerCustomer).toBe(true);
+  });
+
+  it("other limits, or none, leave it to the per-code settings", () => {
+    expect(buildNodeOptions(codes(false), [], 2).appliesOncePerCustomer).toBe(false);
+    expect(buildNodeOptions(codes(false), []).appliesOncePerCustomer).toBe(false);
+    expect(buildNodeOptions(codes(true, true), []).appliesOncePerCustomer).toBe(true);
+    expect(buildNodeOptions(codes(true, false), []).appliesOncePerCustomer).toBe(false);
+  });
+
+  it("never sets it for a node with no live code", () => {
+    expect(buildNodeOptions(codes(), [], 1).appliesOncePerCustomer).toBe(false);
+  });
+});

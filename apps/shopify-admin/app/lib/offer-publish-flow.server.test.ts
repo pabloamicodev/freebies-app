@@ -68,12 +68,12 @@ describe("isConditionEnforcedByFunction", () => {
     "markets",
     "specific_link",
     "page_url",
+    "one_use_per_customer",
   ])("allows Function-enforced condition %s", (conditionType) => {
     expect(isConditionEnforcedByFunction(conditionType)).toBe(true);
   });
 
   it.each([
-    "one_use_per_customer",
     "sales_channels",
     "exclude_collections",
     "exclude_vendors",
