@@ -735,10 +735,29 @@ fn make_order_candidate(
     })
 }
 
+/// Units of an untagged line that qualify the offer (anchor): never counted as its own gift.
+fn reserved_anchor_units(offer: &CompiledOffer, variant_id: &str, product_id: &str) -> i64 {
+    let required = offer
+        .requirements
+        .iter()
+        .filter(|r| r.variant_id.as_deref() == Some(variant_id) || r.product_id.as_deref() == Some(product_id))
+        .map(|r| r.min_quantity)
+        .max()
+        .unwrap_or(0);
+    let listed = [&offer.required_product_ids, &offer.any_required_product_ids]
+        .iter()
+        .any(|ids| ids.iter().any(|id| id == product_id))
+        || [&offer.required_variant_ids, &offer.any_required_variant_ids]
+            .iter()
+            .any(|ids| ids.iter().any(|id| id == variant_id));
+    required.max(i64::from(listed))
+}
+
 /// Gift offer: discount (to free, or the configured value) the line(s) this
-/// offer's runtime already tagged as its gift, but only if the variant is
-/// actually in this offer's allowed gift list — protects against a buyer
-/// editing cart line properties to claim an unrelated product as "the gift".
+/// offer's runtime tagged as its gift, plus untagged lines (added by the theme) of a
+/// configured gift variant, but only if the variant is actually in this offer's allowed
+/// gift list — protects against a buyer editing cart line properties to claim an
+/// unrelated product as "the gift".
 fn evaluate_gift_offer(
     offer: &CompiledOffer,
     input: &Input,
@@ -755,64 +774,69 @@ fn evaluate_gift_offer(
         let mut applied_by_reward: HashMap<String, i64> = HashMap::new();
         let mut candidates = Vec::new();
 
-        for line in input.cart().lines().iter() {
-            let line_quantity = i64::from(*line.quantity());
-            if line_quantity <= 0
-                || line_type(line).as_deref() != Some(LINE_TYPE_GIFT)
-                || line_offer_id(line).as_deref() != Some(offer.id.as_str())
-            {
-                continue;
+        // Tagged lines claim the quota first; untagged lines (a theme adding the gift itself) fill
+        // what is left, so a variant only ever counts as a gift of an offer that qualifies.
+        for tagged_pass in [true, false] {
+            for line in input.cart().lines().iter() {
+                let mut line_quantity = i64::from(*line.quantity());
+                let tagged = line_type(line).as_deref() == Some(LINE_TYPE_GIFT)
+                    && line_offer_id(line).as_deref() == Some(offer.id.as_str());
+                if line_quantity <= 0
+                    || tagged != tagged_pass
+                    || (!tagged && (line_offer_id(line).is_some() || is_gift_line(line)))
+                {
+                    continue;
+                }
+                let Some((variant_id, product_id)) = variant_and_product_id(line) else {
+                    continue;
+                };
+                if !tagged {
+                    line_quantity -= reserved_anchor_units(offer, &variant_id, &product_id);
+                }
+                let reward_id = line_reward_id(line);
+                for reward in offer
+                    .gift_rewards
+                    .iter()
+                    .filter(|reward| !tagged || reward_id.as_deref() == Some(reward.id.as_str()))
+                {
+                    let target_matches = if !reward.target_variant_ids.is_empty() {
+                        reward.target_variant_ids.iter().any(|id| id == &variant_id)
+                    } else {
+                        reward.target_product_ids.iter().any(|id| id == &product_id)
+                    };
+                    if !target_matches {
+                        continue;
+                    }
+                    let mut quantity = take_units(
+                        &mut applied_by_product,
+                        reward.id.clone() + &product_id,
+                        reward.max_quantity,
+                        line_quantity,
+                    );
+                    // A picker (choose K of N) grants selectionCount x limit units across ALL its
+                    // gifts, so adding every option via /cart/add frees only the first lines in cart
+                    // order (the ones the shopper added first); the rest are charged.
+                    if reward.selectable || reward.target_variant_ids.len() > 1 {
+                        quantity = take_units(
+                            &mut applied_by_reward,
+                            reward.id.clone(),
+                            reward.selection_count.unwrap_or(1) * reward.max_quantity,
+                            quantity,
+                        );
+                    }
+                    if quantity <= 0 {
+                        continue;
+                    }
+                    candidates.push(make_candidate(
+                        line.id().clone(),
+                        quantity,
+                        &reward.discount_type,
+                        reward.discount_value,
+                        "Free gift",
+                    ));
+                    break;
+                }
             }
-
-            let Some(reward_id) = line_reward_id(line) else {
-                continue;
-            };
-            let Some(reward) = offer
-                .gift_rewards
-                .iter()
-                .find(|candidate| candidate.id == reward_id)
-            else {
-                continue;
-            };
-            let Some((variant_id, product_id)) = variant_and_product_id(line) else {
-                continue;
-            };
-            let target_matches = if !reward.target_variant_ids.is_empty() {
-                reward.target_variant_ids.iter().any(|id| id == &variant_id)
-            } else {
-                reward.target_product_ids.iter().any(|id| id == &product_id)
-            };
-            if !target_matches {
-                continue;
-            }
-
-            let mut quantity = take_units(
-                &mut applied_by_product,
-                reward.id.clone() + &product_id,
-                reward.max_quantity,
-                line_quantity,
-            );
-            // A picker (choose K of N) grants selectionCount x limit units across ALL its gifts, so
-            // adding every option via /cart/add frees only the first lines in cart order (the ones
-            // the shopper added first); the rest are charged.
-            if reward.selectable || reward.target_variant_ids.len() > 1 {
-                quantity = take_units(
-                    &mut applied_by_reward,
-                    reward.id.clone(),
-                    reward.selection_count.unwrap_or(1) * reward.max_quantity,
-                    quantity,
-                );
-            }
-            if quantity <= 0 {
-                continue;
-            }
-            candidates.push(make_candidate(
-                line.id().clone(),
-                quantity,
-                &reward.discount_type,
-                reward.discount_value,
-                "Free gift",
-            ));
         }
         return candidates;
     }
@@ -4621,5 +4645,143 @@ mod tests {
         assert_eq!(fixed_amount("USD"), 12.5);
         assert_eq!(fixed_amount("JPY"), 13.0);
         assert_eq!(fixed_amount("KRW"), 13.0);
+    }
+
+    const SK_PAGE: &str = "/pages/nektar-starter-kit-50";
+
+    fn theme_gift_config() -> String {
+        r#"{"offers":[{
+            "id":"offer-sk","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":["gid://shopify/Product/nektar"],"requiredVariantIds":[],"excludedProductIds":[],
+            "subscriptionMode":"subscription_only",
+            "pageUrlConditions":[{"matchMode":"exact","patterns":["/pages/nektar-starter-kit-50"],"caseSensitive":false}],
+            "discountType":"free","discountValue":100,"currencyCode":"USD",
+            "giftRewards":[
+                {"id":"reward-frother","targetVariantIds":["gid://shopify/ProductVariant/frother"],"discountType":"free","discountValue":100,"maxQuantity":1},
+                {"id":"reward-otg","targetVariantIds":["gid://shopify/ProductVariant/otg"],"discountType":"free","discountValue":100,"maxQuantity":1}
+            ]
+        }]}"#
+        .to_string()
+    }
+
+    fn theme_line(id: &str, variant: &str, product: &str, qty: i64, subscription: bool, page: &str) -> String {
+        let line = regular_line(
+            &format!("gid://shopify/CartLine/{id}"),
+            &format!("gid://shopify/ProductVariant/{variant}"),
+            &format!("gid://shopify/Product/{product}"),
+            "10.00",
+            qty,
+        );
+        let mut value: Value = serde_json::from_str(&line).unwrap();
+        if subscription {
+            value["sellingPlanAllocation"] = serde_json::json!({ "sellingPlan": { "id": "gid://shopify/SellingPlan/1" } });
+        }
+        value["promoMetadata"] = serde_json::json!({
+            "value": serde_json::json!({ "_promo_page_url": page }).to_string(),
+        });
+        value.to_string()
+    }
+
+    fn tagged_line(id: &str, variant: &str, product: &str, offer: &str, reward: &str, qty: i64) -> String {
+        gift_line_with_metadata(
+            &format!("gid://shopify/CartLine/{id}"),
+            &format!("gid://shopify/ProductVariant/{variant}"),
+            &format!("gid://shopify/Product/{product}"),
+            (offer, reward, "1"),
+            "10.00",
+            qty,
+        )
+    }
+
+    fn discounted_units(lines: &[String], config: &str) -> Vec<(String, i64)> {
+        let payload = cart_json(&format!("[{}]", lines.join(",")), "100.00", config);
+        let result = run_function_with_input(run, &payload).expect("should not error");
+        let mut units = Vec::new();
+        for operation in &result.operations {
+            let schema::CartOperation::ProductDiscountsAdd(op) = operation else {
+                panic!("expected ProductDiscountsAdd, got {operation:?}");
+            };
+            for candidate in &op.candidates {
+                let schema::ProductDiscountCandidateTarget::CartLine(target) = &candidate.targets[0];
+                units.push((
+                    target.id.trim_start_matches("gid://shopify/CartLine/").to_string(),
+                    i64::from(target.quantity.unwrap_or(0)),
+                ));
+            }
+        }
+        units.sort();
+        units
+    }
+
+    fn anchor() -> String {
+        theme_line("1", "nektar-sub", "nektar", 1, true, SK_PAGE)
+    }
+
+    #[test]
+    fn untagged_theme_gift_lines_are_discounted_when_the_offer_qualifies() {
+        let lines = [
+            anchor(),
+            theme_line("2", "frother", "frother-p", 1, false, SK_PAGE),
+            theme_line("3", "otg", "otg-p", 1, false, SK_PAGE),
+        ];
+        assert_eq!(
+            discounted_units(&lines, &theme_gift_config()),
+            vec![("2".to_string(), 1), ("3".to_string(), 1)]
+        );
+    }
+
+    #[test]
+    fn untagged_gift_lines_are_charged_when_the_offer_does_not_qualify() {
+        let gifts = [
+            theme_line("2", "frother", "frother-p", 1, false, SK_PAGE),
+            theme_line("3", "otg", "otg-p", 1, false, SK_PAGE),
+        ];
+        let wrong_page = [
+            theme_line("1", "nektar-sub", "nektar", 1, true, "/pages/other"),
+            theme_line("2", "frother", "frother-p", 1, false, "/pages/other"),
+            theme_line("3", "otg", "otg-p", 1, false, "/pages/other"),
+        ]
+        .to_vec();
+        let one_time = [vec![theme_line("1", "nektar-sub", "nektar", 1, false, SK_PAGE)], gifts.to_vec()].concat();
+        let no_anchor = gifts.to_vec();
+        for lines in [wrong_page, one_time, no_anchor] {
+            assert!(discounted_units(&lines, &theme_gift_config()).is_empty());
+        }
+    }
+
+    #[test]
+    fn untagged_gift_units_are_capped_at_the_reward_quantity() {
+        let lines = [anchor(), theme_line("2", "frother", "frother-p", 2, false, SK_PAGE)];
+        assert_eq!(discounted_units(&lines, &theme_gift_config()), vec![("2".to_string(), 1)]);
+    }
+
+    #[test]
+    fn untagged_lines_never_take_a_gift_tagged_for_another_offer_or_reward() {
+        let other_offer = tagged_line("2", "frother", "frother-p", "offer-other", "reward-frother", 1);
+        let other_reward = tagged_line("3", "otg", "otg-p", "offer-sk", "reward-frother", 1);
+        let lines = [anchor(), other_offer, other_reward];
+        assert!(discounted_units(&lines, &theme_gift_config()).is_empty());
+    }
+
+    #[test]
+    fn our_tagged_gift_line_has_priority_over_an_untagged_one() {
+        let lines = [
+            anchor(),
+            theme_line("2", "frother", "frother-p", 1, false, SK_PAGE),
+            tagged_line("3", "frother", "frother-p", "offer-sk", "reward-frother", 1),
+        ];
+        assert_eq!(discounted_units(&lines, &theme_gift_config()), vec![("3".to_string(), 1)]);
+    }
+
+    #[test]
+    fn the_anchor_unit_is_never_consumed_as_its_own_gift() {
+        let config = theme_gift_config().replace(
+            "\"targetVariantIds\":[\"gid://shopify/ProductVariant/otg\"]",
+            "\"targetVariantIds\":[\"gid://shopify/ProductVariant/nektar-sub\"]",
+        );
+        let alone = [anchor()];
+        assert!(discounted_units(&alone, &config).is_empty());
+        let two = [theme_line("1", "nektar-sub", "nektar", 2, true, SK_PAGE)];
+        assert_eq!(discounted_units(&two, &config), vec![("1".to_string(), 1)]);
     }
 }
