@@ -11,6 +11,8 @@ mod delivery_discount_logic;
 #[path = "../../discount-function/src/page_match.rs"]
 #[allow(dead_code)]
 mod page_match;
+#[path = "../../discount-function/src/usage.rs"]
+mod usage;
 
 use shopify_function::typegen;
 

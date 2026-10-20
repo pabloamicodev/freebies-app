@@ -11,6 +11,8 @@ mod config;
 mod discount_logic;
 #[path = "../../discount-function/src/page_match.rs"]
 mod page_match;
+#[path = "../../discount-function/src/usage.rs"]
+mod usage;
 #[cfg(test)]
 #[path = "../../discount-function/src/parity_tests.rs"]
 mod parity_tests;

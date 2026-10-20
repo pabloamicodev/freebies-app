@@ -5,7 +5,6 @@ query Input(
   $customerTags: [String!]! = []
 ) {
   discount {
-    discountClasses
     metafield(namespace: "$app:promo_engine", key: "function_config") {
       value
     }
@@ -24,23 +23,21 @@ query Input(
         amountSpent {
           amount
         }
+        usage: metafield(namespace: "$app:promo_engine", key: "usage") {
+          value
+        }
       }
     }
     lines {
       id
       quantity
       cost {
-        amountPerQuantity {
-          amount
-        }
         subtotalAmount {
           amount
         }
       }
       sellingPlanAllocation {
-        sellingPlan {
-          id
-        }
+        __typename
       }
       merchandise {
         __typename

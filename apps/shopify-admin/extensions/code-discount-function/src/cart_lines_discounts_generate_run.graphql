@@ -1,7 +1,6 @@
 # Same shape as ../discount-function minus the three custom cart attribute slots, to make room for enteredDiscountCodes under the complexity cap of 30.
 query Input($customerTags: [String!]! = []) {
   discount {
-    discountClasses
     metafield(namespace: "$app:promo_engine", key: "function_config") {
       value
     }
@@ -20,23 +19,21 @@ query Input($customerTags: [String!]! = []) {
         amountSpent {
           amount
         }
+        usage: metafield(namespace: "$app:promo_engine", key: "usage") {
+          value
+        }
       }
     }
     lines {
       id
       quantity
       cost {
-        amountPerQuantity {
-          amount
-        }
         subtotalAmount {
           amount
         }
       }
       sellingPlanAllocation {
-        sellingPlan {
-          id
-        }
+        __typename
       }
       merchandise {
         __typename

@@ -50,7 +50,6 @@ fn line_json(line: &Value, currency: &str) -> Value {
         "id": line["id"],
         "quantity": quantity,
         "cost": {
-            "amountPerQuantity": { "amount": format!("{unit_price:.2}"), "currencyCode": currency },
             "subtotalAmount": { "amount": subtotal, "currencyCode": currency }
         },
         "merchandise": {
@@ -99,7 +98,6 @@ fn function_input(fixture: &Value) -> Value {
         .collect();
     json!({
         "discount": {
-            "discountClasses": ["PRODUCT", "ORDER"],
             "metafield": { "value": attributable_config(&fixture["config"]).to_string() }
         },
         "enteredDiscountCodes": entered,

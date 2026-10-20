@@ -14,6 +14,15 @@ fn offer(id: &str, hashes: &[&str], threshold_cents: i64) -> String {
 }
 
 fn run_with(offers: &[String], entered: &[&str], subtotal: &str) -> CartLinesDiscountsGenerateRunResult {
+    run_with_customer(offers, entered, subtotal, serde_json::Value::Null)
+}
+
+fn run_with_customer(
+    offers: &[String],
+    entered: &[&str],
+    subtotal: &str,
+    buyer_identity: serde_json::Value,
+) -> CartLinesDiscountsGenerateRunResult {
     let config = format!(r#"{{"offers":[{}]}}"#, offers.join(","));
     let entered: Vec<_> = entered
         .iter()
@@ -21,15 +30,14 @@ fn run_with(offers: &[String], entered: &[&str], subtotal: &str) -> CartLinesDis
         .collect();
     let payload = serde_json::json!({
         "discount": {
-            "discountClasses": ["PRODUCT", "ORDER"],
             "metafield": { "value": config }
         },
         "enteredDiscountCodes": entered,
         "cart": {
+            "buyerIdentity": buyer_identity,
             "lines": [{
                 "id": "gid://shopify/CartLine/1", "quantity": 1,
                 "cost": {
-                    "amountPerQuantity": { "amount": subtotal, "currencyCode": "USD" },
                     "subtotalAmount": { "amount": subtotal, "currencyCode": "USD" }
                 },
                 "merchandise": {
@@ -182,7 +190,6 @@ fn run_amazon_cart(entered: &[&str], utm_value: &str) -> CartLinesDiscountsGener
         serde_json::json!({
             "id": format!("gid://shopify/CartLine/{index}"), "quantity": 1,
             "cost": {
-                "amountPerQuantity": { "amount": price, "currencyCode": "USD" },
                 "subtotalAmount": { "amount": price, "currencyCode": "USD" }
             },
             "merchandise": {
@@ -195,7 +202,7 @@ fn run_amazon_cart(entered: &[&str], utm_value: &str) -> CartLinesDiscountsGener
         })
     };
     let payload = serde_json::json!({
-        "discount": { "discountClasses": ["PRODUCT", "ORDER"], "metafield": { "value": config } },
+        "discount": { "metafield": { "value": config } },
         "enteredDiscountCodes": entered,
         "cart": {
             "lines": [line(1, "40.00", "/pages/prime?utm_source=amazon"), line(2, "60.00", "/collections/all")],
@@ -245,4 +252,29 @@ fn code_without_a_utm_match_is_not_accepted_and_discounts_nothing() {
 fn matching_utm_without_the_code_discounts_nothing() {
     let result = run_amazon_cart(&[], "amazon");
     assert!(result.operations.is_empty());
+}
+
+fn customer_with_usage(raw: &str) -> serde_json::Value {
+    serde_json::json!({ "customer": {
+        "numberOfOrders": 0, "hasTags": [], "amountSpent": { "amount": "0.00" }, "usage": { "value": raw }
+    } })
+}
+
+#[test]
+fn an_exhausted_code_is_not_accepted_and_discounts_nothing() {
+    let limited = offer("o1", &["9e35947c8d25"], 0).replace(r#""id":"o1","#, r#""id":"o1","mpu":1,"#);
+    let run_used = |used: i64| {
+        let usage = format!(r#"{{"v":1,"u":{{"o1":{used}}}}}"#);
+        run_with_customer(std::slice::from_ref(&limited), &["SUMMER10"], "50.00", customer_with_usage(&usage))
+    };
+    let fresh = run_used(0);
+    assert_eq!(accepted(&fresh), vec!["SUMMER10"]);
+    assert!(has_discount(&fresh));
+    let exhausted = run_used(1);
+    assert!(accepted(&exhausted).is_empty());
+    assert!(!has_discount(&exhausted));
+    // A guest has no prior uses, so the code works; with require-identified it does not.
+    assert!(has_discount(&run_with(std::slice::from_ref(&limited), &["SUMMER10"], "50.00")));
+    let identified = limited.replace(r#""mpu":1,"#, r#""ri":true,"#);
+    assert!(run_with(std::slice::from_ref(&identified), &["SUMMER10"], "50.00").operations.is_empty());
 }

@@ -8,6 +8,13 @@ query Input {
     }
   }
   cart {
+    buyerIdentity {
+      customer {
+        usage: metafield(namespace: "$app:promo_engine", key: "usage") {
+          value
+        }
+      }
+    }
     cost {
       subtotalAmount {
         amount
