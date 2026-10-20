@@ -29,8 +29,10 @@ vi.mock("./offer-publish-flow.server.js", () => ({
   publishShopConfig,
   republishIfActive,
   validateOffersPublishable: async () => ({ ok: true }),
+  validateActivation: async () => ({ ok: true }),
 }));
-vi.mock("./audit-log.server.js", () => ({ insertAuditLog: async () => undefined }));
+const insertAuditLog = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("./audit-log.server.js", () => ({ insertAuditLog }));
 
 const detail = await import("../routes/app.offers.$id._index.js");
 const list = await import("../routes/app.offers._index.js");
@@ -102,6 +104,32 @@ describe("activation honours the schedule", () => {
     }
     expect((await row(future)).status).toBe("scheduled");
     expect((await row(ended)).status).toBe("expired");
+  });
+
+  it("list toggle_status trusts the stored status, not the posted one, and audits the change", async () => {
+    const id = await seedOffer(db, shopId, { status: "active" });
+    insertAuditLog.mockClear();
+
+    await run(list.action, post("/app/offers", { intent: "toggle_status", offerId: id, currentStatus: "paused" }));
+
+    expect((await row(id)).status).toBe("paused");
+    expect(insertAuditLog).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        entityId: id,
+        action: "toggle_status",
+        before: { status: "active" },
+        after: { status: "paused" },
+      }),
+    );
+  });
+
+  it("list toggle_status never turns a scheduled offer live early, whatever the form says", async () => {
+    const id = await seedOffer(db, shopId, { status: "scheduled", startsAt: days(3) });
+
+    await run(list.action, post("/app/offers", { intent: "toggle_status", offerId: id, currentStatus: "paused" }));
+
+    expect((await row(id)).status).toBe("scheduled");
   });
 
   it("list bulk_activate sets each offer by its own dates", async () => {

@@ -28,6 +28,7 @@ function dependencies(rows: DueOffer[]): OfferScheduleDependencies {
     rollbackTransitions: vi.fn().mockResolvedValue(undefined),
     validateOffers: vi.fn().mockResolvedValue({ ok: true }),
     publishShop: vi.fn().mockResolvedValue(null),
+    recordEvent: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -71,6 +72,34 @@ describe("offer scheduler", () => {
     ], now);
   });
 
+  it("activates the valid offers and audits the blocked one instead of dropping the shop's batch", async () => {
+    const deps = dependencies([due(), due({ id: "offer-bad" }), due({ id: "offer-3" })]);
+    vi.mocked(deps.validateOffers).mockImplementation(async (_shopId, ids) =>
+      ids.includes("offer-bad") ? { ok: false, error: "no reward", scope: "offer" } : { ok: true },
+    );
+
+    const result = await executeOfferSchedule(deps, now);
+
+    expect(result.activated).toBe(2);
+    expect(result.failures).toEqual([expect.objectContaining({ stage: "validation", error: "no reward" })]);
+    expect(deps.applyTransitions).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: "offer-1" }), expect.objectContaining({ id: "offer-3" })],
+      now,
+    );
+    expect(deps.recordEvent).toHaveBeenCalledTimes(1);
+    expect(deps.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ offerId: "offer-bad", action: "schedule_blocked", error: "no reward" }),
+    );
+  });
+
+  it("validates each offer on top of the ones already accepted so shop-wide limits hold", async () => {
+    const deps = dependencies([due(), due({ id: "offer-2" })]);
+
+    await executeOfferSchedule(deps, now);
+
+    expect(vi.mocked(deps.validateOffers).mock.calls.map(([, ids]) => ids)).toEqual([["offer-1"], ["offer-1", "offer-2"]]);
+  });
+
   it("rolls back database state and republishes the previous config after publish failure", async () => {
     const deps = dependencies([due()]);
     vi.mocked(deps.publishShop).mockResolvedValueOnce("Shopify unavailable").mockResolvedValueOnce(null);
@@ -81,6 +110,9 @@ describe("offer scheduler", () => {
     expect(result.failures).toEqual([expect.objectContaining({ stage: "publish", error: "Shopify unavailable" })]);
     expect(deps.rollbackTransitions).toHaveBeenCalledTimes(1);
     expect(deps.publishShop).toHaveBeenCalledTimes(2);
+    expect(deps.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ offerId: "offer-1", action: "schedule_rollback", error: "Shopify unavailable" }),
+    );
   });
 
   it("also rolls back when the publisher throws before returning an error", async () => {

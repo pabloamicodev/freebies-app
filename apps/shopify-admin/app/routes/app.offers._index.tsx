@@ -33,7 +33,7 @@ import { insertAuditLog } from "../lib/audit-log.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
 import {
   publishShopConfig as publishShopConfigToShopify,
-  validateOffersPublishable,
+  validateActivation,
 } from "../lib/offer-publish-flow.server.js";
 import { neutralizeCodeDiscountNode } from "../lib/sync/offer-publisher.server.js";
 import { offerRequiresCode } from "../lib/discount-codes.server.js";
@@ -258,7 +258,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       break;
     }
     case "bulk_activate": {
-      const validation = await validateOffersPublishable(db, shopId, offerIds);
+      const validation = await validateActivation(db, shopId, offerIds);
       if (!validation.ok) return { error: validation.error };
       const previous = await db
         .select({ id: offers.id, status: offers.status, startsAt: offers.startsAt, endsAt: offers.endsAt })
@@ -299,17 +299,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
     case "toggle_status": {
       const offerId = formData.get("offerId") as string;
-      const currentStatus = formData.get("currentStatus") as string;
+      // The posted form can be stale (another tab, the cron); the stored status is the truth.
+      const [current] = await db
+        .select({ status: offers.status, startsAt: offers.startsAt, endsAt: offers.endsAt })
+        .from(offers)
+        .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
+        .limit(1);
+      if (!current) return { error: "Offer not found" };
       let newStatus: OfferStatus = "paused";
-      if (currentStatus !== "active") {
-        const validation = await validateOffersPublishable(db, shopId, [offerId]);
+      if (current.status !== "active") {
+        const validation = await validateActivation(db, shopId, [offerId]);
         if (!validation.ok) return { error: validation.error };
-        const [dates] = await db
-          .select({ startsAt: offers.startsAt, endsAt: offers.endsAt })
-          .from(offers)
-          .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
-          .limit(1);
-        newStatus = activationStatus(dates?.startsAt ?? null, dates?.endsAt ?? null);
+        newStatus = activationStatus(current.startsAt, current.endsAt);
       }
       await db
         .update(offers)
@@ -319,10 +320,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (publishError) {
         await db
           .update(offers)
-          .set({ status: currentStatus as OfferStatus, updatedAt: new Date() })
+          .set({ status: current.status, updatedAt: new Date() })
           .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
         return { error: publishError };
       }
+      void insertAuditLog(db, {
+        shopId,
+        entityType: "offer",
+        entityId: offerId,
+        action: "toggle_status",
+        before: { status: current.status },
+        after: { status: newStatus },
+        performedBy: session.shop,
+      });
       break;
     }
     case "archive": {
