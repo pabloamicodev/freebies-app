@@ -5,6 +5,7 @@ import * as Sentry from "@sentry/node";
 import { runCron } from "../lib/cron-run.server.js";
 import { runDiscountCodeSchedule } from "../lib/discount-code-schedule.server.js";
 import { refreshStaleShopTimezones } from "../lib/shop-timezone-refresh.server.js";
+import { drainUsageSync } from "../lib/offer-usage.server.js";
 import { reconcileActiveShopDiscountNodes, runDiscountDriftRepair } from "../lib/discount-reconciliation.server.js";
 
 // Must be a literal (the Vercel preset parses it statically); cron-config.test.ts checks it equals CRON_JOBS.
@@ -44,6 +45,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // Last: after the publishes above, so a shop they just fixed is not reported as drifted.
     // runDiscountDriftRepair raises its own Sentry alerts (repaired / unresolved / failed).
     const drift = await runDiscountDriftRepair();
+    // Retries customers whose usage metafield push is still pending. Failures stay pending (and Sentry-reported), so they never fail the cron.
+    const usageSync = await drainUsageSync(getDb()).catch((error) => {
+      Sentry.captureException(error, { tags: { cron: "offers", stage: "usage-sync" } });
+      return { synced: 0, failed: 0, blockedShops: 0 };
+    });
     const hasFailures =
       reconciliation.failures.length > 0 ||
       result.failures.length > 0 ||
@@ -52,6 +58,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       drift.failures.length > 0;
     // These are captureMessage, not thrown exceptions, so runCron's check-in flush is
     // what gets them out before Vercel freezes the function.
-    return { body: { ok: !hasFailures, timezones, reconciliation, codeSchedule, drift, ...result }, status: hasFailures ? 207 : 200 };
+    return { body: { ok: !hasFailures, timezones, reconciliation, codeSchedule, drift, usageSync, ...result }, status: hasFailures ? 207 : 200 };
   });
 }

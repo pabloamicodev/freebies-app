@@ -2,6 +2,9 @@ import { offers, type Db } from "@promo/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { reconcileOrderAttribution } from "../sync/analytics-reconcile.server.js";
 import { dispatchIntegrationEvents } from "../integration-dispatcher.server.js";
+import { recordOfferUsages, syncCustomerUsageMetafield, type PushUsage } from "../offer-usage.server.js";
+import * as Sentry from "@sentry/node";
+import { waitUntil } from "@vercel/functions";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -20,8 +23,17 @@ export interface OrderWebhookPayload {
     variant_id: number;
     product_id: number;
     properties: Array<{ name: string; value: string }>;
+    discount_allocations?: Array<{ amount: string }>;
   }>;
   note_attributes: Array<{ name: string; value: string }>;
+  discount_applications?: Array<{ type: string; title?: string | null; code?: string | null }>;
+  discount_codes?: Array<{ code?: string | null }>;
+}
+
+export interface OrderPaidDeps {
+  /** Runs the customer metafield push after the webhook has answered. */
+  defer?: (work: Promise<void>) => void;
+  push?: PushUsage;
 }
 
 export async function handleOrderPaid(
@@ -29,8 +41,24 @@ export async function handleOrderPaid(
   shopId: string | null,
   shop: string,
   order: OrderWebhookPayload,
+  deps: OrderPaidDeps = {},
 ): Promise<void> {
   if (!shopId) return;
+  // The durable fact (one row per order and offer) is written first and is cheap. The metafield push
+  // (an Admin API call) runs after the response; if it is lost, the customer stays pending and the
+  // offers cron retries it.
+  const usage = await recordOfferUsages(db, shopId, order);
+  if (usage && usage.inserted > 0) {
+    const defer = deps.defer ?? ((work: Promise<void>) => waitUntil(work));
+    defer(
+      syncCustomerUsageMetafield(db, shopId, usage.customerGid, deps.push).then(
+        () => undefined,
+        (err) => {
+          Sentry.captureException(err, { tags: { shopId, context: "offer-usage-sync" } });
+        },
+      ),
+    );
+  }
   // Offer attribution comes from LINE ITEM properties — the runtime tags each
   // gift/bundle/upsell line with `_promo_engine_offer_id` when it adds it to
   // the cart. note_attributes (cart-level) are never written by anything and

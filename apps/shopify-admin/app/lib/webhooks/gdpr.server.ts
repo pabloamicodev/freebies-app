@@ -4,6 +4,8 @@ import {
   cartMutationLogs,
   discountCodeRedemptions,
   gdprExports,
+  offerCustomerUsages,
+  offerUsageSync,
   shops,
   webhookDeliveries,
   type Db,
@@ -202,6 +204,12 @@ export async function handleCustomersRedact(
     await tx
       .delete(gdprExports)
       .where(and(eq(gdprExports.shopId, shopId), inArray(gdprExports.customerId, customerIds)));
+    await tx
+      .delete(offerCustomerUsages)
+      .where(and(eq(offerCustomerUsages.shopId, shopId), inArray(offerCustomerUsages.customerGid, customerIds)));
+    await tx
+      .delete(offerUsageSync)
+      .where(and(eq(offerUsageSync.shopId, shopId), inArray(offerUsageSync.customerGid, customerIds)));
     await tx
       .update(discountCodeRedemptions)
       .set({ customerId: null })
