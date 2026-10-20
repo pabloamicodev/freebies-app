@@ -155,6 +155,13 @@
       "when": 1791227233702,
       "tag": "0021_offer_code_redemption_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1791227233703,
+      "tag": "0022_offer_can_stack_with_gift_offers",
+      "breakpoints": true
     }
   ]
 }

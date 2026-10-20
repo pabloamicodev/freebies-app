@@ -1,0 +1,1 @@
+ALTER TABLE "offer_combination_policies" ADD COLUMN "can_stack_with_gift_offers" boolean DEFAULT true NOT NULL;
