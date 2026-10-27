@@ -36,7 +36,7 @@ import {
   validateActivation,
 } from "../lib/offer-publish-flow.server.js";
 import { neutralizeCodeDiscountNode } from "../lib/sync/offer-publisher.server.js";
-import { offerRequiresCode } from "../lib/discount-codes.server.js";
+import { duplicateOffer } from "../lib/offer-duplicate.server.js";
 import * as Sentry from "@sentry/node";
 import type { OfferCreateModalType } from "../components/offers/OfferCreateModalFlow.js";
 import { SUBSCRIPTION_OFFER_TEMPLATES } from "../lib/subscription-offer-templates.js";
@@ -359,35 +359,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     case "duplicate": {
       const offerId = formData.get("offerId") as string;
       if (!offerId) return { error: "Missing offerId" };
-      const [source] = await db
-        .select()
-        .from(offers)
-        .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
-        .limit(1);
-      if (!source) return { error: "Offer not found" };
-      const [newOffer] = await db
-        .insert(offers)
-        .values({
-          ...source,
-          id: undefined as unknown as string,
-          internalName: `${source.internalName}-copy`,
-          status: "draft",
-          compiledConfig: null,
-          archivedAt: null,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          // A copy must not inherit the source's checkout code or Shopify
-          // discount node id — see app.offers.$id._index.tsx's duplicate
-          // action for why (1:1 with the source, unique-index enforced,
-          // and sharing a discount node between two offers is unsafe).
-          requiredDiscountCode: null,
-          codeDiscountId: null,
-          // Keeps a copy of a code offer gated (and inert) until it has codes of its own.
-          requiresCode: await offerRequiresCode(db, shopId, source),
-        })
-        .returning({ id: offers.id });
-      if (newOffer) return redirect(`/app/offers/${newOffer.id}`);
-      break;
+      const newId = await duplicateOffer(db, shopId, offerId);
+      if (!newId) return { error: "Offer not found" };
+      return redirect(`/app/offers/${newId}`);
     }
   }
 
