@@ -1080,6 +1080,21 @@ function ConditionCard({
         {conditionType === "page_types" && (
           <PageTypesConditionEditor conditionId={conditionId} val={val} update={update} save={save} isCodePromo={isCodePromo} />
         )}
+
+        {/* ── Template / section shown / test group ──────────── */}
+        {(conditionType === "template" || conditionType === "section_shown" || conditionType === "experiment") && (() => {
+          const Sub = SUB_FORMS[conditionType];
+          return (
+            <Sub
+              value={val}
+              onChange={(next) => {
+                setVal(next);
+                save(next);
+              }}
+              isCodePromo={isCodePromo}
+            />
+          );
+        })()}
       </div>
     </div>
   );
@@ -1218,6 +1233,10 @@ function conditionSummary(conditionType: string, value: ConditionValue, currency
       if (patterns.length === 0) return ["No URL patterns configured"];
       return [`URL ${label}: ${patterns.slice(0, 2).join(", ")}${patterns.length > 2 ? ` +${patterns.length - 2} more` : ""}`];
     }
+    case "template":
+    case "section_shown":
+    case "experiment":
+      return [sharedConditionSummary(conditionType, v, operator)];
     case "page_types": {
       const types = readPageTypes(v.pageTypes);
       return [types.length ? `Added from: ${types.map(pageTypeLabel).join(", ")}` : "No store pages selected"];

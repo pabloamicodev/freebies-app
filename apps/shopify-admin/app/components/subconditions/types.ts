@@ -14,7 +14,10 @@ export type SubconditionId =
   | "custom_attribute"
   | "quantity_limit"
   | "utm_parameters"
-  | "page_types";
+  | "page_types"
+  | "template"
+  | "section_shown"
+  | "experiment";
 
 /** The stored condition types each picker entry can produce (see normalizeOfferSubconditions). */
 export const SUBCONDITION_CONDITION_TYPES: Record<SubconditionId, ConditionType[]> = {
@@ -34,7 +37,13 @@ export const SUBCONDITION_CONDITION_TYPES: Record<SubconditionId, ConditionType[
   quantity_limit: ["cart_quantity", "specific_product"],
   utm_parameters: ["utm_parameters"],
   page_types: ["page_types"],
+  template: ["template"],
+  section_shown: ["section_shown"],
+  experiment: ["experiment"],
 };
+
+/** The conditions that only read page stamps; the only ones a shipping offer can use. */
+export const PAGE_SUBCONDITION_IDS: SubconditionId[] = ["link", "utm_parameters", "page_types", "template", "section_shown", "experiment"];
 
 /** Entries checkout can actually enforce for at least one of their modes; the rest can never publish on a code offer. */
 export function isFunctionEnforcedSubcondition(id: SubconditionId): boolean {
@@ -116,6 +125,24 @@ const ALL_SUBCONDITIONS: SubconditionDef[] = [
     id: "page_types",
     name: "Store pages",
     desc: "Only counts products added to the cart from certain kinds of pages, like product pages or collections.",
+    plus: false,
+  },
+  {
+    id: "template",
+    name: "Template",
+    desc: "Only for visitors who saw one of the selected theme templates, such as a landing page or a ?view= alternate.",
+    plus: false,
+  },
+  {
+    id: "section_shown",
+    name: "Section is shown",
+    desc: "Only for visitors who saw one of the selected theme sections displayed, such as one side of an A/B swap.",
+    plus: false,
+  },
+  {
+    id: "experiment",
+    name: "Test group",
+    desc: "Only for visitors placed in a selected group of an A/B test.",
     plus: false,
   },
 ];
