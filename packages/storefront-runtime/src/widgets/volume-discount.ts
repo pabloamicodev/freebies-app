@@ -7,6 +7,7 @@
  */
 
 import { on, PromoEvents } from "../event-bus.js";
+import { encodeContext } from "../eligibility-context.js";
 import { escapeHtml } from "../html.js";
 import { formatMoney } from "../format.js";
 import { t } from "../i18n.js";
@@ -52,6 +53,8 @@ class PromoVolumeDiscount extends HTMLElement {
   private variantId: string = "";
   private currency: string = "USD";
   private unsubscribeVariant: (() => void) | null = null;
+  private unsubscribeEvaluation: (() => void) | null = null;
+  private loadedContext = "";
   private abortController: AbortController | null = null;
 
   connectedCallback() {
@@ -71,9 +74,15 @@ class PromoVolumeDiscount extends HTMLElement {
         void this.loadAndRender();
       },
     );
+
+    // The tiers were judged with the stamp context of the load; a different one (experiment assigned, consent) needs a new verdict.
+    this.unsubscribeEvaluation = on(PromoEvents.EvaluationCompleted, () => {
+      if (encodeContext() !== this.loadedContext) void this.loadAndRender();
+    });
   }
 
   disconnectedCallback() {
+    this.unsubscribeEvaluation?.();
     this.unsubscribeVariant?.();
     this.abortController?.abort();
   }
@@ -87,10 +96,11 @@ class PromoVolumeDiscount extends HTMLElement {
     this.abortController?.abort();
     const controller = new AbortController();
     this.abortController = controller;
+    const ctx = (this.loadedContext = encodeContext());
 
     try {
       const response = await fetch(
-        `/apps/promo-engine/product-customizations?offer_id=${encodeURIComponent(this.offerId)}&variant_id=${encodeURIComponent(this.variantId)}`,
+        `/apps/promo-engine/product-customizations?offer_id=${encodeURIComponent(this.offerId)}&variant_id=${encodeURIComponent(this.variantId)}&ctx=${ctx}`,
         { headers: { Accept: "application/json" }, signal: controller.signal },
       );
       if (controller.signal.aborted) return;

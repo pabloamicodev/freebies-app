@@ -4,9 +4,10 @@ import { jsx, jsxs } from "preact/jsx-runtime";
 import { AjaxCartAdapter } from "./cart-adapter.js";
 import { formatMoney } from "./format.js";
 import { t } from "./i18n.js";
-import { emit, PromoEvents, publishAnalytics } from "./event-bus.js";
+import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
+import { canPromise } from "./eligibility-context.js";
 
-export const preactShare = { h, render, Fragment, useState, useEffect, useMemo, useRef, jsx, jsxs, AjaxCartAdapter, formatMoney, t, emit, PromoEvents, publishAnalytics };
+export const preactShare = { h, render, Fragment, useState, useEffect, useMemo, useRef, jsx, jsxs, AjaxCartAdapter, formatMoney, t, emit, on, PromoEvents, publishAnalytics, canPromise };
 export type PreactShare = typeof preactShare;
 
 declare global {

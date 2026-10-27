@@ -5,4 +5,4 @@ import type { PreactShare } from "./preact-share.js";
 
 const p = (window as unknown as { __pePreact: PreactShare }).__pePreact;
 
-export const { h, render, Fragment, useState, useEffect, useMemo, useRef, jsx, jsxs, AjaxCartAdapter, formatMoney, t, emit, PromoEvents, publishAnalytics } = p;
+export const { h, render, Fragment, useState, useEffect, useMemo, useRef, jsx, jsxs, AjaxCartAdapter, formatMoney, t, emit, on, PromoEvents, publishAnalytics, canPromise } = p;

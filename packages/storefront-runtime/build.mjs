@@ -3,7 +3,7 @@ import * as esbuild from "esbuild";
 // The blocks chunk reuses the main bundle's cart adapter, formatter, i18n and event bus (published on window.__pePreact).
 const shareHostModules = (shim) => ({
   name: "share-host-modules",
-  setup: (build) => build.onResolve({ filter: /^\.\.\/(cart-adapter|format|i18n|event-bus)\.js$/ }, () => ({ path: shim })),
+  setup: (build) => build.onResolve({ filter: /^\.\.\/(cart-adapter|format|i18n|event-bus|eligibility-context)\.js$/ }, () => ({ path: shim })),
 });
 
 const options = { bundle: true, platform: "browser", format: "iife", target: ["es2019", "safari13"] };
