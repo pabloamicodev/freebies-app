@@ -1019,7 +1019,7 @@ export function ExperimentForm({ value, onChange, isCodePromo = false }: SubForm
         experimentId={experimentId}
         experimentName={experimentName}
         variantKeys={variantKeys}
-        onChange={(next) => emit(next)}
+        onChange={(next) => emit({ ...next })}
       />
       <div className="b-help">Or enter the experiment manually:</div>
       <div>
