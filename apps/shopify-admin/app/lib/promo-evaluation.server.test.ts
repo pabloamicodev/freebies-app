@@ -266,6 +266,30 @@ describe("collectSpecificLinkParams", () => {
   });
 });
 
+describe("collectStampTargets", () => {
+  it("returns the templates, sections and experiments of enabled conditions, and nothing when no offer uses them", async () => {
+    const { collectStampTargets } = await import("./promo-evaluation.server.js");
+    const cond = (conditionType: string, value: unknown, isEnabled = true) => ({ conditionType, value, isEnabled });
+    expect(collectStampTargets([{ conditions: [cond("page_url", { patterns: ["/x"] })] }] as never)).toEqual({ s: [], t: [] });
+    expect(collectStampTargets([])).toEqual({ s: [], t: [] });
+    const offers = [
+      {
+        conditions: [
+          cond("template", { templates: ["page.landing-nektar", "product"] }),
+          cond("template", { templates: ["off"] }, false),
+          cond("experiment", { experimentId: "abcd1234", variantKeys: ["a", "b"] }),
+        ],
+      },
+      { conditions: [cond("section_shown", { sections: [{ template: "page.landing-nektar", key: "hero_abc" }] })] },
+    ];
+    expect(collectStampTargets(offers as never)).toEqual({
+      s: ["page.landing-nektar/hero_abc"],
+      t: ["page.landing-nektar", "product"],
+      e: ["abcd1234"],
+    });
+  });
+});
+
 describe("ENABLE_STOREFRONT_RUNTIME kill switch", () => {
   it("answers with an inert result without touching rate limits or offers", async () => {
     process.env["ENABLE_STOREFRONT_RUNTIME"] = "false";
@@ -274,7 +298,7 @@ describe("ENABLE_STOREFRONT_RUNTIME kill switch", () => {
       vi.mocked(getOfferDefinitions).mockClear();
       const response = await handleEvaluationRequest(makeRequest("cart-tok-1"), shop, null);
       expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({ cartActions: [], giftSlider: null, qualifiedOffers: [], specificLinkParams: [] });
+      expect(await response.json()).toMatchObject({ cartActions: [], giftSlider: null, qualifiedOffers: [], specificLinkParams: [], stampTargets: { s: [], t: [] } });
       expect(checkRateLimit).not.toHaveBeenCalled();
       expect(getOfferDefinitions).not.toHaveBeenCalled();
     } finally {

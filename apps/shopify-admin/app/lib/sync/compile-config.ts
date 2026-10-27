@@ -59,7 +59,7 @@ interface CompiledPageConditions {
 }
 
 /**
- * Compile one page condition (page_url, specific_link, utm_parameters or page_types).
+ * Compile one page condition (page_url, specific_link, utm_parameters, page_types, template, section_shown or experiment).
  * Query names/values are stored raw: the Function percent-decodes the line URL and
  * compares `utm_*` ASCII case-insensitively (decision D3), so nothing is encoded here.
  * Returns null for any other condition type.
@@ -147,6 +147,34 @@ export function compilePageCondition(
               : [],
             matchMode: "page_type",
             caseSensitive: false,
+          },
+        ],
+        ...flags(value),
+      };
+    }
+    case "template":
+    case "section_shown":
+    case "experiment": {
+      const { value } = condition;
+      const list = <T>(items: T[] | undefined): T[] => (Array.isArray(items) ? items : []);
+      const refs =
+        condition.conditionType === "template"
+          ? list(condition.value.templates)
+          : condition.conditionType === "section_shown"
+            ? list(condition.value.sections).map((section) => `${section.template}/${section.key}`)
+            : list(condition.value.variantKeys).map((key) => `${condition.value.experimentId}:${key}`);
+      return {
+        conditions: [
+          {
+            patterns: refs.map((ref) => ref.toLowerCase()),
+            matchMode:
+              condition.conditionType === "template"
+                ? "template"
+                : condition.conditionType === "section_shown"
+                  ? "section"
+                  : "experiment",
+            caseSensitive: false,
+            ...(value.scope === "page" ? { source: "page" as const } : {}),
           },
         ],
         ...flags(value),
@@ -285,12 +313,12 @@ export interface CompiledAttributeCondition {
 export interface CompiledPageUrlCondition {
   patterns: string[];
   /** "page_type": patterns are PageType names, matched against the classified path. */
-  matchMode: "exact" | "contains" | "starts_with" | "ends_with" | "page_type";
+  matchMode: "exact" | "contains" | "starts_with" | "ends_with" | "page_type" | "template" | "section" | "experiment";
   caseSensitive: boolean;
   paramName?: string;
   paramValue?: string;
   /** "landing": read the line's `_promo_landing_url` (session UTM landing) instead of `_promo_page_url`. */
-  source?: "landing";
+  source?: "landing" | "page";
 }
 
 export interface CompiledRequirement {
@@ -648,6 +676,9 @@ export function compileOfferConfig(
       case "page_url":
       case "utm_parameters":
       case "page_types":
+      case "template":
+      case "section_shown":
+      case "experiment":
         applyPageCondition(config, compilePageCondition(typedCondition, offer, options)!);
         break;
       case "one_use_per_customer":

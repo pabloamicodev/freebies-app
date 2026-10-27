@@ -69,6 +69,9 @@ describe("isConditionEnforcedByFunction", () => {
     "markets",
     "specific_link",
     "page_url",
+    "template",
+    "section_shown",
+    "experiment",
     "one_use_per_customer",
   ])("allows Function-enforced condition %s", (conditionType) => {
     expect(isConditionEnforcedByFunction(conditionType)).toBe(true);
@@ -184,6 +187,22 @@ describe("validateOffersPublishable — required discount code", () => {
     value: { amount: 100 },
     target: { deliveryGroupTypes: ["ONE_TIME_PURCHASE"] },
   };
+
+  it.each([
+    ["template", { templates: ["page.landing-nektar"] }],
+    ["section_shown", { sections: [{ template: "page.landing-nektar", key: "hero_abc" }] }],
+    ["experiment", { experimentId: "abcd1234", variantKeys: ["b"] }],
+  ])("publishes an offer, shipping included, with a %s condition", async (conditionType, value) => {
+    const condition = { id: "c1", offerId: "offer-1", scope: "main", conditionType, operator: "eq", value, sortOrder: 0, isEnabled: true };
+    for (const rewards of [[validGiftReward], [shippingReward]]) {
+      const db = fakeDb({
+        offerRows: [{ id: "offer-1", internalName: "Page", requiredDiscountCode: null }],
+        conditionRows: [condition],
+        rewardRows: rewards,
+      });
+      expect(await validateOffersPublishable(db, "shop-1", ["offer-1"])).toEqual({ ok: true });
+    }
+  });
 
   it("allows a shipping-only offer gated by a legacy required code (its node runs the delivery Function)", async () => {
     const db = fakeDb({

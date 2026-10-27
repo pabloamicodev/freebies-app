@@ -1085,6 +1085,55 @@ describe("product reward scope validation", () => {
   });
 });
 
+describe("template, section_shown and experiment page conditions", () => {
+  const value = {
+    template: { templates: ["Page.Landing-Nektar", "product"] },
+    section_shown: { sections: [{ template: "page.landing-nektar", key: "Hero_abc" }, { template: "index", key: "b" }] },
+    experiment: { experimentId: "abcd1234", variantKeys: ["a", "B"] },
+  };
+  const expected = {
+    template: { patterns: ["page.landing-nektar", "product"], matchMode: "template" },
+    section_shown: { patterns: ["page.landing-nektar/hero_abc", "index/b"], matchMode: "section" },
+    experiment: { patterns: ["abcd1234:a", "abcd1234:b"], matchMode: "experiment" },
+  };
+
+  it.each(["template", "section_shown", "experiment"] as const)("%s compiles to a stamp-mode entry, source:page only for page scope", (type) => {
+    const visit = compileOfferConfig(offer(), [condition(type, value[type])], [], null, 1);
+    expect(visit.pageUrlConditions).toEqual([{ ...expected[type], caseSensitive: false }]);
+    expect(visit.restrictToMatchedLines).toBeUndefined();
+    const page = compileOfferConfig(
+      offer(),
+      [condition(type, { ...value[type], scope: "page", onlyMatchedLines: true, rejectUnmatchedLines: true })],
+      [],
+      null,
+      1,
+    );
+    expect(page.pageUrlConditions).toEqual([{ ...expected[type], caseSensitive: false, source: "page" }]);
+    expect(page.restrictToMatchedLines).toBe(true);
+    expect(page.rejectUnmatchedLines).toBe(true);
+    const [shipping] = compileShippingOfferConfigs(offer(), [condition(type, { ...value[type], scope: "page" })], [shippingReward()]);
+    expect(shipping?.pageUrlConditions).toEqual([{ ...expected[type], caseSensitive: false, source: "page" }]);
+  });
+
+  it("existing page conditions still serialize byte-identically", () => {
+    const result = compileOfferConfig(
+      offer(),
+      [
+        condition("page_types", { pageTypes: ["product"], rejectUnmatchedLines: true }),
+        condition("page_url", { patterns: ["/pages/vip"], matchMode: "exact", caseSensitive: true, onlyMatchedLines: true }),
+        condition("utm_parameters", { utmSource: "fb", scope: "visit" }),
+        condition("specific_link", { requiredUrl: "/pages/vip", paramName: "gift", paramValue: "a" }),
+      ],
+      [],
+      null,
+      1,
+    );
+    expect(JSON.stringify([result.pageUrlConditions, result.restrictToMatchedLines, result.rejectUnmatchedLines])).toBe(
+      '[[{"patterns":["product"],"matchMode":"page_type","caseSensitive":false},{"patterns":["/pages/vip"],"matchMode":"exact","caseSensitive":true},{"patterns":[],"matchMode":"contains","caseSensitive":false,"paramName":"utm_source","paramValue":"fb","source":"landing"},{"patterns":["/pages/vip"],"matchMode":"contains","caseSensitive":false,"paramName":"gift","paramValue":"a"}],true,true]',
+    );
+  });
+});
+
 describe("shared page-condition compiler (offer and shipping)", () => {
   const conditions = [
     condition("page_types", { pageTypes: ["product"], rejectUnmatchedLines: true }),
