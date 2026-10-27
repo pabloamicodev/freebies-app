@@ -55,9 +55,9 @@ export type NormalizedCartLine = z.infer<typeof NormalizedCartLineSchema>;
 /** Line properties written by promo engine — used to identify and validate gift lines. */
 export const PromoLinePropertiesSchema = z.object({
   _promo_engine_line_type: z.enum(["gift", "bundle_component", "upsell"]),
-  _promo_engine_offer_id: z.string().uuid(),
+  _promo_engine_offer_id: z.guid(),
   _promo_engine_offer_version: z.string(),
-  _promo_engine_reward_id: z.string().uuid(),
+  _promo_engine_reward_id: z.guid(),
 });
 export type PromoLineProperties = z.infer<typeof PromoLinePropertiesSchema>;
 

@@ -54,7 +54,8 @@ export function evaluateCartValueMultiplier(
   if (condition.currencyOverrides?.[activeCurrency] !== undefined) {
     thresholdCents = condition.currencyOverrides[activeCurrency]!;
   } else if (
-    activeCurrency !== condition.currencyCode.toUpperCase() &&
+    // Saved conditions may lack currencyCode; their thresholds are in the shop currency.
+    activeCurrency !== (condition.currencyCode ?? currency.shopCurrencyCode).toUpperCase() &&
     currency.exchangeRate
   ) {
     thresholdCents = Math.ceil(condition.thresholdCents * currency.exchangeRate);
