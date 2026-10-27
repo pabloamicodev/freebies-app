@@ -47,6 +47,17 @@ describe("evaluateCartValue", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("treats a saved condition without currencyCode as the shop currency instead of throwing", () => {
+    const cart = makeCart([{ variantId: "v1", productId: "p1", priceCents: 5000, quantity: 1 }]);
+    const legacy = { thresholdCents: 8500, includeGiftValues: false } as unknown as Parameters<typeof evaluateCartValue>[1];
+    expect(evaluateCartValue(cart, legacy, currency).ok).toBe(false);
+    expect(evaluateCartValue(makeCart([{ variantId: "v1", productId: "p1", priceCents: 9000, quantity: 1 }]), legacy, currency).ok).toBe(true);
+    const cad = { activeCurrencyCode: "CAD", shopCurrencyCode: "USD", exchangeRate: 1.4 };
+    const inCad = makeCart([{ variantId: "v1", productId: "p1", priceCents: 11000, quantity: 1 }]);
+    expect(evaluateCartValue(inCad, legacy, cad).ok).toBe(false);
+    expect(evaluateCartValue(makeCart([{ variantId: "v1", productId: "p1", priceCents: 12000, quantity: 1 }]), legacy, cad).ok).toBe(true);
+  });
+
   it("fails when cart value is below threshold", () => {
     const cart = makeCart([{ variantId: "v1", productId: "p1", priceCents: 2000, quantity: 1 }]);
     const result = evaluateCartValue(cart, {
