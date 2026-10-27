@@ -198,7 +198,7 @@ export const AjaxCartAdapter = {
         body: JSON.stringify({
           id: line.key,
           quantity: line.quantity,
-          ...(line.properties ? { properties: withPromoMetadata(line.properties, line.stamp ? undefined : null, null) } : {}),
+          ...(line.properties ? { properties: withPromoMetadata(line.properties, line.stamp ? undefined : null, null, null) } : {}),
           ...sellingPlanField(line),
         }),
       }),

@@ -98,6 +98,10 @@ interface RuntimeConfig {
   cartItemCount?: number | null;
   /** Query-param names of the offers' specific-link conditions; stored with the line page URL (D4). */
   specificLinkParams?: string[];
+  /** Rendered template (`page.landing-nektar`, `customers/account`) for template and section stamps. */
+  template?: string;
+  /** Refs live offers condition on (`s` sections, `t` templates, `e` experiment ids); empty or absent = stamp nothing. */
+  stampTargets?: { s?: string[]; t?: string[]; e?: string[] } | null;
   /** Widget string overrides from the theme extension's locale files. */
   i18n?: Record<string, string>;
 }

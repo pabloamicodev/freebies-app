@@ -20,6 +20,8 @@
   assign pe_debounce = block.settings.cart_debounce_ms | default: 300
 -%}
 
+{%- capture pe_template -%}{% if template.directory %}{{ template.directory }}/{% endif %}{{ template.name }}{% if template.suffix %}.{{ template.suffix }}{% endif %}{%- endcapture -%}
+
 <script>
   window.__promoEngineConfig = {
     shopDomain: {{ shop.permanent_domain | json }},
@@ -33,6 +35,8 @@
     evalEndpoint: "/apps/promo-engine/evaluate",
     cartItemCount: {{ cart.item_count | json }},
     specificLinkParams: {{ app.metafields.promo_engine.specific_link_params.value | json }},
+    template: {{ pe_template | json }},
+    stampTargets: {{ app.metafields.promo_engine.stamp_targets.value | json }},
     i18n: {
       close: {{ 'widgets.close' | t | json }},
       giftOffer: {{ 'widgets.giftOffer' | t | json }},

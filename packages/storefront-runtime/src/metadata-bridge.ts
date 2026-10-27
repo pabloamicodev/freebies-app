@@ -1,3 +1,5 @@
+import { browserStampContext, installStampListeners } from "./stamp-context.js";
+
 const METADATA_PROPERTY = "_promo_engine_metadata";
 const LANDING_STORAGE_KEY = "promo_engine_utm_landing";
 
@@ -179,13 +181,14 @@ function browserLandingUrl(now = Date.now()): string | undefined {
 
 /**
  * Packs promo properties into the single `_promo_engine_metadata` field.
- * `sourcePageUrl`/`landingUrl`: undefined = current browser state, null = never stamp
+ * `sourcePageUrl`/`landingUrl`/`context` (template, sections, experiment): undefined = current browser state, null = never stamp
  * (updates and migrations of an existing line must not change which page it was added on).
  */
 export function withPromoMetadata(
   properties: LineProperties,
   sourcePageUrl: string | null | undefined = browserPageUrl(),
   landingUrl: string | null | undefined = browserLandingUrl(),
+  context: LineProperties | null | undefined = browserStampContext(),
 ): LineProperties {
   let enriched =
     sourcePageUrl && !properties["_promo_page_url"]
@@ -195,6 +198,9 @@ export function withPromoMetadata(
     enriched = { ...enriched, _promo_landing_url: landingUrl };
   }
   const metadata = existingMetadata(enriched[METADATA_PROPERTY]);
+  for (const [key, value] of Object.entries(context ?? {})) {
+    if (!enriched[key] && !metadata[key]) enriched = { ...enriched, [key]: value };
+  }
   for (const [key, value] of Object.entries(enriched)) {
     if (key !== METADATA_PROPERTY) metadata[key] = value;
   }
@@ -560,6 +566,7 @@ export function installPromoMetadataBridge(): void {
   state.__promoEngineMetadataBridgeInstalled = true;
   migrateLegacyLanding();
   recordUtmLanding();
+  installStampListeners();
 
   const nativeFetch = window.fetch.bind(window);
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
