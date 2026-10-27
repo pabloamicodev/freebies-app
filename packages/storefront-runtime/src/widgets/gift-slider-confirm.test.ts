@@ -59,9 +59,9 @@ initGiftSlider("session");
 
 describe("gift picker confirm", () => {
   it("closes after a pick even when the analytics hook throws, and cannot add a second gift", async () => {
-    (window as unknown as { Shopify: Record<string, unknown> }).Shopify.analytics = { publish: () => { throw new Error("pixel boom"); } };
     await open();
     expect(dialog()).not.toBeNull();
+    (window as unknown as { Shopify: Record<string, unknown> }).Shopify.analytics = { publish: () => { throw new Error("pixel boom"); } };
     const button = confirm();
     button.click();
     button.click();

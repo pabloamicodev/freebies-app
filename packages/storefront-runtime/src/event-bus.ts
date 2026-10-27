@@ -49,11 +49,12 @@ export function publishAnalytics(eventName: string, payload: Record<string, unkn
   // Customer Privacy API: skip when the shopper has declined analytics. If the API isn't
   // loaded we defer to Shopify, whose pixel pipeline (customer_privacy.analytics = true on
   // our pixel) only delivers custom events to pixels with consent.
-  // A throwing pixel/analytics hook must never break the widget that reported the event.
   try {
     if (window.Shopify?.customerPrivacy?.analyticsProcessingAllowed?.() === false) return;
-    window.Shopify?.analytics?.publish?.(eventName, payload);
   } catch {
     return;
+  }
+  if (typeof window.Shopify?.analytics?.publish === "function") {
+    window.Shopify.analytics.publish(eventName, payload);
   }
 }
