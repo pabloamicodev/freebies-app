@@ -12,7 +12,7 @@ let status = 1;
 try {
   write(config);
   status =
-    spawnSync("pnpm", ["--filter", "shopify-admin", "exec", "shopify", "app", "deploy", "--config", config], {
+    spawnSync("pnpm", ["--filter", "shopify-admin", "exec", "shopify", "app", "deploy", "--config", config, ...process.argv.slice(3)], {
       stdio: "inherit",
       shell: true,
     }).status ?? 1;
