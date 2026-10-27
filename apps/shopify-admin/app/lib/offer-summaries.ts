@@ -58,7 +58,7 @@ export function conditionSummary(conditionType: string, value: unknown, operator
         const ref = `${String(s["template"] ?? "?")}/${String(s["key"] ?? "?")}`;
         return typeof s["label"] === "string" && s["label"] ? s["label"] : ref;
       });
-      return stampSummary(`Section shown: ${names.join(", ") || "none selected"}`, v);
+      return stampSummary(`Section is shown: ${names.join(", ") || "none selected"}`, v);
     }
     case "experiment": {
       const keys = Array.isArray(v["variantKeys"]) ? (v["variantKeys"] as string[]) : [];

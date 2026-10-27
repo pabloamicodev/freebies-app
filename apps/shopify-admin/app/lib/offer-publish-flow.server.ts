@@ -630,7 +630,7 @@ export async function getPublishWarnings(
     ]);
     return [
       ...staleTemplates.map((ref) => `Template "${ref}" is not in your published theme.`),
-      ...staleSections.map((ref) => `Section "${ref}" is not in your published theme.`),
+      ...staleSections.map((ref) => `Section "${ref}" is not in your published theme. A section that is deleted and re-added gets a new ID, so reselect it.`),
       ...experimentWarnings,
     ];
   } catch {

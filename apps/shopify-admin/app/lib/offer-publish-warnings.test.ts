@@ -84,7 +84,7 @@ describe("getPublishWarnings", () => {
     ]);
     expect(await getPublishWarnings(db, shopId, id, auth)).toEqual([
       'Template "page.gone" is not in your published theme.',
-      'Section "page.landing/old" is not in your published theme.',
+      'Section "page.landing/old" is not in your published theme. A section that is deleted and re-added gets a new ID, so reselect it.',
     ]);
   });
 

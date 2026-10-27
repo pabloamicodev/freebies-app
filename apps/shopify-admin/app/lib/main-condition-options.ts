@@ -6,9 +6,9 @@ export const MAIN_CONDITION_OPTIONS = [
   { value: "specific_product", label: "Specific Product — must contain selected products" },
   { value: "page_url", label: "Page URL — restrict to specific storefront pages" },
   { value: "page_types", label: "Store pages — products added from home, collections, product pages…" },
-  { value: "template", label: "Template — products added from specific theme templates" },
-  { value: "section_shown", label: "Section shown — visitor saw a theme section" },
-  { value: "experiment", label: "Test group — visitor is in an experiment arm" },
+  { value: "template", label: "Template — visitor saw one of these templates" },
+  { value: "section_shown", label: "Section is shown — visitor saw one of these sections" },
+  { value: "experiment", label: "Test group — visitor is in one of these arms" },
 ] as const;
 
 /** Have no usable default, so their value is picked before the condition is created. */

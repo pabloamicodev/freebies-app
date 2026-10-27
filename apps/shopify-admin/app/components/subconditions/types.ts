@@ -130,19 +130,19 @@ const ALL_SUBCONDITIONS: SubconditionDef[] = [
   {
     id: "template",
     name: "Template",
-    desc: "Only for visitors who saw one of the selected theme templates, such as a landing page or a ?view= alternate.",
+    desc: "Only for visitors who saw one of the selected templates, including ?view= alternates.",
     plus: false,
   },
   {
     id: "section_shown",
     name: "Section is shown",
-    desc: "Only for visitors who saw one of the selected theme sections displayed, such as one side of an A/B swap.",
+    desc: "Only for visitors who saw one of the selected sections displayed, such as one side of an A/B swap.",
     plus: false,
   },
   {
     id: "experiment",
     name: "Test group",
-    desc: "Only for visitors placed in a selected group of an A/B test.",
+    desc: "Only for visitors in one of the selected arms of an A/B test. Needs Margin Labs Experiment Engine on this store.",
     plus: false,
   },
 ];

@@ -377,9 +377,9 @@ const MAIN_CONDITION_TYPES = [
   { label: "Pack of Products — every product in the pack must be present", value: "pack_of_products" },
   { label: "Page URL — restrict to specific storefront pages", value: "page_url" },
   { label: "Store pages — products added from home, collections, product pages…", value: "page_types" },
-  { label: "Template — only visitors who saw these theme templates", value: "template" },
-  { label: "Section is shown — only visitors who saw these theme sections", value: "section_shown" },
-  { label: "Test group — only visitors in these A/B test groups", value: "experiment" },
+  { label: "Template — visitor saw one of these templates", value: "template" },
+  { label: "Section is shown — visitor saw one of these sections", value: "section_shown" },
+  { label: "Test group — visitor is in one of these arms", value: "experiment" },
   { label: "Line attribute — approved legacy property", value: "line_attribute" },
   { label: "Cart attribute — approved legacy property", value: "cart_attribute" },
 ];

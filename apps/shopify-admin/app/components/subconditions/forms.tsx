@@ -908,8 +908,8 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
 
 // ─── Theme-based page conditions: template / section shown / test group ───────
 export const PAGE_STAMP_SCOPE_OPTIONS = [
-  { value: "visit", label: "Seen during the visit (24 h)", help: "Counts if the visitor saw it on any page in the last 24 hours." },
-  { value: "page", label: "On the page where the item was added", help: "Stricter: only the page the item was added from counts." },
+  { value: "visit", label: "Seen during the visit (24 h)", help: "Counts if the visitor saw it on any page during the last 24 hours." },
+  { value: "page", label: "On the page where the item was added", help: "Stricter: counts only if the condition was true on the page where the item was added, not earlier in the visit." },
 ] as const;
 
 function PageStampScopeChoice({ name, value, onChange }: { name: string; value: "visit" | "page"; onChange: (next: "visit" | "page") => void }) {
@@ -979,7 +979,7 @@ export function TemplateForm({ value, onChange, isCodePromo = false }: SubFormPr
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <ThemeTargetPicker kind="template" idPrefix={idPrefix} value={templates} onChange={(next) => emit({ templates: next })} />
-      <div className="b-help">Matches if the visitor saw any of the selected templates, including ?view= alternates of them.</div>
+      <div className="b-help">Matches visitors who saw any of the selected templates, including their ?view= alternates.</div>
       <PageStampFlagsFields idPrefix={idPrefix} flags={flags} emit={emit} />
     </div>
   );
@@ -993,7 +993,7 @@ export function SectionShownForm({ value, onChange, isCodePromo = false }: SubFo
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <ThemeTargetPicker kind="section" idPrefix={idPrefix} value={sections} onChange={(next) => emit({ sections: next })} />
-      <div className="b-help">Matches if the visitor saw any of the selected sections displayed. Useful for A/B swaps that show or hide a section.</div>
+      <div className="b-help">Matches visitors who saw any of the selected sections displayed. Works with Margin Labs inline and redirect tests, and with CSS tests that hide a section (Intelligems-style): a hidden section does not count.</div>
       <PageStampFlagsFields idPrefix={idPrefix} flags={flags} emit={emit} />
     </div>
   );
@@ -1031,7 +1031,7 @@ export function ExperimentForm({ value, onChange, isCodePromo = false }: SubForm
         <input id={`${idPrefix}-experiment-name`} className="b-input" value={experimentName} onChange={(event) => emit({ experimentName: event.target.value })} autoComplete="off" />
       </div>
       <div>
-        <label className="b-label" htmlFor={`${idPrefix}-variant-keys`}>Test group keys</label>
+        <label className="b-label" htmlFor={`${idPrefix}-variant-keys`}>Arm keys</label>
         <input
           id={`${idPrefix}-variant-keys`}
           className="b-input"
@@ -1043,8 +1043,9 @@ export function ExperimentForm({ value, onChange, isCodePromo = false }: SubForm
           placeholder="control, variant_a"
           autoComplete="off"
         />
-        <div className="b-help">Comma-separated. Matches visitors in any of these groups of the experiment.</div>
+        <div className="b-help">Comma-separated, e.g. control, variant_a. Matches visitors in any of these arms.</div>
       </div>
+      <div className="b-help">Needs Margin Labs Experiment Engine on this store. Applies only to visitors who see one of the selected arms.</div>
       <PageStampFlagsFields idPrefix={idPrefix} flags={flags} emit={emit} />
     </div>
   );

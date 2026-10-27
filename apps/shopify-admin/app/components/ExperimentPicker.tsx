@@ -35,7 +35,7 @@ export function ExperimentPickerView({ idPrefix, directory, experimentId, experi
 
   if (directory === undefined) return <div className="b-help">Loading your experiments…</div>;
   if (!live) {
-    return <div className="b-help">Experiment Engine was not detected on this store, so enter the experiment below.</div>;
+    return <div className="b-help">Margin Labs Experiment Engine was not detected on this store, so enter the experiment ID below.</div>;
   }
 
   const toggleArm = (key: string) =>

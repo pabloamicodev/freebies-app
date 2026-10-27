@@ -182,7 +182,7 @@ describe("template / section_shown / experiment summaries", () => {
       conditionSummary("section_shown", {
         sections: [{ template: "page.landing-nektar", key: "hero_abc", label: "Hero con promo (page.landing-nektar)" }, { template: "product", key: "main" }],
       }),
-    ).toBe("Section shown: Hero con promo (page.landing-nektar), product/main");
+    ).toBe("Section is shown: Hero con promo (page.landing-nektar), product/main");
   });
 
   it("summarizes a test group with arm labels", () => {

@@ -106,7 +106,7 @@ export function ThemeTargetPickerView(props: ViewProps) {
                 <span style={{ fontSize: 13 }}>
                   {row.label}
                   {kind === "section" && <span style={tag}>{row.ref.split("/").pop()}</span>}
-                  {isStale && <span style={{ ...tag, color: "var(--orange, #b45309)" }}>not in theme</span>}
+                  {isStale && <span style={{ ...tag, color: "var(--orange, #b45309)" }}>not in published theme</span>}
                 </span>
                 <button type="button" className="b-btn-plain b-text-sm" onClick={row.remove} aria-label={`Remove ${row.label}`}>
                   Remove
@@ -128,7 +128,7 @@ export function ThemeTargetPickerView(props: ViewProps) {
       {catalog === undefined && <div className="b-help">Loading your published theme…</div>}
       {unavailable && (
         <div className="b-help">
-          Your theme could not be read, so type the {kind === "section" ? "section as template/section-key" : "template name"} below.
+          Your theme could not be read. Type the {kind === "section" ? "section as template/section-key" : "template name"} below.
         </div>
       )}
 

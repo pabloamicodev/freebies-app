@@ -42,13 +42,13 @@ describe("ThemeTargetPicker", () => {
 
   it("marks a section missing from the theme and shows the reselect warning", () => {
     const html = sections([{ template: "page.landing-nektar", key: "gone", label: "Gone (page.landing-nektar)" }], catalog);
-    expect(html).toContain("not in theme");
+    expect(html).toContain("not in published theme");
     expect(html.replace(/&#x27;/g, "'")).toContain(STALE_SECTION_MESSAGE);
   });
 
   it("warns about a stale template", () => {
     const html = templates(["page.gone"], catalog);
-    expect(html).toContain("not in theme");
+    expect(html).toContain("not in published theme");
     expect(html).toContain(STALE_TEMPLATE_MESSAGE);
   });
 
@@ -58,7 +58,7 @@ describe("ThemeTargetPicker", () => {
       expect(html).toContain("could not be read");
       expect(html).toContain("Hero con promo (page.landing-nektar)");
       expect(html).toContain("Add a section by ID");
-      expect(html).not.toContain("not in theme");
+      expect(html).not.toContain("not in published theme");
       expect(html).not.toContain("Search sections");
     }
   });
