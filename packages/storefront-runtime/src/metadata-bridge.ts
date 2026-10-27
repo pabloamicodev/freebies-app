@@ -101,7 +101,7 @@ export function sanitizePageUrl(raw: string, linkParams: string[] = specificLink
   return kept.length > 0 ? `${path}?${kept.join("&")}` : path;
 }
 
-function browserPageUrl(): string | undefined {
+export function browserPageUrl(): string | undefined {
   if (typeof window === "undefined" || !window.location) return undefined;
   return sanitizePageUrl(`${window.location.pathname}${window.location.search}`);
 }
@@ -165,7 +165,7 @@ function rawBrowserUrl(): string | undefined {
   return `${window.location.pathname}${window.location.search}`;
 }
 
-function browserLandingUrl(now = Date.now()): string | undefined {
+export function browserLandingUrl(now = Date.now()): string | undefined {
   try {
     const storage = localStorageOrUndefined();
     const raw = storage?.getItem(LANDING_STORAGE_KEY);

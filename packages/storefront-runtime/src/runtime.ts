@@ -12,6 +12,7 @@
 
 import { AjaxCartAdapter, appliedDiscountCodes, type CartData, type CartItem } from "./cart-adapter.js";
 import { captureUi, isEditingWithin, restoreUi } from "./dom-preserve.js";
+import { contextKey, currentStampContext } from "./eligibility-context.js";
 import { rememberSpecificLinkParams } from "./metadata-bridge.js";
 import { expectedGiftKeys, hasOwnMarker, parseRetryAfter, withJitter, type GiftOutcome } from "./runtime-helpers.js";
 import { debounce, AbortableRequest } from "./debounce.js";
@@ -182,6 +183,14 @@ export class PromoEngineRuntime {
       if (event.persisted) this.debouncedEvaluate.call();
     });
     document.addEventListener("theme:cart:open", () => this.debouncedEvaluate.call());
+    // A new test group, consent answer or finished page load can change the stamp a new line would get;
+    // the context is part of the cart hash, so an unchanged one costs no request.
+    const contextChanged = () => {
+      if (this.lastCartHash !== null) this.debouncedEvaluate.call();
+    };
+    document.addEventListener("ml:experiment:assigned", contextChanged);
+    document.addEventListener("visitorConsentCollected", contextChanged);
+    window.addEventListener("load", () => setTimeout(contextChanged, 1_600));
 
     // Our own events
     on(PromoEvents.CartChanged, () => {
@@ -506,7 +515,8 @@ export class PromoEngineRuntime {
 
     this.detectDeclinedGifts(cart);
 
-    const cartHash = this.buildCartHash(cart);
+    const prospective = currentStampContext();
+    const cartHash = `${this.buildCartHash(cart)}|${contextKey(prospective)}`;
     if (!options.force && cartHash === this.lastCartHash) {
       this.log("Cart unchanged, skipping evaluation");
       if (this.widgetChangedCart) {
@@ -529,6 +539,7 @@ export class PromoEngineRuntime {
           locale: this.config.locale,
           salesChannel: "online_store",
           requestedUrl: window.location.href,
+          prospective,
           sessionId: this.sessionId,
           declinedGiftRewards: [...this.declinedGiftRewards],
         }),
@@ -877,6 +888,7 @@ export class PromoEngineRuntime {
   public readonly api = {
     refreshCart: () => this.debouncedEvaluate.flush(),
     lastResult: () => this.lastEvaluationResult,
+    eligibilityContext: currentStampContext,
     evaluate: () => this.triggerEvaluation(),
     whenGiftsReady: () => this.settleGifts(),
     validateGiftOffer: async (offerId: string) => {

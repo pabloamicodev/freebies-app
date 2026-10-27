@@ -328,6 +328,52 @@ describe("init guard, bfcache and per-request guard", () => {
   });
 });
 
+describe("eligibility context", () => {
+  const bodyOf = (call: { init?: RequestInit }) => JSON.parse(String(call.init!.body)) as { prospective?: Record<string, string> };
+
+  it("sends the stamp a new line would carry and re-evaluates only when it changes", async () => {
+    const h = harness([
+      [/cart\.js/, () => json(emptyCart)],
+      [/evaluate/, () => json(okResult({ pageGate: { o1: true } }))],
+    ]);
+    const rt = new PromoEngineRuntime(CONFIG);
+    await rt.api.evaluate();
+    expect(bodyOf(h.calls.find((c) => /evaluate/.test(c.url))!).prospective).toEqual({ _promo_page_url: "/" });
+    expect(rt.api.eligibilityContext()).toEqual({ _promo_page_url: "/" });
+    expect(rt.api.lastResult()?.pageGate).toEqual({ o1: true });
+
+    await rt.api.evaluate();
+    expect(h.count(/evaluate/)).toBe(1);
+
+    h.win.location.pathname = "/products/x";
+    await rt.api.evaluate();
+    expect(h.count(/evaluate/)).toBe(2);
+    expect(bodyOf(h.calls.filter((c) => /evaluate/.test(c.url))[1]!).prospective).toEqual({ _promo_page_url: "/products/x" });
+  });
+
+  it("re-judges when the engine assigns a test group, but not before a first evaluation", async () => {
+    const h = harness([
+      [/cart\.js/, () => json(emptyCart)],
+      [/evaluate/, () => json(okResult())],
+    ]);
+    const rt = new PromoEngineRuntime(CONFIG);
+    rt.init();
+    const added = () => vi.mocked(document.addEventListener).mock.calls.filter(([type]) => type === "ml:experiment:assigned");
+    expect(added()).toHaveLength(1);
+    const fire = added()[0]![1] as () => void;
+    h.win.location.pathname = "/changed";
+    fire();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.count(/evaluate/)).toBe(0);
+
+    await rt.api.evaluate();
+    h.win.location.pathname = "/changed-again";
+    fire();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.count(/evaluate/)).toBe(2);
+  });
+});
+
 let cartVersion = 0;
 
 describe("gift hold on theme add-to-cart", () => {
