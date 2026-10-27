@@ -15,6 +15,7 @@ import {
 } from "@promo/db";
 import {
   PAGE_TYPES,
+  isPageConditionType,
   ShippingDiscountRewardPayloadSchema,
   validateRewardPayload,
   type PageType,
@@ -38,8 +39,6 @@ import { isUniqueViolation, withUniqueOfferSuffix } from "./unique-offer-name.se
 
 export type DiscountTarget = "order" | "products" | "shipping";
 export const UTM_FIELDS = ["utmSource", "utmMedium", "utmCampaign", "utmTerm", "utmContent"] as const;
-/** Condition types that match cart lines by the page they were added from. */
-const PAGE_MATCHING_TYPES = new Set(["page_types", "utm_parameters", "page_url", "specific_link"]);
 /**
  * A code offer publishes to its own discount node, so the only size limit is that node's
  * single-offer Function config (`MAX_METAFIELD_BYTES` in sync/offer-publisher.server.ts,
@@ -281,7 +280,7 @@ function parseConditions(formData: FormData): Result<CodeOfferDraft["conditions"
     ok: true,
     data: normalized.data.map((condition) => ({
       ...condition,
-      ...(PAGE_MATCHING_TYPES.has(condition.conditionType)
+      ...(isPageConditionType(condition.conditionType)
         ? { value: { ...condition.value, ...flags } }
         : {}),
       scope: condition.conditionType === "page_types" ? "main" : "sub",

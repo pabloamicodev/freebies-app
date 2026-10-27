@@ -1,20 +1,28 @@
 import type { EligibilityReason, NormalizedCartLine } from "@promo/shared-types";
-import { resolveRejectUnmatchedLines, type Result } from "@promo/shared-types";
+import {
+  PAGE_CONDITION_TYPES,
+  PROMO_EXPERIMENT_KEY,
+  PROMO_SECTIONS_KEY,
+  PROMO_TEMPLATE_KEY,
+  isPageConditionType,
+  resolveRejectUnmatchedLines,
+  type ExperimentConditionValue,
+  type PageConditionType,
+  type Result,
+  type SectionShownConditionValue,
+  type TemplateConditionValue,
+} from "@promo/shared-types";
 import { evaluateUrlParam, type UrlParamConditionValue } from "./conditions/url-param.js";
 import { evaluatePageUrl, type PageUrlConditionValue } from "./conditions/page-url.js";
 import {
   evaluatePageTypes,
+  evaluateStampList,
   evaluateUtmParameters,
   type PageTypesConditionValue,
   type UtmParametersConditionValue,
 } from "./conditions/page-context.js";
 
-export const PAGE_CONDITION_TYPES = ["page_url", "specific_link", "utm_parameters", "page_types"] as const;
-export type PageConditionType = (typeof PAGE_CONDITION_TYPES)[number];
-
-export function isPageConditionType(conditionType: string): conditionType is PageConditionType {
-  return (PAGE_CONDITION_TYPES as readonly string[]).includes(conditionType);
-}
+export { PAGE_CONDITION_TYPES, isPageConditionType, type PageConditionType };
 
 const PAGE_KEY = "_promo_page_url";
 const LANDING_KEY = "_promo_landing_url";
@@ -23,8 +31,17 @@ type Check = Result<EligibilityReason, EligibilityReason>;
 
 interface PageCondition {
   conditionType: PageConditionType;
-  urlKey: typeof PAGE_KEY | typeof LANDING_KEY;
+  urlKey: typeof PAGE_KEY | typeof LANDING_KEY | typeof PROMO_TEMPLATE_KEY | typeof PROMO_SECTIONS_KEY | typeof PROMO_EXPERIMENT_KEY;
   check: (url: string | null) => Check;
+}
+
+function stampCondition(
+  conditionType: "template" | "section_shown" | "experiment",
+  urlKey: PageCondition["urlKey"],
+  refs: string[],
+  scope: "visit" | "page" | undefined,
+): PageCondition {
+  return { conditionType, urlKey, check: (raw) => evaluateStampList(conditionType, raw, refs, scope === "page") };
 }
 
 function toPageCondition(conditionType: PageConditionType, value: unknown): PageCondition {
@@ -35,6 +52,23 @@ function toPageCondition(conditionType: PageConditionType, value: unknown): Page
       return { conditionType, urlKey: PAGE_KEY, check: (url) => evaluatePageUrl(url, value as PageUrlConditionValue) };
     case "page_types":
       return { conditionType, urlKey: PAGE_KEY, check: (url) => evaluatePageTypes(url, value as PageTypesConditionValue) };
+    case "template": {
+      const v = value as TemplateConditionValue;
+      return stampCondition(conditionType, PROMO_TEMPLATE_KEY, v.templates, v.scope);
+    }
+    case "section_shown": {
+      const v = value as SectionShownConditionValue;
+      return stampCondition(conditionType, PROMO_SECTIONS_KEY, v.sections.map((s) => `${s.template}/${s.key}`), v.scope);
+    }
+    case "experiment": {
+      const v = value as ExperimentConditionValue;
+      return stampCondition(
+        conditionType,
+        PROMO_EXPERIMENT_KEY,
+        v.variantKeys.map((key) => `${v.experimentId}:${key}`),
+        v.scope,
+      );
+    }
     case "utm_parameters": {
       const utm = value as UtmParametersConditionValue;
       return {
