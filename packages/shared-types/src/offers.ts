@@ -353,7 +353,7 @@ export type RequiredDiscountCode = z.infer<typeof RequiredDiscountCodeSchema>;
 
 export function validateRequiredDiscountCode(
   code: unknown,
-): z.SafeParseReturnType<unknown, string> {
+): z.ZodSafeParseResult<string> {
   return RequiredDiscountCodeSchema.safeParse(code);
 }
 
@@ -460,7 +460,7 @@ export type TypedOfferCondition = {
 export function validateConditionValue(
   conditionType: string,
   value: unknown,
-): z.SafeParseReturnType<unknown, unknown> {
+): z.ZodSafeParseResult<unknown> {
   switch (conditionType) {
     case "cart_value":
     case "cart_value_multiplier":
@@ -530,7 +530,7 @@ export const RewardTargetSchema = z.object({
   maxUnitsPerVariant: z.number().int().positive().optional(),
   subscriptionMode: z.enum(["any", "subscription_only", "one_time_only"]).optional(),
   scopeMode: z.enum(["sitewide", "landing", "quiz_bundle", "tagged_offer"]).optional(),
-  requiredOfferId: z.string().uuid().optional(),
+  requiredOfferId: z.guid().optional(),
   requiredLineAttributeKey: z.literal("__landing_source").optional(),
   requiredLineAttributeValue: z.string().min(1).optional(),
   requiredAnchorVariantIds: z.array(z.string().min(1)).optional(),
@@ -661,7 +661,7 @@ export const ProductDiscountTargetSchema = z.discriminatedUnion("scopeMode", [
   }).strict(),
   ProductTargetIdsSchema.extend({
     scopeMode: z.literal("tagged_offer"),
-    requiredOfferId: z.string().uuid(),
+    requiredOfferId: z.guid(),
     ...TAGGED_REWARD_ALLOWLIST,
   }).strict(),
   z
@@ -868,7 +868,7 @@ export function validateRewardPayload(
   discountType: string,
   value: unknown,
   target: unknown,
-): z.SafeParseReturnType<unknown, unknown> {
+): z.ZodSafeParseResult<unknown> {
   const rewardTypeResult = RewardTypeSchema.safeParse(rewardType);
   if (!rewardTypeResult.success) return rewardTypeResult;
   const discountTypeResult = DiscountTypeSchema.safeParse(discountType);
@@ -951,8 +951,8 @@ function isProductDiscountRewardType(rewardType: string): boolean {
 
 /** Full offer condition config stored in DB / compiled to Function metafield. */
 export const OfferConditionSchema = z.object({
-  id: z.string().uuid(),
-  offerId: z.string().uuid(),
+  id: z.guid(),
+  offerId: z.guid(),
   scope: ConditionScopeSchema,
   conditionType: ConditionTypeSchema,
   operator: ConditionOperatorSchema,
@@ -973,8 +973,8 @@ export type GiftTarget = z.infer<typeof GiftTargetSchema>;
 
 /** Reward config stored in DB. */
 export const OfferRewardSchema = z.object({
-  id: z.string().uuid(),
-  offerId: z.string().uuid(),
+  id: z.guid(),
+  offerId: z.guid(),
   rewardType: RewardTypeSchema,
   discountType: DiscountTypeSchema,
   value: z.unknown(),
@@ -989,7 +989,7 @@ export type OfferReward = z.infer<typeof OfferRewardSchema>;
 
 /** Compiled offer — minimal config pushed to Shopify Function metafield. */
 export const CompiledOfferSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   version: z.number().int(),
   type: OfferTypeSchema,
   priority: z.number().int(),
@@ -1032,7 +1032,7 @@ export const CompiledOfferSchema = z.object({
   giftRewards: z
     .array(
       z.object({
-        id: z.string().uuid(),
+        id: z.guid(),
         targetProductIds: z.array(z.string()),
         targetVariantIds: z.array(z.string()),
         discountType: DiscountTypeSchema,
@@ -1058,7 +1058,7 @@ export const CompiledOfferSchema = z.object({
         scopeMode: z
           .enum(["sitewide", "landing", "quiz_bundle", "tagged_offer"])
           .default("sitewide"),
-        requiredOfferId: z.string().uuid().optional(),
+        requiredOfferId: z.guid().optional(),
         requiredLineAttributeValue: z.string().optional(),
         requiredAnchorVariantIds: z.array(z.string()).default([]),
         requiredAnchorMinQuantity: z.number().int().positive().default(1),

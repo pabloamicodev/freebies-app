@@ -54,10 +54,12 @@ export function evaluateCartValue(
   let thresholdCents = condition.thresholdCents;
   let maxCents = condition.maxCents;
   const activeCurrency = currency.activeCurrencyCode.toUpperCase();
+  // Saved conditions may lack currencyCode; their thresholds are in the shop currency.
+  const conditionCurrency = (condition.currencyCode ?? currency.shopCurrencyCode).toUpperCase();
   if (condition.currencyOverrides?.[activeCurrency] !== undefined) {
     thresholdCents = condition.currencyOverrides[activeCurrency]!;
   } else if (
-    activeCurrency !== condition.currencyCode.toUpperCase() &&
+    activeCurrency !== conditionCurrency &&
     currency.exchangeRate
   ) {
     thresholdCents = Math.ceil(condition.thresholdCents * currency.exchangeRate);
@@ -66,7 +68,7 @@ export function evaluateCartValue(
     maxCents = condition.maxCurrencyOverrides[activeCurrency]!;
   } else if (
     maxCents !== undefined &&
-    activeCurrency !== condition.currencyCode.toUpperCase() &&
+    activeCurrency !== conditionCurrency &&
     currency.exchangeRate
   ) {
     maxCents = Math.ceil(maxCents * currency.exchangeRate);
