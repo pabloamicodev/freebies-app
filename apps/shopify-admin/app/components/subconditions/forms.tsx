@@ -13,7 +13,7 @@ import { ProductPicker } from "../ProductPicker.js";
 import { ThemeTargetPicker } from "../ThemeTargetPicker.js";
 import { ExperimentPicker } from "../ExperimentPicker.js";
 import { readSections, readTemplates } from "../../lib/theme-target-selection.js";
-import { PAGE_TYPE_OPTIONS, readPageTypes, readPageUrls } from "../../lib/page-types.js";
+import { PAGE_TYPE_OPTIONS, cleanPageHandle, pageHandleToUrl, pageUrlToHandle, readPageTypes, readPageUrls } from "../../lib/page-types.js";
 
 // ─── Shared props ─────────────────────────────────────────────────────────────
 export interface SubFormProps {
@@ -656,26 +656,36 @@ function PageUrlList({
   onChange?: (next: string[]) => void;
   name?: string;
 }) {
-  const [rows, setRows] = useState(urls.length ? urls : [""]);
+  const [rows, setRows] = useState(() => (urls.length ? urls.map(pageUrlToHandle) : [""]));
   function update(next: string[]) {
     setRows(next);
-    onChange?.(next);
+    onChange?.(next.map(pageHandleToUrl).filter(Boolean));
   }
   return (
     <div className="b-stack b-stack-2" style={{ marginLeft: 24 }}>
       <label className="b-label" htmlFor={`${idPrefix}-page-url-0`}>Only these pages</label>
       {rows.map((row, index) => (
         <div key={index} style={{ display: "flex", gap: 8 }}>
-          <input
-            id={`${idPrefix}-page-url-${index}`}
-            className="b-input"
-            name={name}
-            value={row}
-            placeholder="/pages/bundle-builder"
-            autoComplete="off"
-            aria-label={`Page URL ${index + 1}`}
-            onChange={(event) => update(rows.map((current, at) => (at === index ? event.target.value : current)))}
-          />
+          {name && pageHandleToUrl(row) && <input type="hidden" name={name} value={pageHandleToUrl(row)} />}
+          <div style={{ display: "flex", flex: 1, minWidth: 0 }}>
+            <span
+              aria-hidden="true"
+              style={{ display: "flex", alignItems: "center", padding: "0 10px", border: "1.5px solid var(--border)", borderRight: 0, borderRadius: "var(--r-sm) 0 0 var(--r-sm)", background: "var(--bg-subtle, var(--bg-card))", color: "var(--text-muted, var(--text))", fontSize: 14 }}
+            >
+              /pages
+            </span>
+            <input
+              id={`${idPrefix}-page-url-${index}`}
+              className="b-input"
+              style={{ borderRadius: "0 var(--r-sm) var(--r-sm) 0" }}
+              value={row}
+              placeholder="/bundle-builder"
+              autoComplete="off"
+              aria-label={`Page handle ${index + 1}, after /pages`}
+              onChange={(event) => update(rows.map((current, at) => (at === index ? cleanPageHandle(event.target.value) : current)))}
+              onBlur={(event) => update(rows.map((current, at) => (at === index ? cleanPageHandle(event.target.value, true) : current)))}
+            />
+          </div>
           {rows.length > 1 && (
             <button type="button" className="b-btn b-btn-secondary b-btn-sm" aria-label={`Remove page URL ${index + 1}`} onClick={() => update(rows.filter((_, at) => at !== index))}>
               Remove
@@ -688,7 +698,7 @@ function PageUrlList({
           + Add page URL
         </button>
       </div>
-      <div className="b-help">Leave empty to count every page. Path only, domain and query are ignored.</div>
+      <div className="b-help">Leave empty to count every page. Type the part after /pages, or paste the full URL.</div>
     </div>
   );
 }
