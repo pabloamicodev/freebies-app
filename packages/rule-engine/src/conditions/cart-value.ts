@@ -74,6 +74,9 @@ export function evaluateCartValue(
     maxCents = Math.ceil(maxCents * currency.exchangeRate);
   }
 
+  // Editors save an empty maximum as 0; the Function compiles 0 as "no maximum" too.
+  if (maxCents !== undefined && maxCents <= 0) maxCents = undefined;
+
   const meetsMinimum = cartValueCents >= thresholdCents;
   const meetsMaximum = maxCents === undefined || cartValueCents <= maxCents;
   const passed = meetsMinimum && meetsMaximum;
