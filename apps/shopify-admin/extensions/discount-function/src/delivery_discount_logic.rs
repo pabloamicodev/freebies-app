@@ -1379,6 +1379,39 @@ mod tests {
         assert!(run_page(&offer, &[matched.clone(), upsell]));
     }
 
+    fn stamped_line(key: &str, stamp: &str, amount: &str) -> String {
+        let raw = serde_json::json!({ "_promo_page_url": "/pages/landing-nektar", key: stamp }).to_string();
+        page_line(None, None, amount).replace(
+            r#""promoMetadata":null"#,
+            &format!(r#""promoMetadata":{{"value":{}}}"#, serde_json::to_string(&raw).unwrap()),
+        )
+    }
+
+    #[test]
+    fn template_section_and_experiment_conditions_gate_shipping() {
+        let cases = [
+            ("template", "_promo_template", "page.landing-nektar", "product"),
+            ("section", "_promo_sections", "page.landing-nektar/hero_abc", "page.landing-nektar/footer_1"),
+            ("experiment", "_promo_exp", "abcd1234:b", "abcd1234:a"),
+        ];
+        for (mode, key, hit, miss) in cases {
+            let offer = |source: &str| {
+                page_offer("").replace(
+                    r#"{"patterns":["/pages/sale"],"matchMode":"exact","caseSensitive":false}"#,
+                    &format!(r#"{{"patterns":["{hit}"],"matchMode":"{mode}","caseSensitive":false{source}}}"#),
+                )
+            };
+            let visit = offer("");
+            assert!(run_page(&visit, &[stamped_line(key, hit, "60.00")]), "{mode} remembered");
+            assert!(run_page(&visit, &[stamped_line(key, &format!("{miss},@{hit}"), "60.00")]), "{mode} current");
+            assert!(!run_page(&visit, &[stamped_line(key, miss, "60.00")]), "{mode} other");
+            assert!(!run_page(&visit, &[page_line(None, Some("/pages/landing-nektar"), "60.00")]), "{mode} unstamped");
+            let page_scope = offer(r#","source":"page""#);
+            assert!(!run_page(&page_scope, &[stamped_line(key, hit, "60.00")]), "{mode} page scope remembered");
+            assert!(run_page(&page_scope, &[stamped_line(key, &format!("@{hit}"), "60.00")]), "{mode} page scope current");
+        }
+    }
+
     #[test]
     fn page_gated_scoped_offer_does_not_block_sitewide() {
         let landing = r#"{"id":"landing","priority":1,"scopeMode":"landing","requiredLineAttributeValue":"lp",

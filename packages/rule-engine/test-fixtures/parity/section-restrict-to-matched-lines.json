@@ -1,0 +1,124 @@
+{
+  "name": "section-restrict-to-matched-lines",
+  "description": "section_shown with only-matched-lines: only the stamped line is discounted, the unstamped one is not.",
+  "source": {
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "type": "discount",
+        "priority": 100,
+        "stopLowerPriority": false,
+        "conditions": [
+          {
+            "conditionType": "section_shown",
+            "value": {
+              "sections": [
+                {
+                  "template": "page.landing-nektar",
+                  "key": "hero_abc"
+                }
+              ],
+              "onlyMatchedLines": true
+            },
+            "scope": "sub",
+            "operator": "eq",
+            "sortOrder": 0
+          }
+        ],
+        "rewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "rewardType": "product_discount",
+            "discountType": "percentage",
+            "value": {
+              "amount": 10,
+              "currencyCode": "USD"
+            },
+            "target": {},
+            "quantity": null,
+            "isAutoAdd": false,
+            "isCustomerSelectable": false,
+            "trackMode": "variant",
+            "sortOrder": 0,
+            "label": null
+          }
+        ]
+      }
+    ]
+  },
+  "config": {
+    "c1": "_promo_engine_unused",
+    "c2": "_promo_engine_unused",
+    "c3": "_promo_engine_unused",
+    "customerTags": [],
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "offerType": "discount",
+        "priority": 100,
+        "productRewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "discountType": "percentage",
+            "discountValue": 10
+          }
+        ],
+        "pageUrlConditions": [
+          {
+            "patterns": [
+              "page.landing-nektar/hero_abc"
+            ],
+            "matchMode": "section"
+          }
+        ],
+        "restrictToMatchedLines": true
+      }
+    ],
+    "version": "parity",
+    "compiledAt": "2026-01-01T00:00:00.000Z"
+  },
+  "cart": {
+    "currency": "USD",
+    "presentmentCurrencyRate": 1,
+    "country": "US",
+    "customerTags": [],
+    "enteredCodes": [],
+    "lines": [
+      {
+        "id": "s1",
+        "variantId": "gid://shopify/ProductVariant/1",
+        "productId": "gid://shopify/Product/1",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/pages/landing-nektar",
+          "_promo_sections": "@page.landing-nektar/hero_abc"
+        }
+      },
+      {
+        "id": "s2",
+        "variantId": "gid://shopify/ProductVariant/2",
+        "productId": "gid://shopify/Product/2",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/pages/landing-nektar"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "qualifiedOfferIds": [
+      "aaaaaaaa-0000-4000-8000-000000000001"
+    ],
+    "discountedLineIds": {
+      "aaaaaaaa-0000-4000-8000-000000000001": [
+        "s1"
+      ]
+    }
+  }
+}

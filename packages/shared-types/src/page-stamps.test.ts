@@ -6,6 +6,7 @@ import {
   PAGE_CONDITION_TYPES,
   STAMP_CAPS,
   capStampEntries,
+  collectStampTargets,
   isPageConditionType,
   validateConditionValue,
 } from "./index.js";
@@ -115,5 +116,33 @@ describe("capStampEntries", () => {
   it("a full-cap section stamp stays within 512 chars", () => {
     const entries = Array.from({ length: 8 }, () => "p".repeat(100));
     expect(capStampEntries(entries, STAMP_CAPS._promo_sections).length).toBeLessThanOrEqual(512);
+  });
+});
+
+describe("collectStampTargets", () => {
+  const c = (conditionType: string, value: unknown, isEnabled = true) => ({ conditionType, value, isEnabled });
+  it("is empty for no conditions or conditions that need no stamp (the runtime then stamps nothing)", () => {
+    expect(collectStampTargets([])).toEqual({ s: [], t: [] });
+    expect(collectStampTargets([c("page_url", { patterns: ["/x"] }), c("template", { templates: ["product"] }, false)])).toEqual({ s: [], t: [] });
+  });
+  it("unions, lowercases templates, sorts, dedupes and omits e when unused", () => {
+    expect(
+      collectStampTargets([
+        c("template", { templates: ["Product", "index", "product"] }),
+        c("section_shown", { sections: [{ template: "Page.X", key: "Hero_1" }, { template: "page.x", key: "Hero_1" }, { template: "bad name", key: "k" }] }),
+        c("experiment", { experimentId: "abcd1234", variantKeys: ["a"] }),
+        c("experiment", { experimentId: "abcd1234", variantKeys: ["b"] }),
+        c("experiment", { experimentId: "nope", variantKeys: ["b"] }),
+      ]),
+    ).toEqual({ s: ["page.x/Hero_1"], t: ["index", "product"], e: ["abcd1234"] });
+  });
+  it("caps s at 200, t at 100 and e at 50", () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => String(i).padStart(4, "0"));
+    const targets = collectStampTargets([
+      c("template", { templates: many(150).map((i) => `t${i}`) }),
+      c("section_shown", { sections: many(300).map((i) => ({ template: "index", key: `k${i}` })) }),
+      ...many(60).map((i) => c("experiment", { experimentId: `abcd${i}`, variantKeys: ["a"] })),
+    ]);
+    expect([targets.s.length, targets.t.length, targets.e?.length]).toEqual([200, 100, 50]);
   });
 });

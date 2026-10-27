@@ -153,6 +153,18 @@ const cartValue = (thresholdCents: number, scopeFilter?: Record<string, unknown>
   "main",
 ];
 
+const LANDING = "page.landing-nektar";
+const stamped = (key: string, value: string, url = "/pages/landing-nektar") => page(url, { [key]: value });
+const template = (templates: string[], extra: Record<string, unknown> = {}): Cond => ["template", { templates, ...extra }];
+const section = (refs: Array<[string, string]>, extra: Record<string, unknown> = {}): Cond => [
+  "section_shown",
+  { sections: refs.map(([t, key]) => ({ template: t, key })), ...extra },
+];
+const experiment = (variantKeys: string[], extra: Record<string, unknown> = {}): Cond => [
+  "experiment",
+  { experimentId: "abcd1234", variantKeys, ...extra },
+];
+
 interface Scenario {
   name: string;
   description: string;
@@ -991,6 +1003,141 @@ const SCENARIOS: Scenario[] = [
     qualified: [A],
     discounted: { [A]: ["a1"] },
     quantities: { [A]: { a1: 1 } },
+  },
+  {
+    name: "template-visit-match",
+    description: "template condition, visit scope: a remembered or current-page template ref matches (any of the list, case-insensitive); another template does not.",
+    offers: [discountOffer(A, [template([LANDING, "index"], { onlyMatchedLines: true })])],
+    lines: [
+      line("l1", 1, stamped("_promo_template", LANDING)),
+      line("l2", 2, stamped("_promo_template", `product,@${LANDING.toUpperCase()}`)),
+      line("l3", 3, stamped("_promo_template", "product")),
+      line("l4", 4, page("/pages/landing-nektar")),
+    ],
+    qualified: [A],
+    discounted: { [A]: ["l1", "l2"] },
+  },
+  {
+    name: "template-page-scope-rejects-remembered",
+    description: "template condition, page scope: only an @-prefixed (seen where the line was added) entry matches; a remembered ref does not.",
+    offers: [discountOffer(A, [template([LANDING], { scope: "page", onlyMatchedLines: true })])],
+    lines: [
+      line("l1", 1, stamped("_promo_template", LANDING)),
+      line("l2", 2, stamped("_promo_template", `product,@${LANDING}`)),
+      line("l3", 3, stamped("_promo_template", `@product,${LANDING}`)),
+    ],
+    qualified: [A],
+    discounted: { [A]: ["l2"] },
+  },
+  {
+    name: "section-any-of",
+    description: "section_shown: any of the selected template/key refs on the line matches; a different key or a missing key does not.",
+    offers: [discountOffer(A, [section([[LANDING, "hero_abc"], ["product.acv", "hero_mlswap_v"]], { onlyMatchedLines: true })])],
+    lines: [
+      line("s1", 1, stamped("_promo_sections", `${LANDING}/hero_abc`)),
+      line("s2", 2, stamped("_promo_sections", "@product.acv/hero_mlswap_v,index/x")),
+      line("s3", 3, stamped("_promo_sections", `${LANDING}/footer_1`)),
+      line("s4", 4, stamped("_promo_sections", "hero_abc")),
+    ],
+    qualified: [A],
+    discounted: { [A]: ["s1", "s2"] },
+  },
+  {
+    name: "section-missing-stamp",
+    description: "section_shown: lines with a page URL but no section stamp (or another section) never qualify the offer.",
+    offers: [discountOffer(A, [section([[LANDING, "hero_abc"]])])],
+    lines: [line("s1", 1, page("/pages/landing-nektar")), line("s2", 2, stamped("_promo_sections", `${LANDING}/footer_1`)), line("s3", 3, null)],
+    qualified: [],
+    discounted: {},
+  },
+  {
+    name: "section-restrict-to-matched-lines",
+    description: "section_shown with only-matched-lines: only the stamped line is discounted, the unstamped one is not.",
+    offers: [discountOffer(A, [section([[LANDING, "hero_abc"]], { onlyMatchedLines: true })])],
+    lines: [line("s1", 1, stamped("_promo_sections", `@${LANDING}/hero_abc`)), line("s2", 2, page("/pages/landing-nektar"))],
+    qualified: [A],
+    discounted: { [A]: ["s1"] },
+  },
+  {
+    name: "template-reject-unmatched-lines",
+    description: "template with reject-unmatched-lines on an upsell offer: the app-added upsell line is exempt from the reject check and is discounted.",
+    offers: [upsellOffer(A, [template([LANDING], { rejectUnmatchedLines: true })], [P(60)])],
+    lines: [
+      line("l1", 1, stamped("_promo_template", `@${LANDING}`)),
+      line("u1", 60, page("/cart", { _promo_engine_offer_id: A }), { lineType: "upsell" }),
+    ],
+    qualified: [A],
+    discounted: { [A]: ["u1"] },
+  },
+  {
+    name: "template-reject-mixed-cart-blocks-offer",
+    description: "template with reject-unmatched-lines: one non-matching product line blocks the whole offer.",
+    offers: [discountOffer(A, [template([LANDING], { rejectUnmatchedLines: true, onlyMatchedLines: true })])],
+    lines: [line("l1", 1, stamped("_promo_template", `@${LANDING}`)), line("l2", 2, stamped("_promo_template", "product"))],
+    qualified: [],
+    discounted: {},
+  },
+  {
+    name: "template-and-page-url-same-line",
+    description: "template AND page_url: both must hold on the same line; a line matching only one of them is not discounted.",
+    offers: [discountOffer(A, [template([LANDING]), pageUrl(["/pages/landing-nektar"], "exact", { onlyMatchedLines: true })])],
+    lines: [
+      line("l1", 1, stamped("_promo_template", LANDING)),
+      line("l2", 2, stamped("_promo_template", LANDING, "/pages/other")),
+      line("l3", 3, stamped("_promo_template", "product")),
+    ],
+    qualified: [A],
+    discounted: { [A]: ["l1"] },
+  },
+  {
+    name: "section-on-code-offer",
+    description: "section_shown on a code promo: restrict-to-matched-lines defaults on, so only the line stamped with the section is discounted.",
+    offers: [discountOffer(A, [section([[LANDING, "hero_abc"]])], {}, { codePromo: true })],
+    lines: [line("s1", 1, stamped("_promo_sections", `${LANDING}/hero_abc`)), line("s2", 2, page("/pages/landing-nektar"))],
+    qualified: [A],
+    discounted: { [A]: ["s1"] },
+  },
+  {
+    name: "experiment-variant-match",
+    description: "experiment condition: a line stamped with the selected arm matches; another arm of the same test, or no stamp, does not.",
+    offers: [discountOffer(A, [experiment(["b", "c"], { onlyMatchedLines: true })])],
+    lines: [
+      line("x1", 1, stamped("_promo_exp", "abcd1234:b")),
+      line("x2", 2, stamped("_promo_exp", "abcd1234:A")),
+      line("x3", 3, stamped("_promo_exp", "ffff0000:b")),
+      line("x4", 4, stamped("_promo_exp", "@abcd1234:c")),
+      line("x5", 5, page("/pages/landing-nektar")),
+    ],
+    qualified: [A],
+    discounted: { [A]: ["x1", "x4"] },
+  },
+  {
+    name: "experiment-original-fails-closed",
+    description: "experiment: visitors outside the test (original, no _promo_exp) never match, even when the control arm is selected.",
+    offers: [discountOffer(A, [experiment(["control"], { onlyMatchedLines: true })])],
+    lines: [line("x1", 1, page("/pages/landing-nektar")), line("x2", 2, stamped("_promo_exp", "abcd1234:b"))],
+    qualified: [],
+    discounted: {},
+  },
+  {
+    name: "experiment-page-scope-rejects-remembered",
+    description: "experiment, page scope: only an @-prefixed arm stamped on the page where the line was added counts.",
+    offers: [discountOffer(A, [experiment(["b"], { scope: "page", onlyMatchedLines: true })])],
+    lines: [line("x1", 1, stamped("_promo_exp", "abcd1234:b")), line("x2", 2, stamped("_promo_exp", "abcd1234:a,@abcd1234:b"))],
+    qualified: [A],
+    discounted: { [A]: ["x2"] },
+  },
+  {
+    name: "experiment-and-section-same-line",
+    description: "experiment AND section_shown: both stamps must be on the same line; the conditions are not split across lines.",
+    offers: [discountOffer(A, [experiment(["b"]), section([[LANDING, "hero_abc"]], { onlyMatchedLines: true })])],
+    lines: [
+      line("x1", 1, page("/pages/landing-nektar", { _promo_exp: "abcd1234:b", _promo_sections: `${LANDING}/hero_abc` })),
+      line("x2", 2, stamped("_promo_exp", "abcd1234:b")),
+      line("x3", 3, stamped("_promo_sections", `${LANDING}/hero_abc`)),
+    ],
+    qualified: [A],
+    discounted: { [A]: ["x1"] },
   },
   ...stackingScenarios(),
   ...limitsScenarios(),

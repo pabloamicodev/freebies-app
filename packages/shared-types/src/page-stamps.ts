@@ -36,3 +36,46 @@ export function capStampEntries(entries: readonly string[], cap: StampCap): stri
   }
   return kept.join(",");
 }
+
+export interface StampTargets {
+  s: string[];
+  t: string[];
+  e?: string[];
+}
+
+export const STAMP_TARGET_CAPS = { s: 200, t: 100, e: 50 } as const;
+
+export const EMPTY_STAMP_TARGETS: StampTargets = { s: [], t: [] };
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/**
+ * What the storefront runtime may stamp: the union over enabled template / section_shown / experiment
+ * conditions of the offers passed in (the caller passes live offers only). Sorted, deduped and capped, so
+ * the metafield is deterministic and compact. `e` is omitted when empty; empty targets mean nothing is stamped.
+ */
+export function collectStampTargets(conditions: Iterable<{ isEnabled: boolean; conditionType: string; value: unknown }>): StampTargets {
+  const s = new Set<string>();
+  const t = new Set<string>();
+  const e = new Set<string>();
+  const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  for (const c of conditions) {
+    if (!c.isEnabled || !isRecord(c.value)) continue;
+    if (c.conditionType === "template") {
+      for (const ref of strings(c.value["templates"])) if (TEMPLATE_REF_PATTERN.test(ref.toLowerCase())) t.add(ref.toLowerCase());
+    } else if (c.conditionType === "section_shown") {
+      for (const section of Array.isArray(c.value["sections"]) ? c.value["sections"] : []) {
+        if (!isRecord(section) || typeof section["template"] !== "string" || typeof section["key"] !== "string") continue;
+        const template = section["template"].toLowerCase();
+        if (TEMPLATE_REF_PATTERN.test(template) && SECTION_KEY_PATTERN.test(section["key"])) s.add(`${template}/${section["key"]}`);
+      }
+    } else if (c.conditionType === "experiment") {
+      const id = c.value["experimentId"];
+      if (typeof id === "string" && EXPERIMENT_ID_PATTERN.test(id) && strings(c.value["variantKeys"]).some((k) => VARIANT_KEY_PATTERN.test(k))) e.add(id);
+    }
+  }
+  const out = (set: Set<string>, cap: number) => [...set].sort().slice(0, cap);
+  const targets: StampTargets = { s: out(s, STAMP_TARGET_CAPS.s), t: out(t, STAMP_TARGET_CAPS.t) };
+  if (e.size > 0) targets.e = out(e, STAMP_TARGET_CAPS.e);
+  return targets;
+}
