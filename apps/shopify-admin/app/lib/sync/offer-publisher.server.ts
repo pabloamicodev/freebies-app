@@ -1556,9 +1556,9 @@ async function resolveLegacyGiftVariants(
     );
   const eligibleByProduct = new Map<string, string[]>();
   for (const variant of variants) {
-    // availableForSale already accounts for untracked inventory and "continue
-    // selling when out of stock" — a raw qty of 0 + DENY can still be sellable.
-    if (!variant.availableForSale || variant.requiresSellingPlan) continue;
+    // Sold-out variants stay in the gift (storefront shows them sold out until restocked);
+    // only subscription-only variants can't be granted.
+    if (variant.requiresSellingPlan) continue;
     const ids = eligibleByProduct.get(variant.productGid) ?? [];
     ids.push(variant.variantGid);
     eligibleByProduct.set(variant.productGid, ids);

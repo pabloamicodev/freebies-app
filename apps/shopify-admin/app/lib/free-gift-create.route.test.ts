@@ -168,6 +168,69 @@ describe("free gift creation (cart subtotal >= $85, 4 variants, customer selecta
     expect(reward!.isCustomerSelectable).toBe(true);
   });
 
+  it("rewards page keeps sold-out variants in the gift and drops subscription-only ones", async () => {
+    const product = "gid://shopify/Product/9000000000002";
+    const [inStock, soldOut, subscription] = [1, 2, 3].map((n) => `gid://shopify/ProductVariant/9100000000${n}`);
+    await db.insert(productCache).values({
+      shopId, productGid: product, handle: "sold-out-mix", title: "Sold out mix", status: "ACTIVE", raw: {},
+    });
+    await db.insert(variantCache).values([
+      { variantGid: inStock!, availableForSale: true, requiresSellingPlan: false },
+      { variantGid: soldOut!, availableForSale: false, requiresSellingPlan: false },
+      { variantGid: subscription!, availableForSale: true, requiresSellingPlan: true },
+    ].map((v, i) => ({
+      shopId, productGid: product, title: `V${i}`, price: "5.00", currencyCode: "USD",
+      inventoryQuantity: v.availableForSale ? 5 : 0, inventoryPolicy: "DENY", raw: {}, ...v,
+    })));
+    const id = await seedOffer(db, shopId, { status: "draft", internalName: "gift-sold-out-variants" });
+    const result = await run(
+      rewardsRoute.action,
+      post(`/app/offers/${id}/rewards`, {
+        intent: "add_reward", rewardType: "product_gift", discountType: "free", quantity: "1",
+        variantGids: [inStock!, soldOut!, subscription!].join("\n"),
+      }),
+      { id },
+    );
+    expect((result as { error?: string } | null)?.error).toBeUndefined();
+    const [reward] = await db.select().from(offerRewards).where(eq(offerRewards.offerId, id));
+    expect((reward!.target as { variantIds: string[] }).variantIds.slice().sort()).toEqual([inStock, soldOut]);
+    expect(reward!.isCustomerSelectable).toBe(true);
+    expect(reward!.isAutoAdd).toBe(false);
+
+    const onlySoldOut = await seedOffer(db, shopId, { status: "draft", internalName: "gift-only-sold-out" });
+    const single = await run(
+      rewardsRoute.action,
+      post(`/app/offers/${onlySoldOut}/rewards`, {
+        intent: "add_reward", rewardType: "product_gift", discountType: "free", quantity: "1", variantGids: soldOut!,
+      }),
+      { id: onlySoldOut },
+    );
+    expect((single as { error?: string } | null)?.error).toBeUndefined();
+    const [soloReward] = await db.select().from(offerRewards).where(eq(offerRewards.offerId, onlySoldOut));
+    expect((soloReward!.target as { variantIds: string[] }).variantIds).toEqual([soldOut]);
+  });
+
+  it("rewards page rejects a gift whose product only has subscription variants", async () => {
+    const product = "gid://shopify/Product/9000000000003";
+    const variant = "gid://shopify/ProductVariant/92000000001";
+    await db.insert(productCache).values({
+      shopId, productGid: product, handle: "sub-only", title: "Sub only", status: "ACTIVE", raw: {},
+    });
+    await db.insert(variantCache).values({
+      shopId, productGid: product, variantGid: variant, title: "Sub", price: "5.00", currencyCode: "USD",
+      availableForSale: true, requiresSellingPlan: true, inventoryQuantity: 5, inventoryPolicy: "DENY", raw: {},
+    });
+    const id = await seedOffer(db, shopId, { status: "draft", internalName: "gift-sub-only" });
+    const result = await run(
+      rewardsRoute.action,
+      post(`/app/offers/${id}/rewards`, {
+        intent: "add_reward", rewardType: "product_gift", discountType: "free", quantity: "1", variantGids: variant,
+      }),
+      { id },
+    );
+    expect((result as { error?: string }).error).toMatch(/no one-time-purchase variants/);
+  });
+
   it("rewards page rejects variants that are not in the catalog", async () => {
     const id = await seedOffer(db, shopId, { status: "draft", internalName: "rewards-page-gift-unknown" });
     const result = await run(
