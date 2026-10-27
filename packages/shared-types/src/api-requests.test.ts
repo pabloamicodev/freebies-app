@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AnalyticsRequestSchema,
+  BundleQuerySchema,
   OrderAttributionQuerySchema,
   ProductSearchQuerySchema,
   ReportErrorRequestSchema,
@@ -41,5 +42,10 @@ describe("api request schemas", () => {
   it("order attribution requires an order gid", () => {
     expect(OrderAttributionQuerySchema.safeParse({ order_gid: null }).success).toBe(false);
     expect(OrderAttributionQuerySchema.safeParse({ order_gid: "gid://shopify/Order/5" }).success).toBe(true);
+  });
+
+  it("uuid-shaped ids keep the zod 3 shape check (any 8-4-4-4-12 hex, not only RFC nibbles)", () => {
+    expect(BundleQuerySchema.safeParse({ offer_id: "00000000-0000-0000-0000-000000000001" }).success).toBe(true);
+    expect(BundleQuerySchema.safeParse({ offer_id: "not-a-uuid" }).success).toBe(false);
   });
 });
