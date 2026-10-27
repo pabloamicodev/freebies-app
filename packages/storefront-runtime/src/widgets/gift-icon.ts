@@ -8,6 +8,7 @@
  */
 
 import { on, emit, PromoEvents, publishAnalytics } from "../event-bus.js";
+import { canPromise } from "../eligibility-context.js";
 import { escapeHtml } from "../html.js";
 import { t } from "../i18n.js";
 import type { EvaluationResult } from "../types.js";
@@ -60,7 +61,11 @@ class PromoGiftIcon extends HTMLElement {
             ? result.qualifiedOffers.find((o) => o.offerId === this.offerId)
             : result.qualifiedOffers[0])
         : null;
-      this.render(qualified ? { offerId: qualified.offerId, offerName: "Free Gift Available" } : null);
+      this.render(
+        qualified && canPromise(result, qualified.offerId, "add")
+          ? { offerId: qualified.offerId, offerName: "Free Gift Available" }
+          : null,
+      );
     });
 
     // Also listen for variant changes on product page
@@ -171,7 +176,7 @@ class PromoGiftThumbnail extends HTMLElement {
       const giftSlider = result.giftSlider;
       this.activeOfferId = qualified?.offerId ?? "";
       this.render(
-        qualified && giftSlider?.offerId === qualified.offerId
+        qualified && giftSlider?.offerId === qualified.offerId && canPromise(result, qualified.offerId, "add")
           ? giftSlider.selectableGifts
           : null,
       );

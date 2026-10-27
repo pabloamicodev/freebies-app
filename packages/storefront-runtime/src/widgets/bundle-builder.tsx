@@ -13,12 +13,14 @@
  */
 
 import { h } from "preact";
-import { useState, useMemo } from "preact/hooks";
+import { useState, useMemo, useEffect } from "preact/hooks";
 import { render } from "preact";
 import { AjaxCartAdapter } from "../cart-adapter.js";
+import { canPromise } from "../eligibility-context.js";
 import { formatMoney } from "../format.js";
 import { t } from "../i18n.js";
-import { emit, PromoEvents, publishAnalytics } from "../event-bus.js";
+import { emit, on, PromoEvents, publishAnalytics } from "../event-bus.js";
+import type { EvaluationResult } from "../types.js";
 
 interface BundleProduct {
   variantId: string;
@@ -93,6 +95,13 @@ function BundleBuilderComponent({
   const sortBy: string = "name_asc";
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
+  const [gated, setGated] = useState(false);
+
+  // The server judged the page context at load; a later change (experiment, consent) arrives as a new pageGate.
+  useEffect(
+    () => on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => setGated(!canPromise(result, config.offerId, "add"))),
+    [config.offerId],
+  );
 
   const isOneStepPerPage = config.layoutMode === "one_step_per_page";
   const activeSteps = isOneStepPerPage ? [config.steps[currentStep]].filter(Boolean) : config.steps;
@@ -170,6 +179,8 @@ function BundleBuilderComponent({
       setAdding(false);
     }
   }
+
+  if (gated) return null;
 
   if (added) {
     return (

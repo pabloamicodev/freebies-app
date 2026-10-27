@@ -20,21 +20,15 @@
       console.warn('[Promo Engine] Bundle builder could not load:', message);
     }
 
-    function tryInit() {
-      attempts += 1;
-      if (!window.initBundleBuilder) {
-        if (attempts < 50) setTimeout(tryInit, 200);
-        else fail('Promo Engine app embed is not enabled.');
-        return;
-      }
+    var loadedCtx = null;
+
+    function load() {
+      // ctx is the stamp context a line added now would carry (page, landing, template, sections, experiment): the server
+      // judges the bundle's page conditions with it. Nothing else goes in the URL, so the proxy cache key stays stable.
+      var ctx = window.PromoEngine.encodedEligibilityContext();
+      loadedCtx = ctx;
+      var params = new URLSearchParams({ ctx: ctx });
       var offerId = container.dataset.offerId;
-      // page_url travels in a GET query string (proxy/access logs), so drop personal and ad-click params.
-      var pageUrl = new URL(window.location.href);
-      Array.from(pageUrl.searchParams.keys()).forEach(function(key) {
-        if (/(^|_)(e?mail|email_address|phone|token|_kx|gclid|fbclid|msclkid|ttclid|dclid|wbraid|gbraid)$/i.test(key)) pageUrl.searchParams.delete(key);
-      });
-      pageUrl.hash = '';
-      var params = new URLSearchParams({ page_url: pageUrl.toString() });
       if (offerId) params.set('offer_id', offerId);
       fetch('/apps/promo-engine/bundle?' + params.toString(), { headers: { Accept: 'application/json' } })
         .then(function(response) {
@@ -42,14 +36,30 @@
           return response.json();
         })
         .then(function(result) {
+          if (ctx !== loadedCtx) return;
           if (!result.bundleBuilder) {
             container.hidden = true;
             return;
           }
+          container.hidden = false;
           var sessionId = sessionStorage.getItem('promo_engine_session_id') || 'anon';
           window.initBundleBuilder(container, result.bundleBuilder, sessionId);
         })
         .catch(function(error) { fail(error && error.message ? error.message : String(error)); });
+    }
+
+    function tryInit() {
+      attempts += 1;
+      if (!window.initBundleBuilder || !window.PromoEngine) {
+        if (attempts < 50) setTimeout(tryInit, 200);
+        else fail('Promo Engine app embed is not enabled.');
+        return;
+      }
+      load();
+      // An experiment assignment or consent after load changes the context: ask the server again.
+      window.addEventListener('promo-engine:evaluation-completed', function() {
+        if (window.PromoEngine.encodedEligibilityContext() !== loadedCtx) load();
+      });
     }
     tryInit();
   });

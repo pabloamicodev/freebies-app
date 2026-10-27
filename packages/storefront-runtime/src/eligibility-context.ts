@@ -25,8 +25,24 @@ export function contextKey(context: Record<string, string> = currentStampContext
     .join("&");
 }
 
-/** base64url JSON, the `ctx` query param of /bundle and /product-customizations. */
+/** base64url JSON, the `ctx` query param of /bundle and /product-customizations. Keys sorted: proxy responses are cached by URL. */
 export function encodeContext(context: Record<string, string> = currentStampContext()): string {
-  const bytes = new TextEncoder().encode(JSON.stringify(context));
+  const sorted = Object.fromEntries(Object.keys(context).sort().map((key) => [key, context[key]]));
+  const bytes = new TextEncoder().encode(JSON.stringify(sorted));
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * May a widget show its promise? "cart": the Function's view of the current lines (qualified offer).
+ * "add": the promise is for adding something now, so the stamp that add would write must pass the offer's
+ * page conditions. `pageGate` only lists offers with page conditions; an older server omits it (no veto).
+ */
+export function canPromise(
+  result: { qualifiedOffers?: Array<{ offerId: string }>; pageGate?: Record<string, boolean> } | null | undefined,
+  offerId: string,
+  scope: "cart" | "add",
+): boolean {
+  return scope === "cart"
+    ? !!result?.qualifiedOffers?.some((offer) => offer.offerId === offerId)
+    : !!result && result.pageGate?.[offerId] !== false;
 }

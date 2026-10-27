@@ -3,9 +3,11 @@ import { useState, useEffect } from "preact/hooks";
 import { h } from "preact";
 import { render } from "preact";
 import { AjaxCartAdapter } from "../cart-adapter.js";
+import { canPromise } from "../eligibility-context.js";
 import { formatMoney } from "../format.js";
 import { t } from "../i18n.js";
-import { emit, PromoEvents, publishAnalytics } from "../event-bus.js";
+import { emit, on, PromoEvents, publishAnalytics } from "../event-bus.js";
+import type { EvaluationResult } from "../types.js";
 
 interface FbtProduct {
   variantId: string;
@@ -83,6 +85,13 @@ function FbtWidget({
   );
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
+  const [gated, setGated] = useState(false);
+
+  // The upsell came from the runtime's evaluation; a later one with a new page context can withdraw it.
+  useEffect(
+    () => on<EvaluationResult>(PromoEvents.EvaluationCompleted, (result) => setGated(!canPromise(result, config.offerId, "add"))),
+    [config.offerId],
+  );
 
   const allProducts = [config.mainProduct, ...config.relatedProducts.slice(0, config.maxProducts - 1)];
   const selectedProducts = allProducts.filter((p) => selected.has(p.variantId));
@@ -132,6 +141,8 @@ function FbtWidget({
       session_id: sessionId,
     });
   }, []);
+
+  if (gated) return null;
 
   if (added) {
     return (

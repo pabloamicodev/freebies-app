@@ -12,7 +12,7 @@
 
 import { AjaxCartAdapter, appliedDiscountCodes, type CartData, type CartItem } from "./cart-adapter.js";
 import { captureUi, isEditingWithin, restoreUi } from "./dom-preserve.js";
-import { contextKey, currentStampContext } from "./eligibility-context.js";
+import { canPromise, contextKey, currentStampContext, encodeContext } from "./eligibility-context.js";
 import { rememberSpecificLinkParams } from "./metadata-bridge.js";
 import { expectedGiftKeys, hasOwnMarker, parseRetryAfter, withJitter, type GiftOutcome } from "./runtime-helpers.js";
 import { debounce, AbortableRequest } from "./debounce.js";
@@ -889,6 +889,9 @@ export class PromoEngineRuntime {
     refreshCart: () => this.debouncedEvaluate.flush(),
     lastResult: () => this.lastEvaluationResult,
     eligibilityContext: currentStampContext,
+    // `ctx` for the theme blocks' proxy GETs, and the widget rule, so blocks never re-derive either.
+    encodedEligibilityContext: encodeContext,
+    canPromise,
     evaluate: () => this.triggerEvaluation(),
     whenGiftsReady: () => this.settleGifts(),
     validateGiftOffer: async (offerId: string) => {
