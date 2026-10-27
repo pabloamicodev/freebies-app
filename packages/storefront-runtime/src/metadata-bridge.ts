@@ -1,5 +1,6 @@
 import { browserStampContext, installStampListeners } from "./stamp-context.js";
 
+const packWarn = (e: unknown) => console.warn("[PromoEngine] Cart line metadata packing failed, using request as-is", e);
 const METADATA_PROPERTY = "_promo_engine_metadata";
 const LANDING_STORAGE_KEY = "promo_engine_utm_landing";
 
@@ -41,9 +42,9 @@ function safeDecode(value: string): string {
   }
 }
 
-function localStorageOrUndefined(): Storage | undefined {
+function localStorageOrUndefined(session?: boolean): Storage | undefined {
   try {
-    return typeof localStorage === "undefined" ? undefined : localStorage;
+    return session ? sessionStorage : localStorage;
   } catch {
     return undefined;
   }
@@ -60,7 +61,7 @@ export function specificLinkParams(): string[] {
 
 function cachedLinkParams(): string[] {
   try {
-    const parsed: unknown = JSON.parse(localStorageOrUndefined()?.getItem(LINK_PARAMS_STORAGE_KEY) ?? "[]");
+    const parsed: unknown = JSON.parse(localStorageOrUndefined()!.getItem(LINK_PARAMS_STORAGE_KEY) ?? "[]");
     return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
   } catch {
     return [];
@@ -72,7 +73,7 @@ export function rememberSpecificLinkParams(names: unknown): void {
   if (!Array.isArray(names)) return;
   const clean = names.filter((v): v is string => typeof v === "string" && v.length > 0).slice(0, 20);
   try {
-    localStorageOrUndefined()?.setItem(LINK_PARAMS_STORAGE_KEY, JSON.stringify(clean));
+    localStorageOrUndefined()!.setItem(LINK_PARAMS_STORAGE_KEY, JSON.stringify(clean));
   } catch {
     // Storage unavailable: the config/default list still applies.
   }
@@ -90,20 +91,31 @@ export function sanitizePageUrl(raw: string, linkParams: string[] = specificLink
     const q = raw.indexOf("?");
     if (q >= 0) {
       path = raw.slice(0, q);
-      query = raw.slice(q + 1).split("#")[0] ?? "";
+      query = raw.slice(q + 1).split("#")[0]!;
     }
   }
   const kept = query.split("&").filter((segment) => {
     if (!segment) return false;
-    const name = safeDecode(segment.split("=")[0] ?? "").toLowerCase();
+    const name = safeDecode(segment.split("=")[0]!).toLowerCase();
     return name.startsWith("utm_") || linkParams.includes(name);
   });
   return kept.length > 0 ? `${path}?${kept.join("&")}` : path;
 }
 
+let drawerActionAt = 0;
+
+/** An add made from inside the cart drawer counts as page type cart: the click/submit that starts it marks the next 2 s. */
+export function trackCartDrawerActions(): void {
+  // Enter in a drawer form fires a click on its submit button too, so click covers both.
+  document.addEventListener("click", (event) => {
+    if ((event.target as Element).closest("cart-drawer,[id*=drawer i][id*=cart i],[class*=drawer i][class*=cart i],aside[aria-label*=cart i]"))
+      drawerActionAt = Date.now();
+  }, true);
+}
+
 export function browserPageUrl(): string | undefined {
-  if (typeof window === "undefined" || !window.location) return undefined;
-  return sanitizePageUrl(`${window.location.pathname}${window.location.search}`);
+  const raw = rawBrowserUrl();
+  return raw && (Date.now() - drawerActionAt < 2e3 ? "/cart" : sanitizePageUrl(raw));
 }
 
 /**
@@ -118,7 +130,7 @@ export function recordUtmLanding(
 ): void {
   if (!pageUrl || !/[?&]utm_/i.test(pageUrl)) return;
   try {
-    storage?.setItem(
+    storage!.setItem(
       LANDING_STORAGE_KEY,
       JSON.stringify({ u: sanitizePageUrl(pageUrl), e: now + LANDING_TTL_MS }),
     );
@@ -132,14 +144,14 @@ export function recordUtmLanding(
  * Move it once into the localStorage record (fresh 24 h, sanitized) unless a valid one exists, then drop it.
  */
 export function migrateLegacyLanding(
-  session: Pick<Storage, "getItem" | "removeItem"> | undefined = sessionStorageOrUndefined(),
+  session: Pick<Storage, "getItem" | "removeItem"> | undefined = localStorageOrUndefined(true),
   local: Pick<Storage, "getItem" | "setItem"> | undefined = localStorageOrUndefined(),
   now = Date.now(),
 ): void {
   try {
-    const legacy = session?.getItem(LANDING_STORAGE_KEY);
+    const legacy = session!.getItem(LANDING_STORAGE_KEY);
     if (legacy == null) return;
-    session?.removeItem(LANDING_STORAGE_KEY);
+    session!.removeItem(LANDING_STORAGE_KEY);
     if (!local || legacy.startsWith("{") || !/[?&]utm_/i.test(legacy)) return;
     const current = local.getItem(LANDING_STORAGE_KEY);
     if (current) {
@@ -152,14 +164,6 @@ export function migrateLegacyLanding(
   }
 }
 
-function sessionStorageOrUndefined(): Storage | undefined {
-  try {
-    return typeof sessionStorage === "undefined" ? undefined : sessionStorage;
-  } catch {
-    return undefined;
-  }
-}
-
 function rawBrowserUrl(): string | undefined {
   if (typeof window === "undefined" || !window.location) return undefined;
   return `${window.location.pathname}${window.location.search}`;
@@ -168,11 +172,11 @@ function rawBrowserUrl(): string | undefined {
 export function browserLandingUrl(now = Date.now()): string | undefined {
   try {
     const storage = localStorageOrUndefined();
-    const raw = storage?.getItem(LANDING_STORAGE_KEY);
+    const raw = storage!.getItem(LANDING_STORAGE_KEY);
     if (!raw) return undefined;
     const parsed = JSON.parse(raw) as { u?: unknown; e?: unknown };
     if (typeof parsed.u === "string" && typeof parsed.e === "number" && parsed.e > now) return parsed.u;
-    storage?.removeItem(LANDING_STORAGE_KEY);
+    storage!.removeItem(LANDING_STORAGE_KEY);
   } catch {
     // Unreadable or corrupt: treat as no landing.
   }
@@ -198,7 +202,7 @@ export function withPromoMetadata(
     enriched = { ...enriched, _promo_landing_url: landingUrl };
   }
   const metadata = existingMetadata(enriched[METADATA_PROPERTY]);
-  for (const [key, value] of Object.entries(context ?? {})) {
+  for (const [key, value] of Object.entries(context || {})) {
     if (!enriched[key] && !metadata[key]) enriched = { ...enriched, [key]: value };
   }
   for (const [key, value] of Object.entries(enriched)) {
@@ -224,27 +228,24 @@ export function needsPromoMetadataPacking(
 function packJsonPayload(payload: unknown): unknown {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
   const object = payload as Record<string, unknown>;
+  const stamp = (line: Record<string, unknown>) => {
+    const properties = line["properties"];
+    return {
+      ...line,
+      properties: withPromoMetadata(
+        properties && typeof properties === "object" && !Array.isArray(properties) ? stringProperties(properties) : {},
+      ),
+    };
+  };
   if (Array.isArray(object["items"])) {
     return {
       ...object,
-      items: object["items"].map((item) => {
-        if (!item || typeof item !== "object" || Array.isArray(item)) return item;
-        const line = item as Record<string, unknown>;
-        const properties = line["properties"];
-        const normalizedProperties =
-          properties && typeof properties === "object" && !Array.isArray(properties)
-            ? stringProperties(properties)
-            : {};
-        return { ...line, properties: withPromoMetadata(normalizedProperties) };
-      }),
+      items: object["items"].map((item) =>
+        !item || typeof item !== "object" || Array.isArray(item) ? item : stamp(item as Record<string, unknown>),
+      ),
     };
   }
-  const properties = object["properties"];
-  const normalizedProperties =
-    properties && typeof properties === "object" && !Array.isArray(properties)
-      ? stringProperties(properties)
-      : {};
-  return { ...object, properties: withPromoMetadata(normalizedProperties) };
+  return stamp(object);
 }
 
 function stringProperties(value: object): LineProperties {
@@ -280,7 +281,7 @@ function stampFlat(entries: Array<[string, unknown]>, set: (name: string, value:
       if (!items.has(itemAny[1]!)) items.set(itemAny[1]!, {});
       continue;
     }
-    const key = ROOT_PROP.exec(name)?.[1];
+    const key = (ROOT_PROP.exec(name) || [])[1];
     if (key && typeof value === "string") root[key] = value;
   }
   if (items.size === 0) items.set("", root);
@@ -290,24 +291,18 @@ function stampFlat(entries: Array<[string, unknown]>, set: (name: string, value:
   });
 }
 
-function packedFormData(body: FormData): FormData {
-  const clone = new FormData();
+function packedFlat<T extends FormData | URLSearchParams>(body: T, clone: T): T {
   const entries: Array<[string, unknown]> = [];
-  body.forEach((value, key) => {
-    clone.append(key, value);
+  body.forEach((value: FormDataEntryValue, key: string) => {
+    clone.append(key, value as string);
     entries.push([key, value]);
   });
   stampFlat(entries, (name, value) => clone.set(name, value));
   return clone;
 }
 
-function packedSearchParams(body: URLSearchParams): URLSearchParams {
-  const clone = new URLSearchParams(body);
-  const entries: Array<[string, unknown]> = [];
-  clone.forEach((value, name) => entries.push([name, value]));
-  stampFlat(entries, (name, value) => clone.set(name, value));
-  return clone;
-}
+const packedFormData = (body: FormData): FormData => packedFlat(body, new FormData());
+const packedSearchParams = (body: URLSearchParams): URLSearchParams => packedFlat(body, new URLSearchParams());
 
 function packedBody(body: BodyInit | null | undefined): BodyInit | null | undefined {
   if (body instanceof FormData) return packedFormData(body);
@@ -347,7 +342,7 @@ export async function packCartAddRequest(
   const request = new Request(input, init);
   if (!request.body) return [request, undefined];
 
-  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+  const contentType = (request.headers.get("content-type") || "").toLowerCase();
   let body: BodyInit;
   if (contentType.includes("multipart/form-data")) {
     body = packedFormData(await request.clone().formData());
@@ -392,7 +387,7 @@ function patchXhrCartAdd(): void {
       try {
         outgoing = packXhrBody(body);
       } catch (e) {
-        console.warn("[PromoEngine] Cart line metadata packing failed, using request as-is", e);
+        packWarn(e);
       }
     }
     return (originalSend as (b?: PackableBody) => void).call(this, outgoing);
@@ -437,7 +432,7 @@ export function createLateStamper(deps: LateStamperDeps): {
 } {
   let known: Set<string> | null = null;
   const remember = (cart: CartLike | null) => {
-    known = new Set((cart?.items ?? []).map((line) => line.key));
+    known = new Set(((cart && cart.items) || []).map((line) => line.key));
   };
   return {
     async baseline() {
@@ -457,9 +452,9 @@ export function createLateStamper(deps: LateStamperDeps): {
       const page = deps.pageUrl();
       let stamped = 0;
       let latest: CartLike = cart;
-      for (const line of cart.items ?? []) {
+      for (const line of cart.items || []) {
         if (before.has(line.key) || !page) continue;
-        const properties = stringProperties(line.properties ?? {});
+        const properties = stringProperties(line.properties || {});
         if (METADATA_PROPERTY in properties) continue;
         const next = await deps.changeLine({
           id: line.key,
@@ -567,6 +562,7 @@ export function installPromoMetadataBridge(): void {
   migrateLegacyLanding();
   recordUtmLanding();
   installStampListeners();
+  trackCartDrawerActions();
 
   const nativeFetch = window.fetch.bind(window);
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
@@ -574,7 +570,7 @@ export function installPromoMetadataBridge(): void {
     // that would double-submit a POST /cart/add on failure.
     return packCartAddRequest(input, init)
       .catch((e): [RequestInfo | URL, RequestInit | undefined] => {
-        console.warn("[PromoEngine] Cart line metadata packing failed, using request as-is", e);
+        packWarn(e);
         return [input, init];
       })
       .then(([packedInput, packedInit]) => nativeFetch(packedInput, packedInit));
@@ -599,7 +595,7 @@ export function installPromoMetadataBridge(): void {
       try {
         if (isCartAddRequest(this.action, { method: this.method })) stampFormInPlace(this);
       } catch (e) {
-        console.warn("[PromoEngine] Cart line metadata packing failed, using request as-is", e);
+        packWarn(e);
       }
       return originalSubmit.call(this);
     };
