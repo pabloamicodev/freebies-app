@@ -11,6 +11,7 @@ import {
 } from "@promo/shared-types";
 import { ProductPicker } from "../ProductPicker.js";
 import { ThemeTargetPicker } from "../ThemeTargetPicker.js";
+import { ExperimentPicker } from "../ExperimentPicker.js";
 import { readSections, readTemplates } from "../../lib/theme-target-selection.js";
 import { PAGE_TYPE_OPTIONS, readPageTypes } from "../../lib/page-types.js";
 
@@ -1005,11 +1006,22 @@ export function ExperimentForm({ value, onChange, isCodePromo = false }: SubForm
   const variantKeys = readStringList(value?.["variantKeys"]);
   const [keysText, setKeysText] = useState(variantKeys.join(", "));
   const flags = readPageStampFlags(value, isCodePromo);
+  const keysJoined = variantKeys.join(",");
+  useEffect(() => {
+    setKeysText((current) => (readStringList(current).join(",") === keysJoined ? current : keysJoined.split(",").filter(Boolean).join(", ")));
+  }, [keysJoined]);
   const emit = (patch: Partial<Record<string, unknown>>) =>
     onChange?.({ experimentId, variantKeys, ...(experimentName ? { experimentName } : {}), ...flags, ...patch });
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* FIX-sectpl-11 mounts <ExperimentPicker> here; this manual entry stays as its fallback. */}
+      <ExperimentPicker
+        idPrefix={`${idPrefix}-picker`}
+        experimentId={experimentId}
+        experimentName={experimentName}
+        variantKeys={variantKeys}
+        onChange={(next) => emit(next)}
+      />
+      <div className="b-help">Or enter the experiment manually:</div>
       <div>
         <label className="b-label" htmlFor={`${idPrefix}-experiment-id`}>Experiment ID</label>
         <input id={`${idPrefix}-experiment-id`} className="b-input" value={experimentId} onChange={(event) => emit({ experimentId: event.target.value })} autoComplete="off" />
