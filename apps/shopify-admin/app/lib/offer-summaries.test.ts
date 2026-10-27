@@ -168,3 +168,39 @@ describe("codesSummary", () => {
     });
   });
 });
+
+describe("template / section_shown / experiment summaries", () => {
+  it("summarizes templates, adding the page-only suffix", () => {
+    expect(conditionSummary("template", { templates: ["page.landing-nektar", "page.landing-nektar-v2"] })).toBe(
+      "Template: page.landing-nektar, page.landing-nektar-v2",
+    );
+    expect(conditionSummary("template", { templates: ["product"], scope: "page" })).toBe("Template: product · this page only");
+  });
+
+  it("summarizes sections with the stored label, else template/key", () => {
+    expect(
+      conditionSummary("section_shown", {
+        sections: [{ template: "page.landing-nektar", key: "hero_abc", label: "Hero con promo (page.landing-nektar)" }, { template: "product", key: "main" }],
+      }),
+    ).toBe("Section shown: Hero con promo (page.landing-nektar), product/main");
+  });
+
+  it("summarizes a test group with arm labels", () => {
+    expect(
+      conditionSummary("experiment", {
+        experimentId: "abcd1234",
+        experimentName: "PDP hero v2",
+        variantKeys: ["variant_a", "control"],
+        variantLabels: { variant_a: "Variant A" },
+        scope: "page",
+      }),
+    ).toBe("Test group: PDP hero v2 → Variant A, control · this page only");
+    expect(conditionSummary("experiment", { experimentId: "abcd1234", variantKeys: ["control"] })).toBe("Test group: abcd1234 → control");
+  });
+
+  it("labels the three condition types", () => {
+    expect(conditionTypeLabel("template")).toBe("Template");
+    expect(conditionTypeLabel("section_shown")).toBe("Section is shown");
+    expect(conditionTypeLabel("experiment")).toBe("Test group");
+  });
+});

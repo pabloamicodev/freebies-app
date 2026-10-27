@@ -46,6 +46,14 @@ function lineMatchFlags(value: Record<string, unknown>): Record<string, boolean>
   );
 }
 
+/** Scope plus the line-match flags shared by the template, section and experiment conditions. */
+function stampMatchFlags(value: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...(value["scope"] === "visit" || value["scope"] === "page" ? { scope: value["scope"] } : {}),
+    ...lineMatchFlags(value),
+  };
+}
+
 export function normalizeOfferSubconditions(input: Record<string, unknown>): NormalizeResult {
   const conditions: NormalizedOfferSubcondition[] = [];
 
@@ -223,6 +231,54 @@ export function normalizeOfferSubconditions(input: Record<string, unknown>): Nor
           value: { pageTypes: csv(value["pageTypes"]), ...lineMatchFlags(value) },
         });
         break;
+      case "template":
+        conditions.push({
+          conditionType: "template",
+          operator: "eq",
+          value: {
+            templates: [...new Set(csv(value["templates"]).map((ref) => ref.trim().toLowerCase()))],
+            ...stampMatchFlags(value),
+          },
+        });
+        break;
+      case "section_shown": {
+        const sections = Array.isArray(value["sections"])
+          ? value["sections"].flatMap((item) => {
+              const section = record(item);
+              if (!section) return [];
+              const label = String(section["label"] ?? "").trim();
+              return [
+                {
+                  template: String(section["template"] ?? "").trim().toLowerCase(),
+                  key: String(section["key"] ?? "").trim(),
+                  ...(label ? { label } : {}),
+                },
+              ];
+            })
+          : [];
+        conditions.push({
+          conditionType: "section_shown",
+          operator: "eq",
+          value: { sections, ...stampMatchFlags(value) },
+        });
+        break;
+      }
+      case "experiment": {
+        const experimentName = String(value["experimentName"] ?? "").trim();
+        const variantLabels = record(value["variantLabels"]);
+        conditions.push({
+          conditionType: "experiment",
+          operator: "eq",
+          value: {
+            experimentId: String(value["experimentId"] ?? "").trim(),
+            variantKeys: csv(value["variantKeys"]).map((key) => key.trim()),
+            ...(experimentName ? { experimentName } : {}),
+            ...(variantLabels && Object.keys(variantLabels).length > 0 ? { variantLabels } : {}),
+            ...stampMatchFlags(value),
+          },
+        });
+        break;
+      }
       case "custom_attribute": {
         const scope = value["scope"] === "cart" ? "cart" : "line";
         conditions.push({

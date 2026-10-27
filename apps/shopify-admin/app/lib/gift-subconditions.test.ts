@@ -250,3 +250,90 @@ describe("normalizeOfferSubconditions page matching flags", () => {
     expect(normalizeOfferSubconditions({ page_types: { pageTypes: [] } }).success).toBe(false);
   });
 });
+
+describe("normalizeOfferSubconditions template / section_shown / experiment", () => {
+  it("stores trimmed lowercase unique templates with scope and flags", () => {
+    expect(
+      normalizeOfferSubconditions({
+        template: { templates: [" Page.Landing-Nektar ", "page.landing-nektar", "product"], scope: "page", onlyMatchedLines: true },
+      }),
+    ).toEqual({
+      success: true,
+      data: [
+        {
+          conditionType: "template",
+          operator: "eq",
+          value: { templates: ["page.landing-nektar", "product"], scope: "page", onlyMatchedLines: true },
+        },
+      ],
+    });
+  });
+
+  it("stores sections as template/key with the label snapshot", () => {
+    const result = normalizeOfferSubconditions({
+      section_shown: {
+        sections: [{ template: "Page.Landing", key: "hero_abc", label: "Hero (page.landing)" }, { template: "product", key: "main" }],
+        rejectUnmatchedLines: true,
+      },
+    });
+    expect(result).toEqual({
+      success: true,
+      data: [
+        {
+          conditionType: "section_shown",
+          operator: "eq",
+          value: {
+            sections: [{ template: "page.landing", key: "hero_abc", label: "Hero (page.landing)" }, { template: "product", key: "main" }],
+            rejectUnmatchedLines: true,
+          },
+        },
+      ],
+    });
+  });
+
+  it("stores an experiment with name, labels and arm keys", () => {
+    const result = normalizeOfferSubconditions({
+      experiment: {
+        experimentId: " abcd1234 ",
+        variantKeys: "control, variant_a",
+        experimentName: "PDP hero v2",
+        variantLabels: { variant_a: "Variant A" },
+        scope: "visit",
+      },
+    });
+    expect(result).toEqual({
+      success: true,
+      data: [
+        {
+          conditionType: "experiment",
+          operator: "eq",
+          value: {
+            experimentId: "abcd1234",
+            variantKeys: ["control", "variant_a"],
+            experimentName: "PDP hero v2",
+            variantLabels: { variant_a: "Variant A" },
+            scope: "visit",
+          },
+        },
+      ],
+    });
+  });
+
+  it("rejects empty or malformed selections", () => {
+    expect(normalizeOfferSubconditions({ template: { templates: [] } }).success).toBe(false);
+    expect(normalizeOfferSubconditions({ template: { templates: ["not valid!"] } }).success).toBe(false);
+    expect(normalizeOfferSubconditions({ section_shown: { sections: [] } }).success).toBe(false);
+    expect(normalizeOfferSubconditions({ section_shown: { sections: [{ template: "product", key: "bad key" }] } }).success).toBe(false);
+    expect(normalizeOfferSubconditions({ experiment: { experimentId: "", variantKeys: ["a"] } }).success).toBe(false);
+    expect(normalizeOfferSubconditions({ experiment: { experimentId: "abcd1234", variantKeys: [] } }).success).toBe(false);
+  });
+
+  it("combines with other conditions (AND across rows)", () => {
+    const result = normalizeOfferSubconditions({
+      page_types: { pageTypes: ["product"] },
+      template: { templates: ["product"] },
+      section_shown: { sections: [{ template: "product", key: "main" }] },
+    });
+    expect(result.success && result.data.map((c) => c.conditionType)).toEqual(["page_types", "template", "section_shown"]);
+  });
+});
