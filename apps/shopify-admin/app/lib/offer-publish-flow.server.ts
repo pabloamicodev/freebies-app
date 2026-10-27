@@ -29,6 +29,9 @@ import { preflightSharedConfig } from "./shared-config-size.server.js";
 import { insertAuditLog } from "./audit-log.server.js";
 import { limitedTitleError } from "./offer-usage.server.js";
 import { isLimitsEnforced } from "./limits-enforced.server.js";
+import { getStaleThemeRefs } from "./theme-catalog.server.js";
+import { getExperimentWarnings, type StoredExperiment } from "./experiment-directory.server.js";
+import { readSections, readTemplates, sectionRefOf } from "./theme-target-selection.js";
 
 export interface PublishValidationResult {
   ok: boolean;
@@ -573,4 +576,64 @@ export async function finalizeCreatedOffer(
   return rollbackError
     ? `${publishError} The offer was restored to draft, but Shopify configuration rollback also failed: ${rollbackError}`
     : `${publishError} The offer was restored to draft and the previous Shopify configuration was re-published.`;
+}
+
+export interface PublishWarningAuth {
+  shopDomain: string;
+  accessToken: string;
+}
+
+const asRecord = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
+
+/**
+ * Non-blocking problems an offer would go live with: template/section refs gone from the published
+ * theme, or an experiment/arm missing from the Experiment Engine directory. Advisory only: unreadable
+ * sources (theme, directory, DB) yield no warning, and publishing is never refused because of one.
+ */
+export async function getPublishWarnings(
+  db: Db,
+  shopId: string,
+  offerId: string,
+  auth: PublishWarningAuth,
+): Promise<string[]> {
+  try {
+    const rows = await db
+      .select({ conditionType: offerConditions.conditionType, value: offerConditions.value })
+      .from(offerConditions)
+      .where(
+        and(
+          eq(offerConditions.shopId, shopId),
+          eq(offerConditions.offerId, offerId),
+          eq(offerConditions.isEnabled, true),
+          inArray(offerConditions.conditionType, ["template", "section_shown", "experiment"]),
+        ),
+      );
+    const templateRefs: string[] = [];
+    const sectionRefs: string[] = [];
+    const experiments: StoredExperiment[] = [];
+    for (const row of rows) {
+      const value = asRecord(row.value);
+      if (row.conditionType === "template") templateRefs.push(...readTemplates(value["templates"]));
+      else if (row.conditionType === "section_shown") sectionRefs.push(...readSections(value["sections"]).map(sectionRefOf));
+      else if (typeof value["experimentId"] === "string") {
+        experiments.push({
+          experimentId: value["experimentId"],
+          variantKeys: Array.isArray(value["variantKeys"]) ? value["variantKeys"].filter((k): k is string => typeof k === "string") : [],
+          ...(typeof value["experimentName"] === "string" ? { experimentName: value["experimentName"] } : {}),
+        });
+      }
+    }
+    const [staleTemplates, staleSections, experimentWarnings] = await Promise.all([
+      getStaleThemeRefs(auth, templateRefs),
+      getStaleThemeRefs(auth, sectionRefs),
+      getExperimentWarnings(auth, experiments),
+    ]);
+    return [
+      ...staleTemplates.map((ref) => `Template "${ref}" is not in your published theme.`),
+      ...staleSections.map((ref) => `Section "${ref}" is not in your published theme.`),
+      ...experimentWarnings,
+    ];
+  } catch {
+    return [];
+  }
 }

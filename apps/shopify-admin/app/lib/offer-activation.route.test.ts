@@ -8,6 +8,7 @@ const ART = "America/Argentina/Buenos_Aires";
 const ctx = vi.hoisted(() => ({ db: null as unknown, shopId: "", timezone: "UTC" }));
 const publishShopConfig = vi.hoisted(() => vi.fn(async () => null as string | null));
 const republishIfActive = vi.hoisted(() => vi.fn(async () => null as string | null));
+const getPublishWarnings = vi.hoisted(() => vi.fn(async () => [] as string[]));
 
 vi.mock("./shop-context.server.js", () => ({
   getShopContext: async () => ({
@@ -28,6 +29,7 @@ vi.mock("@promo/db", async (importOriginal) => ({
 vi.mock("./offer-publish-flow.server.js", () => ({
   publishShopConfig,
   republishIfActive,
+  getPublishWarnings,
   validateOffersPublishable: async () => ({ ok: true }),
   validateActivation: async () => ({ ok: true }),
 }));
@@ -94,6 +96,20 @@ describe("activation honours the schedule", () => {
     const id = await publishable({ startsAt: days(-1) });
     await run(detail.action, post(`/app/offers/${id}`, { intent: "publish" }), { id });
     expect((await row(id)).status).toBe("active");
+  });
+
+  it("detail Publish returns warnings without publishing, then publishes once acknowledged", async () => {
+    const id = await publishable({ startsAt: days(-1) });
+    getPublishWarnings.mockResolvedValueOnce(['Template "page.gone" is not in your published theme.']);
+
+    const first = await run(detail.action, post(`/app/offers/${id}`, { intent: "publish" }), { id });
+    expect(first).toEqual({ warnings: ['Template "page.gone" is not in your published theme.'] });
+    expect((await row(id)).status).toBe("draft");
+    expect(publishShopConfig).not.toHaveBeenCalled();
+
+    await run(detail.action, post(`/app/offers/${id}`, { intent: "publish", acknowledgeWarnings: "1" }), { id });
+    expect((await row(id)).status).toBe("active");
+    expect(publishShopConfig).toHaveBeenCalledTimes(1);
   });
 
   it("list toggle_status schedules a future-start offer and expires an ended one", async () => {
