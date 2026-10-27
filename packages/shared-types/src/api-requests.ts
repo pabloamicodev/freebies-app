@@ -137,12 +137,12 @@ export const OrderAttributionQuerySchema = z.object({
 });
 
 export const BundleQuerySchema = z.object({
-  offer_id: z.string().uuid().nullish(),
+  offer_id: z.guid().nullish(),
   page_url: z.string().max(2_048).nullish(),
 });
 
 export const ProductCustomizationsQuerySchema = z.object({
-  offer_id: z.string().uuid(),
+  offer_id: z.guid(),
   variant_id: z.string().min(1).max(128),
 });
 

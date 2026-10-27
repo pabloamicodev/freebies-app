@@ -17,7 +17,7 @@ export const CartLineUpdateActionSchema = z.object({
   lineKey: z.string(),
   quantity: z.number().int().nonnegative(),
   properties: z.record(z.string(), z.string()).optional(),
-  offerId: z.string().uuid().optional(),
+  offerId: z.guid().optional(),
   variantId: z.string().optional(),
 });
 export type CartLineUpdateAction = z.infer<typeof CartLineUpdateActionSchema>;
@@ -27,7 +27,7 @@ export const CartLineRemoveActionSchema = z.object({
   action: z.literal("remove_line"),
   lineKey: z.string(),
   reason: z.string().optional(),
-  offerId: z.string().uuid().optional(),
+  offerId: z.guid().optional(),
   variantId: z.string().optional(),
   properties: z.record(z.string(), z.string()).optional(),
 });
@@ -41,7 +41,7 @@ export const CartActionSchema = z.discriminatedUnion("action", [
 export type CartAction = z.infer<typeof CartActionSchema>;
 
 const SelectableGiftSchema = z.object({
-  rewardId: z.string().uuid(),
+  rewardId: z.guid(),
   offerVersion: z.number().int().positive(),
   rewardMaxQuantity: z.number().int().positive(),
   variantId: z.string(),
@@ -61,7 +61,7 @@ const SelectableGiftSchema = z.object({
 });
 
 export const GiftSliderPayloadSchema = z.object({
-  offerId: z.string().uuid(),
+  offerId: z.guid(),
   title: z.string(),
   subtitle: z.string().nullable(),
   currencyCode: z.string().length(3),
@@ -83,8 +83,8 @@ export const GiftSliderPayloadSchema = z.object({
 export type GiftSliderPayload = z.infer<typeof GiftSliderPayloadSchema>;
 
 export const CartMessagePayloadSchema = z.object({
-  offerId: z.string().uuid(),
-  widgetId: z.string().uuid(),
+  offerId: z.guid(),
+  widgetId: z.guid(),
   message: z.string(),
   type: z.enum(["progress", "success", "info"]),
   priority: z.number().int(),
@@ -92,8 +92,8 @@ export const CartMessagePayloadSchema = z.object({
 export type CartMessagePayload = z.infer<typeof CartMessagePayloadSchema>;
 
 export const ProgressBarPayloadSchema = z.object({
-  offerId: z.string().uuid(),
-  widgetId: z.string().uuid(),
+  offerId: z.guid(),
+  widgetId: z.guid(),
   currentCents: z.number().int().nonnegative(),
   targetCents: z.number().int().nonnegative(),
   currentQuantity: z.number().int().nonnegative(),
@@ -116,7 +116,7 @@ export const EligibilityReasonSchema = z.object({
 export type EligibilityReason = z.infer<typeof EligibilityReasonSchema>;
 
 export const EvaluatedOfferSchema = z.object({
-  offerId: z.string().uuid(),
+  offerId: z.guid(),
   offerVersion: z.number().int(),
   type: z.string(),
   qualified: z.boolean(),
@@ -142,7 +142,7 @@ export type UpsellProduct = z.infer<typeof UpsellProductSchema>;
 /** A qualified upsell offer, enriched with catalog pricing. Built at the route
  * layer (not the pure evaluator) since it needs product-catalog data. */
 export const UpsellPayloadSchema = z.object({
-  offerId: z.string().uuid(),
+  offerId: z.guid(),
   product: UpsellProductSchema.nullable(),
   message: z.string(),
   buttonText: z.string(),
