@@ -377,6 +377,20 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
       break;
     }
+    case "set_combination": {
+      const flags = {
+        combinesWithOrderDiscounts: formData.get("order_discounts") === "on",
+        combinesWithProductDiscounts: formData.get("product_discounts") === "on",
+        combinesWithShippingDiscounts: formData.get("shipping_discounts") === "on",
+        canStackWithGiftOffers: formData.get("can_stack_gift_offers") === "on",
+      };
+      await db.insert(offerCombinationPolicies)
+        .values({ shopId, offerId, ...flags })
+        .onConflictDoUpdate({ target: [offerCombinationPolicies.offerId], set: { ...flags, updatedAt: new Date() } });
+      const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+      if (publishError) return { error: publishError };
+      break;
+    }
     case "pause": {
       await db.update(offers).set({ status: "paused", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
       if (offer.status === "active") {
@@ -1451,6 +1465,23 @@ export default function OfferDetailPage() {
     setNewCondValue({});
   }
 
+  const combination = {
+    combinesWithOrderDiscounts: policy?.combinesWithOrderDiscounts ?? false,
+    combinesWithProductDiscounts: policy?.combinesWithProductDiscounts ?? false,
+    combinesWithShippingDiscounts: policy?.combinesWithShippingDiscounts ?? false,
+    canStackWithGiftOffers: policy?.canStackWithGiftOffers ?? true,
+  };
+  function saveCombination(change: Partial<typeof combination>) {
+    const next = { ...combination, ...change };
+    const fd = new FormData();
+    fd.append("intent", "set_combination");
+    if (next.combinesWithOrderDiscounts) fd.append("order_discounts", "on");
+    if (next.combinesWithProductDiscounts) fd.append("product_discounts", "on");
+    if (next.combinesWithShippingDiscounts) fd.append("shipping_discounts", "on");
+    if (next.canStackWithGiftOffers) fd.append("can_stack_gift_offers", "on");
+    void fetcher.submit(fd, { method: "POST" });
+  }
+
   function submitAction(intent: string, extra: Record<string, string> = {}) {
     const fd = new FormData();
     fd.append("intent", intent);
@@ -1968,23 +1999,23 @@ export default function OfferDetailPage() {
               <div className="b-accordion-body">
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <div className="b-checkbox-row">
-                    <input type="checkbox" id="combine-orders" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} checked={policy?.combinesWithOrderDiscounts ?? false} readOnly />
+                    <input type="checkbox" id="combine-orders" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} checked={combination.combinesWithOrderDiscounts} onChange={(e) => saveCombination({ combinesWithOrderDiscounts: e.target.checked })} disabled={fetcher.state !== "idle"} />
                     <label htmlFor="combine-orders" className="b-checkbox-label">Combines with order discounts</label>
                   </div>
                   <div className="b-checkbox-row">
-                    <input type="checkbox" id="combine-products" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} checked={policy?.combinesWithProductDiscounts ?? false} readOnly />
+                    <input type="checkbox" id="combine-products" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} checked={combination.combinesWithProductDiscounts} onChange={(e) => saveCombination({ combinesWithProductDiscounts: e.target.checked })} disabled={fetcher.state !== "idle"} />
                     <label htmlFor="combine-products" className="b-checkbox-label">Combines with product discounts</label>
                   </div>
                   <div className="b-checkbox-row">
-                    <input type="checkbox" id="combine-shipping" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} checked={policy?.combinesWithShippingDiscounts ?? false} readOnly />
+                    <input type="checkbox" id="combine-shipping" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} checked={combination.combinesWithShippingDiscounts} onChange={(e) => saveCombination({ combinesWithShippingDiscounts: e.target.checked })} disabled={fetcher.state !== "idle"} />
                     <label htmlFor="combine-shipping" className="b-checkbox-label">Combines with shipping discounts</label>
                   </div>
                   <div className="b-checkbox-row">
-                    <input type="checkbox" id="combine-gift-offers" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} checked={policy?.canStackWithGiftOffers ?? true} readOnly />
+                    <input type="checkbox" id="combine-gift-offers" style={{ accentColor: "var(--blue)", width: 15, height: 15 }} checked={combination.canStackWithGiftOffers} onChange={(e) => saveCombination({ canStackWithGiftOffers: e.target.checked })} disabled={fetcher.state !== "idle"} />
                     <label htmlFor="combine-gift-offers" className="b-checkbox-label">Can stack with other gift offers</label>
                   </div>
                   <p style={{ fontSize: 12, color: "var(--text-sub)", margin: 0 }}>
-                    To change combination policies, go to the{" "}
+                    Limits and priority live on the{" "}
                     <Link to={`/app/offers/${offer.id}/combination`} style={{ color: "var(--blue)" }}>Combination settings</Link> page.
                   </p>
                 </div>
