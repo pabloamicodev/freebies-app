@@ -30,7 +30,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 function chunkRegisters(api: Record<string, unknown>) {
   win.__peBlocks = api;
-  scripts[0].onload!();
+  scripts[0]!.onload!();
 }
 
 describe("lazy FBT / bundle-builder blocks", () => {
@@ -48,7 +48,7 @@ describe("lazy FBT / bundle-builder blocks", () => {
     lazyInitFbtWidget(a, { offerId: "o" } as never, "USD", "s");
     lazyInitBundleBuilder(b, { offerId: "o2" } as never, "s");
     expect(scripts).toHaveLength(1);
-    expect(scripts[0].src).toBe(CHUNK);
+    expect(scripts[0]!.src).toBe(CHUNK);
     expect(fbt).not.toHaveBeenCalled();
 
     chunkRegisters({ initFbtWidget: fbt, initBundleBuilder: bundle });
@@ -72,7 +72,7 @@ describe("lazy FBT / bundle-builder blocks", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const container = { setAttribute: vi.fn() } as unknown as HTMLElement;
     lazyInitFbtWidget(container, {} as never, "USD", "s");
-    scripts[0].onerror!();
+    scripts[0]!.onerror!();
     await flush();
     expect(container.setAttribute).toHaveBeenCalledWith("data-promo-engine-error", "true");
 
