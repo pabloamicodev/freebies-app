@@ -72,6 +72,27 @@ export function queryValueMatches(name: string, actual: string, expected: string
   return isUtmParam(name) ? asciiLower(actual) === asciiLower(expected) : actual === expected;
 }
 
+/**
+ * Canonical form of a "Store pages" URL entry: path only (scheme, host, query and fragment dropped),
+ * ASCII-lowercased, one leading slash, no trailing slash. Empty and home ("/") entries yield null.
+ */
+export function normalizeStorePageUrl(raw: string): string | null {
+  const { path } = splitPageUrl(raw.trim());
+  const trimmed = asciiLower(path).replace(/\/+$/, "");
+  if (trimmed === "") return null;
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+export function normalizeStorePageUrls(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out = new Set<string>();
+  for (const entry of raw) {
+    const normalized = typeof entry === "string" ? normalizeStorePageUrl(entry) : null;
+    if (normalized) out.add(normalized);
+  }
+  return [...out];
+}
+
 /** Path a specific-link condition requires, exactly as the compiler stores it. */
 export function specificLinkRequiredPath(requiredUrl: string): string {
   const trimmed = requiredUrl.trim();

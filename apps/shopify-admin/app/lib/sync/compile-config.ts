@@ -13,6 +13,7 @@ import {
   isPageConditionType,
   resolveOnlyMatchedLines,
   resolveRejectUnmatchedLines,
+  normalizeStorePageUrls,
   specificLinkRequiredPath,
   type ConditionType,
   type TypedOfferCondition,
@@ -139,12 +140,15 @@ export function compilePageCondition(
     }
     case "page_types": {
       const { value } = condition;
+      const kinds = Array.isArray(value.pageTypes)
+        ? value.pageTypes.filter((pageType) => typeof pageType === "string")
+        : [];
+      // With a URL list, "page" stops meaning "any page": the Function matches the listed paths instead.
+      const urls = kinds.includes("page") ? normalizeStorePageUrls(value.pageUrls) : [];
       return {
         conditions: [
           {
-            patterns: Array.isArray(value.pageTypes)
-              ? value.pageTypes.filter((pageType) => typeof pageType === "string")
-              : [],
+            patterns: urls.length ? [...kinds.filter((kind) => kind !== "page"), ...urls] : kinds,
             matchMode: "page_type",
             caseSensitive: false,
           },

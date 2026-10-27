@@ -36,6 +36,25 @@ describe("evaluatePageTypes", () => {
     expect(evaluatePageTypes("/account", { pageTypes: ["home"] }).ok).toBe(false);
     expect(evaluatePageTypes(null, { pageTypes: ["home"] }).ok).toBe(false);
   });
+
+  it("restricts the page type to the listed URLs and leaves the other types alone", () => {
+    const value = { pageTypes: ["home", "product", "page"] as const, pageUrls: ["/Pages/Bundle-Builder/", "https://x.com/pages/other?a=1"] };
+    const check = (url: string | null) => evaluatePageTypes(url, { ...value, pageTypes: [...value.pageTypes] }).ok;
+    expect(check("/pages/bundle-builder")).toBe(true);
+    expect(check("/en/pages/bundle-builder")).toBe(false);
+    expect(check("/PAGES/Bundle-Builder/?x=1")).toBe(true);
+    expect(check("/pages/other")).toBe(true);
+    expect(check("/pages/landing")).toBe(false);
+    expect(check("/")).toBe(true);
+    expect(check("/products/x")).toBe(true);
+    expect(check("/cart")).toBe(false);
+  });
+
+  it("keeps any page when the list is empty or Pages is not selected", () => {
+    expect(evaluatePageTypes("/pages/landing", { pageTypes: ["page"], pageUrls: [" "] }).ok).toBe(true);
+    expect(evaluatePageTypes("/pages/landing", { pageTypes: ["page"] }).ok).toBe(true);
+    expect(evaluatePageTypes("/pages/x", { pageTypes: ["home"], pageUrls: ["/pages/x"] }).ok).toBe(false);
+  });
 });
 
 describe("evaluateUtmParameters", () => {
