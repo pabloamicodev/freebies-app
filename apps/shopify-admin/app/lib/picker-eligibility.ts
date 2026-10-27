@@ -7,7 +7,9 @@ interface EligibilityVariant {
 }
 
 /**
- * "block" is for gifts/upsells: the server only grants variants that can be sold.
+ * "block" is for gifts/upsells: sold-out variants stay selectable (flagged with the sold_out
+ * warning; the storefront shows them as sold out until restocked) but subscription-only
+ * variants are blocked because they can't be granted as a one-time gift.
  * "warn" is for discounts and conditions, which stay valid while a variant is sold out.
  * Product status (ACTIVE) is checked by the caller.
  */
@@ -19,6 +21,6 @@ export function variantEligibility(variant: EligibilityVariant, policy: Availabi
   if (policy === "warn") {
     return { selectable: true, reason: null, warning: variant.availableForSale ? null : "sold_out" };
   }
-  const reason = !variant.availableForSale ? "sold_out" : variant.requiresSellingPlan ? "subscription_only" : null;
-  return { selectable: reason === null, reason, warning: null };
+  if (variant.requiresSellingPlan) return { selectable: false, reason: "subscription_only", warning: null };
+  return { selectable: true, reason: null, warning: variant.availableForSale ? null : "sold_out" };
 }

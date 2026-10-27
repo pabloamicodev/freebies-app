@@ -47,11 +47,12 @@ interface ProductPickerProps {
   /** Already selected GIDs (shown as pre-checked). */
   selectedIds?: string[];
   onSelect: (gids: string[]) => void;
-  /** "block": sold-out/subscription-only variants can't be picked (gifts, upsells). "warn": pickable, sold-out flagged. */
+  /** "block": subscription-only variants can't be picked, sold-out ones can (gifts, upsells). "warn": everything pickable (discounts). Sold-out is always flagged. */
   availabilityPolicy?: AvailabilityPolicy;
 }
 
 const SOLD_OUT_WARNING = "Sold out — discount applies when restocked";
+const SOLD_OUT_GIFT_WARNING = "Sold out — shown as sold out to shoppers until restocked";
 
 function blockedProductReason(product: Product): string {
   if (product.status !== "ACTIVE") return "it isn't active in Shopify";
@@ -330,7 +331,8 @@ function ProductPickerContent({
               const productSelectable = product.status === "ACTIVE" && variantGids.length > 0;
               const blockedReason = blockedProductReason(product);
               const blockedMessage = `${product.title} can't be selected here: ${blockedReason}.${product.status === "ACTIVE" ? ` ${RESTOCK_HINT}` : ""}`;
-              const productSoldOut = availabilityPolicy === "warn" && product.status === "ACTIVE" &&
+              const soldOutWarning = availabilityPolicy === "block" ? SOLD_OUT_GIFT_WARNING : SOLD_OUT_WARNING;
+              const productSoldOut = product.status === "ACTIVE" &&
                 (product.variants?.length ?? 0) > 0 && product.variants.every((v) => !v.availableForSale);
               const reasonId = `picker-reason-${product.id}`;
               const productSelected =
@@ -400,7 +402,7 @@ function ProductPickerContent({
                           {!productSelectable && product.status === "ACTIVE" && (
                             <span id={reasonId} className="b-badge b-badge-red">No eligible variants: {blockedReason}</span>
                           )}
-                          {productSoldOut && <span className="b-badge b-badge-orange">{SOLD_OUT_WARNING}</span>}
+                          {productSoldOut && <span className="b-badge b-badge-orange">{soldOutWarning}</span>}
                           {product.vendor && <span className="b-picker-row-sub">{product.vendor}</span>}
                         </span>
                       </div>
@@ -449,7 +451,7 @@ function ProductPickerContent({
                               {eligibility.reason === "subscription_only" && (
                                 <span id={variantReasonId} className="b-badge b-badge-red">Subscription only</span>
                               )}
-                              {eligibility.warning === "sold_out" && <span className="b-badge b-badge-orange">{SOLD_OUT_WARNING}</span>}
+                              {eligibility.warning === "sold_out" && <span className="b-badge b-badge-orange">{availabilityPolicy === "block" ? SOLD_OUT_GIFT_WARNING : SOLD_OUT_WARNING}</span>}
                               {availabilityPolicy === "warn" && variant.requiresSellingPlan && (
                                 <span className="b-badge b-badge-orange">Subscription only</span>
                               )}

@@ -198,10 +198,11 @@ export async function buildRewardRecord(
         }
         const eligibleVariantIds = candidateVariants
           .filter((variant) => chosenVariantGids.length === 0 || chosenVariantGids.includes(variant.variantGid))
-          .filter((variant) => variant.availableForSale && !variant.requiresSellingPlan)
+          // Sold-out variants are kept on purpose: the storefront shows them as sold out and they join the gift once restocked.
+          .filter((variant) => !variant.requiresSellingPlan)
           .map((variant) => variant.variantGid);
         if (eligibleVariantIds.length === 0) {
-          return { error: "The selected product has no available one-time-purchase variants." };
+          return { error: "The selected product has no one-time-purchase variants." };
         }
         if (eligibleVariantIds.length > 1 && (quantity ?? 1) > eligibleVariantIds.length) {
           return {

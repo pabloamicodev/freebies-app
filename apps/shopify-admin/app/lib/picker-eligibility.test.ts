@@ -7,14 +7,14 @@ describe("variantEligibility block", () => {
   it("allows sellable variants", () => {
     expect(variantEligibility(v(true), "block")).toEqual({ selectable: true, reason: null, warning: null });
   });
-  it("blocks sold-out variants", () => {
-    expect(variantEligibility(v(false), "block")).toEqual({ selectable: false, reason: "sold_out", warning: null });
+  it("keeps sold-out variants selectable with the sold_out warning", () => {
+    expect(variantEligibility(v(false), "block")).toEqual({ selectable: true, reason: null, warning: "sold_out" });
   });
   it("blocks subscription-only variants", () => {
     expect(variantEligibility(v(true, true), "block")).toEqual({ selectable: false, reason: "subscription_only", warning: null });
   });
-  it("reports sold out first when both apply", () => {
-    expect(variantEligibility(v(false, true), "block").reason).toBe("sold_out");
+  it("blocks a sold-out subscription-only variant", () => {
+    expect(variantEligibility(v(false, true), "block")).toEqual({ selectable: false, reason: "subscription_only", warning: null });
   });
 });
 
