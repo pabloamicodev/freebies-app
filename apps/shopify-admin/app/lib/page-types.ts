@@ -18,6 +18,11 @@ export function pageTypeLabel(value: string): string {
   return LABELS.get(value) ?? value;
 }
 
+/** Raw URL rows as stored (kept un-normalized so the editor shows what the merchant typed). */
+export function readPageUrls(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((url): url is string => typeof url === "string") : [];
+}
+
 export function readPageTypes(value: unknown): PageType[] {
   if (!Array.isArray(value)) return [];
   return PAGE_TYPE_OPTIONS.map((option) => option.value).filter((type) => value.includes(type));

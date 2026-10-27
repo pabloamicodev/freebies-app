@@ -1,4 +1,5 @@
 import {
+  normalizeStorePageUrls,
   validateConditionValue,
   type ConditionOperator,
   type ConditionType,
@@ -224,13 +225,16 @@ export function normalizeOfferSubconditions(input: Record<string, unknown>): Nor
         });
         break;
       }
-      case "page_types":
+      case "page_types": {
+        const pageTypes = csv(value["pageTypes"]);
+        const pageUrls = pageTypes.includes("page") ? normalizeStorePageUrls(value["pageUrls"]) : [];
         conditions.push({
           conditionType: "page_types",
           operator: "eq",
-          value: { pageTypes: csv(value["pageTypes"]), ...lineMatchFlags(value) },
+          value: { pageTypes, ...(pageUrls.length ? { pageUrls } : {}), ...lineMatchFlags(value) },
         });
         break;
+      }
       case "template":
         conditions.push({
           conditionType: "template",
