@@ -19,8 +19,10 @@ import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
 import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
 import { giftRewardKey, loadDeclinedGiftRewards, saveDeclinedGiftRewards } from "./declined-gifts.js";
 import { initGiftSlider, isSoldOutCartError } from "./widgets/gift-slider.js";
-import { initFbtWidget } from "./widgets/fbt.js";
-import { initBundleBuilder } from "./widgets/bundle-builder.js";
+import type { initFbtWidget } from "./widgets/fbt.js";
+import { lazyInitFbtWidget, lazyInitBundleBuilder } from "./widgets/blocks-loader.js";
+import { sharePreact } from "./preact-share.js";
+import type { initBundleBuilder } from "./widgets/bundle-builder.js";
 import { buildMarketContext } from "./market-context.js";
 import type { EvaluationResult, CartAction } from "./types.js";
 
@@ -913,8 +915,10 @@ export function initRuntime() {
   window.PromoEngine = runtime.api;
   // Exposed as its own global (not nested under PromoEngine) because blocks
   // like fbt.liquid poll for `window.initFbtWidget` directly.
-  window.initFbtWidget = initFbtWidget;
-  window.initBundleBuilder = initBundleBuilder;
+  // Both load promo-engine-blocks.js on first mount, so pages without those blocks never download it.
+  sharePreact();
+  window.initFbtWidget = lazyInitFbtWidget;
+  window.initBundleBuilder = lazyInitBundleBuilder;
   initGiftSlider(getOrCreateSessionId());
   runtime.init();
 }

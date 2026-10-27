@@ -28,6 +28,7 @@ try {
 // Copy compiled JS to theme extension assets
 mkdirSync(THEME_ASSETS, { recursive: true });
 copyFileSync(join(DIST, "promo-engine-gift-prompt.js"), join(THEME_ASSETS, "promo-engine-gift-prompt.js"));
+copyFileSync(join(DIST, "promo-engine-blocks.js"), join(THEME_ASSETS, "promo-engine-blocks.js"));
 const src = join(DIST, "promo-engine.js");
 const dst = join(THEME_ASSETS, "promo-engine.js");
 
@@ -47,9 +48,9 @@ const { readFileSync } = await import("fs");
 const content = readFileSync(dst);
 const gzipped = gzipSync(content);
 const kb = (gzipped.length / 1024).toFixed(1);
-console.log(`📦 Bundle size: ${kb} KB gzipped (budget: 30 KB)`);
-if (parseFloat(kb) > 30) {
-  console.warn(`⚠️  Bundle exceeds 30 KB budget — optimize imports`);
+console.log(`📦 Bundle size: ${kb} KB gzipped (budget: 27 KB)`);
+if (parseFloat(kb) > 27) {
+  console.warn(`⚠️  Bundle exceeds 27 KB budget — optimize imports`);
 }
 
 console.log("\n✅ Storefront build complete. Deploy with: shopify app push");
