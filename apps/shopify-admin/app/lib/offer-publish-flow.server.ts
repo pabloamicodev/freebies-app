@@ -155,7 +155,7 @@ export async function validateOffersPublishable(
   if (offerIds.length === 0) return { ok: true };
 
   const [offerRows, conditionRows, rewardRows, codeRows, policyRows]: [
-    { id: string; internalName: string; requiredDiscountCode: string | null; requiresCode: boolean; codeRedemption: CodeRedemptionMode }[],
+    { id: string; internalName: string; requiredDiscountCode: string | null; requiresCode: boolean; codeRedemption: CodeRedemptionMode; type: string }[],
     OfferCondition[],
     OfferReward[],
     Array<{
@@ -176,6 +176,7 @@ export async function validateOffersPublishable(
         requiredDiscountCode: offers.requiredDiscountCode,
         requiresCode: offers.requiresCode,
         codeRedemption: offers.codeRedemption,
+        type: offers.type,
       })
       .from(offers)
       .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds))),

@@ -13,6 +13,7 @@ interface FakeOfferRow {
   requiredDiscountCode: string | null;
   requiresCode?: boolean;
   codeRedemption?: "checkout_code" | "automatic";
+  type?: string;
 }
 
 function fakeDb(rows: {
