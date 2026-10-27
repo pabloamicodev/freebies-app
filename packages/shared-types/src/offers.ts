@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  EXPERIMENT_ID_PATTERN,
+  SECTION_KEY_PATTERN,
+  TEMPLATE_REF_PATTERN,
+  VARIANT_KEY_PATTERN,
+} from "./page-stamps.js";
 
 export const OfferTypeSchema = z.enum(["gift", "bundle", "upsell", "discount", "booster"]);
 export type OfferType = z.infer<typeof OfferTypeSchema>;
@@ -66,6 +72,9 @@ export const ConditionTypeSchema = z.enum([
   "discount_code",
   "utm_parameters",
   "page_types",
+  "template",
+  "section_shown",
+  "experiment",
 ]);
 export type ConditionType = z.infer<typeof ConditionTypeSchema>;
 
@@ -263,6 +272,65 @@ export const PageTypesConditionValueSchema = z.object({
 });
 export type PageTypesConditionValue = z.infer<typeof PageTypesConditionValueSchema>;
 
+/** The one list of conditions judged against the page a cart line was added from. */
+export const PAGE_CONDITION_TYPES = [
+  "page_url",
+  "specific_link",
+  "utm_parameters",
+  "page_types",
+  "template",
+  "section_shown",
+  "experiment",
+] as const;
+export type PageConditionType = (typeof PAGE_CONDITION_TYPES)[number];
+
+export function isPageConditionType(conditionType: string): conditionType is PageConditionType {
+  return (PAGE_CONDITION_TYPES as readonly string[]).includes(conditionType);
+}
+
+/** "visit" (default): refs seen anywhere in the last 24 h; "page": only the page the line was added on. */
+const StampScopeSchema = z.enum(["visit", "page"]);
+const PageMatchFlags = {
+  scope: StampScopeSchema.optional(),
+  onlyMatchedLines: z.boolean().optional(),
+  rejectUnmatchedLines: z.boolean().optional(),
+};
+
+/** Rendered template ref as Liquid reports it: `product`, `product.acv-template`, `customers/account`. */
+export const TemplateRefSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(100)
+  .regex(TEMPLATE_REF_PATTERN, "Invalid template name.");
+export const SectionKeySchema = z.string().trim().regex(SECTION_KEY_PATTERN, "Invalid section key.");
+export const ExperimentIdSchema = z.string().trim().regex(EXPERIMENT_ID_PATTERN, "Invalid experiment id.");
+export const VariantKeySchema = z.string().trim().regex(VARIANT_KEY_PATTERN, "Invalid variant key.");
+
+export const TemplateConditionValueSchema = z.object({
+  templates: z.array(TemplateRefSchema).min(1, "Select at least one template.").max(20),
+  ...PageMatchFlags,
+});
+export type TemplateConditionValue = z.infer<typeof TemplateConditionValueSchema>;
+
+export const SectionShownConditionValueSchema = z.object({
+  sections: z
+    .array(z.object({ template: TemplateRefSchema, key: SectionKeySchema, label: z.string().max(255).optional() }))
+    .min(1, "Select at least one section.")
+    .max(20),
+  ...PageMatchFlags,
+});
+export type SectionShownConditionValue = z.infer<typeof SectionShownConditionValueSchema>;
+
+export const ExperimentConditionValueSchema = z.object({
+  experimentId: ExperimentIdSchema,
+  variantKeys: z.array(VariantKeySchema).min(1, "Select at least one arm.").max(10),
+  experimentName: z.string().max(255).optional(),
+  variantLabels: z.record(z.string(), z.string().max(255)).optional(),
+  ...PageMatchFlags,
+});
+export type ExperimentConditionValue = z.infer<typeof ExperimentConditionValueSchema>;
+
 /**
  * `onlyMatchedLines` on a page-matching condition (page_url / page_types /
  * utm_parameters / specific_link): discount only the cart lines added while on
@@ -439,6 +507,9 @@ export const CONDITION_VALUE_SCHEMAS = {
   discount_code: DiscountCodeConditionValueSchema,
   utm_parameters: UtmParametersConditionValueSchema,
   page_types: PageTypesConditionValueSchema,
+  template: TemplateConditionValueSchema,
+  section_shown: SectionShownConditionValueSchema,
+  experiment: ExperimentConditionValueSchema,
 } satisfies Record<ConditionType, z.ZodTypeAny>;
 
 /** Value shape for each condition type, derived from `CONDITION_VALUE_SCHEMAS`. */
@@ -499,6 +570,12 @@ export function validateConditionValue(
       return UtmParametersConditionValueSchema.safeParse(value);
     case "page_types":
       return PageTypesConditionValueSchema.safeParse(value);
+    case "template":
+      return TemplateConditionValueSchema.safeParse(value);
+    case "section_shown":
+      return SectionShownConditionValueSchema.safeParse(value);
+    case "experiment":
+      return ExperimentConditionValueSchema.safeParse(value);
     case "one_use_per_customer":
       return z.record(z.string(), z.unknown()).safeParse(value);
     default:

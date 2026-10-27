@@ -14,11 +14,11 @@ import {
 import {
   ConditionTypeSchema,
   FUNCTION_ENFORCED_CONDITION_TYPES,
+  isPageConditionType,
   validateConditionValue,
   validateRewardPayload,
 } from "@promo/shared-types";
 import { publishOffersForShop } from "./sync/offer-publisher.server.js";
-import { PAGE_CONDITION_TYPES } from "./sync/compile-config.js";
 import { isCheckoutCodeGated, type CodeRedemptionMode } from "./code-redemption.js";
 import { isCodeRedeemable } from "./discount-code-generation.js";
 import { invalidateOfferDefinitions } from "./offer-definitions.server.js";
@@ -267,7 +267,7 @@ export async function validateOffersPublishable(
         (condition) =>
           condition.isEnabled &&
           condition.conditionType !== "cart_value" &&
-          !(PAGE_CONDITION_TYPES as readonly string[]).includes(condition.conditionType),
+          !isPageConditionType(condition.conditionType),
       );
       if (unsupportedShippingCondition) {
         return {

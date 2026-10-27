@@ -77,6 +77,41 @@ export function evaluatePageTypes(
   });
 }
 
+export type StampConditionType = "template" | "section_shown" | "experiment";
+
+/**
+ * Template / section / experiment stamp check. `raw` is the line's comma-separated
+ * `[@]<ref>` list; matches when ANY entry equals ANY ref (ASCII case-insensitive).
+ * With `pageOnly`, only `@` entries (seen on the page the line was added on) count.
+ * Mirrors `stamp_matches` in the discount Function's page_match.rs.
+ */
+export function evaluateStampList(
+  conditionType: StampConditionType,
+  raw: string | null,
+  refs: readonly string[],
+  pageOnly: boolean,
+): Result<EligibilityReason, EligibilityReason> {
+  const required = refs.join(" | ");
+  if (!raw) {
+    return err({ conditionType, passed: false, message: "No page stamp recorded for this line", required });
+  }
+  const wanted = new Set(refs.map(asciiLower));
+  for (const entry of raw.split(",")) {
+    const current = entry.startsWith("@");
+    const name = current ? entry.slice(1) : entry;
+    if (name !== "" && (current || !pageOnly) && wanted.has(asciiLower(name))) {
+      return ok({ conditionType, passed: true, message: `Matched "${name}"`, actual: name });
+    }
+  }
+  return err({
+    conditionType,
+    passed: false,
+    message: pageOnly ? "No match on the page the line was added from" : "No match in this visit",
+    actual: raw,
+    required,
+  });
+}
+
 export interface UtmParametersConditionValue {
   utmSource?: string;
   utmMedium?: string;

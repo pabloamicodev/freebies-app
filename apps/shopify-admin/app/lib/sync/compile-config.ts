@@ -10,6 +10,7 @@ import type {
   offerCombinationPolicies as PoliciesTable,
 } from "@promo/db";
 import {
+  isPageConditionType,
   resolveOnlyMatchedLines,
   resolveRejectUnmatchedLines,
   specificLinkRequiredPath,
@@ -50,9 +51,6 @@ function onlyMatchedLines(
 ): boolean {
   return resolveOnlyMatchedLines(flag, options.codePromo === true || Boolean(offer.requiredDiscountCode));
 }
-
-/** The four page-condition types, in one place for the offer and shipping compilers. */
-export const PAGE_CONDITION_TYPES = ["page_url", "specific_link", "utm_parameters", "page_types"] as const;
 
 interface CompiledPageConditions {
   conditions: CompiledPageUrlCondition[];
@@ -1053,7 +1051,7 @@ export function compileShippingOfferConfigs(
   let rejectUnmatchedLines = false;
   for (const condition of enabledConditions) {
     const conditionType = condition.conditionType as ConditionType;
-    if (!(PAGE_CONDITION_TYPES as readonly string[]).includes(conditionType)) continue;
+    if (!isPageConditionType(conditionType)) continue;
     const compiled = compilePageCondition(
       {
         conditionType,
