@@ -44,6 +44,7 @@ import { DiscountMessageField } from "../components/DiscountMessageField.js";
 import { resolveDiscountMessage } from "../lib/discount-message.js";
 import { isCheckoutCodeGated } from "../lib/code-redemption.js";
 import { countDiscountCodes, getCodeNotices, listDiscountCodes, offerRequiresCode } from "../lib/discount-codes.server.js";
+import { buildRewardRecord } from "../lib/reward-record.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
@@ -198,6 +199,19 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         shopId, offerId, scope, conditionType,
         operator, value, sortOrder: existing.length, isEnabled: true,
       });
+      if (offer.status === "active") {
+        const publishError = await publishShopConfig(shopId, session.shop);
+        if (publishError) return { error: publishError };
+      }
+      break;
+    }
+    case "add_first_reward": {
+      const [existingReward] = await db.select({ id: offerRewards.id }).from(offerRewards)
+        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))).limit(1);
+      if (existingReward) return { error: "This offer already has a reward." };
+      const built = await buildRewardRecord(formData, db, shopId, shopCurrencyCode);
+      if ("error" in built) return { error: built.error };
+      await db.insert(offerRewards).values({ shopId, offerId, ...built.data, sortOrder: 0 });
       if (offer.status === "active") {
         const publishError = await publishShopConfig(shopId, session.shop);
         if (publishError) return { error: publishError };
@@ -1296,7 +1310,21 @@ export default function OfferDetailPage() {
     variantIds?: string[];
     fallbackVariantIds?: string[];
   }) {
-    if (!firstReward) return;
+    if (!firstReward) {
+      const gifts = overrides?.variantIds ?? giftProductIds;
+      const fallbacks = overrides?.fallbackVariantIds ?? fallbackProductIds;
+      if (gifts.length === 0) return;
+      const first = new FormData();
+      first.append("intent", "add_first_reward");
+      first.append("rewardType", "product_gift");
+      first.append("discountType", overrides?.discountType ?? discountType);
+      first.append("discountValue", overrides?.discountValue ?? discountValue);
+      first.append("quantity", overrides?.giftCount ?? giftCount);
+      first.append("variantGids", gifts.join("\n"));
+      if (fallbacks.length > 0) first.append("fallbackVariantGids", fallbacks.join("\n"));
+      void fetcher.submit(first, { method: "POST" });
+      return;
+    }
     const fd = new FormData();
     fd.append("intent", "update_reward");
     fd.append("rewardId", firstReward.id);
@@ -1815,7 +1843,7 @@ export default function OfferDetailPage() {
               </div>
 
               <div className="b-gift-selector-row">
-                <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setGiftPickerOpen(true)} disabled={!firstReward}>Select gifts</button>
+                <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setGiftPickerOpen(true)}>Select gifts</button>
               </div>
               <SelectedProductsList
                 gids={giftProductIds}
@@ -1844,7 +1872,7 @@ export default function OfferDetailPage() {
                   appears and no other product is offered.
                 </p>
                 <div className="b-gift-selector-row" style={{ marginTop: 10 }}>
-                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setFallbackPickerOpen(true)} disabled={!firstReward}>
+                  <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => setFallbackPickerOpen(true)}>
                     Select fallback gifts
                   </button>
                 </div>
