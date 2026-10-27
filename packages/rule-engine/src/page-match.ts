@@ -80,9 +80,29 @@ function toPageCondition(conditionType: PageConditionType, value: unknown): Page
   }
 }
 
+const METADATA_KEY = "_promo_engine_metadata";
+
+/** Form-posted adds carry the stamps only inside the packed metadata JSON (the Function reads them there too). */
+function withPackedStamps(properties: Record<string, string>): Record<string, string> {
+  const packed = properties[METADATA_KEY];
+  if (typeof packed !== "string") return properties;
+  try {
+    const parsed: unknown = JSON.parse(packed);
+    if (!parsed || typeof parsed !== "object") return properties;
+    const merged: Record<string, string> = { ...properties };
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === "string" && typeof merged[key] !== "string") merged[key] = value;
+    }
+    return merged;
+  } catch {
+    return properties;
+  }
+}
+
 /** Decision D1: a line matches when it carries `_promo_page_url` and satisfies ALL
  * of the offer's page conditions (visit-scoped UTM reads `_promo_landing_url`). */
-function lineChecks(properties: Record<string, string>, conditions: PageCondition[]): Check[] | null {
+function lineChecks(raw: Record<string, string>, conditions: PageCondition[]): Check[] | null {
+  const properties = withPackedStamps(raw);
   if (typeof properties[PAGE_KEY] !== "string") return null;
   const results = conditions.map((condition) => {
     const url = properties[condition.urlKey];
