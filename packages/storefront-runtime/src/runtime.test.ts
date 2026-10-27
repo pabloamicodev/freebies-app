@@ -287,6 +287,17 @@ describe("init guard, bfcache and per-request guard", () => {
     expect(h.listeners["pageshow"]).toHaveLength(1);
   });
 
+  it("exposes the theme block entry points as lazy mounts and shares preact with the blocks chunk", () => {
+    const h = harness([]);
+    initRuntime();
+    const w = h.win as unknown as { initFbtWidget?: unknown; initBundleBuilder?: unknown; __pePreact?: Record<string, unknown> };
+    expect(w.initFbtWidget).toBeTypeOf("function");
+    expect(w.initBundleBuilder).toBeTypeOf("function");
+    for (const key of ["h", "render", "useState", "useEffect", "useMemo", "jsx", "jsxs", "AjaxCartAdapter", "formatMoney", "t", "emit"]) {
+      expect(w.__pePreact?.[key], key).toBeDefined();
+    }
+  });
+
   it("re-evaluates after a bfcache restore but not a normal pageshow", async () => {
     const h = harness([
       [/cart\.js/, () => json(emptyCart)],
