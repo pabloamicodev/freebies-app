@@ -108,7 +108,11 @@ fn condition_matches(url: &str, cond: &CompiledPageUrlCondition) -> bool {
 
     if cond.match_mode == "page_type" {
         let kind = page_type(path);
-        return cond.patterns.iter().any(|pattern| pattern == kind);
+        // A pattern starting with '/' is a listed "Pages" path (compiled from pageUrls); the rest are kinds.
+        let trimmed = path.trim_end_matches('/');
+        return cond.patterns.iter().any(|pattern| {
+            pattern == kind || (pattern.starts_with('/') && pattern == trimmed)
+        });
     }
 
     let path_matches = cond.patterns.is_empty()

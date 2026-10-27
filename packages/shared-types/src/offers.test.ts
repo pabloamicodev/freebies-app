@@ -12,6 +12,7 @@ import {
   validateRequiredDiscountCode,
   validateRewardPayload,
 } from "./offers.js";
+import { normalizeStorePageUrls } from "./page-url.js";
 
 const value = { amount: 100, currencyCode: "USD" };
 
@@ -197,6 +198,9 @@ describe("page_types condition and page-match flags", () => {
         rejectUnmatchedLines: false,
       }).success,
     ).toBe(true);
+    expect(validateConditionValue("page_types", { pageTypes: ["page"], pageUrls: ["/pages/x", ""] }).success).toBe(true);
+    expect(validateConditionValue("page_types", { pageTypes: ["page"], pageUrls: [1] }).success).toBe(false);
+    expect(normalizeStorePageUrls([" https://X.com/Pages/A/?q=1#h ", "pages/a", "", "/", 5])).toEqual(["/pages/a"]);
     expect(validateConditionValue("page_types", { pageTypes: [] }).success).toBe(false);
     expect(validateConditionValue("page_types", { pageTypes: ["checkout"] }).success).toBe(false);
     expect(validateConditionValue("page_types", { pageTypes: ["home"], rejectUnmatchedLines: "y" }).success).toBe(false);

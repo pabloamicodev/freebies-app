@@ -13,7 +13,7 @@ import { ProductPicker } from "../ProductPicker.js";
 import { ThemeTargetPicker } from "../ThemeTargetPicker.js";
 import { ExperimentPicker } from "../ExperimentPicker.js";
 import { readSections, readTemplates } from "../../lib/theme-target-selection.js";
-import { PAGE_TYPE_OPTIONS, readPageTypes } from "../../lib/page-types.js";
+import { PAGE_TYPE_OPTIONS, cleanPageHandle, pageHandleToUrl, pageUrlToHandle, readPageTypes, readPageUrls } from "../../lib/page-types.js";
 
 // ─── Shared props ─────────────────────────────────────────────────────────────
 export interface SubFormProps {
@@ -645,18 +645,85 @@ export function UtmScopeChoice({
 }
 
 // ─── Store page types ─────────────────────────────────────────────────────────
+function PageUrlList({
+  idPrefix,
+  urls,
+  onChange,
+  name,
+}: {
+  idPrefix: string;
+  urls: string[];
+  onChange?: (next: string[]) => void;
+  name?: string;
+}) {
+  const [rows, setRows] = useState(() => (urls.length ? urls.map(pageUrlToHandle) : [""]));
+  function update(next: string[]) {
+    setRows(next);
+    onChange?.(next.map(pageHandleToUrl).filter(Boolean));
+  }
+  return (
+    <div className="b-stack b-stack-2" style={{ marginLeft: 24 }}>
+      <label className="b-label" htmlFor={`${idPrefix}-page-url-0`}>Only these pages</label>
+      {rows.map((row, index) => (
+        <div key={index} style={{ display: "flex", gap: 8 }}>
+          {name && pageHandleToUrl(row) && <input type="hidden" name={name} value={pageHandleToUrl(row)} />}
+          <div style={{ display: "flex", flex: 1, minWidth: 0 }}>
+            <span
+              aria-hidden="true"
+              style={{ display: "flex", alignItems: "center", padding: "0 10px", border: "1.5px solid var(--border)", borderRight: 0, borderRadius: "var(--r-sm) 0 0 var(--r-sm)", background: "var(--bg-subtle, var(--bg-card))", color: "var(--text-muted, var(--text))", fontSize: 14 }}
+            >
+              /pages
+            </span>
+            <input
+              id={`${idPrefix}-page-url-${index}`}
+              className="b-input"
+              style={{ borderRadius: "0 var(--r-sm) var(--r-sm) 0" }}
+              value={row}
+              placeholder="/bundle-builder"
+              autoComplete="off"
+              aria-label={`Page handle ${index + 1}, after /pages`}
+              onChange={(event) => update(rows.map((current, at) => (at === index ? cleanPageHandle(event.target.value) : current)))}
+              onBlur={(event) => update(rows.map((current, at) => (at === index ? cleanPageHandle(event.target.value, true) : current)))}
+            />
+          </div>
+          {rows.length > 1 && (
+            <button type="button" className="b-btn b-btn-secondary b-btn-sm" aria-label={`Remove page URL ${index + 1}`} onClick={() => update(rows.filter((_, at) => at !== index))}>
+              Remove
+            </button>
+          )}
+        </div>
+      ))}
+      <div>
+        <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => update([...rows, ""])}>
+          + Add page URL
+        </button>
+      </div>
+      <div className="b-help">Leave empty to count every page. Type the part after /pages, or paste the full URL.</div>
+    </div>
+  );
+}
+
 export function PageTypeCheckboxes({
   idPrefix,
   selected,
   onChange,
   name,
+  urls = [],
+  onUrlsChange,
+  urlsName,
 }: {
   idPrefix: string;
   selected: string[];
   onChange?: (next: string[]) => void;
   /** When set, each checkbox posts its value under this name (plain form submit). */
   name?: string;
+  urls?: string[];
+  onUrlsChange?: (next: string[]) => void;
+  /** When set, each URL row posts under this name (plain form submit). */
+  urlsName?: string;
 }) {
+  const [pageChecked, setPageChecked] = useState(selected.includes("page"));
+  const showUrls = onChange ? selected.includes("page") : pageChecked;
   // At least one page type must stay selected: an empty list matches nothing and the schema rejects it.
   return (
     <fieldset style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
@@ -682,6 +749,7 @@ export function PageTypeCheckboxes({
                 : {
                     defaultChecked: selected.includes(option.value),
                     onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+                      if (option.value === "page") setPageChecked(event.target.checked);
                       if (event.target.checked) return;
                       const group = event.target.closest("fieldset");
                       if (!group?.querySelector("input[type=checkbox]:checked")) event.target.checked = true;
@@ -697,6 +765,7 @@ export function PageTypeCheckboxes({
         );
       })}
     </div>
+      {showUrls && <PageUrlList idPrefix={idPrefix} urls={urls} onChange={onUrlsChange} name={urlsName} />}
     </fieldset>
   );
 }
@@ -707,16 +776,23 @@ export const PAGE_TYPES_HELP =
 export function PageTypesForm({ value, onChange, isCodePromo = false }: SubFormProps) {
   const idPrefix = useId();
   const pageTypes = readPageTypes(value?.["pageTypes"]);
+  const pageUrls = readPageUrls(value?.["pageUrls"]);
   const onlyMatchedLines = resolveOnlyMatchedLines(value?.["onlyMatchedLines"], isCodePromo);
   const rejectUnmatchedLines = resolveRejectUnmatchedLines(value?.["rejectUnmatchedLines"]);
 
   function emit(patch: Partial<Record<string, unknown>>) {
-    onChange?.({ pageTypes, onlyMatchedLines, rejectUnmatchedLines, ...patch });
+    onChange?.({ pageTypes, ...(pageUrls.length ? { pageUrls } : {}), onlyMatchedLines, rejectUnmatchedLines, ...patch });
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <PageTypeCheckboxes idPrefix={idPrefix} selected={pageTypes} onChange={(next) => emit({ pageTypes: next })} />
+      <PageTypeCheckboxes
+        idPrefix={idPrefix}
+        selected={pageTypes}
+        onChange={(next) => emit({ pageTypes: next })}
+        urls={pageUrls}
+        onUrlsChange={(next) => emit({ pageUrls: next })}
+      />
       <div className="b-help">{PAGE_TYPES_HELP}</div>
       <OnlyMatchedLinesCheckbox
         id={`${idPrefix}-only-matched-lines`}

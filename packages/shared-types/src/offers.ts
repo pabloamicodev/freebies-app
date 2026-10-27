@@ -267,6 +267,8 @@ export type PageType = (typeof PAGE_TYPES)[number];
 
 export const PageTypesConditionValueSchema = z.object({
   pageTypes: z.array(PageTypeSchema).min(1, "Select at least one page type."),
+  /** Restricts the "page" type to these paths (see `normalizeStorePageUrl`); empty or absent keeps any page. */
+  pageUrls: z.array(z.string().trim().max(300)).max(50).optional(),
   onlyMatchedLines: z.boolean().optional(),
   rejectUnmatchedLines: z.boolean().optional(),
 });

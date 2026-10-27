@@ -24,6 +24,7 @@ import {
   CART_ATTRIBUTE_KEYS,
   ConditionTypeSchema,
   LINE_ATTRIBUTE_KEYS,
+  normalizeStorePageUrls,
   resolveOnlyMatchedLines,
   resolveRejectUnmatchedLines,
   validateConditionValue,
@@ -36,7 +37,7 @@ import {
   RejectUnmatchedLinesCheckbox,
   UtmScopeChoice,
 } from "../components/subconditions/forms.js";
-import { DEFAULT_CODE_PAGE_TYPES, readPageTypes } from "../lib/page-types.js";
+import { DEFAULT_CODE_PAGE_TYPES, readPageTypes, readPageUrls } from "../lib/page-types.js";
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
 import { ExperimentForm, SectionShownForm, TemplateForm } from "../components/subconditions/forms.js";
 import { and, eq } from "drizzle-orm";
@@ -222,7 +223,8 @@ function buildConditionValue(
       case "page_types": {
         const pageTypes = formData.getAll("pageTypes").map(String);
         if (pageTypes.length === 0) return { error: "Select at least one kind of store page." };
-        value = { pageTypes, ...lineMatchFlags(formData) };
+        const pageUrls = pageTypes.includes("page") ? normalizeStorePageUrls(formData.getAll("pageUrls")) : [];
+        value = { pageTypes, ...(pageUrls.length ? { pageUrls } : {}), ...lineMatchFlags(formData) };
         break;
       }
       case "template":
@@ -1079,7 +1081,7 @@ export default function OfferConditionsPage() {
                   {selectedType === "page_types" && (
                     <fieldset className="b-stack b-stack-3" style={{ border: 0, padding: 0, margin: 0 }}>
                       <legend className="b-label">Products count when added to the cart from</legend>
-                      <PageTypeCheckboxes idPrefix="condition" name="pageTypes" selected={editingPageTypes} />
+                      <PageTypeCheckboxes idPrefix="condition" name="pageTypes" selected={editingPageTypes} urls={readPageUrls(editingValue["pageUrls"])} urlsName="pageUrls" />
                       <p className="b-help" style={{ margin: 0 }}>{PAGE_TYPES_HELP}</p>
                       <LineMatchFields defaultOnlyMatchedLines={defaultOnlyMatchedLines} defaultRejectUnmatchedLines={defaultRejectUnmatchedLines} />
                     </fieldset>

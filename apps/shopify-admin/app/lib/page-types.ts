@@ -1,11 +1,11 @@
-import type { PageType } from "@promo/shared-types";
+import { splitPageUrl, type PageType } from "@promo/shared-types";
 
 export const PAGE_TYPE_OPTIONS: ReadonlyArray<{ value: PageType; label: string; example: string }> = [
   { value: "home", label: "Home page", example: "/" },
   { value: "collection", label: "Collections", example: "/collections/…" },
   { value: "product", label: "Product pages", example: "/products/…" },
   { value: "search", label: "Search results", example: "/search" },
-  { value: "page", label: "Landing pages", example: "/pages/…" },
+  { value: "page", label: "Pages", example: "/pages/…" },
   { value: "blog", label: "Blog", example: "/blogs/…" },
   { value: "cart", label: "Cart", example: "/cart" },
 ];
@@ -16,6 +16,33 @@ const LABELS = new Map<string, string>(PAGE_TYPE_OPTIONS.map((option) => [option
 
 export function pageTypeLabel(value: string): string {
   return LABELS.get(value) ?? value;
+}
+
+/**
+ * The Pages URL input shows only the handle after a fixed "/pages" prefix; the stored value is the
+ * full path. `final` (blur / save) also drops trailing slashes and a bare "pages"; while typing both stay.
+ */
+export function cleanPageHandle(raw: string, final = false): string {
+  const trimmed = raw.trim();
+  if (trimmed === "") return "";
+  let path = splitPageUrl(trimmed).path.replace(/^\/?pages\//i, "/");
+  if (final) path = path.replace(/^\/?pages$/i, "").replace(/\/+$/, "");
+  if (path === "" || path === "/") return "";
+  return path.startsWith("/") ? path : `/${path}`;
+}
+
+export function pageHandleToUrl(handle: string): string {
+  const clean = cleanPageHandle(handle, true);
+  return clean ? `/pages${clean}` : "";
+}
+
+export function pageUrlToHandle(stored: string): string {
+  return cleanPageHandle(stored, true);
+}
+
+/** Raw URL rows as stored (kept un-normalized so the editor shows what the merchant typed). */
+export function readPageUrls(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((url): url is string => typeof url === "string") : [];
 }
 
 export function readPageTypes(value: unknown): PageType[] {

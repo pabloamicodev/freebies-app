@@ -731,6 +731,24 @@ describe("compileOfferConfig", () => {
         options,
       );
 
+    it("compiles the Pages URL list into path patterns and drops the bare page kind", () => {
+      const result = compile([
+        ["page_types", { pageTypes: ["home", "product", "page"], pageUrls: ["https://x.com/Pages/Bundle-Builder/?a=1", " ", "/pages/bundle-builder", "/"] }],
+      ]);
+      expect(result.pageUrlConditions).toEqual([
+        { patterns: ["home", "product", "/pages/bundle-builder"], matchMode: "page_type", caseSensitive: false },
+      ]);
+    });
+
+    it("keeps the compiled config byte-identical without URLs or when Pages is unchecked", () => {
+      const plain = JSON.stringify(compile([["page_types", { pageTypes: ["home", "page"] }]]).pageUrlConditions);
+      expect(JSON.stringify(compile([["page_types", { pageTypes: ["home", "page"], pageUrls: [] }]]).pageUrlConditions)).toBe(plain);
+      expect(JSON.stringify(compile([["page_types", { pageTypes: ["home", "page"], pageUrls: ["  "] }]]).pageUrlConditions)).toBe(plain);
+      expect(compile([["page_types", { pageTypes: ["home"], pageUrls: ["/pages/x"] }]]).pageUrlConditions).toEqual([
+        { patterns: ["home"], matchMode: "page_type", caseSensitive: false },
+      ]);
+    });
+
     it("compiles page_types into a page_type pageUrlConditions entry", () => {
       const result = compile([["page_types", { pageTypes: ["product", "collection"] }]]);
       expect(result.pageUrlConditions).toEqual([

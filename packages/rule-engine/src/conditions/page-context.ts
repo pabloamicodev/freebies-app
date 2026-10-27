@@ -3,6 +3,7 @@ import {
   ok,
   err,
   asciiLower,
+  normalizeStorePageUrls,
   queryValueMatches,
   readQueryParam,
   splitPageUrl,
@@ -45,6 +46,13 @@ export function classifyPageType(url: string): PageType | null {
 
 export interface PageTypesConditionValue {
   pageTypes: PageType[];
+  pageUrls?: string[];
+}
+
+/** Whether a "page"-type condition with a URL list lets this path through (no list: any page). */
+function pageUrlListed(url: string, pageUrls: readonly string[]): boolean {
+  const current = pathOf(url).replace(/\/+$/, "");
+  return pageUrls.includes(current);
 }
 
 export function evaluatePageTypes(
@@ -60,7 +68,12 @@ export function evaluatePageTypes(
   }
   const pageType = classifyPageType(requestedUrl);
   const required = (condition.pageTypes ?? []).join(" | ");
-  if (!pageType || !condition.pageTypes?.includes(pageType)) {
+  const urls = condition.pageTypes?.includes("page") ? normalizeStorePageUrls(condition.pageUrls) : [];
+  const allowed =
+    urls.length === 0
+      ? !!pageType && !!condition.pageTypes?.includes(pageType)
+      : (!!pageType && pageType !== "page" && condition.pageTypes.includes(pageType)) || pageUrlListed(requestedUrl, urls);
+  if (!allowed) {
     return err({
       conditionType: "page_types",
       passed: false,
