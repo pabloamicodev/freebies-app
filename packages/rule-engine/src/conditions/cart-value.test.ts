@@ -47,6 +47,14 @@ describe("evaluateCartValue", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("treats a saved maximum of 0 as no maximum, like the Function", () => {
+    const cart = makeCart([{ variantId: "v1", productId: "p1", priceCents: 8638, quantity: 1 }]);
+    const saved = { thresholdCents: 8500, maxCents: 0, currencyCode: "USD", includeGiftValues: false };
+    expect(evaluateCartValue(cart, saved, currency).ok).toBe(true);
+    expect(evaluateCartValue(cart, { ...saved, maxCents: 9000 }, currency).ok).toBe(true);
+    expect(evaluateCartValue(cart, { ...saved, maxCents: 8600 }, currency).ok).toBe(false);
+  });
+
   it("treats a saved condition without currencyCode as the shop currency instead of throwing", () => {
     const cart = makeCart([{ variantId: "v1", productId: "p1", priceCents: 5000, quantity: 1 }]);
     const legacy = { thresholdCents: 8500, includeGiftValues: false } as unknown as Parameters<typeof evaluateCartValue>[1];
