@@ -139,11 +139,15 @@ export const OrderAttributionQuerySchema = z.object({
 export const BundleQuerySchema = z.object({
   offer_id: z.guid().nullish(),
   page_url: z.string().max(2_048).nullish(),
+  /** base64url JSON of the eligibility context (the stamp a line added now would carry). */
+  ctx: z.string().max(3_072).nullish(),
 });
 
 export const ProductCustomizationsQuerySchema = z.object({
   offer_id: z.guid(),
   variant_id: z.string().min(1).max(128),
+  page_url: z.string().max(2_048).nullish(),
+  ctx: z.string().max(3_072).nullish(),
 });
 
 /** Turn URLSearchParams into the plain `{ name: string | null }` object the query schemas expect. */
