@@ -162,6 +162,20 @@ describe("validateOffersPublishable — required discount code", () => {
     });
   });
 
+  it("tells a gift offer with no reward to add a gift reward", async () => {
+    const db = fakeDb({
+      offerRows: [{ id: "offer-1", internalName: "Free tee", type: "gift", requiredDiscountCode: "TEE" }],
+      rewardRows: [],
+    });
+
+    const result = await validateOffersPublishable(db, "shop-1", ["offer-1"]);
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Cannot publish "Free tee": Add a gift reward before publishing.',
+    });
+  });
+
   const shippingReward = {
     ...validGiftReward,
     rewardType: "shipping_discount",

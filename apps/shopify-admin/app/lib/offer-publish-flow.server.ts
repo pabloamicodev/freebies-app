@@ -237,7 +237,10 @@ export async function validateOffersPublishable(
     if (rewards.length === 0) {
       return {
         ok: false,
-        error: `Cannot publish "${offer.internalName}": add at least one reward.`,
+        error:
+          offer.type === "gift"
+            ? `Cannot publish "${offer.internalName}": Add a gift reward before publishing.`
+            : `Cannot publish "${offer.internalName}": add at least one reward.`,
       };
     }
 
