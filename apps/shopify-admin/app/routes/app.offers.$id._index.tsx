@@ -43,7 +43,8 @@ import type { SelectedProduct } from "../components/SelectedProductsList.js";
 import { DiscountMessageField } from "../components/DiscountMessageField.js";
 import { resolveDiscountMessage } from "../lib/discount-message.js";
 import { isCheckoutCodeGated } from "../lib/code-redemption.js";
-import { countDiscountCodes, getCodeNotices, listDiscountCodes, offerRequiresCode } from "../lib/discount-codes.server.js";
+import { countDiscountCodes, getCodeNotices, listDiscountCodes } from "../lib/discount-codes.server.js";
+import { duplicateOffer } from "../lib/offer-duplicate.server.js";
 import { buildRewardRecord } from "../lib/reward-record.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -319,7 +320,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         return { error: "Cannot publish: add at least one main condition before publishing." };
       }
       if (existingRewards.length === 0) {
-        return { error: "Cannot publish: add at least one reward (gift) before publishing." };
+        return {
+          error: offer.type === "gift"
+            ? "Cannot publish: Add a gift reward before publishing."
+            : "Cannot publish: add at least one reward before publishing.",
+        };
       }
 
       // Run full Zod validation BEFORE any DB mutation so a failed validation
@@ -391,20 +396,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       return redirect("/app/offers");
     }
     case "duplicate": {
-      const [newOffer] = await db.insert(offers).values({
-        ...offer, id: undefined as unknown as string, internalName: `${offer.internalName}-copy`,
-        status: "draft", createdAt: new Date(), updatedAt: new Date(),
-        // A copy must not inherit the source's checkout code or its Shopify
-        // discount node id — both are 1:1 with the original offer (the DB's
-        // partial unique index would reject a second non-archived offer
-        // reusing the same code anyway), and reusing the discount node id
-        // would let two different offers silently share one live discount.
-        requiredDiscountCode: null, codeDiscountId: null,
-        // The copy has none of the source's codes, so it must stay inert (never run
-        // ungated) until codes are added: requiresCode keeps the gate.
-        requiresCode: await offerRequiresCode(db, shopId, offer),
-      }).returning({ id: offers.id });
-      if (newOffer) return redirect(`/app/offers/${newOffer.id}`);
+      const newId = await duplicateOffer(db, shopId, offerId);
+      if (newId) return redirect(`/app/offers/${newId}`);
       break;
     }
   }

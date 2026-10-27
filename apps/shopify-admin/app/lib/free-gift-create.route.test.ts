@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import {
+  bundleDefinitions,
+  bundleSteps,
+  bundleTiers,
+  discountCodes,
+  offerCombinationPolicies,
   offerConditions,
   offerRewards,
   offers,
@@ -41,6 +46,7 @@ vi.mock("./audit-log.server.js", () => ({ insertAuditLog: async () => undefined 
 
 const wizard = await import("../routes/app.offers.new.gift.$template.js");
 const rewardsRoute = await import("../routes/app.offers.$id.rewards.js");
+const list = await import("../routes/app.offers._index.js");
 const offerPage = await import("../routes/app.offers.$id._index.js");
 
 let db: Db;
@@ -147,6 +153,34 @@ describe("free gift creation (cart subtotal >= $85, 4 variants, customer selecta
     expect((reward!.target as { variantIds: string[]; productId: string })).toMatchObject({ productId: PRODUCT, variantIds: VARIANTS });
   });
 
+  it("rewards page saves a strict subset of variants as the customer-selectable pool", async () => {
+    const id = await seedOffer(db, shopId, { status: "draft", internalName: "rewards-page-gift-subset" });
+    await run(
+      rewardsRoute.action,
+      post(`/app/offers/${id}/rewards`, {
+        intent: "add_reward", rewardType: "product_gift", discountType: "free", quantity: "1",
+        variantGids: VARIANTS.slice(0, 2).join("\n"),
+      }),
+      { id },
+    );
+    const [reward] = await db.select().from(offerRewards).where(eq(offerRewards.offerId, id));
+    expect((reward!.target as { variantIds: string[] }).variantIds).toEqual(VARIANTS.slice(0, 2));
+    expect(reward!.isCustomerSelectable).toBe(true);
+  });
+
+  it("rewards page rejects variants that are not in the catalog", async () => {
+    const id = await seedOffer(db, shopId, { status: "draft", internalName: "rewards-page-gift-unknown" });
+    const result = await run(
+      rewardsRoute.action,
+      post(`/app/offers/${id}/rewards`, {
+        intent: "add_reward", rewardType: "product_gift", discountType: "free", quantity: "1",
+        variantGids: "gid://shopify/ProductVariant/1",
+      }),
+      { id },
+    );
+    expect((result as { error?: string }).error).toMatch(/not found in the catalog/);
+  });
+
   it("offer page creates the first reward when the offer has none", async () => {
     const id = await seedOffer(db, shopId, { status: "draft", internalName: "first-reward" });
     const result = await run(
@@ -171,5 +205,59 @@ describe("free gift creation (cart subtotal >= $85, 4 variants, customer selecta
       { id },
     );
     expect((again as { error?: string }).error).toMatch(/already has a reward/);
+  });
+
+  it("publishing a gift offer without a reward says to add a gift reward", async () => {
+    const id = await seedOffer(db, shopId, { status: "draft", internalName: "no-reward-publish" });
+    await db.insert(offerConditions).values({
+      shopId, offerId: id, scope: "main", conditionType: "cart_value", operator: "gte",
+      value: { thresholdCents: 8500, appliesTo: "any_product" }, sortOrder: 0, isEnabled: true,
+    });
+    const result = await run(offerPage.action, post(`/app/offers/${id}`, { intent: "publish" }), { id });
+    expect((result as { error?: string }).error).toBe("Cannot publish: Add a gift reward before publishing.");
+  });
+
+  it("duplicating a gift offer copies its conditions, rewards and combination policy", async () => {
+    const source = await seedOffer(db, shopId, {
+      status: "active",
+      internalName: "dup-source",
+      startsAt: new Date("2026-09-29T00:00:00Z"),
+    });
+    await db.insert(offerConditions).values({
+      shopId, offerId: source, scope: "main", conditionType: "cart_value", operator: "gte",
+      value: { thresholdCents: 8500, appliesTo: "any_product" }, sortOrder: 0, isEnabled: true,
+    });
+    await db.insert(offerRewards).values({
+      shopId, offerId: source, rewardType: "product_gift", discountType: "free", value: { amount: 100, currencyCode: "USD" },
+      target: { scope: "cart", variantIds: VARIANTS }, quantity: 1, isAutoAdd: false, isCustomerSelectable: true,
+      trackMode: "product", sortOrder: 0,
+    });
+    await db.insert(offerCombinationPolicies).values({
+      shopId, offerId: source, combinesWithOrderDiscounts: true, combinesWithProductDiscounts: true,
+      combinesWithShippingDiscounts: true, combinesWithOtherAppOffers: true, stopLowerPriority: false,
+      giftValueCountsForOtherOffers: false,
+    });
+
+    const [bundle] = await db.insert(bundleDefinitions).values({
+      shopId, offerId: source, bundleType: "classic", title: "B", bundleProductGid: "gid://shopify/Product/1",
+    }).returning({ id: bundleDefinitions.id });
+    await db.insert(bundleSteps).values({ shopId, bundleId: bundle!.id, title: "S", sourceType: "products", sourceConfig: {} });
+    await db.insert(bundleTiers).values({ shopId, bundleId: bundle!.id, minQuantity: 2, label: "T", discountType: "percentage", value: { default: 10 } });
+    await db.insert(discountCodes).values({ shopId, offerId: source, code: "DUP-SRC-1" } as typeof discountCodes.$inferInsert);
+
+    await run(list.action, post("/app/offers", { intent: "duplicate", offerId: source }));
+
+    const [copy] = await db.select().from(offers).where(eq(offers.internalName, "dup-source-copy"));
+    expect(copy).toBeDefined();
+    expect(copy!.status).toBe("draft");
+    expect(copy!.requiresCode).toBe(true);
+    expect(await db.select().from(discountCodes).where(eq(discountCodes.offerId, copy!.id))).toHaveLength(0);
+    const [copyBundle] = await db.select().from(bundleDefinitions).where(eq(bundleDefinitions.offerId, copy!.id));
+    expect(copyBundle?.bundleProductGid).toBeNull();
+    expect(await db.select().from(bundleSteps).where(eq(bundleSteps.bundleId, copyBundle!.id))).toHaveLength(1);
+    expect(await db.select().from(bundleTiers).where(eq(bundleTiers.bundleId, copyBundle!.id))).toHaveLength(1);
+    expect(await db.select().from(offerConditions).where(eq(offerConditions.offerId, copy!.id))).toHaveLength(1);
+    expect(await db.select().from(offerRewards).where(eq(offerRewards.offerId, copy!.id))).toHaveLength(1);
+    expect(await db.select().from(offerCombinationPolicies).where(eq(offerCombinationPolicies.offerId, copy!.id))).toHaveLength(1);
   });
 });
