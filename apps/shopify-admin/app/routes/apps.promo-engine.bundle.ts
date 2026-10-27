@@ -9,11 +9,11 @@ import {
   productCache,
   variantCache,
 } from "@promo/db";
-import { BundleQuerySchema, searchParamsObject } from "@promo/shared-types";
+import { BundleQuerySchema, PAGE_CONDITION_TYPES, searchParamsObject } from "@promo/shared-types";
 import { getSignedShopCached } from "../lib/proxy-shop.server.js";
 import { proxyRateLimitResponse } from "../lib/proxy-rate-limit.server.js";
 import { apiError, apiJson, handleApiError, STOREFRONT_CACHE_CONTROL } from "../lib/api-response.server.js";
-import { isEligibleBundlePage } from "../lib/bundle-page-eligibility.js";
+import { pageGateVerdict, prospectiveFromQuery } from "../lib/page-gate.server.js";
 
 // Storefront endpoints get their own Vercel function (a distinct route config
 // splits the server bundle) so a cold start doesn't load the whole admin app.
@@ -41,7 +41,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const requestUrl = new URL(request.url);
     // Blank params mean "not provided" (the theme block always sends both keys).
     const raw = Object.fromEntries(
-      Object.entries(searchParamsObject(requestUrl.searchParams, ["offer_id", "page_url"])).map(([key, value]) => [key, value?.trim() || null]),
+      Object.entries(searchParamsObject(requestUrl.searchParams, ["offer_id", "page_url", "ctx"])).map(([key, value]) => [key, value?.trim() || null]),
     );
     const query = BundleQuerySchema.safeParse(raw);
     if (!query.success) {
@@ -52,7 +52,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       });
     }
     const requestedOfferId = query.data.offer_id ?? null;
-    const requestedPageUrl = query.data.page_url ?? null;
     if (requestedOfferId && !UUID.test(requestedOfferId)) {
       return apiError(request, {
         status: 400,
@@ -106,11 +105,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
             eq(offerConditions.shopId, shopId),
             eq(offerConditions.offerId, bundle.offerId),
             eq(offerConditions.isEnabled, true),
-            inArray(offerConditions.conditionType, ["specific_link", "page_url"]),
+            inArray(offerConditions.conditionType, [...PAGE_CONDITION_TYPES]),
           ),
         ),
     ]);
-    if (!isEligibleBundlePage(requestedPageUrl, pageConditions)) return apiJson(request, {}, { headers: { "Cache-Control": STOREFRONT_CACHE_CONTROL } });
+    if (pageGateVerdict(pageConditions, prospectiveFromQuery(query.data.ctx, query.data.page_url)) === false) return apiJson(request, {}, { headers: { "Cache-Control": STOREFRONT_CACHE_CONTROL } });
     const selectedIds = [...new Set(steps.flatMap((step) => sourceIds(step.sourceConfig)))];
     const productIds = selectedIds.filter((id) => id.includes("/Product/"));
     const variantIds = selectedIds.filter((id) => id.includes("/ProductVariant/"));

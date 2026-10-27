@@ -12,6 +12,38 @@ export const PROMO_TEMPLATE_KEY = "_promo_template";
 export const PROMO_SECTIONS_KEY = "_promo_sections";
 export const PROMO_EXPERIMENT_KEY = "_promo_exp";
 
+export const PROMO_PAGE_URL_KEY = "_promo_page_url";
+export const PROMO_LANDING_URL_KEY = "_promo_landing_url";
+
+/** The keys a new cart line is stamped with: the only ones a request may send as its eligibility context. */
+export const PROSPECTIVE_KEYS = [
+  PROMO_PAGE_URL_KEY,
+  PROMO_LANDING_URL_KEY,
+  PROMO_TEMPLATE_KEY,
+  PROMO_SECTIONS_KEY,
+  PROMO_EXPERIMENT_KEY,
+] as const;
+export const PROSPECTIVE_MAX_CHARS = 2_048;
+
+/**
+ * Whitelists a client-sent eligibility context (`prospective` body field, decoded `ctx` query param):
+ * only the stamp keys, string values, at most PROSPECTIVE_MAX_CHARS in total. Anything else yields `{}`,
+ * which fails closed for page-conditioned offers.
+ */
+export function sanitizeProspective(value: unknown): Record<string, string> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  let chars = 0;
+  for (const key of PROSPECTIVE_KEYS) {
+    const entry = (value as Record<string, unknown>)[key];
+    if (typeof entry !== "string" || entry === "") continue;
+    chars += key.length + entry.length;
+    if (chars > PROSPECTIVE_MAX_CHARS) return {};
+    out[key] = entry;
+  }
+  return out;
+}
+
 export interface StampCap {
   maxEntries: number;
   maxChars: number;

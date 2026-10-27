@@ -1,10 +1,11 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { and, eq } from "drizzle-orm";
-import { offerRewards, offers, variantCache } from "@promo/db";
-import { ProductCustomizationsQuerySchema, searchParamsObject } from "@promo/shared-types";
+import { and, eq, inArray } from "drizzle-orm";
+import { offerConditions, offerRewards, offers, variantCache } from "@promo/db";
+import { PAGE_CONDITION_TYPES, ProductCustomizationsQuerySchema, searchParamsObject } from "@promo/shared-types";
 import { getSignedShopCached } from "../lib/proxy-shop.server.js";
 import { proxyRateLimitResponse } from "../lib/proxy-rate-limit.server.js";
 import { apiError, apiJson, handleApiError, STOREFRONT_CACHE_CONTROL } from "../lib/api-response.server.js";
+import { pageGateVerdict, prospectiveFromQuery } from "../lib/page-gate.server.js";
 
 // Storefront endpoints get their own Vercel function (a distinct route config
 // splits the server bundle) so a cold start doesn't load the whole admin app.
@@ -39,7 +40,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const { id: shopId, currencyCode, db } = await getSignedShopCached(request);
     const limited = await proxyRateLimitResponse(request, "product-customizations", shopId, 240, 24_000);
     if (limited) return limited;
-    const raw = searchParamsObject(new URL(request.url).searchParams, ["offer_id", "variant_id"]);
+    const raw = searchParamsObject(new URL(request.url).searchParams, ["offer_id", "variant_id", "page_url", "ctx"]);
     if (!raw["offer_id"] || !raw["variant_id"]) {
       return apiError(request, {
         status: 400,
@@ -59,7 +60,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     // The three lookups are independent (reward and variant are keyed by the request ids, not by
     // the offer row), so run them together instead of three sequential round trips.
-    const [[offer], [reward], [variant]] = await Promise.all([
+    const [[offer], [reward], [variant], conditions] = await Promise.all([
       db
         .select({ id: offers.id, type: offers.type })
         .from(offers)
@@ -75,9 +76,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
         .from(variantCache)
         .where(and(eq(variantCache.shopId, shopId), eq(variantCache.variantGid, variantId)))
         .limit(1),
+      db
+        .select({ conditionType: offerConditions.conditionType, value: offerConditions.value })
+        .from(offerConditions)
+        .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.isEnabled, true), inArray(offerConditions.conditionType, [...PAGE_CONDITION_TYPES]))),
     ]);
     const cacheable = { headers: { "Cache-Control": STOREFRONT_CACHE_CONTROL } };
     if (!offer || offer.type !== "discount") {
+      return apiJson(request, {}, cacheable);
+    }
+    if (pageGateVerdict(conditions, prospectiveFromQuery(query.data.ctx, query.data.page_url)) === false) {
       return apiJson(request, {}, cacheable);
     }
 

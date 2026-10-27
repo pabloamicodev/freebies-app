@@ -25,6 +25,8 @@ export interface EvaluationResult {
   upsells: UpsellPayload[];
   warnings: Array<{ code: string; message: string }>;
   evaluatedAt: string;
+  /** Per offer with a page condition: would a line added with the sent `prospective` context match it. Absent on older servers. */
+  pageGate?: Record<string, boolean>;
 }
 
 export interface EvaluatedOffer {

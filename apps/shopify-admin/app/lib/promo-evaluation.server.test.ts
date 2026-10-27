@@ -33,7 +33,8 @@ vi.mock("./gift-enrichment.server.js", () => ({
 vi.mock("./shadow-mode.server.js", () => ({
   isShadowModeEnabled: vi.fn().mockResolvedValue(false),
 }));
-vi.mock("@promo/rule-engine", () => ({
+vi.mock("@promo/rule-engine", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   evaluate: vi.fn().mockResolvedValue({
     requestId: "req-1",
     cartHash: "hash",
@@ -58,7 +59,7 @@ const { resetMemoryCaches } = await import("./memory-cache.server.js");
 const { applyCodeGatesDetailed } = await import("./code-gate.server.js");
 const { waitUntil } = await import("@vercel/functions");
 
-function makeRequest(cartToken: string | null, discountCodes: string[] = []) {
+function makeRequest(cartToken: string | null, discountCodes: string[] = [], extra: Record<string, unknown> = {}) {
   const body = {
     cart: {
       token: cartToken,
@@ -75,6 +76,7 @@ function makeRequest(cartToken: string | null, discountCodes: string[] = []) {
     salesChannel: "online_store",
     requestedUrl: null,
     sessionId: "session-1",
+    ...extra,
   };
   return new Request("https://example.com/evaluate", {
     method: "POST",
@@ -287,6 +289,37 @@ describe("collectStampTargets", () => {
       t: ["page.landing-nektar", "product"],
       e: ["abcd1234"],
     });
+  });
+});
+
+describe("pageGate (eligibility context)", () => {
+  const cond = (conditionType: string, value: unknown, isEnabled = true) => ({ id: "c", conditionType, value, isEnabled });
+  const offers = [
+    { id: "no-page", conditions: [cond("cart_value", { thresholdCents: 100 })] },
+    { id: "by-template", conditions: [cond("template", { templates: ["product"] })] },
+    { id: "disabled-page", conditions: [cond("template", { templates: ["product"] }, false)] },
+    { id: "broken", conditions: [cond("experiment", null)] },
+  ];
+  const gate = async (extra: Record<string, unknown>) => {
+    vi.mocked(getOfferDefinitions).mockClear().mockResolvedValueOnce(offers as never);
+    const response = await handleEvaluationRequest(makeRequest("cart-tok-gate", [], extra), shop, null);
+    expect(getOfferDefinitions).toHaveBeenCalledTimes(1);
+    return ((await response.json()) as { pageGate: Record<string, boolean> }).pageGate;
+  };
+
+  it("lists only offers with an enabled page condition and judges them with the sent context", async () => {
+    expect(await gate({ prospective: { _promo_page_url: "/products/x", _promo_template: "@product" } })).toEqual({ "by-template": true, broken: false });
+    expect(await gate({ prospective: { _promo_page_url: "/products/x", _promo_template: "@collection" } })).toEqual({ "by-template": false, broken: false });
+  });
+
+  it("fails closed for page-conditioned offers when an older runtime sends no context", async () => {
+    expect(await gate({})).toEqual({ "by-template": false, broken: false });
+  });
+
+  it("drops keys outside the stamp whitelist and oversize contexts", async () => {
+    expect(await gate({ prospective: { _promo_page_url: "/products/x", _promo_template: "@product", extra: "1" } })).toMatchObject({ "by-template": true });
+    expect(await gate({ prospective: { _promo_page_url: "/products/x", _promo_template: `@product${"a".repeat(3_000)}` } })).toMatchObject({ "by-template": false });
+    expect(await gate({ prospective: "garbage" })).toMatchObject({ "by-template": false });
   });
 });
 
