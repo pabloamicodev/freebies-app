@@ -21,6 +21,9 @@ const DEFAULT_VALUES: Record<SubconditionId, Record<string, unknown>> = {
   },
   utm_parameters: { utmSource: "", utmMedium: "", utmCampaign: "", utmTerm: "", utmContent: "" },
   page_types: { pageTypes: ["home", "collection", "product"] },
+  template: { templates: [] },
+  section_shown: { sections: [] },
+  experiment: { experimentId: "", variantKeys: [] },
 };
 
 export function initializeOfferConditionValues(

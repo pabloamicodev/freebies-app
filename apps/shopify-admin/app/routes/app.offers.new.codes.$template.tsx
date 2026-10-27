@@ -33,6 +33,7 @@ import { DEFAULT_CODE_PAGE_TYPES, pageTypeLabel } from "../lib/page-types.js";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { OfferWizardHeader, OfferWizardSection, type WizardAccent } from "../components/offers/OfferWizardLayout.js";
 import { OfferConditionsBuilder } from "../components/OfferConditionsBuilder.js";
+import type { SubconditionId } from "../components/subconditions/types.js";
 import { PageTypeCheckboxes, PAGE_TYPES_HELP, UtmScopeChoice } from "../components/subconditions/forms.js";
 import { PurchaseTypeField } from "../components/PurchaseTypeField.js";
 import { ProductPicker } from "../components/ProductPicker.js";
@@ -41,6 +42,9 @@ import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { Toast } from "../components/Toast.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
+// Shipping codes can only read page stamps; the cart-based conditions have no delivery-Function path.
+const SHIPPING_CODE_SUBCONDITIONS: SubconditionId[] = ["template", "section_shown", "experiment"];
 
 // Above this many new codes, publishing inline could outlive the request (same as the Codes tab).
 const INLINE_PUBLISH_LIMIT = 500;
@@ -715,17 +719,16 @@ export default function NewCodesOfferPage() {
             </OfferWizardSection>
 
             {/* ── 6. Extra conditions ── */}
-            {!isShipping && (
             <OfferWizardSection step={nextStep()} title="Extra conditions (optional)" accent={ACCENT}>
               <OfferConditionsBuilder
                 title="Extra conditions"
                 description="Every condition here must also be true for the code to work. Only conditions checkout can verify are listed."
                 functionEnforcedOnly
                 exclude={["page_types", "utm_parameters"]}
+                only={isShipping ? SHIPPING_CODE_SUBCONDITIONS : undefined}
                 isCodePromo={!automatic}
               />
             </OfferWizardSection>
-            )}
           </>
 
         {/* ── 7. Schedule, combinations and review ── */}

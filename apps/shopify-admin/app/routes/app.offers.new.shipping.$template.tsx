@@ -4,6 +4,7 @@ import { safeErrorMessage } from "../lib/safe-error.js";
 import { Form, redirect, useActionData, useLoaderData, useNavigate, useNavigation, useParams } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
+  isPageConditionType,
   ShippingDiscountRewardPayloadSchema,
   type ShippingDiscountTier,
 } from "@promo/shared-types";
@@ -11,7 +12,10 @@ import { offerCombinationPolicies, offerConditions, offerRewards, offers } from 
 import { Toast } from "../components/Toast.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
-import { discountMessageText, nowInZone, parseDateRange, requiredText } from "../lib/offer-validation.server.js";
+import { discountMessageText, nowInZone, parseDateRange, parseJsonRecord, requiredText } from "../lib/offer-validation.server.js";
+import { OfferConditionsBuilder } from "../components/OfferConditionsBuilder.js";
+import { PAGE_SUBCONDITION_IDS } from "../components/subconditions/types.js";
+import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
 import { statusForSubmit } from "../lib/offer-scheduling.server.js";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
@@ -134,6 +138,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { error: payloadResult.error.issues[0]?.message ?? "Invalid shipping configuration." };
   }
   const validatedPayload = payloadResult.data;
+  const subconditionsResult = parseJsonRecord(formData, "subconditions");
+  if (subconditionsResult.error) return { error: subconditionsResult.error };
+  const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!);
+  if (!normalizedSubconditions.success) return { error: normalizedSubconditions.error };
+  const subconditionRows = normalizedSubconditions.data;
+  if (subconditionRows.some((row) => !isPageConditionType(row.conditionType))) {
+    return { error: "Shipping offers only support page-based conditions." };
+  }
 
   const internalName = internalNameResult.data!;
   const publicTitle = publicTitleResult.data!;
@@ -177,6 +189,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           sortOrder: 0,
           isEnabled: true,
         }),
+        ...subconditionRows.map((subcondition, index) =>
+          tx.insert(offerConditions).values({
+            shopId,
+            offerId: offer.id,
+            scope: "sub",
+            conditionType: subcondition.conditionType,
+            operator: subcondition.operator,
+            value: subcondition.value,
+            sortOrder: index + 1,
+            isEnabled: true,
+          }),
+        ),
         tx.insert(offerRewards).values({
           shopId,
           offerId: offer.id,
@@ -571,6 +595,12 @@ export default function NewShippingOfferPage() {
               </label>
             </div>
           </div>
+
+          <OfferConditionsBuilder
+            title="Page conditions"
+            description="Limit this shipping offer to visitors who saw a template, a section or a test group. All conditions here must be true."
+            only={PAGE_SUBCONDITION_IDS}
+          />
 
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <button

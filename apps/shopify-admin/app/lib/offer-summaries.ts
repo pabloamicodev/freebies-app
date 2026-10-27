@@ -7,6 +7,10 @@ import { pageTypeLabel } from "./page-types.js";
 import { fromStoredAmount } from "./money.js";
 import { readMatchBy, readMatchRule } from "./product-condition.js";
 
+function stampSummary(text: string, v: Record<string, unknown>): string {
+  return `${text}${v["scope"] === "page" ? " · this page only" : ""}${v["rejectUnmatchedLines"] === true ? " · other pages block it" : ""}`;
+}
+
 export function conditionSummary(conditionType: string, value: unknown, operator?: string): string {
   const v = (value ?? {}) as Record<string, unknown>;
   switch (conditionType) {
@@ -43,6 +47,24 @@ export function conditionSummary(conditionType: string, value: unknown, operator
       const types = Array.isArray(v["pageTypes"]) ? v["pageTypes"] as string[] : [];
       const summary = types.length ? `added from ${types.map(pageTypeLabel).join(", ")}` : "no page types set";
       return v["rejectUnmatchedLines"] === true ? `${summary} · other pages block it` : summary;
+    }
+    case "template": {
+      const templates = Array.isArray(v["templates"]) ? (v["templates"] as string[]) : [];
+      return stampSummary(`Template: ${templates.join(", ") || "none selected"}`, v);
+    }
+    case "section_shown": {
+      const sections = Array.isArray(v["sections"]) ? (v["sections"] as Array<Record<string, unknown>>) : [];
+      const names = sections.map((s) => {
+        const ref = `${String(s["template"] ?? "?")}/${String(s["key"] ?? "?")}`;
+        return typeof s["label"] === "string" && s["label"] ? s["label"] : ref;
+      });
+      return stampSummary(`Section shown: ${names.join(", ") || "none selected"}`, v);
+    }
+    case "experiment": {
+      const keys = Array.isArray(v["variantKeys"]) ? (v["variantKeys"] as string[]) : [];
+      const labels = (v["variantLabels"] ?? {}) as Record<string, string>;
+      const name = typeof v["experimentName"] === "string" && v["experimentName"] ? v["experimentName"] : String(v["experimentId"] ?? "?");
+      return stampSummary(`Test group: ${name} → ${keys.map((key) => labels[key] ?? key).join(", ") || "none selected"}`, v);
     }
     case "specific_product":
     case "pack_of_products": {
@@ -190,6 +212,9 @@ const CONDITION_TYPE_LABELS: Record<string, string> = {
   discount_code: "Discount code",
   utm_parameters: "UTM parameters",
   page_types: "Store pages",
+  template: "Template",
+  section_shown: "Section is shown",
+  experiment: "Test group",
 };
 
 export function conditionTypeLabel(conditionType: string): string {

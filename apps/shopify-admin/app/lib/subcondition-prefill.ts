@@ -45,6 +45,12 @@ export function subconditionsFromRows(
         activeSubs.push("page_types");
         subValues["page_types"] = v;
         break;
+      case "template":
+      case "section_shown":
+      case "experiment":
+        activeSubs.push(row.conditionType);
+        subValues[row.conditionType] = v;
+        break;
       case "markets":
         activeSubs.push("markets");
         subValues["markets"] = v;
