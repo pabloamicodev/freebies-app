@@ -3,7 +3,8 @@
 //!
 //! A line matches when its packed metadata carries `_promo_page_url` and satisfies
 //! every condition. Conditions read `_promo_page_url`, or `_promo_landing_url` when
-//! `source` is set (visit-scoped UTM).
+//! `source` is set (visit-scoped UTM). The `template`, `section` and `experiment`
+//! modes read the `_promo_template`, `_promo_sections` and `_promo_exp` stamps.
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -36,16 +37,38 @@ pub fn metadata_matches(metadata: Option<&LineMetadata>, conds: &[CompiledPageUr
         return false;
     };
     metadata.contains_key("_promo_page_url")
-        && conds.iter().all(|cond| {
-            let key = if cond.source.is_some() {
-                "_promo_landing_url"
-            } else {
-                "_promo_page_url"
-            };
-            metadata
-                .get(key)
-                .is_some_and(|url| condition_matches(url, cond))
+        && conds.iter().all(|cond| match cond.match_mode.as_str() {
+            "template" => stamp_matches(metadata.get("_promo_template"), cond),
+            "section" => stamp_matches(metadata.get("_promo_sections"), cond),
+            "experiment" => stamp_matches(metadata.get("_promo_exp"), cond),
+            _ => {
+                let key = if cond.source.is_some() {
+                    "_promo_landing_url"
+                } else {
+                    "_promo_page_url"
+                };
+                metadata
+                    .get(key)
+                    .is_some_and(|url| condition_matches(url, cond))
+            }
         })
+}
+
+/// Comma list of `[@]<ref>` stamps; `@` marks a ref seen on the page the line was
+/// added from. Mirrors `evaluateStampList` (rule-engine): ASCII case-insensitive,
+/// empty names never match, `source: "page"` counts only `@` entries.
+fn stamp_matches(value: Option<&String>, cond: &CompiledPageUrlCondition) -> bool {
+    let page_only = cond.source.as_deref() == Some("page");
+    value.is_some_and(|raw| {
+        raw.split(',').any(|entry| {
+            let (current, name) = entry
+                .strip_prefix('@')
+                .map_or((false, entry), |rest| (true, rest));
+            !name.is_empty()
+                && (current || !page_only)
+                && cond.patterns.iter().any(|p| p.eq_ignore_ascii_case(name))
+        })
+    })
 }
 
 /// Scheme and host are stripped only for absolute (`http://`, `https://`) and
@@ -325,5 +348,122 @@ mod tests {
         assert!(matches("/collections/a?utm_source=g", &c));
         assert!(!matches("/collections/a", &c));
         assert!(!matches("/pages/a?utm_source=g", &c));
+    }
+
+    fn stamped(key: &str, stamp: &str) -> String {
+        serde_json::json!({ "_promo_page_url": "/pages/landing-nektar", key: stamp }).to_string()
+    }
+
+    fn stamp_cond(mode: &str, patterns: &[&str], page_only: bool) -> CompiledPageUrlCondition {
+        CompiledPageUrlCondition {
+            source: page_only.then(|| "page".to_string()),
+            ..cond(mode, patterns)
+        }
+    }
+
+    const STAMP_MODES: [(&str, &str, &str, &str); 3] = [
+        ("template", "_promo_template", "page.landing-nektar", "product"),
+        ("section", "_promo_sections", "page.landing-nektar/hero_abc", "page.landing-nektar/footer_1"),
+        ("experiment", "_promo_exp", "clx9k2abcd:variant_a", "clx9k2abcd:control"),
+    ];
+
+    #[test]
+    fn stamp_modes_match_remembered_and_current_entries() {
+        for (mode, key, a, other) in STAMP_MODES {
+            let c = [stamp_cond(mode, &[a], false)];
+            assert!(line_matches(Some(&stamped(key, a)), &c), "{mode} remembered");
+            assert!(line_matches(Some(&stamped(key, &format!("@{a}"))), &c), "{mode} current");
+            assert!(line_matches(Some(&stamped(key, &a.to_uppercase())), &c), "{mode} case");
+            assert!(line_matches(Some(&stamped(key, &format!("{other},{a}"))), &c), "{mode} list");
+            assert!(line_matches(Some(&stamped(key, &format!("@{other},{a}"))), &c), "{mode} @ list");
+            assert!(!line_matches(Some(&stamped(key, other)), &c), "{mode} other");
+            assert!(!line_matches(Some(&stamped(key, &format!("@{other}"))), &c), "{mode} @other");
+        }
+    }
+
+    #[test]
+    fn stamp_modes_page_scope_counts_only_at_entries() {
+        for (mode, key, a, other) in STAMP_MODES {
+            let c = [stamp_cond(mode, &[a], true)];
+            assert!(!line_matches(Some(&stamped(key, a)), &c), "{mode} remembered");
+            assert!(!line_matches(Some(&stamped(key, &format!("@{other},{a}"))), &c), "{mode} mixed");
+            assert!(line_matches(Some(&stamped(key, &format!("{other},@{a}"))), &c), "{mode} @ hit");
+            assert!(line_matches(Some(&stamped(key, &format!(",,@{a},"))), &c), "{mode} stray commas");
+            let visit = [stamp_cond(mode, &[a], false)];
+            assert!(line_matches(Some(&stamped(key, &format!(",,@{a},"))), &visit), "{mode} visit");
+        }
+    }
+
+    #[test]
+    fn stamp_modes_fail_closed() {
+        for (mode, key, a, _) in STAMP_MODES {
+            let c = [stamp_cond(mode, &[a], false)];
+            assert!(!line_matches(Some(&meta("/pages/landing-nektar")), &c), "{mode} missing");
+            let page = [stamp_cond(mode, &[a], true)];
+            assert!(!line_matches(Some(&meta("/pages/landing-nektar")), &page), "{mode} missing page");
+            let no_page = serde_json::json!({ key: format!("@{a}") }).to_string();
+            assert!(!line_matches(Some(&no_page), &c), "{mode} without page url");
+            for raw in ["", ",", ",,,", "@", "@,", " ", "@@x", "no-match,,@"] {
+                assert!(!line_matches(Some(&stamped(key, raw)), &c), "{mode} {raw:?}");
+            }
+            let empty = [stamp_cond(mode, &[""], false)];
+            assert!(!line_matches(Some(&stamped(key, ",@,")), &empty), "{mode} empty pattern");
+            let none = [stamp_cond(mode, &[], false)];
+            assert!(!line_matches(Some(&stamped(key, a)), &none), "{mode} no patterns");
+            let non_string = serde_json::json!({ "_promo_page_url": "/", key: 5 }).to_string();
+            assert!(!line_matches(Some(&non_string), &c), "{mode} non-string");
+        }
+    }
+
+    #[test]
+    fn stamp_modes_any_of_patterns_and_and_semantics() {
+        let tpl = [stamp_cond("template", &["page.landing-nektar", "product.acv-template"], false)];
+        assert!(line_matches(Some(&stamped("_promo_template", "product.acv-template")), &tpl));
+        assert!(line_matches(Some(&stamped("_promo_template", "@page.landing-nektar")), &tpl));
+        assert!(!line_matches(Some(&stamped("_promo_template", "index")), &tpl));
+
+        let sec = [stamp_cond(
+            "section",
+            &["product.acv-template/hero_mlswap_v", "page.landing-nektar/hero_abc"],
+            false,
+        )];
+        assert!(line_matches(Some(&stamped("_promo_sections", "@product.acv-template/hero_mlswap_v")), &sec));
+        assert!(line_matches(Some(&stamped("_promo_sections", "x/y,page.landing-nektar/hero_abc")), &sec));
+        assert!(!line_matches(Some(&stamped("_promo_sections", "product.acv-template/hero")), &sec));
+        assert!(!line_matches(Some(&stamped("_promo_sections", "hero_abc")), &sec));
+
+        let exp = [stamp_cond("experiment", &["clx9k2abcd:variant_a", "clx9k2abcd:variant_b"], false)];
+        assert!(line_matches(Some(&stamped("_promo_exp", "@clx9k2abcd:variant_b")), &exp));
+        assert!(!line_matches(Some(&stamped("_promo_exp", "clx9k2abcd:control")), &exp));
+        assert!(!line_matches(Some(&stamped("_promo_exp", "zzzzzzzzzz:variant_a")), &exp));
+
+        let both = [
+            stamp_cond("template", &["page.landing-nektar"], false),
+            stamp_cond("experiment", &["clx9k2abcd:variant_a"], false),
+        ];
+        let raw = |exp: &str| {
+            serde_json::json!({
+                "_promo_page_url": "/pages/landing-nektar",
+                "_promo_template": "@page.landing-nektar",
+                "_promo_exp": exp
+            })
+            .to_string()
+        };
+        assert!(line_matches(Some(&raw("clx9k2abcd:variant_a")), &both));
+        assert!(!line_matches(Some(&raw("clx9k2abcd:control")), &both));
+
+        let with_url = [
+            stamp_cond("experiment", &["clx9k2abcd:variant_a"], false),
+            cond("starts_with", &["/pages/landing"]),
+        ];
+        assert!(line_matches(Some(&stamped("_promo_exp", "@clx9k2abcd:variant_a")), &with_url));
+        let moved = serde_json::json!({ "_promo_page_url": "/other", "_promo_exp": "@clx9k2abcd:variant_a" }).to_string();
+        assert!(!line_matches(Some(&moved), &with_url));
+    }
+
+    #[test]
+    fn unknown_match_mode_does_not_read_stamps() {
+        let c = [stamp_cond("bogus", &["x"], false)];
+        assert!(!line_matches(Some(&stamped("_promo_template", "x")), &c));
     }
 }

@@ -384,7 +384,7 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
       throw new Error(state.appInstallationError);
     }
     if (query.includes("PromoEngineAppInstallation")) return { currentAppInstallation: { id: "gid://shopify/AppInstallation/1" } };
-    if (query.includes("PromoEngineSpecificLinkParams")) {
+    if (query.includes("PromoEngineStorefrontMetafields")) {
       for (const m of variables!.metafields as Array<{ ownerId: string; namespace: string; key: string; value: string }>) {
         state.shopMetafieldPushes.push(m);
       }
@@ -1775,9 +1775,9 @@ describe("publishOffersForShop — mixed code offers (product/order AND shipping
   it("refreshes the specific-link params on every publish (drift repair republishes), and a missing scope neither fails the publish nor pages", async () => {
     reset();
     await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
-    expect(state.shopMetafieldPushes).toHaveLength(1);
-    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
     expect(state.shopMetafieldPushes).toHaveLength(2);
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    expect(state.shopMetafieldPushes).toHaveLength(4);
 
     state.appInstallationError = "Access denied for currentAppInstallation field. Required access: write_app_data";
     vi.mocked(Sentry.captureException).mockClear();
@@ -2113,7 +2113,30 @@ describe("publishOffersForShop — lock timeouts, retries, manifest and shop met
         type: "json",
         value: JSON.stringify(["freegifts_code"]),
       },
+      {
+        ownerId: "gid://shopify/AppInstallation/1",
+        namespace: "promo_engine",
+        key: "stamp_targets",
+        type: "json",
+        value: JSON.stringify({ s: [], t: [] }),
+      },
     ]);
+  });
+
+  it("writes the template, section and experiment stamp targets of live offers in the same mutation", async () => {
+    reset();
+    const offer = makeOffer({ id: "regular-1" });
+    state.offers = [offer];
+    const base = { shopId: SHOP_ID, offerId: "regular-1", scope: "sub", isEnabled: true, operator: "eq", sortOrder: 0 };
+    state.conditionRows = [
+      { ...base, id: "c-t", conditionType: "template", value: { templates: ["Page.Landing-Nektar"] } },
+      { ...base, id: "c-s", conditionType: "section_shown", value: { sections: [{ template: "page.landing-nektar", key: "hero_abc" }] } },
+      { ...base, id: "c-e", conditionType: "experiment", value: { experimentId: "abcd1234", variantKeys: ["b"] } },
+    ] as never;
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    const targets = state.shopMetafieldPushes.find((m) => m.key === "stamp_targets")!;
+    expect(JSON.parse(targets.value)).toEqual({ s: ["page.landing-nektar/hero_abc"], t: ["page.landing-nektar"], e: ["abcd1234"] });
+    expect(state.shopMetafieldPushes.map((m) => m.key)).toEqual(["specific_link_params", "stamp_targets"]);
   });
 
   it("a failure to write the shop metafield never fails the publish", async () => {

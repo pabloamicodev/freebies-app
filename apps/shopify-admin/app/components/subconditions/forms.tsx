@@ -10,6 +10,9 @@ import {
   resolveRejectUnmatchedLines,
 } from "@promo/shared-types";
 import { ProductPicker } from "../ProductPicker.js";
+import { ThemeTargetPicker } from "../ThemeTargetPicker.js";
+import { ExperimentPicker } from "../ExperimentPicker.js";
+import { readSections, readTemplates } from "../../lib/theme-target-selection.js";
 import { PAGE_TYPE_OPTIONS, readPageTypes } from "../../lib/page-types.js";
 
 // ─── Shared props ─────────────────────────────────────────────────────────────
@@ -899,6 +902,151 @@ export function QuantityLimitForm({ value, onChange }: SubFormProps) {
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ─── Theme-based page conditions: template / section shown / test group ───────
+export const PAGE_STAMP_SCOPE_OPTIONS = [
+  { value: "visit", label: "Seen during the visit (24 h)", help: "Counts if the visitor saw it on any page during the last 24 hours." },
+  { value: "page", label: "On the page where the item was added", help: "Stricter: counts only if the condition was true on the page where the item was added, not earlier in the visit." },
+] as const;
+
+function PageStampScopeChoice({ name, value, onChange }: { name: string; value: "visit" | "page"; onChange: (next: "visit" | "page") => void }) {
+  return (
+    <fieldset style={{ border: 0, padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+      <legend className="b-label">When does it count?</legend>
+      {PAGE_STAMP_SCOPE_OPTIONS.map((option) => (
+        <label key={option.value} className="b-checkbox-row" style={{ cursor: "pointer", gap: 10, alignItems: "flex-start" }}>
+          <input
+            type="radio"
+            name={name}
+            value={option.value}
+            checked={value === option.value}
+            onChange={() => onChange(option.value)}
+            style={{ accentColor: "var(--blue)", width: 14, height: 14, marginTop: 3 }}
+          />
+          <span>
+            <span style={{ fontSize: 13, color: "var(--text)" }}>{option.label}</span>
+            <span className="b-checkbox-help" style={{ display: "block" }}>{option.help}</span>
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
+/** Scope + the two line-match flags, shared by the three page-stamp forms. */
+function readPageStampFlags(value: Record<string, unknown> | undefined, isCodePromo: boolean) {
+  return {
+    scope: (value?.["scope"] === "page" ? "page" : "visit") as "visit" | "page",
+    onlyMatchedLines: resolveOnlyMatchedLines(value?.["onlyMatchedLines"], isCodePromo),
+    rejectUnmatchedLines: resolveRejectUnmatchedLines(value?.["rejectUnmatchedLines"]),
+  };
+}
+
+function PageStampFlagsFields({
+  idPrefix,
+  flags,
+  emit,
+}: {
+  idPrefix: string;
+  flags: ReturnType<typeof readPageStampFlags>;
+  emit: (patch: Partial<Record<string, unknown>>) => void;
+}) {
+  return (
+    <>
+      <PageStampScopeChoice name={`${idPrefix}-scope`} value={flags.scope} onChange={(scope) => emit({ scope })} />
+      <OnlyMatchedLinesCheckbox
+        id={`${idPrefix}-only-matched-lines`}
+        checked={flags.onlyMatchedLines}
+        onChange={(checked) => emit({ onlyMatchedLines: checked })}
+      />
+      <RejectUnmatchedLinesCheckbox
+        id={`${idPrefix}-reject-unmatched-lines`}
+        checked={flags.rejectUnmatchedLines}
+        onChange={(checked) => emit({ rejectUnmatchedLines: checked })}
+      />
+    </>
+  );
+}
+
+export function TemplateForm({ value, onChange, isCodePromo = false }: SubFormProps) {
+  const idPrefix = useId();
+  const templates = readTemplates(value?.["templates"]);
+  const flags = readPageStampFlags(value, isCodePromo);
+  const emit = (patch: Partial<Record<string, unknown>>) => onChange?.({ templates, ...flags, ...patch });
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <ThemeTargetPicker kind="template" idPrefix={idPrefix} value={templates} onChange={(next) => emit({ templates: next })} />
+      <div className="b-help">Matches visitors who saw any of the selected templates, including their ?view= alternates.</div>
+      <PageStampFlagsFields idPrefix={idPrefix} flags={flags} emit={emit} />
+    </div>
+  );
+}
+
+export function SectionShownForm({ value, onChange, isCodePromo = false }: SubFormProps) {
+  const idPrefix = useId();
+  const sections = readSections(value?.["sections"]);
+  const flags = readPageStampFlags(value, isCodePromo);
+  const emit = (patch: Partial<Record<string, unknown>>) => onChange?.({ sections, ...flags, ...patch });
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <ThemeTargetPicker kind="section" idPrefix={idPrefix} value={sections} onChange={(next) => emit({ sections: next })} />
+      <div className="b-help">Matches visitors who saw any of the selected sections displayed. Works with Margin Labs inline and redirect tests, and with CSS tests that hide a section (Intelligems-style): a hidden section does not count.</div>
+      <PageStampFlagsFields idPrefix={idPrefix} flags={flags} emit={emit} />
+    </div>
+  );
+}
+
+export function ExperimentForm({ value, onChange, isCodePromo = false }: SubFormProps) {
+  const idPrefix = useId();
+  const experimentId = typeof value?.["experimentId"] === "string" ? value["experimentId"] : "";
+  const experimentName = typeof value?.["experimentName"] === "string" ? value["experimentName"] : "";
+  const variantKeys = readStringList(value?.["variantKeys"]);
+  const [keysText, setKeysText] = useState(variantKeys.join(", "));
+  const flags = readPageStampFlags(value, isCodePromo);
+  const keysJoined = variantKeys.join(",");
+  useEffect(() => {
+    setKeysText((current) => (readStringList(current).join(",") === keysJoined ? current : keysJoined.split(",").filter(Boolean).join(", ")));
+  }, [keysJoined]);
+  const emit = (patch: Partial<Record<string, unknown>>) =>
+    onChange?.({ experimentId, variantKeys, ...(experimentName ? { experimentName } : {}), ...flags, ...patch });
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <ExperimentPicker
+        idPrefix={`${idPrefix}-picker`}
+        experimentId={experimentId}
+        experimentName={experimentName}
+        variantKeys={variantKeys}
+        onChange={(next) => emit({ ...next })}
+      />
+      <div className="b-help">Or enter the experiment manually:</div>
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-experiment-id`}>Experiment ID</label>
+        <input id={`${idPrefix}-experiment-id`} className="b-input" value={experimentId} onChange={(event) => emit({ experimentId: event.target.value })} autoComplete="off" />
+      </div>
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-experiment-name`}>Experiment name (optional)</label>
+        <input id={`${idPrefix}-experiment-name`} className="b-input" value={experimentName} onChange={(event) => emit({ experimentName: event.target.value })} autoComplete="off" />
+      </div>
+      <div>
+        <label className="b-label" htmlFor={`${idPrefix}-variant-keys`}>Arm keys</label>
+        <input
+          id={`${idPrefix}-variant-keys`}
+          className="b-input"
+          value={keysText}
+          onChange={(event) => {
+            setKeysText(event.target.value);
+            emit({ variantKeys: readStringList(event.target.value) });
+          }}
+          placeholder="control, variant_a"
+          autoComplete="off"
+        />
+        <div className="b-help">Comma-separated, e.g. control, variant_a. Matches visitors in any of these arms.</div>
+      </div>
+      <div className="b-help">Needs Margin Labs Experiment Engine on this store. Applies only to visitors who see one of the selected arms.</div>
+      <PageStampFlagsFields idPrefix={idPrefix} flags={flags} emit={emit} />
     </div>
   );
 }

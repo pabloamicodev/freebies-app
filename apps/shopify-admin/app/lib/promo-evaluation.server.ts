@@ -1,4 +1,12 @@
-import { EvaluationInputSchema, EvaluationResultSchema, type EvaluationInput, type EvaluationResult } from "@promo/shared-types";
+import {
+  EMPTY_STAMP_TARGETS,
+  EvaluationInputSchema,
+  EvaluationResultSchema,
+  collectStampTargets as collectConditionStampTargets,
+  type EvaluationInput,
+  type EvaluationResult,
+  type StampTargets,
+} from "@promo/shared-types";
 import { evaluate, type OfferDefinition } from "@promo/rule-engine";
 import type { Db } from "@promo/db";
 import * as Sentry from "@sentry/node";
@@ -21,6 +29,7 @@ import {
 import { withVolumeDiscountTiers } from "./volume-discount-tiers.server.js";
 import { isShadowModeEnabled } from "./shadow-mode.server.js";
 import { apiError, apiJson, readJsonBody } from "./api-response.server.js";
+import { buildPageGate } from "./page-gate.server.js";
 
 const MAX_EVALUATION_BODY_BYTES = 256 * 1024;
 
@@ -64,6 +73,11 @@ export function collectSpecificLinkParams(offerDefinitions: OfferDefinition[]): 
     }
   }
   return [...names];
+}
+
+/** Templates, sections and experiments the storefront runtime may stamp (D2 fallback to the shop metafield). */
+export function collectStampTargets(offerDefinitions: OfferDefinition[]): StampTargets {
+  return collectConditionStampTargets(offerDefinitions.flatMap((offer) => offer.conditions));
 }
 
 /**
@@ -161,7 +175,7 @@ export async function handleEvaluationRequest(
   timer = createPhaseTimer(),
   options: { viaAppProxy?: boolean } = {},
 ): Promise<Response> {
-  if (!storefrontRuntimeEnabled()) return apiJson(request, { ...inertResult(), specificLinkParams: [] });
+  if (!storefrontRuntimeEnabled()) return apiJson(request, { ...inertResult(), specificLinkParams: [], stampTargets: EMPTY_STAMP_TARGETS, pageGate: {} });
   const body = await readJsonBody<unknown>(request, {
     maxBytes: MAX_EVALUATION_BODY_BYTES,
     tooLargeMessage: "Evaluation payload is too large.",
@@ -354,6 +368,6 @@ export async function handleEvaluationRequest(
   if (timer.total() > SLOW_EVALUATION_MS) {
     console.warn(`[evaluate] slow ${timer.total().toFixed(0)}ms shop=${shop.id} ${timer.header()}`);
   }
-  return apiJson(request, { ...parsedResult.data, specificLinkParams: collectSpecificLinkParams(offerDefinitions) }, { headers: { "Server-Timing": timer.header() } });
+  return apiJson(request, { ...parsedResult.data, specificLinkParams: collectSpecificLinkParams(offerDefinitions), stampTargets: collectStampTargets(offerDefinitions), pageGate: buildPageGate(offerDefinitions, parsed.data.prospective) }, { headers: { "Server-Timing": timer.header() } });
 }
 

@@ -4,6 +4,7 @@
  * validated form for each condition type.
  */
 
+import { useState } from "react";
 import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData, Form, Link, useActionData, useNavigation, useSubmit } from "react-router";
 import * as Sentry from "@sentry/node";
@@ -36,6 +37,8 @@ import {
   UtmScopeChoice,
 } from "../components/subconditions/forms.js";
 import { DEFAULT_CODE_PAGE_TYPES, readPageTypes } from "../lib/page-types.js";
+import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
+import { ExperimentForm, SectionShownForm, TemplateForm } from "../components/subconditions/forms.js";
 import { and, eq } from "drizzle-orm";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { getMarketsForShop } from "../lib/markets.server.js";
@@ -222,6 +225,21 @@ function buildConditionValue(
         value = { pageTypes, ...lineMatchFlags(formData) };
         break;
       }
+      case "template":
+      case "section_shown":
+      case "experiment": {
+        let raw: unknown = {};
+        try {
+          raw = JSON.parse(String(formData.get("pageStampValue") ?? "{}"));
+        } catch {
+          return { error: "Condition value is invalid." };
+        }
+        const normalized = normalizeOfferSubconditions({ [conditionType]: raw });
+        if (!normalized.success) return { error: normalized.error };
+        value = normalized.data[0]?.value ?? {};
+        conditionOperator = normalized.data[0]?.operator ?? conditionOperator;
+        break;
+      }
       case "page_url": {
         const patternsRaw = formData.get("urlPatterns") as string | null;
         const patterns = splitCsvList(patternsRaw).filter((p) => p.length > 0);
@@ -359,6 +377,9 @@ const MAIN_CONDITION_TYPES = [
   { label: "Pack of Products — every product in the pack must be present", value: "pack_of_products" },
   { label: "Page URL — restrict to specific storefront pages", value: "page_url" },
   { label: "Store pages — products added from home, collections, product pages…", value: "page_types" },
+  { label: "Template — visitor saw one of these templates", value: "template" },
+  { label: "Section is shown — visitor saw one of these sections", value: "section_shown" },
+  { label: "Test group — visitor is in one of these arms", value: "experiment" },
   { label: "Line attribute — approved legacy property", value: "line_attribute" },
   { label: "Cart attribute — approved legacy property", value: "cart_attribute" },
 ];
@@ -376,6 +397,9 @@ const SUB_CONDITION_TYPES = [
   { label: "Specific Link / Magic URL", value: "specific_link" },
   { label: "UTM Parameters", value: "utm_parameters" },
   { label: "Store pages", value: "page_types" },
+  { label: "Template", value: "template" },
+  { label: "Section is shown", value: "section_shown" },
+  { label: "Test group", value: "experiment" },
 ];
 
 /** Pulls the edit-form-relevant fields out of a condition's stored value —
@@ -1043,6 +1067,15 @@ export default function OfferConditionsPage() {
                     </>
                   )}
 
+                  {(selectedType === "template" || selectedType === "section_shown" || selectedType === "experiment") && (
+                    <PageStampFields
+                      key={selectedType}
+                      conditionType={selectedType}
+                      initial={editingCondition?.conditionType === selectedType ? editingValue : undefined}
+                      isCodePromo={isCodePromo}
+                    />
+                  )}
+
                   {selectedType === "page_types" && (
                     <fieldset className="b-stack b-stack-3" style={{ border: 0, padding: 0, margin: 0 }}>
                       <legend className="b-label">Products count when added to the cart from</legend>
@@ -1247,6 +1280,26 @@ export default function OfferConditionsPage() {
         }}
         onCancel={() => setConfirmDeleteConditionId(null)}
       />
+    </>
+  );
+}
+
+/** Template / section / test-group editor for the plain-form editor: the value travels as one JSON field. */
+function PageStampFields({
+  conditionType,
+  initial,
+  isCodePromo,
+}: {
+  conditionType: "template" | "section_shown" | "experiment";
+  initial?: Record<string, unknown>;
+  isCodePromo: boolean;
+}) {
+  const [value, setValue] = useState<Record<string, unknown>>(initial ?? {});
+  const Sub = conditionType === "template" ? TemplateForm : conditionType === "section_shown" ? SectionShownForm : ExperimentForm;
+  return (
+    <>
+      <input type="hidden" name="pageStampValue" value={JSON.stringify(value)} />
+      <Sub value={value} onChange={setValue} isCodePromo={isCodePromo} />
     </>
   );
 }

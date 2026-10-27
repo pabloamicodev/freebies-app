@@ -12,6 +12,7 @@
 
 import { AjaxCartAdapter, appliedDiscountCodes, type CartData, type CartItem } from "./cart-adapter.js";
 import { captureUi, isEditingWithin, restoreUi } from "./dom-preserve.js";
+import { canPromise, contextKey, currentStampContext, encodeContext } from "./eligibility-context.js";
 import { rememberSpecificLinkParams } from "./metadata-bridge.js";
 import { expectedGiftKeys, hasOwnMarker, parseRetryAfter, withJitter, type GiftOutcome } from "./runtime-helpers.js";
 import { debounce, AbortableRequest } from "./debounce.js";
@@ -19,8 +20,10 @@ import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
 import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
 import { giftRewardKey, loadDeclinedGiftRewards, saveDeclinedGiftRewards } from "./declined-gifts.js";
 import { initGiftSlider, isSoldOutCartError } from "./widgets/gift-slider.js";
-import { initFbtWidget } from "./widgets/fbt.js";
-import { initBundleBuilder } from "./widgets/bundle-builder.js";
+import type { initFbtWidget } from "./widgets/fbt.js";
+import { lazyInitFbtWidget, lazyInitBundleBuilder } from "./widgets/blocks-loader.js";
+import { sharePreact } from "./preact-share.js";
+import type { initBundleBuilder } from "./widgets/bundle-builder.js";
 import { buildMarketContext } from "./market-context.js";
 import type { EvaluationResult, CartAction } from "./types.js";
 
@@ -96,6 +99,10 @@ interface RuntimeConfig {
   cartItemCount?: number | null;
   /** Query-param names of the offers' specific-link conditions; stored with the line page URL (D4). */
   specificLinkParams?: string[];
+  /** Rendered template (`page.landing-nektar`, `customers/account`) for template and section stamps. */
+  template?: string;
+  /** Refs live offers condition on (`s` sections, `t` templates, `e` experiment ids); empty or absent = stamp nothing. */
+  stampTargets?: { s?: string[]; t?: string[]; e?: string[] } | null;
   /** Widget string overrides from the theme extension's locale files. */
   i18n?: Record<string, string>;
 }
@@ -176,6 +183,14 @@ export class PromoEngineRuntime {
       if (event.persisted) this.debouncedEvaluate.call();
     });
     document.addEventListener("theme:cart:open", () => this.debouncedEvaluate.call());
+    // A new test group, consent answer or finished page load can change the stamp a new line would get;
+    // the context is part of the cart hash, so an unchanged one costs no request.
+    const contextChanged = () => {
+      if (this.lastCartHash !== null) this.debouncedEvaluate.call();
+    };
+    document.addEventListener("ml:experiment:assigned", contextChanged);
+    document.addEventListener("visitorConsentCollected", contextChanged);
+    window.addEventListener("load", () => setTimeout(contextChanged, 1_600));
 
     // Our own events
     on(PromoEvents.CartChanged, () => {
@@ -500,7 +515,8 @@ export class PromoEngineRuntime {
 
     this.detectDeclinedGifts(cart);
 
-    const cartHash = this.buildCartHash(cart);
+    const prospective = currentStampContext();
+    const cartHash = `${this.buildCartHash(cart)}|${contextKey(prospective)}`;
     if (!options.force && cartHash === this.lastCartHash) {
       this.log("Cart unchanged, skipping evaluation");
       if (this.widgetChangedCart) {
@@ -523,6 +539,7 @@ export class PromoEngineRuntime {
           locale: this.config.locale,
           salesChannel: "online_store",
           requestedUrl: window.location.href,
+          prospective,
           sessionId: this.sessionId,
           declinedGiftRewards: [...this.declinedGiftRewards],
         }),
@@ -871,6 +888,10 @@ export class PromoEngineRuntime {
   public readonly api = {
     refreshCart: () => this.debouncedEvaluate.flush(),
     lastResult: () => this.lastEvaluationResult,
+    eligibilityContext: currentStampContext,
+    // `ctx` for the theme blocks' proxy GETs, and the widget rule, so blocks never re-derive either.
+    encodedEligibilityContext: encodeContext,
+    canPromise,
     evaluate: () => this.triggerEvaluation(),
     whenGiftsReady: () => this.settleGifts(),
     validateGiftOffer: async (offerId: string) => {
@@ -913,8 +934,10 @@ export function initRuntime() {
   window.PromoEngine = runtime.api;
   // Exposed as its own global (not nested under PromoEngine) because blocks
   // like fbt.liquid poll for `window.initFbtWidget` directly.
-  window.initFbtWidget = initFbtWidget;
-  window.initBundleBuilder = initBundleBuilder;
+  // Both load promo-engine-blocks.js on first mount, so pages without those blocks never download it.
+  sharePreact();
+  window.initFbtWidget = lazyInitFbtWidget;
+  window.initBundleBuilder = lazyInitBundleBuilder;
   initGiftSlider(getOrCreateSessionId());
   runtime.init();
 }

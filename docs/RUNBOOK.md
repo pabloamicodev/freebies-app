@@ -21,6 +21,7 @@ Operational procedures for the Promo Engine. Release steps live in `docs/DEPLOY.
 15. [Load testing](#load-testing)
 16. [Live-store E2E](#live-store-e2e)
 17. [Offer limits: review and usage backfill](#offer-limits-review-and-usage-backfill)
+18. [Template / Section / Test group conditions](#template--section--test-group-conditions)
 
 ## Environments and ownership
 
@@ -414,3 +415,17 @@ Per-customer limits only count orders the app recorded, so offers that already h
 3. Check the counts look sane, then `--apply`: inserts rows with `ON CONFLICT DO NOTHING` (source `backfill`, safe to re-run) and marks the affected customers pending; the usage-sync cron then pushes their metafields (needs `write_customers`).
 4. Order: HPN, then Ambrosia, then OneSol. Production is one shared Neon database serving all three apps, so `--shop <domain>` is the scope of every step; always pass it. Verify the dry-run and the apply on one shop before moving to the next.
 5. Enforcement is a per-shop flag (`limits.enforced`) at Settings > Offer limits (`/app/settings/limits`). It is only available to shops listed in the env var `LIMITS_TOGGLE_SHOPS` (comma-separated myshopify domains; unset means nobody), every change is audited, and turning it on is refused while limited automatic offers share a discount title. While it is off, limits are stored but ignored, `one_use_per_customer` cannot be published, and the unique-title rule is only a warning. With it on, `one_use_per_customer` compiles as max 1 use per customer and requires an identified customer.
+
+## Template / Section / Test group conditions
+
+These three page conditions read stamps that the storefront runtime writes on each new cart line: `Template` (the rendered template, including `?view=` alternates and product template suffixes), `Section is shown` (a section whose wrapper is displayed on the page) and `Test group` (an Experiment Engine arm). A stamp is only written for the refs in the shop's stamp targets, so nothing is stamped until an offer with these conditions is published.
+
+- **Publish the offer before launching the test or landing page (R2).** Stamp targets are written to `promo_engine.stamp_targets` (app installation metafield) in the same call as `specific_link_params`. Visitors whose storefront still has the old targets cached (localStorage `promo_engine_stamp_targets`, refreshed by `/evaluate`) are not stamped, so their lines never match. Publish, then open the page once in a fresh browser session to confirm the stamp before the test goes live.
+- **Stamp targets refresh on publish.** Adding, editing or removing one of these conditions changes the targets only when the offer is published again. A deleted and re-added section gets a new ID, so its old ref stops matching: the editor and the publish warnings report it ("not in your published theme"). Reselect the item and publish again.
+- **Enable the Test group signal per shop (Experiment Engine side).** The Experiment Engine only publishes arms to Promo when the shop is listed in `ML_PROMO_SIGNAL_SHOPS` (comma-separated myshopify domains, `*` = all, unset = none). Current scope: `hpn-test-store.myshopify.com` only. TRU stays off (owner decision). To enable: set the variable, redeploy the Experiment Engine, then sync the storefront hint for the shop (the hourly reconcile also does it). To roll back: remove the shop from the list and sync; no Promo deploy is needed.
+- **If a promo does not apply**, read the cart line on the storefront (`/cart.js` → `items[].properties`):
+  - `_promo_template`: comma-separated template refs, e.g. `@page.landing-nektar`.
+  - `_promo_sections`: comma-separated `template/key` refs, e.g. `@page.landing-nektar/hero_abc`. A hidden swap arm must not appear here.
+  - `_promo_exp`: `expId:variantKey` entries. Missing for visitors outside the test, or without analytics consent.
+  - `@` means the line was added on a page where the condition held; no `@` means it was remembered from earlier in the visit (24 h). A condition with scope "page" needs the `@` entry.
+  - Then check: the offer was published after the last theme or test change; the visitor is in the selected arm; the line was added after the stamp was set (existing lines are never re-stamped, so remove and re-add the item).

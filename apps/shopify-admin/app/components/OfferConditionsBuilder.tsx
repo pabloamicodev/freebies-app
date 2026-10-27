@@ -14,6 +14,8 @@ interface OfferConditionsBuilderProps {
   functionEnforcedOnly?: boolean;
   /** Conditions the surrounding wizard already asks for in its own steps. */
   exclude?: SubconditionId[];
+  /** Restrict the list to these conditions (e.g. shipping offers only read page stamps). */
+  only?: SubconditionId[];
   /** The offer is code-gated; forwarded to forms whose defaults depend on it. */
   isCodePromo?: boolean;
 }
@@ -29,6 +31,7 @@ export function OfferConditionsBuilder({
   description = "URL, customer, market, subscription, store attributes and quantity guards are combined with AND logic.",
   functionEnforcedOnly = false,
   exclude,
+  only,
   isCodePromo = false,
 }: OfferConditionsBuilderProps) {
   const [active, setActive] = useState<SubconditionId[]>([]);
@@ -38,6 +41,7 @@ export function OfferConditionsBuilder({
   const types = GIFT_SUBCONDITIONS.filter(
     (definition) =>
       !exclude?.includes(definition.id) &&
+      (!only || only.includes(definition.id)) &&
       (!functionEnforcedOnly || isFunctionEnforcedSubcondition(definition.id)),
   );
 

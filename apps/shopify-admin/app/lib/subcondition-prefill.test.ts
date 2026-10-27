@@ -41,3 +41,15 @@ describe("sub-condition prefill round-trip", () => {
     expect(normalizeOfferSubconditions({ page_types: { pageTypes: ["checkout"] } }).success).toBe(false);
   });
 });
+
+describe("sub-condition prefill round-trip: theme conditions", () => {
+  it("reopens template, section and test group exactly as saved", () => {
+    const { first, second, activeSubs } = roundTrip({
+      template: { templates: ["page.landing-nektar"], scope: "page", onlyMatchedLines: true },
+      section_shown: { sections: [{ template: "page.landing-nektar", key: "hero_abc", label: "Hero (page.landing-nektar)" }] },
+      experiment: { experimentId: "abcd1234", variantKeys: ["control"], experimentName: "PDP hero" },
+    });
+    expect(activeSubs).toEqual(["template", "section_shown", "experiment"]);
+    expect(second).toEqual({ success: true, data: first });
+  });
+});

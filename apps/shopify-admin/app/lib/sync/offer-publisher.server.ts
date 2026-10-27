@@ -14,6 +14,7 @@ import {
   type OfferReward,
   type OfferCombinationPolicy,
 } from "@promo/db";
+import { collectStampTargets } from "@promo/shared-types";
 import { normalizeSubscriptionMode } from "../purchase-type.js";
 import { eq, and, inArray, isNotNull, sql } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
@@ -349,7 +350,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     assertConfigFits(emptyValue);
     await pushMetafields(shopDomain, accessToken, discountIds, emptyValue);
     recordShared(emptyValue);
-    await pushSpecificLinkParams(shopDomain, accessToken, [
+    await pushStorefrontMetafields(shopDomain, accessToken, [
       ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
       ...compiledBackendB.flatMap((entry) => entry.conditionRows),
     ]);
@@ -496,7 +497,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     );
     await pushMetafields(shopDomain, accessToken, discountIds, value);
     recordShared(value);
-    await pushSpecificLinkParams(shopDomain, accessToken, [
+    await pushStorefrontMetafields(shopDomain, accessToken, [
       ...conditionRows,
       ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
       ...compiledBackendB.flatMap((entry) => entry.conditionRows),
@@ -1417,11 +1418,12 @@ export function specificLinkParamNames(conditionRows: OfferCondition[]): string[
 }
 
 /**
- * Publishes the param names as an app-owned SHOP metafield the theme embed reads, so even the
- * first add-to-cart of a page load stamps the right params. Best effort: a failure here must not
+ * Publishes the param names and the stamp targets (templates, sections and experiments live offers
+ * use) as app-installation metafields the theme embed reads, in one mutation, so even the first
+ * add-to-cart of a page load stamps the right params. Best effort: a failure here must not
  * fail the publish of the offers themselves.
  */
-async function pushSpecificLinkParams(
+async function pushStorefrontMetafields(
   shopDomain: string,
   accessToken: string,
   conditionRows: OfferCondition[],
@@ -1438,7 +1440,7 @@ async function pushSpecificLinkParams(
       shopDomain,
       accessToken,
       retryable: true,
-      query: `mutation PromoEngineSpecificLinkParams($metafields: [MetafieldsSetInput!]!) {
+      query: `mutation PromoEngineStorefrontMetafields($metafields: [MetafieldsSetInput!]!) {
         metafieldsSet(metafields: $metafields) {
           metafields { id }
           userErrors { field message }
@@ -1452,6 +1454,13 @@ async function pushSpecificLinkParams(
             key: "specific_link_params",
             type: "json",
             value: JSON.stringify(specificLinkParamNames(conditionRows)),
+          },
+          {
+            ownerId: installation.currentAppInstallation.id,
+            namespace: "promo_engine",
+            key: "stamp_targets",
+            type: "json",
+            value: JSON.stringify(collectStampTargets(conditionRows)),
           },
         ],
       },

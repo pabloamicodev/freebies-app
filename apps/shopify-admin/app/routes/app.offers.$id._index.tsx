@@ -7,7 +7,7 @@ import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { parseJsonRecord, parseJsonStringArray, parseDateRange, toZonedLocalInput } from "../lib/offer-validation.server.js";
 import { normalizeConditionValue } from "../lib/offer-config-normalization.server.js";
-import { publishShopConfig, republishIfActive, validateActivation } from "../lib/offer-publish-flow.server.js";
+import { getPublishWarnings, publishShopConfig, republishIfActive, validateActivation } from "../lib/offer-publish-flow.server.js";
 import { activationStatus, statusForScheduleSave } from "../lib/offer-scheduling.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies, offerVersions, discountCodes } from "@promo/db";
@@ -24,6 +24,7 @@ import { SelectedProductsList } from "../components/SelectedProductsList.js";
 import { SubconditionModal } from "../components/SubconditionModal.js";
 import { SubconditionCard } from "../components/SubconditionCard.js";
 import { SUB_FORMS } from "../components/subconditions/registry.js";
+import { MAIN_CONDITION_OPTIONS, valueFirstType } from "../lib/main-condition-options.js";
 import {
   OnlyMatchedLinesCheckbox,
   PAGE_TYPES_HELP,
@@ -331,6 +332,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       // can never leave the offer in status="active" without a working config.
       const validation = await validateActivation(db, shopId, [offerId]);
       if (!validation.ok) return { error: validation.error };
+
+      if (formData.get("acknowledgeWarnings") !== "1") {
+        const warnings = await getPublishWarnings(db, shopId, offerId, { shopDomain: session.shop, accessToken: session.accessToken ?? "" });
+        if (warnings.length > 0) return { warnings };
+      }
 
       // Update status, push to Shopify, then rollback if the push fails.
       const now = new Date();
@@ -1080,6 +1086,21 @@ function ConditionCard({
         {conditionType === "page_types" && (
           <PageTypesConditionEditor conditionId={conditionId} val={val} update={update} save={save} isCodePromo={isCodePromo} />
         )}
+
+        {/* ── Template / section shown / test group ──────────── */}
+        {(conditionType === "template" || conditionType === "section_shown" || conditionType === "experiment") && (() => {
+          const Sub = SUB_FORMS[conditionType];
+          return (
+            <Sub
+              value={val}
+              onChange={(next) => {
+                setVal(next);
+                save(next);
+              }}
+              isCodePromo={isCodePromo}
+            />
+          );
+        })()}
       </div>
     </div>
   );
@@ -1218,6 +1239,10 @@ function conditionSummary(conditionType: string, value: ConditionValue, currency
       if (patterns.length === 0) return ["No URL patterns configured"];
       return [`URL ${label}: ${patterns.slice(0, 2).join(", ")}${patterns.length > 2 ? ` +${patterns.length - 2} more` : ""}`];
     }
+    case "template":
+    case "section_shown":
+    case "experiment":
+      return [sharedConditionSummary(conditionType, v, operator)];
     case "page_types": {
       const types = readPageTypes(v.pageTypes);
       return [types.length ? `Added from: ${types.map(pageTypeLabel).join(", ")}` : "No store pages selected"];
@@ -1244,6 +1269,7 @@ export default function OfferDetailPage() {
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const fetcher = useFetcher();
+  const [newCondValue, setNewCondValue] = useState<Record<string, unknown>>({});
 
   const firstReward = rewards[0] as typeof rewards[0] | undefined;
   const [detailState, setDetailField] = useObjectState(() => ({
@@ -1403,6 +1429,8 @@ export default function OfferDetailPage() {
 
   function addCondition() {
     if (!newCondType) return;
+    const valueFirst = valueFirstType(newCondType);
+    if (valueFirst && !validateConditionValue(valueFirst, newCondValue).success) return;
     const defaults: Record<string, object> = {
       cart_value: { thresholdCents: 50000, currencyCode: "USD", appliesTo: "any_product" },
       cart_quantity: { minQuantity: 1, appliesTo: "any_product" },
@@ -1415,18 +1443,43 @@ export default function OfferDetailPage() {
     fd.append("intent", "add_condition");
     fd.append("conditionType", newCondType);
     fd.append("scope", "main");
-    fd.append("conditionValue", JSON.stringify(defaults[newCondType] ?? {}));
+    fd.append("conditionValue", JSON.stringify(valueFirst ? newCondValue : (defaults[newCondType] ?? {})));
     if (newCondType === "specific_product") fd.append("operator", matchRuleOperator("any"));
     void fetcher.submit(fd, { method: "POST" });
     setAddingCondition(false);
     setNewCondType("");
+    setNewCondValue({});
   }
 
-  function submitAction(intent: string) {
+  function submitAction(intent: string, extra: Record<string, string> = {}) {
     const fd = new FormData();
     fd.append("intent", intent);
+    for (const [key, value] of Object.entries(extra)) fd.append(key, value);
     void fetcher.submit(fd, { method: "POST" });
   }
+
+  const fetcherData = fetcher.data as { warnings?: string[] } | undefined;
+  const [dismissedWarnings, setDismissedWarnings] = useState<unknown>(null);
+  const publishWarningsDialog = (
+    <ConfirmDialog
+      open={Boolean(fetcherData?.warnings?.length) && dismissedWarnings !== fetcherData}
+      ariaLabel="Publish warnings"
+      title="Publish anyway?"
+      message={
+        <ul style={{ margin: 0, paddingLeft: 18 }}>
+          {fetcherData?.warnings?.map((warning) => <li key={warning}>{warning}</li>)}
+        </ul>
+      }
+      confirmLabel="Publish anyway"
+      cancelLabel="Cancel"
+      destructive={false}
+      onConfirm={() => {
+        setDismissedWarnings(fetcherData);
+        submitAction("publish", { acknowledgeWarnings: "1" });
+      }}
+      onCancel={() => setDismissedWarnings(fetcherData)}
+    />
+  );
 
   if (offer.type !== "gift") {
     return (
@@ -1524,6 +1577,7 @@ export default function OfferDetailPage() {
             </div>
 
             <CodeNoticeBanners offerId={offer.id} notices={codeNotices} />
+{publishWarningsDialog}
             {actionData && "error" in actionData && actionData.error && (
               <div className="b-banner b-banner-red" style={{ marginBottom: 12 }}>
                 <span className="b-banner-icon">!</span>
@@ -1658,30 +1712,35 @@ export default function OfferDetailPage() {
                     aria-label="Condition type"
                     className="b-select"
                     value={newCondType}
-                    onChange={(e) => setNewCondType(e.target.value)}
+                    onChange={(e) => { setNewCondType(e.target.value); setNewCondValue({}); }}
                     style={{ marginBottom: 10 }}
                   >
                     <option value="">— Select —</option>
-                    <option value="cart_value">Cart Value — spend threshold</option>
-                    <option value="cart_quantity">Cart Quantity — item count</option>
-                    <option value="cart_value_multiplier">Cart Value Multiplier — earn gifts per $ spent</option>
-                    <option value="specific_product">Specific Product — must contain selected products</option>
-                    <option value="page_url">Page URL — restrict to specific storefront pages</option>
-                    <option value="page_types">Store pages — products added from home, collections, product pages…</option>
+                    {MAIN_CONDITION_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
                   </select>
+                  {valueFirstType(newCondType) && (() => {
+                    const Sub = SUB_FORMS[valueFirstType(newCondType)!];
+                    return (
+                      <div style={{ marginBottom: 10 }}>
+                        <Sub value={newCondValue} onChange={setNewCondValue} isCodePromo={isCodePromo} />
+                      </div>
+                    );
+                  })()}
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
                       type="button"
                       className="b-btn b-btn-dark b-btn-sm"
                       onClick={addCondition}
-                      disabled={!newCondType}
+                      disabled={!newCondType || (valueFirstType(newCondType) !== null && !validateConditionValue(valueFirstType(newCondType)!, newCondValue).success)}
                     >
                       Add condition
                     </button>
                     <button
                       type="button"
                       className="b-btn b-btn-secondary b-btn-sm"
-                      onClick={() => { setAddingCondition(false); setNewCondType(""); }}
+                      onClick={() => { setAddingCondition(false); setNewCondType(""); setNewCondValue({}); }}
                     >
                       Cancel
                     </button>
@@ -1934,6 +1993,7 @@ export default function OfferDetailPage() {
           </div>
 
           <CodeNoticeBanners offerId={offer.id} notices={codeNotices} />
+{publishWarningsDialog}
           {/* Action feedback banners */}
           {actionData && "error" in actionData && actionData.error && (
             <div className="b-banner b-banner-red" style={{ marginBottom: 12 }}>

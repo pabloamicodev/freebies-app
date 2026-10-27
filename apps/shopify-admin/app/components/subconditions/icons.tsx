@@ -101,4 +101,7 @@ export const SUB_ICONS: Record<SubconditionId, () => JSX.Element> = {
   quantity_limit: IQty,
   utm_parameters: ITag,
   page_types: ILink,
+  template: ILink,
+  section_shown: ILink,
+  experiment: ITag,
 };

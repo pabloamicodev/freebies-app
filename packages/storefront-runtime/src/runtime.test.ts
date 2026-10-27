@@ -287,6 +287,17 @@ describe("init guard, bfcache and per-request guard", () => {
     expect(h.listeners["pageshow"]).toHaveLength(1);
   });
 
+  it("exposes the theme block entry points as lazy mounts and shares preact with the blocks chunk", () => {
+    const h = harness([]);
+    initRuntime();
+    const w = h.win as unknown as { initFbtWidget?: unknown; initBundleBuilder?: unknown; __pePreact?: Record<string, unknown> };
+    expect(w.initFbtWidget).toBeTypeOf("function");
+    expect(w.initBundleBuilder).toBeTypeOf("function");
+    for (const key of ["h", "render", "useState", "useEffect", "useMemo", "jsx", "jsxs", "AjaxCartAdapter", "formatMoney", "t", "emit"]) {
+      expect(w.__pePreact?.[key], key).toBeDefined();
+    }
+  });
+
   it("re-evaluates after a bfcache restore but not a normal pageshow", async () => {
     const h = harness([
       [/cart\.js/, () => json(emptyCart)],
@@ -314,6 +325,52 @@ describe("init guard, bfcache and per-request guard", () => {
     await h.win.fetch("/cart/add.js", { method: "POST", body: "{}" });
     await vi.advanceTimersByTimeAsync(1_000);
     expect(h.count(/\/cart\.js$/)).toBe(1);
+  });
+});
+
+describe("eligibility context", () => {
+  const bodyOf = (call: { init?: RequestInit }) => JSON.parse(String(call.init!.body)) as { prospective?: Record<string, string> };
+
+  it("sends the stamp a new line would carry and re-evaluates only when it changes", async () => {
+    const h = harness([
+      [/cart\.js/, () => json(emptyCart)],
+      [/evaluate/, () => json(okResult({ pageGate: { o1: true } }))],
+    ]);
+    const rt = new PromoEngineRuntime(CONFIG);
+    await rt.api.evaluate();
+    expect(bodyOf(h.calls.find((c) => /evaluate/.test(c.url))!).prospective).toEqual({ _promo_page_url: "/" });
+    expect(rt.api.eligibilityContext()).toEqual({ _promo_page_url: "/" });
+    expect(rt.api.lastResult()?.pageGate).toEqual({ o1: true });
+
+    await rt.api.evaluate();
+    expect(h.count(/evaluate/)).toBe(1);
+
+    h.win.location.pathname = "/products/x";
+    await rt.api.evaluate();
+    expect(h.count(/evaluate/)).toBe(2);
+    expect(bodyOf(h.calls.filter((c) => /evaluate/.test(c.url))[1]!).prospective).toEqual({ _promo_page_url: "/products/x" });
+  });
+
+  it("re-judges when the engine assigns a test group, but not before a first evaluation", async () => {
+    const h = harness([
+      [/cart\.js/, () => json(emptyCart)],
+      [/evaluate/, () => json(okResult())],
+    ]);
+    const rt = new PromoEngineRuntime(CONFIG);
+    rt.init();
+    const added = () => vi.mocked(document.addEventListener).mock.calls.filter(([type]) => type === "ml:experiment:assigned");
+    expect(added()).toHaveLength(1);
+    const fire = added()[0]![1] as () => void;
+    h.win.location.pathname = "/changed";
+    fire();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.count(/evaluate/)).toBe(0);
+
+    await rt.api.evaluate();
+    h.win.location.pathname = "/changed-again";
+    fire();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.count(/evaluate/)).toBe(2);
   });
 });
 

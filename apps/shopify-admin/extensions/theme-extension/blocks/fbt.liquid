@@ -18,59 +18,42 @@
     if (!container) return;
     var attempts = 0;
 
+    var mounted = false;
+
+    // The runtime's own evaluation carries the upsells and the pageGate for the stamp this page would write,
+    // so the block issues no request of its own.
+    function mount(result) {
+      if (mounted || !result) return;
+      var offerId = container.dataset.offerId;
+      var currency = container.dataset.currency || 'USD';
+      var sessionId = sessionStorage.getItem('promo_engine_session_id') || 'anon';
+      var upsell = result.upsells && result.upsells.find(function(u) {
+        return (!offerId || u.offerId === offerId) && window.PromoEngine.canPromise(result, u.offerId, 'add');
+      });
+      // The evaluate endpoint returns one recommended product per offer,
+      // not a full "frequently bought together" set — show it alongside
+      // the current product rather than a curated relatedProducts list.
+      if (!upsell || !upsell.product) return;
+      mounted = true;
+      var mainProduct = Object.assign({}, upsell.product, { priceCents: upsell.product.originalPriceCents });
+      window.initFbtWidget(container, {
+        offerId: upsell.offerId,
+        mainProduct: mainProduct,
+        relatedProducts: [upsell.product],
+        title: upsell.message || 'Frequently bought together',
+        buttonText: upsell.buttonText || 'Add to cart',
+        discountPercent: upsell.discountPercent || 0,
+        maxProducts: 1,
+        layout: 'amazon'
+      }, currency, sessionId);
+    }
+
     // Wait for promo engine runtime to load, then init FBT
     function tryInit() {
       attempts += 1;
       if (window.PromoEngine && window.initFbtWidget) {
-        var offerId = container.dataset.offerId;
-        var currency = container.dataset.currency || 'USD';
-        var sessionId = sessionStorage.getItem('promo_engine_session_id') || 'anon';
-
-        // Fetch FBT config from evaluation API
-        fetch('/apps/promo-engine/evaluate', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Promo-Shop': window.__promoEngineConfig?.shopDomain || '',
-            'X-Promo-Key': window.__promoEngineConfig?.publicKey || '',
-            'X-Promo-Session': sessionId
-          },
-          body: JSON.stringify({
-            shopDomain: window.__promoEngineConfig?.shopDomain,
-            cart: { token: null, id: null, lines: [], subtotalCents: 0, discountCodes: [], currencyCode: currency, totalQuantity: 0 },
-            customer: null, market: null, locale: window.__promoEngineConfig?.locale || 'en',
-            salesChannel: 'online_store', requestedUrl: window.location.href, sessionId
-          })
-        })
-        .then(function(r) {
-          if (!r.ok) {
-            throw new Error('Promo Engine evaluation failed with HTTP ' + r.status);
-          }
-          return r.json();
-        })
-        .then(function(result) {
-          var upsell = result.upsells && result.upsells.find(function(u) { return !offerId || u.offerId === offerId; });
-          // The evaluate endpoint returns one recommended product per offer,
-          // not a full "frequently bought together" set — show it alongside
-          // the current product rather than a curated relatedProducts list.
-          if (upsell && upsell.product && window.initFbtWidget) {
-            var mainProduct = Object.assign({}, upsell.product, { priceCents: upsell.product.originalPriceCents });
-            window.initFbtWidget(container, {
-              offerId: upsell.offerId,
-              mainProduct: mainProduct,
-              relatedProducts: [upsell.product],
-              title: upsell.message || 'Frequently bought together',
-              buttonText: upsell.buttonText || 'Add to cart',
-              discountPercent: upsell.discountPercent || 0,
-              maxProducts: 1,
-              layout: 'amazon'
-            }, currency, sessionId);
-          }
-        })
-        .catch(function(error) {
-          container.setAttribute('data-promo-engine-error', 'true');
-          console.warn('[Promo Engine] FBT block could not load:', error);
-        });
+        window.addEventListener('promo-engine:evaluation-completed', function(e) { mount(e.detail); });
+        mount(window.PromoEngine.lastResult());
       } else if (attempts < 50) {
         setTimeout(tryInit, 200);
       } else {

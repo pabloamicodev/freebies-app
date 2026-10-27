@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sanitizeProspective } from "./page-stamps.js";
 
 /** Some storefront scripts (analytics snippets, tracking pixels) write cart/line
  * attributes as numbers or booleans through the Ajax Cart API instead of strings
@@ -120,5 +121,7 @@ export const EvaluationInputSchema = z.object({
   /** `offerId:rewardId` pairs the customer explicitly declined (removed or
    * dismissed the slider without picking) — evaluator must not auto-add these. */
   declinedGiftRewards: z.array(z.string().max(256)).max(200).optional(),
+  /** The stamp a line added now would carry (see page-stamps). Absent from older runtimes; never rejects the request. */
+  prospective: z.unknown().transform(sanitizeProspective).optional(),
 });
 export type EvaluationInput = z.infer<typeof EvaluationInputSchema>;

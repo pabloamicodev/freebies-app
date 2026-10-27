@@ -27,4 +27,12 @@ describe("app_embed.liquid", () => {
     expect(brokenOutputTags(`{{ 'k' | t: percent: '{{percent}}' | json }}`).length).toBeGreaterThan(0);
     expect(brokenOutputTags(`{{ 'k' | t: percent: '__percent__' | json }}`)).toEqual([]);
   });
+
+  it("exposes the rendered template (directory, name, suffix) and the stamp targets", () => {
+    const liquid = readFileSync(EMBED, "utf8");
+    expect(liquid).toContain("template.directory");
+    expect(liquid).toContain("template.suffix");
+    expect(liquid).toMatch(/template:\s*\{\{\s*pe_template \| json\s*\}\}/);
+    expect(liquid).toMatch(/stampTargets:\s*\{\{\s*app\.metafields\.promo_engine\.stamp_targets\.value \| json\s*\}\}/);
+  });
 });
