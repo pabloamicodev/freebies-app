@@ -443,20 +443,30 @@ function GiftSlider({
     submittingRef.current = true;
     setLoading(true);
     setError(null);
+    let confirmed = false;
     try {
       await onConfirm(selectedGifts);
-      publishAnalytics("promo_engine:gift_selected", {
-        offer_id: payload.offerId,
-        variant_ids: selectedGifts.map((gift) => gift.variantId),
-        session_id: sessionId,
-      });
+      // From here the cart holds the pick: the button stays inert for good, whatever the close path does.
+      confirmed = true;
+      try {
+        publishAnalytics("promo_engine:gift_selected", {
+          offer_id: payload.offerId,
+          variant_ids: selectedGifts.map((gift) => gift.variantId),
+          session_id: sessionId,
+        });
+      } catch {
+        // A third-party analytics hook must never turn an added gift into an error that invites a second add.
+      }
       onClose();
     } catch (caught) {
+      if (confirmed) return;
       if (caught instanceof GiftSoldOutError) markSoldOut(caught.variantIds);
       setError(friendlyGiftError(caught, "We couldn't update your gifts. Please try again."));
     } finally {
-      submittingRef.current = false;
-      setLoading(false);
+      if (!confirmed) {
+        submittingRef.current = false;
+        setLoading(false);
+      }
     }
   }
 
@@ -737,6 +747,20 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string, initialSoldO
 
     // Add the new selection first so a failed add never destroys the buyer's
     // current gift, then remove stale lines in one cart update request.
+    // Units each reward already has in the cart (lines staying), so a repeat confirm never tops up past its limit.
+    const stayingUnitsByReward = new Map<string, number>();
+    for (const gift of existingGifts) {
+      if (giftsToRemove.includes(gift)) continue;
+      const rewardId = gift.properties?.["_promo_engine_reward_id"] ?? "";
+      stayingUnitsByReward.set(rewardId, (stayingUnitsByReward.get(rewardId) ?? 0) + gift.quantity);
+    }
+    // A gift another engine put in the cart (the legacy Cart Gift Tiers app tags `__cart_gift_tier`) for one of
+    // this reward's variants already is the shopper's gift: topping up would hand out two.
+    for (const line of cart.items) {
+      if (!line.properties?.["__cart_gift_tier"]) continue;
+      const owner = freshPayload.selectableGifts.find((gift) => String(line.variant_id) === (gift.variantId.split("/").pop() ?? ""));
+      if (owner) stayingUnitsByReward.set(owner.rewardId, (stayingUnitsByReward.get(owner.rewardId) ?? 0) + line.quantity);
+    }
     const newGifts = validatedSelected.flatMap((giftInfo) => {
       if (!giftInfo) return [];
       const legacyVariantId = giftInfo.variantId.split("/").pop() ?? giftInfo.variantId;
@@ -746,7 +770,11 @@ function mountSlider(payload: GiftSliderPayload, sessionId: string, initialSoldO
           gift.properties?.["_promo_engine_reward_id"] === giftInfo.rewardId &&
           gift.properties?.["_promo_engine_offer_version"] === String(giftInfo.offerVersion),
       );
-      return alreadyInCart ? [] : [giftInfo];
+      if (alreadyInCart) return [];
+      const units = stayingUnitsByReward.get(giftInfo.rewardId) ?? 0;
+      if (units >= giftInfo.rewardMaxQuantity) return [];
+      stayingUnitsByReward.set(giftInfo.rewardId, units + 1);
+      return [giftInfo];
     });
     const giftsToAdd = newGifts.map((giftInfo) => ({
       variantId: giftInfo.variantId,
