@@ -25,6 +25,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      // Subpath imports keep zod out of the storefront bundle; listed first so the bare alias below does not prefix-match.
+      "@promo/shared-types/page-stamps": resolve(__dirname, "packages/shared-types/src/page-stamps.ts"),
       "@promo/shared-types": resolve(__dirname, "packages/shared-types/src/index.ts"),
       "@promo/rule-engine": resolve(__dirname, "packages/rule-engine/src/index.ts"),
       "@promo/db": resolve(__dirname, "packages/db/src/index.ts"),
