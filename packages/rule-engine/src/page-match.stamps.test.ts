@@ -192,3 +192,23 @@ describe("evaluateStampList", () => {
     expect(evaluateStampList("template", ",", [""], false).ok).toBe(false);
   });
 });
+
+describe("packed page stamps", () => {
+  const pageTypes = { conditionType: "page_types", value: { pageTypes: ["home", "product", "cart"] } };
+  const packed = (stamp: Record<string, string>) => ({
+    _page_origin: "index",
+    _promo_engine_metadata: JSON.stringify({ _page_origin: "index", ...stamp }),
+  });
+
+  it("reads the stamp from _promo_engine_metadata when a form post packed it", () => {
+    expect(lineMatchesPageConditions(packed({ _promo_page_url: "/cart" }), [pageTypes])).toBe(true);
+    expect(evaluatePageConditionGroup([pageTypes], [line("a", packed({ _promo_page_url: "/cart" }))]).passed).toBe(true);
+    expect(lineMatchesPageConditions(packed({ _promo_page_url: "/pages/landing" }), [pageTypes])).toBe(false);
+  });
+
+  it("prefers the top-level stamp and ignores unreadable metadata", () => {
+    const both = { ...packed({ _promo_page_url: "/pages/landing" }), _promo_page_url: "/cart" };
+    expect(lineMatchesPageConditions(both, [pageTypes])).toBe(true);
+    expect(lineMatchesPageConditions({ _promo_engine_metadata: "{oops" }, [pageTypes])).toBe(false);
+  });
+});
