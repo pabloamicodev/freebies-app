@@ -50,6 +50,25 @@ describe("evaluatePageTypes", () => {
     expect(check("/cart")).toBe(false);
   });
 
+  it("rejects excluded paths for every kind, over the listed pages, and keeps the rest", () => {
+    const value = {
+      pageTypes: ["home", "product", "page"] as Array<"home" | "product" | "page">,
+      pageUrls: ["/pages/landing"],
+      excludeUrls: ["/products/x", "/pages/landing", "https://s.com/Products/One-Sol%E2%84%A2-1/?v=1"],
+    };
+    const check = (url: string | null) => evaluatePageTypes(url, value).ok;
+    expect(check("/products/x")).toBe(false);
+    expect(check("/PRODUCTS/X/?a=1")).toBe(false);
+    expect(check("/fr-ca/products/x")).toBe(false);
+    expect(check("/pages/landing")).toBe(false);
+    expect(check("/products/one-sol%E2%84%A2-1")).toBe(false);
+    expect(check("/products/one-sol™-1")).toBe(false);
+    expect(check("/products/x-2")).toBe(true);
+    expect(check("/collections/c/products/x")).toBe(true);
+    expect(check("/")).toBe(true);
+    expect(evaluatePageTypes("/products/x", { pageTypes: ["product"], excludeUrls: [] }).ok).toBe(true);
+  });
+
   it("keeps any page when the list is empty or Pages is not selected", () => {
     expect(evaluatePageTypes("/pages/landing", { pageTypes: ["page"], pageUrls: [" "] }).ok).toBe(true);
     expect(evaluatePageTypes("/pages/landing", { pageTypes: ["page"] }).ok).toBe(true);

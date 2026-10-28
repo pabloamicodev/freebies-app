@@ -515,6 +515,57 @@ const SCENARIOS: Scenario[] = [
     discounted: { [A]: ["l1", "l2"] },
   },
   {
+    name: "page-types-exclude-urls-rejects-excluded-product",
+    description: "page_types [home, collection, product] with excludeUrls: a line added from an excluded product URL (any case, locale, query, encoded) is not discounted; the other lines still are.",
+    offers: [
+      discountOffer(A, [
+        pageTypes(["home", "collection", "product"], {
+          excludeUrls: ["/products/protein-creatine-bundle", "https://onesol.com/Products/One-Sol%E2%84%A2-8-Week-System-1/?v=1"],
+          onlyMatchedLines: true,
+        }),
+      ]),
+    ],
+    lines: [
+      line("l1", 1, page("/products/protein-creatine-bundle")),
+      line("l2", 2, page("/products/other")),
+      line("l3", 3, page("/")),
+      line("l4", 4, page("/en/products/Protein-Creatine-Bundle?x=1")),
+      line("l5", 5, page("/products/one-sol%E2%84%A2-8-week-system-1")),
+      line("l6", 6, page("/collections/all")),
+    ],
+    qualified: [A],
+    discounted: { [A]: ["l2", "l3", "l6"] },
+  },
+  {
+    name: "page-types-exclude-urls-keeps-non-excluded-product-page",
+    description: "page_types [product] with excludeUrls: a product page that is only a prefix or a collection-nested variant of the excluded one still matches; the exclusion also beats a listed /pages/ URL.",
+    offers: [
+      discountOffer(A, [
+        pageTypes(["product", "page"], {
+          pageUrls: ["/pages/landing"],
+          excludeUrls: ["/products/x", "/pages/landing"],
+          onlyMatchedLines: true,
+        }),
+      ]),
+    ],
+    lines: [
+      line("l1", 1, page("/products/x-2")),
+      line("l2", 2, page("/collections/c/products/x")),
+      line("l3", 3, page("/products/x")),
+      line("l4", 4, page("/pages/landing")),
+    ],
+    qualified: [A],
+    discounted: { [A]: ["l1", "l2"] },
+  },
+  {
+    name: "page-types-exclude-urls-empty-list-keeps-old-behaviour",
+    description: "page_types [product] with an empty or blank excludeUrls behaves as if the list were absent.",
+    offers: [discountOffer(A, [pageTypes(["product"], { excludeUrls: [" ", "/"], onlyMatchedLines: true })])],
+    lines: [line("l1", 1, page("/products/x")), line("l2", 2, page("/products/y")), line("l3", 3, page("/"))],
+    qualified: [A],
+    discounted: { [A]: ["l1", "l2"] },
+  },
+  {
     name: "page-types-locale-prefixes",
     description: "Locale segments (/en, /fr-ca, /EN-US) are ignored; a 3-letter /eng is not a locale; case-insensitive.",
     offers: [discountOffer(A, [pageTypes(["product", "collection"], { onlyMatchedLines: true })])],

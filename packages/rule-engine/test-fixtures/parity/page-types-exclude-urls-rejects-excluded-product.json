@@ -1,0 +1,176 @@
+{
+  "name": "page-types-exclude-urls-rejects-excluded-product",
+  "description": "page_types [home, collection, product] with excludeUrls: a line added from an excluded product URL (any case, locale, query, encoded) is not discounted; the other lines still are.",
+  "source": {
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "type": "discount",
+        "priority": 100,
+        "stopLowerPriority": false,
+        "conditions": [
+          {
+            "conditionType": "page_types",
+            "value": {
+              "pageTypes": [
+                "home",
+                "collection",
+                "product"
+              ],
+              "excludeUrls": [
+                "/products/protein-creatine-bundle",
+                "https://onesol.com/Products/One-Sol%E2%84%A2-8-Week-System-1/?v=1"
+              ],
+              "onlyMatchedLines": true
+            },
+            "scope": "sub",
+            "operator": "eq",
+            "sortOrder": 0
+          }
+        ],
+        "rewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "rewardType": "product_discount",
+            "discountType": "percentage",
+            "value": {
+              "amount": 10,
+              "currencyCode": "USD"
+            },
+            "target": {},
+            "quantity": null,
+            "isAutoAdd": false,
+            "isCustomerSelectable": false,
+            "trackMode": "variant",
+            "sortOrder": 0,
+            "label": null
+          }
+        ]
+      }
+    ]
+  },
+  "config": {
+    "c1": "_promo_engine_unused",
+    "c2": "_promo_engine_unused",
+    "c3": "_promo_engine_unused",
+    "customerTags": [],
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "offerType": "discount",
+        "priority": 100,
+        "productRewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "discountType": "percentage",
+            "discountValue": 10
+          }
+        ],
+        "pageUrlConditions": [
+          {
+            "patterns": [
+              "home",
+              "collection",
+              "product",
+              "!/products/protein-creatine-bundle",
+              "!/products/one-sol™-8-week-system-1"
+            ],
+            "matchMode": "page_type"
+          }
+        ],
+        "restrictToMatchedLines": true
+      }
+    ],
+    "version": "parity",
+    "compiledAt": "2026-01-01T00:00:00.000Z"
+  },
+  "cart": {
+    "currency": "USD",
+    "presentmentCurrencyRate": 1,
+    "country": "US",
+    "customerTags": [],
+    "enteredCodes": [],
+    "lines": [
+      {
+        "id": "l1",
+        "variantId": "gid://shopify/ProductVariant/1",
+        "productId": "gid://shopify/Product/1",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/products/protein-creatine-bundle"
+        }
+      },
+      {
+        "id": "l2",
+        "variantId": "gid://shopify/ProductVariant/2",
+        "productId": "gid://shopify/Product/2",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/products/other"
+        }
+      },
+      {
+        "id": "l3",
+        "variantId": "gid://shopify/ProductVariant/3",
+        "productId": "gid://shopify/Product/3",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/"
+        }
+      },
+      {
+        "id": "l4",
+        "variantId": "gid://shopify/ProductVariant/4",
+        "productId": "gid://shopify/Product/4",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/en/products/Protein-Creatine-Bundle?x=1"
+        }
+      },
+      {
+        "id": "l5",
+        "variantId": "gid://shopify/ProductVariant/5",
+        "productId": "gid://shopify/Product/5",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/products/one-sol%E2%84%A2-8-week-system-1"
+        }
+      },
+      {
+        "id": "l6",
+        "variantId": "gid://shopify/ProductVariant/6",
+        "productId": "gid://shopify/Product/6",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/collections/all"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "qualifiedOfferIds": [
+      "aaaaaaaa-0000-4000-8000-000000000001"
+    ],
+    "discountedLineIds": {
+      "aaaaaaaa-0000-4000-8000-000000000001": [
+        "l2",
+        "l3",
+        "l6"
+      ]
+    }
+  }
+}

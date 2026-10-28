@@ -13,7 +13,7 @@ import { ProductPicker } from "../ProductPicker.js";
 import { ThemeTargetPicker } from "../ThemeTargetPicker.js";
 import { ExperimentPicker } from "../ExperimentPicker.js";
 import { readSections, readTemplates } from "../../lib/theme-target-selection.js";
-import { PAGE_TYPE_OPTIONS, cleanPageHandle, pageHandleToUrl, pageUrlToHandle, readPageTypes, readPageUrls } from "../../lib/page-types.js";
+import { PAGE_TYPE_OPTIONS, cleanExcludeUrl, cleanPageHandle, pageHandleToUrl, pageUrlToHandle, readExcludeUrls, readPageTypes, readPageUrls } from "../../lib/page-types.js";
 
 // ─── Shared props ─────────────────────────────────────────────────────────────
 export interface SubFormProps {
@@ -703,6 +703,56 @@ function PageUrlList({
   );
 }
 
+function ExcludeUrlList({
+  idPrefix,
+  urls,
+  onChange,
+  name,
+}: {
+  idPrefix: string;
+  urls: string[];
+  onChange?: (next: string[]) => void;
+  name?: string;
+}) {
+  const [rows, setRows] = useState(() => (urls.length ? urls : [""]));
+  function update(next: string[]) {
+    setRows(next);
+    onChange?.(next.map((row) => cleanExcludeUrl(row, true)).filter(Boolean));
+  }
+  return (
+    <div className="b-stack b-stack-2">
+      <label className="b-label" htmlFor={`${idPrefix}-exclude-url-0`}>Exclude these pages</label>
+      <div className="b-help">Products added from these pages don't get this offer. Use the full path, like /products/handle.</div>
+      {rows.map((row, index) => (
+        <div key={index} style={{ display: "flex", gap: 8 }}>
+          {name && cleanExcludeUrl(row, true) && <input type="hidden" name={name} value={cleanExcludeUrl(row, true)} />}
+          <input
+            id={`${idPrefix}-exclude-url-${index}`}
+            className="b-input"
+            style={{ flex: 1, minWidth: 0 }}
+            value={row}
+            placeholder="/products/handle"
+            autoComplete="off"
+            aria-label={`Excluded page ${index + 1}`}
+            onChange={(event) => update(rows.map((current, at) => (at === index ? cleanExcludeUrl(event.target.value) : current)))}
+            onBlur={(event) => update(rows.map((current, at) => (at === index ? cleanExcludeUrl(event.target.value, true) : current)))}
+          />
+          {rows.length > 1 && (
+            <button type="button" className="b-btn b-btn-secondary b-btn-sm" aria-label={`Remove excluded page ${index + 1}`} onClick={() => update(rows.filter((_, at) => at !== index))}>
+              Remove
+            </button>
+          )}
+        </div>
+      ))}
+      <div>
+        <button type="button" className="b-btn b-btn-secondary b-btn-sm" onClick={() => update([...rows, ""])}>
+          + Add page URL
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function PageTypeCheckboxes({
   idPrefix,
   selected,
@@ -711,6 +761,9 @@ export function PageTypeCheckboxes({
   urls = [],
   onUrlsChange,
   urlsName,
+  excludeUrls = [],
+  onExcludeUrlsChange,
+  excludeUrlsName,
 }: {
   idPrefix: string;
   selected: string[];
@@ -721,6 +774,10 @@ export function PageTypeCheckboxes({
   onUrlsChange?: (next: string[]) => void;
   /** When set, each URL row posts under this name (plain form submit). */
   urlsName?: string;
+  excludeUrls?: string[];
+  onExcludeUrlsChange?: (next: string[]) => void;
+  /** When set, each excluded URL row posts under this name (plain form submit). */
+  excludeUrlsName?: string;
 }) {
   const [pageChecked, setPageChecked] = useState(selected.includes("page"));
   const showUrls = onChange ? selected.includes("page") : pageChecked;
@@ -766,6 +823,11 @@ export function PageTypeCheckboxes({
       })}
     </div>
       {showUrls && <PageUrlList idPrefix={idPrefix} urls={urls} onChange={onUrlsChange} name={urlsName} />}
+      {(onExcludeUrlsChange || excludeUrlsName) && (
+        <div style={{ marginTop: 12 }}>
+          <ExcludeUrlList idPrefix={idPrefix} urls={excludeUrls} onChange={onExcludeUrlsChange} name={excludeUrlsName} />
+        </div>
+      )}
     </fieldset>
   );
 }
@@ -777,11 +839,12 @@ export function PageTypesForm({ value, onChange, isCodePromo = false }: SubFormP
   const idPrefix = useId();
   const pageTypes = readPageTypes(value?.["pageTypes"]);
   const pageUrls = readPageUrls(value?.["pageUrls"]);
+  const excludeUrls = readExcludeUrls(value?.["excludeUrls"]);
   const onlyMatchedLines = resolveOnlyMatchedLines(value?.["onlyMatchedLines"], isCodePromo);
   const rejectUnmatchedLines = resolveRejectUnmatchedLines(value?.["rejectUnmatchedLines"]);
 
   function emit(patch: Partial<Record<string, unknown>>) {
-    onChange?.({ pageTypes, ...(pageUrls.length ? { pageUrls } : {}), onlyMatchedLines, rejectUnmatchedLines, ...patch });
+    onChange?.({ pageTypes, ...(pageUrls.length ? { pageUrls } : {}), ...(excludeUrls.length ? { excludeUrls } : {}), onlyMatchedLines, rejectUnmatchedLines, ...patch });
   }
 
   return (
@@ -792,6 +855,8 @@ export function PageTypesForm({ value, onChange, isCodePromo = false }: SubFormP
         onChange={(next) => emit({ pageTypes: next })}
         urls={pageUrls}
         onUrlsChange={(next) => emit({ pageUrls: next })}
+        excludeUrls={excludeUrls}
+        onExcludeUrlsChange={(next) => emit({ excludeUrls: next })}
       />
       <div className="b-help">{PAGE_TYPES_HELP}</div>
       <OnlyMatchedLinesCheckbox

@@ -40,9 +40,28 @@ export function pageUrlToHandle(stored: string): string {
   return cleanPageHandle(stored, true);
 }
 
+/**
+ * "Exclude these pages" input: a full path on any kind of page. A pasted URL (https://shop.com/products/x?v=1)
+ * becomes its path while typing; a leading slash is added; `final` (blur / save) also drops the query,
+ * fragment and trailing slashes. A bare "/" (home) is dropped on `final`.
+ */
+export function cleanExcludeUrl(raw: string, final = false): string {
+  const trimmed = raw.trim();
+  if (trimmed === "") return "";
+  const absolute = /^(?:https?:)?\/\//i.test(trimmed);
+  if (!final && !absolute) return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  const path = splitPageUrl(trimmed).path.replace(/\/+$/, "");
+  if (path === "") return final ? "" : "/";
+  return path.startsWith("/") ? path : `/${path}`;
+}
+
 /** Raw URL rows as stored (kept un-normalized so the editor shows what the merchant typed). */
 export function readPageUrls(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((url): url is string => typeof url === "string") : [];
+}
+
+export function readExcludeUrls(value: unknown): string[] {
+  return readPageUrls(value);
 }
 
 export function readPageTypes(value: unknown): PageType[] {

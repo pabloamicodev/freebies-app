@@ -110,6 +110,10 @@ fn condition_matches(url: &str, cond: &CompiledPageUrlCondition) -> bool {
         let kind = page_type(path);
         // A pattern starting with '/' is a listed "Pages" path (compiled from pageUrls); the rest are kinds.
         let trimmed = path.trim_end_matches('/');
+        // "!<path>" patterns are exclusions (compiled from excludeUrls): they win over every kind.
+        if page_excluded(trimmed, &cond.patterns) {
+            return false;
+        }
         return cond.patterns.iter().any(|pattern| {
             pattern == kind || (pattern.starts_with('/') && pattern == trimmed)
         });
@@ -206,6 +210,25 @@ fn page_type(path: &str) -> &'static str {
     }
 }
 
+/// Whether the (lowercased, slash-trimmed) path, or the path without its locale segment, equals a
+/// "!<path>" pattern. Both sides are percent-decoded, like `normalizeExcludedPageUrl` (TS).
+fn page_excluded(path: &str, patterns: &[String]) -> bool {
+    if !patterns.iter().any(|pattern| pattern.starts_with('!')) {
+        return false;
+    }
+    let path = percent_decode(path, false);
+    let unprefixed = path
+        .strip_prefix('/')
+        .and_then(|rest| rest.split_once('/'))
+        .filter(|(first, _)| is_locale_segment(first))
+        .map(|(_, rest)| format!("/{rest}"));
+    patterns.iter().any(|pattern| {
+        pattern.strip_prefix('!').is_some_and(|excluded| {
+            excluded == path || unprefixed.as_deref() == Some(excluded)
+        })
+    })
+}
+
 fn is_locale_segment(segment: &str) -> bool {
     let bytes = segment.as_bytes();
     let letters = |range: &[u8]| range.iter().all(u8::is_ascii_alphabetic);
@@ -294,6 +317,24 @@ mod tests {
         assert!(matches("/", &[cond("page_type", &["home"])]));
         assert!(matches("/fr", &[cond("page_type", &["home"])]));
         assert!(!matches("/account", &[cond("page_type", &["home", "page"])]));
+    }
+
+    #[test]
+    fn excluded_paths_beat_every_kind_and_the_listed_pages() {
+        let c = [cond("page_type", &["home", "product", "page", "/pages/landing", "!/products/x", "!/pages/landing", "!/products/one-sol™-1"])];
+        assert!(matches("/products/y", &c));
+        assert!(!matches("/products/x", &c));
+        assert!(!matches("/PRODUCTS/X/?v=1", &c));
+        assert!(!matches("https://shop.com/products/x#top", &c));
+        assert!(!matches("/fr-ca/products/x", &c));
+        assert!(!matches("/pages/landing", &c));
+        assert!(matches("/products/x-2", &c));
+        assert!(matches("/collections/c/products/x", &[cond("page_type", &["product", "!/products/x"])]));
+        assert!(!matches("/products/one-sol%E2%84%A2-1", &c));
+        assert!(!matches("/products/one-sol™-1", &c));
+        assert!(matches("/", &c));
+        let none = [cond("page_type", &["product"])];
+        assert!(matches("/products/x", &none));
     }
 
     #[test]

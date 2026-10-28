@@ -12,7 +12,7 @@ import {
   validateRequiredDiscountCode,
   validateRewardPayload,
 } from "./offers.js";
-import { normalizeStorePageUrls } from "./page-url.js";
+import { normalizeExcludedPageUrls, normalizeStorePageUrls } from "./page-url.js";
 
 const value = { amount: 100, currencyCode: "USD" };
 
@@ -201,6 +201,14 @@ describe("page_types condition and page-match flags", () => {
     expect(validateConditionValue("page_types", { pageTypes: ["page"], pageUrls: ["/pages/x", ""] }).success).toBe(true);
     expect(validateConditionValue("page_types", { pageTypes: ["page"], pageUrls: [1] }).success).toBe(false);
     expect(normalizeStorePageUrls([" https://X.com/Pages/A/?q=1#h ", "pages/a", "", "/", 5])).toEqual(["/pages/a"]);
+    expect(validateConditionValue("page_types", { pageTypes: ["home"], excludeUrls: ["/products/x"] }).success).toBe(true);
+    expect(validateConditionValue("page_types", { pageTypes: ["home"], excludeUrls: Array(100).fill("/a") }).success).toBe(true);
+    expect(validateConditionValue("page_types", { pageTypes: ["home"], excludeUrls: Array(101).fill("/a") }).success).toBe(false);
+    expect(validateConditionValue("page_types", { pageTypes: ["home"], excludeUrls: ["/" + "a".repeat(300)] }).success).toBe(false);
+    expect(validateConditionValue("page_types", { pageTypes: ["home"], excludeUrls: [1] }).success).toBe(false);
+    expect(
+      normalizeExcludedPageUrls([" https://X.com/Products/One-Sol%E2%84%A2-1/?q=1#h ", "products/one-sol™-1", "/products/a/", "", "/", 5]),
+    ).toEqual(["/products/one-sol™-1", "/products/a"]);
     expect(validateConditionValue("page_types", { pageTypes: [] }).success).toBe(false);
     expect(validateConditionValue("page_types", { pageTypes: ["checkout"] }).success).toBe(false);
     expect(validateConditionValue("page_types", { pageTypes: ["home"], rejectUnmatchedLines: "y" }).success).toBe(false);
