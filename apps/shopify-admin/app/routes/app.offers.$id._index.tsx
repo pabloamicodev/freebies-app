@@ -35,7 +35,7 @@ import { GIFT_SUBCONDITIONS } from "../components/subconditions/types.js";
 import type { SubconditionId } from "../components/subconditions/types.js";
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
 import { subconditionsFromRows } from "../lib/subcondition-prefill.js";
-import { pageTypeLabel, readPageTypes } from "../lib/page-types.js";
+import { pageTypeLabel, readExcludeUrls, readPageTypes, readPageUrls } from "../lib/page-types.js";
 import { codesSummary, conditionSummary as sharedConditionSummary, conditionTypeLabel, rewardSummary } from "../lib/offer-summaries.js";
 import { anyOfConflictError } from "../lib/any-of-guard.server.js";
 import { MatchBySelect, MatchRuleField, ProductConditionNote, pickedItems } from "../components/ProductConditionFields.js";
@@ -724,6 +724,16 @@ function PageTypesConditionEditor({
         onChange={(next) => {
           update({ pageTypes: next });
           save({ ...val, pageTypes: next });
+        }}
+        urls={readPageUrls(val.pageUrls)}
+        onUrlsChange={(next) => {
+          update({ pageUrls: next });
+          save({ ...val, pageUrls: next });
+        }}
+        excludeUrls={readExcludeUrls(val.excludeUrls)}
+        onExcludeUrlsChange={(next) => {
+          update({ excludeUrls: next });
+          save({ ...val, excludeUrls: next });
         }}
       />
       <div className="b-help">{PAGE_TYPES_HELP}</div>

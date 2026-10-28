@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanPageHandle, pageHandleToUrl, pageUrlToHandle, pageTypeLabel } from "./page-types.js";
+import { cleanExcludeUrl, cleanPageHandle, pageHandleToUrl, pageUrlToHandle, pageTypeLabel } from "./page-types.js";
 
 describe("Pages handle input", () => {
   it.each([
@@ -30,6 +30,27 @@ describe("Pages handle input", () => {
     expect(pageHandleToUrl("https://x.com/pages/a?b=1")).toBe("/pages/a");
     expect(pageHandleToUrl("")).toBe("");
     expect(pageUrlToHandle("/pages/bundle-builder")).toBe("/bundle-builder");
+  });
+
+  it.each([
+    ["https://onesol.com/products/x", "/products/x"],
+    ["https://onesol.com/products/x/?variant=1#a", "/products/x"],
+    ["//onesol.com/products/x", "/products/x"],
+    ["products/x", "/products/x"],
+    ["/products/x/", "/products/x"],
+    ["/products/x?v=1", "/products/x"],
+    ["/en/collections/a/products/x", "/en/collections/a/products/x"],
+    ["  ", ""],
+    ["/", ""],
+    ["https://onesol.com", ""],
+  ])("exclude input %j -> %j on blur", (raw, path) => {
+    expect(cleanExcludeUrl(raw, true)).toBe(path);
+  });
+
+  it("converts a pasted URL while typing but leaves partial paths alone", () => {
+    expect(cleanExcludeUrl("https://onesol.com/products/x")).toBe("/products/x");
+    expect(cleanExcludeUrl("products/")).toBe("/products/");
+    expect(cleanExcludeUrl("/products/x?")).toBe("/products/x?");
   });
 
   it("labels the type Pages", () => {

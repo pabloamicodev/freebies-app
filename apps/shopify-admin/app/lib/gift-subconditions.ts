@@ -1,5 +1,5 @@
 import {
-  normalizeStorePageUrls,
+  normalizeExcludedPageUrls, normalizeStorePageUrls,
   validateConditionValue,
   type ConditionOperator,
   type ConditionType,
@@ -228,10 +228,11 @@ export function normalizeOfferSubconditions(input: Record<string, unknown>): Nor
       case "page_types": {
         const pageTypes = csv(value["pageTypes"]);
         const pageUrls = pageTypes.includes("page") ? normalizeStorePageUrls(value["pageUrls"]) : [];
+        const excludeUrls = normalizeExcludedPageUrls(value["excludeUrls"]);
         conditions.push({
           conditionType: "page_types",
           operator: "eq",
-          value: { pageTypes, ...(pageUrls.length ? { pageUrls } : {}), ...lineMatchFlags(value) },
+          value: { pageTypes, ...(pageUrls.length ? { pageUrls } : {}), ...(excludeUrls.length ? { excludeUrls } : {}), ...lineMatchFlags(value) },
         });
         break;
       }

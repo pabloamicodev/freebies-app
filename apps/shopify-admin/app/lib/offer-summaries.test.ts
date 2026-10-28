@@ -59,6 +59,9 @@ describe("conditionSummary", () => {
     );
     expect(conditionSummary("page_types", { pageTypes: ["home", "product"] })).toBe("added from Home page, Product pages");
     expect(conditionSummary("page_types", { pageTypes: [] })).toBe("no page types set");
+    expect(conditionSummary("page_types", { pageTypes: ["home"], excludeUrls: ["/Products/X/", "/products/y"] })).toBe(
+      "added from Home page · not from /products/x, /products/y",
+    );
   });
 });
 

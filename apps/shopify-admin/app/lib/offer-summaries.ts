@@ -3,7 +3,7 @@ import { purchaseTypeLabel } from "./purchase-type.js";
  * Shared by the conditions/rewards editors and the offers-list row preview
  * so all three describe a given condition/reward the same way. */
 
-import { normalizeStorePageUrls } from "@promo/shared-types";
+import { normalizeExcludedPageUrls, normalizeStorePageUrls } from "@promo/shared-types";
 import { pageTypeLabel } from "./page-types.js";
 import { fromStoredAmount } from "./money.js";
 import { readMatchBy, readMatchRule } from "./product-condition.js";
@@ -48,7 +48,9 @@ export function conditionSummary(conditionType: string, value: unknown, operator
       const types = Array.isArray(v["pageTypes"]) ? v["pageTypes"] as string[] : [];
       const urls = types.includes("page") ? normalizeStorePageUrls(v["pageUrls"]) : [];
       const labels = types.map((type) => (type === "page" && urls.length ? `pages ${urls.join(", ")}` : pageTypeLabel(type)));
-      const summary = types.length ? `added from ${labels.join(", ")}` : "no page types set";
+      const excluded = normalizeExcludedPageUrls(v["excludeUrls"]);
+      const base = types.length ? `added from ${labels.join(", ")}` : "no page types set";
+      const summary = excluded.length ? `${base} · not from ${excluded.join(", ")}` : base;
       return v["rejectUnmatchedLines"] === true ? `${summary} · other pages block it` : summary;
     }
     case "template": {
