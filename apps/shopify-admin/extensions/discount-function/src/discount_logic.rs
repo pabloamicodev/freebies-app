@@ -3914,6 +3914,10 @@ mod tests {
 
     /// Two regular lines with the given packed metadata, a 10% plain discount offer.
     fn two_line_payload(offer_fields: &str, metadata: [serde_json::Value; 2]) -> String {
+        two_line_payload_with_classes(offer_fields, metadata, r#"["PRODUCT"]"#)
+    }
+
+    fn two_line_payload_with_classes(offer_fields: &str, metadata: [serde_json::Value; 2], classes: &str) -> String {
         let config = format!(
             r#"{{"offers":[{{
                 "id":"offer-1","version":1,"offerType":"discount","priority":100,
@@ -3927,7 +3931,7 @@ mod tests {
             regular_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/b", "gid://shopify/Product/b", "60.00", 1),
         );
         let mut payload: serde_json::Value =
-            serde_json::from_str(&cart_json_with_classes(&lines, "100.00", &config, r#"["PRODUCT"]"#)).unwrap();
+            serde_json::from_str(&cart_json_with_classes(&lines, "100.00", &config, classes)).unwrap();
         for (index, value) in metadata.into_iter().enumerate() {
             if !value.is_null() {
                 payload["cart"]["lines"][index]["promoMetadata"] =
@@ -3962,6 +3966,66 @@ mod tests {
         );
         let result = run_function_with_input(run, &no_product_page).expect("no product page");
         assert!(result.operations.is_empty());
+    }
+
+    const EXCLUDING_PAGES: &str = r#""pageUrlConditions":[{"matchMode":"page_type","patterns":["home","collection","product","!/products/protein-creatine-bundle","!/products/one-sol™-8-week-system-1"]}],"restrictToMatchedLines":true"#;
+
+    #[test]
+    fn excluded_url_lines_get_no_product_discount_while_other_lines_do() {
+        let lines = |first: &str| {
+            [
+                serde_json::json!({ "_promo_page_url": first }),
+                serde_json::json!({ "_promo_page_url": "/products/other" }),
+            ]
+        };
+        for excluded in [
+            "/products/protein-creatine-bundle",
+            "/Products/Protein-Creatine-Bundle/?variant=1",
+            "https://onesol.com/products/protein-creatine-bundle",
+            "/en/products/protein-creatine-bundle",
+            "/products/one-sol%E2%84%A2-8-week-system-1",
+            "/products/one-sol™-8-week-system-1",
+        ] {
+            let result = run_function_with_input(run, &two_line_payload(EXCLUDING_PAGES, lines(excluded))).expect("excluded");
+            assert_eq!(product_target_ids(&result), vec!["gid://shopify/CartLine/2"], "{excluded}");
+        }
+        let result = run_function_with_input(run, &two_line_payload(EXCLUDING_PAGES, lines("/products/protein-creatine-bundle-2"))).expect("near miss");
+        assert_eq!(product_target_ids(&result).len(), 2);
+        let result = run_function_with_input(run, &two_line_payload(EXCLUDING_PAGES, lines("/collections/x/products/protein-creatine-bundle"))).expect("collection path");
+        assert_eq!(product_target_ids(&result).len(), 2);
+    }
+
+    #[test]
+    fn excluded_url_lines_are_left_out_of_the_order_discount_and_its_tiers() {
+        let order_candidate = |reward: &str| {
+            let metadata = [
+                serde_json::json!({ "_promo_page_url": "/products/protein-creatine-bundle" }),
+                serde_json::json!({ "_promo_page_url": "/products/other" }),
+            ];
+            let payload = two_line_payload_with_classes(&format!("{reward},{EXCLUDING_PAGES}"), metadata, r#"["ORDER"]"#);
+            run_function_with_input(run, &payload).expect("order")
+        };
+        let result = order_candidate(r#""orderRewards":[{"id":"o1","discountType":"percentage","discountValue":10}]"#);
+        let schema::CartOperation::OrderDiscountsAdd(op) = &result.operations[0] else {
+            panic!("expected OrderDiscountsAdd");
+        };
+        #[allow(irrefutable_let_patterns)]
+        let schema::OrderDiscountCandidateTarget::OrderSubtotal(target) = &op.candidates[0].targets[0] else {
+            panic!("expected order subtotal target");
+        };
+        assert_eq!(target.excluded_cart_line_ids, vec!["gid://shopify/CartLine/1"]);
+
+        // The $40 excluded line does not count toward the reward's own subtotal tier: $60 < $70.
+        let tiered = order_candidate(
+            r#""orderRewards":[{"id":"o1","discountType":"percentage","discountValue":0,"subtotalTiers":[{"minimumSubtotalCents":7000,"discountType":"percentage","discountValue":20}]}]"#,
+        );
+        assert!(tiered.operations.is_empty());
+
+        // The offer-level cart value gate still counts the whole cart ($100 >= $90).
+        let gated = order_candidate(
+            r#""cartValueThresholdCents":9000,"orderRewards":[{"id":"o1","discountType":"percentage","discountValue":10}]"#,
+        );
+        assert_eq!(gated.operations.len(), 1);
     }
 
     #[test]

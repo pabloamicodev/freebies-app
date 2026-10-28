@@ -3,7 +3,9 @@ import {
   ok,
   err,
   asciiLower,
+  normalizeExcludedPageUrls,
   normalizeStorePageUrls,
+  percentDecode,
   queryValueMatches,
   readQueryParam,
   splitPageUrl,
@@ -47,12 +49,22 @@ export function classifyPageType(url: string): PageType | null {
 export interface PageTypesConditionValue {
   pageTypes: PageType[];
   pageUrls?: string[];
+  excludeUrls?: string[];
 }
 
 /** Whether a "page"-type condition with a URL list lets this path through (no list: any page). */
 function pageUrlListed(url: string, pageUrls: readonly string[]): boolean {
   const current = pathOf(url).replace(/\/+$/, "");
   return pageUrls.includes(current);
+}
+
+/** Whether the path, or the path without its locale segment, is on the exclude list. Mirrors `page_excluded` in page_match.rs. */
+function pageExcluded(url: string, excluded: readonly string[]): boolean {
+  if (excluded.length === 0) return false;
+  const path = asciiLower(percentDecode(splitPageUrl(url).path, false)).replace(/\/+$/, "");
+  const segments = path.split("/");
+  const unprefixed = segments[1] && LOCALE_SEGMENT.test(segments[1]) ? `/${segments.slice(2).join("/")}` : path;
+  return excluded.includes(path) || excluded.includes(unprefixed);
 }
 
 export function evaluatePageTypes(
@@ -69,10 +81,12 @@ export function evaluatePageTypes(
   const pageType = classifyPageType(requestedUrl);
   const required = (condition.pageTypes ?? []).join(" | ");
   const urls = condition.pageTypes?.includes("page") ? normalizeStorePageUrls(condition.pageUrls) : [];
+  const excluded = pageExcluded(requestedUrl, normalizeExcludedPageUrls(condition.excludeUrls));
   const allowed =
-    urls.length === 0
+    !excluded &&
+    (urls.length === 0
       ? !!pageType && !!condition.pageTypes?.includes(pageType)
-      : (!!pageType && pageType !== "page" && condition.pageTypes.includes(pageType)) || pageUrlListed(requestedUrl, urls);
+      : (!!pageType && pageType !== "page" && condition.pageTypes.includes(pageType)) || pageUrlListed(requestedUrl, urls));
   if (!allowed) {
     return err({
       conditionType: "page_types",

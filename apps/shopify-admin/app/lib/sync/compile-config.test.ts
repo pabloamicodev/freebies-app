@@ -749,6 +749,21 @@ describe("compileOfferConfig", () => {
       ]);
     });
 
+    it("compiles excludeUrls into decoded, lowercase '!' patterns after the kinds", () => {
+      const result = compile([
+        ["page_types", { pageTypes: ["product", "page"], pageUrls: ["/pages/x"], excludeUrls: ["https://x.com/Products/Protein-Creatine-Bundle/?a=1", "products/One-Sol%E2%84%A2-1", "/products/one-sol™-1", " ", "/"] }],
+      ]);
+      expect(result.pageUrlConditions).toEqual([
+        { patterns: ["product", "/pages/x", "!/products/protein-creatine-bundle", "!/products/one-sol™-1"], matchMode: "page_type", caseSensitive: false },
+      ]);
+    });
+
+    it("keeps the compiled config byte-identical without excludeUrls", () => {
+      const plain = JSON.stringify(compile([["page_types", { pageTypes: ["home", "product"] }]]).pageUrlConditions);
+      expect(JSON.stringify(compile([["page_types", { pageTypes: ["home", "product"], excludeUrls: [] }]]).pageUrlConditions)).toBe(plain);
+      expect(JSON.stringify(compile([["page_types", { pageTypes: ["home", "product"], excludeUrls: ["  ", "/"] }]]).pageUrlConditions)).toBe(plain);
+    });
+
     it("compiles page_types into a page_type pageUrlConditions entry", () => {
       const result = compile([["page_types", { pageTypes: ["product", "collection"] }]]);
       expect(result.pageUrlConditions).toEqual([

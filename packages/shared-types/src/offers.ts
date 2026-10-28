@@ -269,6 +269,8 @@ export const PageTypesConditionValueSchema = z.object({
   pageTypes: z.array(PageTypeSchema).min(1, "Select at least one page type."),
   /** Restricts the "page" type to these paths (see `normalizeStorePageUrl`); empty or absent keeps any page. */
   pageUrls: z.array(z.string().trim().max(300)).max(50).optional(),
+  /** Full paths (any kind of page) a line must NOT have been added from; wins over every kind and over `pageUrls`. */
+  excludeUrls: z.array(z.string().trim().max(300)).max(100).optional(),
   onlyMatchedLines: z.boolean().optional(),
   rejectUnmatchedLines: z.boolean().optional(),
 });

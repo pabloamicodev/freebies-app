@@ -93,6 +93,28 @@ export function normalizeStorePageUrls(raw: unknown): string[] {
   return [...out];
 }
 
+/**
+ * Canonical form of an "Exclude these pages" entry: like `normalizeStorePageUrl`, but percent-decoded
+ * so `/products/one-sol%E2%84%A2-x` (what `location.pathname` stamps) and `/products/one-sol™-x` (what
+ * an admin pastes) compare equal. The Function decodes the stamped path the same way.
+ */
+export function normalizeExcludedPageUrl(raw: string): string | null {
+  const { path } = splitPageUrl(raw.trim());
+  const trimmed = asciiLower(percentDecode(path, false)).replace(/\/+$/, "");
+  if (trimmed === "") return null;
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+export function normalizeExcludedPageUrls(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out = new Set<string>();
+  for (const entry of raw) {
+    const normalized = typeof entry === "string" ? normalizeExcludedPageUrl(entry) : null;
+    if (normalized) out.add(normalized);
+  }
+  return [...out];
+}
+
 /** Path a specific-link condition requires, exactly as the compiler stores it. */
 export function specificLinkRequiredPath(requiredUrl: string): string {
   const trimmed = requiredUrl.trim();

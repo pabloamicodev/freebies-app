@@ -13,6 +13,7 @@ import {
   isPageConditionType,
   resolveOnlyMatchedLines,
   resolveRejectUnmatchedLines,
+  normalizeExcludedPageUrls,
   normalizeStorePageUrls,
   specificLinkRequiredPath,
   type ConditionType,
@@ -145,10 +146,12 @@ export function compilePageCondition(
         : [];
       // With a URL list, "page" stops meaning "any page": the Function matches the listed paths instead.
       const urls = kinds.includes("page") ? normalizeStorePageUrls(value.pageUrls) : [];
+      // "!<path>" patterns are exclusions: the Function rejects a line added from that path before any kind matches.
+      const excluded = normalizeExcludedPageUrls(value.excludeUrls).map((url) => `!${url}`);
       return {
         conditions: [
           {
-            patterns: urls.length ? [...kinds.filter((kind) => kind !== "page"), ...urls] : kinds,
+            patterns: [...(urls.length ? [...kinds.filter((kind) => kind !== "page"), ...urls] : kinds), ...excluded],
             matchMode: "page_type",
             caseSensitive: false,
           },
