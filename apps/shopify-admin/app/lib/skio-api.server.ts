@@ -5,13 +5,13 @@ export type SkioGraphQLProxy = <TData = unknown>(
 
 const SKIO_API_URL = "https://graphql.skio.com/v1/graphql";
 
-export function makeSkioGraphQLProxy(apiKey: string): SkioGraphQLProxy {
+export function makeSkioGraphQLProxy(apiKey: string, timeoutMs = 15_000): SkioGraphQLProxy {
   return async <TData>(query: string, variables?: Record<string, unknown>) => {
     const response = await fetch(SKIO_API_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", authorization: `API ${apiKey}` },
       body: JSON.stringify({ query, variables }),
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) throw new Error(`Skio API request failed: HTTP ${response.status} ${response.statusText}`);
     return response.json() as Promise<{ data?: TData; errors?: Array<{ message: string }> }>;
@@ -159,4 +159,29 @@ export async function validateSkioApiKey(apiKey: string): Promise<{ ok: boolean;
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "Skio connection failed." };
   }
+}
+
+const GET_CUSTOMER_CREDIT_BALANCE_QUERY = `
+  query getCustomerCreditBalance($input: GetCustomerCreditBalanceInput!) {
+    getCustomerCreditBalance(input: $input) {
+      credits
+      siteCurrencyValue
+      siteCurrencyStringValue
+    }
+  }
+`;
+
+export interface SkioCreditBalance {
+  credits: number;
+  siteCurrencyValue: number;
+  siteCurrencyStringValue: string;
+}
+
+/** Loyalty points balance; platformId is the Shopify customer GID. */
+export async function getSkioCreditBalance(proxy: SkioGraphQLProxy, shopifyCustomerGid: string): Promise<SkioCreditBalance | null> {
+  const result = await proxy<{ getCustomerCreditBalance: SkioCreditBalance | null }>(GET_CUSTOMER_CREDIT_BALANCE_QUERY, {
+    input: { platformId: shopifyCustomerGid },
+  });
+  assertNoSkioErrors(result, "getCustomerCreditBalance");
+  return result.data?.getCustomerCreditBalance ?? null;
 }
