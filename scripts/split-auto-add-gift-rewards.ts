@@ -21,9 +21,10 @@ process.loadEnvFile(flagValue("--env") ?? ".env");
 async function main(): Promise<void> {
   const { getDb, shops, offers, offerRewards } = await import("@promo/db");
   const { and, eq, inArray, isNull, sql } = await import("drizzle-orm");
-  const { loadProductOf, planGiftRewards, applyGiftRewardPlan, rewardFallbackIds, rewardVariantIds } = await import(
-    "../apps/shopify-admin/app/lib/gift-rewards.server.js"
+  const { planGiftRewards, rewardFallbackIds, rewardVariantIds } = await import(
+    "../apps/shopify-admin/app/lib/gift-rewards.js"
   );
+  const { loadProductOf, applyGiftRewardPlan } = await import("../apps/shopify-admin/app/lib/gift-rewards.server.js");
   const db = getDb();
 
   const named = args.filter((arg) => arg.endsWith(".myshopify.com"));

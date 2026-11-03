@@ -3,7 +3,7 @@ import { asc, eq } from "drizzle-orm";
 import { offerRewards, offers, productCache, variantCache, type Db } from "@promo/db";
 import type * as PromoDb from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
-import { deriveGiftBlock, planGiftRewards } from "./gift-rewards.server.js";
+import { deriveGiftBlock, planGiftRewards } from "./gift-rewards.js";
 
 const ctx = vi.hoisted(() => ({ db: null as unknown, shopId: "" }));
 

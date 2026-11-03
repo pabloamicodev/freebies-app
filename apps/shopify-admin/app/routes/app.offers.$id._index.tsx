@@ -47,7 +47,8 @@ import { isCheckoutCodeGated } from "../lib/code-redemption.js";
 import { countDiscountCodes, getCodeNotices, listDiscountCodes } from "../lib/discount-codes.server.js";
 import { duplicateOffer } from "../lib/offer-duplicate.server.js";
 import { buildRewardRecord } from "../lib/reward-record.server.js";
-import { applyGiftRewardPlan, deriveGiftBlock, loadProductOf, planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.server.js";
+import { deriveGiftBlock, planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.js";
+import { applyGiftRewardPlan, loadProductOf } from "../lib/gift-rewards.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";

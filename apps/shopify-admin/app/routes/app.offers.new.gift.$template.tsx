@@ -4,7 +4,8 @@ import { DISCOUNT_MESSAGE_MAX_LENGTH } from "../lib/discount-message.js";
  * Routes: /app/offers/new/gift/bxgy  /bogo  /free-sample  /cart-value  /tiered  /scratch
  */
 
-import { loadProductOf, planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.server.js";
+import { planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.js";
+import { loadProductOf } from "../lib/gift-rewards.server.js";
 import { Form, useActionData, useLoaderData, useNavigate, useNavigation, redirect, useParams } from "react-router";
 import { useCallback, useEffect } from "react";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";

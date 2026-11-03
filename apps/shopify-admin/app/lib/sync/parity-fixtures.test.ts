@@ -118,6 +118,29 @@ function giftOffer(
 
 const setRewardId = (n: number) => `dddddddd-0000-4000-8000-0000000000${n}`;
 
+/** "Add all gifts" stored one reward per gift product: one variant auto-adds, several variants open a picker. */
+function addAllGiftOffer(id: string, conditions: Cond[], single: number, picker: number[]): OfferSpec {
+  const reward = (rewardId: string, ns: number[], sortOrder: number) => ({
+    id: rewardId,
+    rewardType: "product_gift",
+    discountType: "free",
+    value: { percentage: 100, currencyCode: "USD" },
+    target: { scope: "cart", variantIds: ns.map(V), productIds: ns.map(P) },
+    quantity: 1,
+    isAutoAdd: ns.length === 1,
+    isCustomerSelectable: ns.length > 1,
+    trackMode: ns.length === 1 ? "variant" : "product",
+    sortOrder,
+    label: null,
+  });
+  return {
+    id,
+    type: "gift",
+    conditions,
+    rewards: [reward(setRewardId(single), [single], 0), reward(setRewardId(picker[0]!), picker, 1)],
+  };
+}
+
 function upsellOffer(id: string, conditions: Cond[], productIds: string[]): OfferSpec {
   return {
     id,
@@ -1028,6 +1051,20 @@ const SCENARIOS: Scenario[] = [
     qualified: [A],
     discounted: { [A]: ["g50"] },
     quantities: { [A]: { g50: 1 } },
+  },
+  {
+    name: "gift-add-all-single-plus-picker-both-discounted",
+    description:
+      "Add-all gifts stored one reward per gift product: product A (one variant, auto-added) and product B (3 variants, picker). After the shopper picks one of B's variants, both A and the chosen B are free, one unit each.",
+    offers: [addAllGiftOffer(A, [pageTypes(["product"])], 60, [70, 71, 72])],
+    lines: [
+      line("l1", 1, page("/products/a")),
+      gift("gA", A, { ...page("/cart"), _promo_engine_reward_id: setRewardId(60) }, { variantId: V(60), productId: P(60) }),
+      gift("gB", A, { ...page("/cart"), _promo_engine_reward_id: setRewardId(70) }, { variantId: V(71), productId: P(71) }),
+    ],
+    qualified: [A],
+    discounted: { [A]: ["gA", "gB"] },
+    quantities: { [A]: { gA: 1, gB: 1 } },
   },
   {
     name: "gift-picker-bumped-quantity-and-extra-option",
