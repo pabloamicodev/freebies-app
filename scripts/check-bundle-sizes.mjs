@@ -19,6 +19,8 @@ const BUDGETS = {
   "promo-engine-gift-prompt.js": 3,
   // Requested by promo-engine.js when an FBT or bundle-builder block mounts; preact is shared from the main bundle.
   "promo-engine-blocks.js": 6,
+  // Requested only when a gift modal offers more than one product (product cards + variant chooser); preact is shared from the main bundle.
+  "promo-engine-gift-picker.js": 3,
 };
 
 let failed = false;

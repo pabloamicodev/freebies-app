@@ -15,5 +15,5 @@ if (process.argv.includes("--dev")) {
   await esbuild.build({ ...options, minify: true, entryPoints: { "promo-engine": "src/theme.ts", "promo-engine-gift-prompt": "src/gift-prompt-entry.ts" }, outdir: "dist" });
   // The FBT and bundle-builder blocks, requested by promo-engine.js when a block mounts. preact comes from the main bundle.
   const shim = new URL("./src/preact-shim.ts", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1");
-  await esbuild.build({ ...options, minify: true, entryPoints: { "promo-engine-blocks": "src/blocks-entry.ts" }, outdir: "dist", alias: { preact: shim, "preact/hooks": shim, "preact/jsx-runtime": shim }, plugins: [shareHostModules(shim)] });
+  await esbuild.build({ ...options, minify: true, entryPoints: { "promo-engine-blocks": "src/blocks-entry.ts", "promo-engine-gift-picker": "src/widgets/gift-picker.tsx" }, outdir: "dist", alias: { preact: shim, "preact/hooks": shim, "preact/jsx-runtime": shim }, plugins: [shareHostModules(shim)] });
 }
