@@ -4,7 +4,7 @@ import { DISCOUNT_MESSAGE_MAX_LENGTH } from "../lib/discount-message.js";
  * Routes: /app/offers/new/gift/bxgy  /bogo  /free-sample  /cart-value  /tiered  /scratch
  */
 
-import { planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.js";
+import { mergeFallbacks, parseFallbackByGift, planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.js";
 import { loadProductOf } from "../lib/gift-rewards.server.js";
 import { Form, useActionData, useLoaderData, useNavigate, useNavigation, redirect, useParams } from "react-router";
 import { useCallback, useEffect } from "react";
@@ -28,6 +28,7 @@ import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
+import { PerGiftFallbacks } from "../components/PerGiftFallbacks.js";
 import { SelectedProductsList } from "../components/SelectedProductsList.js";
 import { MatchRuleField } from "../components/ProductConditionFields.js";
 import { matchRuleOperator, presenceOnlyValue, type MatchRule } from "../lib/product-condition.js";
@@ -268,7 +269,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const fallbackProductsResult = parseJsonStringArray(formData, "fallbackProducts");
   if (fallbackProductsResult.error) return { error: fallbackProductsResult.error };
   // A fallback that is also a primary gift would never act as a replacement.
-  const fallbackProducts = fallbackProductsResult.data!.filter((id) => !rewardProducts.includes(id)).slice(0, 5);
+  let fallbackProducts = fallbackProductsResult.data!.filter((id) => !rewardProducts.includes(id)).slice(0, 5);
+  // "Add all" lets each gift have its own fallbacks; "customer selects" keeps the one shared list.
+  const fallbackByGiftRaw = formData.get("fallbackByGift");
+  let fallbackByGift: Record<string, string[]> | undefined;
+  if (formData.get("isAutoAdd") === "true" && typeof fallbackByGiftRaw === "string") {
+    const parsed = parseFallbackByGift(fallbackByGiftRaw, rewardProducts);
+    if (!parsed) return { error: "fallbackByGift must be a map of gift IDs to fallback ID lists." };
+    fallbackByGift = parsed;
+    fallbackProducts = mergeFallbacks(parsed, rewardProducts);
+  }
   if (
     intent === "publish" &&
     conditionType === "specific_product" &&
@@ -310,6 +320,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           variantIds: rewardProducts,
           productOf: await loadProductOf(db, shopId, rewardProducts),
           fallbackVariantIds: fallbackProducts,
+          ...(fallbackByGift ? { fallbackByVariant: fallbackByGift } : {}),
           autoAddAll: true,
           quantity: 1,
           discountType: discountTypeValue,
@@ -456,6 +467,7 @@ export default function NewGiftOfferPage() {
     giftCount: 1,
     rewardProducts: [] as string[],
     fallbackProducts: [] as string[],
+    fallbackByGift: {} as Record<string, string[]>,
     rewardPickerOpen: false,
     fallbackPickerOpen: false,
     advancedOpen: false,
@@ -496,6 +508,7 @@ export default function NewGiftOfferPage() {
     giftCount,
     rewardProducts,
     fallbackProducts,
+    fallbackByGift,
     rewardPickerOpen,
     fallbackPickerOpen,
     advancedOpen,
@@ -537,7 +550,8 @@ export default function NewGiftOfferPage() {
   const setRewardProducts = createFieldSetter(setFormField, "rewardProducts");
   const setRewardPickerOpen = createFieldSetter(setFormField, "rewardPickerOpen");
   const setFallbackProducts = createFieldSetter(setFormField, "fallbackProducts");
-  const setFallbackPickerOpen = createFieldSetter(setFormField, "fallbackPickerOpen");
+  const setFallbackByGift = createFieldSetter(setFormField, "fallbackByGift");
+  const setFallbackPickerOpen =createFieldSetter(setFormField, "fallbackPickerOpen");
   const setAdvancedOpen = createFieldSetter(setFormField, "advancedOpen");
   const setPriority = createFieldSetter(setFormField, "priority");
   const setStopLower = createFieldSetter(setFormField, "stopLower");
@@ -678,7 +692,8 @@ export default function NewGiftOfferPage() {
         <input type="hidden" name="conditionProducts" value={JSON.stringify(conditionProducts)} />
         <input type="hidden" name="rewardProducts" value={JSON.stringify(rewardProducts)} />
         <input type="hidden" name="fallbackProducts" value={JSON.stringify(fallbackProducts)} />
-        <input type="hidden" name="isAutoAdd" value={String(isAutoAdd)} />
+        <input type="hidden" name="fallbackByGift" value={JSON.stringify(fallbackByGift)} />
+        <input type="hidden" name="isAutoAdd"value={String(isAutoAdd)} />
         <input type="hidden" name="minAmount" value={minAmount} />
         <input type="hidden" name="maxAmount" value={maxAmount} />
         <input type="hidden" name="appliesTo" value={appliesTo} />
@@ -1714,6 +1729,13 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                     />
                   </div>
 
+                  {isAutoAdd ? (
+                    <PerGiftFallbacks
+                      giftIds={rewardProducts}
+                      value={fallbackByGift}
+                      onChange={setFallbackByGift}
+                    />
+                  ) : (
                   <div className="b-fieldset" style={{ marginTop: 16 }}>
                     <p className="b-form-title">Fallback gift if out of stock (optional)</p>
                     <p className="b-form-desc">
@@ -1738,6 +1760,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                       />
                     </div>
                   </div>
+                  )}
                 </div>
               </div>
             </div>

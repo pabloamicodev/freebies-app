@@ -99,6 +99,51 @@ describe("collectGiftCatalogVariantIds", () => {
   });
 });
 
+describe("resolveSoldOutGiftAdds with a fallback per gift", () => {
+  const twoGiftOffer = (fallbackA: string[]) => {
+    const offer = offerWithFallback("offer-1", "reward-a", fallbackA);
+    const second = offerWithFallback("offer-1", "reward-b", []).rewards[0]!;
+    return [{ ...offer, rewards: [...offer.rewards, second] } as OfferDefinition];
+  };
+  const add = (variantId: string, rewardId: string) => ({
+    action: "add_line",
+    variantId,
+    properties: { _promo_engine_line_type: "gift", _promo_engine_offer_id: "offer-1", _promo_engine_reward_id: rewardId },
+  });
+  const catalog = new Map([
+    ["gift-a", row({ variantGid: "gift-a", availableForSale: false })],
+    ["gift-b", row({ variantGid: "gift-b", availableForSale: true })],
+    ["fa", row({ variantGid: "fa", availableForSale: true })],
+  ]);
+  const ids = (actions: unknown[]) => (actions as Array<{ variantId: string }>).map((a) => a.variantId);
+
+  it("gift A sold out with fallback FA, gift B in stock: FA and B are both offered", () => {
+    const result = resolveSoldOutGiftAdds(catalog, [add("gift-a", "reward-a"), add("gift-b", "reward-b")] as never, twoGiftOffer(["fa"]));
+    expect(ids(result)).toEqual(["fa", "gift-b"]);
+  });
+
+  it("gift A sold out without a fallback: only B is offered", () => {
+    const result = resolveSoldOutGiftAdds(catalog, [add("gift-a", "reward-a"), add("gift-b", "reward-b")] as never, twoGiftOffer([]));
+    expect(ids(result)).toEqual(["gift-b"]);
+  });
+
+  it("the same fallback on both gifts is granted once per gift", () => {
+    const both = new Map([
+      ["gift-a", row({ variantGid: "gift-a", availableForSale: false })],
+      ["gift-b", row({ variantGid: "gift-b", availableForSale: false })],
+      ["fa", row({ variantGid: "fa", availableForSale: true })],
+    ]);
+    const offer = offerWithFallback("offer-1", "reward-a", ["fa"]);
+    const second = offerWithFallback("offer-1", "reward-b", ["fa"]).rewards[0]!;
+    const result = resolveSoldOutGiftAdds(
+      both,
+      [add("gift-a", "reward-a"), add("gift-b", "reward-b")] as never,
+      [{ ...offer, rewards: [...offer.rewards, second] } as OfferDefinition],
+    );
+    expect(ids(result)).toEqual(["fa", "fa"]);
+  });
+});
+
 describe("resolveSoldOutGiftAdds", () => {
   const offers = [offerWithFallback("offer-1", "reward-1", ["fallback-1"])];
 

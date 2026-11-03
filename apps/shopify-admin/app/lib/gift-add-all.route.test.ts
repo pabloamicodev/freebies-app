@@ -205,8 +205,130 @@ describe("editor: one Gifts block over all product_gift rewards", () => {
   });
 });
 
+const FA = V(8100000091);
+const FB = V(8100000092);
+const fallbackOf = (r: { target: unknown }) => (r.target as { fallbackVariantIds?: string[] }).fallbackVariantIds;
+const editPerGift = (id: string, rewardId: string, variants: string[], byGift: Record<string, string[]>) =>
+  run(
+    offerPage.action,
+    post(`/app/offers/${id}`, {
+      intent: "update_reward", rewardId, discountType: "free", discountValue: "100", quantity: "1", isAutoAdd: "on",
+      targetVariantIds: JSON.stringify(variants),
+      targetFallbackVariantIds: JSON.stringify([]),
+      targetFallbackByGift: JSON.stringify(byGift),
+    }),
+    { id },
+  );
+
+describe("per-gift fallbacks", () => {
+  it("wizard stores each gift's own fallbacks, the same fallback may repeat", async () => {
+    const result = await run(
+      wizard.action,
+      post("/app/offers/new/gift/cart_value", {
+        intent: "draft", internalName: "per-gift-wizard", publicTitle: "x", conditionType: "cart_value", minAmount: "50",
+        appliesTo: "any_product", discountType: "free", giftCount: "1", rewardProducts: JSON.stringify([A, C]),
+        isAutoAdd: "true", fallbackProducts: JSON.stringify([FB]),
+        fallbackByGift: JSON.stringify({ [A]: [FA, FB], [C]: [FA] }),
+      }),
+      { template: "cart_value" },
+    );
+    expect((result as { error?: string }).error).toBeUndefined();
+    const [offer] = await db.select().from(offers).where(eq(offers.internalName, "per-gift-wizard"));
+    const rewards = await rewardsOf(offer!.id);
+    expect(rewards.map(variantsOf)).toEqual([[A], [C]]);
+    expect(rewards.map(fallbackOf)).toEqual([[FA, FB], [FA]]);
+  });
+
+  it("wizard: a gift without a fallback gets none, and select mode keeps the shared list", async () => {
+    const post1 = (name: string, auto: boolean) =>
+      run(
+        wizard.action,
+        post("/app/offers/new/gift/cart_value", {
+          intent: "draft", internalName: name, publicTitle: "x", conditionType: "cart_value", minAmount: "50",
+          appliesTo: "any_product", discountType: "free", giftCount: "1", rewardProducts: JSON.stringify([A, C]),
+          isAutoAdd: String(auto), fallbackProducts: JSON.stringify([FB]), fallbackByGift: JSON.stringify({ [A]: [FA] }),
+        }),
+        { template: "cart_value" },
+      );
+    await post1("per-gift-partial", true);
+    const [o1] = await db.select().from(offers).where(eq(offers.internalName, "per-gift-partial"));
+    expect((await rewardsOf(o1!.id)).map(fallbackOf)).toEqual([[FA], undefined]);
+    await post1("per-gift-select", false);
+    const [o2] = await db.select().from(offers).where(eq(offers.internalName, "per-gift-select"));
+    const selectRewards = await rewardsOf(o2!.id);
+    expect(selectRewards).toHaveLength(1);
+    expect(fallbackOf(selectRewards[0]!)).toEqual([FB]);
+  });
+
+  it("editor round-trips per-gift fallbacks through deriveGiftBlock and keeps reward ids", async () => {
+    const id = await createViaWizard("per-gift-editor", [A, C], true);
+    const [ra] = await rewardsOf(id);
+    expect(((await editPerGift(id, ra!.id, [A, C], { [A]: [FA], [C]: [FA, FB] })) as { error?: string } | null)?.error).toBeUndefined();
+    let rewards = await rewardsOf(id);
+    expect(rewards.map(fallbackOf)).toEqual([[FA], [FA, FB]]);
+    expect(rewards[0]!.id).toBe(ra!.id);
+    expect(deriveGiftBlock(rewards).fallbackByVariant).toEqual({ [A]: [FA], [C]: [FA, FB] });
+
+    await editPerGift(id, ra!.id, [A, C], { [A]: [], [C]: [FB] });
+    rewards = await rewardsOf(id);
+    expect(rewards.map(fallbackOf)).toEqual([undefined, [FB]]);
+  });
+
+  it("editor: an offer saved with one shared list loads it on each gift and saves per-row lists", async () => {
+    const id = await seedOffer(db, shopId, { status: "draft", internalName: "per-gift-legacy" });
+    const [legacy] = await db.insert(offerRewards).values({
+      shopId, offerId: id, rewardType: "product_gift", discountType: "free", value: { amount: 100, currencyCode: "USD" },
+      target: { scope: "cart", variantIds: [A], fallbackVariantIds: [FA] }, quantity: 1, isAutoAdd: true, isCustomerSelectable: false, trackMode: "variant", sortOrder: 0,
+    }).returning();
+    await db.insert(offerRewards).values({
+      shopId, offerId: id, rewardType: "product_gift", discountType: "free", value: { amount: 100, currencyCode: "USD" },
+      target: { scope: "cart", variantIds: [C], fallbackVariantIds: [FA] }, quantity: 1, isAutoAdd: true, isCustomerSelectable: false, trackMode: "variant", sortOrder: 1,
+    });
+    const loaded = deriveGiftBlock(await rewardsOf(id));
+    expect(loaded.fallbackByVariant).toEqual({ [A]: [FA], [C]: [FA] });
+    expect(loaded.fallbackVariantIds).toEqual([FA]);
+    await editPerGift(id, legacy!.id, [A, C], { ...loaded.fallbackByVariant, [C]: [] });
+    expect((await rewardsOf(id)).map(fallbackOf)).toEqual([[FA], undefined]);
+  });
+
+  it("editor: an old client posting only the shared list still applies it to every gift", async () => {
+    const id = await createViaWizard("per-gift-oldclient", [A, C], true);
+    const [ra] = await rewardsOf(id);
+    await edit(id, ra!.id, { auto: true, variants: [A, C], fallback: [FA] });
+    expect((await rewardsOf(id)).map(fallbackOf)).toEqual([[FA], [FA]]);
+  });
+});
+
 describe("planGiftRewards", () => {
   const base = { fallbackVariantIds: [], quantity: 1, discountType: "free" as const, value: { amount: 100 } };
+  const productOf = new Map([[A, "pA"], [B[0]!, "pB"], [B[1]!, "pB"], [C, "pC"]]);
+
+  it("per-gift fallbacks: own list per product, merged for a multi-variant product, capped at 5", () => {
+    const many = Array.from({ length: 7 }, (_, i) => V(8200000000 + i));
+    const plan = planGiftRewards({
+      ...base, existing: [], variantIds: [A, B[0]!, B[1]!, C], productOf, autoAddAll: true,
+      fallbackByVariant: { [A]: [FA], [B[0]!]: [FA], [B[1]!]: [FB], [C]: many },
+    });
+    expect(plan.insert.map(fallbackOf)).toEqual([[FA], [FA, FB], many.slice(0, 5)]);
+  });
+
+  it("a fallback that is also a gift is dropped; without byVariant the shared list is used", () => {
+    const perGift = planGiftRewards({
+      ...base, existing: [], variantIds: [A, C], productOf, autoAddAll: true, fallbackByVariant: { [A]: [C, FA] },
+    });
+    expect(perGift.insert.map(fallbackOf)).toEqual([[FA], undefined]);
+    const shared = planGiftRewards({ ...base, fallbackVariantIds: [FA], existing: [], variantIds: [A, C], productOf, autoAddAll: true });
+    expect(shared.insert.map(fallbackOf)).toEqual([[FA], [FA]]);
+  });
+
+  it("deriveGiftBlock: each gift shows its reward's fallbacks, a shared select list lands on every variant", () => {
+    const block = deriveGiftBlock([
+      { isAutoAdd: false, target: { variantIds: [A, C], fallbackVariantIds: [FA, A] } },
+    ]);
+    expect(block.fallbackByVariant).toEqual({ [A]: [FA], [C]: [FA] });
+    expect(block.fallbackVariantIds).toEqual([FA]);
+  });
+
   it("groups per product and never mixes products into one picker", () => {
     const productOf = new Map([[A, "pA"], [B[0]!, "pB"], [B[1]!, "pB"], [C, "pC"]]);
     const plan = planGiftRewards({ ...base, existing: [], variantIds: [A, B[0]!, C, B[1]!], productOf, autoAddAll: true });
