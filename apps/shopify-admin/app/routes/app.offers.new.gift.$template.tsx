@@ -4,6 +4,7 @@ import { DISCOUNT_MESSAGE_MAX_LENGTH } from "../lib/discount-message.js";
  * Routes: /app/offers/new/gift/bxgy  /bogo  /free-sample  /cart-value  /tiered  /scratch
  */
 
+import { loadProductOf, planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.server.js";
 import { Form, useActionData, useLoaderData, useNavigate, useNavigation, redirect, useParams } from "react-router";
 import { useCallback, useEffect } from "react";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
@@ -297,6 +298,39 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (!normalizedSubconditions.success) return { error: normalizedSubconditions.error };
   const normalizedSubconditionRows = normalizedSubconditions.data;
 
+  // "Add all" with 2+ gifts stores one reward per gift product (the engine treats a reward with
+  // several variants as a customer picker); a product with several picked variants picks its own.
+  const discountTypeValue = discountType as GiftRewardValues["discountType"];
+  const rewardValue = { amount: rewardAmount, currencyCode: shopCurrency };
+  const giftRewardRows: GiftRewardValues[] =
+    isAutoAdd && rewardProducts.length >= 2
+      ? planGiftRewards({
+          existing: [],
+          variantIds: rewardProducts,
+          productOf: await loadProductOf(db, shopId, rewardProducts),
+          fallbackVariantIds: fallbackProducts,
+          autoAddAll: true,
+          quantity: 1,
+          discountType: discountTypeValue,
+          value: rewardValue,
+        }).insert
+      : [
+          {
+            discountType: discountTypeValue,
+            value: rewardValue,
+            target: {
+              scope: "cart",
+              variantIds: rewardProducts,
+              ...(fallbackProducts.length > 0 ? { fallbackVariantIds: fallbackProducts } : {}),
+            },
+            quantity: giftCount,
+            isAutoAdd,
+            isCustomerSelectable: !isAutoAdd,
+            trackMode: "product",
+            sortOrder: 0,
+          },
+        ];
+
   // Offer + conditions + reward + policy created atomically (no orphan offers
   // on partial failure). Unique-name retry wraps the whole tx.
   async function createOfferWithChildren(candidateName: string) {
@@ -340,29 +374,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             isEnabled: true,
           }),
         ),
-        tx.insert(offerRewards).values({
-          shopId,
-          offerId: offer.id,
-          rewardType: "product_gift",
-          discountType: discountType as
-            | "free"
-            | "percentage"
-            | "fixed_amount"
-            | "fixed_price"
-            | "cheapest_item_free"
-            | "most_expensive_item_discount",
-          value: { amount: rewardAmount, currencyCode: shopCurrency },
-          target: {
-            scope: "cart",
-            variantIds: rewardProducts,
-            ...(fallbackProducts.length > 0 ? { fallbackVariantIds: fallbackProducts } : {}),
-          },
-          quantity: giftCount,
-          isAutoAdd,
-          isCustomerSelectable: !isAutoAdd,
-          trackMode: "product",
-          sortOrder: 0,
-        }),
+        ...giftRewardRows.map((row) =>
+          tx.insert(offerRewards).values({ shopId, offerId: offer.id, rewardType: "product_gift", ...row }),
+        ),
         tx.insert(offerCombinationPolicies).values({
           shopId,
           offerId: offer.id,
