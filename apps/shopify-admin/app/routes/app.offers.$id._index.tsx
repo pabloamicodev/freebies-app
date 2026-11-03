@@ -18,6 +18,7 @@ import {
   IconPlus, IconCheck, IconLink, IconCondition,
 } from "../components/Icons.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
+import { PerGiftFallbacks } from "../components/PerGiftFallbacks.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { OfferStepTabs } from "../components/OfferStepTabs.js";
 import { SelectedProductsList } from "../components/SelectedProductsList.js";
@@ -47,7 +48,7 @@ import { isCheckoutCodeGated } from "../lib/code-redemption.js";
 import { countDiscountCodes, getCodeNotices, listDiscountCodes } from "../lib/discount-codes.server.js";
 import { duplicateOffer } from "../lib/offer-duplicate.server.js";
 import { buildRewardRecord } from "../lib/reward-record.server.js";
-import { deriveGiftBlock, planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.js";
+import { deriveGiftBlock, mergeFallbacks, parseFallbackByGift, planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.js";
 import { applyGiftRewardPlan, loadProductOf } from "../lib/gift-rewards.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -254,11 +255,21 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         }
         // A fallback that is also a primary gift would never act as a replacement.
         fallbackVariantIds = fallbackVariantIds.filter((id) => !variantIds.includes(id)).slice(0, 5);
+        // "Add all": each gift keeps its own fallbacks; otherwise the one shared list applies.
+        let fallbackByVariant: Record<string, string[]> | undefined;
+        const byGiftRaw = formData.get("targetFallbackByGift");
+        if (isAutoAdd && typeof byGiftRaw === "string") {
+          const parsed = parseFallbackByGift(byGiftRaw, variantIds);
+          if (!parsed) return { error: "targetFallbackByGift must be a map of gift IDs to fallback ID lists." };
+          fallbackByVariant = parsed;
+          fallbackVariantIds = mergeFallbacks(parsed, variantIds);
+        }
         const plan = planGiftRewards({
           existing: giftRewards,
           variantIds,
           productOf: await loadProductOf(db, shopId, variantIds),
           fallbackVariantIds,
+          ...(fallbackByVariant ? { fallbackByVariant } : {}),
           autoAddAll: isAutoAdd && variantIds.length >= 2,
           quantity,
           discountType: discountType as GiftRewardValues["discountType"],
@@ -1400,6 +1411,11 @@ export default function OfferDetailPage() {
   const initialFallbackIds = giftRewards.length > 0 ? giftBlock.fallbackVariantIds : ((firstReward?.target as { fallbackVariantIds?: string[] } | null)?.fallbackVariantIds ?? []);
   const [fallbackProductIds, setFallbackProductIds] = useState<string[]>(initialFallbackIds);
   const [fallbackPickerOpen, setFallbackPickerOpen] = useState(false);
+  const [fallbackByGift, setFallbackByGift] = useState<Record<string, string[]>>(() =>
+    giftRewards.length > 0
+      ? giftBlock.fallbackByVariant
+      : Object.fromEntries(initialGiftIds.map((id) => [id, initialFallbackIds])),
+  );
 
   // Persist the reward (discount type/value/qty/auto-add + product target).
   // The editor previously never submitted update_reward, so gift edits were lost.
@@ -1411,10 +1427,13 @@ export default function OfferDetailPage() {
     receivesAll?: boolean;
     variantIds?: string[];
     fallbackVariantIds?: string[];
+    fallbackByGift?: Record<string, string[]>;
   }) {
     if (!firstReward) {
       const gifts = overrides?.variantIds ?? giftProductIds;
-      const fallbacks = overrides?.fallbackVariantIds ?? fallbackProductIds;
+      const fallbacks = (overrides?.receivesAll ?? receivesAll)
+        ? mergeFallbacks(overrides?.fallbackByGift ?? fallbackByGift, gifts)
+        : (overrides?.fallbackVariantIds ?? fallbackProductIds);
       if (gifts.length === 0) return;
       const first = new FormData();
       first.append("intent", "add_first_reward");
@@ -1436,6 +1455,7 @@ export default function OfferDetailPage() {
     if (overrides?.receivesAll ?? receivesAll) fd.append("isAutoAdd", "on");
     fd.append("targetVariantIds", JSON.stringify(overrides?.variantIds ?? giftProductIds));
     fd.append("targetFallbackVariantIds", JSON.stringify(overrides?.fallbackVariantIds ?? fallbackProductIds));
+    fd.append("targetFallbackByGift", JSON.stringify(overrides?.fallbackByGift ?? fallbackByGift));
     void fetcher.submit(fd, { method: "POST" });
   }
 
@@ -1973,7 +1993,13 @@ export default function OfferDetailPage() {
                     aria-label="Number of gifts the customer will receive"
                     name="receives"
                     checked={!receivesAll}
-                    onChange={() => { setReceivesAll(false); saveReward({ receivesAll: false }); }}
+                    onChange={() => {
+                      const perGift = mergeFallbacks(fallbackByGift, giftProductIds);
+                      const merged = perGift.length > 0 ? perGift : fallbackProductIds;
+                      setFallbackProductIds(merged);
+                      setReceivesAll(false);
+                      saveReward({ receivesAll: false, fallbackVariantIds: merged });
+                    }}
                     style={{ accentColor: "var(--blue)", width: 15, height: 15, marginTop: 2 }}
                   />
                   <div>
@@ -2017,6 +2043,17 @@ export default function OfferDetailPage() {
                 onSelect={(gids) => { setGiftProductIds(gids); saveReward({ variantIds: gids }); }}
               />
 
+              {receivesAll ? (
+                <PerGiftFallbacks
+                  small
+                  giftIds={giftProductIds}
+                  value={fallbackByGift}
+                  onChange={(next) => {
+                    setFallbackByGift(next);
+                    saveReward({ fallbackByGift: next });
+                  }}
+                />
+              ) : (
               <div className="b-fieldset" style={{ marginTop: 16 }}>
                 <p className="b-form-title">Fallback gift if out of stock (optional)</p>
                 <p className="b-form-desc">
@@ -2052,6 +2089,7 @@ export default function OfferDetailPage() {
                   }}
                 />
               </div>
+              )}
             </div>
           </div>
 

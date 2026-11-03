@@ -352,6 +352,22 @@ describe("evaluate — cart value condition", () => {
     });
   });
 
+  it("gives each add-all gift reward its own fallbacks (not the other gift's)", async () => {
+    const offer = makeGiftOffer("offer-1", 5000);
+    const base = offer.rewards[0]!;
+    const V = (n: string) => `gid://shopify/ProductVariant/${n}`;
+    offer.rewards = [
+      { ...base, id: "reward-a", sortOrder: 0, target: { variantIds: [V("a")], fallbackVariantIds: [V("fa")] } },
+      { ...base, id: "reward-b", sortOrder: 1, target: { variantIds: [V("b")] } },
+    ];
+    const result = await evaluate(makeInput(makeCart(6000)), { offers: [offer], usageStates: [], now: NOW });
+    const adds = result.cartActions.filter((a) => a.action === "add_line");
+    expect(adds).toHaveLength(2);
+    expect(adds[0]).toMatchObject({ variantId: V("a"), fallbackVariantIds: [V("fa")] });
+    expect(adds[1]).toMatchObject({ variantId: V("b") });
+    expect(adds[1]).not.toHaveProperty("fallbackVariantIds");
+  });
+
   const giftLineWith = (overrides: Record<string, unknown>) => {
     const cart = makeCart(6000);
     cart.lines.push({
