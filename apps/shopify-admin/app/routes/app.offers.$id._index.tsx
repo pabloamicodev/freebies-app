@@ -47,6 +47,8 @@ import { isCheckoutCodeGated } from "../lib/code-redemption.js";
 import { countDiscountCodes, getCodeNotices, listDiscountCodes } from "../lib/discount-codes.server.js";
 import { duplicateOffer } from "../lib/offer-duplicate.server.js";
 import { buildRewardRecord } from "../lib/reward-record.server.js";
+import { deriveGiftBlock, planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.js";
+import { applyGiftRewardPlan, loadProductOf } from "../lib/gift-rewards.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
@@ -229,6 +231,61 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const parsedValue = parseFloat(formData.get("discountValue") as string);
       const discountValue = Number.isFinite(parsedValue) ? parsedValue : 100;
       const isAutoAdd = formData.get("isAutoAdd") === "on";
+
+      const [editedReward] = await db.select({ rewardType: offerRewards.rewardType }).from(offerRewards)
+        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId))).limit(1);
+      if (!editedReward) return { error: "Reward not found." };
+      if (editedReward.rewardType === "product_gift") {
+        // The editor shows ONE Gifts block over all of the offer's product_gift rewards.
+        const giftRewards = await db.select().from(offerRewards)
+          .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.rewardType, "product_gift")));
+        const current = deriveGiftBlock(giftRewards);
+        let variantIds = current.variantIds;
+        let fallbackVariantIds = current.fallbackVariantIds;
+        if (typeof formData.get("targetVariantIds") === "string") {
+          const picked = parseJsonStringArray(formData, "targetVariantIds");
+          if (picked.error) return { error: picked.error };
+          variantIds = picked.data!;
+        }
+        if (typeof formData.get("targetFallbackVariantIds") === "string") {
+          const picked = parseJsonStringArray(formData, "targetFallbackVariantIds");
+          if (picked.error) return { error: picked.error };
+          fallbackVariantIds = picked.data!;
+        }
+        // A fallback that is also a primary gift would never act as a replacement.
+        fallbackVariantIds = fallbackVariantIds.filter((id) => !variantIds.includes(id)).slice(0, 5);
+        const plan = planGiftRewards({
+          existing: giftRewards,
+          variantIds,
+          productOf: await loadProductOf(db, shopId, variantIds),
+          fallbackVariantIds,
+          autoAddAll: isAutoAdd && variantIds.length >= 2,
+          quantity,
+          discountType: discountType as GiftRewardValues["discountType"],
+          value: { amount: discountValue, currencyCode: shopCurrencyCode },
+          preferredId: rewardId,
+        });
+        // A lone gift keeps the old toggle semantics: auto-add follows the radio.
+        if (variantIds.length < 2) {
+          for (const { values } of plan.update) {
+            values.isAutoAdd = isAutoAdd;
+            values.isCustomerSelectable = !isAutoAdd;
+            values.quantity = quantity;
+          }
+        }
+        if (offer.status === "active") {
+          for (const values of [...plan.update.map((u) => u.values), ...plan.insert]) {
+            const rewardResult = validateRewardPayload("product_gift", discountType, values.value, values.target);
+            if (!rewardResult.success) return { error: rewardResult.error.issues[0]?.message ?? "Reward configuration is invalid." };
+          }
+        }
+        await db.transaction((tx) => applyGiftRewardPlan(tx, shopId, offerId, plan));
+        if (offer.status === "active") {
+          const publishError = await publishShopConfig(shopId, session.shop);
+          if (publishError) return { error: publishError };
+        }
+        break;
+      }
 
       // Optional product target — variant GIDs from the picker. Only update
       // `target` when the field is present so plain discount edits don't wipe it.
@@ -1295,7 +1352,9 @@ export default function OfferDetailPage() {
   const fetcher = useFetcher();
   const [newCondValue, setNewCondValue] = useState<Record<string, unknown>>({});
 
-  const firstReward = rewards[0] as typeof rewards[0] | undefined;
+  const giftRewards = rewards.filter((r) => r.rewardType === "product_gift");
+  const giftBlock = deriveGiftBlock(giftRewards);
+  const firstReward = (giftRewards[0] ?? rewards[0]) as typeof rewards[0] | undefined;
   const [detailState, setDetailField] = useObjectState(() => ({
     internalName: offer.internalName,
     publicTitle: offer.publicTitle ?? "",
@@ -1303,7 +1362,7 @@ export default function OfferDetailPage() {
     endsAt: offer.endsAtLocal,
     discountType: firstReward?.discountType ?? "free",
     discountValue: String((firstReward?.value as { amount?: number } | null)?.amount ?? 100),
-    receivesAll: firstReward?.isAutoAdd !== false,
+    receivesAll: giftRewards.length > 0 ? giftBlock.receivesAll : firstReward?.isAutoAdd !== false,
     giftCount: String(firstReward?.quantity ?? 1),
     addingCondition: false,
     newCondType: "",
@@ -1334,11 +1393,11 @@ export default function OfferDetailPage() {
   const setNewCondType = createFieldSetter(setDetailField, "newCondType");
   const setAdvancedOpen = createFieldSetter(setDetailField, "advancedOpen");
 
-  const initialGiftIds = (firstReward?.target as { variantIds?: string[] } | null)?.variantIds ?? [];
+  const initialGiftIds = giftRewards.length > 0 ? giftBlock.variantIds : ((firstReward?.target as { variantIds?: string[] } | null)?.variantIds ?? []);
   const [giftProductIds, setGiftProductIds] = useState<string[]>(initialGiftIds);
   const [giftPickerOpen, setGiftPickerOpen] = useState(false);
 
-  const initialFallbackIds = (firstReward?.target as { fallbackVariantIds?: string[] } | null)?.fallbackVariantIds ?? [];
+  const initialFallbackIds = giftRewards.length > 0 ? giftBlock.fallbackVariantIds : ((firstReward?.target as { fallbackVariantIds?: string[] } | null)?.fallbackVariantIds ?? []);
   const [fallbackProductIds, setFallbackProductIds] = useState<string[]>(initialFallbackIds);
   const [fallbackPickerOpen, setFallbackPickerOpen] = useState(false);
 
@@ -1606,9 +1665,11 @@ export default function OfferDetailPage() {
                       </span>
                     </div>
                     <div className="b-card-body">
-                      {rewards.length > 0 ? rewards.map((reward) => (
+                      {rewards.length > 0 ? rewards.filter((reward) => reward.id !== giftRewards[0]?.id ? reward.rewardType !== "product_gift" : true).map((reward) => (
                         <p key={reward.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>
-                          {rewardSummary(reward)}
+                          {reward.id === giftRewards[0]?.id && giftRewards.length > 1
+                            ? `${rewardSummary(reward)} (${giftRewards.length} gift products)`
+                            : rewardSummary(reward)}
                         </p>
                       )) : <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>No rewards configured.</p>}
                     </div>
