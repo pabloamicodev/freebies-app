@@ -166,8 +166,20 @@ describe("gift modal layouts", () => {
     await open(payload([single(1, 11, { rewardMaxQuantity: 2 }), single(2, 21, { rewardMaxQuantity: 2 }), single(3, 31, { rewardMaxQuantity: 2 })], 2));
     await click(cards()[0]!);
     await click(cards()[1]!);
+    expect(q(".pe-picker-limit").textContent).toBe("");
     await click(cards()[2]!);
     expect(cards().map((c) => c.getAttribute("aria-pressed"))).toEqual(["true", "true", "false"]);
+    expect(q(".pe-picker-limit").textContent).toBe("You can choose up to 2 gifts");
+    await click(cards()[0]!);
+    expect(q(".pe-picker-limit").textContent).toBe("");
+  });
+
+  it("uses the merchant's labels for the variant prompt and the limit notice", async () => {
+    const p = payload([gift(1, 11), gift(1, 12), single(2, 21)], 1);
+    p.labels = { free: "Free", outOfStock: "Sold out", selectPrompt: "Select a gift", remove: "Remove", replaces: "Replacement for {{title}}", chooseVariant: "Elegí una variante", limitReached: "Máximo {{max}}" };
+    await open(p);
+    await click(cards()[0]!);
+    expect(q(".pe-variant-prompt").textContent).toBe("Elegí una variante");
   });
 
   it("reserving a product for a variant counts toward the limit", async () => {

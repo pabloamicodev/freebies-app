@@ -106,6 +106,8 @@ const STYLES = `
 .pe-variant-chip:disabled { opacity: .5; text-decoration: line-through; cursor: not-allowed; }
 .pe-variant-chip:focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
 .pe-variant-prompt { font-size: 11px; color: #6b7280; margin: 2px 0 0; }
+.pe-picker-limit { font-size: 13px; color: #b45309; margin: 0 0 8px; min-height: 1em; }
+.pe-picker-limit:empty { display: none; }
 `;
 
 function injectStyles() {
@@ -129,9 +131,17 @@ export function ProductPicker({ gifts, state, soldOut, maxSelectable, labels, cu
     onChange(stale.reduce((next, group) => dropGroup(next, group), state));
   }, [stale.length]);
 
-  const apply = (next: PickerState | null) => next && onChange(next);
+  const [full, setFull] = useState(false);
+  const limitText = (labels?.limitReached ?? "You can choose up to {{max}} gifts").replace("{{max}}", String(maxSelectable));
+  const change = (next: PickerState) => {
+    setFull(false);
+    onChange(next);
+  };
+  const apply = (next: PickerState | null) => (next ? change(next) : setFull(true));
 
   return (
+    <>
+    <p class="pe-picker-limit" role="status" aria-live="polite">{full ? limitText : ""}</p>
     <div class="pe-gift-grid">
       {groups.map((group) => {
         const first = group.gifts.find((gift) => gift.imageUrl) ?? group.gifts[0]!;
@@ -157,12 +167,12 @@ export function ProductPicker({ gifts, state, soldOut, maxSelectable, labels, cu
                 if (!hasVariants) return apply(toggleProduct(state, group, groups, maxSelectable, soldOut));
                 if (expanded) {
                   setOpen(null);
-                  if (state.pending.has(group.key)) onChange(dropGroup(state, group));
+                  if (state.pending.has(group.key)) change(dropGroup(state, group));
                   return;
                 }
                 const next = reserveProduct(state, group, groups, maxSelectable);
-                if (!next) return;
-                if (next !== state) onChange(next);
+                if (!next) return setFull(true);
+                if (next !== state) change(next);
                 setOpen(group.key);
               }}
             >
@@ -193,7 +203,7 @@ export function ProductPicker({ gifts, state, soldOut, maxSelectable, labels, cu
                 )}
               </p>
               {unavailable && <p class="pe-gift-unavailable">{outOfStock}</p>}
-              {state.pending.has(group.key) && <p class="pe-variant-prompt">Choose a variant</p>}
+              {state.pending.has(group.key) && <p class="pe-variant-prompt">{labels?.chooseVariant ?? "Choose a variant"}</p>}
             </button>
             {expanded && (
               <div class="pe-variant-row" id={panelId} role="group" aria-label={first.title}>
@@ -207,7 +217,7 @@ export function ProductPicker({ gifts, state, soldOut, maxSelectable, labels, cu
                     onClick={() => {
                       const next = chooseVariant(state, group, gift, groups, maxSelectable, soldOut);
                       if (!next) return;
-                      onChange(next);
+                      change(next);
                       if (next.selected.has(giftKey(gift))) setOpen(null);
                     }}
                   >
@@ -221,6 +231,7 @@ export function ProductPicker({ gifts, state, soldOut, maxSelectable, labels, cu
         );
       })}
     </div>
+    </>
   );
 }
 
