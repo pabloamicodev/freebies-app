@@ -40,7 +40,7 @@ export async function mcpWhoami(
       data: {
         operator: { id: operator.id, email: operator.email, name: operator.name, role: operator.role, shopAccess },
         shops: rows,
-        server: { name: "promo-engine", phase: 1, writeEnabledShops: writable },
+        server: { name: "promo-engine", phase: 4, writeEnabledShops: writable },
       },
       nextActions: rows.length
         ? [{ mcp: "promo-engine", tool: "shops_list", args: {}, why: "See offers and health per shop.", risk: "read" }]

@@ -155,9 +155,7 @@ Retention: the daily `analytics-cleanup` cron (`call-log-retention.server.ts`, n
 ### Enabling writes on hpn-test-store
 
 1. Vercel (HPN project only): set `MCP_WRITE_SHOPS=hpn-test-store.myshopify.com` and `MCP_CONFIRM_SECRET` (32+ random chars), redeploy.
-2. In that shop's database, upsert the setting (value is JSON text):
-   `INSERT INTO app_settings (shop_id, key, value) SELECT id, 'mcp.writeMode', '"write"' FROM shops WHERE myshopify_domain = 'hpn-test-store.myshopify.com' ON CONFLICT (shop_id, key) DO UPDATE SET value = '"write"';`
-   Set it back to `"read_only"` (or delete the row) to lock the shop again; removing the domain from the env also locks it.
+2. Open the per-shop lock: `pnpm mcp:operator write-mode --shop hpn-test-store --mode write --env <file>` (upserts `app_settings` key `mcp.writeMode`; fails if the shop does not exist; prints the resulting mode). `write-mode --list` shows every shop's stored mode. Use `--mode read_only` to lock the shop again; removing the domain from `MCP_WRITE_SHOPS` also locks it (the env lock always applies on top of this setting).
 3. Give the operator the `editor` (or `admin`) role: `pnpm mcp:operator create ... --role editor --shops '*'`.
 4. Test only on offers named `[MCP test] ...`: hpn-test-store shares the app with HPN and TRU. Any other shop answers `SHOP_READ_ONLY` even for admins.
 
