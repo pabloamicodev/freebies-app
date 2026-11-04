@@ -48,6 +48,7 @@ const TOOL_KEYS: Record<string, string[]> = {
   codes_create_batch: ["count", "length"],
   codes_delete: ["onlyUnused"],
   shop_set_limits_enforced: ["enforced"],
+  drift_repair_settings: [],
 };
 const MAX_VALUE = 120;
 const MAX_ITEMS = 20;

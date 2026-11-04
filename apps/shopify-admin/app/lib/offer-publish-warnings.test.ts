@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { offerConditions, type Db } from "@promo/db";
+import { and, eq } from "drizzle-orm";
+import { auditLogs, offerConditions, offerRewards, offers, type Db } from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
 const world = vi.hoisted(() => ({ theme: "ok" as "ok" | "down", directory: "ok" as "ok" | "absent" | "down" }));
@@ -9,6 +10,9 @@ vi.mock("./redis.server.js", () => ({
   redisGetString: async (k: string) => redis.store.get(k) ?? null,
   redisSetString: async (k: string, v: string) => void redis.store.set(k, v),
 }));
+vi.mock("./token-crypto.server.js", () => ({ decryptToken: async () => "tok" }));
+vi.mock("./offer-definitions.server.js", () => ({ invalidateOfferDefinitions: async () => undefined }));
+vi.mock("./sync/offer-publisher.server.js", () => ({ MAX_METAFIELD_BYTES: 9500, publishOffersForShop: async () => "ok" }));
 vi.mock("./shopify-fetch.server.js", () => ({
   shopifyGraphQL: async ({ query }: { query: string }) => {
     if (query.includes("PromoEngineExperimentDirectory")) {
@@ -36,7 +40,7 @@ vi.mock("./shopify-fetch.server.js", () => ({
   },
 }));
 
-const { getPublishWarnings } = await import("./offer-publish-flow.server.js");
+const { finalizeCreatedOffer, getPublishWarnings, getShopPublishWarnings } = await import("./offer-publish-flow.server.js");
 
 let db: Db;
 let close: () => Promise<void>;
@@ -110,5 +114,32 @@ describe("getPublishWarnings", () => {
     expect(await getPublishWarnings(db, shopId, id, auth)).toEqual([]);
     world.directory = "absent";
     expect(await getPublishWarnings(db, shopId, id, auth)).toEqual([]);
+  });
+});
+
+describe("getShopPublishWarnings and the wizard end", () => {
+  const missing = { conditionType: "experiment", value: { experimentId: "deadbeef", variantKeys: ["a"], experimentName: "Old" } };
+
+  it("resolves the stored token itself and returns the same warnings", async () => {
+    const id = await offerWith([missing]);
+    expect(await getShopPublishWarnings(db, shopId, "warn-shop.myshopify.com", id)).toEqual(await getPublishWarnings(db, shopId, id, auth));
+    expect(await getShopPublishWarnings(db, shopId, "warn-shop.myshopify.com", id)).toHaveLength(1);
+  });
+
+  it("finalizeCreatedOffer keeps the offer live and audits the warnings; a clean offer writes no audit", async () => {
+    const withWarning = await offerWith([missing, { conditionType: "cart_value", value: { thresholdCents: 100, currencyCode: "USD", includeGiftValues: false } }]);
+    const clean = await offerWith([{ conditionType: "cart_value", value: { thresholdCents: 100, currencyCode: "USD", includeGiftValues: false } }]);
+    for (const id of [withWarning, clean]) {
+      await db.insert(offerRewards).values({
+        shopId, offerId: id, rewardType: "product_gift", discountType: "free", value: { amount: 100 },
+        target: { productId: "gid://shopify/Product/1", variantId: "gid://shopify/ProductVariant/1" },
+      });
+      await db.update(offers).set({ status: "active" }).where(eq(offers.id, id));
+      expect(await finalizeCreatedOffer(db, shopId, "warn-shop.myshopify.com", id, "active")).toBeNull();
+    }
+    expect((await db.select().from(offers).where(eq(offers.id, withWarning)))[0]!.status).toBe("active");
+    const logs = (id: string) => db.select().from(auditLogs).where(and(eq(auditLogs.shopId, shopId), eq(auditLogs.entityId, id)));
+    expect((await logs(withWarning))[0]).toMatchObject({ action: "publish_warning", performedBy: "system", after: { warnings: ['Experiment "Old" is not in your Experiment Engine directory.'] } });
+    expect(await logs(clean)).toHaveLength(0);
   });
 });

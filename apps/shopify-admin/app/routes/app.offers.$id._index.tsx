@@ -385,15 +385,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const target = { shopId, shopDomain: session.shop, offerId };
       const failureMessage = (r: Exclude<Awaited<ReturnType<typeof activateDraftOffer>>, { ok: true }>) =>
         r.code === "not_found" ? "Offer not found." : r.error;
-      const check = await activateDraftOffer(db, target, { ...activation, dryRun: true });
+      const publishWarnings = () => getPublishWarnings(db, shopId, offerId, { shopDomain: session.shop, accessToken: session.accessToken ?? "" });
+      const check = await activateDraftOffer(db, target, { ...activation, dryRun: true, publishWarnings });
       if (!check.ok) return { error: failureMessage(check) };
 
-      if (formData.get("acknowledgeWarnings") !== "1") {
-        const warnings = await getPublishWarnings(db, shopId, offerId, { shopDomain: session.shop, accessToken: session.accessToken ?? "" });
-        if (warnings.length > 0) return { warnings };
-      }
+      const warnings = check.warnings ?? [];
+      if (warnings.length > 0 && formData.get("acknowledgeWarnings") !== "1") return { warnings };
 
-      const published = await activateDraftOffer(db, target, activation);
+      const published = await activateDraftOffer(db, target, { ...activation, publishWarnings: async () => warnings });
       if (!published.ok) return { error: failureMessage(published) };
       break;
     }

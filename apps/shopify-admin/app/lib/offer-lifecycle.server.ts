@@ -4,6 +4,7 @@ import { normalizeExcludedPageUrls, normalizeStorePageUrls, validateConditionVal
 import { insertAuditLog } from "./audit-log.server.js";
 import { parseDateRange, toZonedLocalInput } from "./offer-validation.server.js";
 import {
+  getShopPublishWarnings,
   republishIfActive,
   tryPublishShop,
   validateActivation,
@@ -41,6 +42,8 @@ export interface OfferLifecycleOptions {
   publish?: ShopPublishFn;
   /** Optimistic concurrency: refuse when the offer changed since the caller read it. */
   expectedUpdatedAt?: Date;
+  /** Replaces the advisory publish-warnings lookup (theme refs, experiments). */
+  publishWarnings?: () => Promise<string[]>;
 }
 
 export interface OfferLifecycleSuccess {
@@ -54,6 +57,8 @@ export interface OfferLifecycleSuccess {
   updatedAt: Date;
   /** What a schedule / page URL change resolved to. */
   details?: Record<string, unknown>;
+  /** Advisory problems the offer goes live with (set only when there are any). Never blocks; also audited on execution. */
+  warnings?: string[];
 }
 
 export type OfferLifecycleFailure =
@@ -111,6 +116,12 @@ async function audit(
   });
 }
 
+async function liveWarnings(db: Db, ctx: OfferLifecycleContext, opts: OfferLifecycleOptions, statusAfter: OfferStatus): Promise<{ warnings?: string[] }> {
+  if (statusAfter !== "active" && statusAfter !== "scheduled") return {};
+  const warnings = await (opts.publishWarnings ?? (() => getShopPublishWarnings(db, ctx.shopId, ctx.shopDomain, ctx.offerId)))();
+  return warnings.length > 0 ? { warnings } : {};
+}
+
 function staleFailure(current: Date, opts: OfferLifecycleOptions): OfferLifecycleFailure | null {
   if (opts.expectedUpdatedAt && opts.expectedUpdatedAt.getTime() !== current.getTime()) {
     return { ok: false, code: "state", reason: "stale", error: "The offer changed since it was read; read it again." };
@@ -160,6 +171,7 @@ async function changeStatus(
     }
     statusAfter = activationStatus(current.startsAt, current.endsAt);
   }
+  const advisory = pausing ? {} : await liveWarnings(db, ctx, opts, statusAfter);
 
   if (opts.dryRun) {
     return {
@@ -170,6 +182,7 @@ async function changeStatus(
       statusAfter,
       changed: statusBefore !== statusAfter,
       updatedAt: current.updatedAt,
+      ...advisory,
     };
   }
 
@@ -188,9 +201,9 @@ async function changeStatus(
     entityId: ctx.offerId,
     action: intent === "toggle" ? "toggle_status" : intent,
     before: { status: statusBefore },
-    after: { status: statusAfter },
+    after: { status: statusAfter, ...advisory },
   });
-  return { ok: true, dryRun: false, offerId: ctx.offerId, statusBefore, statusAfter, changed: statusBefore !== statusAfter, updatedAt };
+  return { ok: true, dryRun: false, offerId: ctx.offerId, statusBefore, statusAfter, changed: statusBefore !== statusAfter, updatedAt, ...advisory };
 }
 
 /** Pauses a live (active or scheduled) offer and republishes the shop without it. */
@@ -390,8 +403,10 @@ export async function setOfferSchedule(
     }
   }
   const details = { startsAt, endsAt, timezone };
+  const wasLive = statusBefore === "active" || statusBefore === "scheduled";
+  const advisory = wasLive ? {} : await liveWarnings(db, ctx, opts, statusAfter);
   if (opts.dryRun) {
-    return { ok: true, dryRun: true, offerId: ctx.offerId, statusBefore, statusAfter, changed: true, updatedAt: offer.updatedAt, details };
+    return { ok: true, dryRun: true, offerId: ctx.offerId, statusBefore, statusAfter, changed: true, updatedAt: offer.updatedAt, details, ...advisory };
   }
 
   const updatedAt = new Date();
@@ -419,9 +434,9 @@ export async function setOfferSchedule(
     entityId: ctx.offerId,
     action: "set_schedule",
     before: { status: statusBefore, startsAt: offer.startsAt, endsAt: offer.endsAt, timezone: offer.timezone },
-    after: { status: statusAfter, startsAt, endsAt, timezone },
+    after: { status: statusAfter, startsAt, endsAt, timezone, ...advisory },
   });
-  return { ok: true, dryRun: false, offerId: ctx.offerId, statusBefore, statusAfter, changed: true, updatedAt, details };
+  return { ok: true, dryRun: false, offerId: ctx.offerId, statusBefore, statusAfter, changed: true, updatedAt, details, ...advisory };
 }
 
 export interface SetPageUrlsInput extends OfferLifecycleContext {
@@ -543,7 +558,7 @@ export async function republishShop(
 /**
  * Draft -> live, the admin Publish button's sequence: needs a main condition and a reward, validateActivation,
  * the schedule-aware status, publish (status put back if it fails), then the version snapshot and the audit row.
- * The advisory theme / experiment warnings need a shop access token and stay an admin-UI check.
+ * The advisory theme / experiment warnings come back as `warnings` (and are audited); they never block.
  */
 export async function activateDraftOffer(
   db: Db,
@@ -580,8 +595,9 @@ export async function activateDraftOffer(
   }
   const now = new Date();
   const statusAfter = activationStatus(offer.startsAt, offer.endsAt, now);
+  const advisory = await liveWarnings(db, ctx, opts, statusAfter);
   if (opts.dryRun) {
-    return { ok: true, dryRun: true, offerId: ctx.offerId, statusBefore, statusAfter, changed: true, updatedAt: offer.updatedAt };
+    return { ok: true, dryRun: true, offerId: ctx.offerId, statusBefore, statusAfter, changed: true, updatedAt: offer.updatedAt, ...advisory };
   }
   await db.update(offers).set({ status: statusAfter, updatedAt: now }).where(key(ctx));
   const failure = await publish(ctx.shopId, ctx.shopDomain);
@@ -615,6 +631,6 @@ export async function activateDraftOffer(
       createdBy: opts.performedBy,
     });
   });
-  await audit(db, ctx, opts, { entityId: ctx.offerId, action: "publish", before: { status: statusBefore }, after: { status: statusAfter } });
-  return { ok: true, dryRun: false, offerId: ctx.offerId, statusBefore, statusAfter, changed: true, updatedAt: now };
+  await audit(db, ctx, opts, { entityId: ctx.offerId, action: "publish", before: { status: statusBefore }, after: { status: statusAfter, ...advisory } });
+  return { ok: true, dryRun: false, offerId: ctx.offerId, statusBefore, statusAfter, changed: true, updatedAt: now, ...advisory };
 }

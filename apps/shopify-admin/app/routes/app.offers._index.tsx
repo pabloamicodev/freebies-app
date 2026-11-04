@@ -237,7 +237,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
     case "toggle_status": {
       const offerId = formData.get("offerId") as string;
-      const result = await toggleOfferStatus(db, { shopId, shopDomain: session.shop, offerId }, { performedBy: session.shop });
+      const target = { shopId, shopDomain: session.shop, offerId };
+      const check = await toggleOfferStatus(db, target, { performedBy: session.shop, dryRun: true });
+      if (!check.ok) return { error: "error" in check ? check.error : "Offer not found" };
+      const warnings = check.warnings ?? [];
+      if (warnings.length > 0 && formData.get("acknowledgeWarnings") !== "1") return { warnings };
+      const result = await toggleOfferStatus(db, target, { performedBy: session.shop, publishWarnings: async () => warnings });
       if (!result.ok) return { error: "error" in result ? result.error : "Offer not found" };
       break;
     }
