@@ -183,6 +183,13 @@
       "when": 1792510000000,
       "tag": "0028_offer_require_identified_customer",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1793750076288,
+      "tag": "0029_mcp_operators",
+      "breakpoints": true
     }
   ]
 }

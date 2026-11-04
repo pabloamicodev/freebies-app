@@ -161,9 +161,11 @@ export async function checkRateLimit(
 }
 
 export function getClientIp(request: Request): string {
+  // x-vercel-forwarded-for is set by Vercel's edge and cannot be spoofed by the client, unlike a client-supplied x-forwarded-for entry.
   return (
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    request.headers.get("x-real-ip") ??
+    request.headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
     "unknown"
   );
 }
