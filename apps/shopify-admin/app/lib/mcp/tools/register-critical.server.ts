@@ -17,7 +17,7 @@ import {
 
 const CRITICAL = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true } as const;
 const FLOW =
-  " Admin only, 3 executions a minute. dryRun defaults to true: it returns the preview and a confirmToken (5 min, single use, bound to these exact arguments); call again with dryRun:false and that token to apply. Only write-enabled shops (hpn-test-store); other shops answer SHOP_READ_ONLY.";
+  " Admin only, 3 executions a minute. dryRun defaults to true: it returns the preview and a confirmToken (5 min, single use, bound to these exact arguments); call again with dryRun:false and that token to apply. Only write-enabled shops (see mcp_whoami); other shops answer SHOP_READ_ONLY.";
 
 /** Phase 4.1 critical tools: admin role, confirmToken, same write locks as the Phase 3 tools. */
 export function registerCriticalTools(server: McpServer, ctx: McpContext): void {
