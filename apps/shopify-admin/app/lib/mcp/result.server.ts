@@ -146,15 +146,22 @@ export function parsePromoRef(ref: string): { shopHandle: string; offerId: strin
   return match ? { shopHandle: match[1]!, offerId: match[2]! } : null;
 }
 
-const ZERO_DECIMAL = new Set(["JPY", "KRW", "VND", "CLP", "ISK", "UGX", "XAF", "XOF", "XPF"]);
+const ZERO_DECIMAL = new Set(["JPY", "KRW", "VND", "CLP", "ISK", "UGX", "XAF", "XOF", "XPF", "PYG", "RWF", "DJF", "GNF", "KMF", "VUV"]);
+const THREE_DECIMAL = new Set(["KWD", "BHD", "OMR", "JOD", "TND", "LYD", "IQD"]);
 
-/** Cents (integer minor units) to the contract's decimal string. */
-export function moneyFromMinor(minor: number, currency: string): Money {
+/**
+ * The app stores money as Math.round(amount * 100) for every currency (order-paid webhook,
+ * thresholds), so `stored` is amount x 100 even for JPY or KWD. Formatted with the currency's own decimals.
+ */
+export function moneyFromMinor(stored: number, currency: string): Money {
   const code = currency.toUpperCase();
-  if (ZERO_DECIMAL.has(code)) return { amount: String(Math.round(minor)), currency: code };
-  const sign = minor < 0 ? "-" : "";
-  const abs = Math.abs(Math.round(minor));
-  return { amount: `${sign}${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, "0")}`, currency: code };
+  const decimals = ZERO_DECIMAL.has(code) ? 0 : THREE_DECIMAL.has(code) ? 3 : 2;
+  const sign = stored < 0 ? "-" : "";
+  const scale = 10 ** decimals;
+  const units = Math.round((Math.abs(stored) * scale) / 100);
+  if (decimals === 0) return { amount: `${sign}${units}`, currency: code };
+  const whole = Math.floor(units / scale);
+  return { amount: `${sign}${whole}.${String(units % scale).padStart(decimals, "0")}`, currency: code };
 }
 
 export function buildResult<T>(
