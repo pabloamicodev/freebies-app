@@ -28,6 +28,11 @@ vi.mock("@promo/db", async (importOriginal) => ({
 }));
 vi.mock("./offer-publish-flow.server.js", () => ({
   publishShopConfig,
+  // The lifecycle service publishes through tryPublishShop; the publishShopConfig spy stays this file's single seam.
+  tryPublishShop: async (...args: unknown[]) => {
+    const message = await (publishShopConfig as unknown as (...a: unknown[]) => Promise<string | null>)(...args);
+    return message ? { message, scope: "shop" } : null;
+  },
   republishIfActive,
   getPublishWarnings,
   validateOffersPublishable: async () => ({ ok: true }),

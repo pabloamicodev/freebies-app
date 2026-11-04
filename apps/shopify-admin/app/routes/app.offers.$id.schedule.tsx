@@ -7,11 +7,8 @@ import { useLoaderData, Form, useActionData, useNavigation } from "react-router"
 import { BackButton } from "../components/BackButton.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
-import { parseDateRange, toZonedLocalInput } from "../lib/offer-validation.server.js";
-import { statusForScheduleSave } from "../lib/offer-scheduling.server.js";
-import { republishIfActive, validateActivation } from "../lib/offer-publish-flow.server.js";
-import { offers } from "@promo/db";
-import { and, eq } from "drizzle-orm";
+import { toZonedLocalInput } from "../lib/offer-validation.server.js";
+import { setOfferSchedule } from "../lib/offer-lifecycle.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import "../styles/bogos.css";
 
@@ -20,15 +17,6 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 function timezoneOptions(...extra: string[]): string[] {
   const supported = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
   return [...new Set(["UTC", ...supported, ...extra])].sort();
-}
-
-function isValidTimeZone(tz: string): boolean {
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
@@ -51,31 +39,23 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db, timezone: shopTimezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
-  const offer = await loadOwnedOffer(db, shopId, offerId);
-  const timezone = (formData.get("timezone") as string) || offer.timezone || shopTimezone;
-  if (!isValidTimeZone(timezone)) return { error: "Timezone is invalid." };
-  const proxyFormData = new FormData();
-  proxyFormData.set("startsAt", (formData.get("starts_at") as string | null) ?? "");
-  proxyFormData.set("endsAt", (formData.get("ends_at") as string | null) ?? "");
-  const dateRange = parseDateRange(proxyFormData, timezone);
-  if (dateRange.error) return { error: dateRange.error };
-  const { startsAt, endsAt } = dateRange.data!;
-
-  const nextStatus = statusForScheduleSave(offer.status, startsAt, endsAt);
-  if (nextStatus === "active" && offer.status !== "active") {
-    const activation = await validateActivation(db, shopId, [offerId]);
-    if (!activation.ok) return { error: activation.error };
+  const result = await setOfferSchedule(
+    db,
+    {
+      shopId,
+      shopDomain: session.shop,
+      offerId,
+      shopTimezone,
+      timezone: (formData.get("timezone") as string) || null,
+      startsAt: (formData.get("starts_at") as string | null) ?? "",
+      endsAt: (formData.get("ends_at") as string | null) ?? "",
+    },
+    { performedBy: session.shop },
+  );
+  if (!result.ok) {
+    if (result.code === "not_found") throw new Response("Not found", { status: 404 });
+    return { error: result.error };
   }
-  await db.update(offers).set({
-    startsAt,
-    endsAt,
-    status: nextStatus,
-    timezone,
-    updatedAt: new Date(),
-  }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-  const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active" || nextStatus === "active");
-  if (publishError) return { error: publishError };
-
   return { success: true };
 };
 
