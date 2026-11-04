@@ -25,18 +25,23 @@ Phase 0 has no write tools; `shops_list` only reports the mode.
 
 ## Auth
 
-Bearer PAT (`pemcp_...`), tied to an operator (`mcp_operators`) with a role (`viewer|editor|admin`) and an optional
-shop allow list (empty = all shops). 90-day expiry, revocable. Every auth failure is the same 401. Rate limits: 120/min per IP,
-60/min per operator.
+Bearer PAT (`pemcp_...`), tied to an operator (`mcp_operators`) with a role (`viewer|editor|admin`, default `viewer`) and a
+shop allow list. Least privilege: an empty allow list sees NO shops; the explicit entry `*` sees all shops; otherwise a list
+of `<store>.myshopify.com` domains (lowercased and validated). 90-day maximum expiry (`--ttl-days` 1-90), revocable. Every
+auth failure is the same 401. Without a usable `MCP_TOKEN_PEPPER` (16+ chars) the endpoint answers 503 `UPSTREAM_UNAVAILABLE`.
+Rate limits: 120/min per IP (`x-vercel-forwarded-for`, then `x-real-ip`, then `x-forwarded-for`), 60/min per operator.
 
 Create the first admin (prints the PAT once; run against the database that serves the endpoint, with the same
-`MCP_TOKEN_PEPPER`; do it from a trusted terminal with `--env <file>` pointing at that environment):
+`MCP_TOKEN_PEPPER`; do it from a trusted terminal with `--env <file>` pointing at that environment). `--shops` is required:
 
 ```
-pnpm mcp:operator create --email you@example.com --name "You" --role admin
+pnpm mcp:operator create --email you@example.com --name "You" --role admin --shops '*'
 pnpm mcp:operator list
 pnpm mcp:operator revoke --email you@example.com
 ```
+
+Runbook: rotating `MCP_TOKEN_PEPPER` invalidates every PAT (no pepper versioning). After a rotation, re-issue each PAT with
+`pnpm mcp:operator` (`revoke` disables the old operator row, which keeps its email, so `create` the replacement with a new email).
 
 ## Connect Claude Code
 

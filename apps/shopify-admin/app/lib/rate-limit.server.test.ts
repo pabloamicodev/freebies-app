@@ -37,6 +37,13 @@ describe("getClientIp", () => {
     expect(getClientIp(req)).toBe("1.2.3.4");
   });
 
+  it("prefers x-vercel-forwarded-for, then x-real-ip, over x-forwarded-for", () => {
+    const headers = { "x-forwarded-for": "1.1.1.1", "x-real-ip": "2.2.2.2", "x-vercel-forwarded-for": "3.3.3.3, 4.4.4.4" };
+    expect(getClientIp(new Request("https://example.com", { headers }))).toBe("3.3.3.3");
+    delete (headers as Record<string, string>)["x-vercel-forwarded-for"];
+    expect(getClientIp(new Request("https://example.com", { headers }))).toBe("2.2.2.2");
+  });
+
   it("falls back to x-real-ip", () => {
     const req = new Request("https://example.com", {
       headers: { "x-real-ip": "9.9.9.9" },

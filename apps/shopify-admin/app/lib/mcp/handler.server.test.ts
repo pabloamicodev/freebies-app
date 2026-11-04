@@ -22,7 +22,7 @@ let pat: string;
 
 beforeAll(async () => {
   ({ db, close } = await createTestDb());
-  ({ pat } = await createOperatorWithPat(db, { email: "owner@example.com", name: "Owner", role: "admin" }, env));
+  ({ pat } = await createOperatorWithPat(db, { email: "owner@example.com", name: "Owner", role: "admin", shopAllowList: ["*"] }, env));
   const testShop = await seedShop(db, "hpn-test-store.myshopify.com");
   await seedShop(db, "hpn.myshopify.com");
   const uninstalled = await seedShop(db, "gone.myshopify.com");
@@ -61,6 +61,18 @@ describe("MCP_ENABLED gate", () => {
     const res = await call({ jsonrpc: "2.0", id: 1, method: "tools/list" }, undefined, { ...env, MCP_ENABLED: "1" });
     expect(res.status).toBe(404);
   });
+  it("is 503 UPSTREAM_UNAVAILABLE without a usable pepper, before any DB call", async () => {
+    const throwingDb = new Proxy({}, { get: () => { throw new Error("db touched"); } }) as unknown as Db;
+    for (const MCP_TOKEN_PEPPER of [undefined, "", "short"]) {
+      const res = await handleMcpRequest(rpc({ jsonrpc: "2.0", id: 1, method: "tools/list" }), {
+        db: throwingDb,
+        env: { ...env, MCP_TOKEN_PEPPER },
+        rateLimit: allowAll,
+      });
+      expect(res.status).toBe(503);
+      expect((await res.json()).error).toEqual({ code: "UPSTREAM_UNAVAILABLE", message: "MCP not configured" });
+    }
+  });
   describe("route module", () => {
     const saved = process.env["MCP_ENABLED"];
     afterEach(() => {
@@ -91,7 +103,7 @@ describe("auth on the route", () => {
     }
     const { pat: expired } = await createOperatorWithPat(
       db,
-      { email: "old@example.com", name: "Old", role: "viewer", ttlDays: 1 },
+      { email: "old@example.com", name: "Old", role: "viewer", shopAllowList: ["*"], ttlDays: 1 },
       env,
       new Date("2020-01-01T00:00:00Z"),
     );
@@ -191,6 +203,22 @@ describe("MCP protocol over the route (pglite)", () => {
     expect(json.result.isError).toBe(true);
     expect(json.result.structuredContent).toMatchObject({ code: "SHOP_NOT_FOUND", mcp: "promo-engine" });
     expect(json.result.structuredContent.suggestedAction.tool).toBe("shops_list");
+  });
+
+  it("an operator with an empty allow list sees no shops", async () => {
+    const { pat: none } = await createOperatorWithPat(db, { email: "none@example.com", name: "N", role: "viewer", shopAllowList: [] }, env);
+    const res = await call({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "shops_list", arguments: {} } }, { authorization: `Bearer ${none}` });
+    expect((await res.json()).result.structuredContent.data.shops).toEqual([]);
+  });
+
+  it("uses the Vercel-set client IP for the per-IP limit", async () => {
+    const keys: string[] = [];
+    await handleMcpRequest(rpc({ jsonrpc: "2.0", id: 1, method: "tools/list" }, { "x-forwarded-for": "6.6.6.6", "x-vercel-forwarded-for": "7.7.7.7" }), {
+      db,
+      env,
+      rateLimit: async (key) => (keys.push(key), { ok: true }),
+    });
+    expect(keys[0]).toBe("mcp:ip:7.7.7.7");
   });
 
   it("filters by handle", async () => {

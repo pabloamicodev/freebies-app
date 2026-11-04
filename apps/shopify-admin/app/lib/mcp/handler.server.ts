@@ -3,7 +3,7 @@ import type { Db } from "@promo/db";
 import { authenticateBearer } from "./auth.server.js";
 import { createMcpServer } from "./server.server.js";
 import { ToolError } from "./result.server.js";
-import { checkRateLimit } from "../rate-limit.server.js";
+import { checkRateLimit, getClientIp } from "../rate-limit.server.js";
 
 export type RateLimiter = (key: string, limit: number) => Promise<{ ok: true } | { ok: false; retryAfterSeconds: number }>;
 
@@ -27,20 +27,23 @@ function jsonError(status: number, code: string, message: string, extra: Headers
   return Response.json({ error: { code, message } }, { status, headers: { ...JSON_HEADERS, ...extra } });
 }
 
-function clientIp(request: Request): string {
-  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+function pepperConfigured(env: NodeJS.ProcessEnv): boolean {
+  return (env["MCP_TOKEN_PEPPER"]?.length ?? 0) >= 16;
 }
 
 /** 404 unless MCP_ENABLED=true (set only on the HPN Vercel project); then Bearer PAT auth, then a stateless transport. */
 export async function handleMcpRequest(request: Request, deps: McpHandlerDeps): Promise<Response> {
   const env = deps.env ?? process.env;
   if (!mcpEnabled(env)) return new Response("Not Found", { status: 404, headers: JSON_HEADERS });
+  // No DB call without a usable pepper: hashing would throw and every request would 500.
+
+  if (!pepperConfigured(env)) return jsonError(503, "UPSTREAM_UNAVAILABLE", "MCP not configured");
 
   const now = deps.now ?? (() => new Date());
   const rateLimit = deps.rateLimit ?? defaultRateLimit;
 
   // Before any DB work, so PAT guessing is throttled per IP.
-  const ipLimit = await rateLimit(`mcp:ip:${clientIp(request)}`, 120);
+  const ipLimit = await rateLimit(`mcp:ip:${getClientIp(request)}`, 120);
   if (!ipLimit.ok) {
     return jsonError(429, "RATE_LIMITED", "Too many requests.", { "Retry-After": String(ipLimit.retryAfterSeconds) });
   }
@@ -63,8 +66,15 @@ export async function handleMcpRequest(request: Request, deps: McpHandlerDeps): 
   const server = createMcpServer({ db: deps.db, env, operator, now });
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   await server.connect(transport);
-  const response = await transport.handleRequest(request);
-  const headers = new Headers(response.headers);
-  headers.set("Cache-Control", "no-store");
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  try {
+    const response = await transport.handleRequest(request);
+    // JSON responses are fully buffered, so the body is read before the transport closes.
+    const body = await response.text();
+    const headers = new Headers(response.headers);
+    headers.set("Cache-Control", "no-store");
+    return new Response(body, { status: response.status, statusText: response.statusText, headers });
+  } finally {
+    await transport.close().catch(() => undefined);
+    await server.close().catch(() => undefined);
+  }
 }

@@ -1,6 +1,6 @@
 import { and, eq, isNull, inArray } from "drizzle-orm";
 import { appSettings, shops, type Db } from "@promo/db";
-import type { Operator } from "./auth.server.js";
+import { canSeeShop, type Operator } from "./auth.server.js";
 import { ToolError, shopHandle } from "./result.server.js";
 import type { ShopRef } from "./multi-shop.server.js";
 
@@ -15,7 +15,7 @@ export type VisibleShop = ShopRef & {
 
 export const WRITE_MODE_SETTING_KEY = "mcp.writeMode";
 
-/** Active installed shops the operator may see (allow list empty = all). */
+/** Active installed shops the operator may see (allow list: explicit domains, "*" = all, empty = none). */
 export async function visibleShops(db: Db, operator: Operator): Promise<VisibleShop[]> {
   const rows = await db
     .select()
@@ -23,7 +23,7 @@ export async function visibleShops(db: Db, operator: Operator): Promise<VisibleS
     .where(and(isNull(shops.uninstalledAt), eq(shops.isActive, true)))
     .orderBy(shops.myshopifyDomain);
   return rows
-    .filter((s) => operator.shopAllowList.length === 0 || operator.shopAllowList.includes(s.myshopifyDomain))
+    .filter((s) => canSeeShop(operator.shopAllowList, s.myshopifyDomain))
     .map((s) => ({
       id: s.id,
       myshopifyDomain: s.myshopifyDomain,

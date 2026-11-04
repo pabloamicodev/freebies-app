@@ -1,7 +1,7 @@
 /**
  * Manage MCP operators (docs/MCP.md).
  *
- *   tsx scripts/mcp-operator.ts create --email you@x.com --name "You" [--role admin] [--shops a.myshopify.com,b.myshopify.com] [--ttl-days 90] [--env <file>]
+ *   tsx scripts/mcp-operator.ts create --email you@x.com --name "You" --shops a.myshopify.com,b.myshopify.com|'*' [--role viewer|editor|admin] [--ttl-days 1-90] [--env <file>]
  *   tsx scripts/mcp-operator.ts list   [--env <file>]
  *   tsx scripts/mcp-operator.ts revoke --email you@x.com [--env <file>]
  *
@@ -45,12 +45,19 @@ async function main() {
   if (command === "create") {
     const email = flag("email");
     const name = flag("name");
-    const role = (flag("role") ?? "admin") as "viewer" | "editor" | "admin";
+    const role = (flag("role") ?? "viewer") as "viewer" | "editor" | "admin";
     if (!email || !name || !["viewer", "editor", "admin"].includes(role)) {
-      throw new Error("create needs --email, --name and a valid --role");
+      throw new Error("create needs --email, --name and a valid --role (default viewer)");
     }
-    const shopAllowList = flag("shops")?.split(",").map((s) => s.trim()).filter(Boolean);
-    const ttlDays = flag("ttl-days") ? Number(flag("ttl-days")) : undefined;
+    const shops = flag("shops");
+    if (!shops) {
+      throw new Error("create needs --shops <a.myshopify.com,b.myshopify.com>, or --shops '*' for every shop (least privilege: no default)");
+    }
+    const shopAllowList = auth.normalizeAllowList(shops.split(","));
+    const ttlDays = flag("ttl-days") === undefined ? undefined : Number(flag("ttl-days"));
+    if (ttlDays !== undefined && (!Number.isInteger(ttlDays) || ttlDays < 1 || ttlDays > 90)) {
+      throw new Error("--ttl-days must be an integer from 1 to 90");
+    }
     const { operatorId, pat, expiresAt } = await auth.createOperatorWithPat(db, { email, name, role, shopAllowList, ttlDays });
     out(`Operator ${email} (${role}) created: ${operatorId}`);
     out(`Expires: ${expiresAt.toISOString()}`);
@@ -62,7 +69,7 @@ async function main() {
   } else if (command === "revoke") {
     const email = flag("email");
     if (!email) throw new Error("revoke needs --email");
-    const [operator] = await db.select().from(mcpOperators).where(eq(mcpOperators.email, email.toLowerCase()));
+    const [operator] = await db.select().from(mcpOperators).where(eq(mcpOperators.email, email.trim().toLowerCase()));
     if (!operator) throw new Error("no such operator");
     await auth.revokeOperatorCredentials(db, operator.id);
     await db.update(mcpOperators).set({ disabledAt: new Date() }).where(eq(mcpOperators.id, operator.id));

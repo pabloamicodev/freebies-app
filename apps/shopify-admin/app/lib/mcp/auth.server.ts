@@ -1,11 +1,30 @@
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { mcpCredentials, mcpOperators, type Db } from "@promo/db";
 import { ToolError } from "./result.server.js";
 
 export type McpRole = "viewer" | "editor" | "admin";
 export const PAT_PREFIX = "pemcp_";
 export const PAT_TTL_DAYS = 90;
+export const ALL_SHOPS = "*";
+const LAST_USED_THROTTLE_MS = 60_000;
+const MYSHOPIFY_PATTERN = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
+
+/** Lowercases and trims; every entry must be a myshopify domain or the explicit "*" (all shops). Empty list = no shops. */
+export function normalizeAllowList(entries: string[]): string[] {
+  const normalized = entries.map((e) => e.trim().toLowerCase());
+  for (const entry of normalized) {
+    if (entry !== ALL_SHOPS && !MYSHOPIFY_PATTERN.test(entry)) {
+      throw new Error(`Invalid shop "${entry}": use <store>.myshopify.com, or "*" for every shop.`);
+    }
+  }
+  if (normalized.includes(ALL_SHOPS) && normalized.length > 1) throw new Error(`"*" cannot be combined with other shops.`);
+  return [...new Set(normalized)];
+}
+
+export function canSeeShop(allowList: string[], myshopifyDomain: string): boolean {
+  return allowList.includes(ALL_SHOPS) || allowList.includes(myshopifyDomain.toLowerCase());
+}
 
 const ROLE_RANK: Record<McpRole, number> = { viewer: 1, editor: 2, admin: 3 };
 
@@ -43,12 +62,17 @@ export function generatePat(): string {
 
 export async function createOperatorWithPat(
   db: Db,
-  input: { email: string; name: string; role: McpRole; shopAllowList?: string[]; ttlDays?: number },
+  input: { email: string; name: string; role: McpRole; shopAllowList: string[]; ttlDays?: number },
   env: NodeJS.ProcessEnv = process.env,
   now: Date = new Date(),
 ): Promise<{ operatorId: string; pat: string; expiresAt: Date }> {
+  const ttlDays = input.ttlDays ?? PAT_TTL_DAYS;
+  if (!Number.isInteger(ttlDays) || ttlDays < 1 || ttlDays > PAT_TTL_DAYS) {
+    throw new Error(`ttlDays must be an integer from 1 to ${PAT_TTL_DAYS}`);
+  }
+  const shopAllowList = normalizeAllowList(input.shopAllowList);
   const pat = generatePat();
-  const expiresAt = new Date(now.getTime() + (input.ttlDays ?? PAT_TTL_DAYS) * 86_400_000);
+  const expiresAt = new Date(now.getTime() + ttlDays * 86_400_000);
   const tokenHash = hashToken(pat, env);
   const operatorId = await db.transaction(async (tx) => {
     const [operator] = await tx
@@ -57,7 +81,7 @@ export async function createOperatorWithPat(
         email: input.email.trim().toLowerCase(),
         name: input.name,
         role: input.role,
-        shopAllowList: input.shopAllowList ?? [],
+        shopAllowList,
       })
       .returning({ id: mcpOperators.id });
     await tx.insert(mcpCredentials).values({
@@ -76,7 +100,7 @@ export async function revokeOperatorCredentials(db: Db, operatorId: string, now:
   await db
     .update(mcpCredentials)
     .set({ revokedAt: now })
-    .where(and(eq(mcpCredentials.operatorId, operatorId)));
+    .where(and(eq(mcpCredentials.operatorId, operatorId), isNull(mcpCredentials.revokedAt)));
 }
 
 /**
@@ -97,6 +121,7 @@ export async function authenticateBearer(
     .select({
       credentialId: mcpCredentials.id,
       expiresAt: mcpCredentials.expiresAt,
+      lastUsedAt: mcpCredentials.lastUsedAt,
       revokedAt: mcpCredentials.revokedAt,
       operatorDisabledAt: mcpOperators.disabledAt,
       id: mcpOperators.id,
@@ -113,6 +138,8 @@ export async function authenticateBearer(
   if (!row || row.revokedAt || row.operatorDisabledAt) throw fail();
   if (!row.expiresAt || row.expiresAt.getTime() <= now.getTime()) throw fail();
 
-  await db.update(mcpCredentials).set({ lastUsedAt: now }).where(eq(mcpCredentials.id, row.credentialId));
+  if (!row.lastUsedAt || now.getTime() - row.lastUsedAt.getTime() >= LAST_USED_THROTTLE_MS) {
+    await db.update(mcpCredentials).set({ lastUsedAt: now }).where(eq(mcpCredentials.id, row.credentialId));
+  }
   return { id: row.id, email: row.email, name: row.name, role: row.role, shopAllowList: row.shopAllowList };
 }
