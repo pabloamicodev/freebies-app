@@ -4,7 +4,7 @@
  * every offer. Stored per shop in `app_settings`; one entry per discount node / validation.
  */
 import { createHash } from "node:crypto";
-import { appSettings, getDb } from "@promo/db";
+import { appSettings, getDb, type Db } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 
 export const PUBLISH_MANIFEST_SETTING = "publish_manifest.v1";
@@ -94,8 +94,8 @@ export async function writePublishManifest(shopId: string, manifest: PublishMani
     });
 }
 
-export async function readPublishManifest(shopId: string): Promise<PublishManifest | null> {
-  const [row] = await getDb()
+export async function readPublishManifest(shopId: string, db: Db = getDb()): Promise<PublishManifest | null> {
+  const [row] = await db
     .select({ value: appSettings.value })
     .from(appSettings)
     .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, PUBLISH_MANIFEST_SETTING)))

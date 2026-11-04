@@ -7,6 +7,8 @@ import {
   codesCreateBatchTool,
   codesDeleteInput,
   codesDeleteTool,
+  driftRepairSettingsInput,
+  driftRepairSettingsTool,
   promoActivateDraftInput,
   promoActivateDraftTool,
   promosPauseAllInput,
@@ -79,5 +81,16 @@ export function registerCriticalTools(server: McpServer, ctx: McpContext): void 
       annotations: CRITICAL,
     },
     (args, extra) => shopSetLimitsEnforcedTool(ctx, call(extra), args),
+  );
+
+  server.registerTool(
+    "drift_repair_settings",
+    {
+      title: "Repair Shopify drift of one shop",
+      description: `Compares everything the last publish put on Shopify (discount nodes, function_config metafields, purchase-type flags, code counts, cart-validation config) with what is there now. The dry run lists every out-of-sync item with current vs expected, bytes before/after and what would be written; nothing is written. Executing reactivates switched-off automatic nodes, re-queues codes deleted on Shopify and republishes the shop config, bound to that exact diff (STATE_CONFLICT if it changed). Refused while drift repair is paused for the shop. One shop per call.${FLOW}`,
+      inputSchema: driftRepairSettingsInput,
+      annotations: CRITICAL,
+    },
+    (args, extra) => driftRepairSettingsTool(ctx, call(extra), args),
   );
 }

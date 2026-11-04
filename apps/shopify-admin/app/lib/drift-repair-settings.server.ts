@@ -7,7 +7,7 @@
  *  - `DRIFT_REPAIR_DISABLED=true` (env, Vercel project): every shop.
  *  - app setting `drift_repair.paused` = true: one shop.
  */
-import { appSettings, getDb } from "@promo/db";
+import { appSettings, getDb, type Db } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 
 export const DRIFT_REPAIR_PAUSED_SETTING = "drift_repair.paused";
@@ -16,8 +16,8 @@ export function isDriftRepairGloballyDisabled(env: NodeJS.ProcessEnv = process.e
   return /^(true|1|yes|on)$/i.test((env.DRIFT_REPAIR_DISABLED ?? "").trim());
 }
 
-export async function isDriftRepairPausedForShop(shopId: string): Promise<boolean> {
-  const [row] = await getDb()
+export async function isDriftRepairPausedForShop(shopId: string, db: Db = getDb()): Promise<boolean> {
+  const [row] = await db
     .select({ value: appSettings.value })
     .from(appSettings)
     .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, DRIFT_REPAIR_PAUSED_SETTING)))
