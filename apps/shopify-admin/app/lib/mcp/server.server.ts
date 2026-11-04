@@ -4,6 +4,7 @@ import type { Db } from "@promo/db";
 import type { Operator } from "./auth.server.js";
 import { toToolErrorPayload, type ToolResult } from "./result.server.js";
 import { visibleShops } from "./shops.server.js";
+import { registerInsightsTools } from "./tools/register-insights.server.js";
 import { shopsList, shopsListInput } from "./tools/shops-list.server.js";
 import { registerCatalogTools } from "./tools/register-catalog.server.js";
 
@@ -46,6 +47,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   );
 
   registerCatalogTools(server, ctx);
+  registerInsightsTools(server, ctx);
 
   return server;
 }
