@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { sql } from "drizzle-orm";
 import { auditLogs, type Db } from "@promo/db";
 import { createTestDb, seedOffer } from "../../test-support/pglite-db.js";
 import { now, operatorAll, seedWorld } from "./insights-test-fixtures.js";
+import { maskCode } from "./catalog-shared.server.js";
 import { changesOf, maskActor, promoAuditLog, sanitizeAuditJson } from "./promo-audit-log.server.js";
 
 let db: Db;
@@ -86,6 +88,35 @@ describe("promo_audit_log", () => {
     ].sort((a, z) => a.field.localeCompare(z.field)));
   });
 
+  it("masks discount codes in strings, arrays, nested values and free-text diffs", () => {
+    const out = sanitizeAuditJson({
+      code: "SUMMER2026",
+      codes: ["ABCDEF12", "XY"],
+      requestedCode: "REQUESTED9",
+      existingDiscount: "Shopify discount",
+      nested: { discount_code: "NESTED123" },
+      diff: ['condition[0].value: db={"code":"FREEBIE50"} preset={"codes":["AAAAAA","BBBBBB"]}'],
+    });
+    const json = JSON.stringify(out);
+    for (const real of ["SUMMER2026", "ABCDEF12", "REQUESTED9", "NESTED123", "FREEBIE50", "AAAAAA", "BBBBBB"]) expect(json).not.toContain(real);
+    expect(out).toMatchObject({ code: maskCode("SUMMER2026"), codes: [maskCode("ABCDEF12"), maskCode("XY")], existingDiscount: "Shopify discount" });
+  });
+
+  it("never returns the codes of a code_collision_resolved row, in before, after, changes or summary", async () => {
+    const entityId = await seedOffer(db, world.alpha, { internalName: "Collision" });
+    await db.insert(auditLogs).values({
+      shopId: world.alpha, entityType: "offer", entityId, action: "code_collision_resolved", performedBy: "system",
+      before: { code: "WELCOME10" }, after: { code: "WELCOME10-K7", existingDiscount: "Old campaign" },
+      createdAt: at("2025-12-01T10:00:00.000Z"),
+    });
+    const res = await run({ ref: `promo:alpha:${entityId}`, since: "2025-11-15T00:00:00Z" });
+    expect(res.data.events).toHaveLength(1);
+    const json = JSON.stringify(res);
+    expect(json).not.toContain("WELCOME10");
+    expect(res.data.events[0]!.before).toEqual({ code: maskCode("WELCOME10") });
+    expect(res.data.events[0]!.changes.find((c) => c.field === "code")).toEqual({ field: "code", before: maskCode("WELCOME10"), after: maskCode("WELCOME10-K7") });
+  });
+
   it("classifies and masks actors", async () => {
     const events = (await run()).data.events;
     expect(events.map((e) => [e.actorKind, e.actor])).toEqual([
@@ -130,6 +161,20 @@ describe("promo_audit_log", () => {
     }
     expect(seen).toHaveLength(5);
     expect(new Set(seen).size).toBe(5);
+    const tokyo: string[] = [];
+    await db.execute(sql`SET TIME ZONE 'Asia/Tokyo'`);
+    try {
+      let c2: string | undefined;
+      for (let i = 0; i < 5; i++) {
+        const page = await run({ limit: 2, ...(c2 ? { cursor: c2 } : {}) });
+        tokyo.push(...page.data.events.map((e) => e.id));
+        if (!page.meta.page?.hasMore) break;
+        c2 = page.meta.page.cursor;
+      }
+    } finally {
+      await db.execute(sql`RESET TIME ZONE`);
+    }
+    expect(tokyo).toEqual(seen);
     await expect(run({ cursor: encodeURIComponent("zzz") })).rejects.toMatchObject({ payload: { code: "VALIDATION" } });
   });
 

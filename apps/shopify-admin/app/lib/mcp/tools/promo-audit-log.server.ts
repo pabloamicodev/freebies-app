@@ -3,6 +3,7 @@ import { and, desc, eq, gte, inArray, or, sql } from "drizzle-orm";
 import { auditLogs, type Db } from "@promo/db";
 import { buildResult, parsePromoRef, promoRef, shopHandle, ToolError, type ToolResult } from "../result.server.js";
 import { selectShops, type VisibleShop } from "../shops.server.js";
+import { maskCode } from "./catalog-shared.server.js";
 import { DAY_MS, clampLimit, decodeCursor, encodeCursor, iso } from "./insights-common.server.js";
 
 export const promoAuditLogInput = {
@@ -19,6 +20,8 @@ const DEFAULT_BACK_DAYS = 30;
 
 const SECRET_KEY = /token|secret|password|passwd|authorization|api[_-]?key|credential|signature|cookie|pepper|private|client[_-]?secret/i;
 const PII_KEY = /^(email|e[_-]?mail|phone|mobile|first[_-]?name|last[_-]?name|full[_-]?name|address\d?|street|zip|postcode|ip|ip[_-]?address|user[_-]?agent|customer[_-]?(id|gid|email)|session[_-]?id|cart[_-]?token|order[_-]?(id|gid)|checkout[_-]?token)$/i;
+const CODE_KEY = /^(code|codes|discount[_-]?codes?|requested[_-]?code)$/i;
+const CODE_JSON_FRAGMENT = /("(?:code|codes|discount[_-]?codes?|requested[_-]?code)"\s*:\s*)(\[[^\]]*\]|"[^"]*")/gi;
 const EMAIL_VALUE = /[^\s@"]+@[^\s@"]+\.[^\s@"]+/g;
 const MAX_STRING = 500;
 const MAX_DEPTH = 6;
@@ -27,10 +30,19 @@ const MAX_KEYS = 60;
 
 export const REDACTED = "[redacted]";
 
+/** Free-text diffs embed JSON like `db={"code":"SAVE10"}`; mask those code literals. */
+function maskCodeFragments(text: string): string {
+  return text.replace(CODE_JSON_FRAGMENT, (_m, head: string, val: string) =>
+    val.startsWith("[")
+      ? `${head}${val.replace(/"([^"]*)"/g, (_x, c: string) => JSON.stringify(maskCode(c)))}`
+      : `${head}${JSON.stringify(maskCode(val.slice(1, -1)))}`,
+  );
+}
+
 /** Drops secret/PII keys, masks emails inside strings, bounds depth and size. Pure. */
 export function sanitizeAuditJson(value: unknown, depth = 0): unknown {
   if (value === null || value === undefined) return null;
-  if (typeof value === "string") return value.replace(EMAIL_VALUE, "[email]").slice(0, MAX_STRING);
+  if (typeof value === "string") return maskCodeFragments(value).replace(EMAIL_VALUE, "[email]").slice(0, MAX_STRING);
   if (typeof value === "number" || typeof value === "boolean") return value;
   if (depth >= MAX_DEPTH) return "[truncated]";
   if (Array.isArray(value)) return value.slice(0, MAX_ARRAY).map((v) => sanitizeAuditJson(v, depth + 1));
@@ -38,6 +50,14 @@ export function sanitizeAuditJson(value: unknown, depth = 0): unknown {
     const out: Record<string, unknown> = {};
     for (const [key, v] of Object.entries(value as Record<string, unknown>).slice(0, MAX_KEYS)) {
       if (SECRET_KEY.test(key) || PII_KEY.test(key)) continue;
+      if (CODE_KEY.test(key) && typeof v === "string") {
+        out[key] = maskCode(v);
+        continue;
+      }
+      if (CODE_KEY.test(key) && Array.isArray(v) && v.every((x) => typeof x === "string")) {
+        out[key] = v.slice(0, MAX_ARRAY).map((x) => maskCode(x as string));
+        continue;
+      }
       out[key] = sanitizeAuditJson(v, depth + 1);
     }
     return out;
@@ -150,7 +170,7 @@ export async function promoAuditLog(
           after: auditLogs.after,
           performedBy: auditLogs.performedBy,
           createdAt: auditLogs.createdAt,
-          ts: sql<string>`${auditLogs.createdAt}::text`,
+          ts: sql<string>`to_char(${auditLogs.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
         })
         .from(auditLogs)
         .where(
