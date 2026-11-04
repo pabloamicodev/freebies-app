@@ -6,6 +6,7 @@ import { toToolErrorPayload, type ToolResult } from "./result.server.js";
 import { visibleShops } from "./shops.server.js";
 import { registerInsightsTools } from "./tools/register-insights.server.js";
 import { shopsList, shopsListInput } from "./tools/shops-list.server.js";
+import { registerResourcesAndPrompts } from "./resources.server.js";
 import { registerCatalogTools } from "./tools/register-catalog.server.js";
 import { registerWriteTools } from "./tools/register-writes.server.js";
 import { instrumentReadTools, type RateLimiter } from "./call-log.server.js";
@@ -62,6 +63,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
   registerCatalogTools(server, ctx);
   registerInsightsTools(server, ctx);
   registerWriteTools(server, ctx);
+  registerResourcesAndPrompts(server, ctx);
 
   return server;
 }

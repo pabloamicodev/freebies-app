@@ -139,3 +139,16 @@ Retention: the daily `analytics-cleanup` cron (`call-log-retention.server.ts`, n
    Set it back to `"read_only"` (or delete the row) to lock the shop again; removing the domain from the env also locks it.
 3. Give the operator the `editor` (or `admin`) role: `pnpm mcp:operator create ... --role editor --shops '*'`.
 4. Test only on offers named `[MCP test] ...`: hpn-test-store shares the app with HPN and TRU. Any other shop answers `SHOP_READ_ONLY` even for admins.
+
+## Resources and prompts (`lib/mcp/resources.server.ts`)
+
+Resources reuse the read tools and the operator shop visibility; an unknown or invisible shop is an error, never data. Template lists only show visible shops.
+
+| URI | Content |
+|---|---|
+| `shop://{shop}/capacity` | Same as `discount_capacity` for one shop (domain or handle). |
+| `promo://{shop}/{offerId}` | Same as `promo_detail`. |
+| `docs://offer-types` | Offer and reward types, gift limit semantics (limit = times the gift SET is granted, per gift product, never duplicated on re-qualification), picker vs auto-add. |
+| `docs://page-conditions` | Store pages, `excludeUrls` (`!<path>` patterns), template, section, test group. |
+
+Prompts: `promo_weekly_readout` (shops?, lastDays?) -> promos_active, promo_performance, promo_health. `promo_test_ideas` (shop, goal?) -> suggest_promo_tests, then the Experiment Engine MCP experiments_list / results_get, joined by shopDomain. `why_not_applying` (ref, pageUrl) -> page_conditions_explain + promo_detail.
