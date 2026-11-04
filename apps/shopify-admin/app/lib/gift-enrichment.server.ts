@@ -29,7 +29,7 @@ export interface GiftCatalogRow {
 // "continue selling when out of stock" policy; a raw quantity of 0 is normal for untracked items.
 // availableForSale in the cache has been seen stale-true for sold-out variants, so a tracked variant
 // at or below zero that can't oversell is sold out regardless. Untracked stock legitimately reads 0.
-function isGiftVariantAvailable(variant: GiftCatalogRow | undefined): boolean {
+export function isGiftVariantAvailable(variant: GiftCatalogRow | undefined): boolean {
   if (!variant) return false;
   const soldOutTracked =
     variant.inventoryTracked === true &&

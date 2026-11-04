@@ -59,6 +59,7 @@ async function compileSharedOffers(
     const policy = policies.find((p) => p.offerId === offer.id) ?? null;
     try {
       return {
+        offerId: offer.id,
         offer: compileOfferConfig(offer, offerConditionsRows, offerRewardsRows, policy, 1, { shopCurrencyCode }),
         shipping: compileShippingOfferConfigs(offer, offerConditionsRows, offerRewardsRows, { shopCurrencyCode }),
         conditions: offerConditionsRows,
@@ -90,6 +91,31 @@ export async function estimateSharedConfigBytes(
 ): Promise<number> {
   const shared = await compileSharedOffers(db, shopId, shopCurrencyCode, includeOfferIds, true);
   return shared ? encodedBytes(shared.config()) : 0;
+}
+
+export interface SharedConfigBreakdown {
+  totalBytes: number;
+  validationBytes: number;
+  perOffer: Array<{ offerId: string; name: string; bytes: number }>;
+}
+
+/** Size of the shared automatic config as published today, with each offer's own share (read-only). */
+export async function sharedConfigBreakdown(
+  db: Db,
+  shopId: string,
+  shopCurrencyCode: string,
+): Promise<SharedConfigBreakdown> {
+  const shared = await compileSharedOffers(db, shopId, shopCurrencyCode, [], false);
+  if (!shared) return { totalBytes: 0, validationBytes: 0, perOffer: [] };
+  return {
+    totalBytes: encodedBytes(shared.config()),
+    validationBytes: encodedBytes(JSON.stringify(buildCartValidationConfig(shared.compiled.map((entry) => entry.offer)))),
+    perOffer: shared.compiled.map((entry) => ({
+      offerId: entry.offerId,
+      name: entry.name,
+      bytes: encodedBytes(JSON.stringify(entry.offer)) + entry.shipping.reduce((sum, s) => sum + encodedBytes(JSON.stringify(s)), 0),
+    })),
+  };
 }
 
 export interface PreflightFailure {

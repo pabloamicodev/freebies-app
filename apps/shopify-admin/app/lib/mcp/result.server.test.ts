@@ -67,7 +67,9 @@ describe("refs and money", () => {
     expect(moneyFromMinor(1234, "usd")).toEqual({ amount: "12.34", currency: "USD" });
     expect(moneyFromMinor(5, "EUR")).toEqual({ amount: "0.05", currency: "EUR" });
     expect(moneyFromMinor(-250, "EUR")).toEqual({ amount: "-2.50", currency: "EUR" });
-    expect(moneyFromMinor(1500, "JPY")).toEqual({ amount: "1500", currency: "JPY" });
+    expect(moneyFromMinor(150000, "JPY")).toEqual({ amount: "1500", currency: "JPY" });
+    expect(moneyFromMinor(123456, "KWD")).toEqual({ amount: "1234.560", currency: "KWD" });
+    expect(moneyFromMinor(-5, "KWD")).toEqual({ amount: "-0.050", currency: "KWD" });
   });
   it("exposes the shared experiment type enum", () => {
     expect(EXPERIMENT_TYPES).toContain("OFFER_TEST");
