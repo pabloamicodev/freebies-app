@@ -101,3 +101,16 @@ Claude joins both MCPs by `shopDomain`; neither calls the other.
 | `promo_audit_log` | `audit_logs` newest first (shops/ref/actor/since, keyset cursor), readable before/after, secret and PII keys stripped, emails masked. |
 | `promo_health` | Prioritized findings: publish errors, system pauses, `publish_pending`, drift visible from the DB (missing discount nodes, uncompiled or mis-scheduled offers), each with a next read tool. |
 | `suggest_promo_tests` | Per shop: active promos with performance, gaps, `experimentDirectory[]` (shop metafield `experiment_engine.directory`), `experimentBindings[]`, and `candidates[]` (TestIdea plus `nextActions` with `mcp: "experiment-engine"`). Does not call the Experiment Engine MCP. |
+
+## Resources and prompts (`lib/mcp/resources.server.ts`)
+
+Resources reuse the read tools and the operator shop visibility; an unknown or invisible shop is an error, never data. Template lists only show visible shops.
+
+| URI | Content |
+|---|---|
+| `shop://{shop}/capacity` | Same as `discount_capacity` for one shop (domain or handle). |
+| `promo://{shop}/{offerId}` | Same as `promo_detail`. |
+| `docs://offer-types` | Offer and reward types, gift limit semantics (limit = times the gift SET is granted, per gift product, never duplicated on re-qualification), picker vs auto-add. |
+| `docs://page-conditions` | Store pages, `excludeUrls` (`!<path>` patterns), template, section, test group. |
+
+Prompts: `promo_weekly_readout` (shops?, lastDays?) -> promos_active, promo_performance, promo_health. `promo_test_ideas` (shop, goal?) -> suggest_promo_tests, then the Experiment Engine MCP experiments_list / results_get, joined by shopDomain. `why_not_applying` (ref, pageUrl) -> page_conditions_explain + promo_detail.
