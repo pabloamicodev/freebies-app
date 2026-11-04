@@ -7,6 +7,7 @@ import {
   offerRewards,
   offerCombinationPolicies,
   discountCodes,
+  shops,
   type Db,
   type OfferCondition,
   type OfferReward,
@@ -29,6 +30,7 @@ import { preflightSharedConfig } from "./shared-config-size.server.js";
 import { insertAuditLog } from "./audit-log.server.js";
 import { limitedTitleError } from "./offer-usage.server.js";
 import { isLimitsEnforced } from "./limits-enforced.server.js";
+import { decryptToken } from "./token-crypto.server.js";
 import { getStaleThemeRefs } from "./theme-catalog.server.js";
 import { getExperimentWarnings, type StoredExperiment } from "./experiment-directory.server.js";
 import { readSections, readTemplates, sectionRefOf } from "./theme-target-selection.js";
@@ -95,6 +97,19 @@ export async function recordSystemOfferEvent(db: Db, event: SystemOfferEvent): P
     level: "warning",
     tags: { shopId: event.shopId, offerId: event.offerId, scope, action: event.action },
     extra: { error: event.error },
+  });
+}
+
+/** Audit row for advisory warnings an offer went live with where nobody could be asked first (cron, wizard end). */
+export async function recordPublishWarnings(db: Db, target: { shopId: string; offerId: string }, warnings: string[]): Promise<void> {
+  if (warnings.length === 0) return;
+  await recordSystemOfferEvent(db, {
+    ...target,
+    action: "publish_warning",
+    reason: "advisory",
+    error: warnings.join(" "),
+    after: { warnings },
+    dedupe: true,
   });
 }
 
@@ -573,7 +588,10 @@ export async function finalizeCreatedOffer(
     return error;
   }
   const failure = await tryPublishShop(shopId, shopDomain);
-  if (!failure) return null;
+  if (!failure) {
+    await recordPublishWarnings(db, { shopId, offerId }, await getShopPublishWarnings(db, shopId, shopDomain, offerId));
+    return null;
+  }
   if (!isOwnFault(failure, offerId)) return resolveForeignFailure(db, shopId, shopDomain, offerId, failure);
 
   const publishError = failure.message;
@@ -639,6 +657,17 @@ export async function getPublishWarnings(
       ...staleSections.map((ref) => `Section "${ref}" is not in your published theme. A section that is deleted and re-added gets a new ID, so reselect it.`),
       ...experimentWarnings,
     ];
+  } catch {
+    return [];
+  }
+}
+
+/** `getPublishWarnings` with the shop's stored token, for paths that have no admin session (MCP, cron, wizards). */
+export async function getShopPublishWarnings(db: Db, shopId: string, shopDomain: string, offerId: string): Promise<string[]> {
+  try {
+    const [row] = await db.select({ token: shops.accessTokenEncrypted }).from(shops).where(eq(shops.id, shopId)).limit(1);
+    if (!row) return [];
+    return await getPublishWarnings(db, shopId, offerId, { shopDomain, accessToken: await decryptToken(row.token) });
   } catch {
     return [];
   }

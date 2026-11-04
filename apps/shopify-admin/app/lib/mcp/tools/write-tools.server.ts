@@ -20,7 +20,7 @@ import {
 import { sharedConfigBreakdown } from "../../shared-config-size.server.js";
 import { MAX_METAFIELD_BYTES } from "../../sync/offer-publisher.server.js";
 import { logCall, shopsFromArgs } from "../call-log.server.js";
-import { ToolError, promoRef, shopHandle, type Warning } from "../result.server.js";
+import { ToolError, promoRef, publishAdvisories, shopHandle, type Warning } from "../result.server.js";
 import { toErrorCallToolResult, type McpContext } from "../server.server.js";
 import { selectShops, visibleShops, type VisibleShop } from "../shops.server.js";
 import { runWrite, lifecycleToolError, type ApplyContext, type CallInfo, type WriteBody, type WritePreview } from "../write-runner.server.js";
@@ -194,6 +194,7 @@ export function statusChange(
         return {
           summary: `${def.verb} "${label(basics.name)}" (${ref}): ${result.statusBefore} -> ${result.statusAfter}. The shop's Shopify config is republished and rolled back if that fails.`,
           data: { promoRef: ref, offerId, name: basics.name, statusBefore: result.statusBefore, statusAfter: result.statusAfter, willPublish: true },
+          warnings: publishAdvisories(result.warnings),
           links: [adminLink(shopHandle(shop.myshopifyDomain))],
           offerUpdatedAt: result.updatedAt,
         };
@@ -504,6 +505,7 @@ export function setScheduleTool(
         return {
           summary: `Reschedule "${label(basics.name)}" (${ref}): ${data.startsAt ?? "no start"} -> ${data.endsAt ?? "no end"} (${data.timezone}); status ${result.statusBefore} -> ${result.statusAfter}.`,
           data,
+          warnings: publishAdvisories(result.warnings),
           links: [adminLink(shopHandle(shop.myshopifyDomain))],
           offerUpdatedAt: result.updatedAt,
         };

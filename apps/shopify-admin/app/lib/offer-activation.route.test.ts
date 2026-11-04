@@ -35,6 +35,7 @@ vi.mock("./offer-publish-flow.server.js", () => ({
   },
   republishIfActive,
   getPublishWarnings,
+  getShopPublishWarnings: async () => [] as string[],
   validateOffersPublishable: async () => ({ ok: true }),
   validateActivation: async () => ({ ok: true }),
 }));

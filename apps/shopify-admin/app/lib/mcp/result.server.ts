@@ -7,6 +7,8 @@ export type Money = { amount: string; currency: string };
 
 export type Link = { label: string; url: string };
 export type Warning = { code: string; severity: "info" | "warn" | "block"; message: string };
+export const publishAdvisories = (messages: string[] | undefined): Warning[] =>
+  (messages ?? []).map((message) => ({ code: "PUBLISH_ADVISORY", severity: "warn", message }));
 export type NextAction = {
   mcp: McpName;
   tool: string;
