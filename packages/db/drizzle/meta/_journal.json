@@ -204,6 +204,13 @@
       "when": 1793765054627,
       "tag": "0031_mcp_call_log",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1793766474622,
+      "tag": "0032_mcp_operator_totp",
+      "breakpoints": true
     }
   ]
 }

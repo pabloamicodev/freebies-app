@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Db } from "@promo/db";
+import { checkOperatorTotp } from "./totp.server.js";
 import { authenticatePat, patIsLive, type Operator } from "./auth.server.js";
 import { mcpEnabled, type RateLimiter } from "./handler.server.js";
 import {
@@ -362,6 +363,7 @@ function patForm(a: AuthRequest, csrf: string, error?: string): string {
 ${error ? `<p class="err" role="alert">${escapeHtml(error)}</p>` : ""}
 <form method="post" action="/mcp/authorize" autocomplete="off">${hiddenFields(a, csrf)}<input type="hidden" name="intent" value="review">
 <p><label for="pat">Your operator token (PAT, <code>pemcp_...</code>)</label><br><input id="pat" type="password" name="pat" required autocomplete="off" spellcheck="false"></p>
+<p><label for="code">Authenticator code (only if TOTP is enabled for you)</label><br><input id="code" type="text" name="code" inputmode="numeric" pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code"></p>
 <p><button type="submit">Continue</button></p></form>`;
 }
 
@@ -433,6 +435,9 @@ export async function handleAuthorize(request: Request, deps: OAuthDeps): Promis
     operator = await authenticatePat(deps.db, form.get("pat") ?? "", g.env, g.now);
   } catch {
     return page("Connect to Promo Engine", patForm(parsed, csrf, "That token is invalid, expired or revoked."), 401);
+  }
+  if (!(await checkOperatorTotp(deps.db, operator.id, form.get("code") ?? "", g.now))) {
+    return page("Connect to Promo Engine", patForm(parsed, csrf, "That token or authenticator code is invalid."), 401);
   }
   const consent = signConsent(
     { o: operator.id, p: operator.credentialId, c: parsed.client.clientId, r: parsed.redirectUri, k: sha256Hex(csrf), e: g.now.getTime() + CONSENT_TTL_SECONDS * 1000 },
