@@ -1,6 +1,6 @@
 # MCP server (Promo Engine)
 
-Read-only phase 0: `POST /api/mcp` (Streamable HTTP, stateless, JSON responses) with one tool, `shops_list`.
+`POST /api/mcp` (Streamable HTTP, stateless, JSON responses): read tools for every shop (phase 0/1) and, behind two locks, write tools (phase 3).
 Plan: Brain `Repos/freebies-app/PLAN-MCP-SERVER.md`.
 
 ## Transport
@@ -20,9 +20,10 @@ project (`freebies-app-shopify-admin`). Never add `alias` to a `vercel.json`.
 | `MCP_TOKEN_PEPPER` | 16+ chars. PATs are stored as `sha256(pepper + token)`. Changing it invalidates every PAT. |
 | `MCP_PUBLIC_URL` | Optional. Pins the public origin (issuer, OAuth endpoints, `resource_metadata`) when the request host is not the public one. Defaults to the request origin. |
 | `MCP_WRITE_SHOPS` | Comma list of myshopify domains that may ever be write-enabled (only `hpn-test-store.myshopify.com`). |
+| `MCP_CONFIRM_SECRET` | 32+ chars. HMAC key of the write `confirmToken`s. Missing or short: every write tool (dry runs too) answers `UPSTREAM_UNAVAILABLE`; reads are unaffected. Rotating it only invalidates tokens in flight (5 min). |
 
 Write mode needs both locks: the env list above AND `app_settings` key `mcp.writeMode` = `"write"` for that shop.
-Phase 0 has no write tools; `shops_list` only reports the mode.
+`shops_list` and `mcp_whoami` report the mode per shop.
 
 ## Auth
 
@@ -101,6 +102,43 @@ Claude joins both MCPs by `shopDomain`; neither calls the other.
 | `promo_audit_log` | `audit_logs` newest first (shops/ref/actor/since, keyset cursor), readable before/after, secret and PII keys stripped, emails masked. |
 | `promo_health` | Prioritized findings: publish errors, system pauses, `publish_pending`, drift visible from the DB (missing discount nodes, uncompiled or mis-scheduled offers), each with a next read tool. |
 | `suggest_promo_tests` | Per shop: active promos with performance, gaps, `experimentDirectory[]` (shop metafield `experiment_engine.directory`), `experimentBindings[]`, and `candidates[]` (TestIdea plus `nextActions` with `mcp: "experiment-engine"`). Does not call the Experiment Engine MCP. |
+
+## Phase 3 write tools (`lib/mcp/tools/register-writes.server.ts`)
+
+Every write calls the `offer-lifecycle.server.ts` service (validate, update, publish, rollback, audit), never SQL on offers.
+
+| Tool | Role | What it does |
+|---|---|---|
+| `promo_pause` / `promo_resume` | editor | Pause a live offer / resume a paused one (validates, schedule decides active, scheduled or expired). Publish failure rolls the status back. |
+| `promo_archive` | admin, destructive | Archive and republish. Max 3 executions a minute. |
+| `promos_republish_shop` | admin | Re-publish the shop's config; the dry run shows live offers and bytes vs the 9500 B limit. |
+| `promo_duplicate` | editor | Draft copy (no codes, widgets, versions) with a unique name (`name (2)`); `targetShop`, if given, must be the source shop: cross-shop copies are refused (`VALIDATION`) because product, variant and collection ids can't be translated yet. |
+| `promo_create_draft_from_template` | editor | v1: clone an existing offer as the template + bounded overrides (`startsAt`, `endsAt`, `excludeUrls` max 100, `pageUrls` max 50, each 300 chars; unknown keys rejected). Overrides are validated against the template in the dry run; if one still fails after the draft exists, the result is the draft plus an `OVERRIDE_FAILED` warning (so an idempotent retry replays it instead of creating a second draft). |
+| `promo_set_page_exclude_urls` | editor | Replace `excludeUrls` / `pageUrls` of the Store pages condition (same normalization and limits as the UI). |
+| `promo_set_schedule` | editor | `startsAt` / `endsAt` in the shop's timezone (`YYYY-MM-DDTHH:mm`) or an ISO instant. |
+| `codes_set_status` | editor | `active` / `disabled` for `ids`, a `batchId` or `all` codes of an offer (max 2000; exhausted codes never change); the snapshot and update run in one transaction, and if the publish fails the statuses are restored and re-synced (the message says whether the re-sync worked). |
+
+Flow (all of them): `dryRun` defaults to `true` and returns the diff plus `meta.confirmToken` (HMAC-SHA256 over tool, canonical args hash,
+operator, shop, the offer's `updated_at`, expiry 5 min and a `jti`). Execute with the same arguments plus `dryRun:false` and the token. The token is
+single use (the `jti` is claimed in `mcp_call_log.confirm_jti`, unique), tied to the operator, and refused as `CONFIRM_INVALID` / `CONFIRM_EXPIRED` if anything differs.
+If the offer changed since the dry run: `STATE_CONFLICT`. `idempotencyKey` (8-128 chars, optional) replays the stored result of an executed call for 24 h
+(warning `IDEMPOTENT_REPLAY`); the same key with other arguments is `VALIDATION`; a failed execution frees the key.
+
+Errors added to the shared list: `STATE_CONFLICT`, `PUBLISH_FAILED` (message says whether the change was rolled back; `promo_set_schedule`,
+`promo_set_page_exclude_urls` keep the saved change like the admin UI and may pause the offer), plus `CONFIRM_REQUIRED/INVALID/EXPIRED`, `SHOP_READ_ONLY`, `RATE_LIMITED`.
+
+Audit: `audit_logs.performed_by = mcp:<operatorId>`, `after._mcp = { operator, client, tool, requestId }` (+ `reason`). Every call, reads included, writes a
+`mcp_call_log` row (operator, tool, shops, outcome, duration, and args through a per-tool allow list: ids, refs, shops, status, dryRun, limits and dates only; free text such as `reason` or `q`, names, URLs and anything keyed like email/phone/code/token is dropped, with the dropped key names kept in `_omitted`). Rate limits per operator per minute: 60 reads, 10 writes (dry runs count), 3 critical executions.
+Retention: the daily `analytics-cleanup` cron (`call-log-retention.server.ts`, next to the OAuth cleanup) deletes `mcp_call_log` rows older than 90 days and PATs expired for more than 7 days.
+
+### Enabling writes on hpn-test-store
+
+1. Vercel (HPN project only): set `MCP_WRITE_SHOPS=hpn-test-store.myshopify.com` and `MCP_CONFIRM_SECRET` (32+ random chars), redeploy.
+2. In that shop's database, upsert the setting (value is JSON text):
+   `INSERT INTO app_settings (shop_id, key, value) SELECT id, 'mcp.writeMode', '"write"' FROM shops WHERE myshopify_domain = 'hpn-test-store.myshopify.com' ON CONFLICT (shop_id, key) DO UPDATE SET value = '"write"';`
+   Set it back to `"read_only"` (or delete the row) to lock the shop again; removing the domain from the env also locks it.
+3. Give the operator the `editor` (or `admin`) role: `pnpm mcp:operator create ... --role editor --shops '*'`.
+4. Test only on offers named `[MCP test] ...`: hpn-test-store shares the app with HPN and TRU. Any other shop answers `SHOP_READ_ONLY` even for admins.
 
 ## Resources and prompts (`lib/mcp/resources.server.ts`)
 

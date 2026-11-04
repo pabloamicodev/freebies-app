@@ -14,13 +14,19 @@ import { offerRequiresCode } from "./discount-codes.server.js";
 /**
  * Copies an offer and everything it owns (conditions, rewards, combination policy,
  * bundle definition with steps and tiers) in ONE transaction. The copy starts as a draft.
+ * `options.name` replaces the default "-copy" name (the caller keeps it unique per shop).
  *
  * Deliberately NOT copied: discount codes, batches and redemptions (codes are unique per
  * shop, so a copy would collide), usage counters, versions, gift clone products (Shopify
  * products tied to the source reward ids) and widgets. The copy keeps `requiresCode` so a
  * code offer stays inert until it gets codes of its own.
  */
-export async function duplicateOffer(db: Db, shopId: string, offerId: string): Promise<string | null> {
+export async function duplicateOffer(
+  db: Db,
+  shopId: string,
+  offerId: string,
+  options: { name?: string } = {},
+): Promise<string | null> {
   return db.transaction(async (tx) => {
     const [source] = await tx
       .select()
@@ -35,7 +41,7 @@ export async function duplicateOffer(db: Db, shopId: string, offerId: string): P
       .insert(offers)
       .values({
         ...rest,
-        internalName: `${source.internalName}-copy`,
+        internalName: options.name ?? `${source.internalName}-copy`,
         status: "draft",
         compiledConfig: null,
         archivedAt: null,

@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { cleanupOldAnalyticsEvents } from "../lib/sync/analytics-reconcile.server.js";
 import { cleanupOperationalState } from "../lib/operational-retention.server.js";
 import { deleteExpiredMcpOauthState } from "../lib/mcp/oauth-retention.server.js";
+import { deleteExpiredMcpCallState } from "../lib/mcp/call-log-retention.server.js";
 import { runNightlyCatalogReconcile } from "../lib/sync/product-sync.server.js";
 import { runCron } from "../lib/cron-run.server.js";
 
@@ -15,12 +16,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const reconcile = runNightlyCatalogReconcile({ maxRuntimeMs: 40_000 }).catch((error: unknown) => ({
       error: error instanceof Error ? error.message : String(error),
     }));
-    const [analyticsDeleted, operational, mcpOauth, catalogReconcile] = await Promise.all([
+    const [analyticsDeleted, operational, mcpOauth, mcpCalls, catalogReconcile] = await Promise.all([
       cleanupOldAnalyticsEvents(Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays : 90, undefined, 45_000),
       cleanupOperationalState(),
       deleteExpiredMcpOauthState(),
+      deleteExpiredMcpCallState(),
       reconcile,
     ]);
-    return { body: { ok: !("error" in catalogReconcile), analyticsDeleted, operational, mcpOauth, catalogReconcile } };
+    return { body: { ok: !("error" in catalogReconcile), analyticsDeleted, operational, mcpOauth, mcpCalls, catalogReconcile } };
   });
 }
