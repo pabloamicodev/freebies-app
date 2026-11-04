@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { bundleDefinitions, bundleTiers, offerConditions, type Db } from "@promo/db";
 import { clearFanOutCache } from "../multi-shop.server.js";
 import { createTestDb, seedOffer } from "../../test-support/pglite-db.js";
+import type * as ShopifyFetch from "../../shopify-fetch.server.js";
 
 const gql = vi.hoisted(() => ({
   calls: [] as { shopDomain: string; accessToken: string; query: string }[],
@@ -14,7 +15,7 @@ const gql = vi.hoisted(() => ({
 }));
 
 vi.mock("../../shopify-fetch.server.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../shopify-fetch.server.js")>()),
+  ...(await importOriginal<typeof ShopifyFetch>()),
   shopifyGraphQL: async (args: { shopDomain: string; accessToken: string; query: string }) => {
     gql.calls.push(args);
     if (args.shopDomain === "beta.myshopify.com") throw new Error("Shopify down");
