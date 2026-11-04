@@ -19,6 +19,7 @@ import {
 } from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "../../test-support/pglite-db.js";
 import { resetMemoryRateLimits } from "../../rate-limit.server.js";
+import type * as ExperimentDirectory from "../../experiment-directory.server.js";
 import type { ShopPublishFn } from "../../offer-lifecycle.server.js";
 import { isLimitsEnforced } from "../../limits-enforced.server.js";
 import { deleteDiscountCodes } from "../../discount-codes.server.js";
@@ -36,6 +37,12 @@ import {
 
 vi.mock("../../offer-definitions.server.js", () => ({ invalidateOfferDefinitions: async () => undefined }));
 vi.mock("../../publish-pending.server.js", () => ({ markPublishPending: async () => undefined }));
+vi.mock("../../token-crypto.server.js", () => ({ decryptToken: async () => "tok" }));
+const experimentWarnings = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => [] as string[]));
+vi.mock("../../experiment-directory.server.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ExperimentDirectory>()),
+  getExperimentWarnings: experimentWarnings,
+}));
 
 const TEST = "hpn-test-store.myshopify.com";
 const PAUSE = "pause-all-test.myshopify.com";
@@ -240,6 +247,24 @@ describe("promo_activate_draft", () => {
     expect(await db.select().from(offerVersions).where(eq(offerVersions.offerId, id))).toHaveLength(1);
     const [log] = await audits(shopIds["test"]!, id);
     expect(log).toMatchObject({ action: "publish", performedBy: `mcp:${operators["admin"]!.id}` });
+  });
+
+  it("surfaces the advisory publish warnings in the dry run and audits them, without blocking", async () => {
+    const message = 'Experiment "Hero" is not in your Experiment Engine directory.';
+    experimentWarnings.mockResolvedValue([message]);
+    const id = await publishable(shopIds["test"]!, { status: "draft" });
+    await db.insert(offerConditions).values({
+      shopId: shopIds["test"]!, offerId: id, scope: "sub", conditionType: "experiment", operator: "eq",
+      value: { experimentId: "clx9k2abcd", variantKeys: ["control"], experimentName: "Hero" }, sortOrder: 1, isEnabled: true,
+    });
+    const { dry, done } = await twoStep("promo_activate_draft", { ref: ref(TEST, id) });
+    expect(body(dry).warnings).toEqual([{ code: "PUBLISH_ADVISORY", severity: "warn", message }]);
+    expect(done.isError).toBeFalsy();
+    expect((await row(id)).status).toBe("active");
+    expect((await audits(shopIds["test"]!, id))[0]!.after).toMatchObject({ warnings: [message] });
+    experimentWarnings.mockResolvedValue([]);
+    const clean = await publishable(shopIds["test"]!, { status: "draft" });
+    expect(body(await run("promo_activate_draft", { ref: ref(TEST, clean) })).warnings).toEqual([]);
   });
 
   it("a future start date makes it scheduled", async () => {

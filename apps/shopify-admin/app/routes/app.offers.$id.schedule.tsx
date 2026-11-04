@@ -3,7 +3,9 @@
  */
 
 import { parseUuidParam } from "../lib/route-params.js";
-import { useLoaderData, Form, useActionData, useNavigation } from "react-router";
+import { useRef, useState } from "react";
+import { useLoaderData, Form, useActionData, useNavigation, useSubmit } from "react-router";
+import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { BackButton } from "../components/BackButton.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
@@ -39,19 +41,23 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db, timezone: shopTimezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
-  const result = await setOfferSchedule(
-    db,
-    {
-      shopId,
-      shopDomain: session.shop,
-      offerId,
-      shopTimezone,
-      timezone: (formData.get("timezone") as string) || null,
-      startsAt: (formData.get("starts_at") as string | null) ?? "",
-      endsAt: (formData.get("ends_at") as string | null) ?? "",
-    },
-    { performedBy: session.shop },
-  );
+  const input = {
+    shopId,
+    shopDomain: session.shop,
+    offerId,
+    shopTimezone,
+    timezone: (formData.get("timezone") as string) || null,
+    startsAt: (formData.get("starts_at") as string | null) ?? "",
+    endsAt: (formData.get("ends_at") as string | null) ?? "",
+  };
+  const check = await setOfferSchedule(db, input, { performedBy: session.shop, dryRun: true });
+  if (!check.ok) {
+    if (check.code === "not_found") throw new Response("Not found", { status: 404 });
+    return { error: check.error };
+  }
+  const warnings = check.warnings ?? [];
+  if (warnings.length > 0 && formData.get("acknowledgeWarnings") !== "1") return { warnings };
+  const result = await setOfferSchedule(db, input, { performedBy: session.shop, publishWarnings: async () => warnings });
   if (!result.ok) {
     if (result.code === "not_found") throw new Response("Not found", { status: 404 });
     return { error: result.error };
@@ -74,6 +80,10 @@ export default function OfferSchedulePage() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
+  const submit = useSubmit();
+  const formRef = useRef<HTMLFormElement>(null);
+  const [dismissedWarnings, setDismissedWarnings] = useState<unknown>(null);
+  const warnings = actionData && "warnings" in actionData ? actionData.warnings : undefined;
 
   return (
     <div className="b-page">
@@ -91,6 +101,28 @@ export default function OfferSchedulePage() {
         </span>
       </div>
 
+
+      <ConfirmDialog
+        open={Boolean(warnings?.length) && dismissedWarnings !== actionData}
+        ariaLabel="Publish warnings"
+        title="Publish anyway?"
+        message={
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {warnings?.map((warning) => <li key={warning}>{warning}</li>)}
+          </ul>
+        }
+        confirmLabel="Publish anyway"
+        cancelLabel="Cancel"
+        destructive={false}
+        onConfirm={() => {
+          setDismissedWarnings(actionData);
+          if (!formRef.current) return;
+          const data = new FormData(formRef.current);
+          data.set("acknowledgeWarnings", "1");
+          void submit(data, { method: "POST" });
+        }}
+        onCancel={() => setDismissedWarnings(actionData)}
+      />
 
       {/* Action feedback */}
       {actionData && "error" in actionData && actionData.error && (
@@ -118,7 +150,7 @@ export default function OfferSchedulePage() {
           <div className="b-editor-section">
             <h2 className="b-editor-section-title">Schedule Settings</h2>
             <div className="b-editor-section-body">
-              <Form method="POST">
+              <Form method="POST" ref={formRef}>
                 <div className="b-stack b-stack-4">
 
                   {/* Start time */}

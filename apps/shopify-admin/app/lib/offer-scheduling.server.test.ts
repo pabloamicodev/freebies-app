@@ -33,6 +33,21 @@ function dependencies(rows: DueOffer[]): OfferScheduleDependencies {
 }
 
 describe("offer scheduler", () => {
+  it("audits advisory warnings of an offer it activates and keeps activating", async () => {
+    const deps = dependencies([due(), due({ id: "offer-2" })]);
+    deps.publishWarnings = vi.fn(async (_shop: string, _domain: string, id: string) => (id === "offer-1" ? ['Experiment "Old" is not in your Experiment Engine directory.'] : []));
+    await expect(executeOfferSchedule(deps, now)).resolves.toEqual({ activated: 2, expired: 0, failures: [] });
+    expect(deps.recordEvent).toHaveBeenCalledTimes(1);
+    expect(deps.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ offerId: "offer-1", action: "publish_warning", dedupe: true }));
+  });
+
+  it("an unreadable warnings lookup never affects the activation", async () => {
+    const deps = dependencies([due()]);
+    deps.publishWarnings = vi.fn().mockRejectedValue(new Error("theme down"));
+    await expect(executeOfferSchedule(deps, now)).resolves.toEqual({ activated: 1, expired: 0, failures: [] });
+    expect(deps.recordEvent).not.toHaveBeenCalled();
+  });
+
   it("expires an ended scheduled offer instead of briefly activating it", () => {
     expect(planOfferScheduleTransitions([
       due({ endsAt: new Date("2026-09-24T11:30:00.000Z") }),

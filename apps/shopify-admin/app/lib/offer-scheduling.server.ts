@@ -1,6 +1,7 @@
 import { offers, shops, type Db } from "@promo/db";
 import { and, eq, inArray, isNotNull, lte, or } from "drizzle-orm";
 import {
+  getShopPublishWarnings,
   publishShopConfig,
   recordSystemOfferEvent,
   validateActivation,
@@ -38,6 +39,8 @@ export type OfferScheduleDependencies = {
   validateOffers(shopId: string, offerIds: string[]): Promise<PublishValidationResult>;
   publishShop(shopId: string, shopDomain: string): Promise<string | null>;
   recordEvent(event: SystemOfferEvent): Promise<void>;
+  /** Advisory warnings for an offer that just went live; audited, never blocking. */
+  publishWarnings?(shopId: string, shopDomain: string, offerId: string): Promise<string[]>;
 };
 
 export function statusForSubmit(intent: string, startsAt: Date | null, now = new Date()): "draft" | "active" | "scheduled" {
@@ -132,7 +135,9 @@ export async function executeOfferSchedule(
 
     const publishError = await publisherError(dependencies, shopId, shopDomain);
     if (!publishError) {
-      activated += applicable.filter((transition) => transition.to === "active").length;
+      const nowLive = applicable.filter((transition) => transition.to === "active");
+      activated += nowLive.length;
+      await warnActivated(dependencies, nowLive);
       expired += applicable.filter((transition) => transition.to === "expired").length;
       continue;
     }
@@ -213,6 +218,7 @@ export async function runOfferScheduler(db: Db, now = new Date()) {
     validateOffers: (shopId, offerIds) => validateActivation(db, shopId, offerIds),
     publishShop: publishShopConfig,
     recordEvent: (event) => recordSystemOfferEvent(db, event),
+    publishWarnings: (shopId, shopDomain, offerId) => getShopPublishWarnings(db, shopId, shopDomain, offerId),
   };
 
   return executeOfferSchedule(dependencies, now);
@@ -235,6 +241,27 @@ async function recordTransitions(
       before: { status: transition.to },
       after: { status: transition.from },
     });
+  }
+}
+
+async function warnActivated(dependencies: OfferScheduleDependencies, activated: OfferScheduleTransition[]): Promise<void> {
+  if (!dependencies.publishWarnings) return;
+  for (const transition of activated) {
+    try {
+      const warnings = await dependencies.publishWarnings(transition.shopId, transition.shopDomain, transition.id);
+      if (warnings.length === 0) continue;
+      await dependencies.recordEvent({
+        shopId: transition.shopId,
+        offerId: transition.id,
+        action: "publish_warning",
+        reason: "advisory",
+        error: warnings.join(" "),
+        after: { warnings },
+        dedupe: true,
+      });
+    } catch {
+      // advisory only: an unreadable theme or directory never affects the activation
+    }
   }
 }
 

@@ -4,6 +4,7 @@ import { auditLogs, offerConditions, offerRewards, offers, type Db } from "@prom
 import type * as PromoDb from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 import type * as OfferPublisher from "./sync/offer-publisher.server.js";
+import type * as ExperimentDirectory from "./experiment-directory.server.js";
 
 /**
  * Characterization of the offer lifecycle admin actions against a real Postgres. Only the Shopify
@@ -33,6 +34,12 @@ vi.mock("./sync/offer-publisher.server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof OfferPublisher>()),
   publishOffersForShop,
 }));
+const experimentWarnings = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => [] as string[]));
+vi.mock("./token-crypto.server.js", () => ({ decryptToken: async () => "tok" }));
+vi.mock("./experiment-directory.server.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ExperimentDirectory>()),
+  getExperimentWarnings: experimentWarnings,
+}));
 vi.mock("./offer-definitions.server.js", () => ({ invalidateOfferDefinitions: async () => undefined }));
 vi.mock("./publish-pending.server.js", () => ({ markPublishPending: async () => undefined }));
 
@@ -57,6 +64,8 @@ afterAll(async () => {
 beforeEach(() => {
   publishOffersForShop.mockReset();
   publishOffersForShop.mockResolvedValue("published");
+  experimentWarnings.mockReset();
+  experimentWarnings.mockResolvedValue([]);
 });
 
 const days = (n: number) => new Date(Date.now() + n * 86_400_000);
@@ -88,6 +97,53 @@ async function publishable(overrides: Partial<typeof offers.$inferInsert> = {}) 
   });
   return id;
 }
+
+const WARNING = 'Experiment "Old" is not in your Experiment Engine directory.';
+async function withExperiment(overrides: Partial<typeof offers.$inferInsert>) {
+  const id = await publishable(overrides);
+  await db.insert(offerConditions).values({
+    shopId, offerId: id, scope: "sub", conditionType: "experiment", operator: "eq",
+    value: { experimentId: "clx9k2abcd", variantKeys: ["control"], experimentName: "Old" }, sortOrder: 1, isEnabled: true,
+  });
+  experimentWarnings.mockResolvedValue([WARNING]);
+  return id;
+}
+
+describe("publish warnings on the list toggle and the schedule save", () => {
+  it("toggle_status on a paused offer asks first and changes nothing, then switches on once acknowledged", async () => {
+    const id = await withExperiment({ status: "paused" });
+    const first = await run(list.action, post("/app/offers", { intent: "toggle_status", offerId: id }));
+    expect(first).toEqual({ warnings: [WARNING] });
+    expect((await row(id)).status).toBe("paused");
+    expect(publishOffersForShop).not.toHaveBeenCalled();
+    expect(await run(list.action, post("/app/offers", { intent: "toggle_status", offerId: id, acknowledgeWarnings: "1" }))).toBeNull();
+    expect((await row(id)).status).toBe("active");
+    expect(publishOffersForShop).toHaveBeenCalledTimes(1);
+  });
+
+  it("pausing an offer with warnings never asks", async () => {
+    const id = await withExperiment({ status: "active" });
+    expect(await run(list.action, post("/app/offers", { intent: "toggle_status", offerId: id }))).toBeNull();
+    expect((await row(id)).status).toBe("paused");
+  });
+
+  it("schedule save that takes a paused offer to scheduled asks first, then saves once acknowledged", async () => {
+    const id = await withExperiment({ status: "paused" });
+    const save = (fields: Record<string, string>) => run(schedule.action, post(`/app/offers/${id}/schedule`, fields), { id });
+    const fields = { starts_at: "2099-01-01T09:00", ends_at: "", timezone: "UTC" };
+    expect(await save(fields)).toEqual({ warnings: [WARNING] });
+    expect((await row(id)).status).toBe("paused");
+    expect(await save({ ...fields, acknowledgeWarnings: "1" })).toEqual({ success: true });
+    expect((await row(id)).status).toBe("scheduled");
+    expect((await audits(id)).find((a) => a.action === "set_schedule")!.after).toMatchObject({ warnings: [WARNING] });
+  });
+
+  it("schedule save on a live offer does not ask", async () => {
+    const id = await withExperiment({ status: "active", timezone: "UTC" });
+    const result = await run(schedule.action, post(`/app/offers/${id}/schedule`, { starts_at: "2099-01-01T09:00", ends_at: "", timezone: "UTC" }), { id });
+    expect(result).toEqual({ success: true });
+  });
+});
 
 describe("toggle_status", () => {
   it("pauses an active offer, publishes the shop and audits before/after", async () => {
