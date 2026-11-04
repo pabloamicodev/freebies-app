@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { McpContext } from "../server.server.js";
 import type { CallInfo } from "../write-runner.server.js";
+import { registerCriticalTools } from "./register-critical.server.js";
 import {
   codesSetStatusInput,
   codesSetStatusTool,
@@ -131,4 +132,6 @@ export function registerWriteTools(server: McpServer, ctx: McpContext): void {
     },
     (args, extra) => codesSetStatusTool(ctx, call(extra), args),
   );
+
+  registerCriticalTools(server, ctx);
 }

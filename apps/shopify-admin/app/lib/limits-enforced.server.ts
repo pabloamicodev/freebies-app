@@ -38,7 +38,7 @@ export async function setLimitsEnforced(db: Db, shopId: string, enabled: boolean
  * Only shops listed in LIMITS_TOGGLE_SHOPS (comma-separated myshopify domains) can flip the flag; with the
  * variable unset nobody can. Offline sessions carry no user, so the shop allow-list is the gate.
  */
-export function canToggleLimits(shopDomain: string): boolean {
-  const allowed = (process.env["LIMITS_TOGGLE_SHOPS"] ?? "").split(",").map((d) => d.trim().toLowerCase()).filter(Boolean);
+export function canToggleLimits(shopDomain: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const allowed = (env["LIMITS_TOGGLE_SHOPS"] ?? "").split(",").map((d) => d.trim().toLowerCase()).filter(Boolean);
   return allowed.includes(shopDomain.trim().toLowerCase());
 }

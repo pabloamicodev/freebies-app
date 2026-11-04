@@ -33,6 +33,11 @@ const READ_KEYS = ["types", "limit", "cursor", "groupBy", "start", "end", "lastD
 const COUNT_KEYS = new Set(["ids", "excludeUrls", "pageUrls"]);
 const TOOL_KEYS: Record<string, string[]> = {
   promo_set_schedule: ["startsAt", "endsAt"],
+  promos_pause_all: [],
+  promo_activate_draft: [],
+  codes_create_batch: ["count", "length"],
+  codes_delete: ["onlyUnused"],
+  shop_set_limits_enforced: ["enforced"],
 };
 const MAX_VALUE = 120;
 const MAX_ITEMS = 20;

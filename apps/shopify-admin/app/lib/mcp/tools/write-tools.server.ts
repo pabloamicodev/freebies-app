@@ -89,7 +89,7 @@ export const codesSetStatusInput = {
   ...writeControls,
 };
 
-type Controls = { dryRun?: boolean; confirmToken?: string; idempotencyKey?: string };
+export type Controls = { dryRun?: boolean; confirmToken?: string; idempotencyKey?: string };
 type Built = {
   tool: string;
   minRole: McpRole;
@@ -100,7 +100,7 @@ type Built = {
 };
 
 /** Resolves refs/shops (any failure is logged and returned as a tool error), then hands the spec to runWrite. */
-async function guarded(
+export async function guarded(
   ctx: McpContext,
   call: CallInfo,
   tool: string,
@@ -133,7 +133,7 @@ async function guarded(
   });
 }
 
-async function offerBasics(db: Db, shop: VisibleShop, offerId: string) {
+export async function offerBasics(db: Db, shop: VisibleShop, offerId: string) {
   const [row] = await db
     .select({ name: offers.internalName, status: offers.status, updatedAt: offers.updatedAt, type: offers.type })
     .from(offers)
@@ -145,15 +145,15 @@ async function offerBasics(db: Db, shop: VisibleShop, offerId: string) {
 
 const withReason = (a: ApplyContext, why?: string) => (why ? { _mcp: { ...(a.auditExtra["_mcp"] as object), reason: why } } : a.auditExtra);
 /** Offer names come from the shop: one short line, so they read as data inside a summary, never as instructions. */
-const label = (name: string) => name.replace(/\s+/g, " ").trim().slice(0, 80);
-const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
+export const label = (name: string) => name.replace(/\s+/g, " ").trim().slice(0, 80);
+export const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
 
-function expectOk(result: OfferLifecycleResult, ref: string): OfferLifecycleSuccess {
+export function expectOk(result: OfferLifecycleResult, ref: string): OfferLifecycleSuccess {
   if (!result.ok) throw lifecycleToolError(result, ref);
   return result;
 }
 
-function plain(details: Record<string, unknown> | undefined): Record<string, unknown> {
+export function plain(details: Record<string, unknown> | undefined): Record<string, unknown> {
   return JSON.parse(JSON.stringify(details ?? {})) as Record<string, unknown>;
 }
 

@@ -118,6 +118,20 @@ Every write calls the `offer-lifecycle.server.ts` service (validate, update, pub
 | `promo_set_schedule` | editor | `startsAt` / `endsAt` in the shop's timezone (`YYYY-MM-DDTHH:mm`) or an ISO instant. |
 | `codes_set_status` | editor | `active` / `disabled` for `ids`, a `batchId` or `all` codes of an offer (max 2000; exhausted codes never change); the snapshot and update run in one transaction, and if the publish fails the statuses are restored and re-synced (the message says whether the re-sync worked). |
 
+### Phase 4.1 critical tools (`lib/mcp/tools/critical-tools.server.ts`)
+
+All admin-only, `destructiveHint`, 3 executions a minute, audited as `mcp:<operatorId>`, and locked exactly like the tools above (`MCP_WRITE_SHOPS` AND `mcp.writeMode`: today only hpn-test-store; any other shop answers `SHOP_READ_ONLY` even for admins). `dryRun` defaults to `true` and the same confirmToken / idempotencyKey flow applies.
+
+| Tool | What it does |
+|---|---|
+| `promos_pause_all` `{ shop, reason }` | `bulkPauseOffers` over every active/scheduled offer of the shop in one publish; the dry run lists them (first 50). Rolled back if the publish fails. The token is bound to the newest `updated_at` of the live set: if it changed, `STATE_CONFLICT`. |
+| `promo_activate_draft` `{ ref }` | Draft -> live via `activateDraftOffer` (offer-lifecycle): main condition and reward required, `validateActivation`, schedule-aware status (active or scheduled), publish with status rollback, `offer_versions` snapshot, audit `publish`. The admin's advisory theme/Experiment Engine warnings need a shop token and are not run (dry-run warning `ADMIN_WARNINGS_NOT_CHECKED`). |
+| `codes_create_batch` `{ ref, count <= 500, prefix?, length? }` | `createDiscountCodeBatch` (app-generated codes, unambiguous charset, entropy and uniqueness checks). The response never contains plaintext codes: only the count, the batch id and 3 masked samples; export the batch from the Codes tab in the admin. A live offer is republished; if that fails the batch is removed (codes already on Shopify are disabled) and `PUBLISH_FAILED` is returned. `prefix` is not written to the call log. |
+| `codes_delete` `{ ref, ids \| batchId, onlyUnused = true }` | `deleteDiscountCodes`. Dry run returns `matched / deletable / skippedUsed / skippedOnShopify`. Codes still on Shopify (synced or pending) are never deleted (disable them first); with `onlyUnused` redeemed codes are kept too, `onlyUnused:false` deletes them (warning `DELETES_REDEEMED_CODES`). Max 2000 per call. |
+| `shop_set_limits_enforced` `{ shop, enforced }` | `setLimitsEnforced` + republish, reverted if the publish fails. Same preconditions as Settings -> Limits: the shop must be in `LIMITS_TOGGLE_SHOPS` (else `VALIDATION`) and, to enable, no limited automatic offers may share a discount title. The usage backfill cannot be verified from the database; the dry run warns `BACKFILL_NOT_VERIFIED`. |
+
+Not exposed on purpose: `drift_repair_settings` (the only repair is `runDiscountDriftRepair`, a cron over all shops that writes to Shopify and has no per-shop or report-only mode; wrapping it would be new behavior), `shopify app deploy`, tokens, `TOKEN_ENCRYPTION_KEY`, deleting shops, `neutralize*` and backfill scripts.
+
 Flow (all of them): `dryRun` defaults to `true` and returns the diff plus `meta.confirmToken` (HMAC-SHA256 over tool, canonical args hash,
 operator, shop, the offer's `updated_at`, expiry 5 min and a `jti`). Execute with the same arguments plus `dryRun:false` and the token. The token is
 single use (the `jti` is claimed in `mcp_call_log.confirm_jti`, unique), tied to the operator, and refused as `CONFIRM_INVALID` / `CONFIRM_EXPIRED` if anything differs.
