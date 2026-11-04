@@ -4,6 +4,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { and, eq, inArray } from "drizzle-orm";
 import { discountCodeBatches, discountCodes, offers, type Db } from "@promo/db";
 import { insertAuditLog } from "../../audit-log.server.js";
+import { repairShopDrift, type DriftRepairContext } from "../../discount-reconciliation.server.js";
 import { normalizePrefix, validateBatchSpec, type BatchSpec } from "../../discount-code-generation.js";
 import { createDiscountCodeBatch, deleteDiscountCodes, setDiscountCodesStatus, validateBatchEntropy } from "../../discount-codes.server.js";
 import { canToggleLimits, isLimitsEnforced, setLimitsEnforced } from "../../limits-enforced.server.js";
@@ -11,6 +12,7 @@ import { invalidateOfferDefinitions } from "../../offer-definitions.server.js";
 import { activateDraftOffer, bulkPauseOffers } from "../../offer-lifecycle.server.js";
 import { republishIfActive, tryPublishShop } from "../../offer-publish-flow.server.js";
 import { listLimitedTitleCollisions } from "../../offer-usage.server.js";
+import { publishOffersForShop } from "../../sync/offer-publisher.server.js";
 import { ToolError, promoRef, shopHandle, type Warning } from "../result.server.js";
 import { selectShops } from "../shops.server.js";
 import { lifecycleToolError, type ApplyContext, type CallInfo } from "../write-runner.server.js";
@@ -50,6 +52,11 @@ export const codesDeleteInput = {
 export const shopSetLimitsEnforcedInput = {
   shop: z.string().max(200).describe("Shop domain or handle."),
   enforced: z.boolean().describe("true turns per-cart / per-customer limits on for the shop's Functions."),
+  ...writeControls,
+};
+
+export const driftRepairSettingsInput = {
+  shop: z.string().max(200).describe("Shop domain or handle."),
   ...writeControls,
 };
 
@@ -431,6 +438,108 @@ export function shopSetLimitsEnforcedTool(ctx: McpContext, call: CallInfo, args:
           summary: `limits.enforced on ${domain}: ${previous} -> ${args.enforced}. Shopify config republished.`,
           data: { shopDomain: domain, enforced: args.enforced, changed: true, at: iso(new Date()) },
           nextActions: [{ mcp: "promo-engine", tool: "promo_health", args: { shops: [domain] }, why: "Confirm there are no publish errors.", risk: "read" }],
+        };
+      },
+    };
+  });
+}
+
+const ITEM_CAP = 50;
+
+export function driftRepairSettingsTool(
+  ctx: McpContext,
+  call: CallInfo,
+  args: Controls & { shop: string },
+  deps: DriftRepairContext = {},
+): Promise<CallToolResult> {
+  return guarded(ctx, call, "drift_repair_settings", "admin", args, async (visible) => {
+    const [shop] = selectShops(visible, [args.shop]);
+    const domain = shop!.myshopifyDomain;
+    const driftDeps: DriftRepairContext = {
+      ...deps,
+      publish:
+        deps.publish ??
+        (ctx.publish
+          ? async (shopId, shopDomain) => {
+              const failure = await ctx.publish!(shopId, shopDomain);
+              if (failure) throw new Error(failure.message);
+              return null;
+            }
+          : async (shopId, shopDomain) => {
+              const outcome = await publishOffersForShop(shopId, shopDomain);
+              await invalidateOfferDefinitions(shopId);
+              return outcome;
+            }),
+    };
+    const describe = (r: Awaited<ReturnType<typeof repairShopDrift>>) => ({
+      shopDomain: domain,
+      outcome: r.outcome,
+      itemCount: r.items.length,
+      items: r.items.slice(0, ITEM_CAP),
+      truncated: r.items.length > ITEM_CAP,
+      wouldWrite: r.wouldWrite,
+      diffHash: r.diffHash,
+    });
+    const blocked = (outcome: string) => {
+      if (outcome === "no_nodes") return new ToolError("INVALID_STATE", `${domain} has never published discount nodes; there is nothing to drift from.`);
+      if (outcome === "settling") return new ToolError("INVALID_STATE", `${domain} was published less than 2 minutes ago and may still be writing; retry shortly.`);
+      return null;
+    };
+    return {
+      tool: "drift_repair_settings",
+      minRole: "admin",
+      critical: true,
+      shops: [shop!],
+      preview: async () => {
+        const result = await repairShopDrift(ctx.db, driftDeps, { shopId: shop!.id, dryRun: true });
+        const error = blocked(result.outcome);
+        if (error) throw error;
+        const warnings: Warning[] = [];
+        if (result.outcome === "clean") warnings.push({ code: "NO_DRIFT", severity: "info", message: "Everything the last publish wrote is still on Shopify; executing changes nothing." });
+        if (result.outcome === "paused") {
+          warnings.push({ code: "REPAIR_PAUSED", severity: "warn", message: "Drift repair is paused for this shop (drift_repair.paused or DRIFT_REPAIR_DISABLED); executing is refused until it is resumed." });
+        }
+        return {
+          summary: result.items.length
+            ? `${result.items.length} item(s) out of sync on ${domain}. Executing republishes the shop config to Shopify (${result.wouldWrite.length} write step(s), listed in wouldWrite).`
+            : `No drift on ${domain}.`,
+          data: describe(result),
+          warnings,
+          links: [adminLink(shopHandle(domain))],
+          offerUpdatedAt: null,
+          setHash: result.diffHash,
+        };
+      },
+      apply: async (a) => {
+        const result = await repairShopDrift(ctx.db, driftDeps, {
+          shopId: shop!.id,
+          dryRun: false,
+          performedBy: a.performedBy,
+          auditExtra: a.auditExtra,
+          expectedDiffHash: a.expectedSetHash,
+        });
+        const error = blocked(result.outcome);
+        if (error) throw error;
+        if (result.outcome === "diff_changed") throw new ToolError("STATE_CONFLICT", "What is out of sync changed since the dry run; run it again.");
+        if (result.outcome === "paused") throw new ToolError("INVALID_STATE", "Drift repair is paused for this shop (drift_repair.paused or DRIFT_REPAIR_DISABLED).");
+        const warnings: Warning[] =
+          result.outcome === "unresolved"
+            ? [{ code: "DRIFT_UNRESOLVED", severity: "warn", message: `${result.unresolved.length} item(s) are still out of sync after the republish; a Sentry alert was raised.` }]
+            : result.outcome === "deferred"
+              ? [{ code: "REPAIR_DEFERRED", severity: "info", message: "The publish was parked behind another publish; the cron retries it." }]
+              : [];
+        const summary = {
+          clean: `No drift on ${domain}; nothing changed.`,
+          repaired: `Repaired ${result.items.length} item(s) on ${domain}; Shopify config republished and verified.`,
+          deferred: `Repair queued on ${domain}: the publish was parked and will be retried.`,
+          unresolved: `Republished ${domain}, but ${result.unresolved.length} item(s) are still out of sync.`,
+        }[result.outcome as "clean" | "repaired" | "deferred" | "unresolved"];
+        return {
+          summary,
+          data: { ...describe(result), unresolved: result.unresolved.map(({ issue, nodeId, detail }) => ({ issue, nodeId, detail })) },
+          warnings,
+          links: [adminLink(shopHandle(domain))],
+          nextActions: [{ mcp: "promo-engine", tool: "discount_capacity", args: { shops: [domain], live: true }, why: "Check the live nodes after the repair.", risk: "read" }],
         };
       },
     };
