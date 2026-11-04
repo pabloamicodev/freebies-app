@@ -42,7 +42,7 @@ export function roleAtLeast(role: McpRole, minimum: McpRole): boolean {
 
 export function requireRole(operator: Operator, minimum: McpRole): void {
   if (!roleAtLeast(operator.role, minimum)) {
-    throw new ToolError("FORBIDDEN_ROLE", `This tool needs the ${minimum} role; your role is ${operator.role}.`);
+    throw new ToolError("FORBIDDEN", `This tool needs the ${minimum} role; your role is ${operator.role}.`, { details: { reason: "ROLE" } });
   }
 }
 

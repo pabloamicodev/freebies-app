@@ -136,7 +136,7 @@ describe("guards shared by every critical tool", () => {
     ];
     for (const [tool, allowed, blocked] of cases) {
       for (const role of ["viewer", "editor"] as const) {
-        expect(body(await run(tool, allowed, operators[role])).code, `${tool} ${role}`).toBe("FORBIDDEN_ROLE");
+        expect(body(await run(tool, allowed, operators[role])).code, `${tool} ${role}`).toBe("FORBIDDEN");
       }
       const dry = await run(tool, blocked);
       expect(body(dry).code, `${tool} dry`).toBe("SHOP_READ_ONLY");
