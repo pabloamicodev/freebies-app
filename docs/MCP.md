@@ -128,7 +128,13 @@ Errors added to the shared list: `STATE_CONFLICT`, `PUBLISH_FAILED` (message say
 `promo_set_page_exclude_urls` keep the saved change like the admin UI and may pause the offer), plus `CONFIRM_REQUIRED/INVALID/EXPIRED`, `SHOP_READ_ONLY`, `RATE_LIMITED`.
 
 Audit: `audit_logs.performed_by = mcp:<operatorId>`, `after._mcp = { operator, client, tool, requestId }` (+ `reason`). Every call, reads included, writes a
-`mcp_call_log` row (operator, tool, shops, outcome, duration, and args through a per-tool allow list: ids, refs, shops, status, dryRun, limits and dates only; free text such as `reason` or `q`, names, URLs and anything keyed like email/phone/code/token is dropped, with the dropped key names kept in `_omitted`). Rate limits per operator per minute: 60 reads, 10 writes (dry runs count), 3 critical executions.
+`mcp_call_log` row (operator, tool, shops, outcome, duration, and args through a per-tool allow list: ids, refs, shops, status, dryRun, limits and dates only; free text such as `reason` or `q`, names, URLs and anything keyed like email/phone/code/token is dropped, with the dropped key names kept in `_omitted`). Rate limits per operator per minute: 60 reads, 10 writes (dry runs count), 3 critical executions; override with `MCP_RATE_READS`, `MCP_RATE_WRITES`, `MCP_RATE_CRITICAL` (integer 1-600, invalid values fall back to the default). `RATE_LIMITED` errors carry `retryAfterSeconds`.
+
+Operators: `pnpm mcp:operator list` shows PAT prefix, role, allow list, last used, expiry and TOTP on/off (never secrets). There is no operator screen in the admin UI; the CLI is enough for an internal app.
+
+Optional TOTP (RFC 6238, SHA-1, 6 digits, 30 s, +-1 step) on `/mcp/authorize`: `pnpm mcp:operator totp-enable --email x` stores the secret encrypted with `TOKEN_ENCRYPTION_KEY` (migration 0032) and prints the `otpauth://` URI once; `totp-disable` removes it. While enabled, the authorize review step needs a valid code, and a used step is never accepted again. PAT bearer calls to `/api/mcp` are not affected.
+
+Load check: `scripts/load/mcp.k6.js` (read tools, hpn-test-store only, 2 VUs by default; see its header).
 Retention: the daily `analytics-cleanup` cron (`call-log-retention.server.ts`, next to the OAuth cleanup) deletes `mcp_call_log` rows older than 90 days and PATs expired for more than 7 days.
 
 ### Enabling writes on hpn-test-store
