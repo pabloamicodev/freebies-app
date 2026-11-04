@@ -11,6 +11,10 @@ export const mcpOperators = pgTable("mcp_operators", {
   /** myshopify domains this operator may see; empty = every shop. */
   shopAllowList: text("shop_allow_list").array().notNull().default([]),
   disabledAt: timestamp("disabled_at", { withTimezone: true }),
+  /** Encrypted TOTP secret (token-crypto); null = TOTP off. */
+  totpSecret: text("totp_secret"),
+  /** Last accepted RFC 6238 time step, to refuse replays. */
+  totpLastStep: integer("totp_last_step"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

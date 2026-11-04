@@ -8,6 +8,16 @@ import { ToolError, parsePromoRef } from "./result.server.js";
 
 export type RateClass = "read" | "write" | "critical";
 export const RATE_LIMITS: Record<RateClass, number> = { read: 60, write: 10, critical: 3 };
+const RATE_ENV: Record<RateClass, string> = { read: "MCP_RATE_READS", write: "MCP_RATE_WRITES", critical: "MCP_RATE_CRITICAL" };
+const RATE_MAX = 600;
+
+/** Per-minute limit for a class: MCP_RATE_READS/WRITES/CRITICAL when an integer in 1..600, else the default. */
+export function rateLimitFor(cls: RateClass, env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[RATE_ENV[cls]]?.trim();
+  const n = raw && /^\d+$/.test(raw) ? Number(raw) : NaN;
+  return n >= 1 && n <= RATE_MAX ? n : RATE_LIMITS[cls];
+}
+
 export const IDEMPOTENCY_TTL_MS = 24 * 3_600_000;
 
 export type RateLimiter = (key: string, limit: number) => Promise<{ ok: true } | { ok: false; retryAfterSeconds: number }>;
@@ -17,7 +27,7 @@ const defaultRateLimiter: RateLimiter = (key, limit) =>
 
 /** Per operator and class, per minute: 60 reads, 10 writes (dry runs included), 3 critical executions. */
 export async function enforceOperatorRate(ctx: Pick<McpContext, "operator" | "rateLimit">, cls: RateClass): Promise<void> {
-  const verdict = await (ctx.rateLimit ?? defaultRateLimiter)(`mcp:${cls}:${ctx.operator.id}`, RATE_LIMITS[cls]);
+  const verdict = await (ctx.rateLimit ?? defaultRateLimiter)(`mcp:${cls}:${ctx.operator.id}`, rateLimitFor(cls));
   if (!verdict.ok) {
     throw new ToolError("RATE_LIMITED", `Too many ${cls} calls; wait ${verdict.retryAfterSeconds}s.`, {
       retryAfterSeconds: verdict.retryAfterSeconds,
