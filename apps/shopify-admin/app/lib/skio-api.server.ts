@@ -177,11 +177,27 @@ export interface SkioCreditBalance {
   siteCurrencyStringValue: string;
 }
 
-/** Loyalty points balance; platformId is the Shopify customer GID. */
-export async function getSkioCreditBalance(proxy: SkioGraphQLProxy, shopifyCustomerGid: string): Promise<SkioCreditBalance | null> {
+export type SkioCustomerRef = { platformId: string } | { storefrontUserId: string };
+
+/** Loyalty points balance; null when Skio has no such customer for this shop's key. */
+export async function getSkioCreditBalance(proxy: SkioGraphQLProxy, customer: SkioCustomerRef): Promise<SkioCreditBalance | null> {
   const result = await proxy<{ getCustomerCreditBalance: SkioCreditBalance | null }>(GET_CUSTOMER_CREDIT_BALANCE_QUERY, {
-    input: { platformId: shopifyCustomerGid },
+    input: customer,
   });
+  if (result.errors?.some((error) => /no customer found/i.test(JSON.stringify(error)))) return null;
   assertNoSkioErrors(result, "getCustomerCreditBalance");
   return result.data?.getCustomerCreditBalance ?? null;
+}
+
+const GET_STOREFRONT_USER_QUERY = `
+  query GetStorefrontUser($id: uuid!) {
+    StorefrontUserByPk(id: $id) { platformId }
+  }
+`;
+
+/** Shopify customer GID of a Skio storefront user, scoped to this shop's Skio key. */
+export async function getSkioStorefrontUserPlatformId(proxy: SkioGraphQLProxy, storefrontUserId: string): Promise<string | null> {
+  const result = await proxy<{ StorefrontUserByPk: { platformId: string | null } | null }>(GET_STOREFRONT_USER_QUERY, { id: storefrontUserId });
+  assertNoSkioErrors(result, "GetStorefrontUser");
+  return result.data?.StorefrontUserByPk?.platformId ?? null;
 }
