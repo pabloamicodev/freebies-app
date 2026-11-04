@@ -141,6 +141,19 @@ function candidateFor(
     why: "Draft the experiment in the Experiment Engine; join by shopDomain.",
     risk: "write",
   });
+  if (extra.type === "OFFER_TEST") {
+    actions.push({
+      mcp: "experiment-engine",
+      tool: "experiments_configure_arms",
+      args: {
+        ref: "<ref returned by experiments_create>",
+        arms: extra.arms.slice(1).map((a) => ({ key: a.key, config: { modification: { offerType: "BANNER", headline: a.description } } })),
+        dryRun: true,
+      },
+      why: "Configure the treatment arm(s) once the experiment exists; adjust offerType (BANNER|POPUP|CART_DRAWER|PRODUCT_PAGE) and copy before confirming.",
+      risk: "write",
+    });
+  }
   return {
     title: extra.title,
     hypothesis: extra.hypothesis,
