@@ -4,6 +4,7 @@ import type { Db } from "@promo/db";
 import type { Operator } from "./auth.server.js";
 import { toToolErrorPayload, type ToolResult } from "./result.server.js";
 import { visibleShops } from "./shops.server.js";
+import { registerInsightsTools } from "./tools/register-insights.server.js";
 import { shopsList, shopsListInput } from "./tools/shops-list.server.js";
 
 export type McpContext = { db: Db; env: NodeJS.ProcessEnv; operator: Operator; now: () => Date };
@@ -43,6 +44,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
     (args) =>
       runTool(async () => shopsList(ctx.db, await visibleShops(ctx.db, ctx.operator), args, ctx.env, ctx.now)),
   );
+
+  registerInsightsTools(server, ctx);
 
   return server;
 }
