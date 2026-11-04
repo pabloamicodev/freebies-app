@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { mcpCredentials, mcpAuthCodes, type Db } from "@promo/db";
-import { createOperatorWithPat, revokeOperatorCredentials } from "./auth.server.js";
+import { mcpCredentials, mcpAuthCodes, mcpOauthClients, type Db } from "@promo/db";
+import { createOperatorWithPat, generatePat, hashToken, revokeOperatorCredentials } from "./auth.server.js";
 import { handleMcpRequest } from "./handler.server.js";
 import {
   handleAuthorize,
@@ -13,6 +13,7 @@ import {
   type OAuthDeps,
 } from "./oauth-http.server.js";
 import { pkceChallengeS256 } from "./oauth.server.js";
+import { deleteExpiredMcpOauthState } from "./oauth-retention.server.js";
 import { createTestDb, seedShop } from "../test-support/pglite-db.js";
 
 const env = { MCP_ENABLED: "true", MCP_TOKEN_PEPPER: "test-pepper-0123456789" } as NodeJS.ProcessEnv;
@@ -68,12 +69,13 @@ async function authorize(clientId: string, pat: string, opts: { redirect?: strin
   };
   const get = await handleAuthorize(new Request(`${ORIGIN}/mcp/authorize?${new URLSearchParams(params)}`), deps());
   expect(get.status).toBe(200);
-  const cookie = get.headers.get("set-cookie")!.split(";")[0]!;
+  const cookie = get.headers.getSetCookie()[0]!.split(";")[0]!;
   const csrf = cookie.split("=")[1]!;
   const headers = { cookie, origin: ORIGIN };
   const review = await handleAuthorize(form("/mcp/authorize", { ...params, csrf, pat, intent: "review" }, headers), deps());
   expect(review.status).toBe(200);
-  const approve = await handleAuthorize(form("/mcp/authorize", { ...params, csrf, pat, intent: "approve" }, headers), deps());
+  const consent = review.headers.getSetCookie().find((c) => c.startsWith("mcp_consent="))!.split(";")[0]!;
+  const approve = await handleAuthorize(form("/mcp/authorize", { ...params, csrf, intent: "approve" }, { cookie: `${cookie}; ${consent}`, origin: ORIGIN }), deps());
   expect(approve.status).toBe(303);
   const location = new URL(approve.headers.get("location")!);
   expect(location.searchParams.get("state")).toBe(opts.state ?? "st-1");
@@ -167,8 +169,8 @@ describe("authorize page", () => {
     const get = await handleAuthorize(new Request(`${ORIGIN}/mcp/authorize?${new URLSearchParams(params)}`), deps());
     expect(get.headers.get("cache-control")).toBe("no-store");
     expect(get.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
-    expect(get.headers.get("set-cookie")).toMatch(/HttpOnly; SameSite=Strict/);
-    const cookie = get.headers.get("set-cookie")!.split(";")[0]!;
+    expect(get.headers.getSetCookie()[0]).toMatch(/HttpOnly; SameSite=Strict/);
+    const cookie = get.headers.getSetCookie()[0]!.split(";")[0]!;
     const csrf = cookie.split("=")[1]!;
     const review = await (await handleAuthorize(form("/mcp/authorize", { ...params, csrf, pat, intent: "review" }, { cookie, origin: ORIGIN }), deps())).text();
     expect(review).toContain("viewer");
@@ -208,14 +210,14 @@ describe("authorize page", () => {
     const params = { response_type: "code", client_id: xssClient, redirect_uri: REDIRECT, code_challenge: CHALLENGE, code_challenge_method: "S256", state: "s" };
     const get = await handleAuthorize(new Request(`${ORIGIN}/mcp/authorize?${new URLSearchParams(params)}`), deps());
     expect(await get.text()).not.toContain("<script>alert");
-    const cookie = get.headers.get("set-cookie")!.split(";")[0]!;
+    const cookie = get.headers.getSetCookie()[0]!.split(";")[0]!;
     const csrf = cookie.split("=")[1]!;
-    const bad = await handleAuthorize(form("/mcp/authorize", { ...params, csrf, pat: "pemcp_nope", intent: "approve" }, { cookie, origin: ORIGIN }), deps());
+    const bad = await handleAuthorize(form("/mcp/authorize", { ...params, csrf, pat: "pemcp_nope", intent: "review" }, { cookie, origin: ORIGIN }), deps());
     expect(bad.status).toBe(401);
 
     const { pat } = await newOperator();
     const tokens = (await (await exchange(clientId, await authorize(clientId, pat))).json()) as Tokens;
-    const withAccess = await handleAuthorize(form("/mcp/authorize", { ...params, csrf, pat: tokens.access_token, intent: "approve" }, { cookie, origin: ORIGIN }), deps());
+    const withAccess = await handleAuthorize(form("/mcp/authorize", { ...params, csrf, pat: tokens.access_token, intent: "review" }, { cookie, origin: ORIGIN }), deps());
     expect(withAccess.status).toBe(401);
   });
   it("is rate limited per IP", async () => {
@@ -227,7 +229,7 @@ describe("authorize page", () => {
     const { pat } = await newOperator();
     const params = { response_type: "code", client_id: clientId, redirect_uri: REDIRECT, code_challenge: CHALLENGE, code_challenge_method: "S256", state: "zz" };
     const get = await handleAuthorize(new Request(`${ORIGIN}/mcp/authorize?${new URLSearchParams(params)}`), deps());
-    const cookie = get.headers.get("set-cookie")!.split(";")[0]!;
+    const cookie = get.headers.getSetCookie()[0]!.split(";")[0]!;
     const res = await handleAuthorize(form("/mcp/authorize", { ...params, csrf: cookie.split("=")[1]!, pat, intent: "deny" }, { cookie, origin: ORIGIN }), deps());
     const loc = new URL(res.headers.get("location")!);
     expect(loc.searchParams.get("error")).toBe("access_denied");
@@ -331,11 +333,17 @@ describe("refresh rotation", () => {
     const call = (t: string) => handleMcpRequest(bearer(t), { db, env, now: () => clock, rateLimit: ok });
     expect((await call(second.access_token)).status).not.toBe(401);
 
-    const replay = await refresh(clientId, first.refresh_token);
-    expect(replay.status).toBe(400);
-    expect(((await replay.json()) as { error: string }).error).toBe("invalid_grant");
-    expect((await call(second.access_token)).status).toBe(401);
-    expect((await refresh(clientId, second.refresh_token)).status).toBe(400);
+    const early = clock;
+    clock = new Date(clock.getTime() + 31_000);
+    try {
+      const replay = await refresh(clientId, first.refresh_token);
+      expect(replay.status).toBe(400);
+      expect(((await replay.json()) as { error: string }).error).toBe("invalid_grant");
+      expect((await call(second.access_token)).status).toBe(401);
+      expect((await refresh(clientId, second.refresh_token)).status).toBe(400);
+    } finally {
+      clock = early;
+    }
   });
   it("a refresh token bound to another client, or expired, fails", async () => {
     const clientId = await register();
@@ -371,6 +379,161 @@ describe("PAT revocation cascade", () => {
     const res = await handleMcpRequest(new Request(`${ORIGIN}/api/mcp`, { method: "POST", headers: { authorization: `Bearer ${t.access_token}` } }), { db, env, now: () => clock, rateLimit: ok });
     expect(res.status).toBe(401);
     expect((await refresh(clientId, t.refresh_token)).status).toBe(400);
+  });
+});
+
+describe("refresh reuse grace window", () => {
+  it("a replay within 30 s is refused without revoking the family; an older replay revokes it", async () => {
+    const clientId = await register();
+    const { pat } = await newOperator();
+    const first = (await (await exchange(clientId, await authorize(clientId, pat))).json()) as Tokens;
+    const second = (await (await refresh(clientId, first.refresh_token)).json()) as Tokens;
+    const early = clock;
+    try {
+      clock = new Date(early.getTime() + 10_000);
+      const quick = await refresh(clientId, first.refresh_token);
+      expect(quick.status).toBe(400);
+      expect(((await quick.json()) as { error: string }).error).toBe("invalid_grant");
+      const third = await refresh(clientId, second.refresh_token);
+      expect(third.status).toBe(200);
+      clock = new Date(early.getTime() + 40_000);
+      expect((await refresh(clientId, first.refresh_token)).status).toBe(400);
+      expect((await refresh(clientId, ((await third.json()) as Tokens).refresh_token)).status).toBe(400);
+    } finally {
+      clock = early;
+    }
+  });
+});
+
+describe("grants are bound to the pasted PAT", () => {
+  async function addPat(operatorId: string): Promise<string> {
+    const pat = generatePat();
+    const [row] = await db
+      .insert(mcpCredentials)
+      .values({ operatorId, kind: "pat", tokenHash: hashToken(pat, env), prefix: pat.slice(0, 14), expiresAt: new Date(clock.getTime() + 86_400_000) })
+      .returning({ id: mcpCredentials.id });
+    patIds.set(pat, row!.id);
+    return pat;
+  }
+  const patIds = new Map<string, string>();
+  const callWith = (token: string) =>
+    handleMcpRequest(new Request(`${ORIGIN}/api/mcp`, { method: "POST", headers: { authorization: `Bearer ${token}` } }), { db, env, now: () => clock, rateLimit: ok });
+
+  it("revoking PAT-A kills the tokens even while PAT-B is live; PAT-B grants survive", async () => {
+    const clientId = await register();
+    const { pat: patA, operatorId } = await newOperator();
+    const patB = await addPat(operatorId);
+    const a = (await (await exchange(clientId, await authorize(clientId, patA))).json()) as Tokens;
+    const b = (await (await exchange(clientId, await authorize(clientId, patB))).json()) as Tokens;
+    expect((await callWith(a.access_token)).status).not.toBe(401);
+    const [rowA] = await db.select().from(mcpCredentials).where(eq(mcpCredentials.tokenHash, hashToken(patA, env)));
+    await db.update(mcpCredentials).set({ revokedAt: clock }).where(eq(mcpCredentials.id, rowA!.id));
+    expect((await callWith(a.access_token)).status).toBe(401);
+    expect((await refresh(clientId, a.refresh_token)).status).toBe(400);
+    expect((await callWith(b.access_token)).status).not.toBe(401);
+    expect((await refresh(clientId, b.refresh_token)).status).toBe(200);
+  });
+});
+
+describe("consent cookie", () => {
+  async function startReview() {
+    const clientId = await register();
+    const { pat } = await newOperator();
+    const params = { response_type: "code", client_id: clientId, redirect_uri: REDIRECT, code_challenge: CHALLENGE, code_challenge_method: "S256", state: "s" };
+    const get = await handleAuthorize(new Request(`${ORIGIN}/mcp/authorize?${new URLSearchParams(params)}`), deps());
+    const cookie = get.headers.getSetCookie()[0]!.split(";")[0]!;
+    const csrf = cookie.split("=")[1]!;
+    const review = await handleAuthorize(form("/mcp/authorize", { ...params, csrf, pat, intent: "review" }, { cookie, origin: ORIGIN }), deps());
+    const consent = review.headers.getSetCookie().find((c) => c.startsWith("mcp_consent="))!.split(";")[0]!;
+    const approve = (cookies: string) => handleAuthorize(form("/mcp/authorize", { ...params, csrf, intent: "approve" }, { cookie: cookies, origin: ORIGIN }), deps());
+    return { cookie, consent, approve };
+  }
+  it("approve works only with the signed, unexpired cookie", async () => {
+    const { cookie, consent, approve } = await startReview();
+    expect((await approve(cookie)).status).toBe(400);
+    const [body, mac] = consent.slice("mcp_consent=".length).split(".");
+    const forged = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(body!, "base64url").toString()), o: "00000000-0000-0000-0000-000000000000" })).toString("base64url");
+    expect((await approve(`${cookie}; mcp_consent=${forged}.${mac}`)).status).toBe(400);
+    expect((await approve(`${cookie}; mcp_consent=${body}.${mac}x`)).status).toBe(400);
+    const early = clock;
+    clock = new Date(clock.getTime() + 301_000);
+    try {
+      expect((await approve(`${cookie}; ${consent}`)).status).toBe(400);
+    } finally {
+      clock = early;
+    }
+    expect((await approve(`${cookie}; ${consent}`)).status).toBe(303);
+  });
+  it("is bound to the CSRF token of the browser session", async () => {
+    const { consent, approve } = await startReview();
+    expect((await approve(`mcp_csrf=other; ${consent}`)).status).toBe(400);
+  });
+  it("approve fails if the PAT was revoked while the consent page was open", async () => {
+    const { cookie, consent, approve } = await startReview();
+    await db.update(mcpCredentials).set({ revokedAt: clock });
+    expect((await approve(`${cookie}; ${consent}`)).status).toBe(400);
+  });
+  it("labels loopback redirects as a program on this computer", async () => {
+    const clientId = await register(["http://127.0.0.1:5555/cb"]);
+    const { pat } = await newOperator();
+    const params = { response_type: "code", client_id: clientId, redirect_uri: "http://127.0.0.1:5555/cb", code_challenge: CHALLENGE, code_challenge_method: "S256", state: "s" };
+    const get = await handleAuthorize(new Request(`${ORIGIN}/mcp/authorize?${new URLSearchParams(params)}`), deps());
+    const cookie = get.headers.getSetCookie()[0]!.split(";")[0]!;
+    const review = await handleAuthorize(form("/mcp/authorize", { ...params, csrf: cookie.split("=")[1]!, pat, intent: "review" }, { cookie, origin: ORIGIN }), deps());
+    const html = await review.text();
+    expect(html).toContain("http://127.0.0.1:5555/cb");
+    expect(html).toContain("a program on this computer");
+  });
+});
+
+describe("registration global cap and retention", () => {
+  it("caps registrations deployment-wide at 100 per hour", async () => {
+    const seen: Array<[string, number]> = [];
+    const res = await handleRegister(
+      postJson("/api/mcp/oauth/register", { redirect_uris: [REDIRECT] }),
+      deps({
+        hourlyRateLimit: async (key, limit) => {
+          seen.push([key, limit]);
+          return { ok: false, retryAfterSeconds: 60 };
+        },
+      }),
+    );
+    expect(res.status).toBe(429);
+    expect(seen).toEqual([["mcp:oauth:register:global", 100]]);
+  });
+  it("deletes old codes, dead tokens and orphaned clients but keeps live and recent ones", async () => {
+    const day = 86_400_000;
+    const now = clock;
+    const { operatorId } = await newOperator();
+    const mk = async (id: string, createdAt: Date) => {
+      await db.insert(mcpOauthClients).values({ clientId: id, redirectUris: [REDIRECT], name: id, createdAt });
+    };
+    await mk("old-orphan", new Date(now.getTime() - 40 * day));
+    await mk("old-with-live-token", new Date(now.getTime() - 40 * day));
+    await mk("recent-orphan", new Date(now.getTime() - 2 * day));
+    const cred = (kind: "access" | "refresh", over: Partial<typeof mcpCredentials.$inferInsert>) =>
+      db.insert(mcpCredentials).values({ operatorId, kind, tokenHash: `h-${Math.random()}`, prefix: "p", ...over });
+    await cred("access", { clientId: "old-with-live-token", expiresAt: new Date(now.getTime() + day) });
+    await cred("access", { expiresAt: new Date(now.getTime() - 31 * day), tokenHash: "dead-expired" });
+    await cred("refresh", { revokedAt: new Date(now.getTime() - 31 * day), expiresAt: new Date(now.getTime() + day), tokenHash: "dead-revoked" });
+    await cred("refresh", { revokedAt: new Date(now.getTime() - 1 * day), tokenHash: "recently-revoked" });
+    const code = (hash: string, expiresAt: Date) =>
+      db.insert(mcpAuthCodes).values({ codeHash: hash, operatorId, clientId: "recent-orphan", codeChallenge: CHALLENGE, redirectUri: REDIRECT, expiresAt });
+    await code("code-old", new Date(now.getTime() - 2 * day));
+    await code("code-fresh", new Date(now.getTime() - 3600_000));
+
+    const result = await deleteExpiredMcpOauthState(db, now);
+    expect(result.authCodes).toBe(1);
+    expect(result.credentials).toBe(2);
+    const clients = (await db.select().from(mcpOauthClients)).map((c) => c.clientId);
+    expect(clients).toContain("old-with-live-token");
+    expect(clients).toContain("recent-orphan");
+    expect(clients).not.toContain("old-orphan");
+    const hashes = (await db.select().from(mcpCredentials)).map((c) => c.tokenHash);
+    expect(hashes).toContain("recently-revoked");
+    expect(hashes).not.toContain("dead-expired");
+    expect((await db.select().from(mcpAuthCodes)).map((c) => c.codeHash)).toContain("code-fresh");
+    expect((await db.select().from(mcpCredentials)).filter((c) => c.kind === "pat").length).toBeGreaterThan(0);
   });
 });
 

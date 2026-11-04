@@ -27,6 +27,8 @@ export const mcpCredentials = pgTable(
     prefix: text("prefix").notNull(),
     familyId: uuid("family_id"),
     clientId: text("client_id"),
+    /** OAuth access/refresh only: the exact PAT the operator pasted. The grant dies with that PAT. */
+    patCredentialId: uuid("pat_credential_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
@@ -56,6 +58,7 @@ export const mcpAuthCodes = pgTable(
       .references(() => mcpOauthClients.clientId, { onDelete: "cascade" }),
     codeChallenge: text("code_challenge").notNull(),
     redirectUri: text("redirect_uri").notNull(),
+    patCredentialId: uuid("pat_credential_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     usedAt: timestamp("used_at", { withTimezone: true }),
     /** Token family issued from this code, so replaying the code revokes it. */

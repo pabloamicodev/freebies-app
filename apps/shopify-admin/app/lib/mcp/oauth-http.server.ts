@@ -1,6 +1,6 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Db } from "@promo/db";
-import { authenticatePat, type Operator } from "./auth.server.js";
+import { authenticatePat, patIsLive, type Operator } from "./auth.server.js";
 import { mcpEnabled, type RateLimiter } from "./handler.server.js";
 import {
   OAuthError,
@@ -21,9 +21,15 @@ export type OAuthDeps = {
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   rateLimit?: RateLimiter;
+  /** Hour-long window, used for the global cap on dynamic client registrations. */
+  hourlyRateLimit?: RateLimiter;
 };
 
 const defaultRateLimit: RateLimiter = (key, limit) => checkRateLimit(key, { limit, windowMs: 60_000, onRedisUnavailable: "memory" });
+
+const defaultHourlyRateLimit: RateLimiter = (key, limit) =>
+  checkRateLimit(key, { limit, windowMs: 3_600_000, fixedWindow: true, onRedisUnavailable: "memory" });
+export const DCR_GLOBAL_PER_HOUR = 100;
 
 const BASE_HEADERS = { "Cache-Control": "no-store", Pragma: "no-cache", "X-Content-Type-Options": "nosniff" };
 const MAX_BODY_BYTES = 8192;
@@ -145,6 +151,11 @@ export async function handleRegister(request: Request, deps: OAuthDeps): Promise
   const g = await guard(request, deps, "register", 10);
   if (!g.ok) return g.response;
   if (request.method !== "POST") return methodNotAllowed("POST");
+  // Registration is unauthenticated: besides the per-IP limit, cap the whole deployment so rotating IPs cannot flood the table.
+  const global = await (deps.hourlyRateLimit ?? defaultHourlyRateLimit)("mcp:oauth:register:global", DCR_GLOBAL_PER_HOUR);
+  if (!global.ok) {
+    return json(429, { error: "rate_limited", error_description: "Too many registrations." }, { "Retry-After": String(global.retryAfterSeconds) });
+  }
   try {
     let body: unknown;
     try {
@@ -240,9 +251,11 @@ export function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
-function page(title: string, body: string, status = 200, extra: HeadersInit = {}): Response {
+function page(title: string, body: string, status = 200, cookies: string[] = []): Response {
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(title)}</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem;color:#1a1a1a}input[type=password]{width:100%;padding:.5rem;box-sizing:border-box;font:inherit}button{padding:.5rem 1rem;font:inherit;margin-right:.5rem}.err{color:#b00020}code{background:#eee;padding:0 .25rem}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}code{background:#333}}</style></head><body>${body}</body></html>`;
-  return new Response(html, { status, headers: { ...PAGE_HEADERS, ...extra } });
+  const headers = new Headers(PAGE_HEADERS);
+  for (const cookie of cookies) headers.append("Set-Cookie", cookie);
+  return new Response(html, { status, headers });
 }
 
 type AuthRequest = { client: OAuthClient; redirectUri: string; state: string; codeChallenge: string };
@@ -260,10 +273,19 @@ function hiddenFields(a: AuthRequest, csrf: string): string {
   ].join("");
 }
 
-function redirectTo(redirectUri: string, params: Record<string, string>): Response {
+function redirectTo(redirectUri: string, params: Record<string, string>, cookies: string[] = []): Response {
   const url = new URL(redirectUri);
   for (const [k, v] of Object.entries(params)) if (v !== "") url.searchParams.set(k, v);
-  return new Response(null, { status: 303, headers: { ...BASE_HEADERS, Location: url.toString(), "Referrer-Policy": "no-referrer" } });
+  const headers = new Headers({ ...BASE_HEADERS, Location: url.toString(), "Referrer-Policy": "no-referrer" });
+  for (const cookie of cookies) headers.append("Set-Cookie", cookie);
+  return new Response(null, { status: 303, headers });
+}
+
+/** The full redirect URI, with loopback targets spelled out so nobody mistakes them for a website. */
+function describeRedirect(redirectUri: string): string {
+  const { hostname } = new URL(redirectUri);
+  const loopback = hostname === "localhost" || hostname === "127.0.0.1";
+  return `<code>${escapeHtml(redirectUri)}</code>${loopback ? " (a program on this computer)" : ""}`;
 }
 
 function errorPage(message: string): Response {
@@ -296,9 +318,36 @@ function readCookie(request: Request, name: string): string {
   return "";
 }
 
-function csrfCookie(request: Request, token: string): string {
+function scopedCookie(request: Request, name: string, value: string, maxAgeSeconds: number): string {
   const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
-  return `${CSRF_COOKIE}=${token}; Path=/mcp/authorize; HttpOnly; SameSite=Strict; Max-Age=900${secure}`;
+  return `${name}=${value}; Path=/mcp/authorize; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSeconds}${secure}`;
+}
+
+// The consent step must not round-trip the PAT through the page: it is exchanged for this signed, short-lived,
+// HttpOnly cookie (server-side facts only; the browser cannot alter them and script cannot read them).
+const CONSENT_COOKIE = "mcp_consent";
+const CONSENT_TTL_SECONDS = 300;
+type Consent = { o: string; p: string; c: string; r: string; k: string; e: number };
+
+const sha256Hex = (value: string) => createHash("sha256").update(value).digest("hex");
+const consentMac = (body: string, env: NodeJS.ProcessEnv) =>
+  createHmac("sha256", env["MCP_TOKEN_PEPPER"]!).update(`mcp-consent:${body}`).digest("base64url");
+
+function signConsent(consent: Consent, env: NodeJS.ProcessEnv): string {
+  const body = Buffer.from(JSON.stringify(consent)).toString("base64url");
+  return `${body}.${consentMac(body, env)}`;
+}
+
+function verifyConsent(value: string, env: NodeJS.ProcessEnv, now: Date): Consent | null {
+  const [body, mac, extra] = value.split(".");
+  if (!body || !mac || extra !== undefined || !safeEqual(mac, consentMac(body, env))) return null;
+  try {
+    const c = JSON.parse(Buffer.from(body, "base64url").toString()) as Consent;
+    const strings = [c.o, c.p, c.c, c.r, c.k].every((v) => typeof v === "string");
+    return strings && typeof c.e === "number" && c.e > now.getTime() ? c : null;
+  } catch {
+    return null;
+  }
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -309,22 +358,22 @@ function safeEqual(a: string, b: string): boolean {
 
 function patForm(a: AuthRequest, csrf: string, error?: string): string {
   return `<h1>Connect ${escapeHtml(a.client.name)}</h1>
-<p>This will let <strong>${escapeHtml(a.client.name)}</strong> (returning to <code>${escapeHtml(new URL(a.redirectUri).host)}</code>) use the Promo Engine MCP as you.</p>
+<p>This will let <strong>${escapeHtml(a.client.name)}</strong> (returning to ${describeRedirect(a.redirectUri)}) use the Promo Engine MCP as you.</p>
 ${error ? `<p class="err" role="alert">${escapeHtml(error)}</p>` : ""}
 <form method="post" action="/mcp/authorize" autocomplete="off">${hiddenFields(a, csrf)}<input type="hidden" name="intent" value="review">
 <p><label for="pat">Your operator token (PAT, <code>pemcp_...</code>)</label><br><input id="pat" type="password" name="pat" required autocomplete="off" spellcheck="false"></p>
 <p><button type="submit">Continue</button></p></form>`;
 }
 
-async function consentPage(db: Db, a: AuthRequest, operator: Operator, pat: string, csrf: string): Promise<string> {
+async function consentPage(db: Db, a: AuthRequest, operator: Operator, csrf: string): Promise<string> {
   const shops = await visibleShops(db, operator);
   const shown = shops.slice(0, 50).map((s) => `<li>${escapeHtml(s.myshopifyDomain)}</li>`).join("");
   const more = shops.length > 50 ? `<li>and ${shops.length - 50} more</li>` : "";
   return `<h1>Allow ${escapeHtml(a.client.name)}?</h1>
 <p>Signed in as <strong>${escapeHtml(operator.email)}</strong> with role <strong>${escapeHtml(operator.role)}</strong>.</p>
-<p><strong>${escapeHtml(a.client.name)}</strong> (returning to <code>${escapeHtml(new URL(a.redirectUri).host)}</code>) will act with that role on ${shops.length} shop${shops.length === 1 ? "" : "s"}:</p>
+<p><strong>${escapeHtml(a.client.name)}</strong> (returning to ${describeRedirect(a.redirectUri)}) will act with that role on ${shops.length} shop${shops.length === 1 ? "" : "s"}:</p>
 <ul>${shown || "<li>no shops</li>"}${more}</ul>
-<form method="post" action="/mcp/authorize">${hiddenFields(a, csrf)}<input type="hidden" name="pat" value="${escapeHtml(pat)}">
+<form method="post" action="/mcp/authorize">${hiddenFields(a, csrf)}
 <button type="submit" name="intent" value="approve">Allow</button><button type="submit" name="intent" value="deny">Deny</button></form>`;
 }
 
@@ -338,7 +387,7 @@ export async function handleAuthorize(request: Request, deps: OAuthDeps): Promis
     const parsed = await parseAuthRequest(deps.db, new URL(request.url).searchParams);
     if (parsed instanceof Response) return parsed;
     const csrf = randomBytes(24).toString("base64url");
-    return page("Connect to Promo Engine", patForm(parsed, csrf), 200, { "Set-Cookie": csrfCookie(request, csrf) });
+    return page("Connect to Promo Engine", patForm(parsed, csrf), 200, [scopedCookie(request, CSRF_COOKIE, csrf, 900)]);
   }
 
   let form: URLSearchParams;
@@ -352,27 +401,42 @@ export async function handleAuthorize(request: Request, deps: OAuthDeps): Promis
   if ((origin && origin !== publicOrigin(request, g.env)) || !safeEqual(cookie, form.get("csrf") ?? "")) {
     return errorPage("Your session expired. Go back to the app and start the connection again.");
   }
-  const parsed = await parseAuthRequest(deps.db, form);
-  if (parsed instanceof Response) return parsed;
   const csrf = cookie;
   const intent = form.get("intent");
-  if (intent === "deny") return redirectTo(parsed.redirectUri, { error: "access_denied", state: parsed.state });
-  if (intent !== "review" && intent !== "approve") return errorPage("Invalid request.");
+  const clearConsent = scopedCookie(request, CONSENT_COOKIE, "", 0);
 
-  let operator: Operator;
-  const pat = form.get("pat") ?? "";
+  if (intent === "approve") {
+    const consent = verifyConsent(readCookie(request, CONSENT_COOKIE), g.env, g.now);
+    if (!consent || !safeEqual(consent.k, sha256Hex(csrf))) return errorPage("Your session expired. Go back to the app and start the connection again.");
+    const approved = await parseAuthRequest(deps.db, form);
+    if (approved instanceof Response || approved.client.clientId !== consent.c || approved.redirectUri !== consent.r) {
+      return errorPage("Invalid request.");
+    }
+    // The PAT may have been revoked while the consent page was open.
+    if (!(await patIsLive(deps.db, consent.p, consent.o, g.now))) return errorPage("That token is no longer valid.");
+    const code = await issueAuthCode(
+      deps.db,
+      g.env,
+      { operatorId: consent.o, patCredentialId: consent.p, clientId: consent.c, codeChallenge: approved.codeChallenge, redirectUri: consent.r },
+      g.now,
+    );
+    return redirectTo(consent.r, { code, state: approved.state }, [clearConsent]);
+  }
+
+  const parsed = await parseAuthRequest(deps.db, form);
+  if (parsed instanceof Response) return parsed;
+  if (intent === "deny") return redirectTo(parsed.redirectUri, { error: "access_denied", state: parsed.state }, [clearConsent]);
+  if (intent !== "review") return errorPage("Invalid request.");
+
+  let operator: Operator & { credentialId: string };
   try {
-    operator = await authenticatePat(deps.db, pat, g.env, g.now);
+    operator = await authenticatePat(deps.db, form.get("pat") ?? "", g.env, g.now);
   } catch {
     return page("Connect to Promo Engine", patForm(parsed, csrf, "That token is invalid, expired or revoked."), 401);
   }
-  if (intent === "review") return page("Allow access", await consentPage(deps.db, parsed, operator, pat, csrf));
-
-  const code = await issueAuthCode(
-    deps.db,
+  const consent = signConsent(
+    { o: operator.id, p: operator.credentialId, c: parsed.client.clientId, r: parsed.redirectUri, k: sha256Hex(csrf), e: g.now.getTime() + CONSENT_TTL_SECONDS * 1000 },
     g.env,
-    { operatorId: operator.id, clientId: parsed.client.clientId, codeChallenge: parsed.codeChallenge, redirectUri: parsed.redirectUri },
-    g.now,
   );
-  return redirectTo(parsed.redirectUri, { code, state: parsed.state });
+  return page("Allow access", await consentPage(deps.db, parsed, operator, csrf), 200, [scopedCookie(request, CONSENT_COOKIE, consent, CONSENT_TTL_SECONDS)]);
 }

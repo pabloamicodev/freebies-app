@@ -1,11 +1,13 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
-import { mcpAuthCodes, mcpCredentials, mcpOauthClients, mcpOperators, type Db } from "@promo/db";
-import { hashToken, operatorHasActivePat } from "./auth.server.js";
+import { mcpAuthCodes, mcpCredentials, mcpOauthClients, type Db } from "@promo/db";
+import { hashToken, patIsLive } from "./auth.server.js";
 
 export const ACCESS_TOKEN_TTL_SECONDS = 3600;
 export const REFRESH_TOKEN_TTL_SECONDS = 30 * 86_400;
 export const AUTH_CODE_TTL_SECONDS = 120;
+/** A refresh token rotated this recently is a benign retry (lost response, parallel tabs), not theft. */
+export const REFRESH_REUSE_GRACE_MS = 30_000;
 export const ACCESS_PREFIX = "pemcp_at_";
 export const REFRESH_PREFIX = "pemcp_rt_";
 const CODE_PREFIX = "pemcp_ac_";
@@ -81,13 +83,14 @@ export function verifyPkceS256(verifier: string, challenge: string): boolean {
 export async function issueAuthCode(
   db: Db,
   env: NodeJS.ProcessEnv,
-  input: { operatorId: string; clientId: string; codeChallenge: string; redirectUri: string },
+  input: { operatorId: string; patCredentialId: string; clientId: string; codeChallenge: string; redirectUri: string },
   now: Date = new Date(),
 ): Promise<string> {
   const code = CODE_PREFIX + randomBytes(32).toString("base64url");
   await db.insert(mcpAuthCodes).values({
     codeHash: hashToken(code, env),
     operatorId: input.operatorId,
+    patCredentialId: input.patCredentialId,
     clientId: input.clientId,
     codeChallenge: input.codeChallenge,
     redirectUri: input.redirectUri,
@@ -106,7 +109,7 @@ export type TokenResponse = {
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
-async function mintTokens(tx: Tx, env: NodeJS.ProcessEnv, operatorId: string, clientId: string, familyId: string, now: Date): Promise<TokenResponse> {
+async function mintTokens(tx: Tx, env: NodeJS.ProcessEnv, operatorId: string, patCredentialId: string, clientId: string, familyId: string, now: Date): Promise<TokenResponse> {
   const access = ACCESS_PREFIX + randomBytes(32).toString("base64url");
   const refresh = REFRESH_PREFIX + randomBytes(32).toString("base64url");
   await tx.insert(mcpCredentials).values([
@@ -117,6 +120,7 @@ async function mintTokens(tx: Tx, env: NodeJS.ProcessEnv, operatorId: string, cl
       prefix: access.slice(0, 14),
       familyId,
       clientId,
+      patCredentialId,
       expiresAt: new Date(now.getTime() + ACCESS_TOKEN_TTL_SECONDS * 1000),
     },
     {
@@ -126,6 +130,7 @@ async function mintTokens(tx: Tx, env: NodeJS.ProcessEnv, operatorId: string, cl
       prefix: refresh.slice(0, 14),
       familyId,
       clientId,
+      patCredentialId,
       expiresAt: new Date(now.getTime() + REFRESH_TOKEN_TTL_SECONDS * 1000),
     },
   ]);
@@ -137,11 +142,6 @@ async function revokeFamily(db: Db | Tx, familyId: string, now: Date): Promise<v
     .update(mcpCredentials)
     .set({ revokedAt: now })
     .where(and(eq(mcpCredentials.familyId, familyId), isNull(mcpCredentials.revokedAt)));
-}
-
-async function operatorUsable(db: Db | Tx, operatorId: string, now: Date): Promise<boolean> {
-  const [op] = await db.select({ disabledAt: mcpOperators.disabledAt }).from(mcpOperators).where(eq(mcpOperators.id, operatorId)).limit(1);
-  return Boolean(op) && !op!.disabledAt && (await operatorHasActivePat(db as Db, operatorId, now));
 }
 
 const invalidGrant = (description = "Invalid, expired or already used grant.") => new OAuthError("invalid_grant", description);
@@ -170,10 +170,10 @@ export async function exchangeAuthCode(
     if (row.expiresAt.getTime() <= now.getTime()) return invalidGrant();
     if (row.clientId !== input.clientId || row.redirectUri !== input.redirectUri) return invalidGrant();
     if (!verifyPkceS256(input.codeVerifier, row.codeChallenge)) return invalidGrant("PKCE verification failed.");
-    if (!(await operatorUsable(tx, row.operatorId, now))) return invalidGrant();
+    if (!(await patIsLive(tx, row.patCredentialId, row.operatorId, now))) return invalidGrant();
     const familyId = randomUUID();
     await tx.update(mcpAuthCodes).set({ familyId }).where(eq(mcpAuthCodes.codeHash, codeHash));
-    return mintTokens(tx, env, row.operatorId, row.clientId, familyId, now);
+    return mintTokens(tx, env, row.operatorId, row.patCredentialId!, row.clientId, familyId, now);
   });
   if (result instanceof OAuthError) throw result;
   return result;
@@ -189,24 +189,25 @@ export async function refreshTokens(
   const result = await db.transaction(async (tx): Promise<TokenResponse | OAuthError> => {
     const [row] = await tx.select().from(mcpCredentials).where(eq(mcpCredentials.tokenHash, hash)).limit(1);
     if (!row || row.kind !== "refresh" || !row.familyId || row.clientId !== input.clientId) return invalidGrant();
-    // A rotated (revoked) refresh token coming back means it leaked: kill the whole family.
-    const reuse = async () => {
-      await revokeFamily(tx, row.familyId!, now);
+    // A rotated (revoked) refresh token coming back means it leaked: kill the whole family, unless it was
+    // rotated moments ago (a retry after a lost response), which is refused without punishing the grant.
+    const reuse = async (revokedAt: Date | null) => {
+      if (!revokedAt || now.getTime() - revokedAt.getTime() >= REFRESH_REUSE_GRACE_MS) await revokeFamily(tx, row.familyId!, now);
       return invalidGrant();
     };
-    if (row.revokedAt) return reuse();
+    if (row.revokedAt) return reuse(row.revokedAt);
     if (!row.expiresAt || row.expiresAt.getTime() <= now.getTime()) return invalidGrant();
     const claimed = await tx
       .update(mcpCredentials)
       .set({ revokedAt: now, lastUsedAt: now })
       .where(and(eq(mcpCredentials.id, row.id), isNull(mcpCredentials.revokedAt)))
       .returning({ id: mcpCredentials.id });
-    if (claimed.length === 0) return reuse();
-    if (!(await operatorUsable(tx, row.operatorId, now))) {
+    if (claimed.length === 0) return reuse(now);
+    if (!(await patIsLive(tx, row.patCredentialId, row.operatorId, now))) {
       await revokeFamily(tx, row.familyId, now);
       return invalidGrant();
     }
-    return mintTokens(tx, env, row.operatorId, row.clientId!, row.familyId, now);
+    return mintTokens(tx, env, row.operatorId, row.patCredentialId!, row.clientId!, row.familyId, now);
   });
   if (result instanceof OAuthError) throw result;
   return result;

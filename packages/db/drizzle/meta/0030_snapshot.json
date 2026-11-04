@@ -1,5 +1,5 @@
 {
-  "id": "860bee2c-1b46-4fc9-92c0-c96374926cf3",
+  "id": "c7afab2d-bb1c-4131-9a3b-6b5d7a27c53d",
   "prevId": "af0d79ab-4c7e-4ac4-a917-711eaa305880",
   "version": "7",
   "dialect": "postgresql",
@@ -4300,6 +4300,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "pat_credential_id": {
+          "name": "pat_credential_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "expires_at": {
           "name": "expires_at",
           "type": "timestamp with time zone",
@@ -4422,6 +4428,12 @@
         "client_id": {
           "name": "client_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pat_credential_id": {
+          "name": "pat_credential_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },

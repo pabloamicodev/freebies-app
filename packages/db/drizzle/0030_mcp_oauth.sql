@@ -5,6 +5,7 @@ CREATE TABLE "mcp_auth_codes" (
 	"client_id" text NOT NULL,
 	"code_challenge" text NOT NULL,
 	"redirect_uri" text NOT NULL,
+	"pat_credential_id" uuid,
 	"expires_at" timestamp with time zone NOT NULL,
 	"used_at" timestamp with time zone,
 	"family_id" uuid,
@@ -18,6 +19,7 @@ CREATE TABLE "mcp_oauth_clients" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+ALTER TABLE "mcp_credentials" ADD COLUMN "pat_credential_id" uuid;--> statement-breakpoint
 ALTER TABLE "mcp_auth_codes" ADD CONSTRAINT "mcp_auth_codes_operator_id_mcp_operators_id_fk" FOREIGN KEY ("operator_id") REFERENCES "public"."mcp_operators"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "mcp_auth_codes" ADD CONSTRAINT "mcp_auth_codes_client_id_mcp_oauth_clients_client_id_fk" FOREIGN KEY ("client_id") REFERENCES "public"."mcp_oauth_clients"("client_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "mcp_auth_codes_expires_at_idx" ON "mcp_auth_codes" USING btree ("expires_at");--> statement-breakpoint

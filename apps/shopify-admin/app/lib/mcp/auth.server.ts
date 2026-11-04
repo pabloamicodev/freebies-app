@@ -105,17 +105,21 @@ export async function revokeOperatorCredentials(db: Db, operatorId: string, now:
 
 type CredentialKind = "pat" | "access" | "refresh";
 
-/** True while the operator still holds an unrevoked, unexpired PAT: OAuth tokens never outlive the PAT they were issued against. */
-export async function operatorHasActivePat(db: Db, operatorId: string, now: Date): Promise<boolean> {
+/** True while this exact PAT is unrevoked and unexpired: OAuth grants never outlive the PAT that was pasted to create them. */
+export async function patIsLive(db: Pick<Db, "select">, patCredentialId: string | null, operatorId: string, now: Date): Promise<boolean> {
+  if (!patCredentialId) return false;
   const [row] = await db
     .select({ id: mcpCredentials.id })
     .from(mcpCredentials)
+    .innerJoin(mcpOperators, eq(mcpOperators.id, mcpCredentials.operatorId))
     .where(
       and(
+        eq(mcpCredentials.id, patCredentialId),
         eq(mcpCredentials.operatorId, operatorId),
         eq(mcpCredentials.kind, "pat"),
         isNull(mcpCredentials.revokedAt),
         gt(mcpCredentials.expiresAt, now),
+        isNull(mcpOperators.disabledAt),
       ),
     )
     .limit(1);
@@ -132,7 +136,7 @@ async function authenticateToken(
   kinds: CredentialKind[],
   env: NodeJS.ProcessEnv,
   now: Date,
-): Promise<Operator> {
+): Promise<Operator & { credentialId: string }> {
   const fail = () => new ToolError("UNAUTHENTICATED", "Missing, invalid or expired token.");
   if (!token.startsWith(PAT_PREFIX)) throw fail();
 
@@ -140,6 +144,7 @@ async function authenticateToken(
     .select({
       credentialId: mcpCredentials.id,
       kind: mcpCredentials.kind,
+      patCredentialId: mcpCredentials.patCredentialId,
       expiresAt: mcpCredentials.expiresAt,
       lastUsedAt: mcpCredentials.lastUsedAt,
       revokedAt: mcpCredentials.revokedAt,
@@ -157,12 +162,12 @@ async function authenticateToken(
 
   if (!row || !kinds.includes(row.kind) || row.revokedAt || row.operatorDisabledAt) throw fail();
   if (!row.expiresAt || row.expiresAt.getTime() <= now.getTime()) throw fail();
-  if (row.kind !== "pat" && !(await operatorHasActivePat(db, row.id, now))) throw fail();
+  if (row.kind !== "pat" && !(await patIsLive(db, row.patCredentialId, row.id, now))) throw fail();
 
   if (!row.lastUsedAt || now.getTime() - row.lastUsedAt.getTime() >= LAST_USED_THROTTLE_MS) {
     await db.update(mcpCredentials).set({ lastUsedAt: now }).where(eq(mcpCredentials.id, row.credentialId));
   }
-  return { id: row.id, email: row.email, name: row.name, role: row.role, shopAllowList: row.shopAllowList };
+  return { id: row.id, email: row.email, name: row.name, role: row.role, shopAllowList: row.shopAllowList, credentialId: row.credentialId };
 }
 
 function bearerToken(authorization: string | null): string {
@@ -176,7 +181,8 @@ export async function authenticateBearer(
   env: NodeJS.ProcessEnv = process.env,
   now: Date = new Date(),
 ): Promise<Operator> {
-  return authenticateToken(db, bearerToken(authorization), ["pat", "access"], env, now);
+  const r = await authenticateToken(db, bearerToken(authorization), ["pat", "access"], env, now);
+  return { id: r.id, email: r.email, name: r.name, role: r.role, shopAllowList: r.shopAllowList };
 }
 
 /** A bare PAT (pasted into the OAuth authorize page). Access and refresh tokens are not accepted there. */
@@ -185,6 +191,6 @@ export async function authenticatePat(
   pat: string,
   env: NodeJS.ProcessEnv = process.env,
   now: Date = new Date(),
-): Promise<Operator> {
+): Promise<Operator & { credentialId: string }> {
   return authenticateToken(db, pat.trim(), ["pat"], env, now);
 }

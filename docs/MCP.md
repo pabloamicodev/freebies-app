@@ -70,8 +70,13 @@ Phase 2. claude.ai discovers everything from the 401 of `/api/mcp` (`WWW-Authent
 
 Rules: codes live 2 minutes and are single use (replaying one revokes the tokens issued from it). Refresh tokens rotate on every
 use; presenting an already-used refresh token revokes the whole family. Access and refresh tokens are stored as `sha256(pepper + token)`
-in `mcp_credentials` (kind `access`/`refresh`). They stop working as soon as the operator has no active PAT (revoked, expired) or is
-disabled, so `pnpm mcp:operator revoke` cuts claude.ai off too. Every OAuth endpoint is rate limited per IP and answers 404 without
+in `mcp_credentials` (kind `access`/`refresh`). Each grant is bound to the exact PAT that was pasted: it stops working as soon as that PAT is revoked or expires (or the
+operator is disabled), even if the operator has other PATs, so `pnpm mcp:operator revoke` cuts claude.ai off too. A refresh
+token replayed within 30 s of its rotation is refused without revoking the family (retry after a lost response); an older
+replay revokes it. The consent step keeps the PAT out of the page: it is swapped for a signed (HMAC with the pepper), HttpOnly,
+5-minute cookie scoped to `/mcp/authorize`. Registrations are capped at 100/hour deployment-wide on top of the per-IP limit.
+The nightly `analytics-cleanup` cron deletes auth codes 1 day past expiry, dead access/refresh tokens after 30 days and
+unreferenced clients older than 30 days. Every OAuth endpoint is rate limited per IP and answers 404 without
 `MCP_ENABLED=true`. After deploying, smoke test `curl -i <origin>/.well-known/oauth-protected-resource` (React Router serves it; no
 `vercel.json` rewrite was added).
 
