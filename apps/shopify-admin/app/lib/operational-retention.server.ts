@@ -1,6 +1,8 @@
 import {
   gdprExports,
   getDb,
+  mcpCallLog,
+  mcpCredentials,
   rateLimits,
   webhookDeliveries,
   type Db,
@@ -12,6 +14,8 @@ export type OperationalRetentionSettings = {
   processedWebhookDays?: number;
   failedWebhookDays?: number;
   stuckProcessingWebhookDays?: number;
+  mcpCallLogDays?: number;
+  mcpCredentialGraceDays?: number;
 };
 
 export function operationalRetentionCutoffs(
@@ -51,6 +55,8 @@ export async function cleanupOperationalState(
   failedWebhooks: number;
   stuckProcessingWebhooks: number;
   expiredGdprExports: number;
+  mcpCallLog: number;
+  expiredMcpCredentials: number;
 }> {
   const cutoffs = operationalRetentionCutoffs(now, settings);
   const staleRateLimits = await db
@@ -87,12 +93,25 @@ export async function cleanupOperationalState(
 
   const expiredGdprExports = await deleteExpiredGdprExports(db, now);
 
+  // MCP: audit-grade call log kept 90 days; credentials stay a week past expiry so "expired" can still be told apart from "unknown".
+  const day = 24 * 60 * 60 * 1_000;
+  const mcpCalls = await db
+    .delete(mcpCallLog)
+    .where(lt(mcpCallLog.createdAt, new Date(now.getTime() - (settings.mcpCallLogDays ?? 90) * day)))
+    .returning({ id: mcpCallLog.id });
+  const expiredMcpCredentials = await db
+    .delete(mcpCredentials)
+    .where(lt(mcpCredentials.expiresAt, new Date(now.getTime() - (settings.mcpCredentialGraceDays ?? 7) * day)))
+    .returning({ id: mcpCredentials.id });
+
   return {
     rateLimits: staleRateLimits.length,
     processedWebhooks: processedWebhooks.length,
     failedWebhooks: failedWebhooks.length,
     stuckProcessingWebhooks: stuckProcessingWebhooks.length,
     expiredGdprExports,
+    mcpCallLog: mcpCalls.length,
+    expiredMcpCredentials: expiredMcpCredentials.length,
   };
 }
 

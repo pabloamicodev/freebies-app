@@ -190,6 +190,13 @@
       "when": 1793750076288,
       "tag": "0029_mcp_operators",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1793764097340,
+      "tag": "0031_mcp_call_log",
+      "breakpoints": true
     }
   ]
 }

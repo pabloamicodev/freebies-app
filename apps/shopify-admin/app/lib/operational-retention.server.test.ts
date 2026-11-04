@@ -24,7 +24,9 @@ describe("operational retention", () => {
       .mockResolvedValueOnce([{ webhookId: "processed" }, { webhookId: "processed-2" }])
       .mockResolvedValueOnce([{ webhookId: "failed" }])
       .mockResolvedValueOnce([{ webhookId: "stuck-processing" }])
-      .mockResolvedValueOnce([{ id: "expired-export" }, { id: "expired-export-2" }]);
+      .mockResolvedValueOnce([{ id: "expired-export" }, { id: "expired-export-2" }])
+      .mockResolvedValueOnce([{ id: "call-1" }, { id: "call-2" }, { id: "call-3" }])
+      .mockResolvedValueOnce([{ id: "credential-1" }]);
     const where = vi.fn(() => ({ returning }));
     const deleteFrom = vi.fn(() => ({ where }));
     const db = { delete: deleteFrom };
@@ -38,7 +40,9 @@ describe("operational retention", () => {
       failedWebhooks: 1,
       stuckProcessingWebhooks: 1,
       expiredGdprExports: 2,
+      mcpCallLog: 3,
+      expiredMcpCredentials: 1,
     });
-    expect(deleteFrom).toHaveBeenCalledTimes(5);
+    expect(deleteFrom).toHaveBeenCalledTimes(7);
   });
 });
