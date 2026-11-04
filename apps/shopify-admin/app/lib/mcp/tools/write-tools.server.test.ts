@@ -16,7 +16,7 @@ import {
   type Db,
 } from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "../../test-support/pglite-db.js";
-import { cleanupOperationalState } from "../../operational-retention.server.js";
+import { deleteExpiredMcpCallState } from "../call-log-retention.server.js";
 import { resetMemoryRateLimits } from "../../rate-limit.server.js";
 import type { ShopPublishFn } from "../../offer-lifecycle.server.js";
 import type { Operator } from "../auth.server.js";
@@ -708,7 +708,7 @@ describe("registered over MCP", () => {
 });
 
 describe("retention", () => {
-  it("cleanupOperationalState deletes old call-log rows and long-expired credentials only", async () => {
+  it("deleteExpiredMcpCallState deletes old call-log rows and long-expired PATs only", async () => {
     const base = new Date("2027-01-01T00:00:00Z");
     const day = 86_400_000;
     const opId = operators["viewer"]!.id;
@@ -721,9 +721,9 @@ describe("retention", () => {
       { operatorId: opId, kind: "pat", tokenHash: "h-recent", prefix: "p", expiresAt: new Date(base.getTime() - 2 * day) },
       { operatorId: opId, kind: "pat", tokenHash: "h-live", prefix: "p", expiresAt: new Date(base.getTime() + day) },
     ]);
-    const result = await cleanupOperationalState(db, base);
-    expect(result.mcpCallLog).toBeGreaterThanOrEqual(1);
-    expect(result.expiredMcpCredentials).toBe(1);
+    const result = await deleteExpiredMcpCallState(db, base);
+    expect(result.callLog).toBeGreaterThanOrEqual(1);
+    expect(result.expiredPats).toBe(1);
     expect((await callLogs("retention_old")).length).toBe(0);
     expect((await callLogs("retention_new")).length).toBe(1);
     const left = (await db.select({ h: mcpCredentials.tokenHash }).from(mcpCredentials)).map((c) => c.h);

@@ -129,7 +129,7 @@ Errors added to the shared list: `STATE_CONFLICT`, `PUBLISH_FAILED` (message say
 
 Audit: `audit_logs.performed_by = mcp:<operatorId>`, `after._mcp = { operator, client, tool, requestId }` (+ `reason`). Every call, reads included, writes a
 `mcp_call_log` row (operator, tool, shops, redacted args, outcome, duration). Rate limits per operator per minute: 60 reads, 10 writes (dry runs count), 3 critical executions.
-Retention: the daily `analytics-cleanup` cron deletes `mcp_call_log` rows older than 90 days and `mcp_credentials` expired for more than 7 days.
+Retention: the daily `analytics-cleanup` cron (`call-log-retention.server.ts`, next to the OAuth cleanup) deletes `mcp_call_log` rows older than 90 days and PATs expired for more than 7 days.
 
 ### Enabling writes on hpn-test-store
 
