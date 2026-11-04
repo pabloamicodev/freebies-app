@@ -10,6 +10,7 @@ import {
   discountCodes,
   mcpCallLog,
   mcpOperators,
+  offerCombinationPolicies,
   offerConditions,
   offerRewards,
   offerVersions,
@@ -376,6 +377,30 @@ describe("shop_set_limits_enforced", () => {
     expect(body(res).code).toBe("VALIDATION");
     expect(body(res).message).toContain("LIMITS_TOGGLE_SHOPS");
     expect(await isLimitsEnforced(db, shopIds["test"]!)).toBe(false);
+  });
+
+  it("refuses to enable while limited automatic offers share a discount title; disabling stays possible", async () => {
+    const shopId = shopIds["limits"]!;
+    const clean = await run("shop_set_limits_enforced", { shop: LIMITS, enforced: true });
+    const token = body(clean).meta.confirmToken!;
+    expect(token).toBeTruthy();
+    const a = await seedOffer(db, shopId, { status: "active", internalName: "limited-a", publicTitle: "Same title" });
+    const b = await seedOffer(db, shopId, { status: "active", internalName: "plain-b", publicTitle: "Same title" });
+    await db.insert(offerCombinationPolicies).values({ shopId, offerId: a, maxApplicationsPerCustomer: 1 });
+
+    const dry = await run("shop_set_limits_enforced", { shop: LIMITS, enforced: true });
+    expect(body(dry).code).toBe("VALIDATION");
+    expect(body(dry).message).toContain("limited-a, plain-b");
+    // The collision appeared after the dry run: the execute re-checks the preconditions.
+    const exec = await run("shop_set_limits_enforced", { shop: LIMITS, enforced: true, dryRun: false, confirmToken: token });
+    expect(body(exec).code).toBe("VALIDATION");
+    expect(await isLimitsEnforced(db, shopId)).toBe(false);
+    expect(publish).not.toHaveBeenCalled();
+    expect(body(await run("shop_set_limits_enforced", { shop: LIMITS, enforced: false })).meta.dryRun).toBe(true);
+
+    await db.update(offers).set({ status: "archived" }).where(eq(offers.id, b));
+    expect(body(await run("shop_set_limits_enforced", { shop: LIMITS, enforced: true })).meta.dryRun).toBe(true);
+    await db.update(offers).set({ status: "archived" }).where(eq(offers.id, a));
   });
 
   it("dry run then execute flips the flag, republishes and audits; the same value again is a no-op", async () => {

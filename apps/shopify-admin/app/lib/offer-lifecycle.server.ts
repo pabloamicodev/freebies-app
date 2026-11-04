@@ -548,7 +548,10 @@ export async function republishShop(
 export async function activateDraftOffer(
   db: Db,
   ctx: OfferLifecycleContext,
-  opts: OfferLifecycleOptions,
+  opts: OfferLifecycleOptions & {
+    /** The admin Publish button also re-publishes a non-draft offer; MCP keeps the draft-only guard. */
+    fromAnyStatus?: boolean;
+  },
 ): Promise<OfferLifecycleResult> {
   const publish = opts.publish ?? tryPublishShop;
   const [offer] = await db
@@ -560,7 +563,7 @@ export async function activateDraftOffer(
   const stale = staleFailure(offer.updatedAt, opts);
   if (stale) return stale;
   const statusBefore = offer.status as OfferStatus;
-  if (statusBefore !== "draft") {
+  if (statusBefore !== "draft" && !opts.fromAnyStatus) {
     return { ok: false, code: "state", reason: "invalid_status", error: `Only a draft can be activated this way (status: ${statusBefore}).` };
   }
   const [mains, rewards] = await Promise.all([
