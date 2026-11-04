@@ -76,7 +76,7 @@ export type TestIdea = {
 
 export const ERROR_CODES = [
   "UNAUTHENTICATED",
-  "FORBIDDEN_ROLE",
+  "FORBIDDEN",
   "SHOP_NOT_FOUND",
   "SHOP_FORBIDDEN",
   "SHOP_READ_ONLY",
@@ -104,6 +104,8 @@ export type ToolErrorPayload = {
   retryable: boolean;
   retryAfterSeconds?: number;
   confirmToken?: string;
+  /** Shared with the EE: FORBIDDEN carries reason "ROLE" (insufficient operator role). */
+  details?: { reason?: string };
 };
 
 const RETRYABLE: ReadonlySet<ErrorCode> = new Set(["RATE_LIMITED", "UPSTREAM_UNAVAILABLE"]);
@@ -113,7 +115,7 @@ export class ToolError extends Error {
   constructor(
     code: ErrorCode,
     message: string,
-    opts: { suggestedAction?: SuggestedAction; retryAfterSeconds?: number; confirmToken?: string } = {},
+    opts: { suggestedAction?: SuggestedAction; retryAfterSeconds?: number; confirmToken?: string; details?: { reason?: string } } = {},
   ) {
     super(message);
     this.name = "ToolError";
@@ -125,6 +127,7 @@ export class ToolError extends Error {
       retryable: RETRYABLE.has(code),
       ...(opts.retryAfterSeconds !== undefined ? { retryAfterSeconds: opts.retryAfterSeconds } : {}),
       ...(opts.confirmToken ? { confirmToken: opts.confirmToken } : {}),
+      ...(opts.details ? { details: opts.details } : {}),
     };
   }
 }

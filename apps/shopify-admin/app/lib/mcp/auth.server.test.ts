@@ -48,12 +48,12 @@ describe("roles", () => {
     expect(roleAtLeast("viewer", "editor")).toBe(false);
     expect(roleAtLeast("editor", "editor")).toBe(true);
   });
-  it("requireRole throws FORBIDDEN_ROLE", () => {
+  it("requireRole throws FORBIDDEN", () => {
     expect(() => requireRole(op("viewer"), "admin")).toThrow(ToolError);
     try {
       requireRole(op("viewer"), "admin");
     } catch (error) {
-      expect((error as ToolError).payload.code).toBe("FORBIDDEN_ROLE");
+      expect((error as ToolError).payload.code).toBe("FORBIDDEN");
     }
     expect(() => requireRole(op("admin"), "editor")).not.toThrow();
   });

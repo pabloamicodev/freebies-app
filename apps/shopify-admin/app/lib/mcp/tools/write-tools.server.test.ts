@@ -362,7 +362,7 @@ describe("write guard and roles", () => {
     expect(body(await run("promo_pause", { ref: ref("env-only.myshopify.com", offerId), reason: "now allowed" }, operators["editor"], { env })).meta.dryRun).toBe(true);
   });
 
-  it("viewer is FORBIDDEN_ROLE everywhere; editor cannot archive or republish", async () => {
+  it("viewer is FORBIDDEN everywhere; editor cannot archive or republish", async () => {
     const id = await seedOffer(db, shopIds["test"]!, { status: "active" });
     const args: Record<string, Record<string, unknown>> = {
       promo_pause: { ref: ref(TEST, id), reason: "viewer try" },
@@ -376,10 +376,10 @@ describe("write guard and roles", () => {
       codes_set_status: { ref: ref(TEST, id), status: "disabled", all: true },
     };
     for (const [tool, a] of Object.entries(args)) {
-      expect(body(await run(tool, a, operators["viewer"])).code, tool).toBe("FORBIDDEN_ROLE");
+      expect(body(await run(tool, a, operators["viewer"])).code, tool).toBe("FORBIDDEN");
     }
     for (const tool of ["promo_archive", "promos_republish_shop"]) {
-      expect(body(await run(tool, args[tool]!, operators["editor"])).code, tool).toBe("FORBIDDEN_ROLE");
+      expect(body(await run(tool, args[tool]!, operators["editor"])).code, tool).toBe("FORBIDDEN");
     }
     expect((await row(id)).status).toBe("active");
   });
@@ -668,7 +668,7 @@ describe("mcp_call_log", () => {
     await run("promo_pause", { ...args, dryRun: false, confirmToken: token });
     await run("promo_pause", args, operators["viewer"]);
     const rows = (await callLogs("promo_pause")).filter((r) => (r.argsRedacted as { ref?: string } | null)?.ref === args.ref);
-    expect(rows.map((r) => r.outcome).sort()).toEqual(["CONFIRM_INVALID", "FORBIDDEN_ROLE", "ok", "ok"]);
+    expect(rows.map((r) => r.outcome).sort()).toEqual(["CONFIRM_INVALID", "FORBIDDEN", "ok", "ok"]);
     const executed = rows.find((r) => r.confirmJti)!;
     expect(executed).toMatchObject({ operatorId: operators["editor"]!.id, shops: [TEST], outcome: "ok" });
     expect(executed.durationMs).not.toBeNull();

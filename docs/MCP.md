@@ -172,3 +172,7 @@ Resources reuse the read tools and the operator shop visibility; an unknown or i
 | `docs://page-conditions` | Store pages, `excludeUrls` (`!<path>` patterns), template, section, test group. |
 
 Prompts: `promo_weekly_readout` (shops?, lastDays?) -> promos_active, promo_performance, promo_health. `promo_test_ideas` (shop, goal?) -> suggest_promo_tests, then the Experiment Engine MCP experiments_list / results_get, joined by shopDomain. `why_not_applying` (ref, pageUrl) -> page_conditions_explain + promo_detail.
+
+## Error codes
+
+Errors use the contract shared with the Experiment Engine MCP: `code`, `message`, `retryable`, `suggestedAction`, optional `retryAfterSeconds` and `details`. An insufficient operator role is `FORBIDDEN` with `details.reason = "ROLE"`; a shop outside the operator allow list is `SHOP_FORBIDDEN`; a shop that is not write-enabled is `SHOP_READ_ONLY`.
