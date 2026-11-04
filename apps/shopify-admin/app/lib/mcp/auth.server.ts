@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { mcpCredentials, mcpOperators, type Db } from "@promo/db";
 import { ToolError } from "./result.server.js";
 
@@ -103,23 +103,43 @@ export async function revokeOperatorCredentials(db: Db, operatorId: string, now:
     .where(and(eq(mcpCredentials.operatorId, operatorId), isNull(mcpCredentials.revokedAt)));
 }
 
+type CredentialKind = "pat" | "access" | "refresh";
+
+/** True while the operator still holds an unrevoked, unexpired PAT: OAuth tokens never outlive the PAT they were issued against. */
+export async function operatorHasActivePat(db: Db, operatorId: string, now: Date): Promise<boolean> {
+  const [row] = await db
+    .select({ id: mcpCredentials.id })
+    .from(mcpCredentials)
+    .where(
+      and(
+        eq(mcpCredentials.operatorId, operatorId),
+        eq(mcpCredentials.kind, "pat"),
+        isNull(mcpCredentials.revokedAt),
+        gt(mcpCredentials.expiresAt, now),
+      ),
+    )
+    .limit(1);
+  return Boolean(row);
+}
+
 /**
- * Bearer token -> operator. Every failure is the same UNAUTHENTICATED error so a caller
- * cannot tell an unknown token from an expired, revoked or disabled one.
+ * Raw token -> operator, restricted to the given credential kinds. Every failure is the same UNAUTHENTICATED error
+ * so a caller cannot tell an unknown token from an expired, revoked or disabled one.
  */
-export async function authenticateBearer(
+async function authenticateToken(
   db: Db,
-  authorization: string | null,
-  env: NodeJS.ProcessEnv = process.env,
-  now: Date = new Date(),
+  token: string,
+  kinds: CredentialKind[],
+  env: NodeJS.ProcessEnv,
+  now: Date,
 ): Promise<Operator> {
   const fail = () => new ToolError("UNAUTHENTICATED", "Missing, invalid or expired token.");
-  const token = authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
   if (!token.startsWith(PAT_PREFIX)) throw fail();
 
   const [row] = await db
     .select({
       credentialId: mcpCredentials.id,
+      kind: mcpCredentials.kind,
       expiresAt: mcpCredentials.expiresAt,
       lastUsedAt: mcpCredentials.lastUsedAt,
       revokedAt: mcpCredentials.revokedAt,
@@ -135,11 +155,36 @@ export async function authenticateBearer(
     .where(eq(mcpCredentials.tokenHash, hashToken(token, env)))
     .limit(1);
 
-  if (!row || row.revokedAt || row.operatorDisabledAt) throw fail();
+  if (!row || !kinds.includes(row.kind) || row.revokedAt || row.operatorDisabledAt) throw fail();
   if (!row.expiresAt || row.expiresAt.getTime() <= now.getTime()) throw fail();
+  if (row.kind !== "pat" && !(await operatorHasActivePat(db, row.id, now))) throw fail();
 
   if (!row.lastUsedAt || now.getTime() - row.lastUsedAt.getTime() >= LAST_USED_THROTTLE_MS) {
     await db.update(mcpCredentials).set({ lastUsedAt: now }).where(eq(mcpCredentials.id, row.credentialId));
   }
   return { id: row.id, email: row.email, name: row.name, role: row.role, shopAllowList: row.shopAllowList };
+}
+
+function bearerToken(authorization: string | null): string {
+  return authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+}
+
+/** `Authorization: Bearer <PAT or OAuth access token>` -> operator. Refresh tokens are rejected. */
+export async function authenticateBearer(
+  db: Db,
+  authorization: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+  now: Date = new Date(),
+): Promise<Operator> {
+  return authenticateToken(db, bearerToken(authorization), ["pat", "access"], env, now);
+}
+
+/** A bare PAT (pasted into the OAuth authorize page). Access and refresh tokens are not accepted there. */
+export async function authenticatePat(
+  db: Db,
+  pat: string,
+  env: NodeJS.ProcessEnv = process.env,
+  now: Date = new Date(),
+): Promise<Operator> {
+  return authenticateToken(db, pat.trim(), ["pat"], env, now);
 }
