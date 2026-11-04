@@ -39,6 +39,7 @@ Create the first admin (prints the PAT once; run against the database that serve
 ```
 pnpm mcp:operator create --email you@example.com --name "You" --role admin --shops '*'
 pnpm mcp:operator list
+pnpm mcp:operator rotate --email you@example.com --grace-minutes 60   # new PAT printed once; old PAT (and claude.ai grants bound to it) expire after the grace, default 60, max 1440
 pnpm mcp:operator revoke --email you@example.com
 ```
 

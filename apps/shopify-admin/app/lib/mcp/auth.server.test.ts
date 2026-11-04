@@ -10,10 +10,12 @@ import {
   generatePat,
   hashToken,
   requireRole,
+  rotateOperatorPat,
   revokeOperatorCredentials,
   roleAtLeast,
 } from "./auth.server.js";
 import { ToolError } from "./result.server.js";
+import { ACCESS_PREFIX, issueAuthCode, exchangeAuthCode, pkceChallengeS256, refreshTokens, registerClient } from "./oauth.server.js";
 import { createTestDb } from "../test-support/pglite-db.js";
 
 const env = { MCP_TOKEN_PEPPER: "test-pepper-0123456789" } as NodeJS.ProcessEnv;
@@ -153,5 +155,59 @@ describe("authenticateBearer", () => {
     await expect(
       authenticateBearer(db, `Bearer ${pat}`, { MCP_TOKEN_PEPPER: "different-pepper-0123456" } as NodeJS.ProcessEnv, now),
     ).rejects.toMatchObject({ payload: { code: "UNAUTHENTICATED" } });
+  });
+});
+
+describe("rotateOperatorPat", () => {
+  const now = new Date("2026-03-01T12:00:00Z");
+  const min = (n: number) => new Date(now.getTime() + n * 60_000);
+
+  it("issues a new PAT and lets the old one live until the grace ends", async () => {
+    const old = await createOperatorWithPat(db, { email: "rot@example.com", name: "R", role: "editor", shopAllowList: ["*"] }, env, now);
+    const next = await rotateOperatorPat(db, old.operatorId, 30, env, now);
+    expect(next.graceEndsAt).toEqual(min(30));
+    await expect(authenticateBearer(db, `Bearer ${next.pat}`, env, min(31))).resolves.toMatchObject({ email: "rot@example.com" });
+    await expect(authenticateBearer(db, `Bearer ${old.pat}`, env, min(29))).resolves.toMatchObject({ email: "rot@example.com" });
+    await expect(authenticateBearer(db, `Bearer ${old.pat}`, env, min(31))).rejects.toMatchObject({ payload: { code: "UNAUTHENTICATED" } });
+  });
+
+  it("OAuth grants bound to the old PAT work during the grace and die with it", async () => {
+    const old = await createOperatorWithPat(db, { email: "rot-oauth@example.com", name: "R", role: "editor", shopAllowList: ["*"] }, env, now);
+    const [cred] = await db.select().from(mcpCredentials).where(eq(mcpCredentials.operatorId, old.operatorId));
+    const client = await registerClient(db, { redirectUris: ["https://claude.ai/api/mcp/auth_callback"], name: "c" });
+    const verifier = "v".repeat(50);
+    const code = await issueAuthCode(
+      db,
+      env,
+      { operatorId: old.operatorId, patCredentialId: cred!.id, clientId: client.clientId, codeChallenge: pkceChallengeS256(verifier), redirectUri: client.redirectUris[0]! },
+      now,
+    );
+    const tokens = await exchangeAuthCode(db, env, { code, clientId: client.clientId, redirectUri: client.redirectUris[0]!, codeVerifier: verifier }, now);
+    expect(tokens.access_token.startsWith(ACCESS_PREFIX)).toBe(true);
+    await rotateOperatorPat(db, old.operatorId, 60, env, now);
+
+    await expect(authenticateBearer(db, `Bearer ${tokens.access_token}`, env, min(10))).resolves.toMatchObject({ email: "rot-oauth@example.com" });
+    const refreshed = await refreshTokens(db, env, { refreshToken: tokens.refresh_token, clientId: client.clientId }, min(20));
+    await expect(authenticateBearer(db, `Bearer ${refreshed.access_token}`, env, min(30))).resolves.toBeTruthy();
+
+    await expect(authenticateBearer(db, `Bearer ${refreshed.access_token}`, env, min(61))).rejects.toMatchObject({ payload: { code: "UNAUTHENTICATED" } });
+    await expect(refreshTokens(db, env, { refreshToken: refreshed.refresh_token, clientId: client.clientId }, min(61))).rejects.toMatchObject({ error: "invalid_grant" });
+  });
+
+  it("never lengthens an already shorter expiry, and revoke still cuts everything", async () => {
+    const op = await createOperatorWithPat(db, { email: "rot-short@example.com", name: "R", role: "viewer", shopAllowList: ["*"], ttlDays: 1 }, env, now);
+    await rotateOperatorPat(db, op.operatorId, 1440, env, now);
+    await expect(authenticateBearer(db, `Bearer ${op.pat}`, env, new Date(now.getTime() + 25 * 3_600_000))).rejects.toMatchObject({ payload: { code: "UNAUTHENTICATED" } });
+    const again = await rotateOperatorPat(db, op.operatorId, 0, env, now);
+    await revokeOperatorCredentials(db, op.operatorId, now);
+    await expect(authenticateBearer(db, `Bearer ${again.pat}`, env, now)).rejects.toMatchObject({ payload: { code: "UNAUTHENTICATED" } });
+  });
+
+  it("validates grace and refuses unknown or disabled operators", async () => {
+    const op = await createOperatorWithPat(db, { email: "rot-bad@example.com", name: "R", role: "viewer", shopAllowList: ["*"] }, env, now);
+    for (const g of [-1, 1441, 1.5, Number.NaN]) await expect(rotateOperatorPat(db, op.operatorId, g, env, now)).rejects.toThrow(/graceMinutes/);
+    await expect(rotateOperatorPat(db, "00000000-0000-0000-0000-000000000000", 5, env, now)).rejects.toThrow(/no such operator/);
+    await db.update(mcpOperators).set({ disabledAt: now }).where(eq(mcpOperators.id, op.operatorId));
+    await expect(rotateOperatorPat(db, op.operatorId, 5, env, now)).rejects.toThrow(/disabled/);
   });
 });
