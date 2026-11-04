@@ -138,9 +138,13 @@ describe("suggest_promo_tests", () => {
     expect(ee.args).toMatchObject({ shop: "alpha.myshopify.com", type: "OFFER_TEST", primaryMetric: "aov", dryRun: true });
     expect((ee.args["variants"] as unknown[]).length).toBe(2);
     expect(threshold.nextActions.find((a) => a.mcp === "promo-engine")).toMatchObject({ tool: "promo_duplicate", risk: "write" });
+    const arms = threshold.nextActions.find((a) => a.tool === "experiments_configure_arms")!;
+    expect(arms).toMatchObject({ mcp: "experiment-engine", risk: "write", args: { dryRun: true } });
+    expect(arms.args["arms"]).toEqual([expect.objectContaining({ config: { modification: expect.objectContaining({ offerType: "BANNER" }) } })]);
 
     const content = c.find((x) => x.gap === "low_add_rate")!;
     expect(content.suggestedExperimentType).toBe("CONTENT_TEST");
+    expect(content.nextActions.some((a) => a.tool === "experiments_configure_arms")).toBe(false);
     expect(content.baseline?.value).toBe("1.00% add rate");
   });
 
