@@ -4,6 +4,7 @@ import { authenticateBearer } from "./auth.server.js";
 import { createMcpServer } from "./server.server.js";
 import { ToolError } from "./result.server.js";
 import { checkRateLimit, getClientIp } from "../rate-limit.server.js";
+import { publicOrigin, resourceMetadataUrl } from "./oauth-http.server.js";
 
 export type RateLimiter = (key: string, limit: number) => Promise<{ ok: true } | { ok: false; retryAfterSeconds: number }>;
 
@@ -31,7 +32,7 @@ function pepperConfigured(env: NodeJS.ProcessEnv): boolean {
   return (env["MCP_TOKEN_PEPPER"]?.length ?? 0) >= 16;
 }
 
-/** 404 unless MCP_ENABLED=true (set only on the HPN Vercel project); then Bearer PAT auth, then a stateless transport. */
+/** 404 unless MCP_ENABLED=true (set only on the HPN Vercel project); then Bearer auth (PAT or OAuth access token), then a stateless transport. */
 export async function handleMcpRequest(request: Request, deps: McpHandlerDeps): Promise<Response> {
   const env = deps.env ?? process.env;
   if (!mcpEnabled(env)) return new Response("Not Found", { status: 404, headers: JSON_HEADERS });
@@ -53,7 +54,9 @@ export async function handleMcpRequest(request: Request, deps: McpHandlerDeps): 
     operator = await authenticateBearer(deps.db, request.headers.get("authorization"), env, now());
   } catch (error) {
     if (error instanceof ToolError && error.payload.code === "UNAUTHENTICATED") {
-      return jsonError(401, "UNAUTHENTICATED", error.message, { "WWW-Authenticate": 'Bearer realm="promo-engine"' });
+      return jsonError(401, "UNAUTHENTICATED", error.message, {
+        "WWW-Authenticate": `Bearer resource_metadata="${resourceMetadataUrl(publicOrigin(request, env))}"`,
+      });
     }
     throw error;
   }
