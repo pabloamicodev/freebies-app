@@ -145,6 +145,65 @@ describe("publish warnings on the list toggle and the schedule save", () => {
   });
 });
 
+describe("publish warnings on a condition edit and the bulk resume", () => {
+  const stamp = JSON.stringify({ experimentId: "clx9k2abcd", variantKeys: ["control"], experimentName: "Old" });
+  const addExperiment = (id: string, fields: Record<string, string> = {}) =>
+    run(conditions.action, post(`/app/offers/${id}/conditions`, { intent: "add_condition", conditionType: "experiment", scope: "sub", pageStampValue: stamp, ...fields }), { id });
+  const count = async (id: string) => (await db.select().from(offerConditions).where(eq(offerConditions.offerId, id))).length;
+  const warnOnExperiments = () => experimentWarnings.mockImplementation(async (_auth, experiments) => ((experiments as unknown[]).length > 0 ? [WARNING] : []));
+  beforeEach(() => void warnOnExperiments());
+
+  it("a new warning on a live offer asks first and saves nothing, then saves and republishes once acknowledged", async () => {
+    const id = await publishable({ status: "active" });
+    expect(await addExperiment(id)).toEqual({ warnings: [WARNING] });
+    expect(await count(id)).toBe(1);
+    expect(publishOffersForShop).not.toHaveBeenCalled();
+    expect(await addExperiment(id, { acknowledgeWarnings: "1" })).toEqual({ success: true });
+    expect(await count(id)).toBe(2);
+    expect(publishOffersForShop).toHaveBeenCalledTimes(1);
+  });
+
+  it("a scheduled offer asks too, a draft or paused one never does", async () => {
+    const scheduled = await publishable({ status: "scheduled", startsAt: days(2) });
+    expect(await addExperiment(scheduled)).toEqual({ warnings: [WARNING] });
+    for (const status of ["draft", "paused"] as const) {
+      const id = await publishable({ status });
+      expect(await addExperiment(id)).toEqual({ success: true });
+      expect(await count(id)).toBe(2);
+    }
+  });
+
+  it("editing an offer that already had the warning does not ask again", async () => {
+    const id = await withExperiment({ status: "active" });
+    const [cond] = await db.select().from(offerConditions).where(and(eq(offerConditions.offerId, id), eq(offerConditions.conditionType, "experiment")));
+    const result = await run(
+      conditions.action,
+      post(`/app/offers/${id}/conditions`, { intent: "update_condition", conditionId: cond!.id, conditionType: "experiment", scope: "sub", pageStampValue: stamp }),
+      { id },
+    );
+    expect(result).toEqual({ success: true });
+  });
+
+  it("bulk_activate lists the warnings per offer and changes nothing until acknowledged, then audits them", async () => {
+    const flagged = await withExperiment({ status: "paused", internalName: "Flagged offer" });
+    const clean = await publishable({ status: "draft" });
+    warnOnExperiments();
+    const fields = { intent: "bulk_activate", "offerIds[]": [flagged, clean] };
+    expect(await run(list.action, post("/app/offers", fields))).toEqual({ bulkWarnings: [{ name: "Flagged offer", warnings: [WARNING] }] });
+    expect((await row(flagged)).status).toBe("paused");
+    expect(publishOffersForShop).not.toHaveBeenCalled();
+    expect(await run(list.action, post("/app/offers", { ...fields, acknowledgeWarnings: "1" }))).toBeNull();
+    expect([(await row(flagged)).status, (await row(clean)).status]).toEqual(["active", "active"]);
+    const [entry] = await waitAudit([flagged, clean].join(","), "bulk_activate");
+    expect(entry!.after).toMatchObject({ warnings: { [flagged]: [WARNING] } });
+  });
+
+  it("bulk_activate does not warn about offers that are already live", async () => {
+    const live = await withExperiment({ status: "active" });
+    expect(await run(list.action, post("/app/offers", { intent: "bulk_activate", "offerIds[]": [live] }))).toBeNull();
+  });
+});
+
 describe("toggle_status", () => {
   it("pauses an active offer, publishes the shop and audits before/after", async () => {
     const id = await seedOffer(db, shopId, { status: "active" });

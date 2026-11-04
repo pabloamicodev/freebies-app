@@ -189,6 +189,20 @@ describe("bulk", () => {
     expect((await audits([a, b].join(",")))[0]).toMatchObject({ action: "bulk_pause", after: { offerIds: [a, b] } });
   });
 
+  it("bulkResumeOffers reports advisory warnings per offer on a dry run, skips live offers and audits them on execution", async () => {
+    const paused = await publishable({ status: "paused" });
+    const live = await publishable({ status: "active" });
+    const publishWarningsFor = vi.fn(async (id: string) => [`warn ${id}`]);
+    const ctx = { shopId, shopDomain: DOMAIN, offerIds: [paused, live] };
+    const dry = await bulkResumeOffers(db, ctx, { ...opts, dryRun: true, publishWarningsFor });
+    expect(dry.ok && dry.offers.map((o) => o.warnings)).toEqual([[`warn ${paused}`], undefined]);
+    expect((await row(paused)).status).toBe("paused");
+    const done = await bulkResumeOffers(db, ctx, { ...opts, publishWarningsFor });
+    expect(done.ok).toBe(true);
+    expect((await row(paused)).status).toBe("active");
+    expect((await audits(ctx.offerIds.join(",")))[0]!.after).toMatchObject({ warnings: { [paused]: [`warn ${paused}`] } });
+  });
+
   it("bulkResumeOffers validates all first and honours each offer's dates", async () => {
     const now = await publishable({ status: "draft" });
     const future = await publishable({ status: "paused", startsAt: days(3) });

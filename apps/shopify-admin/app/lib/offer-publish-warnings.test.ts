@@ -40,7 +40,7 @@ vi.mock("./shopify-fetch.server.js", () => ({
   },
 }));
 
-const { finalizeCreatedOffer, getPublishWarnings, getShopPublishWarnings } = await import("./offer-publish-flow.server.js");
+const { finalizeCreatedOffer, getNewPublishWarningsForEdit, getPublishWarnings, getShopPublishWarnings } = await import("./offer-publish-flow.server.js");
 
 let db: Db;
 let close: () => Promise<void>;
@@ -141,5 +141,32 @@ describe("getShopPublishWarnings and the wizard end", () => {
     const logs = (id: string) => db.select().from(auditLogs).where(and(eq(auditLogs.shopId, shopId), eq(auditLogs.entityId, id)));
     expect((await logs(withWarning))[0]).toMatchObject({ action: "publish_warning", performedBy: "system", after: { warnings: ['Experiment "Old" is not in your Experiment Engine directory.'] } });
     expect(await logs(clean)).toHaveLength(0);
+  });
+});
+
+describe("getNewPublishWarningsForEdit", () => {
+  const gone = { conditionType: "template", value: { templates: ["page.gone"] } };
+  const idOf = async (offerId: string, conditionType: string) =>
+    (await db.select().from(offerConditions).where(and(eq(offerConditions.offerId, offerId), eq(offerConditions.conditionType, conditionType as "template"))))[0]!.id;
+
+  it("reports a warning an added condition introduces and writes nothing", async () => {
+    const id = await offerWith([{ conditionType: "cart_value", value: { thresholdCents: 1 } }]);
+    expect(await getNewPublishWarningsForEdit(db, shopId, id, auth, gone)).toEqual(['Template "page.gone" is not in your published theme.']);
+    expect(await db.select().from(offerConditions).where(eq(offerConditions.offerId, id))).toHaveLength(1);
+  });
+
+  it("skips warnings the offer already has and reports only the new ones", async () => {
+    const id = await offerWith([gone]);
+    const conditionId = await idOf(id, "template");
+    expect(await getNewPublishWarningsForEdit(db, shopId, id, auth, { ...gone, conditionId })).toEqual([]);
+    expect(await getNewPublishWarningsForEdit(db, shopId, id, auth, { conditionId, conditionType: "template", value: { templates: ["page.gone", "page.other"] } })).toEqual([
+      'Template "page.other" is not in your published theme.',
+    ]);
+    expect(await getNewPublishWarningsForEdit(db, shopId, id, auth, { conditionId, conditionType: "template", value: { templates: ["page.landing"] } })).toEqual([]);
+  });
+
+  it("ignores a disabled condition the edit does not touch", async () => {
+    const id = await offerWith([{ ...gone, isEnabled: false }]);
+    expect(await getNewPublishWarningsForEdit(db, shopId, id, auth, { conditionType: "cart_value", value: {} })).toEqual([]);
   });
 });

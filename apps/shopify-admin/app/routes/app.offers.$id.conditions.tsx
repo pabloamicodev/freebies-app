@@ -4,7 +4,7 @@
  * validated form for each condition type.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData, Form, Link, useActionData, useNavigation, useSubmit } from "react-router";
 import * as Sentry from "@sentry/node";
@@ -42,7 +42,7 @@ import { DEFAULT_CODE_PAGE_TYPES, readExcludeUrls, readPageTypes, readPageUrls }
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
 import { ExperimentForm, SectionShownForm, TemplateForm } from "../components/subconditions/forms.js";
 import { and, eq } from "drizzle-orm";
-import { republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { getNewPublishWarningsForEdit, republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { getMarketsForShop } from "../lib/markets.server.js";
 import { isCheckoutCodeGated } from "../lib/code-redemption.js";
 import { conditionSummary, conditionTypeLabel } from "../lib/offer-summaries.js";
@@ -325,6 +325,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       if (conflict) return { error: conflict };
     }
 
+    const conditionId = intent === "update_condition" ? (formData.get("conditionId") as string | null) ?? "" : "";
+    if (intent === "update_condition" && !conditionId) return { error: "Condition ID missing." };
+    if ((offer.status === "active" || offer.status === "scheduled") && formData.get("acknowledgeWarnings") !== "1") {
+      const warnings = await getNewPublishWarningsForEdit(db, shopId, offerId, { shopDomain: session.shop, accessToken: session.accessToken ?? "" }, { conditionId: conditionId || undefined, conditionType, value });
+      if (warnings.length > 0) return { warnings };
+    }
+
     if (intent === "add_condition") {
       const existingCount = await db.select({ id: offerConditions.id })
         .from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
@@ -339,8 +346,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         isEnabled: true,
       });
     } else {
-      const conditionId = formData.get("conditionId") as string;
-      if (!conditionId) return { error: "Condition ID missing." };
       await db.update(offerConditions)
         .set({ scope, conditionType, operator: conditionOperator, value })
         .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)));
@@ -431,6 +436,8 @@ export default function OfferConditionsPage() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const submit = useSubmit();
+  const lastForm = useRef<FormData | null>(null);
+  const [dismissed, setDismissed] = useState<unknown>(null);
   const isSubmitting = navigation.state !== "idle";
   const [conditionState, setConditionField] = useObjectState(() => {
     // Open the first condition's edit form by default, so it's immediately
@@ -549,6 +556,26 @@ export default function OfferConditionsPage() {
           else if (matchBy === "product") setRequiredProductGids(gids);
           else setRequiredVariantGids(gids);
         }}
+      />
+
+      <ConfirmDialog
+        open={Boolean(actionData && "warnings" in actionData && actionData.warnings?.length) && dismissed !== actionData}
+        ariaLabel="Publish warnings"
+        title="Publish anyway?"
+        message={
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {actionData && "warnings" in actionData && actionData.warnings?.map((warning) => <li key={warning}>{warning}</li>)}
+          </ul>
+        }
+        confirmLabel="Publish anyway"
+        destructive={false}
+        onConfirm={() => {
+          setDismissed(actionData);
+          if (!lastForm.current) return;
+          lastForm.current.set("acknowledgeWarnings", "1");
+          void submit(lastForm.current, { method: "POST" });
+        }}
+        onCancel={() => setDismissed(actionData)}
       />
 
       <div className="b-page">
@@ -706,7 +733,7 @@ export default function OfferConditionsPage() {
               {editingId ? "Edit Condition" : `Add ${addingScope === "main" ? "Main" : "Sub"} Condition`}
             </div>
             <div className="b-card-body">
-              <Form method="POST" key={editingId ?? "new"}>
+              <Form method="POST" key={editingId ?? "new"} onSubmit={(e) => { lastForm.current = new FormData(e.currentTarget); }}>
                 <input type="hidden" name="intent" value={editingId ? "update_condition" : "add_condition"} />
                 {editingId && <input type="hidden" name="conditionId" value={editingId} />}
                 <input type="hidden" name="scope" value={addingScope} />

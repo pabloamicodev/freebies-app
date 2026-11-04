@@ -9,7 +9,7 @@ import {
   offers,
   widgets,
 } from "@promo/db";
-import { eq, and, like, desc, count } from "drizzle-orm";
+import { eq, and, like, desc, count, inArray } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
   IconCopy,
@@ -231,7 +231,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       break;
     }
     case "bulk_activate": {
-      const result = await bulkResumeOffers(db, { shopId, shopDomain: session.shop, offerIds }, { performedBy: session.shop });
+      const target = { shopId, shopDomain: session.shop, offerIds };
+      const check = await bulkResumeOffers(db, target, { performedBy: session.shop, dryRun: true });
+      if (!check.ok) return { error: check.error };
+      const flagged = check.offers.filter((o) => o.warnings);
+      if (flagged.length > 0 && formData.get("acknowledgeWarnings") !== "1") {
+        const names = await db.select({ id: offers.id, name: offers.internalName }).from(offers).where(and(eq(offers.shopId, shopId), inArray(offers.id, flagged.map((o) => o.offerId))));
+        return { bulkWarnings: flagged.map((o) => ({ name: names.find((n) => n.id === o.offerId)?.name ?? o.offerId, warnings: o.warnings ?? [] })) };
+      }
+      const byOffer = new Map(flagged.map((o) => [o.offerId, o.warnings ?? []]));
+      const result = await bulkResumeOffers(db, target, { performedBy: session.shop, publishWarningsFor: async (id) => byOffer.get(id) ?? [] });
       if (!result.ok) return { error: result.error };
       break;
     }
@@ -792,7 +801,9 @@ export default function OffersPage() {
   const [searchInput, setSearchInput] = useState(loaderSearch);
   const deleteFetcher = useFetcher<{ error?: string }>();
   const archiveFetcher = useFetcher<{ error?: string }>();
-  const bulkFetcher = useFetcher<{ error?: string }>();
+  const bulkFetcher = useFetcher<{ error?: string; bulkWarnings?: Array<{ name: string; warnings: string[] }> }>();
+  const lastBulk = useRef<FormData | null>(null);
+  const [dismissedBulk, setDismissedBulk] = useState<unknown>(null);
   const duplicateFetcher = useFetcher<{ error?: string }>();
   const [csvError, setCsvError] = useState<string | null>(null);
 
@@ -941,6 +952,7 @@ export default function OffersPage() {
       for (const id of checkedIds) {
         fd.append("offerIds[]", id);
       }
+      lastBulk.current = fd;
       void bulkFetcher.submit(fd, { method: "POST" });
       setCheckedIds(new Set());
     },
@@ -1083,6 +1095,31 @@ export default function OffersPage() {
           onCancel={closeConfirmAction}
         />
       )}
+
+      <ConfirmDialog
+        open={Boolean(bulkFetcher.data?.bulkWarnings?.length) && dismissedBulk !== bulkFetcher.data}
+        ariaLabel="Publish warnings"
+        title="Publish anyway?"
+        message={
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {bulkFetcher.data?.bulkWarnings?.map((o) => (
+              <li key={o.name}>
+                {o.name}
+                <ul style={{ paddingLeft: 18 }}>{o.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
+              </li>
+            ))}
+          </ul>
+        }
+        confirmLabel="Publish anyway"
+        destructive={false}
+        onConfirm={() => {
+          setDismissedBulk(bulkFetcher.data);
+          if (!lastBulk.current) return;
+          lastBulk.current.set("acknowledgeWarnings", "1");
+          void bulkFetcher.submit(lastBulk.current, { method: "POST" });
+        }}
+        onCancel={() => setDismissedBulk(bulkFetcher.data)}
+      />
 
       {/* ── Bulk actions toolbar ─────────────────────────────── */}
       {checkedIds.size > 0 && (
