@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { and, eq, inArray, like, ne } from "drizzle-orm";
@@ -5,6 +6,7 @@ import { discountCodes, offers, type Db } from "@promo/db";
 import { requireRole, type McpRole } from "../auth.server.js";
 import { insertAuditLog } from "../../audit-log.server.js";
 import { duplicateOffer } from "../../offer-duplicate.server.js";
+import { mapOfferResourcesToShop, type ResourceMapping } from "../../offer-resource-mapping.server.js";
 import { setDiscountCodesStatus } from "../../discount-codes.server.js";
 import { republishIfActive, tryPublishShop } from "../../offer-publish-flow.server.js";
 import {
@@ -20,6 +22,7 @@ import {
 import { sharedConfigBreakdown } from "../../shared-config-size.server.js";
 import { MAX_METAFIELD_BYTES } from "../../sync/offer-publisher.server.js";
 import { logCall, shopsFromArgs } from "../call-log.server.js";
+import { canonicalJson } from "../confirm.server.js";
 import { ToolError, promoRef, publishAdvisories, shopHandle, type Warning } from "../result.server.js";
 import { toErrorCallToolResult, type McpContext } from "../server.server.js";
 import { selectShops, visibleShops, type VisibleShop } from "../shops.server.js";
@@ -49,7 +52,7 @@ export const promosRepublishShopInput = { shop: z.string().max(200).describe("Sh
 export const promoDuplicateInput = {
   ...refFields,
   name: z.string().trim().min(1).max(120).optional().describe("Name of the draft copy; made unique in the target shop. Default: '<name>-copy'."),
-  targetShop: z.string().max(200).optional().describe("Must be the source shop (or omitted): cross-shop copies are not supported yet because product and collection ids can't be translated."),
+  targetShop: z.string().max(200).optional().describe("Another shop to copy into (admin role; the target must be write-enabled). Products, variants and collections are matched by handle/SKU; unmatched references are stripped and listed. The dry run shows the mapping."),
   ...writeControls,
 };
 export const promoCreateDraftInput = {
@@ -292,6 +295,7 @@ async function cloneDraft(
   name: string,
   tool: string,
   extra: Record<string, unknown>,
+  mapping?: ResourceMapping,
 ): Promise<string> {
   const current = await offerBasics(ctx.db, source.shop, source.offerId);
   if (a.expectedUpdatedAt && current.updatedAt.getTime() !== a.expectedUpdatedAt.getTime()) {
@@ -300,7 +304,7 @@ async function cloneDraft(
   const finalName = await uniqueOfferName(ctx.db, target.id, name);
   let newId: string | null;
   try {
-    newId = await duplicateOffer(ctx.db, source.shop.id, source.offerId, { name: finalName });
+    newId = await duplicateOffer(ctx.db, source.shop.id, source.offerId, { name: finalName, targetShopId: target.id, resourceMapping: mapping });
   } catch (error) {
     if (isUnique(error)) throw new ToolError("STATE_CONFLICT", "The name was taken meanwhile; run the dry run again.");
     throw error;
@@ -318,6 +322,33 @@ async function cloneDraft(
   return newId;
 }
 
+const mappingHash = (m: ResourceMapping) => createHash("sha256").update(canonicalJson(m)).digest("hex");
+
+async function mapForTool(ctx: McpContext, source: { shop: VisibleShop; offerId: string }, target: VisibleShop): Promise<ResourceMapping> {
+  try {
+    return await mapOfferResourcesToShop(ctx.db, { sourceShopId: source.shop.id, offerId: source.offerId, targetShopId: target.id });
+  } catch (error) {
+    if (error instanceof ToolError) throw error;
+    throw new ToolError("UPSTREAM_UNAVAILABLE", `Could not read products from Shopify to map them across shops (${safeMessage(error)}). Retry later.`);
+  }
+}
+
+const safeMessage = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").slice(0, 200);
+
+const unmatchedWarning = (m: ResourceMapping): Warning[] =>
+  m.unmatched.length
+    ? [
+        {
+          code: "UNMATCHED_RESOURCES",
+          severity: "warn",
+          message: `${m.unmatched.length} reference(s) have no match in the target shop and are stripped from the copy (review the draft before activating): ${m.unmatched
+            .slice(0, 10)
+            .map((u) => `${u.kind} ${u.key ?? u.from} (${u.reason})`)
+            .join("; ")}${m.unmatched.length > 10 ? "; ..." : ""}`,
+        },
+      ]
+    : [];
+
 export function duplicateTool(
   ctx: McpContext,
   call: CallInfo,
@@ -326,36 +357,44 @@ export function duplicateTool(
   return guarded(ctx, call, "promo_duplicate", "editor", args, async (visible) => {
     const source = resolvePromoRef(visible, args);
     const target = args.targetShop ? selectShops(visible, [args.targetShop])[0]! : source.shop;
-    if (target.id !== source.shop.id) {
-      throw new ToolError("VALIDATION", "Cross-shop copies are not supported yet: product, variant and collection ids can't be translated across shops. Duplicate inside the same shop.");
-    }
+    const crossShop = target.id !== source.shop.id;
     const sourceRef = promoRef(source.shop.myshopifyDomain, source.offerId);
     return {
       tool: "promo_duplicate",
-      minRole: "editor",
+      minRole: crossShop ? "admin" : "editor",
       critical: false,
-      shops: [source.shop],
+      shops: [target],
       preview: async () => {
         const basics = await offerBasics(ctx.db, source.shop, source.offerId);
         const name = await uniqueOfferName(ctx.db, target.id, args.name ?? `${basics.name}-copy`);
+        const mapping = crossShop ? await mapForTool(ctx, source, target) : null;
         const warnings: Warning[] = [
           { code: "NOT_COPIED", severity: "info", message: "Discount codes, widgets, versions, usage counters and gift clone products are not copied; the copy is a draft." },
+          ...(mapping ? unmatchedWarning(mapping) : []),
         ];
         return {
-          summary: `Duplicate "${label(basics.name)}" (${basics.status}) as the draft "${name}" in ${target.myshopifyDomain}.`,
-          data: { sourceRef, targetShop: target.myshopifyDomain, name, resultingStatus: "draft" },
+          summary: `Duplicate "${label(basics.name)}" (${basics.status}) as the draft "${name}" in ${target.myshopifyDomain}${mapping ? ` (${mapping.mapped.length} resource(s) mapped, ${mapping.unmatched.length} unmatched)` : ""}.`,
+          data: { sourceRef, targetShop: target.myshopifyDomain, name, resultingStatus: "draft", ...(mapping ? { resourceMapping: mapping } : {}) },
           warnings,
           links: [adminLink(shopHandle(target.myshopifyDomain))],
           offerUpdatedAt: basics.updatedAt,
+          setHash: mapping ? mappingHash(mapping) : null,
         };
       },
       apply: async (a) => {
         const basics = await offerBasics(ctx.db, source.shop, source.offerId);
-        const newId = await cloneDraft(ctx, a, source, target, args.name ?? `${basics.name}-copy`, "promo_duplicate", {});
+        let mapping: ResourceMapping | undefined;
+        if (crossShop) {
+          mapping = await mapForTool(ctx, source, target);
+          if (a.expectedSetHash !== mappingHash(mapping)) throw new ToolError("STATE_CONFLICT", "The product mapping to the target shop changed since the dry run; run it again.");
+        }
+        const extra = crossShop ? { sourceShop: source.shop.myshopifyDomain, sourceOfferId: source.offerId, mapped: mapping!.mapped.length, unmatched: mapping!.unmatched } : {};
+        const newId = await cloneDraft(ctx, a, source, target, args.name ?? `${basics.name}-copy`, "promo_duplicate", extra, mapping);
         const newRef = promoRef(target.myshopifyDomain, newId);
         return {
           summary: `Created the draft ${newRef} from ${sourceRef}.`,
-          data: { promoRef: newRef, offerId: newId, sourceRef, status: "draft" },
+          data: { promoRef: newRef, offerId: newId, sourceRef, status: "draft", ...(mapping ? { unmatched: mapping.unmatched } : {}) },
+          warnings: mapping ? unmatchedWarning(mapping) : undefined,
           links: [adminLink(shopHandle(target.myshopifyDomain))],
           nextActions: [{ mcp: "promo-engine", tool: "promo_detail", args: { ref: newRef }, why: "Review the draft.", risk: "read" }],
         };
