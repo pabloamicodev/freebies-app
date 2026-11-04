@@ -25,7 +25,7 @@ import {
 const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } as const;
 const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true } as const;
 const FLOW =
-  " dryRun defaults to true: it returns the diff and a confirmToken (5 min, single use, bound to these exact arguments); call again with dryRun:false and that token to apply. Only write-enabled shops (hpn-test-store); other shops answer SHOP_READ_ONLY.";
+  " dryRun defaults to true: it returns the diff and a confirmToken (5 min, single use, bound to these exact arguments); call again with dryRun:false and that token to apply. Only write-enabled shops (see mcp_whoami); other shops answer SHOP_READ_ONLY.";
 
 /** Phase 3 write tools (editor; archive and republish need admin). They call the offer-lifecycle service, never SQL. */
 export function registerWriteTools(server: McpServer, ctx: McpContext): void {

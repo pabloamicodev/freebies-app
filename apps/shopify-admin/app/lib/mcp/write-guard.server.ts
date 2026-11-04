@@ -21,7 +21,7 @@ export async function assertWriteAllowed(
     if (modes.get(shop.id) === "write") continue;
     throw new ToolError(
       "SHOP_READ_ONLY",
-      `${shop.myshopifyDomain} is read-only for the MCP. Writes are only enabled on the test shop; ask the owner before enabling another one.`,
+      `${shop.myshopifyDomain} is read-only for the MCP. Writes need the shop in MCP_WRITE_SHOPS and its mcp.writeMode set to write; ask the owner to enable it.`,
       {
         suggestedAction: {
           mcp: "promo-engine",
