@@ -112,11 +112,11 @@ Every write calls the `offer-lifecycle.server.ts` service (validate, update, pub
 | `promo_pause` / `promo_resume` | editor | Pause a live offer / resume a paused one (validates, schedule decides active, scheduled or expired). Publish failure rolls the status back. |
 | `promo_archive` | admin, destructive | Archive and republish. Max 3 executions a minute. |
 | `promos_republish_shop` | admin | Re-publish the shop's config; the dry run shows live offers and bytes vs the 9500 B limit. |
-| `promo_duplicate` | editor | Draft copy (no codes, widgets, versions) with a unique name (`name (2)`); `targetShop` copies into another write-enabled shop (references to products and collections are not translated). |
-| `promo_create_draft_from_template` | editor | v1: clone an existing offer as the template + bounded overrides (`startsAt`, `endsAt`, `excludeUrls` max 100, `pageUrls` max 50, each 300 chars; unknown keys rejected). Overrides are validated against the template in the dry run. |
+| `promo_duplicate` | editor | Draft copy (no codes, widgets, versions) with a unique name (`name (2)`); `targetShop`, if given, must be the source shop: cross-shop copies are refused (`VALIDATION`) because product, variant and collection ids can't be translated yet. |
+| `promo_create_draft_from_template` | editor | v1: clone an existing offer as the template + bounded overrides (`startsAt`, `endsAt`, `excludeUrls` max 100, `pageUrls` max 50, each 300 chars; unknown keys rejected). Overrides are validated against the template in the dry run; if one still fails after the draft exists, the result is the draft plus an `OVERRIDE_FAILED` warning (so an idempotent retry replays it instead of creating a second draft). |
 | `promo_set_page_exclude_urls` | editor | Replace `excludeUrls` / `pageUrls` of the Store pages condition (same normalization and limits as the UI). |
 | `promo_set_schedule` | editor | `startsAt` / `endsAt` in the shop's timezone (`YYYY-MM-DDTHH:mm`) or an ISO instant. |
-| `codes_set_status` | editor | `active` / `disabled` for `ids`, a `batchId` or `all` codes of an offer (max 2000; exhausted codes never change); statuses are restored if the publish fails. |
+| `codes_set_status` | editor | `active` / `disabled` for `ids`, a `batchId` or `all` codes of an offer (max 2000; exhausted codes never change); the snapshot and update run in one transaction, and if the publish fails the statuses are restored and re-synced (the message says whether the re-sync worked). |
 
 Flow (all of them): `dryRun` defaults to `true` and returns the diff plus `meta.confirmToken` (HMAC-SHA256 over tool, canonical args hash,
 operator, shop, the offer's `updated_at`, expiry 5 min and a `jti`). Execute with the same arguments plus `dryRun:false` and the token. The token is
@@ -128,7 +128,7 @@ Errors added to the shared list: `STATE_CONFLICT`, `PUBLISH_FAILED` (message say
 `promo_set_page_exclude_urls` keep the saved change like the admin UI and may pause the offer), plus `CONFIRM_REQUIRED/INVALID/EXPIRED`, `SHOP_READ_ONLY`, `RATE_LIMITED`.
 
 Audit: `audit_logs.performed_by = mcp:<operatorId>`, `after._mcp = { operator, client, tool, requestId }` (+ `reason`). Every call, reads included, writes a
-`mcp_call_log` row (operator, tool, shops, redacted args, outcome, duration). Rate limits per operator per minute: 60 reads, 10 writes (dry runs count), 3 critical executions.
+`mcp_call_log` row (operator, tool, shops, outcome, duration, and args through a per-tool allow list: ids, refs, shops, status, dryRun, limits and dates only; free text such as `reason` or `q`, names, URLs and anything keyed like email/phone/code/token is dropped, with the dropped key names kept in `_omitted`). Rate limits per operator per minute: 60 reads, 10 writes (dry runs count), 3 critical executions.
 Retention: the daily `analytics-cleanup` cron (`call-log-retention.server.ts`, next to the OAuth cleanup) deletes `mcp_call_log` rows older than 90 days and PATs expired for more than 7 days.
 
 ### Enabling writes on hpn-test-store

@@ -18,6 +18,8 @@ import {
 import { createTestDb, seedOffer, seedShop } from "../../test-support/pglite-db.js";
 import { deleteExpiredMcpCallState } from "../call-log-retention.server.js";
 import { resetMemoryRateLimits } from "../../rate-limit.server.js";
+import * as lifecycle from "../../offer-lifecycle.server.js";
+import type * as LifecycleModule from "../../offer-lifecycle.server.js";
 import type { ShopPublishFn } from "../../offer-lifecycle.server.js";
 import type { Operator } from "../auth.server.js";
 import { createMcpServer, type McpContext } from "../server.server.js";
@@ -35,6 +37,10 @@ import {
 
 vi.mock("../../offer-definitions.server.js", () => ({ invalidateOfferDefinitions: async () => undefined }));
 vi.mock("../../publish-pending.server.js", () => ({ markPublishPending: async () => undefined }));
+vi.mock("../../offer-lifecycle.server.js", async (importActual) => {
+  const actual = await importActual<typeof LifecycleModule>();
+  return { ...actual, setOfferSchedule: vi.fn(actual.setOfferSchedule) };
+});
 
 const TEST = "hpn-test-store.myshopify.com";
 const SECOND = "second-test.myshopify.com";
@@ -173,13 +179,24 @@ describe("confirm token", () => {
 });
 
 describe("redactArgs", () => {
-  it("masks secrets and bounds size", () => {
-    const out = redactArgs({ confirmToken: "abc.def", ref: "r", nested: { apiSecret: "s", list: Array.from({ length: 80 }, (_, i) => i), long: "z".repeat(500) } }) as Record<string, any>;
-    expect(out["confirmToken"]).toBe("[redacted]");
-    expect(out["nested"].apiSecret).toBe("[redacted]");
-    expect(out["nested"].list).toHaveLength(51);
-    expect(out["nested"].long.length).toBeLessThan(310);
-    expect(out["ref"]).toBe("r");
+  it("keeps only allow-listed keys: free text, secrets, emails, phones and codes are dropped", () => {
+    const out = redactArgs("promo_pause", {
+      confirmToken: "abc.def", ref: "promo:a:b", reason: "call Jane on +34 600 123 456", q: "summer", name: "Secret launch",
+      customerEmail: "jane@example.com", discountCode: "SUMMER-AAAA", shop: "jane@example.com", dryRun: false,
+      idempotencyKey: "idem-key-0001", ids: ["x", "y"], excludeUrls: ["/a?e=jane@example.com"],
+    }) as Record<string, unknown>;
+    expect(out).toEqual({
+      ref: "promo:a:b", shop: "[masked]", dryRun: false, idsCount: 2, excludeUrlsCount: 1,
+      _omitted: ["confirmToken", "customerEmail", "discountCode", "name", "q", "reason"],
+    });
+    const text = JSON.stringify(out);
+    for (const leaked of ["abc.def", "Jane", "600 123", "summer", "Secret launch", "jane@", "SUMMER-AAAA"]) expect(text).not.toContain(leaked);
+  });
+
+  it("read tools log their filters but not q or free text", () => {
+    expect(redactArgs("promos_active", { shops: ["a"], status: ["active"], q: "vip customers", limit: 10 })).toEqual({
+      shops: ["a"], status: ["active"], limit: 10, _omitted: ["q"],
+    });
   });
 });
 
@@ -420,15 +437,43 @@ describe("promo_duplicate and promo_create_draft_from_template", () => {
     expect((await row(body(named.done).data["offerId"] as string)).internalName).toBe("[MCP test] custom");
   });
 
-  it("targetShop copies into another write-enabled shop, and is blocked into a read-only one", async () => {
+  it("targetShop must be the source shop: cross-shop copies are VALIDATION and create nothing", async () => {
     const id = await source();
-    const { done } = await twoStep("promo_duplicate", { ref: ref(TEST, id), targetShop: SECOND });
-    const copy = await row(body(done).data["offerId"] as string);
-    expect(copy.shopId).toBe(shopIds["second"]);
-    const conds = await db.select().from(offerConditions).where(eq(offerConditions.offerId, copy.id));
-    expect(conds.every((c) => c.shopId === shopIds["second"])).toBe(true);
-    expect(body(await run("promo_duplicate", { ref: ref(TEST, id), targetShop: LIVE }, operators["admin"])).code).toBe("SHOP_READ_ONLY");
+    const count = async () => (await db.select().from(offers)).length;
+    const before = await count();
+    for (const targetShop of [SECOND, LIVE]) {
+      const res = await run("promo_duplicate", { ref: ref(TEST, id), targetShop }, operators["admin"]);
+      expect(body(res).code).toBe("VALIDATION");
+      expect(body(res).message).toMatch(/can't be translated across shops/);
+      const exec = await run("promo_duplicate", { ref: ref(TEST, id), targetShop, dryRun: false, confirmToken: "x.y" }, operators["admin"]);
+      expect(body(exec).code).toBe("VALIDATION");
+    }
+    expect(await count()).toBe(before);
     expect(body(await run("promo_duplicate", { ref: ref(TEST, id), targetShop: "nowhere.myshopify.com" })).code).toBe("SHOP_NOT_FOUND");
+    const same = await twoStep("promo_duplicate", { ref: ref(TEST, id), targetShop: TEST });
+    expect((await row(body(same.done).data["offerId"] as string)).shopId).toBe(shopIds["test"]);
+  });
+
+  it("an override that fails after the draft exists returns the draft with a warning, and an idempotent retry replays it", async () => {
+    const id = await source();
+    const args = { shop: TEST, templateId: id, name: "[MCP test] partial", overrides: { startsAt: "2031-03-01T10:00" }, idempotencyKey: "idem-partial-1" };
+    // Call 1 is the dry run against the template (real, the default); call 2 is the override on the new draft (forced to fail).
+    const real = vi.mocked(lifecycle.setOfferSchedule).getMockImplementation()!;
+    vi.mocked(lifecycle.setOfferSchedule)
+      .mockImplementationOnce(real)
+      .mockResolvedValueOnce({ ok: false, code: "validation", error: "Override rejected" });
+    const { done, token } = await twoStep("promo_create_draft_from_template", args);
+    expect(done.isError).toBeFalsy();
+    const first = body(done);
+    expect(first.warnings.map((w) => w.code)).toContain("OVERRIDE_FAILED");
+    expect(first.data).toMatchObject({ status: "draft", overridesApplied: false });
+    const drafts = async () => (await db.select().from(offers).where(eq(offers.internalName, "[MCP test] partial"))).length;
+    expect(await drafts()).toBe(1);
+
+    const replay = await run("promo_create_draft_from_template", { ...args, dryRun: false, confirmToken: token });
+    expect(body(replay).warnings.map((w) => w.code)).toEqual(expect.arrayContaining(["IDEMPOTENT_REPLAY", "OVERRIDE_FAILED"]));
+    expect(body(replay).data["promoRef"]).toBe(first.data["promoRef"]);
+    expect(await drafts()).toBe(1);
   });
 
   it("a source changed since the dry run is STATE_CONFLICT and nothing is created", async () => {
@@ -546,8 +591,22 @@ describe("codes_set_status", () => {
 
   it("a failed publish restores the previous code statuses", async () => {
     const { id } = await withCodes();
-    const { done } = await twoStep("codes_set_status", { ref: ref(TEST, id), status: "disabled", all: true }, operators["editor"], { publish: failing() });
+    const bad = failing();
+    const { done } = await twoStep("codes_set_status", { ref: ref(TEST, id), status: "disabled", all: true }, operators["editor"], { publish: bad });
     expect(body(done).code).toBe("PUBLISH_FAILED");
+    expect(await statuses(id)).toEqual(["active", "active", "exhausted"]);
+    // The restored statuses are pushed through the normal publish path once more, and the message says how that went.
+    expect(bad.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(body(done).message).toMatch(/next successful publish will sync them/);
+  });
+
+  it("restores statuses and reports the re-sync when the second publish works", async () => {
+    const { id } = await withCodes();
+    let calls = 0;
+    const flaky = vi.fn<ShopPublishFn>(async () => (++calls === 1 ? { message: "blip", scope: "shop" } : null));
+    const { done } = await twoStep("codes_set_status", { ref: ref(TEST, id), status: "disabled", all: true }, operators["editor"], { publish: flaky });
+    expect(body(done).code).toBe("PUBLISH_FAILED");
+    expect(body(done).message).toMatch(/re-synced to Shopify/);
     expect(await statuses(id)).toEqual(["active", "active", "exhausted"]);
   });
 
@@ -614,6 +673,10 @@ describe("mcp_call_log", () => {
     expect(executed).toMatchObject({ operatorId: operators["editor"]!.id, shops: [TEST], outcome: "ok" });
     expect(executed.durationMs).not.toBeNull();
     expect(JSON.stringify(rows.map((r) => r.argsRedacted))).not.toContain(token);
+    // Free text never reaches the table, in any column.
+    const everything = JSON.stringify(await db.select().from(mcpCallLog));
+    expect(everything).not.toContain("log me please");
+    expect(rows.find((r) => r.confirmJti)!.argsRedacted).toMatchObject({ ref: args.ref, _omitted: expect.arrayContaining(["reason", "confirmToken"]) });
     expect((executed.resultRef as { result: { data: unknown } }).result.data).toBeTruthy();
   });
 });

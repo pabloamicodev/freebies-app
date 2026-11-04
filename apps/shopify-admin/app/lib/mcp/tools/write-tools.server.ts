@@ -6,7 +6,7 @@ import { requireRole, type McpRole } from "../auth.server.js";
 import { insertAuditLog } from "../../audit-log.server.js";
 import { duplicateOffer } from "../../offer-duplicate.server.js";
 import { setDiscountCodesStatus } from "../../discount-codes.server.js";
-import { republishIfActive } from "../../offer-publish-flow.server.js";
+import { republishIfActive, tryPublishShop } from "../../offer-publish-flow.server.js";
 import {
   archiveOffer,
   pauseOffer,
@@ -49,7 +49,7 @@ export const promosRepublishShopInput = { shop: z.string().max(200).describe("Sh
 export const promoDuplicateInput = {
   ...refFields,
   name: z.string().trim().min(1).max(120).optional().describe("Name of the draft copy; made unique in the target shop. Default: '<name>-copy'."),
-  targetShop: z.string().max(200).optional().describe("Copy into another shop of this app (must be write-enabled too). Product and collection references are NOT translated."),
+  targetShop: z.string().max(200).optional().describe("Must be the source shop (or omitted): cross-shop copies are not supported yet because product and collection ids can't be translated."),
   ...writeControls,
 };
 export const promoCreateDraftInput = {
@@ -299,7 +299,7 @@ async function cloneDraft(
   const finalName = await uniqueOfferName(ctx.db, target.id, name);
   let newId: string | null;
   try {
-    newId = await duplicateOffer(ctx.db, source.shop.id, source.offerId, { name: finalName, targetShopId: target.id });
+    newId = await duplicateOffer(ctx.db, source.shop.id, source.offerId, { name: finalName });
   } catch (error) {
     if (isUnique(error)) throw new ToolError("STATE_CONFLICT", "The name was taken meanwhile; run the dry run again.");
     throw error;
@@ -325,21 +325,21 @@ export function duplicateTool(
   return guarded(ctx, call, "promo_duplicate", "editor", args, async (visible) => {
     const source = resolvePromoRef(visible, args);
     const target = args.targetShop ? selectShops(visible, [args.targetShop])[0]! : source.shop;
+    if (target.id !== source.shop.id) {
+      throw new ToolError("VALIDATION", "Cross-shop copies are not supported yet: product, variant and collection ids can't be translated across shops. Duplicate inside the same shop.");
+    }
     const sourceRef = promoRef(source.shop.myshopifyDomain, source.offerId);
     return {
       tool: "promo_duplicate",
       minRole: "editor",
       critical: false,
-      shops: target.id === source.shop.id ? [source.shop] : [source.shop, target],
+      shops: [source.shop],
       preview: async () => {
         const basics = await offerBasics(ctx.db, source.shop, source.offerId);
         const name = await uniqueOfferName(ctx.db, target.id, args.name ?? `${basics.name}-copy`);
         const warnings: Warning[] = [
           { code: "NOT_COPIED", severity: "info", message: "Discount codes, widgets, versions, usage counters and gift clone products are not copied; the copy is a draft." },
         ];
-        if (target.id !== source.shop.id) {
-          warnings.push({ code: "CROSS_SHOP", severity: "warn", message: "Product, variant and collection references are copied as they are and are not translated to the target shop." });
-        }
         return {
           summary: `Duplicate "${label(basics.name)}" (${basics.status}) as the draft "${name}" in ${target.myshopifyDomain}.`,
           data: { sourceRef, targetShop: target.myshopifyDomain, name, resultingStatus: "draft" },
@@ -412,16 +412,23 @@ export function createDraftFromTemplateTool(
         const newRef = promoRef(shop!.myshopifyDomain, newId);
         const copy = { shopId: shop!.id, shopDomain: shop!.myshopifyDomain, offerId: newId };
         const opts = { performedBy: a.performedBy, auditExtra: a.auditExtra, publish: a.publish };
-        const fail = (result: OfferLifecycleResult) => {
+        // The draft already exists: a failing override is reported as a warning on a successful result, so the stored
+        // outcome (and an idempotent retry) points at that draft instead of creating a second one.
+        let overrideFailure: { step: string; code: string; message: string } | null = null;
+        const check = (step: string, result: OfferLifecycleResult) => {
           if (result.ok) return;
           const e = lifecycleToolError(result, newRef);
-          throw new ToolError(e.payload.code, `The draft ${newRef} was created but an override failed: ${e.payload.message}`, { suggestedAction: e.payload.suggestedAction ?? undefined });
+          overrideFailure = { step, code: e.payload.code, message: e.payload.message };
         };
-        if (hasSchedule) fail(await setOfferSchedule(ctx.db, { ...copy, startsAt: o.startsAt, endsAt: o.endsAt, shopTimezone: shop!.timezone }, opts));
-        if (hasUrls) fail(await setOfferPageUrls(ctx.db, { ...copy, excludeUrls: o.excludeUrls, pageUrls: o.pageUrls }, opts));
+        if (hasSchedule) check("schedule", await setOfferSchedule(ctx.db, { ...copy, startsAt: o.startsAt, endsAt: o.endsAt, shopTimezone: shop!.timezone }, opts));
+        if (hasUrls && !overrideFailure) check("pageUrls", await setOfferPageUrls(ctx.db, { ...copy, excludeUrls: o.excludeUrls, pageUrls: o.pageUrls }, opts));
+        const failure = overrideFailure as { step: string; code: string; message: string } | null;
         return {
-          summary: `Created the draft ${newRef} from the template.`,
-          data: { promoRef: newRef, offerId: newId, status: "draft" },
+          summary: failure
+            ? `Created the draft ${newRef}, but the ${failure.step} override failed (${failure.code}: ${failure.message}). Fix it on the draft with the matching tool.`
+            : `Created the draft ${newRef} from the template.`,
+          data: { promoRef: newRef, offerId: newId, status: "draft", overridesApplied: !failure, ...(failure ? { overrideFailure: failure } : {}) },
+          warnings: failure ? [{ code: "OVERRIDE_FAILED", severity: "warn", message: `${failure.step}: ${failure.message}` }] : [],
           links: [adminLink(shopHandle(shop!.myshopifyDomain))],
           nextActions: [{ mcp: "promo-engine", tool: "promo_detail", args: { ref: newRef }, why: "Review the draft.", risk: "read" }],
         };
@@ -534,8 +541,8 @@ export function codesSetStatusTool(
       else if (target.batchId) filters.push(eq(discountCodes.batchId, target.batchId));
       return and(...filters);
     };
-    const affected = async () => {
-      const rows = await ctx.db.select({ id: discountCodes.id, status: discountCodes.status }).from(discountCodes).where(scope()).limit(MAX_CODES_PER_CALL + 1);
+    const affected = async (exec: Db = ctx.db) => {
+      const rows = await exec.select({ id: discountCodes.id, status: discountCodes.status }).from(discountCodes).where(scope()).limit(MAX_CODES_PER_CALL + 1);
       if (rows.length > MAX_CODES_PER_CALL) {
         throw new ToolError("VALIDATION", `More than ${MAX_CODES_PER_CALL} codes match; narrow it with a batchId or ids.`);
       }
@@ -562,8 +569,12 @@ export function codesSetStatusTool(
         if (a.expectedUpdatedAt && basics.updatedAt.getTime() !== a.expectedUpdatedAt.getTime()) {
           throw new ToolError("STATE_CONFLICT", "The offer changed since the dry run; run it again.");
         }
-        const before = await affected();
-        const changed = await setDiscountCodesStatus(ctx.db, shop.id, offerId, target, args.status);
+        // Snapshot and update in one transaction so the restore below puts back exactly what this call changed.
+        const { before, changed } = await ctx.db.transaction(async (tx) => {
+          const txDb = tx as unknown as Db;
+          const snapshot = await affected(txDb);
+          return { before: snapshot, changed: await setDiscountCodesStatus(txDb, shop.id, offerId, target, args.status) };
+        });
         const failure = await republishIfActive(ctx.db, shop.id, shop.myshopifyDomain, offerId, basics.status === "active", a.publish);
         if (failure) {
           const previous = new Map<string, string[]>();
@@ -571,7 +582,10 @@ export function codesSetStatusTool(
           for (const [status, ids] of previous) {
             if (status === "active" || status === "disabled") await setDiscountCodesStatus(ctx.db, shop.id, offerId, { ids }, status);
           }
-          throw new ToolError("PUBLISH_FAILED", `Publishing to Shopify failed and the code statuses were restored (${failure.replace(/\s+/g, " ").slice(0, 300)}). The offer may have been paused so the shop stays consistent.`, {
+          // The failed publish may have reached Shopify partially; push the restored statuses through the normal path too.
+          const resync = basics.status === "active" ? await (a.publish ?? tryPublishShop)(shop.id, shop.myshopifyDomain) : null;
+          const synced = basics.status !== "active" || !resync;
+          throw new ToolError("PUBLISH_FAILED", `Publishing to Shopify failed and the code statuses were restored (${failure.replace(/\s+/g, " ").slice(0, 300)}). ${synced ? "The restored statuses were re-synced to Shopify." : "Re-syncing the restored statuses also failed; the next successful publish will sync them."} The offer may have been paused so the shop stays consistent.`, {
             suggestedAction: { mcp: "promo-engine", tool: "promo_detail", args: { ref }, why: "Check the offer's current status and publish errors, then retry." },
           });
         }

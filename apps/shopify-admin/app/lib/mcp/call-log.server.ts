@@ -25,24 +25,53 @@ export async function enforceOperatorRate(ctx: Pick<McpContext, "operator" | "ra
   }
 }
 
-const SENSITIVE_KEY = /token|secret|password|authorization|credential|cookie/i;
-const MAX_STRING = 300;
-const MAX_ITEMS = 50;
-const MAX_DEPTH = 4;
+/** Never logged, whatever a tool's allow list says. */
+const NEVER_KEY = /token|secret|password|authorization|credential|cookie|email|phone|code/i;
+const COMMON_KEYS = ["dryRun", "ref", "shop", "shops", "targetShop", "offerId", "templateId", "status", "all", "batchId"];
+const READ_KEYS = ["types", "limit", "cursor", "groupBy", "start", "end", "lastDays", "live", "includeUninstalled", "goal", "actor", "since"];
+/** Logged as `<key>Count` only: lists of ids or URLs. */
+const COUNT_KEYS = new Set(["ids", "excludeUrls", "pageUrls"]);
+const TOOL_KEYS: Record<string, string[]> = {
+  promo_set_schedule: ["startsAt", "endsAt"],
+};
+const MAX_VALUE = 120;
+const MAX_ITEMS = 20;
+const PII_VALUE = /[^\s@]+@[^\s@]+\.[^\s@]+|\+?\d[\d\s().-]{7,}\d/;
 
-/** Args as stored in the log: secrets masked, long strings and arrays cut, depth bounded. */
-export function redactArgs(value: unknown, depth = 0): unknown {
-  if (value === null || value === undefined) return value ?? null;
-  if (typeof value === "string") return value.length > MAX_STRING ? `${value.slice(0, MAX_STRING)}...` : value;
-  if (typeof value !== "object") return value;
-  if (depth >= MAX_DEPTH) return "[truncated]";
-  if (Array.isArray(value)) {
-    const items = value.slice(0, MAX_ITEMS).map((v) => redactArgs(v, depth + 1));
-    return value.length > MAX_ITEMS ? [...items, `[+${value.length - MAX_ITEMS} more]`] : items;
+function safeScalar(value: unknown): unknown {
+  if (typeof value === "boolean" || typeof value === "number") return value;
+  if (typeof value !== "string") return undefined;
+  if (PII_VALUE.test(value)) return "[masked]";
+  return value.length > MAX_VALUE ? `${value.slice(0, MAX_VALUE)}...` : value;
+}
+
+/**
+ * Args as stored in the log: an allow list per tool (ids, refs, shops, dryRun, status, limits, dates). Free text
+ * (reason, q, names, URLs, overrides) and anything keyed like email/phone/code/token is dropped; only the dropped
+ * key names are kept in `_omitted`, and id/URL lists are reduced to a count.
+ */
+export function redactArgs(tool: string, args: unknown): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return null;
+  const allowed = new Set([...COMMON_KEYS, ...(TOOL_KEYS[tool] ?? READ_KEYS)]);
+  const out: Record<string, unknown> = {};
+  const omitted: string[] = [];
+  for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
+    if (value === undefined || key === "idempotencyKey") continue;
+    if (NEVER_KEY.test(key)) {
+      omitted.push(key);
+    } else if (COUNT_KEYS.has(key)) {
+      if (Array.isArray(value)) out[`${key}Count`] = value.length;
+    } else if (!allowed.has(key)) {
+      omitted.push(key);
+    } else if (Array.isArray(value)) {
+      out[key] = value.slice(0, MAX_ITEMS).map(safeScalar).filter((v) => v !== undefined);
+    } else {
+      const scalar = safeScalar(value);
+      if (scalar !== undefined) out[key] = scalar;
+    }
   }
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, SENSITIVE_KEY.test(k) ? "[redacted]" : redactArgs(v, depth + 1)]),
-  );
+  if (omitted.length) out["_omitted"] = omitted.sort();
+  return out;
 }
 
 /** Best-effort shop list from the common argument names; only used for the log. */
@@ -73,7 +102,7 @@ export async function logCall(db: Db, entry: CallLogEntry): Promise<void> {
       operatorId: entry.operatorId,
       tool: entry.tool,
       shops: entry.shops,
-      argsRedacted: redactArgs(entry.args),
+      argsRedacted: redactArgs(entry.tool, entry.args),
       outcome: entry.outcome,
       durationMs: Math.round(entry.durationMs),
     });
@@ -165,7 +194,7 @@ export async function claimWrite(
         operatorId: input.operatorId,
         tool: input.tool,
         shops: input.shops,
-        argsRedacted: redactArgs(input.args),
+        argsRedacted: redactArgs(input.tool, input.args),
         outcome: "pending",
         confirmJti: input.jti,
         idempotencyKey: input.idempotencyKey ?? null,
