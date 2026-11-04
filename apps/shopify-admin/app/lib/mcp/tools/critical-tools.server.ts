@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { and, eq, inArray } from "drizzle-orm";
@@ -99,7 +100,15 @@ export function promosPauseAllTool(ctx: McpContext, call: CallInfo, args: Contro
           { performedBy: a.performedBy, auditExtra: withReason(a, args.reason), publish: a.publish },
         );
         if (!result.ok) {
-          throw lifecycleToolError(result.code === "publish_failed" ? { ...result, statusBefore: "active", statusAfter: "active" } : result);
+          if (result.code !== "publish_failed") throw lifecycleToolError(result);
+          // Every offer went back to the status it had; say which, per status.
+          const restored = rows.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.status]: (acc[r.status] ?? 0) + 1 }), {});
+          const summary = Object.entries(restored).map(([status, n]) => `${n} ${status}`).join(", ");
+          throw new ToolError(
+            "PUBLISH_FAILED",
+            `Publishing to Shopify failed and the change was rolled back; ${summary} offer(s) kept their status (${result.error.replace(/\s+/g, " ").slice(0, 300)}).`,
+            { suggestedAction: { mcp: "promo-engine", tool: "promo_health", args: { shops: [shop!.myshopifyDomain] }, why: "Check publish errors, then retry." } },
+          );
         }
         return {
           summary: `Paused ${result.offers.length} offer(s) of ${shop!.myshopifyDomain}. Shopify config republished.`,
@@ -293,8 +302,10 @@ export function codesDeleteTool(
       const removable = rows.filter((r) => !r.syncedAt && !r.pendingAt);
       const skippedUsed = onlyUnused ? removable.filter((r) => r.usageCount > 0) : [];
       const deletable = onlyUnused ? removable.filter((r) => r.usageCount === 0) : removable;
+      const ids = deletable.map((r) => r.id).sort();
       return {
-        deletable: deletable.map((r) => r.id),
+        deletable: ids,
+        setHash: createHash("sha256").update(ids.join(",")).digest("hex"),
         counts: {
           matched: rows.length,
           deletable: deletable.length,
@@ -312,7 +323,7 @@ export function codesDeleteTool(
       shops: [shop],
       preview: async () => {
         const basics = await offerBasics(ctx.db, shop, offerId);
-        const { counts } = await classify();
+        const { counts, setHash } = await classify();
         if (counts.matched === 0) throw new ToolError("NOT_FOUND", "No codes match in that offer.");
         if (counts.deletable === 0) {
           throw new ToolError(
@@ -333,6 +344,7 @@ export function codesDeleteTool(
           warnings,
           links: [adminLink(shopHandle(shop.myshopifyDomain))],
           offerUpdatedAt: basics.updatedAt,
+          setHash,
         };
       },
       apply: async (a) => {
@@ -340,9 +352,11 @@ export function codesDeleteTool(
         if (a.expectedUpdatedAt && basics.updatedAt.getTime() !== a.expectedUpdatedAt.getTime()) {
           throw new ToolError("STATE_CONFLICT", "The offer changed since the dry run; run it again.");
         }
-        const { deletable, counts } = await classify();
+        const { deletable, counts, setHash } = await classify();
         if (deletable.length === 0) throw new ToolError("STATE_CONFLICT", "Nothing deletable any more; run the dry run again.");
-        const deleted = await deleteDiscountCodes(ctx.db, shop.id, offerId, deletable);
+        // The token pins the exact codes the dry run showed: a redemption, sync or new code since then changes the set.
+        if (a.expectedSetHash !== setHash) throw new ToolError("STATE_CONFLICT", "The codes to delete changed since the dry run; run it again.");
+        const deleted = await deleteDiscountCodes(ctx.db, shop.id, offerId, deletable, { onlyUnused });
         await insertAuditLog(ctx.db, {
           shopId: shop.id,
           entityType: "offer",
@@ -403,11 +417,11 @@ export function shopSetLimitsEnforcedTool(ctx: McpContext, call: CallInfo, args:
         if (previous === args.enforced) {
           return { summary: `limits.enforced is already ${args.enforced} on ${domain}; nothing changed.`, data: { shopDomain: domain, enforced: previous, changed: false } };
         }
-        await setLimitsEnforced(ctx.db, shop!.id, args.enforced, a.performedBy);
+        await setLimitsEnforced(ctx.db, shop!.id, args.enforced, a.performedBy, a.auditExtra);
         await invalidateOfferDefinitions(shop!.id);
         const failure = await (a.publish ?? tryPublishShop)(shop!.id, domain);
         if (failure) {
-          await setLimitsEnforced(ctx.db, shop!.id, previous, a.performedBy);
+          await setLimitsEnforced(ctx.db, shop!.id, previous, a.performedBy, a.auditExtra);
           await invalidateOfferDefinitions(shop!.id);
           throw new ToolError("PUBLISH_FAILED", `Republishing to Shopify failed and limits.enforced was reverted to ${previous} (${failure.message.replace(/\s+/g, " ").slice(0, 300)}).`, {
             suggestedAction: { mcp: "promo-engine", tool: "promo_health", args: { shops: [domain] }, why: "Check publish errors, then retry." },

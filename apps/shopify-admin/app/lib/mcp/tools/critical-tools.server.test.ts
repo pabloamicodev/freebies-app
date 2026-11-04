@@ -21,6 +21,7 @@ import { createTestDb, seedOffer, seedShop } from "../../test-support/pglite-db.
 import { resetMemoryRateLimits } from "../../rate-limit.server.js";
 import type { ShopPublishFn } from "../../offer-lifecycle.server.js";
 import { isLimitsEnforced } from "../../limits-enforced.server.js";
+import { deleteDiscountCodes } from "../../discount-codes.server.js";
 import type { Operator } from "../auth.server.js";
 import { createMcpServer, type McpContext } from "../server.server.js";
 import { redactArgs } from "../call-log.server.js";
@@ -192,6 +193,7 @@ describe("promos_pause_all", () => {
     const { done } = await twoStep("promos_pause_all", { shop: PAUSE, reason: "will fail" }, operators["admin"], { publish: failing() });
     expect(body(done).code).toBe("PUBLISH_FAILED");
     expect(body(done).message).toContain("rolled back");
+    expect(body(done).message).toContain("1 active, 1 scheduled");
     expect([(await row(a)).status, (await row(s)).status]).toEqual(["active", "scheduled"]);
     await db.update(offers).set({ status: "paused" }).where(eq(offers.shopId, shopId));
   });
@@ -369,6 +371,25 @@ describe("codes_delete", () => {
     expect(body(done).data["deleted"]).toBe(2);
   });
 
+  it("STATE_CONFLICT when the codes to delete changed after the dry run (a redemption), and nothing is deleted", async () => {
+    const { offerId, batchId, inserted } = await seedCodes();
+    const dry = await run("codes_delete", { ref: ref(TEST, offerId), batchId });
+    const token = body(dry).meta.confirmToken!;
+    const victim = inserted.find((c) => c.usageCount === 0 && !c.syncedAt)!.id;
+    await db.update(discountCodes).set({ usageCount: 1 }).where(eq(discountCodes.id, victim));
+    const done = await run("codes_delete", { ref: ref(TEST, offerId), batchId, dryRun: false, confirmToken: token });
+    expect(body(done).code).toBe("STATE_CONFLICT");
+    expect(await left(offerId)).toBe(4);
+  });
+
+  it("deleteDiscountCodes with onlyUnused filters usage_count = 0 in the DELETE itself; the admin default is unchanged", async () => {
+    const { shopId, offerId, inserted } = await seedCodes();
+    const used = inserted.find((c) => c.usageCount > 0)!.id;
+    const unused = inserted.find((c) => c.usageCount === 0 && !c.syncedAt)!.id;
+    expect(await deleteDiscountCodes(db, shopId, offerId, [used, unused], { onlyUnused: true })).toBe(1);
+    expect(await deleteDiscountCodes(db, shopId, offerId, [used])).toBe(1);
+  });
+
   it("does not touch another offer's codes", async () => {
     const a = await seedCodes();
     const b = await seedCodes();
@@ -419,6 +440,7 @@ describe("shop_set_limits_enforced", () => {
     expect(publish).toHaveBeenCalledTimes(1);
     const log = (await db.select().from(auditLogs).where(and(eq(auditLogs.shopId, shopIds["limits"]!), eq(auditLogs.action, "limits_enforced_changed"))))[0]!;
     expect(log.performedBy).toBe(`mcp:${operators["admin"]!.id}`);
+    expect(log.after).toMatchObject({ enabled: true, _mcp: { tool: "shop_set_limits_enforced", operator: operators["admin"]!.id, requestId: "req-1" } });
 
     const again = await twoStep("shop_set_limits_enforced", { shop: LIMITS, enforced: true });
     expect(body(again.done).data["changed"]).toBe(false);

@@ -14,7 +14,7 @@ export async function isLimitsEnforced(db: Db, shopId: string): Promise<boolean>
   return row?.value === "true";
 }
 
-export async function setLimitsEnforced(db: Db, shopId: string, enabled: boolean, performedBy?: string): Promise<void> {
+export async function setLimitsEnforced(db: Db, shopId: string, enabled: boolean, performedBy?: string, auditExtra?: Record<string, unknown>): Promise<void> {
   const before = await isLimitsEnforced(db, shopId);
   await db
     .insert(appSettings)
@@ -29,7 +29,7 @@ export async function setLimitsEnforced(db: Db, shopId: string, enabled: boolean
     entityId: LIMITS_ENFORCED_KEY,
     action: "limits_enforced_changed",
     before,
-    after: enabled,
+    after: auditExtra ? { enabled, ...auditExtra } : enabled,
     performedBy,
   });
 }
