@@ -312,6 +312,13 @@ describe("codes_create_batch", () => {
     expect((await row(id)).requiresCode).toBe(false);
   });
 
+  it("redactArgs keeps uuid refs whose digit runs look like a phone number, and still masks real ones", () => {
+    const id = "12345678-1234-4123-8123-123456789012";
+    expect(redactArgs("promo_pause", { ref: `promo:hpn-test-store:${id}`, batchId: id, shop: "call +34 600 123 456" })).toEqual({
+      ref: `promo:hpn-test-store:${id}`, batchId: id, shop: "[masked]",
+    });
+  });
+
   it("maskCode keeps only the prefix", () => {
     expect(maskCode("VIP-ABCD2345", "VIP-")).toBe("VIP-********");
     expect(maskCode("ABCD2345", "")).toBe("********");

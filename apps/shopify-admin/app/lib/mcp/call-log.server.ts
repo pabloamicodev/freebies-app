@@ -53,9 +53,13 @@ const MAX_VALUE = 120;
 const MAX_ITEMS = 20;
 const PII_VALUE = /[^\s@]+@[^\s@]+\.[^\s@]+|\+?\d[\d\s().-]{7,}\d/;
 
+/** A uuid, alone or inside promo:<handle>:<uuid>: random digit runs in it must not be mistaken for a phone number. */
+const ID_VALUE = /^(?:promo:[a-z0-9.-]{1,80}:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function safeScalar(value: unknown): unknown {
   if (typeof value === "boolean" || typeof value === "number") return value;
   if (typeof value !== "string") return undefined;
+  if (ID_VALUE.test(value)) return value;
   if (PII_VALUE.test(value)) return "[masked]";
   return value.length > MAX_VALUE ? `${value.slice(0, MAX_VALUE)}...` : value;
 }
