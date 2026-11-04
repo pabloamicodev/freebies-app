@@ -147,7 +147,7 @@ function candidateFor(
       tool: "experiments_configure_arms",
       args: {
         ref: "<ref returned by experiments_create>",
-        arms: extra.arms.slice(1).map((a) => ({ key: a.key, config: { modification: { offerType: "BANNER", headline: a.description } } })),
+        arms: extra.arms.slice(1).map((a) => ({ key: a.key, config: { type: "OFFER_TEST", modification: { offerType: "BANNER", headline: a.description } } })),
         dryRun: true,
       },
       why: "Configure the treatment arm(s) once the experiment exists; adjust offerType (BANNER|POPUP|CART_DRAWER|PRODUCT_PAGE) and copy before confirming.",
