@@ -245,7 +245,8 @@ const PAGE_HEADERS = {
   "Content-Type": "text/html; charset=utf-8",
   "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
   "X-Frame-Options": "DENY",
-  "Referrer-Policy": "no-referrer",
+  // Not no-referrer: browsers then send `Origin: null` on the form POST and the Origin check in handleAuthorize refuses it.
+  "Referrer-Policy": "same-origin",
 };
 
 export function escapeHtml(value: string): string {

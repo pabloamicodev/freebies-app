@@ -69,6 +69,8 @@ async function authorize(clientId: string, pat: string, opts: { redirect?: strin
   };
   const get = await handleAuthorize(new Request(`${ORIGIN}/mcp/authorize?${new URLSearchParams(params)}`), deps());
   expect(get.status).toBe(200);
+  // no-referrer would make browsers post `Origin: null`, which the Origin check refuses.
+  expect(get.headers.get("referrer-policy")).toBe("same-origin");
   const cookie = get.headers.getSetCookie()[0]!.split(";")[0]!;
   const csrf = cookie.split("=")[1]!;
   const headers = { cookie, origin: ORIGIN };
