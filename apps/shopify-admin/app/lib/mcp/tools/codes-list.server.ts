@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import { discountCodeBatches, discountCodes, type Db } from "@promo/db";
 import { buildResult, shopHandle, type ToolResult } from "../result.server.js";
 import { fanOut } from "../multi-shop.server.js";
@@ -71,6 +71,15 @@ export async function codesList(
     const loaded = await loadOffers(db, shop, { statuses: OFFER_STATUSES, offerId: target?.offerId });
     if (loaded.length === 0) return [];
     const offerIds = loaded.map((l) => l.offer.id);
+    const ranked = db
+      .select({
+        offerId: discountCodes.offerId,
+        code: discountCodes.code,
+        rn: sql<number>`row_number() over (partition by ${discountCodes.offerId} order by ${discountCodes.code})`.as("rn"),
+      })
+      .from(discountCodes)
+      .where(and(eq(discountCodes.shopId, shop.id), inArray(discountCodes.offerId, offerIds)))
+      .as("ranked");
     const [counts, batches, samples] = await Promise.all([
       db
         .select({
@@ -89,16 +98,11 @@ export async function codesList(
         .from(discountCodeBatches)
         .where(and(eq(discountCodeBatches.shopId, shop.id), inArray(discountCodeBatches.offerId, offerIds)))
         .orderBy(desc(discountCodeBatches.createdAt)),
-      Promise.all(
-        offerIds.map((offerId) =>
-          db
-            .select({ offerId: discountCodes.offerId, code: discountCodes.code })
-            .from(discountCodes)
-            .where(and(eq(discountCodes.shopId, shop.id), eq(discountCodes.offerId, offerId)))
-            .orderBy(asc(discountCodes.code))
-            .limit(SAMPLE_SIZE),
-        ),
-      ).then((groups) => groups.flat()),
+      db
+        .select({ offerId: ranked.offerId, code: ranked.code })
+        .from(ranked)
+        .where(lte(ranked.rn, SAMPLE_SIZE))
+        .orderBy(asc(ranked.offerId), asc(ranked.code)),
     ]);
     const toDate = (v: Date | string | null): Date | null => (v ? new Date(v) : null);
     return loaded
