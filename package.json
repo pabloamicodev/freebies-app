@@ -24,6 +24,8 @@
     "reconcile:legacy-presets": "tsx scripts/reconcile-legacy-presets.ts",
     "backfill:offer-usage": "tsx scripts/backfill-offer-usage.ts",
     "limits:review": "tsx scripts/limits-review.ts",
+    "mcp:operator": "tsx scripts/mcp-operator.ts",
+    "mcp:verify-tokens": "tsx scripts/mcp-verify-shop-tokens.ts",
     "test:load": "tsx apps/shopify-admin/tests/load/evaluation.load.ts",
     "lint": "eslint .",
     "format": "prettier --write .",

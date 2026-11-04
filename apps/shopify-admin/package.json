@@ -16,6 +16,7 @@
     "lint": "eslint app --ext .ts,.tsx"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.26.0",
     "@promo/db": "workspace:*",
     "@promo/rule-engine": "workspace:*",
     "@promo/shared-types": "workspace:*",
