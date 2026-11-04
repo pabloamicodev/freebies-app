@@ -1,7 +1,7 @@
 // NOTE: This file uses Preact JSX (class= not className=, style strings not objects).
 // @jsxImportSource preact is required — do not replace with React imports.
 /** @jsxImportSource preact */
-import { loadGiftPrompt } from "./gift-prompt-loader.js";
+import { canLoadGiftPicker, loadGiftPicker, loadGiftPrompt } from "./gift-prompt-loader.js";
 import { useState, useEffect, useRef } from "preact/hooks";
 import { h, Fragment } from "preact";
 import { render } from "preact";
@@ -382,6 +382,12 @@ function GiftSlider({
   const [selected, setSelected] = useState<Set<string>>(
     new Set(payload.selectableGifts.filter((gift) => gift.isSelected).map(giftKey)),
   );
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  // More than one product on offer: the lazy picker shows one card per product with a variant chooser; a single product keeps one card per variant.
+  const multiProduct =
+    new Set(payload.selectableGifts.filter((gift) => !gift.isFallback).map((gift) => gift.productId || gift.variantId)).size > 1;
+  const [picker, setPicker] = useState(window.__peGiftPicker ?? null);
+  const [pickerFailed, setPickerFailed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Variants found sold out after the payload was built (live stock check or a
@@ -423,6 +429,11 @@ function GiftSlider({
     };
   }, [payload]);
 
+  useEffect(() => {
+    if (multiProduct && !picker && canLoadGiftPicker()) loadGiftPicker().then(setPicker, () => setPickerFailed(true));
+  }, [multiProduct]);
+  const productView = multiProduct && !pickerFailed && canLoadGiftPicker();
+
   function toggleGift(gift: SelectableGift) {
     const next = toggleGiftSelection(selected, gift, payload.selectableGifts, maxSelectable, soldOut);
     if (!next) return;
@@ -431,7 +442,7 @@ function GiftSlider({
   }
 
   async function handleConfirm() {
-    if (submittingRef.current) return;
+    if (submittingRef.current || pending.size > 0) return;
     const selectedGifts = gifts.filter((gift) => selected.has(giftKey(gift)));
     // The customer can only reach an unavailable selection by having it
     // already in their cart when the popup opened (toggleGift refuses to
@@ -544,7 +555,28 @@ function GiftSlider({
         </div>
 
         <div class="pe-slider-body">
-          <div class="pe-gift-grid">
+          {productView && !picker && (
+            <div class="pe-loading">
+              <div class="pe-spinner" aria-hidden="true" />
+            </div>
+          )}
+          {productView && picker && (
+            <picker.ProductPicker
+              gifts={gifts}
+              state={{ selected, pending }}
+              soldOut={soldOut}
+              maxSelectable={maxSelectable}
+              labels={payload.labels}
+              currencyCode={payload.currencyCode}
+              disabled={loading}
+              onChange={(next) => {
+                setError(null);
+                setSelected(next.selected);
+                setPending(next.pending);
+              }}
+            />
+          )}
+          {!productView && <div class="pe-gift-grid">
             {gifts.map((gift) => {
               const key = giftKey(gift);
               const isSelected = selected.has(key);
@@ -608,7 +640,7 @@ function GiftSlider({
                 </button>
               );
             })}
-          </div>
+          </div>}
         </div>
 
         {(error || hasUnavailableSelection) && (
@@ -619,7 +651,7 @@ function GiftSlider({
 
         <div class="pe-slider-footer">
           <p class="pe-selected-count" aria-live="polite">
-            {selected.size} / {maxSelectable} selected
+            {selected.size + pending.size} / {maxSelectable} selected
           </p>
           <button
             class="pe-btn-confirm"
@@ -628,6 +660,7 @@ function GiftSlider({
             disabled={
               (selected.size === 0 && initiallySelectedCount.current === 0) ||
               loading ||
+              pending.size > 0 ||
               hasUnavailableSelection
             }
             aria-label={loading ? t("giftsUpdating") : undefined}

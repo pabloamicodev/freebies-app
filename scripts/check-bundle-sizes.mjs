@@ -14,11 +14,13 @@ const DIST = join(process.cwd(), "packages/storefront-runtime/dist");
 /** Budget table (gzipped KB) */
 const BUDGETS = {
   // Widgets are bundled into the single theme runtime by package.json.
-  "promo-engine.js": 28.5,
+  "promo-engine.js": 29.0,
   // Requested by promo-engine.js only once an evaluation returns a gift picker (cart drawer button, cart page button, checkout reminder).
   "promo-engine-gift-prompt.js": 3,
   // Requested by promo-engine.js when an FBT or bundle-builder block mounts; preact is shared from the main bundle.
   "promo-engine-blocks.js": 6,
+  // Requested only when a gift modal offers more than one product (product cards + variant chooser); preact is shared from the main bundle.
+  "promo-engine-gift-picker.js": 3,
 };
 
 let failed = false;
