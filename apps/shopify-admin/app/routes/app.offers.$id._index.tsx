@@ -8,10 +8,11 @@ import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { parseJsonRecord, parseJsonStringArray, parseDateRange, toZonedLocalInput } from "../lib/offer-validation.server.js";
 import { normalizeConditionValue } from "../lib/offer-config-normalization.server.js";
 import { getPublishWarnings, publishShopConfig, republishIfActive, validateActivation } from "../lib/offer-publish-flow.server.js";
-import { activationStatus, statusForScheduleSave } from "../lib/offer-scheduling.server.js";
+import { activateDraftOffer } from "../lib/offer-lifecycle.server.js";
+import { statusForScheduleSave } from "../lib/offer-scheduling.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
-import { offers, offerConditions, offerRewards, offerCombinationPolicies, offerVersions, discountCodes } from "@promo/db";
-import { and, eq, desc, sql } from "drizzle-orm";
+import { offers, offerConditions, offerRewards, offerCombinationPolicies, discountCodes } from "@promo/db";
+import { and, eq } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
   IconChevronLeft, IconChevronRight, IconChevronDown, IconInfo, IconRefresh,
@@ -378,71 +379,22 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       break;
     }
     case "publish": {
-      // Guard: must have at least one scope='main' condition and one reward
-      const [existingMainConditions, existingRewards] = await Promise.all([
-        db.select({ id: offerConditions.id }).from(offerConditions)
-          .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.scope, "main"))),
-        db.select({ id: offerRewards.id }).from(offerRewards)
-          .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))),
-      ]);
-      if (existingMainConditions.length === 0) {
-        return { error: "Cannot publish: add at least one main condition before publishing." };
-      }
-      if (existingRewards.length === 0) {
-        return {
-          error: offer.type === "gift"
-            ? "Cannot publish: Add a gift reward before publishing."
-            : "Cannot publish: add at least one reward before publishing.",
-        };
-      }
-
-      // Run full Zod validation BEFORE any DB mutation so a failed validation
-      // can never leave the offer in status="active" without a working config.
-      const validation = await validateActivation(db, shopId, [offerId]);
-      if (!validation.ok) return { error: validation.error };
+      // The same sequence the MCP uses (checks, validation before any write, status, publish, rollback, snapshot, audit).
+      // The dry run runs the checks first so the advisory warnings (they need the shop token) come before any write.
+      const activation = { performedBy: session.shop, fromAnyStatus: true };
+      const target = { shopId, shopDomain: session.shop, offerId };
+      const failureMessage = (r: Exclude<Awaited<ReturnType<typeof activateDraftOffer>>, { ok: true }>) =>
+        r.code === "not_found" ? "Offer not found." : r.error;
+      const check = await activateDraftOffer(db, target, { ...activation, dryRun: true });
+      if (!check.ok) return { error: failureMessage(check) };
 
       if (formData.get("acknowledgeWarnings") !== "1") {
         const warnings = await getPublishWarnings(db, shopId, offerId, { shopDomain: session.shop, accessToken: session.accessToken ?? "" });
         if (warnings.length > 0) return { warnings };
       }
 
-      // Update status, push to Shopify, then rollback if the push fails.
-      const now = new Date();
-      const status = activationStatus(offer.startsAt, offer.endsAt, now);
-      await db.update(offers).set({ status, updatedAt: now }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-      const publishError = await publishShopConfig(shopId, session.shop);
-      if (publishError) {
-        await db.update(offers).set({ status: offer.status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-        return { error: publishError };
-      }
-
-      // Snapshot with atomic version number: FOR UPDATE lock prevents two concurrent
-      // publishes from computing the same version number and one silently dropping.
-      const [offerSnapshot, condSnapshot, rewSnapshot, policySnapshot] = await Promise.all([
-        db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1),
-        db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId))),
-        db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId))),
-        db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId))).limit(1),
-      ]);
-      await db.transaction(async (tx) => {
-        await tx.execute(sql`SELECT id FROM offers WHERE id = ${offerId} AND shop_id = ${shopId} FOR UPDATE`);
-        const [lastVersion] = await tx
-          .select({ versionNumber: offerVersions.versionNumber })
-          .from(offerVersions)
-          .where(and(eq(offerVersions.shopId, shopId), eq(offerVersions.offerId, offerId)))
-          .orderBy(desc(offerVersions.versionNumber))
-          .limit(1);
-        const nextVersion = (lastVersion?.versionNumber ?? 0) + 1;
-        await tx.insert(offerVersions).values({
-          shopId,
-          offerId,
-          versionNumber: nextVersion,
-          snapshot: { offer: offerSnapshot[0], conditions: condSnapshot, rewards: rewSnapshot, combinationPolicy: policySnapshot[0] ?? null },
-          createdBy: session.shop,
-        });
-      });
-      void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "publish", before: { status: offer.status }, after: { status }, performedBy: session.shop });
-
+      const published = await activateDraftOffer(db, target, activation);
+      if (!published.ok) return { error: failureMessage(published) };
       break;
     }
     case "set_combination": {

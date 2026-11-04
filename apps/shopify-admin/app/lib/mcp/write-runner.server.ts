@@ -24,11 +24,14 @@ export type WriteBody = {
   links?: Link[];
   nextActions?: NextAction[];
 };
-export type WritePreview = WriteBody & { offerUpdatedAt: Date | null };
+/** `setHash`: optional digest of the exact set of rows the dry run would touch, bound into the confirm token. */
+export type WritePreview = WriteBody & { offerUpdatedAt: Date | null; setHash?: string | null };
 
 export type ApplyContext = {
   /** The offer's updated_at the operator saw in the dry run; the write refuses (STATE_CONFLICT) if it moved. */
   expectedUpdatedAt: Date | null;
+  /** The setHash the dry run bound into the token, if any; the write refuses (STATE_CONFLICT) when the set differs. */
+  expectedSetHash: string | null;
   performedBy: string;
   auditExtra: Record<string, unknown>;
   publish: ShopPublishFn | undefined;
@@ -126,7 +129,7 @@ async function runInner(
 
   if (spec.dryRun) {
     const preview = await spec.preview();
-    const issued = issueConfirmToken(ctx.env, binding, preview.offerUpdatedAt, ctx.now());
+    const issued = issueConfirmToken(ctx.env, binding, preview.offerUpdatedAt, ctx.now(), preview.setHash);
     const executeArgs = {
       ...stripControlArgs(spec.args),
       dryRun: false,
@@ -183,6 +186,7 @@ async function runInner(
 
   const body = await spec.apply({
     expectedUpdatedAt: verified.offerUpdatedAt,
+    expectedSetHash: verified.setHash,
     performedBy: `mcp:${ctx.operator.id}`,
     auditExtra: { _mcp: { operator: ctx.operator.id, client: call.client ?? null, tool: spec.tool, requestId: call.requestId } },
     publish: ctx.publish,

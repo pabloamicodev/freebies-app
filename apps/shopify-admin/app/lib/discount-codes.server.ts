@@ -430,6 +430,8 @@ export async function deleteDiscountCodes(
   shopId: string,
   offerId: string,
   ids: string[],
+  /** `onlyUnused`: the DELETE itself skips redeemed codes, so a redemption landing after the read can't be deleted. */
+  options: { onlyUnused?: boolean } = {},
 ): Promise<number> {
   if (ids.length === 0) return 0;
   const rows = await db
@@ -441,6 +443,7 @@ export async function deleteDiscountCodes(
         inArray(discountCodes.id, ids),
         sql`${discountCodes.shopifySyncedAt} is null`,
         sql`${discountCodes.shopifySyncPendingAt} is null`,
+        options.onlyUnused ? sql`${discountCodes.usageCount} = 0` : undefined,
       ),
     )
     .returning({ id: discountCodes.id });

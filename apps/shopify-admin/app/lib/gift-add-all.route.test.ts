@@ -25,6 +25,8 @@ vi.mock("@promo/db", async (importOriginal) => ({
 }));
 vi.mock("./offer-publish-flow.server.js", () => ({
   publishShopConfig: async () => null,
+  tryPublishShop: async () => null,
+  getPublishWarnings: async () => [] as string[],
   republishIfActive: async () => null,
   finalizeCreatedOffer: async () => null,
   validateOffersPublishable: async () => ({ ok: true }),

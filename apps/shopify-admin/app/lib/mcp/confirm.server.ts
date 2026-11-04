@@ -6,7 +6,7 @@ const MIN_SECRET_LENGTH = 32;
 /** Control fields are not part of what the operator confirms: the dry run and the execute differ in them by design. */
 const CONTROL_KEYS = new Set(["dryRun", "confirmToken", "idempotencyKey"]);
 
-type Claims = { v: 1; tool: string; args: string; op: string; shop: string; upd: string | null; exp: number; jti: string };
+type Claims = { v: 1; tool: string; args: string; op: string; shop: string; upd: string | null; set?: string | null; exp: number; jti: string };
 
 export type ConfirmBinding = { tool: string; args: Record<string, unknown>; operatorId: string; shopDomain: string };
 
@@ -49,6 +49,7 @@ export function issueConfirmToken(
   binding: ConfirmBinding,
   offerUpdatedAt: Date | null,
   now: Date,
+  setHash: string | null = null,
 ): { token: string; expiresAt: Date; jti: string } {
   const expiresAt = new Date(now.getTime() + CONFIRM_TTL_MS);
   const jti = randomUUID();
@@ -59,6 +60,7 @@ export function issueConfirmToken(
     op: binding.operatorId,
     shop: binding.shopDomain.toLowerCase(),
     upd: offerUpdatedAt ? offerUpdatedAt.toISOString() : null,
+    ...(setHash ? { set: setHash } : {}),
     exp: expiresAt.getTime(),
     jti,
   };
@@ -73,7 +75,7 @@ export function verifyConfirmToken(
   token: string,
   expected: ConfirmBinding,
   now: Date,
-): { jti: string; offerUpdatedAt: Date | null } {
+): { jti: string; offerUpdatedAt: Date | null; setHash: string | null } {
   const [payload, signature, extra] = token.split(".");
   if (!payload || !signature || extra !== undefined) throw invalid();
   const given = Buffer.from(signature, "base64url");
@@ -100,5 +102,5 @@ export function verifyConfirmToken(
   if (claims.exp <= now.getTime()) {
     throw new ToolError("CONFIRM_EXPIRED", "The confirmToken expired (5 minutes). Run the dry run again.");
   }
-  return { jti: claims.jti, offerUpdatedAt: claims.upd ? new Date(claims.upd) : null };
+  return { jti: claims.jti, offerUpdatedAt: claims.upd ? new Date(claims.upd) : null, setHash: typeof claims.set === "string" ? claims.set : null };
 }

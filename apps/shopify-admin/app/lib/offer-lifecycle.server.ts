@@ -1,5 +1,5 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
-import { offerConditions, offers, shops, type Db } from "@promo/db";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { offerCombinationPolicies, offerConditions, offerRewards, offerVersions, offers, shops, type Db } from "@promo/db";
 import { normalizeExcludedPageUrls, normalizeStorePageUrls, validateConditionValue } from "@promo/shared-types";
 import { insertAuditLog } from "./audit-log.server.js";
 import { parseDateRange, toZonedLocalInput } from "./offer-validation.server.js";
@@ -538,4 +538,83 @@ export async function republishShop(
   }
   await audit(db, ctx, opts, { entityType: "shop", entityId: ctx.shopId, action: "republish_shop" });
   return { ok: true, dryRun: false };
+}
+
+/**
+ * Draft -> live, the admin Publish button's sequence: needs a main condition and a reward, validateActivation,
+ * the schedule-aware status, publish (status put back if it fails), then the version snapshot and the audit row.
+ * The advisory theme / experiment warnings need a shop access token and stay an admin-UI check.
+ */
+export async function activateDraftOffer(
+  db: Db,
+  ctx: OfferLifecycleContext,
+  opts: OfferLifecycleOptions & {
+    /** The admin Publish button also re-publishes a non-draft offer; MCP keeps the draft-only guard. */
+    fromAnyStatus?: boolean;
+  },
+): Promise<OfferLifecycleResult> {
+  const publish = opts.publish ?? tryPublishShop;
+  const [offer] = await db
+    .select({ status: offers.status, type: offers.type, startsAt: offers.startsAt, endsAt: offers.endsAt, updatedAt: offers.updatedAt })
+    .from(offers)
+    .where(key(ctx))
+    .limit(1);
+  if (!offer) return notFound;
+  const stale = staleFailure(offer.updatedAt, opts);
+  if (stale) return stale;
+  const statusBefore = offer.status as OfferStatus;
+  if (statusBefore !== "draft" && !opts.fromAnyStatus) {
+    return { ok: false, code: "state", reason: "invalid_status", error: `Only a draft can be activated this way (status: ${statusBefore}).` };
+  }
+  const [mains, rewards] = await Promise.all([
+    db.select({ id: offerConditions.id }).from(offerConditions).where(and(eq(offerConditions.shopId, ctx.shopId), eq(offerConditions.offerId, ctx.offerId), eq(offerConditions.scope, "main"))).limit(1),
+    db.select({ id: offerRewards.id }).from(offerRewards).where(and(eq(offerRewards.shopId, ctx.shopId), eq(offerRewards.offerId, ctx.offerId))).limit(1),
+  ]);
+  if (mains.length === 0) return { ok: false, code: "validation", error: "Cannot publish: add at least one main condition before publishing." };
+  if (rewards.length === 0) {
+    return { ok: false, code: "validation", error: offer.type === "gift" ? "Cannot publish: Add a gift reward before publishing." : "Cannot publish: add at least one reward before publishing." };
+  }
+  const validation = await validateActivation(db, ctx.shopId, [ctx.offerId]);
+  if (!validation.ok) {
+    return { ok: false, code: "validation", error: validation.error ?? "Offer is not publishable.", scope: validation.scope, offerId: validation.offerId };
+  }
+  const now = new Date();
+  const statusAfter = activationStatus(offer.startsAt, offer.endsAt, now);
+  if (opts.dryRun) {
+    return { ok: true, dryRun: true, offerId: ctx.offerId, statusBefore, statusAfter, changed: true, updatedAt: offer.updatedAt };
+  }
+  await db.update(offers).set({ status: statusAfter, updatedAt: now }).where(key(ctx));
+  const failure = await publish(ctx.shopId, ctx.shopDomain);
+  if (failure) {
+    await db
+      .update(offers)
+      .set({ status: statusBefore, updatedAt: new Date() })
+      .where(and(key(ctx), eq(offers.status, statusAfter)));
+    return { ok: false, code: "publish_failed", error: failure.message, rolledBack: true, statusBefore, statusAfter: statusBefore };
+  }
+  const [offerSnapshot, condSnapshot, rewSnapshot, policySnapshot] = await Promise.all([
+    db.select().from(offers).where(key(ctx)).limit(1),
+    db.select().from(offerConditions).where(and(eq(offerConditions.shopId, ctx.shopId), eq(offerConditions.offerId, ctx.offerId))),
+    db.select().from(offerRewards).where(and(eq(offerRewards.shopId, ctx.shopId), eq(offerRewards.offerId, ctx.offerId))),
+    db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, ctx.shopId), eq(offerCombinationPolicies.offerId, ctx.offerId))).limit(1),
+  ]);
+  // FOR UPDATE keeps two concurrent publishes from computing the same version number.
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT id FROM offers WHERE id = ${ctx.offerId} AND shop_id = ${ctx.shopId} FOR UPDATE`);
+    const [last] = await tx
+      .select({ versionNumber: offerVersions.versionNumber })
+      .from(offerVersions)
+      .where(and(eq(offerVersions.shopId, ctx.shopId), eq(offerVersions.offerId, ctx.offerId)))
+      .orderBy(desc(offerVersions.versionNumber))
+      .limit(1);
+    await tx.insert(offerVersions).values({
+      shopId: ctx.shopId,
+      offerId: ctx.offerId,
+      versionNumber: (last?.versionNumber ?? 0) + 1,
+      snapshot: { offer: offerSnapshot[0], conditions: condSnapshot, rewards: rewSnapshot, combinationPolicy: policySnapshot[0] ?? null },
+      createdBy: opts.performedBy,
+    });
+  });
+  await audit(db, ctx, opts, { entityId: ctx.offerId, action: "publish", before: { status: statusBefore }, after: { status: statusAfter } });
+  return { ok: true, dryRun: false, offerId: ctx.offerId, statusBefore, statusAfter, changed: true, updatedAt: now };
 }
