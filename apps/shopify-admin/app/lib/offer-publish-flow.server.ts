@@ -445,6 +445,9 @@ async function keepStatusAndRetry(
   return `${failure.message} The change is saved and the offer keeps its status; publishing to Shopify will be retried automatically.`;
 }
 
+/** Publishes a shop's config; injectable so callers/tests can replace only the Shopify side. */
+export type ShopPublishFn = (shopId: string, shopDomain: string) => Promise<PublishFailure | null>;
+
 /** Pauses an active offer for its own fault and republishes the shop without it. */
 async function pauseOffer(
   db: Db,
@@ -453,13 +456,14 @@ async function pauseOffer(
   offerId: string,
   reason: string,
   error: string,
+  publish: ShopPublishFn,
 ): Promise<{ rollbackError: string | null; name: string }> {
   const [row] = await db
     .update(offers)
     .set({ status: "paused", updatedAt: new Date() })
     .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
     .returning({ name: offers.internalName });
-  const rollbackError = await publishShopConfig(shopId, shopDomain);
+  const rollbackError = (await publish(shopId, shopDomain))?.message ?? null;
   await addOfferPublishErrors(db, shopId, [offerId], error);
   await recordSystemOfferEvent(db, {
     shopId,
@@ -483,9 +487,10 @@ async function resolveForeignFailure(
   shopDomain: string,
   offerId: string,
   failure: PublishFailure,
+  publish: ShopPublishFn = tryPublishShop,
 ): Promise<string> {
   if (failure.scope !== "offer" || !failure.offerId) return keepStatusAndRetry(db, shopId, offerId, failure);
-  const { name, rollbackError } = await pauseOffer(db, shopId, shopDomain, failure.offerId, "compile_error", failure.message);
+  const { name, rollbackError } = await pauseOffer(db, shopId, shopDomain, failure.offerId, "compile_error", failure.message, publish);
   return rollbackError
     ? `Another offer, "${name}", was paused because ${failure.message} Re-publishing the Shopify configuration also failed: ${rollbackError}`
     : `Another offer, "${name}", was paused because ${failure.message} It blocked publishing for the whole shop; your change is live.`;
@@ -497,6 +502,7 @@ export async function republishIfActive(
   shopDomain: string,
   offerId: string,
   wasActive: boolean,
+  publish: ShopPublishFn = tryPublishShop,
 ): Promise<string | null> {
   if (!wasActive) {
     await invalidateOfferDefinitions(shopId);
@@ -518,13 +524,13 @@ export async function republishIfActive(
     failure = { message: preflight.error, scope: "offer", offerId: preflight.offerId ?? offerId };
   } else {
     reason = "compile_error";
-    failure = await tryPublishShop(shopId, shopDomain);
+    failure = await publish(shopId, shopDomain);
   }
   if (!failure) return null;
-  if (!isOwnFault(failure, offerId)) return resolveForeignFailure(db, shopId, shopDomain, offerId, failure);
+  if (!isOwnFault(failure, offerId)) return resolveForeignFailure(db, shopId, shopDomain, offerId, failure, publish);
 
   const publishError = failure.message;
-  const { rollbackError } = await pauseOffer(db, shopId, shopDomain, offerId, reason, publishError);
+  const { rollbackError } = await pauseOffer(db, shopId, shopDomain, offerId, reason, publishError, publish);
   return rollbackError
     ? `${publishError} The offer was paused, but re-publishing the Shopify configuration also failed: ${rollbackError}`
     : `${publishError} The offer was paused so the change can't go live; fix it and activate it again.`;
