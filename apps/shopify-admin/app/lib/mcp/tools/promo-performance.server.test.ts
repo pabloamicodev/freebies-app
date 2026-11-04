@@ -3,7 +3,7 @@ import type { Db } from "@promo/db";
 import { clearFanOutCache } from "../multi-shop.server.js";
 import { createTestDb, seedOffer } from "../../test-support/pglite-db.js";
 import { NOW, SECRET_VALUES, insertEvents, now, operatorAll, seedWorld } from "./insights-test-fixtures.js";
-import { promoPerformance } from "./promo-performance.server.js";
+import { moneyOf, emptyBucket, promoPerformance } from "./promo-performance.server.js";
 import { resolveWindow } from "./insights-common.server.js";
 
 let db: Db;
@@ -200,4 +200,39 @@ describe("resolveWindow", () => {
     expect(w.end).toEqual(NOW);
     expect(NOW.getTime() - w.start.getTime()).toBe(30 * 86_400_000);
   });
+});
+
+describe("promo_performance money", () => {
+  it("reads stored amount x 100 with each currency's own decimals", () => {
+    for (const [currency, stored, amount] of [["USD", 123456, "1234.56"], ["JPY", 150000, "1500"], ["KWD", 123456, "1234.560"]] as const) {
+      const b = emptyBucket();
+      b.revenue.add(currency, stored);
+      b.revenueOrders.set(currency, 1);
+      expect(moneyOf(b)).toMatchObject({ revenue: [{ amount, currency }], aov: [{ amount, currency }] });
+    }
+  });
+});
+
+describe("promo_performance shop total", () => {
+  it("counts an order attributed to several offers once", async () => {
+    const { db: db2, close: close2 } = await createTestDb();
+    try {
+      const w = await seedWorld(db2);
+      const a = await seedOffer(db2, w.alpha, { type: "gift", internalName: "A" });
+      const b = await seedOffer(db2, w.alpha, { type: "bundle", internalName: "B" });
+      for (const offerId of [a, b]) {
+        await insertEvents(db2, { shopId: w.alpha, offerId, name: "order_placed_attributed", at: DAY, orderId: "gid://shopify/Order/1", properties: { subtotalCents: 10000, savedCents: 1000 } });
+      }
+      await insertEvents(db2, { shopId: w.alpha, offerId: a, name: "order_placed_attributed", at: DAY, orderId: "gid://shopify/Order/2", properties: { subtotalCents: 2000 } });
+      clearFanOutCache();
+      const res = await promoPerformance(db2, await w.visible(), { shops: ["alpha"] }, now);
+      expect(res.data.rows.map((r) => r.counts.orders).sort()).toEqual([1, 2]);
+      expect(res.data.totals.counts.orders).toBe(2);
+      expect(res.data.totals.revenue).toEqual([{ amount: "120.00", currency: "USD" }]);
+      expect(res.data.totals.discountGiven).toEqual([{ amount: "10.00", currency: "USD" }]);
+      expect(res.data.totals.aov).toEqual([{ amount: "60.00", currency: "USD" }]);
+    } finally {
+      await close2();
+    }
+  }, 60_000);
 });

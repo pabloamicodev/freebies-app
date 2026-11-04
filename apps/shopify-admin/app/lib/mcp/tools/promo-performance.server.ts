@@ -202,8 +202,28 @@ export async function queryShopPerformance(
       GROUP BY key, currency`),
   );
 
+  const totalOrders = rowsOf<Record<string, string | number | null>>(
+    await db.execute(sql`
+      SELECT currency,
+        COUNT(*)::int AS orders,
+        COUNT(subtotal)::int AS with_subtotal,
+        COALESCE(SUM(subtotal), 0)::bigint AS subtotal_cents,
+        COALESCE(SUM(saved), 0)::bigint AS saved_cents
+      FROM (
+        SELECT DISTINCT ON (e.order_id)
+          COALESCE(NULLIF(e.properties->>'currencyCode', ''), ${shop.currencyCode}) AS currency,
+          CASE WHEN e.properties->>'subtotalCents' ~ '^[0-9]+$' THEN (e.properties->>'subtotalCents')::bigint END AS subtotal,
+          CASE WHEN e.properties->>'savedCents' ~ '^[0-9]+$' THEN (e.properties->>'savedCents')::bigint END AS saved
+        FROM analytics_events e
+        WHERE ${base} AND e.event_name = ${ORDER_EVENT} AND e.order_id IS NOT NULL
+        ORDER BY e.order_id, e.occurred_at DESC
+      ) d
+      GROUP BY currency`),
+  );
+
+  // Bounded to the requested window: there is no (shop_id, occurred_at) index to scan a shop's full history.
   const [earliest] = rowsOf<{ at: string | Date | null }>(
-    await db.execute(sql`SELECT e.occurred_at AS at FROM analytics_events e WHERE e.shop_id = ${shop.id} ORDER BY e.occurred_at ASC LIMIT 1`),
+    await db.execute(sql`SELECT MIN(e.occurred_at) AS at FROM analytics_events e WHERE e.shop_id = ${shop.id} AND e.occurred_at >= ${startIso} AND e.occurred_at < ${endIso}`),
   );
 
   const buckets = new Map<string, Bucket>();
@@ -221,21 +241,37 @@ export async function queryShopPerformance(
     b.cartErrors += Number(row["cart_errors"] ?? 0);
     b.ordersWithoutReference += Number(row["orders_no_id"] ?? 0);
   }
-  let ordersWithoutRevenue = 0;
   for (const row of orders) {
     const b = bucketFor(String(row["key"]));
     const currency = String(row["currency"]);
-    const n = Number(row["orders"] ?? 0);
     const withSubtotal = Number(row["with_subtotal"] ?? 0);
-    b.orders += n;
-    ordersWithoutRevenue += n - withSubtotal;
+    b.orders += Number(row["orders"] ?? 0);
     b.revenue.add(currency, Number(row["subtotal_cents"] ?? 0));
     b.discount.add(currency, Number(row["saved_cents"] ?? 0));
     if (withSubtotal > 0) b.revenueOrders.set(currency, (b.revenueOrders.get(currency) ?? 0) + withSubtotal);
   }
 
+  // An order attributed to several offers sits in several buckets; the shop total counts it once.
   const total = emptyBucket();
-  for (const b of buckets.values()) addBucket(total, b);
+  for (const b of buckets.values()) {
+    total.views += b.views;
+    total.qualified += b.qualified;
+    total.adds += b.adds;
+    total.checkouts += b.checkouts;
+    total.cartErrors += b.cartErrors;
+    total.ordersWithoutReference += b.ordersWithoutReference;
+  }
+  let ordersWithoutRevenue = 0;
+  for (const row of totalOrders) {
+    const currency = String(row["currency"]);
+    const n = Number(row["orders"] ?? 0);
+    const withSubtotal = Number(row["with_subtotal"] ?? 0);
+    total.orders += n;
+    ordersWithoutRevenue += n - withSubtotal;
+    total.revenue.add(currency, Number(row["subtotal_cents"] ?? 0));
+    total.discount.add(currency, Number(row["saved_cents"] ?? 0));
+    if (withSubtotal > 0) total.revenueOrders.set(currency, (total.revenueOrders.get(currency) ?? 0) + withSubtotal);
+  }
 
   const labels = new Map<string, { name: string; type: string; status: string; offerId: string }>();
   if (groupBy === "offer" && buckets.size > 0) {
