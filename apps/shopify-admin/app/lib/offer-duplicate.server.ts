@@ -10,6 +10,7 @@ import {
 } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import { offerRequiresCode } from "./discount-codes.server.js";
+import { applyResourceMapping, type ResourceMapping } from "./offer-resource-mapping.server.js";
 
 /**
  * Copies an offer and everything it owns (conditions, rewards, combination policy,
@@ -24,13 +25,14 @@ import { offerRequiresCode } from "./discount-codes.server.js";
  * `options.targetShopId` copies into another shop: every shop-scoped Shopify GID column
  * (function metafield, code discount node, bundle product) is nulled so nothing points at
  * the source shop's resources. Product/collection GIDs inside conditions, rewards and
- * bundle step configs are not rewritten (no cross-shop mapping exists).
+ * bundle step configs are rewritten with `options.resourceMapping` (see mapOfferResourcesToShop);
+ * unmatched GIDs are stripped. Without a mapping they are copied untouched.
  */
 export async function duplicateOffer(
   db: Db,
   shopId: string,
   offerId: string,
-  options: { name?: string; targetShopId?: string } = {},
+  options: { name?: string; targetShopId?: string; resourceMapping?: ResourceMapping } = {},
 ): Promise<string | null> {
   return db.transaction(async (tx) => {
     const [source] = await tx
@@ -41,6 +43,8 @@ export async function duplicateOffer(
     if (!source) return null;
     const targetShopId = options.targetShopId ?? shopId;
     const crossShop = targetShopId !== shopId;
+    const mapping = crossShop ? options.resourceMapping : undefined;
+    const remap = <V>(value: V): V => (mapping ? applyResourceMapping(value, mapping) : value);
     const requiresCode = await offerRequiresCode(tx as unknown as Db, shopId, source);
 
     const { id: _id, ...rest } = source;
@@ -71,10 +75,10 @@ export async function duplicateOffer(
     };
 
     const conditions = await tx.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
-    if (conditions.length) await tx.insert(offerConditions).values(conditions.map((r) => ({ ...strip(r), shopId: targetShopId, offerId: newId })));
+    if (conditions.length) await tx.insert(offerConditions).values(conditions.map((r) => ({ ...strip(r), value: remap(r.value), shopId: targetShopId, offerId: newId })));
 
     const rewards = await tx.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
-    if (rewards.length) await tx.insert(offerRewards).values(rewards.map((r) => ({ ...strip(r), shopId: targetShopId, offerId: newId })));
+    if (rewards.length) await tx.insert(offerRewards).values(rewards.map((r) => ({ ...strip(r), value: remap(r.value), target: remap(r.target), shopId: targetShopId, offerId: newId })));
 
     const policies = await tx.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId)));
     if (policies.length) await tx.insert(offerCombinationPolicies).values(policies.map((r) => ({ ...strip(r), shopId: targetShopId, offerId: newId })));
@@ -84,13 +88,13 @@ export async function duplicateOffer(
       // The bundle product belongs to the source; the copy must create its own.
       const [newBundle] = await tx
         .insert(bundleDefinitions)
-        .values({ ...strip(bundle), shopId: targetShopId, offerId: newId, bundleProductGid: null })
+        .values({ ...strip(bundle), config: remap(bundle.config), shopId: targetShopId, offerId: newId, bundleProductGid: null })
         .returning({ id: bundleDefinitions.id });
       if (newBundle) {
         const steps = await tx.select().from(bundleSteps).where(and(eq(bundleSteps.shopId, shopId), eq(bundleSteps.bundleId, bundle.id)));
-        if (steps.length) await tx.insert(bundleSteps).values(steps.map((r) => ({ ...strip(r), shopId: targetShopId, bundleId: newBundle.id })));
+        if (steps.length) await tx.insert(bundleSteps).values(steps.map((r) => ({ ...strip(r), sourceConfig: remap(r.sourceConfig), filterOptions: remap(r.filterOptions), sortOptions: remap(r.sortOptions), shopId: targetShopId, bundleId: newBundle.id })));
         const tiers = await tx.select().from(bundleTiers).where(and(eq(bundleTiers.shopId, shopId), eq(bundleTiers.bundleId, bundle.id)));
-        if (tiers.length) await tx.insert(bundleTiers).values(tiers.map((r) => ({ ...strip(r), shopId: targetShopId, bundleId: newBundle.id })));
+        if (tiers.length) await tx.insert(bundleTiers).values(tiers.map((r) => ({ ...strip(r), value: remap(r.value), shopId: targetShopId, bundleId: newBundle.id })));
       }
     }
     return newId;

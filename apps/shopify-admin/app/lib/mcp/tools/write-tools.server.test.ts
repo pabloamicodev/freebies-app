@@ -437,21 +437,12 @@ describe("promo_duplicate and promo_create_draft_from_template", () => {
     expect((await row(body(named.done).data["offerId"] as string)).internalName).toBe("[MCP test] custom");
   });
 
-  it("targetShop must be the source shop: cross-shop copies are VALIDATION and create nothing", async () => {
+  it("an unknown targetShop is SHOP_NOT_FOUND and targetShop equal to the source is a plain same-shop copy", async () => {
     const id = await source();
-    const count = async () => (await db.select().from(offers)).length;
-    const before = await count();
-    for (const targetShop of [SECOND, LIVE]) {
-      const res = await run("promo_duplicate", { ref: ref(TEST, id), targetShop }, operators["admin"]);
-      expect(body(res).code).toBe("VALIDATION");
-      expect(body(res).message).toMatch(/can't be translated across shops/);
-      const exec = await run("promo_duplicate", { ref: ref(TEST, id), targetShop, dryRun: false, confirmToken: "x.y" }, operators["admin"]);
-      expect(body(exec).code).toBe("VALIDATION");
-    }
-    expect(await count()).toBe(before);
     expect(body(await run("promo_duplicate", { ref: ref(TEST, id), targetShop: "nowhere.myshopify.com" })).code).toBe("SHOP_NOT_FOUND");
     const same = await twoStep("promo_duplicate", { ref: ref(TEST, id), targetShop: TEST });
     expect((await row(body(same.done).data["offerId"] as string)).shopId).toBe(shopIds["test"]);
+    expect(body(same.dry).data["resourceMapping"]).toBeUndefined();
   });
 
   it("an override that fails after the draft exists returns the draft with a warning, and an idempotent retry replays it", async () => {
