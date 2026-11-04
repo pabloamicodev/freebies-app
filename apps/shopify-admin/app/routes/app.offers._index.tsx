@@ -9,7 +9,7 @@ import {
   offers,
   widgets,
 } from "@promo/db";
-import { eq, and, like, desc, count, inArray } from "drizzle-orm";
+import { eq, and, like, desc, count } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
   IconCopy,
@@ -27,14 +27,16 @@ import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { OfferToggle } from "../components/BogosSwitch.js";
 import { getShopContext } from "../lib/shop-context.server.js";
-import { activationStatus } from "../lib/offer-scheduling.server.js";
 import { getOfferPublishErrors } from "../lib/offer-publish-errors.server.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
-import { createRouteTimer } from "../lib/route-timing.server.js";
 import {
-  publishShopConfig as publishShopConfigToShopify,
-  validateActivation,
-} from "../lib/offer-publish-flow.server.js";
+  archiveOffer,
+  bulkPauseOffers,
+  bulkResumeOffers,
+  toggleOfferStatus,
+} from "../lib/offer-lifecycle.server.js";
+import { createRouteTimer } from "../lib/route-timing.server.js";
+import { publishShopConfig as publishShopConfigToShopify } from "../lib/offer-publish-flow.server.js";
 import { neutralizeCodeDiscountNode } from "../lib/sync/offer-publisher.server.js";
 import { duplicateOffer } from "../lib/offer-duplicate.server.js";
 import * as Sentry from "@sentry/node";
@@ -224,136 +226,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   switch (intent) {
     case "bulk_pause": {
-      const previous = await db
-        .select({ id: offers.id, status: offers.status })
-        .from(offers)
-        .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
-      await db
-        .update(offers)
-        .set({ status: "paused", updatedAt: new Date() })
-        .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
-      const publishError = await publishShopConfig();
-      if (publishError) {
-        // Restore individual statuses inside a transaction so the rollback is also atomic.
-        await db.transaction(async (tx) => {
-          await Promise.all(
-            previous.map((row) =>
-              tx
-                .update(offers)
-                .set({ status: row.status, updatedAt: new Date() })
-                .where(and(eq(offers.shopId, shopId), eq(offers.id, row.id))),
-            ),
-          );
-        });
-        return { error: publishError };
-      }
-      void insertAuditLog(db, {
-        shopId,
-        entityType: "offer",
-        entityId: offerIds.join(","),
-        action: "bulk_pause",
-        after: { offerIds },
-        performedBy: session.shop,
-      });
+      const result = await bulkPauseOffers(db, { shopId, shopDomain: session.shop, offerIds }, { performedBy: session.shop });
+      if (!result.ok) return { error: result.error };
       break;
     }
     case "bulk_activate": {
-      const validation = await validateActivation(db, shopId, offerIds);
-      if (!validation.ok) return { error: validation.error };
-      const previous = await db
-        .select({ id: offers.id, status: offers.status, startsAt: offers.startsAt, endsAt: offers.endsAt })
-        .from(offers)
-        .where(and(eq(offers.shopId, shopId), inArray(offers.id, offerIds)));
-      const now = new Date();
-      await db.transaction(async (tx) => {
-        for (const row of previous) {
-          await tx
-            .update(offers)
-            .set({ status: activationStatus(row.startsAt, row.endsAt, now), updatedAt: now })
-            .where(and(eq(offers.shopId, shopId), eq(offers.id, row.id)));
-        }
-      });
-      const publishError = await publishShopConfig();
-      if (publishError) {
-        await db.transaction(async (tx) => {
-          await Promise.all(
-            previous.map((row) =>
-              tx
-                .update(offers)
-                .set({ status: row.status, updatedAt: new Date() })
-                .where(and(eq(offers.shopId, shopId), eq(offers.id, row.id))),
-            ),
-          );
-        });
-        return { error: publishError };
-      }
-      void insertAuditLog(db, {
-        shopId,
-        entityType: "offer",
-        entityId: offerIds.join(","),
-        action: "bulk_activate",
-        after: { offerIds },
-        performedBy: session.shop,
-      });
+      const result = await bulkResumeOffers(db, { shopId, shopDomain: session.shop, offerIds }, { performedBy: session.shop });
+      if (!result.ok) return { error: result.error };
       break;
     }
     case "toggle_status": {
       const offerId = formData.get("offerId") as string;
-      // The posted form can be stale (another tab, the cron); the stored status is the truth.
-      const [current] = await db
-        .select({ status: offers.status, startsAt: offers.startsAt, endsAt: offers.endsAt })
-        .from(offers)
-        .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
-        .limit(1);
-      if (!current) return { error: "Offer not found" };
-      let newStatus: OfferStatus = "paused";
-      if (current.status !== "active") {
-        const validation = await validateActivation(db, shopId, [offerId]);
-        if (!validation.ok) return { error: validation.error };
-        newStatus = activationStatus(current.startsAt, current.endsAt);
-      }
-      await db
-        .update(offers)
-        .set({ status: newStatus, updatedAt: new Date() })
-        .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-      const publishError = await publishShopConfig();
-      if (publishError) {
-        await db
-          .update(offers)
-          .set({ status: current.status, updatedAt: new Date() })
-          .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId), eq(offers.status, newStatus)));
-        return { error: publishError };
-      }
-      void insertAuditLog(db, {
-        shopId,
-        entityType: "offer",
-        entityId: offerId,
-        action: "toggle_status",
-        before: { status: current.status },
-        after: { status: newStatus },
-        performedBy: session.shop,
-      });
+      const result = await toggleOfferStatus(db, { shopId, shopDomain: session.shop, offerId }, { performedBy: session.shop });
+      if (!result.ok) return { error: "error" in result ? result.error : "Offer not found" };
       break;
     }
     case "archive": {
       const offerId = formData.get("offerId") as string;
-      const [previous] = await db
-        .select({ status: offers.status, archivedAt: offers.archivedAt })
-        .from(offers)
-        .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
-        .limit(1);
-      await db
-        .update(offers)
-        .set({ status: "archived", archivedAt: new Date(), updatedAt: new Date() })
-        .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-      const publishError = await publishShopConfig();
-      if (publishError && previous) {
-        await db
-          .update(offers)
-          .set({ status: previous.status, archivedAt: previous.archivedAt, updatedAt: new Date() })
-          .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-        return { error: publishError };
-      }
+      const result = await archiveOffer(db, { shopId, shopDomain: session.shop, offerId }, { performedBy: session.shop });
+      if (!result.ok && result.code === "publish_failed") return { error: result.error };
       break;
     }
     case "duplicate": {
