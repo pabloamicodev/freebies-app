@@ -13,7 +13,7 @@ import { activateDraftOffer, bulkPauseOffers } from "../../offer-lifecycle.serve
 import { republishIfActive, tryPublishShop } from "../../offer-publish-flow.server.js";
 import { listLimitedTitleCollisions } from "../../offer-usage.server.js";
 import { publishOffersForShop } from "../../sync/offer-publisher.server.js";
-import { ToolError, promoRef, shopHandle, type Warning } from "../result.server.js";
+import { ToolError, promoRef, publishAdvisories, shopHandle, type Warning } from "../result.server.js";
 import { selectShops } from "../shops.server.js";
 import { lifecycleToolError, type ApplyContext, type CallInfo } from "../write-runner.server.js";
 import type { McpContext } from "../server.server.js";
@@ -144,13 +144,7 @@ export function promoActivateDraftTool(ctx: McpContext, call: CallInfo, args: Co
         return {
           summary: `Publish draft "${label(basics.name)}" (${ref}): ${result.statusBefore} -> ${result.statusAfter} (follows its schedule). The shop's Shopify config is republished and the status put back if that fails.`,
           data: { promoRef: ref, offerId, name: basics.name, statusBefore: result.statusBefore, statusAfter: result.statusAfter, willPublish: true },
-          warnings: [
-            {
-              code: "ADMIN_WARNINGS_NOT_CHECKED",
-              severity: "info",
-              message: "The admin's advisory checks (theme templates/sections, Experiment Engine) need a shop token and are not run here; check them in the admin if the offer targets them.",
-            },
-          ],
+          warnings: publishAdvisories(result.warnings),
           links: [adminLink(shopHandle(shop.myshopifyDomain))],
           offerUpdatedAt: result.updatedAt,
         };

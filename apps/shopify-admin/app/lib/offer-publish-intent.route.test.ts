@@ -140,7 +140,7 @@ describe("admin Publish intent", () => {
     expect(publishOffersForShop).not.toHaveBeenCalled();
     await publish(id, { acknowledgeWarnings: "1" });
     expect((await row(id)).status).toBe("active");
-    expect(getPublishWarnings).toHaveBeenCalledTimes(1);
+    expect(getPublishWarnings).toHaveBeenCalledTimes(2);
   });
 
   it("a failed Shopify publish returns its message, puts the previous status back and records no version or audit", async () => {

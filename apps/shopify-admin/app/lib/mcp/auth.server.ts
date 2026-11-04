@@ -103,6 +103,43 @@ export async function revokeOperatorCredentials(db: Db, operatorId: string, now:
     .where(and(eq(mcpCredentials.operatorId, operatorId), isNull(mcpCredentials.revokedAt)));
 }
 
+export const MAX_ROTATE_GRACE_MINUTES = 1440;
+
+/** Issues a fresh PAT and shortens the live ones to now+grace (never lengthens). Grants bound to an old PAT die with it, via patIsLive. */
+export async function rotateOperatorPat(
+  db: Db,
+  operatorId: string,
+  graceMinutes = 60,
+  env: NodeJS.ProcessEnv = process.env,
+  now: Date = new Date(),
+): Promise<{ pat: string; expiresAt: Date; graceEndsAt: Date }> {
+  if (!Number.isInteger(graceMinutes) || graceMinutes < 0 || graceMinutes > MAX_ROTATE_GRACE_MINUTES) {
+    throw new Error(`graceMinutes must be an integer from 0 to ${MAX_ROTATE_GRACE_MINUTES}`);
+  }
+  const pat = generatePat();
+  const expiresAt = new Date(now.getTime() + PAT_TTL_DAYS * 86_400_000);
+  const graceEndsAt = new Date(now.getTime() + graceMinutes * 60_000);
+  const tokenHash = hashToken(pat, env);
+  await db.transaction(async (tx) => {
+    const [operator] = await tx.select({ disabledAt: mcpOperators.disabledAt }).from(mcpOperators).where(eq(mcpOperators.id, operatorId));
+    if (!operator) throw new Error("no such operator");
+    if (operator.disabledAt) throw new Error("operator is disabled");
+    await tx
+      .update(mcpCredentials)
+      .set({ expiresAt: graceEndsAt })
+      .where(
+        and(
+          eq(mcpCredentials.operatorId, operatorId),
+          eq(mcpCredentials.kind, "pat"),
+          isNull(mcpCredentials.revokedAt),
+          gt(mcpCredentials.expiresAt, graceEndsAt),
+        ),
+      );
+    await tx.insert(mcpCredentials).values({ operatorId, kind: "pat", tokenHash, prefix: pat.slice(0, 14), expiresAt });
+  });
+  return { pat, expiresAt, graceEndsAt };
+}
+
 type CredentialKind = "pat" | "access" | "refresh";
 
 /** True while this exact PAT is unrevoked and unexpired: OAuth grants never outlive the PAT that was pasted to create them. */
