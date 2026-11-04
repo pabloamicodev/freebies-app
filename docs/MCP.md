@@ -39,6 +39,7 @@ Create the first admin (prints the PAT once; run against the database that serve
 ```
 pnpm mcp:operator create --email you@example.com --name "You" --role admin --shops '*'
 pnpm mcp:operator list
+pnpm mcp:operator rotate --email you@example.com --grace-minutes 60   # new PAT printed once; old PAT (and claude.ai grants bound to it) expire after the grace, default 60, max 1440
 pnpm mcp:operator revoke --email you@example.com
 ```
 
@@ -98,6 +99,7 @@ Claude joins both MCPs by `shopDomain`; neither calls the other.
 | Tool | What it returns |
 |---|---|
 | `mcp_whoami` | Operator, role, visible shops with `writeMode`. |
+| `mcp_call_log_query` `{ operatorEmail?, tool?, outcome?, since?, until?, limit = 50 (max 200), cursor? }` | Admin only (read rate class). Rows of `mcp_call_log`, newest first with a keyset cursor: id, time, operator id and name (the email filters but is never returned), tool, shops, outcome, duration and `args` exactly as redacted at write time. `result_ref`, idempotency keys and confirm jtis are never returned. |
 | `promo_performance` | Funnel per offer/day/type over up to 90 days from `analytics_events` (shop+offer+time indexes). Rates from summed counts, `null` when the denominator is 0; money per currency, never converted; `dataQuality` lists missing event types. Never returns customer, session, cart or order identifiers. |
 | `promo_audit_log` | `audit_logs` newest first (shops/ref/actor/since, keyset cursor), readable before/after, secret and PII keys stripped, emails masked. |
 | `promo_health` | Prioritized findings: publish errors, system pauses, `publish_pending`, drift visible from the DB (missing discount nodes, uncompiled or mis-scheduled offers), each with a next read tool. |
@@ -154,9 +156,7 @@ Retention: the daily `analytics-cleanup` cron (`call-log-retention.server.ts`, n
 ### Enabling writes on hpn-test-store
 
 1. Vercel (HPN project only): set `MCP_WRITE_SHOPS=hpn-test-store.myshopify.com` and `MCP_CONFIRM_SECRET` (32+ random chars), redeploy.
-2. In that shop's database, upsert the setting (value is JSON text):
-   `INSERT INTO app_settings (shop_id, key, value) SELECT id, 'mcp.writeMode', '"write"' FROM shops WHERE myshopify_domain = 'hpn-test-store.myshopify.com' ON CONFLICT (shop_id, key) DO UPDATE SET value = '"write"';`
-   Set it back to `"read_only"` (or delete the row) to lock the shop again; removing the domain from the env also locks it.
+2. Open the per-shop lock: `pnpm mcp:operator write-mode --shop hpn-test-store --mode write --env <file>` (upserts `app_settings` key `mcp.writeMode`; fails if the shop does not exist; prints the resulting mode). `write-mode --list` shows every shop's stored mode. Use `--mode read_only` to lock the shop again; removing the domain from `MCP_WRITE_SHOPS` also locks it (the env lock always applies on top of this setting).
 3. Give the operator the `editor` (or `admin`) role: `pnpm mcp:operator create ... --role editor --shops '*'`.
 4. Test only on offers named `[MCP test] ...`: hpn-test-store shares the app with HPN and TRU. Any other shop answers `SHOP_READ_ONLY` even for admins.
 

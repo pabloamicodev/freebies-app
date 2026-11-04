@@ -92,3 +92,27 @@ function parseSetting(raw: string): string | null {
     return raw;
   }
 }
+
+/** CLI side of the per-shop lock: `shop` is a myshopify domain or its handle. Does not touch the MCP_WRITE_SHOPS env lock. */
+export async function setShopWriteMode(db: Db, shop: string, mode: WriteMode): Promise<{ myshopifyDomain: string; mode: WriteMode }> {
+  const key = shop.trim().toLowerCase();
+  const domain = key.includes(".") ? key : `${key}.myshopify.com`;
+  const [row] = await db.select({ id: shops.id, myshopifyDomain: shops.myshopifyDomain }).from(shops).where(eq(shops.myshopifyDomain, domain));
+  if (!row) throw new Error(`no such shop: ${shop}`);
+  const value = JSON.stringify(mode);
+  await db
+    .insert(appSettings)
+    .values({ shopId: row.id, key: WRITE_MODE_SETTING_KEY, value })
+    .onConflictDoUpdate({ target: [appSettings.shopId, appSettings.key], set: { value, updatedAt: new Date() } });
+  return { myshopifyDomain: row.myshopifyDomain, mode };
+}
+
+/** Stored per-shop setting only (a missing or unknown value reads as read_only); the env lock is separate. */
+export async function listShopWriteModes(db: Db): Promise<{ myshopifyDomain: string; mode: WriteMode }[]> {
+  const rows = await db
+    .select({ myshopifyDomain: shops.myshopifyDomain, value: appSettings.value })
+    .from(shops)
+    .leftJoin(appSettings, and(eq(appSettings.shopId, shops.id), eq(appSettings.key, WRITE_MODE_SETTING_KEY)))
+    .orderBy(shops.myshopifyDomain);
+  return rows.map((r) => ({ myshopifyDomain: r.myshopifyDomain, mode: r.value !== null && parseSetting(r.value) === "write" ? "write" : "read_only" }));
+}

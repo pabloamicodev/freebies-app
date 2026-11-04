@@ -4,11 +4,13 @@
  *   tsx scripts/mcp-operator.ts create --email you@x.com --name "You" --shops a.myshopify.com,b.myshopify.com|'*' [--role viewer|editor|admin] [--ttl-days 1-90] [--env <file>]
  *   tsx scripts/mcp-operator.ts list   [--env <file>]
  *   tsx scripts/mcp-operator.ts revoke --email you@x.com [--env <file>]
+ *   tsx scripts/mcp-operator.ts rotate --email you@x.com [--grace-minutes 0-1440, default 60] [--env <file>]   (prints a new PAT once; the old PAT and OAuth grants bound to it expire after the grace instead of being revoked)
+ *   tsx scripts/mcp-operator.ts write-mode --shop <domain|handle> --mode write|read_only [--env <file>]   (or --list; the MCP_WRITE_SHOPS env lock still applies on top)
  *   tsx scripts/mcp-operator.ts totp-enable  --email you@x.com [--env <file>]   (prints the otpauth:// URI once; needs TOKEN_ENCRYPTION_KEY)
  *   tsx scripts/mcp-operator.ts totp-disable --email you@x.com [--env <file>]
  *
  * Needs DATABASE_URL and MCP_TOKEN_PEPPER (the same pepper as the deployment that serves /api/mcp).
- * `create` prints the PAT once; only its peppered hash is stored. Writes to whatever DATABASE_URL points at.
+ * `create` and `rotate` print the PAT once; only its peppered hash is stored. Writes to whatever DATABASE_URL points at.
  */
 
 import process from "node:process";
@@ -106,6 +108,31 @@ async function main() {
     if (!email) throw new Error("totp-disable needs --email");
     await totp.disableTotp(db, email);
     out(`TOTP disabled for ${email}.`);
+  } else if (command === "rotate") {
+    const email = flag("email");
+    if (!email) throw new Error("rotate needs --email");
+    const grace = flag("grace-minutes") === undefined ? 60 : Number(flag("grace-minutes"));
+    const [operator] = await db.select().from(mcpOperators).where(eq(mcpOperators.email, email.trim().toLowerCase()));
+    if (!operator) throw new Error("no such operator");
+    const { pat, expiresAt, graceEndsAt } = await auth.rotateOperatorPat(db, operator.id, grace);
+    out(`PAT rotated for ${email}. Old PAT and its OAuth grants stop working at ${graceEndsAt.toISOString()}.`);
+    out(`Expires: ${expiresAt.toISOString()}`);
+    out("PAT (shown once, store it now):");
+    out(pat);
+  } else if (command === "write-mode") {
+    const shops = await import("../apps/shopify-admin/app/lib/mcp/shops.server.js");
+    const reminder = "Reminder: MCP_WRITE_SHOPS (env) must also list the shop for writes to work.";
+    if (argv.includes("--list")) {
+      for (const r of await shops.listShopWriteModes(db)) out(`${r.myshopifyDomain}	${r.mode}`);
+      out(reminder);
+    } else {
+      const shop = flag("shop");
+      const mode = flag("mode");
+      if (!shop || (mode !== "write" && mode !== "read_only")) throw new Error("write-mode needs --shop <domain|handle> and --mode write|read_only (or --list)");
+      const r = await shops.setShopWriteMode(db, shop, mode);
+      out(`${r.myshopifyDomain}: ${r.mode}`);
+      out(reminder);
+    }
   } else if (command === "revoke") {
     const email = flag("email");
     if (!email) throw new Error("revoke needs --email");
@@ -115,7 +142,7 @@ async function main() {
     await db.update(mcpOperators).set({ disabledAt: new Date() }).where(eq(mcpOperators.id, operator.id));
     out(`Operator ${email} disabled and credentials revoked.`);
   } else {
-    throw new Error("usage: create | list | revoke | totp-enable | totp-disable (see header of this file)");
+    throw new Error("usage: create | list | rotate | write-mode | revoke | totp-enable | totp-disable (see header of this file)");
   }
   await closeDb();
 }

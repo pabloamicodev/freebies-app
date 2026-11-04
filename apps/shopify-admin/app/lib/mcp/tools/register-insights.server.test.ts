@@ -58,7 +58,7 @@ describe("insights tools over the MCP endpoint", () => {
       ["alpha.myshopify.com", "write"],
       ["beta.myshopify.com", "read_only"],
     ]);
-    expect(out.data.server.writeEnabledShops).toEqual(["alpha.myshopify.com"]);
+    expect(out.data.server).toMatchObject({ phase: 4, writeEnabledShops: ["alpha.myshopify.com"] });
     expect(JSON.stringify(out)).not.toMatch(/pemcp_|pepper|token_hash/i);
   });
 
