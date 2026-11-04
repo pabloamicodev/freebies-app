@@ -140,7 +140,7 @@ describe("suggest_promo_tests", () => {
     expect(threshold.nextActions.find((a) => a.mcp === "promo-engine")).toMatchObject({ tool: "promo_duplicate", risk: "write" });
     const arms = threshold.nextActions.find((a) => a.tool === "experiments_configure_arms")!;
     expect(arms).toMatchObject({ mcp: "experiment-engine", risk: "write", args: { dryRun: true } });
-    expect(arms.args["arms"]).toEqual([expect.objectContaining({ config: { modification: expect.objectContaining({ offerType: "BANNER" }) } })]);
+    expect(arms.args["arms"]).toEqual([expect.objectContaining({ config: { type: "OFFER_TEST", modification: expect.objectContaining({ offerType: "BANNER" }) } })]);
 
     const content = c.find((x) => x.gap === "low_add_rate")!;
     expect(content.suggestedExperimentType).toBe("CONTENT_TEST");
