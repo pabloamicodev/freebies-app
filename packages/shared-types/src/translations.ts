@@ -18,6 +18,8 @@ export const WidgetTranslationsSchema = z.object({
   "gift_slider.confirm_button": z.string().default("Add Gift to Cart"),
   "gift_slider.out_of_stock": z.string().default("Out of Stock"),
   "gift_slider.free_label": z.string().default("Free"),
+  "gift_slider.choose_variant": z.string().default("Choose a variant"),
+  "gift_slider.limit_reached": z.string().default("You can choose up to {{max}} gifts"),
   /** Today offer. */
   "today_offer.title": z.string().default("Today's Deals"),
   "today_offer.button": z.string().default("View →"),

@@ -22,6 +22,8 @@ const TRANSLATION_KEYS: Array<{ key: keyof WidgetTranslations; label: string; hi
   { key: "gift_slider.confirm_button", label: "Gift slider confirm button" },
   { key: "gift_slider.out_of_stock", label: "Gift out of stock label" },
   { key: "gift_slider.free_label", label: "Free price label" },
+  { key: "gift_slider.choose_variant", label: "Gift picker — choose a variant prompt" },
+  { key: "gift_slider.limit_reached", label: "Gift picker — limit reached notice", hint: "Use {{max}} for the number of gifts." },
   { key: "today_offer.title", label: "Today Offer widget title" },
   { key: "today_offer.button", label: "Today Offer button text" },
   { key: "volume_discount.title", label: "Volume discount title" },

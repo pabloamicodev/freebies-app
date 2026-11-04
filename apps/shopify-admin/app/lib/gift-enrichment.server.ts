@@ -144,6 +144,8 @@ const GIFT_SLIDER_LABEL_DEFAULTS = {
   selectPrompt: "Select a gift",
   remove: "Remove Gifts from Cart",
   replaces: "Replacement for {{title}}",
+  chooseVariant: "Choose a variant",
+  limitReached: "You can choose up to {{max}} gifts",
 } as const;
 
 /** Builds the gift slider's `labels`, layering merchant overrides (from the
@@ -164,6 +166,8 @@ export function resolveGiftSliderLabels(
     selectPrompt: GIFT_SLIDER_LABEL_DEFAULTS.selectPrompt,
     remove: GIFT_SLIDER_LABEL_DEFAULTS.remove,
     replaces: GIFT_SLIDER_LABEL_DEFAULTS.replaces,
+    chooseVariant: overrides?.["gift_slider.choose_variant"]?.trim() || GIFT_SLIDER_LABEL_DEFAULTS.chooseVariant,
+    limitReached: overrides?.["gift_slider.limit_reached"]?.trim() || GIFT_SLIDER_LABEL_DEFAULTS.limitReached,
   };
 }
 

@@ -78,6 +78,8 @@ export const GiftSliderPayloadSchema = z.object({
     selectPrompt: z.string(),
     remove: z.string(),
     replaces: z.string(),
+    chooseVariant: z.string().optional(),
+    limitReached: z.string().optional(),
   }).optional(),
 });
 export type GiftSliderPayload = z.infer<typeof GiftSliderPayloadSchema>;

@@ -48,6 +48,9 @@ export interface GiftSliderLabels {
   selectPrompt: string;
   remove: string;
   replaces: string;
+  chooseVariant?: string;
+  /** "{{max}}" is replaced with the modal's limit. */
+  limitReached?: string;
 }
 
 export interface GiftSliderPayload {
