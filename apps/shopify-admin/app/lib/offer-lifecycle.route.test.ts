@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { auditLogs, offerConditions, offerRewards, offers, type Db } from "@promo/db";
 import type * as PromoDb from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
+import type * as OfferPublisher from "./sync/offer-publisher.server.js";
 
 /**
  * Characterization of the offer lifecycle admin actions against a real Postgres. Only the Shopify
@@ -29,7 +30,7 @@ vi.mock("@promo/db", async (importOriginal) => ({
   getDb: () => ctx.db,
 }));
 vi.mock("./sync/offer-publisher.server.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./sync/offer-publisher.server.js")>()),
+  ...(await importOriginal<typeof OfferPublisher>()),
   publishOffersForShop,
 }));
 vi.mock("./offer-definitions.server.js", () => ({ invalidateOfferDefinitions: async () => undefined }));
