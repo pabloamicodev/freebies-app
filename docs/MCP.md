@@ -99,6 +99,7 @@ Claude joins both MCPs by `shopDomain`; neither calls the other.
 | Tool | What it returns |
 |---|---|
 | `mcp_whoami` | Operator, role, visible shops with `writeMode`. |
+| `mcp_call_log_query` `{ operatorEmail?, tool?, outcome?, since?, until?, limit = 50 (max 200), cursor? }` | Admin only (read rate class). Rows of `mcp_call_log`, newest first with a keyset cursor: id, time, operator id and name (the email filters but is never returned), tool, shops, outcome, duration and `args` exactly as redacted at write time. `result_ref`, idempotency keys and confirm jtis are never returned. |
 | `promo_performance` | Funnel per offer/day/type over up to 90 days from `analytics_events` (shop+offer+time indexes). Rates from summed counts, `null` when the denominator is 0; money per currency, never converted; `dataQuality` lists missing event types. Never returns customer, session, cart or order identifiers. |
 | `promo_audit_log` | `audit_logs` newest first (shops/ref/actor/since, keyset cursor), readable before/after, secret and PII keys stripped, emails masked. |
 | `promo_health` | Prioritized findings: publish errors, system pauses, `publish_pending`, drift visible from the DB (missing discount nodes, uncompiled or mis-scheduled offers), each with a next read tool. |

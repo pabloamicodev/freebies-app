@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { runTool, type McpContext } from "../server.server.js";
 import { visibleShops } from "../shops.server.js";
+import { mcpCallLogQuery, mcpCallLogQueryInput } from "./mcp-call-log-query.server.js";
 import { mcpWhoami, mcpWhoamiInput } from "./mcp-whoami.server.js";
 import { promoAuditLog, promoAuditLogInput } from "./promo-audit-log.server.js";
 import { promoHealth, promoHealthInput } from "./promo-health.server.js";
@@ -22,6 +23,18 @@ export function registerInsightsTools(server: McpServer, ctx: McpContext): void 
       annotations: READ_ONLY,
     },
     () => runTool(async () => mcpWhoami(ctx.db, ctx.operator, await visible(), ctx.env, ctx.now)),
+  );
+
+  server.registerTool(
+    "mcp_call_log_query",
+    {
+      title: "MCP call log",
+      description:
+        "Admin only. Past MCP calls, newest first: operator (id and name, never the email), tool, shops, outcome, duration and the arguments as redacted when stored (ids, refs, shops, status, dates; free text, emails and codes are never kept). Filter by operatorEmail, tool, outcome, since/until; limit default 50, max 200; keyset cursor.",
+      inputSchema: mcpCallLogQueryInput,
+      annotations: READ_ONLY,
+    },
+    (args) => runTool(async () => mcpCallLogQuery(ctx.db, ctx.operator, args, ctx.now)),
   );
 
   server.registerTool(
