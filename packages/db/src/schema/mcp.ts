@@ -27,12 +27,45 @@ export const mcpCredentials = pgTable(
     prefix: text("prefix").notNull(),
     familyId: uuid("family_id"),
     clientId: text("client_id"),
+    /** OAuth access/refresh only: the exact PAT the operator pasted. The grant dies with that PAT. */
+    patCredentialId: uuid("pat_credential_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("mcp_credentials_operator_id_idx").on(t.operatorId)],
+  (t) => [index("mcp_credentials_operator_id_idx").on(t.operatorId), index("mcp_credentials_family_id_idx").on(t.familyId)],
+);
+
+/** RFC 7591 dynamic clients. Public clients only (PKCE, no secret). */
+export const mcpOauthClients = pgTable("mcp_oauth_clients", {
+  clientId: text("client_id").primaryKey(),
+  redirectUris: text("redirect_uris").array().notNull(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Single-use authorization codes: only sha256(pepper + code) is stored. */
+export const mcpAuthCodes = pgTable(
+  "mcp_auth_codes",
+  {
+    codeHash: text("code_hash").primaryKey(),
+    operatorId: uuid("operator_id")
+      .notNull()
+      .references(() => mcpOperators.id, { onDelete: "cascade" }),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => mcpOauthClients.clientId, { onDelete: "cascade" }),
+    codeChallenge: text("code_challenge").notNull(),
+    redirectUri: text("redirect_uri").notNull(),
+    patCredentialId: uuid("pat_credential_id"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    /** Token family issued from this code, so replaying the code revokes it. */
+    familyId: uuid("family_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("mcp_auth_codes_expires_at_idx").on(t.expiresAt)],
 );
 
 export type McpOperator = typeof mcpOperators.$inferSelect;
