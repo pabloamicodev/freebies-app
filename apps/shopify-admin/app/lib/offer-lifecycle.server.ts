@@ -44,6 +44,8 @@ export interface OfferLifecycleOptions {
   expectedUpdatedAt?: Date;
   /** Replaces the advisory publish-warnings lookup (theme refs, experiments). */
   publishWarnings?: () => Promise<string[]>;
+  /** Per-offer variant of `publishWarnings`, for bulk resume. */
+  publishWarningsFor?: (offerId: string) => Promise<string[]>;
 }
 
 export interface OfferLifecycleSuccess {
@@ -87,7 +89,7 @@ export type BulkLifecycleResult =
   | {
       ok: true;
       dryRun: boolean;
-      offers: Array<{ offerId: string; statusBefore: OfferStatus; statusAfter: OfferStatus }>;
+      offers: Array<{ offerId: string; statusBefore: OfferStatus; statusAfter: OfferStatus; warnings?: string[] }>;
     }
   | Extract<OfferLifecycleFailure, { code: "validation" }>
   | { ok: false; code: "publish_failed"; error: string; rolledBack: true };
@@ -316,11 +318,16 @@ export async function bulkResumeOffers(
     .from(offers)
     .where(and(eq(offers.shopId, ctx.shopId), inArray(offers.id, ctx.offerIds)));
   const now = new Date();
-  const planned = previous.map((row) => ({
-    offerId: row.id,
-    statusBefore: row.status as OfferStatus,
-    statusAfter: activationStatus(row.startsAt, row.endsAt, now) as OfferStatus,
-  }));
+  const lookup = opts.publishWarningsFor ?? ((offerId: string) => getShopPublishWarnings(db, ctx.shopId, ctx.shopDomain, offerId));
+  const planned = await Promise.all(
+    previous.map(async (row) => {
+      const statusBefore = row.status as OfferStatus;
+      const statusAfter = activationStatus(row.startsAt, row.endsAt, now) as OfferStatus;
+      const wasLive = statusBefore === "active" || statusBefore === "scheduled";
+      const warnings = wasLive ? [] : await lookup(row.id);
+      return { offerId: row.id, statusBefore, statusAfter, ...(warnings.length > 0 ? { warnings } : {}) };
+    }),
+  );
   if (opts.dryRun) return { ok: true, dryRun: true, offers: planned };
   await db.transaction(async (tx) => {
     for (const row of previous) {
@@ -338,7 +345,10 @@ export async function bulkResumeOffers(
   await audit(db, ctx, opts, {
     entityId: ctx.offerIds.join(","),
     action: "bulk_activate",
-    after: { offerIds: ctx.offerIds },
+    after: {
+      offerIds: ctx.offerIds,
+      ...(planned.some((o) => o.warnings) ? { warnings: Object.fromEntries(planned.filter((o) => o.warnings).map((o) => [o.offerId, o.warnings])) } : {}),
+    },
   });
   return { ok: true, dryRun: false, offers: planned };
 }

@@ -602,6 +602,14 @@ export async function finalizeCreatedOffer(
     : `${publishError} The offer was restored to draft and the previous Shopify configuration was re-published.`;
 }
 
+const WARNING_CONDITION_TYPES = ["template", "section_shown", "experiment"];
+
+interface WarningConditionRow {
+  conditionType: string;
+  value: unknown;
+  isEnabled: boolean;
+}
+
 export interface PublishWarningAuth {
   shopDomain: string;
   accessToken: string;
@@ -619,9 +627,10 @@ export async function getPublishWarnings(
   shopId: string,
   offerId: string,
   auth: PublishWarningAuth,
+  conditionRows?: WarningConditionRow[],
 ): Promise<string[]> {
   try {
-    const rows = await db
+    const rows = conditionRows?.filter((r) => r.isEnabled && WARNING_CONDITION_TYPES.includes(r.conditionType)) ?? await db
       .select({ conditionType: offerConditions.conditionType, value: offerConditions.value })
       .from(offerConditions)
       .where(
@@ -629,7 +638,7 @@ export async function getPublishWarnings(
           eq(offerConditions.shopId, shopId),
           eq(offerConditions.offerId, offerId),
           eq(offerConditions.isEnabled, true),
-          inArray(offerConditions.conditionType, ["template", "section_shown", "experiment"]),
+          inArray(offerConditions.conditionType, WARNING_CONDITION_TYPES),
         ),
       );
     const templateRefs: string[] = [];
@@ -671,4 +680,32 @@ export async function getShopPublishWarnings(db: Db, shopId: string, shopDomain:
   } catch {
     return [];
   }
+}
+
+export interface ConditionEdit {
+  conditionId?: string;
+  conditionType: string;
+  value: unknown;
+}
+
+/** Warnings the offer would have after saving `edit` that it does not already have, so an unchanged known warning never nags again. Nothing is written. */
+export async function getNewPublishWarningsForEdit(
+  db: Db,
+  shopId: string,
+  offerId: string,
+  auth: PublishWarningAuth,
+  edit: ConditionEdit,
+): Promise<string[]> {
+  const current = await db
+    .select({ id: offerConditions.id, conditionType: offerConditions.conditionType, value: offerConditions.value, isEnabled: offerConditions.isEnabled })
+    .from(offerConditions)
+    .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
+  const next: WarningConditionRow[] = edit.conditionId
+    ? current.map((r) => (r.id === edit.conditionId ? { ...r, conditionType: edit.conditionType, value: edit.value } : r))
+    : [...current, { conditionType: edit.conditionType, value: edit.value, isEnabled: true }];
+  const [before, after] = await Promise.all([
+    getPublishWarnings(db, shopId, offerId, auth, current),
+    getPublishWarnings(db, shopId, offerId, auth, next),
+  ]);
+  return after.filter((w) => !before.includes(w));
 }
