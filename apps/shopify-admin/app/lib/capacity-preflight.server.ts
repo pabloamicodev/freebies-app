@@ -18,6 +18,7 @@ import {
 import { buildAttributeQueryVariables, MAX_CUSTOM_CART_ATTRIBUTE_KEYS } from "./sync/attribute-query-variables.js";
 import { planShards, SLOT_LIMITS, type PlanBlockCode } from "./sync/shard-planner.js";
 import { baseOfferId, buildPlanUnits, cartAttributeKeysOf } from "./sync/plan-units.js";
+import { combinationBlockers, type CombinationBlocker } from "./sync/combination-blockers.js";
 import { isCheckoutCodeGated } from "./code-redemption.js";
 import { MAX_METAFIELD_BYTES } from "./sync/offer-publisher.server.js";
 import { buildCartValidationConfig, MAX_VALIDATION_CONFIG_BYTES } from "./cart-validation.server.js";
@@ -35,6 +36,7 @@ import { decryptToken } from "./token-crypto.server.js";
 import {
   automaticDiscountCountUnknownMessage,
   automaticDiscountLimitMessage,
+  combinationSingleShardMessage,
   offerTooLargeMessage,
   sharedConfigTooLargeMessage,
   shippingConfigTooLargeMessage,
@@ -166,6 +168,7 @@ export type CapacityCode =
   | "SHIPPING_CONFIG_TOO_LARGE"
   | "VALIDATION_CONFIG_TOO_LARGE"
   | "CART_ATTRIBUTE_KEYS"
+  | "COMBINATION_SINGLE_SHARD"
   | "COMPILE_ERROR";
 
 export interface CapacityBudget {
@@ -183,6 +186,8 @@ export type CapacityPreflight =
         deliveryBytes: number;
         maxSlots: number;
         budget: CapacityBudget | null;
+        singleShardReason?: "flag_off" | "combination" | "budget";
+        combinationBlockers?: CombinationBlocker[];
       };
     }
   | {
@@ -191,7 +196,7 @@ export type CapacityPreflight =
       offerIds: string[];
       offerNames: string[];
       numbers: Record<string, number>;
-      reason?: "bytes" | "keys" | "tags";
+      reason?: "bytes" | "keys" | "tags" | "combination";
       message: string;
     };
 
@@ -292,7 +297,7 @@ export async function preflightCapacity(
     ids: string[],
     numbers: Record<string, number>,
     message: (offerNames: string[]) => string,
-    reason?: "bytes" | "keys" | "tags",
+    reason?: "bytes" | "keys" | "tags" | "combination",
   ): CapacityPreflight => {
     const unique = [...new Set(ids)];
     const offerNames = nameList(unique);
@@ -322,6 +327,8 @@ export async function preflightCapacity(
   const previous = await readPreviousAssignment(db, shopId);
   const policy = compileDiscountCombinationPolicy(shared.compiled.map((entry) => entry.offer));
   const plan = planShards(units, previous, { ...SLOT_LIMITS, maxSlots, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, policy);
+  const blockers = combinationBlockers(shared.compiled, units.some((unit) => unit.hasOrderRewards));
+  const combinationForcesSingle = enabled && maxSlots > 1 && blockers.length > 0;
   let blocked = plan.blocked;
   if (blocked && enabled && maxSlots < MAX_CART_SLOTS && blocked.code !== "AUTOMATIC_DISCOUNT_LIMIT") {
     // The budget, not the offers, may be what is short: replan with every slot to learn how many are needed.
@@ -339,6 +346,15 @@ export async function preflightCapacity(
     const numbers = blocked.numbers;
     switch (blocked.code) {
       case "SLOT_FULL":
+        if (combinationForcesSingle) {
+          return fail(
+            "COMBINATION_SINGLE_SHARD",
+            blockers.map((blocker) => blocker.offerId),
+            { bytes: numbers["neededBytes"] ?? 0, slotBytes: numbers["slotBytes"] ?? SLOT_LIMITS.slotBytes, offersBlocking: blockers.length },
+            combinationSingleShardMessage,
+            "combination",
+          );
+        }
         return fail("SLOT_FULL", ids, numbers, (n) => sharedConfigTooLargeMessage(numbers["neededBytes"] ?? 0, n));
       case "AUTOMATIC_DISCOUNT_LIMIT": {
         const needed = (numbers["needed"] ?? 0) - (numbers["allowed"] ?? 0);
@@ -400,6 +416,13 @@ export async function preflightCapacity(
       deliveryBytes,
       maxSlots,
       budget: budget ? { storeActive: budget.storeActive, ours: budget.ours, others: budget.others } : null,
+      ...(!enabled
+        ? { singleShardReason: "flag_off" as const }
+        : combinationForcesSingle
+          ? { singleShardReason: "combination" as const, combinationBlockers: blockers }
+          : maxSlots <= 1
+            ? { singleShardReason: "budget" as const }
+            : {}),
     },
   };
 }

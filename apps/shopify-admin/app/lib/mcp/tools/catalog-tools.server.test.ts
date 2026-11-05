@@ -402,6 +402,29 @@ describe("discount_capacity", () => {
     expect(result.data.shops[0]).toMatchObject({ plannedSlots: 1, maxCartSlots: 7, budget: { storeActive: 9, ours: 3, others: 6 } });
   });
 
+  it("explains a single node forced by offers that do not combine with product discounts", async () => {
+    const domain = "combo.myshopify.com";
+    const shopId = await insertShop(domain);
+    const names = ["No combine A", "No combine B"];
+    for (const [i, name] of names.entries()) {
+      const offerId = await seedOffer(db, shopId, { type: "gift", status: "active", internalName: name, priority: i, requiresCode: false });
+      await db.insert(offerRewards).values({ shopId, offerId, rewardType: "product_gift", discountType: "free", value: {}, target: { variantIds: [V1] }, quantity: 1 });
+      await db.insert(offerCombinationPolicies).values({ shopId, offerId, combinesWithProductDiscounts: false });
+    }
+    const only = await visibleShops(db, operator([domain]));
+    const budget = { storeActive: 9, ours: 3, others: 6, maxCartSlots: 11 };
+    const result = await discountCapacity(db, only, {}, undefined, { capacity: { shardsEnabled: true, loadBudget: async () => budget } });
+    const row = result.data.shops[0]!;
+    expect(row).toMatchObject({ plannedSlots: 1, maxCartSlots: 11, singleShardReason: "combination" });
+    expect(row.combinationBlockers.map((b) => b.name)).toEqual(names);
+    expect(result.summary).toContain("slots 1/11 (single node: 2 offers don't combine with product discounts: No combine A, No combine B)");
+    expect(result.warnings).toContainEqual(expect.objectContaining({ code: "CAPACITY_SINGLE_SHARD", severity: "warn" }));
+
+    const off = await discountCapacity(db, only, {}, undefined, { capacity: { shardsEnabled: false } });
+    expect(off.data.shops[0]!.singleShardReason).toBe("flag_off");
+    expect(off.warnings.some((w) => w.code === "CAPACITY_SINGLE_SHARD")).toBe(false);
+  });
+
   it("live:true reads the metafield through the injected Admin client and reports drift; no token reaches the output", async () => {
     const graphQL = vi.fn(async (_options: unknown) => ({ nodes: [{ id: "n1", metafield: { value: "x".repeat(1234) } }, { id: "n2", metafield: null }] }));
     const decrypt = vi.fn(async (stored: string) => `plain:${stored}`);

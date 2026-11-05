@@ -3,6 +3,7 @@ import { and, eq, gt } from "drizzle-orm";
 import {
   automaticDiscountCountUnknownMessage,
   automaticDiscountLimitMessage,
+  combinationSingleShardMessage,
   offerTooLargeMessage,
   sharedConfigTooLargeMessage,
   slot0GroupTooLargeMessage,
@@ -16,16 +17,34 @@ export interface ShardPlanBlockedContext {
   shardsEnabled?: boolean;
   /** Offer id to display name, so messages quote names and not ids. */
   names?: ReadonlyMap<string, string>;
+  /** Shards on with room for several slots, but the combination policy forced one: the offers that forced it. */
+  combinationBlockers?: readonly { offerId: string; name: string }[];
 }
 
 /** The planner refused the plan: nothing was written and the live Shopify state is untouched. */
 export class ShardPlanBlockedError extends Error {
-  readonly capacity: { code: PlanBlockCode; offerIds: string[]; numbers: Record<string, number> };
+  readonly capacity: { code: PlanBlockCode | "COMBINATION_SINGLE_SHARD"; offerIds: string[]; numbers: Record<string, number>; reason?: "combination" };
 
   constructor(
     readonly blocked: PlanBlocked,
     context: ShardPlanBlockedContext = {},
   ) {
+    const blockers = context.combinationBlockers ?? [];
+    if (blocked.code === "SLOT_FULL" && blockers.length > 0) {
+      super(combinationSingleShardMessage(blockers.map((blocker) => blocker.name)));
+      this.name = "ShardPlanBlockedError";
+      this.capacity = {
+        code: "COMBINATION_SINGLE_SHARD",
+        offerIds: blockers.map((blocker) => blocker.offerId),
+        numbers: {
+          bytes: blocked.numbers["neededBytes"] ?? 0,
+          slotBytes: blocked.numbers["slotBytes"] ?? 0,
+          offersBlocking: blockers.length,
+        },
+        reason: "combination",
+      };
+      return;
+    }
     const offerIds = [...new Set(blocked.unitKeys.map(baseOfferId))];
     const names = offerIds.map((id) => context.names?.get(id) ?? id);
     const { code, numbers } = shardPlanBlockedCapacity(blocked, context);

@@ -9,6 +9,12 @@ export function sharedConfigTooLargeMessage(bytes: number, names: readonly strin
   return names.length > 0 ? `${base} Offers that don't fit: ${quoted(names)}.` : base;
 }
 
+export const combinationSingleShardTitle = "Discount combinations limit how many offers can run";
+
+export function combinationSingleShardMessage(names: readonly string[]): string {
+  return `${names.length} active offers don't combine with other product discounts, so all offers must share one Shopify discount, and it's full. Allow those offers to combine with product discounts, or pause some offers. Offers: ${quoted(names)}.`;
+}
+
 export function shippingConfigTooLargeMessage(bytes: number): string {
   return `The shipping config would be ${bytes}B, over the ${SLOT_LIMITS.slotBytes}B limit. Pause or simplify other shipping offers first.`;
 }

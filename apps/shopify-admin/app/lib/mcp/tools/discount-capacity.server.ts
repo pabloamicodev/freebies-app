@@ -38,6 +38,10 @@ export type CapacityRow = {
   maxCartSlots: number | null;
   deliveryBytes: number;
   budget: CapacityBudget | null;
+  /** Why the planner uses a single node, when it does (null when it can spread over several). */
+  singleShardReason: "flag_off" | "combination" | "budget" | null;
+  /** Offers whose combination flags force a single node (only with reason "combination"). */
+  combinationBlockers: { offerId: string; name: string }[];
   /** Code of the preflight failure the next publish would hit, if any. */
   blockedBy: string | null;
   live?: { checked: boolean; nodes: LiveNode[]; driftBytes: number | null; error?: string };
@@ -48,6 +52,15 @@ export type CapacityDeps = {
   decrypt?: (stored: string) => Promise<string>;
   capacity?: CapacityOptions;
 };
+
+const singleNodeNote = (r: CapacityRow) =>
+  r.singleShardReason === "combination"
+    ? ` (single node: ${r.combinationBlockers.length} offers don't combine with product discounts: ${r.combinationBlockers.map((b) => b.name).join(", ")})`
+    : r.singleShardReason === "budget"
+      ? " (single node: no automatic discount budget for more)"
+      : r.singleShardReason === "flag_off"
+        ? " (single node: sharding off)"
+        : "";
 
 const pct = (used: number, limit: number) => Math.round((used / limit) * 1000) / 10;
 
@@ -106,6 +119,8 @@ export async function discountCapacity(
       maxCartSlots: plan?.ok ? plan.plan.maxSlots : null,
       deliveryBytes: breakdown.deliveryBytes,
       budget: plan?.ok ? plan.plan.budget : null,
+      singleShardReason: plan?.ok ? (plan.plan.singleShardReason ?? null) : null,
+      combinationBlockers: plan?.ok ? (plan.plan.combinationBlockers ?? []) : [],
       blockedBy: plan && !plan.ok ? plan.code : null,
       perOffer: [...breakdown.perOffer].sort((a, b) => b.bytes - a.bytes).slice(0, TOP_OFFERS),
       cartValidation: {
@@ -135,6 +150,13 @@ export async function discountCapacity(
       });
     }
     if (r.blockedBy) warnings.push({ code: `CAPACITY_${r.blockedBy}`, severity: "block", message: `${r.shopDomain}: the capacity preflight fails with ${r.blockedBy}; the next activation would be refused.` });
+    if (r.singleShardReason === "combination") {
+      warnings.push({
+        code: "CAPACITY_SINGLE_SHARD",
+        severity: "warn",
+        message: `${r.shopDomain}: ${r.combinationBlockers.length} offers don't combine with product discounts, so all offers share one Shopify discount: ${r.combinationBlockers.map((b) => b.name).join(", ")}.`,
+      });
+    }
     if (r.cartValidation.pct >= WARN_AT * 100) {
       warnings.push({ code: "VALIDATION_CAPACITY_HIGH", severity: r.cartValidation.pct > 100 ? "block" : "warn", message: `${r.shopDomain} cart validation config is at ${r.cartValidation.pct}% of its limit.` });
     }
@@ -144,7 +166,7 @@ export async function discountCapacity(
 
   const summary = [
     `Shared config capacity (limit ${MAX_METAFIELD_BYTES} bytes per node):`,
-    ...rows.map((r) => `- ${r.shopDomain}: ${r.bytesUsed} B (${r.pct}%), headroom ${r.headroom} B, ${r.offerCount} offers, slots ${r.plannedSlots ?? "?"}/${r.maxCartSlots ?? "?"}, ${r.risk}${r.perOffer[0] ? `; heaviest "${r.perOffer[0].name}" ${r.perOffer[0].bytes} B` : ""}`),
+    ...rows.map((r) => `- ${r.shopDomain}: ${r.bytesUsed} B (${r.pct}%), headroom ${r.headroom} B, ${r.offerCount} offers, slots ${r.plannedSlots ?? "?"}/${r.maxCartSlots ?? "?"}${singleNodeNote(r)}, ${r.risk}${r.perOffer[0] ? `; heaviest "${r.perOffer[0].name}" ${r.perOffer[0].bytes} B` : ""}`),
   ].join("\n");
 
   return buildResult(
