@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { and, desc, eq } from "drizzle-orm";
 import { auditLogs, offerVersions, type Db } from "@promo/db";
-import { conditionTypeLabel, rewardSummary, targetSummaryParts } from "../../offer-summaries.js";
+import { readCartLabels } from "../../cart-labels.js";
+import { conditionTypeLabel, readRewardTiers, rewardSummary, targetSummaryParts } from "../../offer-summaries.js";
 import { readExcludeUrls, readPageTypes, readPageUrls } from "../../page-types.js";
 import { ToolError, buildResult, shopHandle, type ToolResult } from "../result.server.js";
 import type { VisibleShop } from "../shops.server.js";
@@ -88,6 +89,7 @@ export async function promoDetail(
     shopDomain: shop.myshopifyDomain,
     name: offer.internalName,
     publicTitle: offer.publicTitle,
+    cartLabels: readCartLabels(offer.cartLabels),
     description: offer.description,
     type: offer.type,
     subtype: subtypeOf(loaded),
@@ -107,6 +109,7 @@ export async function promoDetail(
       rewardType: r.rewardType,
       discountType: r.discountType,
       summary: rewardSummary(r),
+      tiers: readRewardTiers(r.value),
       quantity: r.quantity,
       autoAdd: r.isAutoAdd,
       customerSelectable: r.isCustomerSelectable,

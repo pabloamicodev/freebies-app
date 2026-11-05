@@ -6,6 +6,7 @@ import { purchaseTypeLabel } from "./purchase-type.js";
 import { normalizeExcludedPageUrls, normalizeStorePageUrls } from "@promo/shared-types";
 import { pageTypeLabel } from "./page-types.js";
 import { fromStoredAmount } from "./money.js";
+import { readCartLabels } from "./cart-labels.js";
 import { readMatchBy, readMatchRule } from "./product-condition.js";
 
 function stampSummary(text: string, v: Record<string, unknown>): string {
@@ -240,7 +241,57 @@ export function rewardTypeLabel(rewardType: string): string {
 }
 
 /** "Product discount — 20% off"; gifts and free shipping already read as a full phrase. */
+export interface RewardTier {
+  minQuantity: number;
+  maxQuantity: number | null;
+  discountType: string;
+  discountValue: number;
+  label: string | null;
+  cartLabels: string[];
+}
+
+/** Quantity tiers of a reward value (volume discounts); empty when the reward has none. */
+export function readRewardTiers(value: unknown): RewardTier[] {
+  const tiers = (value as Record<string, unknown> | null)?.["tiers"];
+  if (!Array.isArray(tiers)) return [];
+  return tiers.flatMap((raw) => {
+    if (!raw || typeof raw !== "object") return [];
+    const tier = raw as Record<string, unknown>;
+    const min = Number(tier["minimumQuantity"]);
+    const discountValue = Number(tier["discountValue"]);
+    if (!Number.isFinite(min) || !Number.isFinite(discountValue)) return [];
+    const max = tier["maximumQuantity"] === undefined || tier["maximumQuantity"] === null ? null : Number(tier["maximumQuantity"]);
+    return [{
+      minQuantity: min,
+      maxQuantity: max !== null && Number.isFinite(max) ? max : null,
+      discountType: String(tier["discountType"] ?? ""),
+      discountValue,
+      label: typeof tier["label"] === "string" && tier["label"] ? tier["label"] : null,
+      cartLabels: readCartLabels(tier["cartLabels"]),
+    }];
+  });
+}
+
+function tierSummary(tiers: RewardTier[], currency: string): string {
+  const parts = tiers.map((tier) => {
+    const range = tier.maxQuantity === null ? `${tier.minQuantity}+` : tier.maxQuantity === tier.minQuantity ? `${tier.minQuantity}` : `${tier.minQuantity}-${tier.maxQuantity}`;
+    const amount =
+      tier.discountType === "percentage" ? `${tier.discountValue}%`
+      : tier.discountType === "free" ? "free"
+      : `${currency} ${fromStoredAmount(tier.discountValue, currency).toFixed(2)}`;
+    return `${range}→${amount}`;
+  });
+  return `Tiers: ${parts.join(", ")}`;
+}
+
 export function rewardSummary(reward: { rewardType: string; discountType: string; value: unknown; target?: unknown }): string {
+  const tiers = reward.rewardType === "shipping_discount" || reward.rewardType === "product_gift" ? [] : readRewardTiers(reward.value);
+  if (tiers.length > 0) {
+    const currency = typeof (reward.value as Record<string, unknown>)["currencyCode"] === "string" ? String((reward.value as Record<string, unknown>)["currencyCode"]) : "USD";
+    const base = `${rewardTypeLabel(reward.rewardType)} — ${tierSummary(tiers, currency)}`;
+    if (reward.target === undefined) return base;
+    return `${base} · ${purchaseTypeLabel((reward.target as Record<string, unknown> | null)?.["subscriptionMode"])}`;
+  }
   const headline = rewardHeadline(reward);
   if (headline === "Free gift" || headline === "Free shipping") return headline;
   const base = `${rewardTypeLabel(reward.rewardType)} — ${headline}`;

@@ -135,6 +135,15 @@ describe("conditionTypeLabel / rewardTypeLabel", () => {
     for (const type of RewardTypeSchema.options) expect(rewardTypeLabel(type)).not.toContain("_");
     expect(rewardSummary({ rewardType: "product_discount", discountType: "percentage", value: { amount: 20 } })).toBe("Product discount — 20% off");
     expect(rewardSummary({ rewardType: "product_gift", discountType: "free", value: {} })).toBe("Free gift");
+    const tiers = [
+      { minimumQuantity: 1, maximumQuantity: 1, discountType: "percentage", discountValue: 15 },
+      { minimumQuantity: 2, maximumQuantity: 2, discountType: "percentage", discountValue: 20 },
+      { minimumQuantity: 3, maximumQuantity: 3, discountType: "percentage", discountValue: 25 },
+      { minimumQuantity: 4, discountType: "percentage", discountValue: 30 },
+    ];
+    expect(rewardSummary({ rewardType: "product_discount", discountType: "percentage", value: { amount: 0, tiers } })).toBe(
+      "Product discount — Tiers: 1→15%, 2→20%, 3→25%, 4+→30%",
+    );
     expect(rewardSummary({ rewardType: "shipping_discount", discountType: "free", value: {} })).toBe("Free shipping");
   });
 });
