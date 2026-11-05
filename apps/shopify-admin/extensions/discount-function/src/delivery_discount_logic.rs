@@ -194,7 +194,7 @@ fn apply_offers(
                     selection_strategy: schema::DeliveryDiscountSelectionStrategy::All,
                     candidates: vec![schema::DeliveryDiscountCandidate {
                         associated_discount_code: None,
-                        message: offer.title.clone(),
+                        message: offer.cart_message.clone().filter(|message| !message.is_empty()).or_else(|| offer.title.clone()),
                         targets: eligible_groups
                             .iter()
                             .map(|group| {
@@ -1270,6 +1270,23 @@ mod tests {
                     op.candidates[0].message.as_deref(),
                     Some("Free shipping over $50")
                 );
+            }
+            other => panic!("expected DeliveryDiscountsAdd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shipping_cart_message_wins_over_the_title() {
+        let offer = one_tier_offer(0, "percentage", 100.0, "").replace(
+            "\"id\":\"ship-1\"",
+            "\"id\":\"ship-1\",\"title\":\"Free shipping\",\"cartMessage\":\"Free shipping · Gift\"",
+        );
+        let config = shipping_config(&format!("[{offer}]"));
+        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let result = run_with(r#"["SHIPPING"]"#, "10.00", &config, &groups);
+        match &result.operations[0] {
+            schema::DeliveryOperation::DeliveryDiscountsAdd(op) => {
+                assert_eq!(op.candidates[0].message.as_deref(), Some("Free shipping \u{b7} Gift"));
             }
             other => panic!("expected DeliveryDiscountsAdd, got {other:?}"),
         }

@@ -29,6 +29,7 @@ de_struct! {
     pub struct CompiledShippingOffer {
         "id" => id: String,
         "title" => title: Option<String> = None,
+        "cartMessage" => cart_message: Option<String> = None,
         "priority" => priority: i32,
         "mpu" => max_per_customer: Option<i64> = None,
         "ri" => require_identified: bool = false,

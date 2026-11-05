@@ -10,6 +10,7 @@ import {
   offerConditions,
   offerRewards,
   offerVersions,
+  offers,
   productCache,
   shops,
   variantCache,
@@ -22,6 +23,7 @@ import { handleMcpRequest } from "../handler.server.js";
 import { clearFanOutCache } from "../multi-shop.server.js";
 import { ToolError } from "../result.server.js";
 import { visibleShops, type VisibleShop } from "../shops.server.js";
+import { eq } from "drizzle-orm";
 import { createTestDb, seedOffer } from "../../test-support/pglite-db.js";
 import { setOfferPublishErrors } from "../../offer-publish-errors.server.js";
 import { promosActive } from "./promos-active.server.js";
@@ -230,6 +232,29 @@ describe("promos_active", () => {
 });
 
 describe("promo_detail", () => {
+  it("exposes offer cart labels and reward tiers with their labels", async () => {
+    const a = ids["alpha"]!;
+    const id = await seedOffer(db, a, { type: "discount", status: "draft", internalName: "Volume", publicTitle: "Volume", cartLabels: ["Spring", "VIP"] });
+    await db.insert(offerRewards).values({
+      shopId: a, offerId: id, rewardType: "product_discount", discountType: "percentage", target: { scopeMode: "sitewide" },
+      value: { amount: 0, currencyCode: "USD", tiers: [
+        { minimumQuantity: 1, maximumQuantity: 1, discountType: "percentage", discountValue: 15, label: "Buy 1", cartLabels: ["Starter"] },
+        { minimumQuantity: 2, discountType: "percentage", discountValue: 20 },
+      ] },
+    });
+    try {
+      const d = track(await promoDetail(db, visible, { ref: `promo:alpha:${id}` })).data as Record<string, any>;
+      expect(d.cartLabels).toEqual(["Spring", "VIP"]);
+      expect(d.rewards[0].summary).toContain("Tiers: 1→15%, 2+→20%");
+      expect(d.rewards[0].tiers).toEqual([
+        { minQuantity: 1, maxQuantity: 1, discountType: "percentage", discountValue: 15, label: "Buy 1", cartLabels: ["Starter"] },
+        { minQuantity: 2, maxQuantity: null, discountType: "percentage", discountValue: 20, label: null, cartLabels: [] },
+      ]);
+    } finally {
+      await db.delete(offers).where(eq(offers.id, id));
+    }
+  });
+
   it("returns the full definition with page conditions, test group, versions and coarse audit events", async () => {
     const result = track(await promoDetail(db, visible, { ref: `promo:alpha:${offerIds["page"]}` }));
     const d = result.data as Record<string, any>;

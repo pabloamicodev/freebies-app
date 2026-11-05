@@ -55,6 +55,7 @@ de_struct! {
         "version" => version: i32,
         "offerType" => offer_type: String,
         "title" => title: Option<String> = None,
+        "cartMessage" => cart_message: Option<String> = None,
         "priority" => priority: i32,
         "stopLowerPriority" => stop_lower_priority: bool = false,
         // Max discounted units/sets/bundles per cart; only ever lowers an existing cap.
@@ -296,6 +297,7 @@ de_struct! {
         "discountType" => discount_type: String,
         "discountValue" => discount_value: f64,
         "discountedQuantity" => discounted_quantity: Option<i64> = None,
+        "cartMessage" => cart_message: Option<String> = None,
     }
 }
 

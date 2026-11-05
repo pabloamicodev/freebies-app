@@ -20,9 +20,11 @@ import {
   parseJsonStringArray,
   parseMoneyAmount,
   requiredText,
+  cartLabelsFromForm,
   discountMessageText,
   nowInZone,
 } from "../lib/offer-validation.server.js";
+import { CartLabelsField } from "../components/CartLabelsField.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import {
   offers,
@@ -113,6 +115,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (publicTitleResult.error) return { error: publicTitleResult.error };
   const internalName = internalNameResult.data!;
   const publicTitle = publicTitleResult.data!;
+  const cartLabelsResult = cartLabelsFromForm(formData);
+  if (cartLabelsResult.error) return { error: cartLabelsResult.error };
+  const cartLabels = cartLabelsResult.data!;
   const description = (formData.get("description") as string)?.trim() || null;
   const dateRange = parseDateRange(formData, timezone);
   if (dateRange.error) return { error: dateRange.error };
@@ -287,6 +292,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           status,
           internalName: candidateName,
           publicTitle,
+          cartLabels,
           description: description,
           priority: 100,
           startsAt: startsAt ?? new Date(),
@@ -504,6 +510,7 @@ export default function NewBundleOfferPage() {
     toastMsg: "",
     internalName: "",
     publicTitle: "",
+    cartLabels: [] as string[],
     description: "",
     startsAt: nowLocal,
     endsAt: "",
@@ -526,6 +533,7 @@ export default function NewBundleOfferPage() {
     toastMsg,
     internalName,
     publicTitle,
+    cartLabels,
     description,
     startsAt,
     endsAt,
@@ -547,6 +555,7 @@ export default function NewBundleOfferPage() {
   const setToastMsg = createFieldSetter(setFormField, "toastMsg");
   const setInternalName = createFieldSetter(setFormField, "internalName");
   const setPublicTitle = createFieldSetter(setFormField, "publicTitle");
+  const setCartLabels = createFieldSetter(setFormField, "cartLabels");
   const setDescription = createFieldSetter(setFormField, "description");
   const setStartsAt = createFieldSetter(setFormField, "startsAt");
   const setEndsAt = createFieldSetter(setFormField, "endsAt");
@@ -749,6 +758,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                           />
 <div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
                           {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
+                          <div style={{ marginTop: 12 }}><CartLabelsField value={cartLabels} onChange={setCartLabels} /></div>
                         </div>
                         <div>
                           <label className="b-label" htmlFor="description">
@@ -1048,6 +1058,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                           />
 <div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
                           {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
+                          <div style={{ marginTop: 12 }}><CartLabelsField value={cartLabels} onChange={setCartLabels} /></div>
                         </div>
                         <div>
                           <label className="b-label" htmlFor="description">
@@ -1517,6 +1528,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                           />
 <div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
                           {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
+                          <div style={{ marginTop: 12 }}><CartLabelsField value={cartLabels} onChange={setCartLabels} /></div>
                         </div>
                         <div>
                           <label className="b-label" htmlFor="description">

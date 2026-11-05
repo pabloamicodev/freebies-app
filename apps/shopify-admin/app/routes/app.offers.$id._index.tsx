@@ -5,7 +5,8 @@ import { SUPPORTED_CURRENCIES, validateConditionValue, validateRewardPayload, Co
 import { getShopContext } from "../lib/shop-context.server.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
-import { parseJsonRecord, parseJsonStringArray, parseDateRange, toZonedLocalInput } from "../lib/offer-validation.server.js";
+import { cartLabelsFromForm, ok, parseJsonRecord, parseJsonStringArray, parseDateRange, toZonedLocalInput } from "../lib/offer-validation.server.js";
+import { readCartLabels } from "../lib/cart-labels.js";
 import { normalizeConditionValue } from "../lib/offer-config-normalization.server.js";
 import { getPublishWarnings, publishShopConfig, republishIfActive, validateActivationWithPreflight } from "../lib/offer-publish-flow.server.js";
 import { activateDraftOffer } from "../lib/offer-lifecycle.server.js";
@@ -44,6 +45,7 @@ import { MatchBySelect, MatchRuleField, ProductConditionNote, pickedItems } from
 import { buildProductConditionValue, matchRuleOperator, parseMatchOperator, presenceOnlyValue, readMatchRule, type MatchBy, type MatchRule } from "../lib/product-condition.js";
 import type { SelectedProduct } from "../components/SelectedProductsList.js";
 import { DiscountMessageField } from "../components/DiscountMessageField.js";
+import { CartLabelsField } from "../components/CartLabelsField.js";
 import { resolveDiscountMessage } from "../lib/discount-message.js";
 import { isCheckoutCodeGated } from "../lib/code-redemption.js";
 import { countDiscountCodes, getCodeNotices, listDiscountCodes } from "../lib/discount-codes.server.js";
@@ -111,6 +113,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const message = resolveDiscountMessage(formData.get("publicTitle"), internalName);
       if (!message.ok) return { error: message.error };
       const publicTitle = message.value;
+      const labelsResult = formData.has("cartLabels") ? cartLabelsFromForm(formData) : ok(readCartLabels(offer.cartLabels));
+      if (labelsResult.error) return { error: labelsResult.error };
+      const cartLabels = labelsResult.data!;
       const timezone = offer.timezone ?? shopTimezone;
       const datesPosted = formData.has("startsAt") || formData.has("endsAt");
       const dateResult = datesPosted
@@ -125,7 +130,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         preflight = activation.preflight;
       }
       await db.update(offers).set({
-        publicTitle, internalName,
+        publicTitle, internalName, cartLabels,
         startsAt: dateResult.data!.startsAt,
         endsAt: dateResult.data!.endsAt,
         timezone,
@@ -134,7 +139,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
       const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active" || status === "active", undefined, preflight);
       if (publishError) return { error: publishError };
-      void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "update", before: { publicTitle: offer.publicTitle, internalName: offer.internalName, startsAt: offer.startsAt, endsAt: offer.endsAt }, after: { publicTitle, internalName, startsAt: dateResult.data!.startsAt, endsAt: dateResult.data!.endsAt }, performedBy: session.shop });
+      void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "update", before: { publicTitle: offer.publicTitle, cartLabels: offer.cartLabels, internalName: offer.internalName, startsAt: offer.startsAt, endsAt: offer.endsAt }, after: { publicTitle, cartLabels, internalName, startsAt: dateResult.data!.startsAt, endsAt: dateResult.data!.endsAt }, performedBy: session.shop });
       break;
     }
     case "update_condition": {
@@ -236,7 +241,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const discountValue = Number.isFinite(parsedValue) ? parsedValue : 100;
       const isAutoAdd = formData.get("isAutoAdd") === "on";
 
-      const [editedReward] = await db.select({ rewardType: offerRewards.rewardType }).from(offerRewards)
+      const [editedReward] = await db.select({ rewardType: offerRewards.rewardType, value: offerRewards.value }).from(offerRewards)
         .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId))).limit(1);
       if (!editedReward) return { error: "Reward not found." };
       if (editedReward.rewardType === "product_gift") {
@@ -306,7 +311,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const targetRaw = formData.get("targetVariantIds");
       const set: Record<string, unknown> = {
         discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
-        value: { amount: discountValue, currencyCode: shopCurrencyCode },
+        value: {
+          ...(editedReward.rewardType === "product_discount" && Array.isArray((editedReward.value as { tiers?: unknown } | null)?.tiers)
+            ? { tiers: (editedReward.value as { tiers: unknown[] }).tiers }
+            : null),
+          amount: discountValue,
+          currencyCode: shopCurrencyCode,
+        },
         quantity,
         isAutoAdd,
       };
@@ -1322,6 +1333,7 @@ export default function OfferDetailPage() {
   const [detailState, setDetailField] = useObjectState(() => ({
     internalName: offer.internalName,
     publicTitle: offer.publicTitle ?? "",
+    cartLabels: readCartLabels(offer.cartLabels),
     startsAt: offer.startsAtLocal,
     endsAt: offer.endsAtLocal,
     discountType: firstReward?.discountType ?? "free",
@@ -1335,6 +1347,7 @@ export default function OfferDetailPage() {
   const {
     internalName,
     publicTitle,
+    cartLabels,
     startsAt,
     endsAt,
     discountType,
@@ -1347,6 +1360,7 @@ export default function OfferDetailPage() {
   } = detailState;
   const setInternalName = createFieldSetter(setDetailField, "internalName");
   const setPublicTitle = createFieldSetter(setDetailField, "publicTitle");
+  const setCartLabels = createFieldSetter(setDetailField, "cartLabels");
   const setStartsAt = createFieldSetter(setDetailField, "startsAt");
   const setEndsAt = createFieldSetter(setDetailField, "endsAt");
   const setDiscountType = createFieldSetter(setDetailField, "discountType");
@@ -1464,11 +1478,12 @@ export default function OfferDetailPage() {
     saveSubconditions(activeSubs, nextValues);
   }
 
-  function saveInfo() {
+  function saveInfo(labels: string[] = cartLabels) {
     const fd = new FormData();
     fd.append("intent", "update");
     fd.append("internalName", internalName);
     fd.append("publicTitle", publicTitle);
+    fd.append("cartLabels", JSON.stringify(labels));
     if (startsAt !== offer.startsAtLocal || endsAt !== offer.endsAtLocal) {
       fd.append("startsAt", startsAt);
       fd.append("endsAt", endsAt);
@@ -1581,19 +1596,20 @@ export default function OfferDetailPage() {
                     className="b-input"
                     value={internalName}
                     onChange={(e) => setInternalName(e.target.value)}
-                    onBlur={saveInfo}
+                    onBlur={() => saveInfo()}
                     autoComplete="off"
                   />
                 </div>
-                <DiscountMessageField value={publicTitle} onChange={setPublicTitle} onBlur={saveInfo} />
+                <DiscountMessageField value={publicTitle} onChange={setPublicTitle} onBlur={() => saveInfo()} />
+                <CartLabelsField name="" value={cartLabels} onChange={(labels) => { setCartLabels(labels); saveInfo(labels); }} />
                 <div className="b-datetime-row">
                   <div>
                     <label className="b-label" htmlFor="offer-start-time">Start time</label>
-                    <input id="offer-start-time" className="b-input" type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} onBlur={saveInfo} />
+                    <input id="offer-start-time" className="b-input" type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} onBlur={() => saveInfo()} />
                   </div>
                   <div>
                     <label className="b-label" htmlFor="offer-end-time">End time</label>
-                    <input id="offer-end-time" className="b-input" type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} onBlur={saveInfo} />
+                    <input id="offer-end-time" className="b-input" type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} onBlur={() => saveInfo()} />
                   </div>
                 </div>
               </div>
@@ -1671,7 +1687,7 @@ export default function OfferDetailPage() {
             )}
 
             <div className="b-editor-footer">
-              <button type="button" className="b-btn b-btn-secondary" onClick={saveInfo}>Save draft</button>
+              <button type="button" className="b-btn b-btn-secondary" onClick={() => saveInfo()}>Save draft</button>
               {canPublish ? (
                 <button type="button" className="b-btn b-btn-dark" onClick={() => submitAction("publish")}>{publishLabel}</button>
               ) : (
@@ -1725,13 +1741,14 @@ export default function OfferDetailPage() {
                   className="b-input"
                   value={internalName}
                   onChange={(e) => setInternalName(e.target.value)}
-                  onBlur={saveInfo}
+                  onBlur={() => saveInfo()}
                   placeholder="Enter offer name"
                   autoComplete="off"
                 />
                 <div className="b-help">For internal use only, not shown to customers..</div>
               </div>
-              <DiscountMessageField value={publicTitle} onChange={setPublicTitle} onBlur={saveInfo} />
+              <DiscountMessageField value={publicTitle} onChange={setPublicTitle} onBlur={() => saveInfo()} />
+              <CartLabelsField name="" value={cartLabels} onChange={(labels) => { setCartLabels(labels); saveInfo(labels); }} />
               <div className="b-datetime-row">
                 <div>
                   <label className="b-label" htmlFor="offer-start-time">Start time</label>
@@ -1742,7 +1759,7 @@ export default function OfferDetailPage() {
                     type="datetime-local"
                     value={startsAt}
                     onChange={(e) => setStartsAt(e.target.value)}
-                    onBlur={saveInfo}
+                    onBlur={() => saveInfo()}
                   />
                 </div>
                 <div>
@@ -1754,7 +1771,7 @@ export default function OfferDetailPage() {
                     type="datetime-local"
                     value={endsAt}
                     onChange={(e) => setEndsAt(e.target.value)}
-                    onBlur={saveInfo}
+                    onBlur={() => saveInfo()}
                     placeholder="End time"
                   />
                 </div>
@@ -2107,7 +2124,7 @@ export default function OfferDetailPage() {
 
           {/* Footer ──────────────────────────────────────── */}
           <div className="b-editor-footer">
-            <button type="button" className="b-btn b-btn-secondary" onClick={saveInfo}>
+            <button type="button" className="b-btn b-btn-secondary" onClick={() => saveInfo()}>
               Save draft
             </button>
             {canPublish ? (

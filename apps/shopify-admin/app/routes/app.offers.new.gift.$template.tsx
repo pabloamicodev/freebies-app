@@ -21,9 +21,11 @@ import {
   parseJsonStringArray,
   parseMoneyAmount,
   requiredText,
+  cartLabelsFromForm,
   discountMessageText,
   nowInZone,
 } from "../lib/offer-validation.server.js";
+import { CartLabelsField } from "../components/CartLabelsField.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
@@ -196,6 +198,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (publicTitleResult.error) return { error: publicTitleResult.error };
   const internalName = internalNameResult.data!;
   const publicTitle = publicTitleResult.data!;
+  const cartLabelsResult = cartLabelsFromForm(formData);
+  if (cartLabelsResult.error) return { error: cartLabelsResult.error };
+  const cartLabels = cartLabelsResult.data!;
   const dateRange = parseDateRange(formData, timezone);
   if (dateRange.error) return { error: dateRange.error };
   const { startsAt, endsAt } = dateRange.data!;
@@ -355,6 +360,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           status,
           internalName: candidateName,
           publicTitle,
+          cartLabels,
           priority,
           startsAt: startsAt ?? new Date(),
           endsAt,
@@ -444,6 +450,7 @@ export default function NewGiftOfferPage() {
     toastMsg: "",
     internalName: preset?.internalName ?? "",
     publicTitle: preset?.publicTitle ?? "",
+    cartLabels: [] as string[],
     startsAt: nowLocal,
     endsAt: "",
     minAmount: "500",
@@ -485,6 +492,7 @@ export default function NewGiftOfferPage() {
     toastMsg,
     internalName,
     publicTitle,
+    cartLabels,
     startsAt,
     endsAt,
     minAmount,
@@ -526,6 +534,7 @@ export default function NewGiftOfferPage() {
   const setToastMsg = createFieldSetter(setFormField, "toastMsg");
   const setInternalName = createFieldSetter(setFormField, "internalName");
   const setPublicTitle = createFieldSetter(setFormField, "publicTitle");
+  const setCartLabels = createFieldSetter(setFormField, "cartLabels");
   const setStartsAt = createFieldSetter(setFormField, "startsAt");
   const setEndsAt = createFieldSetter(setFormField, "endsAt");
   const setMinAmount = createFieldSetter(setFormField, "minAmount");
@@ -775,6 +784,9 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                   ) : (
                     <div className="b-help">Shown to customers in your online store.</div>
                   )}
+                  <div style={{ marginTop: 12 }}>
+                    <CartLabelsField value={cartLabels} onChange={setCartLabels} />
+                  </div>
                 </div>
                 <div className="b-grid-2">
                   <div>

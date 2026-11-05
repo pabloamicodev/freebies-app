@@ -35,6 +35,13 @@ function parsePositiveIntOrUnset(raw: FormDataEntryValue | null): { value?: numb
   return { value: n };
 }
 
+/** Quantity tiers survive an edit of a product discount; nothing else of the old value does. */
+function keptTiers(rewardType: string, existing: { rewardType: string; value: unknown } | null | undefined): { tiers?: unknown[] } {
+  if (rewardType !== "product_discount" || existing?.rewardType !== "product_discount") return {};
+  const tiers = (existing.value as { tiers?: unknown } | null)?.tiers;
+  return Array.isArray(tiers) ? { tiers } : {};
+}
+
 type ShopDb = Awaited<ReturnType<typeof getShopContext>>["db"];
 
 export async function buildRewardRecord(
@@ -42,6 +49,7 @@ export async function buildRewardRecord(
   db: ShopDb,
   shopId: string,
   shopCurrencyCode: string,
+  existing?: { rewardType: string; value: unknown } | null,
 ): Promise<
   | {
       data: {
@@ -326,6 +334,7 @@ export async function buildRewardRecord(
             : ordinaryTarget;
       }
       value = {
+        ...keptTiers(rewardType, existing),
         amount: discountType === "percentage" ? discountValue : toStoredAmount(discountValue, currencyCode),
         currencyCode,
       };

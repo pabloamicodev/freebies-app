@@ -791,6 +791,8 @@ export const ProductDiscountTierSchema = boundedTier(
     discountValue: z.number().nonnegative(),
     discountedQuantity: z.number().int().positive().optional(),
     label: z.string().max(120).optional(),
+    cartLabels: z.array(z.string().trim().min(1).refine((s) => Array.from(s).length <= 40)).max(3).optional(),
+    cartMessage: z.string().refine((s) => Array.from(s).length <= 64).optional(),
   },
   "minimumQuantity",
   "maximumQuantity",

@@ -92,6 +92,7 @@ export async function loadOfferDefinitions(shopId: string, db: Db): Promise<Offe
       status: offers.status,
       internalName: offers.internalName,
       publicTitle: offers.publicTitle,
+      cartLabels: offers.cartLabels,
       description: offers.description,
       priority: offers.priority,
       startsAt: offers.startsAt,

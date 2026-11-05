@@ -43,6 +43,7 @@ export function computeOfferVersion(
   return (hash >>> 0) & 0x7fffffff || 1;
 }
 
+// Empty cart labels hash like the column not existing, so adding it did not re-version every published offer.
 function normalize(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString();
   if (Array.isArray(value)) return value.map(normalize);
@@ -50,7 +51,7 @@ function normalize(value: unknown): unknown {
 
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key]) => !VOLATILE_KEYS.has(key))
+      .filter(([key, entry]) => !VOLATILE_KEYS.has(key) && !(key === "cartLabels" && Array.isArray(entry) && entry.length === 0))
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, entry]) => [key, normalize(entry)]),
   );

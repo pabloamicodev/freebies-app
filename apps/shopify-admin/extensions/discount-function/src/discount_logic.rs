@@ -123,12 +123,27 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
             vec![]
         };
         // Shopify shows the candidate message as the discount name in cart and checkout.
-        if let Some(title) = offer.title.as_deref().filter(|title| !title.is_empty()) {
-            for candidate in &mut offer_candidates {
-                candidate.message = Some(title.to_string());
-            }
+        let title = offer
+            .cart_message
+            .as_deref()
+            .filter(|message| !message.is_empty())
+            .or(offer.title.as_deref().filter(|title| !title.is_empty()));
+        for candidate in &mut offer_candidates {
+            let tier_message = candidate
+                .message
+                .as_deref()
+                .and_then(|message| message.strip_prefix(TIER_MESSAGE_MARK))
+                .map(str::to_string);
+            candidate.message = match (title, tier_message) {
+                (Some(title), Some(tier)) => Some(cap_message(format!("{title} \u{b7} {tier}"))),
+                (None, Some(tier)) => Some(cap_message(tier)),
+                (Some(title), None) => Some(cap_message(title.to_string())),
+                (None, None) => candidate.message.take(),
+            };
+        }
+        if let Some(title) = title {
             for candidate in &mut offer_order_candidates {
-                candidate.message = Some(title.to_string());
+                candidate.message = Some(cap_message(title.to_string()));
             }
         }
         if !offer_candidates.is_empty() || !offer_order_candidates.is_empty() {
@@ -435,15 +450,25 @@ fn evaluate_product_reward(
         if discount_value <= 0.0 {
             continue;
         }
+        let message = quantity_tier
+            .and_then(|tier| tier.cart_message.as_deref().filter(|message| !message.is_empty()))
+            .map_or_else(|| "Discount".to_string(), |message| format!("{TIER_MESSAGE_MARK}{message}"));
         candidates.push(make_candidate(
             line.id().clone(),
             quantity,
             discount_type,
             discount_value,
-            "Discount",
+            &message,
         ));
     }
     candidates
+}
+
+const TIER_MESSAGE_MARK: &str = "\u{1}";
+const MAX_MESSAGE_CHARS: usize = 64;
+
+fn cap_message(message: String) -> String {
+    message.chars().take(MAX_MESSAGE_CHARS).collect()
 }
 
 /// Per-cart cap (`mpc`): only ever lowers a limit that already exists.
@@ -3827,6 +3852,89 @@ mod tests {
             panic!("expected ProductDiscountsAdd");
         };
         op.candidates[0].message.clone()
+    }
+
+    const FOUR_TIERS: &str = r#"[
+        {"minimumQuantity":1,"maximumQuantity":1,"discountType":"percentage","discountValue":15,"cartMessage":"Starter"},
+        {"minimumQuantity":2,"maximumQuantity":2,"discountType":"percentage","discountValue":20,"cartMessage":"Twenty off \u00b7 Duo"},
+        {"minimumQuantity":3,"maximumQuantity":3,"discountType":"percentage","discountValue":25},
+        {"minimumQuantity":4,"discountType":"fixed_amount","discountValue":5}]"#;
+
+    fn tiered_message(title: Option<&str>, tiers: &str, quantity: i64) -> Option<String> {
+        labeled_tiered_message(title, None, tiers, quantity)
+    }
+
+    fn labeled_tiered_message(title: Option<&str>, cart_message: Option<&str>, tiers: &str, quantity: i64) -> Option<String> {
+        let title = format!(
+            "{}{}",
+            title.map_or(String::new(), |t| format!(r#""title":"{t}","#)),
+            cart_message.map_or(String::new(), |m| format!(r#""cartMessage":"{m}","#)),
+        );
+        let config = format!(
+            r#"{{"offers":[{{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,{title}
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[],"orderRewards":[],"productRewards":[{{
+                "id":"tiered","targetProductIds":[],"targetVariantIds":[],"discountType":"percentage","discountValue":0,
+                "subscriptionMode":"any","scopeMode":"sitewide","priceTiers":[],"selectionMode":"all","countRule":"sum",
+                "quantityTiers":{tiers},"discountPercentageOnGifts":100
+            }}]
+        }}]}}"#
+        );
+        let lines = format!(
+            "[{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/a", "gid://shopify/Product/a", "10.00", quantity)
+        );
+        let result = run_function_with_input(run, &cart_json(&lines, "50.00", &config)).expect("tiered");
+        product_message(&result)
+    }
+
+    #[test]
+    fn tier_cart_message_is_appended_to_the_offer_title() {
+        assert_eq!(
+            tiered_message(Some("Black Friday"), FOUR_TIERS, 2).as_deref(),
+            Some("Black Friday \u{b7} Twenty off \u{b7} Duo")
+        );
+        assert_eq!(tiered_message(Some("Black Friday"), FOUR_TIERS, 1).as_deref(), Some("Black Friday \u{b7} Starter"));
+    }
+
+    #[test]
+    fn tier_without_cart_message_leaves_the_message_untouched() {
+        assert_eq!(tiered_message(Some("Sale"), FOUR_TIERS, 3).as_deref(), Some("Sale"));
+        assert_eq!(tiered_message(Some("Sale"), FOUR_TIERS, 5).as_deref(), Some("Sale"));
+        assert_eq!(tiered_message(None, FOUR_TIERS, 3).as_deref(), Some("Discount"));
+    }
+
+    #[test]
+    fn tier_message_is_capped_at_64_chars() {
+        let long = "x".repeat(60);
+        let tiers = format!(
+            r#"[{{"minimumQuantity":1,"discountType":"percentage","discountValue":10,"cartMessage":"{long}"}}]"#
+        );
+        let message = tiered_message(Some("Black Friday Sale"), &tiers, 1).unwrap();
+        assert_eq!(message.chars().count(), 64);
+        assert!(message.starts_with("Black Friday Sale \u{b7} xxx"));
+    }
+
+    #[test]
+    fn offer_cart_message_replaces_the_title_and_precedes_the_tier_message() {
+        let tiers = r#"[{"minimumQuantity":1,"discountType":"percentage","discountValue":20,"cartMessage":"20% OFF"}]"#;
+        assert_eq!(
+            labeled_tiered_message(Some("Title"), Some("Title \u{b7} A \u{b7} B"), tiers, 1).as_deref(),
+            Some("Title \u{b7} A \u{b7} B \u{b7} 20% OFF")
+        );
+        let untiered_plain = format!(r#"{PRODUCT_REWARD},"title":"Title","cartMessage":"Title · A · B""#);
+        let result = run_function_with_input(run, &landing_and_other_page_payload(&untiered_plain, r#"["PRODUCT"]"#)).expect("product");
+        assert_eq!(product_message(&result).as_deref(), Some("Title \u{b7} A \u{b7} B"));
+    }
+
+    #[test]
+    fn offers_without_tiers_keep_the_title_only_message() {
+        let titled = format!(r#"{PRODUCT_REWARD},"title":"Spring sale""#);
+        let result = run_function_with_input(run, &landing_and_other_page_payload(&titled, r#"["PRODUCT"]"#)).expect("product");
+        assert_eq!(product_message(&result).as_deref(), Some("Spring sale"));
     }
 
     #[test]

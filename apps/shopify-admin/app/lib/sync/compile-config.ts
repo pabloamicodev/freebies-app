@@ -21,6 +21,7 @@ import {
 } from "@promo/shared-types";
 import { normalizeConditionValue } from "../offer-config-normalization.server.js";
 import { clampDiscountMessage } from "../discount-message.js";
+import { compileOfferCartMessage, compileTierCartMessage } from "../cart-labels.js";
 
 export interface CompileOfferOptions {
   /** The offer is gated by its own discount codes (the "code promo" default for onlyMatchedLines). */
@@ -223,6 +224,8 @@ export interface CompiledShippingOffer {
   id: string;
   /** Customer-facing shipping discount name, emitted as the candidate message. */
   title?: string;
+  /** Title plus cart labels; wins over `title` as the candidate message. */
+  cartMessage?: string;
   /** Max paid orders per customer that may use this offer (Function: uses >= mpu skips it). */
   mpu?: number;
   /** Requires an identified customer; a guest never qualifies. Only ever true. */
@@ -253,6 +256,8 @@ export interface CompiledOffer {
   offerType: string;
   /** Customer-facing discount name shown in cart and checkout. */
   title?: string;
+  /** Title plus cart labels ("Title - A - B"); wins over `title`. Absent without labels. */
+  cartMessage?: string;
   /** Max applications per cart (units, sets or bundles, by reward shape). Only lowers existing caps. */
   mpc?: number;
   /** Max paid orders per customer that may use this offer (Function: uses >= mpu skips it). */
@@ -388,6 +393,8 @@ export interface CompiledProductDiscountTier {
   discountType: "percentage" | "fixed_amount" | "fixed_price" | "free";
   discountValue: number;
   discountedQuantity?: number;
+  /** Cart labels joined; the Function appends it to the offer message. Absent without labels. */
+  cartMessage?: string;
 }
 
 export interface CompiledOrderReward {
@@ -430,6 +437,14 @@ export function compileDiscountCombinationPolicy(
 }
 
 type OfferRow = typeof OffersTable.$inferSelect;
+
+function offerCartMessage(offer: OfferRow): { cartMessage?: string } {
+  const cartMessage = compileOfferCartMessage(
+    clampDiscountMessage(offer.publicTitle) ?? clampDiscountMessage(offer.internalName),
+    offer.cartLabels,
+  );
+  return cartMessage === undefined ? {} : { cartMessage };
+}
 type ConditionRow = typeof ConditionsTable.$inferSelect;
 type RewardRow = typeof RewardsTable.$inferSelect;
 type PolicyRow = typeof PoliciesTable.$inferSelect;
@@ -477,6 +492,7 @@ export function compileOfferConfig(
     version: versionNumber,
     offerType: offer.type,
     title: clampDiscountMessage(offer.publicTitle) ?? clampDiscountMessage(offer.internalName),
+    ...offerCartMessage(offer),
     priority: offer.priority,
     stopLowerPriority: policy?.stopLowerPriority ?? false,
     ...(policy?.canStackWithGiftOffers === false ? { canStackWithGiftOffers: false as const } : {}),
@@ -867,6 +883,7 @@ export function compileOfferConfig(
                 (!Number.isInteger(discountedQuantity) || discountedQuantity < 1)
               )
                 return [];
+              const tierCartMessage = compileTierCartMessage(candidate["cartLabels"]);
               return [
                 {
                   minimumQuantity,
@@ -874,6 +891,7 @@ export function compileOfferConfig(
                   discountType,
                   discountValue,
                   ...(discountedQuantity === undefined ? {} : { discountedQuantity }),
+                  ...(tierCartMessage === undefined ? {} : { cartMessage: tierCartMessage }),
                 },
               ];
             })
@@ -1167,6 +1185,7 @@ export function compileShippingOfferConfigs(
         {
           id: `${offer.id}:${reward.id}`,
           title: clampDiscountMessage(offer.publicTitle) ?? clampDiscountMessage(offer.internalName),
+          ...offerCartMessage(offer),
           ...(mpu !== undefined ? { mpu } : {}),
           ...(ri ? { ri } : {}),
           priority: offer.priority * 1000 + rewardIndex,

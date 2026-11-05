@@ -218,6 +218,13 @@
       "when": 1793911546970,
       "tag": "0033_discount_shards",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1793922260653,
+      "tag": "0034_offer_cart_labels",
+      "breakpoints": true
     }
   ]
 }

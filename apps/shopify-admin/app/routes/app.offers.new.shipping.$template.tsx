@@ -1,3 +1,4 @@
+import { CartLabelsField } from "../components/CartLabelsField.js";
 import { DiscountMessageField } from "../components/DiscountMessageField.js";
 import { useEffect, useMemo, useState } from "react";
 import { safeErrorMessage } from "../lib/safe-error.js";
@@ -12,7 +13,7 @@ import { offerCombinationPolicies, offerConditions, offerRewards, offers } from 
 import { Toast } from "../components/Toast.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
-import { discountMessageText, nowInZone, parseDateRange, parseJsonRecord, requiredText } from "../lib/offer-validation.server.js";
+import { cartLabelsFromForm, discountMessageText, nowInZone, parseDateRange, parseJsonRecord, requiredText } from "../lib/offer-validation.server.js";
 import { OfferConditionsBuilder } from "../components/OfferConditionsBuilder.js";
 import { PAGE_SUBCONDITION_IDS } from "../components/subconditions/types.js";
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
@@ -149,6 +150,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const internalName = internalNameResult.data!;
   const publicTitle = publicTitleResult.data!;
+  const cartLabelsResult = cartLabelsFromForm(formData);
+  if (cartLabelsResult.error) return { error: cartLabelsResult.error };
+  const cartLabels = cartLabelsResult.data!;
   const description = String(formData.get("description") ?? "").trim() || null;
   const status = statusForSubmit(
     String(formData.get("intent") ?? "draft"),
@@ -166,6 +170,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           status,
           internalName: candidateName,
           publicTitle,
+          cartLabels,
           description,
           priority: 100,
           startsAt: dateRange.data!.startsAt ?? new Date(),
@@ -253,6 +258,7 @@ export default function NewShippingOfferPage() {
   const [tiers, setTiers] = useState<TierDraft[]>([
     tierDraft({ minimum: "100", discountValue: "100" }),
   ]);
+  const [cartLabels, setCartLabels] = useState<string[]>([]);
   const [publicTitle, setPublicTitle] = useState(template === "global" ? "Shipping savings" : template === "landing" ? "Landing-page shipping offer" : "Quiz bundle shipping offer");
   const [oneTimeDelivery, setOneTimeDelivery] = useState(true);
   const [subscriptionDelivery, setSubscriptionDelivery] = useState(true);
@@ -334,6 +340,7 @@ export default function NewShippingOfferPage() {
                   />
                 </div>
                 <DiscountMessageField id="shipping-title" value={publicTitle} onChange={setPublicTitle} />
+                <CartLabelsField value={cartLabels} onChange={setCartLabels} />
               </div>
               <div>
                 <label className="b-label" htmlFor="shipping-description">
