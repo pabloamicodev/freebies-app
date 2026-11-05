@@ -25,7 +25,16 @@ import {
   configHash,
   readPublishManifest,
   writePublishManifest,
+  type ManifestNodeKind,
 } from "../publish-manifest.server.js";
+import { isFunctionShardsEnabled } from "../function-shards-flag.server.js";
+import { SLOT_LIMITS, planShards } from "./shard-planner.js";
+import {
+  ShardPlanBlockedError,
+  buildPlanUnits,
+  readShardState,
+  saveShardState,
+} from "./cart-shards.server.js";
 import {
   clearPublishPending,
   isLockTimeoutError,
@@ -34,7 +43,14 @@ import {
 } from "../publish-pending.server.js";
 import {
   CART_DISCOUNT_CLASSES,
+  CART_SHARD_CLASSES,
   DELIVERY_DISCOUNT_CLASSES,
+  EMPTY_CART_SHARD_CONFIG,
+  automaticNodeBudget,
+  deleteAutomaticDiscountNode,
+  ensureCartShardNodes,
+  readCartShardNodeIds,
+  writeCartShardNodeIds,
   addRedeemCodes,
   codeOwners,
   ALL_PURCHASE_TYPES,
@@ -96,6 +112,18 @@ export const MAX_METAFIELD_BYTES = 9500;
 export const PUBLISH_LOCK_TIMEOUT_MS = 25_000;
 /** The background retry and the cron can afford to wait longer. */
 const BACKGROUND_LOCK_TIMEOUT_MS = 50_000;
+
+/** A metafieldsSet takes 25 metafields; every owner gets one per config namespace. */
+const MAX_OWNERS_PER_CALL = Math.floor(25 / FUNCTION_CONFIG_NAMESPACES.length);
+
+interface SharedConfigEntry {
+  ownerId: string;
+  value: string;
+  /** Manifest kind to record for the owner; null for nodes that are being drained. */
+  kind: ManifestNodeKind | null;
+  /** 0 = grows or appears, 1 = unchanged, 2 = shrinks or drains. */
+  rank?: number;
+}
 
 export type PublishOutcome = "published" | "pending";
 
@@ -181,14 +209,27 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     { discountId: discountNodes.deliveryDiscountId, discountClasses: DELIVERY_DISCOUNT_CLASSES },
   ];
   const manifest = new ManifestCollector();
-  const pushSharedConfigs = async (cartValue: string, deliveryValue: string) => {
-    await pushMetafields(shopDomain, accessToken, [
-      { ownerId: discountNodes.cartLinesDiscountId, value: cartValue },
-      { ownerId: discountNodes.deliveryDiscountId, value: deliveryValue },
-    ]);
-    manifest.record(discountNodes.cartLinesDiscountId, "cart", cartValue);
-    manifest.record(discountNodes.deliveryDiscountId, "delivery", deliveryValue);
+  const pushSharedEntries = async (entries: SharedConfigEntry[]) => {
+    // One metafieldsSet is atomic. Past 12 owners (25 metafields / 2 namespaces) it takes several calls,
+    // so slots that grow or appear go first and slots that shrink or drain go last.
+    const ordered =
+      entries.length > MAX_OWNERS_PER_CALL
+        ? entries
+            .map((entry, index) => ({ entry, index }))
+            .sort((a, b) => (a.entry.rank ?? 1) - (b.entry.rank ?? 1) || a.index - b.index)
+            .map(({ entry }) => entry)
+        : entries;
+    for (let offset = 0; offset < ordered.length; offset += MAX_OWNERS_PER_CALL) {
+      await pushMetafields(shopDomain, accessToken, ordered.slice(offset, offset + MAX_OWNERS_PER_CALL));
+    }
+    for (const entry of entries) if (entry.kind) manifest.record(entry.ownerId, entry.kind, entry.value);
   };
+  const pushSharedConfigs = (cartValue: string, deliveryValue: string, drainIds: string[] = []) =>
+    pushSharedEntries([
+      { ownerId: discountNodes.cartLinesDiscountId, value: cartValue, kind: "cart" },
+      ...drainIds.map((ownerId) => ({ ownerId, value: EMPTY_CART_SHARD_CONFIG, kind: null, rank: 2 })),
+      { ownerId: discountNodes.deliveryDiscountId, value: deliveryValue, kind: "delivery" as const },
+    ]);
 
   // Shadow mode runs in parallel with BOGOS: publishing live config would double-discount.
   const activeOffersRaw: Offer[] = (await isShadowModeEnabled(shopId))
@@ -353,7 +394,20 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const emptyDeliveryValue = serializeFunctionConfig(emptyConfig, { omitQueryVariables: true });
     assertConfigFits(emptyCartValue);
     assertConfigFits(emptyDeliveryValue);
-    await pushSharedConfigs(emptyCartValue, emptyDeliveryValue);
+    const strayShardIds = await liveCartShardIds(shopDomain, accessToken, await readCartShardNodeIds(shopId));
+    await pushSharedConfigs(emptyCartValue, emptyDeliveryValue, strayShardIds);
+    if (strayShardIds.length > 0) {
+      await saveShardState(db, shopId, [
+        {
+          slot: 0,
+          nodeId: discountNodes.cartLinesDiscountId,
+          unitKeys: [],
+          configBytes: utf8Length(emptyCartValue),
+          configHash: configHash(emptyCartValue),
+        },
+      ]);
+      await deleteDrainedShards(shopId, shopDomain, accessToken, strayShardIds, strayShardIds);
+    }
     await pushStorefrontMetafields(shopDomain, accessToken, [
       ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
       ...compiledBackendB.flatMap((entry) => entry.conditionRows),
@@ -448,41 +502,63 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       compiledByOffer.map((entry) => entry.offer),
     );
     const shippingOffers = compiledByOffer.flatMap((entry) => entry.shippingOffers);
-    const customerTags = [
-      ...new Set(
-        compiledOffers.flatMap((offer) => [
-          ...(offer.requiredCustomerTags ?? []),
-          ...(offer.excludedCustomerTags ?? []),
-        ]),
-      ),
-    ].sort();
-    if (customerTags.length > 100) {
-      throw new Error(
-        "Active offers reference more than 100 unique customer tags. Reduce the tag set before publishing.",
+    const shardsEnabled = await isFunctionShardsEnabled(db, shopId);
+    const storedShardIds = await readCartShardNodeIds(shopId);
+    const shardMode = shardsEnabled || storedShardIds.length > 0;
+    if (!shardsEnabled) {
+      const allTags = new Set(
+        compiledOffers.flatMap((offer) => [...(offer.requiredCustomerTags ?? []), ...(offer.excludedCustomerTags ?? [])]),
       );
+      if (allTags.size > 100) {
+        throw new Error(
+          "Active offers reference more than 100 unique customer tags. Reduce the tag set before publishing.",
+        );
+      }
+      buildAttributeQueryVariables(conditionRows);
     }
 
-    const compiledAt = new Date().toISOString();
-    const cartConfig: CompiledFunctionConfig = {
-      offers: compiledOffers,
-      shippingOffers: [],
-      version: "1",
-      compiledAt,
-      ...(customerTags.length > 0 ? { customerTags } : {}),
-      ...buildAttributeQueryVariables(conditionRows),
-    };
-    const deliveryConfig: CompiledFunctionConfig = { offers: [], shippingOffers, version: "1", compiledAt };
+    // Single-shard mode (flag off, or the 25-discount budget leaves room for one slot) is today's behavior:
+    // everything in slot 0, and an overflow is a ShardPlanBlockedError instead of an untyped size error.
+    const budget = shardsEnabled ? await automaticNodeBudget(shopId, shopDomain, accessToken) : null;
+    const persisted = shardMode ? await readShardState(db, shopId) : null;
+    const combination = compileDiscountCombinationPolicy(compiledOffers);
+    const plan = planShards(
+      buildPlanUnits(compiledOffers, conditionRows),
+      persisted?.previous ?? new Map(),
+      { ...SLOT_LIMITS, maxSlots: budget?.maxCartSlots ?? 1 },
+      { productDiscounts: combination.productDiscounts, orderDiscounts: combination.orderDiscounts },
+    );
+    if (plan.blocked) throw new ShardPlanBlockedError(plan.blocked, budget?.storeActive ?? null);
+    // Empty slots are omitted by the planner; renumber so node ids stay a dense list.
+    const slots = plan.slots.map((slot, index) => ({ ...slot, slot: index }));
 
-    const cartValue = serializeFunctionConfig(cartConfig);
+    const compiledAt = new Date().toISOString();
+    const slotValues = slots.map((slot) => {
+      const members = new Set(slot.unitKeys);
+      const cartConfig: CompiledFunctionConfig = {
+        offers: compiledOffers.filter((offer) => members.has(offer.id)),
+        shippingOffers: [],
+        version: "1",
+        compiledAt,
+        ...(slot.tags.length > 0 ? { customerTags: slot.tags } : {}),
+        ...buildAttributeQueryVariables(conditionRows.filter((row) => members.has(row.offerId))),
+      };
+      return serializeFunctionConfig(cartConfig);
+    });
+    const deliveryConfig: CompiledFunctionConfig = { offers: [], shippingOffers, version: "1", compiledAt };
     const deliveryValue = serializeFunctionConfig(deliveryConfig, { omitQueryVariables: true });
-    for (const [label, value] of [["cart", cartValue], ["delivery", deliveryValue]] as const) {
-      const sizeBytes = new TextEncoder().encode(value).byteLength;
+    for (const [label, value] of [
+      ...slotValues.map((slotValue) => ["cart", slotValue] as const),
+      ["delivery", deliveryValue] as const,
+    ]) {
+      const sizeBytes = utf8Length(value);
       if (sizeBytes > MAX_METAFIELD_BYTES) {
         throw new Error(
           `Function config (${label}) is ${sizeBytes}B, exceeding the safe ${MAX_METAFIELD_BYTES}B limit. Pause or simplify active offers before publishing.`,
         );
       }
     }
+    const cartValue = slotValues[0]!;
 
     // Publish guardrails before the discount config. If either prerequisite
     // fails, the previous Function config stays active and the new offer cannot
@@ -490,21 +566,57 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     // validation must see code offers too — they authorize gift/product/order
     // rewards exactly like a regular offer, just through a different discount
     // node, and validation has no other way to know they're allowed.
+    // Shard nodes are created first because the combination policy is set on the node itself; a new node
+    // carries an inert config, so it grants nothing until the metafieldsSet below.
+    const wantedShards = slots.length - 1;
+    const shardIds =
+      wantedShards > 0
+        ? await ensureCartShardNodes(shopId, shopDomain, accessToken, Math.max(wantedShards, storedShardIds.length))
+        : await liveCartShardIds(shopDomain, accessToken, storedShardIds);
+    const activeShardIds = shardIds.slice(0, wantedShards);
+    const drainIds = shardIds.slice(wantedShards);
     const validationConfig = buildCartValidationConfig([...compiledOffers, ...codeOfferConfigs]);
     await syncCartValidation(shopDomain, accessToken, validationConfig);
     manifest.validationHash = configHash(JSON.stringify(validationConfig));
     await Promise.all(
-      discountNodesWithClasses.map(({ discountId, discountClasses }) =>
-        syncDiscountCombinationPolicy(
-          shopDomain,
-          accessToken,
-          discountId,
-          compileDiscountCombinationPolicy(compiledOffers),
-          discountClasses,
-        ),
+      [
+        ...discountNodesWithClasses,
+        ...activeShardIds.map((discountId) => ({ discountId, discountClasses: CART_SHARD_CLASSES })),
+      ].map(({ discountId, discountClasses }) =>
+        syncDiscountCombinationPolicy(shopDomain, accessToken, discountId, combination, discountClasses),
       ),
     );
-    await pushSharedConfigs(cartValue, deliveryValue);
+    const slotNodeId = (index: number) =>
+      index === 0 ? discountNodes.cartLinesDiscountId : activeShardIds[index - 1]!;
+    if (!shardMode) await pushSharedConfigs(cartValue, deliveryValue);
+    else {
+      await pushSharedEntries([
+        ...slots.map((slot, index) => {
+          const previousBytes = persisted?.bytesBySlot.get(index);
+          const bytes = utf8Length(slotValues[index]!);
+          return {
+            ownerId: slotNodeId(index),
+            value: slotValues[index]!,
+            kind: index === 0 ? ("cart" as const) : ("cart-shard" as const),
+            rank: previousBytes === undefined || bytes > previousBytes ? 0 : bytes === previousBytes ? 1 : 2,
+          };
+        }),
+        ...drainIds.map((ownerId) => ({ ownerId, value: EMPTY_CART_SHARD_CONFIG, kind: null, rank: 2 })),
+        { ownerId: discountNodes.deliveryDiscountId, value: deliveryValue, kind: "delivery" as const },
+      ]);
+      await saveShardState(
+        db,
+        shopId,
+        slots.map((slot, index) => ({
+          slot: index,
+          nodeId: slotNodeId(index),
+          unitKeys: slot.unitKeys,
+          configBytes: utf8Length(slotValues[index]!),
+          configHash: configHash(slotValues[index]!),
+        })),
+      );
+      await deleteDrainedShards(shopId, shopDomain, accessToken, shardIds, drainIds);
+    }
     await pushStorefrontMetafields(shopDomain, accessToken, [
       ...conditionRows,
       ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
@@ -1602,6 +1714,47 @@ async function resolveLegacyGiftVariants(
       },
     ];
   });
+}
+
+const utf8Length = (text: string) => new TextEncoder().encode(text).byteLength;
+
+/** Recorded shard node ids that still exist in Shopify, in slot order. No Shopify call when none are recorded. */
+async function liveCartShardIds(shopDomain: string, accessToken: string, stored: string[]): Promise<string[]> {
+  if (stored.length === 0) return [];
+  const live = await existingDiscountNodeIds(shopDomain, accessToken, stored);
+  return stored.filter((id) => live.has(id));
+}
+
+/**
+ * Deletes shard nodes whose slot is empty in the new plan (their config was already emptied by the
+ * metafieldsSet), freeing Shopify's 25-automatic-discount budget. A failed delete leaves an inert node
+ * that stays recorded, so the next publish drains it again.
+ */
+async function deleteDrainedShards(
+  shopId: string,
+  shopDomain: string,
+  accessToken: string,
+  shardIds: string[],
+  drainIds: string[],
+): Promise<void> {
+  const deleted = new Set<string>();
+  for (const id of drainIds) {
+    try {
+      await deleteAutomaticDiscountNode(shopDomain, accessToken, id);
+      deleted.add(id);
+    } catch (error) {
+      if (error instanceof ShopifyOutcomeUnknownError) throw error;
+      Sentry.captureMessage("Drained cart shard node could not be deleted; retried on the next publish", {
+        level: "warning",
+        tags: { shopId },
+        extra: { nodeId: id, error: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }
+  await writeCartShardNodeIds(
+    shopId,
+    shardIds.filter((id) => !deleted.has(id)),
+  );
 }
 
 async function pushMetafields(

@@ -9,7 +9,7 @@ import { and, eq } from "drizzle-orm";
 
 export const PUBLISH_MANIFEST_SETTING = "publish_manifest.v1";
 
-export type ManifestNodeKind = "cart" | "delivery" | "pool" | "code" | "code-delivery" | "code-b";
+export type ManifestNodeKind = "cart" | "cart-shard" | "delivery" | "pool" | "code" | "code-delivery" | "code-b";
 
 export interface ManifestNode {
   kind: ManifestNodeKind;

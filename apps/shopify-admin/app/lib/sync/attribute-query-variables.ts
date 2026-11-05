@@ -24,6 +24,10 @@ function customKeys(
     .sort((left, right) => left.localeCompare(right));
 }
 
+export function cartAttributeKeys(conditions: AttributeCondition[]): string[] {
+  return customKeys(conditions, "cart_attribute");
+}
+
 export function buildAttributeQueryVariables(conditions: AttributeCondition[]): Record<string, string> {
   const cartKeys = customKeys(conditions, "cart_attribute");
 
