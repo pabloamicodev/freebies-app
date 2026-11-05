@@ -47,6 +47,8 @@ export const offers = pgTable(
     status: offerStatusEnum("status").notNull().default("draft"),
     internalName: text("internal_name").notNull(),
     publicTitle: text("public_title").notNull(),
+    /** Up to 3 short labels appended to the discount name in cart and checkout. */
+    cartLabels: jsonb("cart_labels").$type<string[]>().notNull().default([]),
     description: text("description"),
     priority: integer("priority").notNull().default(100),
     startsAt: timestamp("starts_at", { withTimezone: true }),

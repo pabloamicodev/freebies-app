@@ -211,6 +211,13 @@
       "when": 1793766474622,
       "tag": "0032_mcp_operator_totp",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1793918352284,
+      "tag": "0034_offer_cart_labels",
+      "breakpoints": true
     }
   ]
 }

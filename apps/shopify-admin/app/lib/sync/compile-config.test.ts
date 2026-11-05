@@ -266,6 +266,46 @@ describe("compileShippingOfferConfigs", () => {
     expect(shipping[0]?.title).toBe("y".repeat(60));
   });
 
+  it("emits cartMessage only when cart labels exist (title + labels, 64 cap), for offers and shipping", () => {
+    const compile = (overrides: Record<string, unknown>) => compileOfferConfig(offer(overrides), [], [], null, 1);
+    expect("cartMessage" in compile({ publicTitle: "Sale" })).toBe(false);
+    expect("cartMessage" in compile({ publicTitle: "Sale", cartLabels: [] })).toBe(false);
+    expect(compile({ publicTitle: "Sale", cartLabels: [" A ", "", "B"] }).cartMessage).toBe("Sale · A · B");
+    expect(compile({ publicTitle: "Sale", cartLabels: ["x".repeat(40), "y".repeat(40)] }).cartMessage).toHaveLength(64);
+    const shipping = (cartLabels: string[]) =>
+      compileShippingOfferConfigs(
+        offer({ publicTitle: "Free shipping", cartLabels }),
+        [condition("cart_value", { thresholdCents: 5000 })],
+        [shippingReward({ discountType: "free" })],
+      )[0]!;
+    expect("cartMessage" in shipping([])).toBe(false);
+    expect(shipping(["Gift"]).cartMessage).toBe("Free shipping · Gift");
+  });
+
+  it("emits a tier cartMessage only when the tier has cart labels", () => {
+    const tier = (extra: Record<string, unknown>) => ({ minimumQuantity: 1, discountType: "percentage", discountValue: 15, ...extra });
+    const result = compileOfferConfig(
+      offer(),
+      [],
+      [
+        {
+          id: REWARD_ID,
+          rewardType: "product_discount",
+          discountType: "percentage",
+          value: { amount: 0, currencyCode: "USD", tiers: [tier({ cartLabels: ["Starter", " 15% OFF "] }), tier({ minimumQuantity: 2, label: "widget only" }), tier({ minimumQuantity: 3, cartLabels: [] })] },
+          target: { scopeMode: "sitewide", scope: "all_products" },
+          sortOrder: 0,
+        },
+      ] as CompileArgs[2],
+      null,
+      1,
+    );
+    const tiers = result.productRewards[0]!.quantityTiers;
+    expect(tiers[0]!.cartMessage).toBe("Starter · 15% OFF");
+    expect("cartMessage" in tiers[1]!).toBe(false);
+    expect("cartMessage" in tiers[2]!).toBe(false);
+  });
+
   it("omits the shipping candidate title when there is no public title", () => {
     const result = compileShippingOfferConfigs(
       offer(),
