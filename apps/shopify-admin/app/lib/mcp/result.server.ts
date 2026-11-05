@@ -107,7 +107,7 @@ export type ToolErrorPayload = {
   retryAfterSeconds?: number;
   confirmToken?: string;
   /** Shared with the EE: FORBIDDEN carries reason "ROLE" (insufficient operator role). */
-  details?: { reason?: string };
+  details?: { reason?: string; capacity?: { code: string; offerIds: string[]; numbers: Record<string, number> } };
 };
 
 const RETRYABLE: ReadonlySet<ErrorCode> = new Set(["RATE_LIMITED", "UPSTREAM_UNAVAILABLE"]);
@@ -117,7 +117,7 @@ export class ToolError extends Error {
   constructor(
     code: ErrorCode,
     message: string,
-    opts: { suggestedAction?: SuggestedAction; retryAfterSeconds?: number; confirmToken?: string; details?: { reason?: string } } = {},
+    opts: { suggestedAction?: SuggestedAction; retryAfterSeconds?: number; confirmToken?: string; details?: ToolErrorPayload["details"] } = {},
   ) {
     super(message);
     this.name = "ToolError";

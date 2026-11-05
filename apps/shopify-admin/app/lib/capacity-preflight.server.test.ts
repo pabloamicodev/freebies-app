@@ -1,0 +1,196 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { and, eq } from "drizzle-orm";
+import { offerCombinationPolicies, offerConditions, offerRewards, offers, type Db } from "@promo/db";
+import { preflightCapacity, readPreviousAssignment, type CapacityOptions } from "./capacity-preflight.server.js";
+import { setFunctionShardsEnabled } from "./function-shards-flag.server.js";
+import { getLegacyStorePreset, insertPresetOffer } from "./legacy-store-presets.server.js";
+import { shippingConfigTooLargeMessage } from "./capacity-copy.js";
+import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
+
+let db: Db;
+let close: () => Promise<void>;
+
+beforeAll(async () => {
+  ({ db, close } = await createTestDb());
+}, 60_000);
+afterAll(async () => {
+  await close();
+});
+
+const budget = (maxCartSlots: number, others = 3) => ({ storeActive: others + 2, ours: 2, others, maxCartSlots });
+const withBudget = (maxCartSlots: number, others?: number): CapacityOptions => ({
+  shardsEnabled: true,
+  loadBudget: async () => budget(maxCartSlots, others),
+});
+
+let variantSeq = 0;
+async function giftOffer(shopId: string, variants: number, overrides: Parameters<typeof seedOffer>[2] = {}) {
+  const offerId = await seedOffer(db, shopId, overrides);
+  await db.insert(offerConditions).values({
+    shopId, offerId, scope: "main", conditionType: "cart_value", operator: "gte",
+    value: { thresholdCents: 1000, currencyCode: "USD" }, sortOrder: 0, isEnabled: true,
+  });
+  await db.insert(offerRewards).values({
+    shopId, offerId, rewardType: "product_gift", discountType: "free", value: {},
+    target: { variantIds: Array.from({ length: variants }, () => `gid://shopify/ProductVariant/${++variantSeq}`) },
+    quantity: 1, sortOrder: 0,
+  });
+  return offerId;
+}
+
+describe("Ambrosia preset plus 40 heavy offers", () => {
+  let shopId: string;
+  const heavyNames: string[] = [];
+
+  beforeAll(async () => {
+    shopId = await seedShop(db, "ambrosia-nutraceuticals.myshopify.com");
+    const preset = getLegacyStorePreset("ambrosia-nutraceuticals.myshopify.com")!;
+    for (const presetOffer of preset.offers) await db.transaction((tx) => insertPresetOffer(tx, shopId, presetOffer));
+    await db.update(offers).set({ status: "active" }).where(eq(offers.shopId, shopId));
+    for (let i = 0; i < 40; i++) {
+      const name = `heavy-${String(i).padStart(2, "0")}`;
+      heavyNames.push(name);
+      await giftOffer(shopId, 25, { internalName: name, priority: 100 + i });
+    }
+  }, 120_000);
+
+  it("fits across several slots with the flag on", async () => {
+    const result = await preflightCapacity(db, shopId, [], withBudget(11));
+    expect(result.ok ? null : JSON.stringify(result)).toBeNull();
+    if (!result.ok) return;
+    expect(result.plan.slots).toBeGreaterThan(1);
+    expect(result.plan.maxSlots).toBe(11);
+    expect(result.plan.bytesPerSlot).toHaveLength(result.plan.slots);
+    expect(Math.max(...result.plan.bytesPerSlot)).toBeLessThanOrEqual(9500);
+    expect(result.plan.budget).toEqual({ storeActive: 5, ours: 2, others: 3 });
+  });
+
+  it("is SLOT_FULL naming the offers that do not fit with the flag off", async () => {
+    const result = await preflightCapacity(db, shopId, [], { shardsEnabled: false });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("SLOT_FULL");
+    expect(result.offerIds.length).toBeGreaterThan(0);
+    expect(result.offerNames.length).toBe(result.offerIds.length);
+    expect(result.offerNames.some((name) => heavyNames.includes(name))).toBe(true);
+    expect(result.message).toContain("over the 9500B limit");
+    for (const name of result.offerNames) expect(result.message).toContain(`"${name}"`);
+    expect(result.numbers["neededBytes"]).toBeGreaterThan(9500);
+  });
+
+  it("reads the per-shop flag from app_settings when no override is given", async () => {
+    expect((await preflightCapacity(db, shopId, [], { loadBudget: async () => budget(11) })).ok).toBe(false);
+    await setFunctionShardsEnabled(db, shopId, true);
+    expect((await preflightCapacity(db, shopId, [], { loadBudget: async () => budget(11) })).ok).toBe(true);
+    await setFunctionShardsEnabled(db, shopId, false);
+  });
+});
+
+describe("limits", () => {
+  it("is AUTOMATIC_DISCOUNT_LIMIT with numbers when 23 other automatic discounts leave one slot", async () => {
+    const shopId = await seedShop(db, "budget.myshopify.com");
+    for (let i = 0; i < 6; i++) await giftOffer(shopId, 60, { internalName: `b-${i}`, priority: i });
+    const result = await preflightCapacity(db, shopId, [], {
+      shardsEnabled: true,
+      loadBudget: async () => ({ storeActive: 25, ours: 2, others: 23, maxCartSlots: 1 }),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("AUTOMATIC_DISCOUNT_LIMIT");
+    expect(result.numbers["allowed"]).toBe(1);
+    expect(result.numbers["needed"]).toBeGreaterThan(0);
+    expect(result.numbers["storeActive"]).toBe(25);
+    expect(result.numbers["others"]).toBe(23);
+    expect(result.message).toBe(
+      `Shopify allows 25 active automatic discounts per store. Your store has 25 active and Promo Engine needs ${result.numbers["needed"]} more. Deactivate or delete some automatic discounts in Shopify, or pause offers, then publish again.`,
+    );
+    expect(result.offerIds.length).toBeGreaterThan(0);
+  });
+
+  it("is SLOT0_GROUP_TOO_LARGE when a top-priority stop offer drags a big tail into slot 0", async () => {
+    const shopId = await seedShop(db, "stop.myshopify.com");
+    const stop = await giftOffer(shopId, 5, { internalName: "stopper", priority: 0 });
+    await db.insert(offerCombinationPolicies).values({ shopId, offerId: stop, stopLowerPriority: true });
+    for (let i = 0; i < 8; i++) await giftOffer(shopId, 60, { internalName: `tail-${i}`, priority: 10 + i });
+    const result = await preflightCapacity(db, shopId, [], withBudget(11));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("SLOT0_GROUP_TOO_LARGE");
+    expect(result.offerNames).toContain("stopper");
+    expect(result.message).toContain("must share one Shopify discount and don't fit. Pause or simplify some of them.");
+    expect(result.numbers["groupBytes"]).toBeGreaterThan(9500);
+  });
+
+  it("is OFFER_TOO_LARGE naming a single offer bigger than a slot", async () => {
+    const shopId = await seedShop(db, "huge.myshopify.com");
+    const huge = await giftOffer(shopId, 400, { internalName: "huge-offer" });
+    const result = await preflightCapacity(db, shopId, [], withBudget(11));
+    expect(result).toMatchObject({ ok: false, code: "OFFER_TOO_LARGE", offerIds: [huge], offerNames: ["huge-offer"], reason: "bytes" });
+    if (!result.ok) expect(result.message).toContain('"huge-offer" is too large for one Shopify discount');
+  });
+
+  it("is OFFER_TOO_LARGE for keys when one offer checks more than 3 cart attributes", async () => {
+    const shopId = await seedShop(db, "keys-one.myshopify.com");
+    const offerId = await giftOffer(shopId, 2, { internalName: "attr-heavy" });
+    await db.insert(offerConditions).values(
+      ["a", "b", "c", "d"].map((key, i) => ({
+        shopId, offerId, scope: "main" as const, conditionType: "cart_attribute", operator: "eq" as const,
+        value: { key, value: "x" }, sortOrder: i + 1, isEnabled: true,
+      })),
+    );
+    const result = await preflightCapacity(db, shopId, [], withBudget(11));
+    expect(result).toMatchObject({ ok: false, code: "OFFER_TOO_LARGE", reason: "keys", offerNames: ["attr-heavy"] });
+    if (!result.ok) expect(result.message).toBe('"attr-heavy" checks 4 cart attributes. Shopify lets a discount read at most 3. Remove 1 cart attribute conditions.');
+  });
+
+  it("is CART_ATTRIBUTE_KEYS in single-slot mode when active offers use more than 3 keys in total", async () => {
+    const shopId = await seedShop(db, "keys-many.myshopify.com");
+    for (const key of ["a", "b", "c", "d"]) {
+      const offerId = await giftOffer(shopId, 2, { internalName: `attr-${key}` });
+      await db.insert(offerConditions).values({
+        shopId, offerId, scope: "main", conditionType: "cart_attribute", operator: "eq",
+        value: { key, value: "x" }, sortOrder: 1, isEnabled: true,
+      });
+    }
+    const off = await preflightCapacity(db, shopId, [], { shardsEnabled: false });
+    expect(off).toMatchObject({ ok: false, code: "CART_ATTRIBUTE_KEYS" });
+    if (!off.ok) {
+      expect(off.offerNames).toEqual(["attr-a", "attr-b", "attr-c", "attr-d"]);
+      expect(off.message).toContain("Offers using them:");
+    }
+    expect((await preflightCapacity(db, shopId, [], withBudget(11))).ok).toBe(true);
+  });
+
+  it("is SHIPPING_CONFIG_TOO_LARGE for 150 shipping rewards, naming the offer", async () => {
+    const shopId = await seedShop(db, "ship.myshopify.com");
+    const offerId = await seedOffer(db, shopId, { internalName: "shipper" });
+    await db.insert(offerRewards).values(
+      Array.from({ length: 150 }, (_, i) => ({
+        shopId, offerId, rewardType: "shipping_discount" as const, discountType: "free" as const, value: { amount: 100 },
+        target: { deliveryGroupTypes: ["ONE_TIME_PURCHASE"] }, quantity: null, sortOrder: i,
+      })),
+    );
+    const result = await preflightCapacity(db, shopId, [offerId], { shardsEnabled: false });
+    expect(result).toMatchObject({ ok: false, code: "SHIPPING_CONFIG_TOO_LARGE", offerIds: [offerId], offerNames: ["shipper"] });
+    if (!result.ok) expect(result.message).toBe(shippingConfigTooLargeMessage(result.numbers["bytes"]!));
+  });
+
+  it("is COMPILE_ERROR attributing the offer whose data cannot compile", async () => {
+    const shopId = await seedShop(db, "compile.myshopify.com");
+    const offerId = await giftOffer(shopId, 2, { internalName: "broken" });
+    await db.update(offerConditions).set({ value: { thresholdCents: "nope" } }).where(and(eq(offerConditions.offerId, offerId), eq(offerConditions.shopId, shopId)));
+    const result = await preflightCapacity(db, shopId, [], { shardsEnabled: false });
+    if (result.ok) return;
+    expect(result.code).toBe("COMPILE_ERROR");
+    expect(result.offerIds).toEqual([offerId]);
+  });
+
+  it("is ok and empty for a shop with no active offers, and previous assignment starts empty", async () => {
+    const shopId = await seedShop(db, "empty.myshopify.com");
+    expect(await preflightCapacity(db, shopId, [], { shardsEnabled: false })).toEqual({
+      ok: true,
+      plan: { slots: 1, bytesPerSlot: [0], deliveryBytes: 0, maxSlots: 1, budget: null },
+    });
+    expect((await readPreviousAssignment(db, shopId)).size).toBe(0);
+  });
+});

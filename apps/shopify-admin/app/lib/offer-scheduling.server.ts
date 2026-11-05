@@ -120,6 +120,7 @@ export async function executeOfferSchedule(
         reason: "validation_error",
         error,
         scope: validation.scope,
+        ...(validation.capacity ? { after: { capacity: validation.capacity } } : {}),
         dedupe: true,
       });
     }
