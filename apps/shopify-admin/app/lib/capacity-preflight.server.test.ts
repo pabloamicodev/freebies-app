@@ -38,7 +38,7 @@ async function giftOffer(shopId: string, variants: number, overrides: Parameters
   return offerId;
 }
 
-describe("Ambrosia preset plus 40 heavy offers", () => {
+describe("Ambrosia preset plus 12 heavy offers", () => {
   let shopId: string;
   const heavyNames: string[] = [];
 
@@ -47,10 +47,10 @@ describe("Ambrosia preset plus 40 heavy offers", () => {
     const preset = getLegacyStorePreset("ambrosia-nutraceuticals.myshopify.com")!;
     for (const presetOffer of preset.offers) await db.transaction((tx) => insertPresetOffer(tx, shopId, presetOffer));
     await db.update(offers).set({ status: "active" }).where(eq(offers.shopId, shopId));
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 12; i++) {
       const name = `heavy-${String(i).padStart(2, "0")}`;
       heavyNames.push(name);
-      await giftOffer(shopId, 25, { internalName: name, priority: 100 + i });
+      await giftOffer(shopId, 60, { internalName: name, priority: 100 + i });
     }
   }, 120_000);
 
@@ -144,7 +144,7 @@ describe("limits", () => {
 
   it("uses a separate message and no placeholder numbers when the automatic discount count is unknown", async () => {
     const shopId = await seedShop(db, "unknown-budget.myshopify.com");
-    for (let i = 0; i < 12; i++) await giftOffer(shopId, 60, { internalName: `u-${i}`, priority: i });
+    for (let i = 0; i < 8; i++) await giftOffer(shopId, 60, { internalName: `u-${i}`, priority: i });
     const result = await preflightCapacity(db, shopId, [], { shardsEnabled: true, loadBudget: async () => null });
     expect(result).toMatchObject({ ok: false, code: "AUTOMATIC_DISCOUNT_LIMIT" });
     if (result.ok) return;
