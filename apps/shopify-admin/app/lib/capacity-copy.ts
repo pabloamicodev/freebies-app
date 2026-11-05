@@ -21,6 +21,10 @@ export function automaticDiscountLimitMessage(storeActive: number, needed: numbe
   return `Shopify allows ${SHOPIFY_AUTOMATIC_LIMIT} active automatic discounts per store. Your store has ${storeActive} active and Promo Engine needs ${needed} more. Deactivate or delete some automatic discounts in Shopify, or pause offers, then publish again.`;
 }
 
+export function automaticDiscountCountUnknownMessage(): string {
+  return `Promo Engine couldn't read how many automatic discounts your store has. Try again in a minute; Shopify allows ${SHOPIFY_AUTOMATIC_LIMIT} active automatic discounts per store.`;
+}
+
 export function slot0GroupTooLargeMessage(count: number, names: readonly string[] = []): string {
   const base = `${count} offers with order discounts or 'stop lower priority' must share one Shopify discount and don't fit. Pause or simplify some of them.`;
   return names.length > 0 ? `${base} Offers involved: ${quoted(names)}.` : base;

@@ -26,7 +26,7 @@ import { invalidateOfferDefinitions } from "./offer-definitions.server.js";
 import { normalizeConditionValue } from "./offer-config-normalization.server.js";
 import { OfferPublishError, addOfferPublishErrors } from "./offer-publish-errors.server.js";
 import { markPublishPending } from "./publish-pending.server.js";
-import { preflightCapacity, type CapacityFailure } from "./capacity-preflight.server.js";
+import { preflightCapacity, type CapacityFailure, type CapacityPreflight } from "./capacity-preflight.server.js";
 import { insertAuditLog } from "./audit-log.server.js";
 import { limitedTitleError } from "./offer-usage.server.js";
 import { isLimitsEnforced } from "./limits-enforced.server.js";
@@ -406,9 +406,22 @@ export async function validateActivation(
   shopId: string,
   offerIds: string[],
 ): Promise<PublishValidationResult> {
+  return (await validateActivationWithPreflight(db, shopId, offerIds)).validation;
+}
+
+/** `validateActivation` that also returns the capacity result, so a following `republishIfActive` can reuse it. */
+export async function validateActivationWithPreflight(
+  db: Db,
+  shopId: string,
+  offerIds: string[],
+): Promise<{ validation: PublishValidationResult; preflight?: CapacityPreflight }> {
   const validation = await validateOffersPublishable(db, shopId, offerIds);
-  if (!validation.ok) return validation;
+  if (!validation.ok) return { validation };
   const capacity = await preflightCapacity(db, shopId, offerIds);
+  return { validation: capacityValidation(capacity), preflight: capacity };
+}
+
+function capacityValidation(capacity: CapacityPreflight): PublishValidationResult {
   if (capacity.ok) return { ok: true };
   const offerId = capacity.code === "COMPILE_ERROR" ? capacity.offerIds[0] : undefined;
   return {
@@ -529,6 +542,8 @@ export async function republishIfActive(
   offerId: string,
   wasActive: boolean,
   publish: ShopPublishFn = tryPublishShop,
+  /** Capacity result the caller already computed for this offer (`validateActivationWithPreflight`); skips a second preflight. */
+  earlierPreflight?: CapacityPreflight,
 ): Promise<string | null> {
   if (!wasActive) {
     await invalidateOfferDefinitions(shopId);
@@ -540,7 +555,7 @@ export async function republishIfActive(
   // A size or attribute-key overflow found before publishing is blamed on the edited offer: left
   // active it would block every later publish for the shop.
   const validation = await validateOffersPublishable(db, shopId, [offerId]);
-  const capacity = validation.ok ? await preflightCapacity(db, shopId, [offerId]) : null;
+  const capacity = validation.ok ? (earlierPreflight ?? (await preflightCapacity(db, shopId, [offerId]))) : null;
   const preflight = capacity && !capacity.ok ? capacity : null;
   let reason = "validation_error";
   let failure: PublishFailure | null;
@@ -550,7 +565,8 @@ export async function republishIfActive(
     reason = "shop_limit_exceeded";
     failure = {
       message: preflight.message,
-      scope: "offer",
+      // The store's automatic-discount budget is not this offer's fault: keep its status and retry.
+      scope: preflight.code === "AUTOMATIC_DISCOUNT_LIMIT" ? "shop" : "offer",
       offerId: (preflight.code === "COMPILE_ERROR" ? preflight.offerIds[0] : undefined) ?? offerId,
     };
   } else {

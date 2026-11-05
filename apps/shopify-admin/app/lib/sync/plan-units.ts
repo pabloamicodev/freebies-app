@@ -19,6 +19,7 @@ export function cartAttributeKeysOf(conditions: readonly ConditionRow[]): string
   return [...new Set(keys)].sort((a, b) => a.localeCompare(b));
 }
 
+// Variant-only rewards (no product ids) count as sitewide until product ids are resolved at compile time.
 function targetProductIdsOf(offer: CompiledOffer): string[] | null {
   const rewards = [...offer.productRewards, ...offer.giftRewards];
   if (rewards.length === 0 || rewards.some((reward) => reward.targetProductIds.length === 0)) return null;

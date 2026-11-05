@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { offerCombinationPolicies, offerConditions, offerRewards, offers, type Db } from "@promo/db";
+import { discountCodes, offerCombinationPolicies, offerConditions, offerRewards, offers, type Db } from "@promo/db";
 import { preflightCapacity, readPreviousAssignment, type CapacityOptions } from "./capacity-preflight.server.js";
 import { setFunctionShardsEnabled } from "./function-shards-flag.server.js";
 import { getLegacyStorePreset, insertPresetOffer } from "./legacy-store-presets.server.js";
@@ -127,6 +127,48 @@ describe("limits", () => {
     const result = await preflightCapacity(db, shopId, [], withBudget(11));
     expect(result).toMatchObject({ ok: false, code: "OFFER_TOO_LARGE", offerIds: [huge], offerNames: ["huge-offer"], reason: "bytes" });
     if (!result.ok) expect(result.message).toContain('"huge-offer" is too large for one Shopify discount');
+  });
+
+  it("keeps the 100-tag limit only when sharding is on", async () => {
+    const shopId = await seedShop(db, "tags.myshopify.com");
+    const offerId = await giftOffer(shopId, 2, { internalName: "taggy" });
+    await db.insert(offerConditions).values({
+      shopId, offerId, scope: "main", conditionType: "customer_tags", operator: "any",
+      value: { includeTags: Array.from({ length: 101 }, (_, i) => `tag-${i}`), excludeTags: [] }, sortOrder: 1, isEnabled: true,
+    });
+    expect((await preflightCapacity(db, shopId, [], { shardsEnabled: false })).ok).toBe(true);
+    const on = await preflightCapacity(db, shopId, [], withBudget(11));
+    expect(on).toMatchObject({ ok: false, code: "OFFER_TOO_LARGE", reason: "tags", offerNames: ["taggy"] });
+    if (!on.ok) expect(on.message).toBe('"taggy" references 101 customer tags. Shopify allows up to 100 per discount.');
+  });
+
+  it("uses a separate message and no placeholder numbers when the automatic discount count is unknown", async () => {
+    const shopId = await seedShop(db, "unknown-budget.myshopify.com");
+    for (let i = 0; i < 12; i++) await giftOffer(shopId, 60, { internalName: `u-${i}`, priority: i });
+    const result = await preflightCapacity(db, shopId, [], { shardsEnabled: true, loadBudget: async () => null });
+    expect(result).toMatchObject({ ok: false, code: "AUTOMATIC_DISCOUNT_LIMIT" });
+    if (result.ok) return;
+    expect(result.message).toBe(
+      "Promo Engine couldn't read how many automatic discounts your store has. Try again in a minute; Shopify allows 25 active automatic discounts per store.",
+    );
+    expect(result.numbers).not.toHaveProperty("storeActive");
+    expect(result.numbers).not.toHaveProperty("others");
+  });
+
+  it("with sharding off reports a too-large offer as SLOT_FULL with today's wording", async () => {
+    const shopId = await seedShop(db, "huge-off.myshopify.com");
+    const huge = await giftOffer(shopId, 400, { internalName: "huge-off" });
+    const result = await preflightCapacity(db, shopId, [], { shardsEnabled: false });
+    expect(result).toMatchObject({ ok: false, code: "SLOT_FULL", offerIds: [huge], offerNames: ["huge-off"] });
+    if (!result.ok) expect(result.message).toBe(`The shared automatic config would be ${result.numbers["neededBytes"]}B, over the 9500B limit. Pause or simplify other automatic offers first. Offers that don't fit: "huge-off".`);
+  });
+
+  it("forceInclude counts a code-gated offer about to switch to automatic", async () => {
+    const shopId = await seedShop(db, "force.myshopify.com");
+    const coded = await giftOffer(shopId, 400, { internalName: "coded-huge", requiresCode: true });
+    await db.insert(discountCodes).values({ shopId, offerId: coded, code: "FORCE-1" });
+    expect((await preflightCapacity(db, shopId, [coded], { shardsEnabled: false })).ok).toBe(true);
+    expect(await preflightCapacity(db, shopId, [coded], { shardsEnabled: false, forceInclude: true })).toMatchObject({ ok: false, code: "SLOT_FULL" });
   });
 
   it("is OFFER_TOO_LARGE for keys when one offer checks more than 3 cart attributes", async () => {

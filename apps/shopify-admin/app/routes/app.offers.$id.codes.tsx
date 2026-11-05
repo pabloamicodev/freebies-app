@@ -30,8 +30,7 @@ import {
 import { DiscountMessageField } from "../components/DiscountMessageField.js";
 import { resolveDiscountMessage } from "../lib/discount-message.js";
 import { automaticModeWarnings, type CodeRedemptionMode } from "../lib/code-redemption.js";
-import { estimateSharedConfigBytes, sharedConfigTooLargeMessage } from "../lib/shared-config-size.server.js";
-import { MAX_METAFIELD_BYTES } from "../lib/sync/offer-publisher.server.js";
+import { preflightCapacity } from "../lib/capacity-preflight.server.js";
 import { retryOriginalCode } from "../lib/code-retry.server.js";
 import { CODE_CHARSETS, isCodeRedeemable, type CodeCharset } from "../lib/discount-code-generation.js";
 import "../styles/bogos.css";
@@ -145,7 +144,7 @@ function parseSettings(formData: FormData, timeZone: string): { error: string } 
 }
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session, shopId, db, timezone: shopTimezone, currencyCode } = await getShopContext(request);
+  const { session, shopId, db, timezone: shopTimezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
@@ -213,8 +212,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.scope, "main"), eq(offerConditions.isEnabled, true)))
         .limit(1);
       if (!mainCondition) return { error: "Add at least one enabled condition first; without a code it would apply to every cart." };
-      const bytes = await estimateSharedConfigBytes(db, shopId, currencyCode, [offerId]);
-      if (bytes > MAX_METAFIELD_BYTES) return { error: sharedConfigTooLargeMessage(bytes) };
+      const capacity = await preflightCapacity(db, shopId, [offerId], { forceInclude: true });
+      if (!capacity.ok) return { error: capacity.message };
     }
     await db
       .update(offers)
