@@ -71,6 +71,12 @@ describe("computeOfferVersion", () => {
     expect(afterCodeDiscountCreated).toBe(withoutCodeFields);
   });
 
+  it("keeps the version of offers without cart labels, and changes it when labels are set", () => {
+    const base = computeOfferVersion(offer, conditions, rewards, null);
+    expect(computeOfferVersion({ ...offer, cartLabels: [] }, conditions, rewards, null)).toBe(base);
+    expect(computeOfferVersion({ ...offer, cartLabels: ["VIP"] }, conditions, rewards, null)).not.toBe(base);
+  });
+
   it("is unaffected by codeRedemption: getOfferDefinitions omits it, the publisher hashes the full row", () => {
     const base = computeOfferVersion(offer, conditions, rewards, null);
     expect(computeOfferVersion({ ...offer, codeRedemption: "automatic" }, conditions, rewards, null)).toBe(base);
