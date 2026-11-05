@@ -475,11 +475,11 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
 
     const cartValue = serializeFunctionConfig(cartConfig);
     const deliveryValue = serializeFunctionConfig(deliveryConfig, { omitQueryVariables: true });
-    for (const value of [cartValue, deliveryValue]) {
+    for (const [label, value] of [["cart", cartValue], ["delivery", deliveryValue]] as const) {
       const sizeBytes = new TextEncoder().encode(value).byteLength;
       if (sizeBytes > MAX_METAFIELD_BYTES) {
         throw new Error(
-          `Function config is ${sizeBytes}B, exceeding the safe ${MAX_METAFIELD_BYTES}B limit. Pause or simplify active offers before publishing.`,
+          `Function config (${label}) is ${sizeBytes}B, exceeding the safe ${MAX_METAFIELD_BYTES}B limit. Pause or simplify active offers before publishing.`,
         );
       }
     }

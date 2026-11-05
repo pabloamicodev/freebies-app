@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { discountCodes, offerConditions, offerRewards, type Db } from "@promo/db";
-import { estimateSharedConfigBytes } from "./shared-config-size.server.js";
+import { estimateSharedConfigBytes, preflightSharedConfig, sharedConfigBreakdown, shippingConfigTooLargeMessage } from "./shared-config-size.server.js";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
 let db: Db;
@@ -56,5 +56,24 @@ describe("estimateSharedConfigBytes", () => {
     const auto = await giftOffer({ requiresCode: true, codeRedemption: "automatic" });
     await db.insert(discountCodes).values({ shopId, offerId: auto, code: "SIZE-AUTO" });
     expect(await estimateSharedConfigBytes(db, shopId, "USD", [])).toBeGreaterThan(before);
+  });
+});
+
+describe("shipping config preflight", () => {
+  it("blocks when the delivery payload is over the limit while the cart payload fits", async () => {
+    const shipShop = await seedShop(db, "ship-size.myshopify.com");
+    const offerId = await seedOffer(db, shipShop);
+    await db.insert(offerRewards).values(
+      Array.from({ length: 150 }, (_, i) => ({
+        shopId: shipShop, offerId, rewardType: "shipping_discount" as const, discountType: "free" as const, value: { amount: 100 },
+        target: { deliveryGroupTypes: ["ONE_TIME_PURCHASE"] }, quantity: null, sortOrder: i,
+      })),
+    );
+    const breakdown = await sharedConfigBreakdown(db, shipShop, "USD");
+    expect(breakdown.totalBytes).toBeLessThan(9500);
+    expect(breakdown.deliveryBytes).toBeGreaterThan(9500);
+    expect(await preflightSharedConfig(db, shipShop, [offerId])).toEqual({
+      error: shippingConfigTooLargeMessage(breakdown.deliveryBytes),
+    });
   });
 });

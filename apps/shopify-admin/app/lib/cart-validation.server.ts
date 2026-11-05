@@ -8,21 +8,10 @@ export const VALIDATION_APP_METAFIELD_NAMESPACE = "$app:promo_engine";
 export const VALIDATION_METAFIELD_KEY = "validation_config";
 export const MAX_VALIDATION_CONFIG_BYTES = 9_500;
 
-export interface GiftRewardValidationRule {
-  maxQuantity: number;
-  variantIds: string[];
-}
-
-export interface GiftOfferValidationRule {
-  version: number;
-  maxQuantity: number;
-  rewards: Record<string, GiftRewardValidationRule>;
-}
-
 export interface CartValidationConfig {
-  offerRules: Record<string, GiftOfferValidationRule>;
-  /** Legacy, read by the Function only when `offerRules` is empty. Always empty: every gift variant
-   * id is stored once, under its reward, which keeps the metafield half the size. */
+  /** No longer read by the Function (gift limits are enforced by the discount Function); always empty. */
+  offerRules: Record<string, never>;
+  /** Legacy, always empty. */
   offerMaxQuantities: Record<string, number>;
   /** Legacy, see `offerMaxQuantities`. */
   allowedGiftVariantIds: string[];
