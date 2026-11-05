@@ -41,6 +41,16 @@ describe("estimateSharedConfigBytes", () => {
     expect(await estimateSharedConfigBytes(db, shopId, "USD", [coded])).toBeGreaterThan(withRegular);
   });
 
+  it("does not count shipping offers: they ship on the delivery node", async () => {
+    const offerId = await giftOffer();
+    const before = await estimateSharedConfigBytes(db, shopId, "USD", []);
+    await db.insert(offerRewards).values({
+      shopId, offerId, rewardType: "shipping_discount", discountType: "free", value: { amount: 100 },
+      target: { deliveryGroupTypes: ["ONE_TIME_PURCHASE"] }, quantity: null, sortOrder: 1,
+    });
+    expect(await estimateSharedConfigBytes(db, shopId, "USD", [])).toBe(before);
+  });
+
   it("ignores an automatic offer's code rows: it is always in the shared config", async () => {
     const before = await estimateSharedConfigBytes(db, shopId, "USD", []);
     const auto = await giftOffer({ requiresCode: true, codeRedemption: "automatic" });

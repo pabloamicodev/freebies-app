@@ -31,32 +31,15 @@ export interface CartValidationConfig {
 }
 
 export function buildCartValidationConfig(compiledOffers: CompiledOffer[]): CartValidationConfig {
-  const offerRules: Record<string, GiftOfferValidationRule> = {};
   const cloneProductIds = new Set<string>();
-
   for (const offer of compiledOffers) {
-    if (offer.giftRewards.length === 0) continue;
-
-    const rewards: Record<string, GiftRewardValidationRule> = {};
-    let offerMaxQuantity = 0;
-
     for (const reward of offer.giftRewards) {
-      const variantIds = [...new Set(reward.targetVariantIds)].sort();
-      const maxQuantity = Math.max(1, Math.trunc(reward.maxQuantity));
-      rewards[reward.id] = { maxQuantity, variantIds };
-      offerMaxQuantity += maxQuantity;
       for (const productId of reward.targetProductIds) cloneProductIds.add(productId);
     }
-
-    offerRules[offer.id] = {
-      version: Math.max(1, Math.trunc(offer.version)),
-      maxQuantity: offerMaxQuantity,
-      rewards,
-    };
   }
 
   return {
-    offerRules,
+    offerRules: {},
     offerMaxQuantities: {},
     allowedGiftVariantIds: [],
     cloneProductIds: [...cloneProductIds].sort(),

@@ -488,11 +488,6 @@ describe("compileOfferConfig", () => {
     // Discount Function: the gift allowlist and per-reward targets include the fallbacks.
     expect(result.giftVariantIds).toEqual([...primaries, ...fallbacks]);
     expect(result.giftRewards[0]?.targetVariantIds).toEqual([...primaries, ...fallbacks]);
-    // Cart validation: a fallback line is an allowed gift line for this reward.
-    const validation = buildCartValidationConfig([result]);
-    expect(Object.values(validation.offerRules)[0]?.rewards["reward-1"]?.variantIds).toEqual(
-      expect.arrayContaining(fallbacks),
-    );
   });
 
   it("compiles gift rules per reward instead of flattening their limits and discounts", () => {

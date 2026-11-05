@@ -1583,4 +1583,20 @@ mod tests {
         assert!(accepted(&exhausted).is_empty());
         assert_eq!(discount_pct(&exhausted), None);
     }
+
+    #[test]
+    fn offers_in_the_delivery_config_are_inert() {
+        const COMPACT: &str = include_str!("fixtures/ambrosia-function-config.compact.json");
+        let mut config: serde_json::Value = serde_json::from_str(COMPACT).unwrap();
+        let shipping = config["shippingOffers"].clone();
+        assert!(shipping.as_array().is_some_and(|a| !a.is_empty()));
+        let with = serde_json::json!({ "offers": config["offers"], "shippingOffers": shipping }).to_string();
+        config = serde_json::json!({ "offers": [], "shippingOffers": shipping });
+        let without = config.to_string();
+        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let run_config = |config: &str| format!("{:?}", run_with(r#"["SHIPPING"]"#, "500.00", config, &groups));
+        let output = run_config(&with);
+        assert!(output.contains("DeliveryDiscountsAdd"), "fixture shipping offers must apply");
+        assert_eq!(output, run_config(&without));
+    }
 }

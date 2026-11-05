@@ -31,7 +31,7 @@ function compiledOffer(overrides: Partial<CompiledOffer> = {}): CompiledOffer {
 }
 
 describe("buildCartValidationConfig", () => {
-  it("binds every gift variant to its exact offer, reward, version, and quantity", () => {
+  it("ships no per-offer rules or variant ids, only the clone product ids", () => {
     const config = buildCartValidationConfig([
       compiledOffer({
         giftRewards: [
@@ -55,27 +55,15 @@ describe("buildCartValidationConfig", () => {
       }),
     ]);
 
-    expect(config.offerRules["offer-1"]).toEqual({
-      version: 4,
-      maxQuantity: 3,
-      rewards: {
-        "reward-1": {
-          maxQuantity: 2,
-          variantIds: ["gid://shopify/ProductVariant/1", "gid://shopify/ProductVariant/2"],
-        },
-        "reward-2": {
-          maxQuantity: 1,
-          variantIds: ["gid://shopify/ProductVariant/2"],
-        },
-      },
-    });
-    // Variant ids live only under their reward; the legacy flat lists are empty.
+    expect(config.offerRules).toEqual({});
+    expect(JSON.stringify(config)).not.toContain("ProductVariant");
+    expect(config.cloneMinPriceCents).toBe(100);
     expect(config.offerMaxQuantities).toEqual({});
     expect(config.allowedGiftVariantIds).toEqual([]);
     expect(config.cloneProductIds).toEqual(["gid://shopify/Product/1"]);
   });
 
-  it("stores each gift variant id once, so the serialized config does not repeat them", () => {
+  it("does not grow with the number of gift variants", () => {
     const variant = "gid://shopify/ProductVariant/123456789";
     const config = buildCartValidationConfig([
       compiledOffer({
@@ -91,7 +79,7 @@ describe("buildCartValidationConfig", () => {
         ],
       }),
     ]);
-    expect(JSON.stringify(config).split(variant).length - 1).toBe(1);
+    expect(JSON.stringify(config)).not.toContain(variant);
   });
 
   it("does not create validation allowances for promotions without gifts", () => {
