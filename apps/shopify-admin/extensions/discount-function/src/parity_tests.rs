@@ -9,6 +9,11 @@ use shopify_function::run_function_with_input;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+/// Messages are the offer id, optionally followed by the tier label (" · ...").
+fn offer_key(message: Option<&str>) -> String {
+    message.unwrap_or_default().split(" · ").next().unwrap_or_default().to_string()
+}
+
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../packages/rule-engine/test-fixtures/parity")
 }
@@ -125,7 +130,7 @@ fn outcomes(result: &CartLinesDiscountsGenerateRunResult) -> BTreeMap<String, BT
         match operation {
             CartOperation::ProductDiscountsAdd(add) => {
                 for candidate in &add.candidates {
-                    let entry = by_offer.entry(candidate.message.clone().unwrap_or_default()).or_default();
+                    let entry = by_offer.entry(offer_key(candidate.message.as_deref())).or_default();
                     for target in &candidate.targets {
                         let ProductDiscountCandidateTarget::CartLine(line) = target;
                         *entry.entry(line.id.clone()).or_insert(0) += i64::from(line.quantity.unwrap_or(0));
@@ -134,7 +139,7 @@ fn outcomes(result: &CartLinesDiscountsGenerateRunResult) -> BTreeMap<String, BT
             }
             CartOperation::OrderDiscountsAdd(add) => {
                 for candidate in &add.candidates {
-                    by_offer.entry(candidate.message.clone().unwrap_or_default()).or_default();
+                    by_offer.entry(offer_key(candidate.message.as_deref())).or_default();
                 }
             }
             _ => {}
