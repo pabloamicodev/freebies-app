@@ -390,6 +390,16 @@ describe("discount_capacity", () => {
     expect(beta.nodeCount).toBe(0);
     expect(beta.bytesUsed).toBeGreaterThan(0);
     expect(beta.bytesUsed).toBeLessThan(alpha.bytesUsed);
+    expect(alpha).toMatchObject({ plannedSlots: 1, maxCartSlots: 1, budget: null, blockedBy: null });
+    expect(alpha.deliveryBytes).toBeGreaterThanOrEqual(0);
+  });
+
+  it("reports the planned slots and live budget when sharding is on", async () => {
+    const budget = { storeActive: 9, ours: 3, others: 6, maxCartSlots: 7 };
+    const result = await discountCapacity(db, visible, { shops: [ALPHA] }, undefined, {
+      capacity: { shardsEnabled: true, loadBudget: async () => budget },
+    });
+    expect(result.data.shops[0]).toMatchObject({ plannedSlots: 1, maxCartSlots: 7, budget: { storeActive: 9, ours: 3, others: 6 } });
   });
 
   it("live:true reads the metafield through the injected Admin client and reports drift; no token reaches the output", async () => {

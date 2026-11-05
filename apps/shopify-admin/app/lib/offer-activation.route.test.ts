@@ -38,6 +38,7 @@ vi.mock("./offer-publish-flow.server.js", () => ({
   getShopPublishWarnings: async () => [] as string[],
   validateOffersPublishable: async () => ({ ok: true }),
   validateActivation: async () => ({ ok: true }),
+  validateActivationWithPreflight: async () => ({ validation: { ok: true } }),
 }));
 const insertAuditLog = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("./audit-log.server.js", () => ({ insertAuditLog }));
@@ -194,7 +195,7 @@ describe("activation honours the schedule", () => {
     const after = await row(id);
     expect(after.status).toBe("scheduled");
     expect(after.startsAt!.toISOString()).toBe("2099-01-01T12:00:00.000Z");
-    expect(republishIfActive).toHaveBeenCalledWith(expect.anything(), shopId, "route-shop.myshopify.com", id, true);
+    expect(republishIfActive).toHaveBeenCalledWith(expect.anything(), shopId, "route-shop.myshopify.com", id, true, undefined, undefined);
   });
 
   it("detail update without date fields keeps the stored dates and adopts the shop timezone", async () => {
