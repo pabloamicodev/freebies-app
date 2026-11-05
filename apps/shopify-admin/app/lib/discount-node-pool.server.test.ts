@@ -74,6 +74,7 @@ interface FakeNode {
   id: string;
   title: string;
   functionId: string;
+  status?: string;
 }
 
 /** In-memory Shopify: automatic app nodes, an active count, and a call log. */
@@ -97,6 +98,15 @@ function installShopify(opts: { nodes?: FakeNode[]; active?: number | null; fail
           })),
           pageInfo: { hasNextPage: false, endCursor: null },
         },
+      };
+    }
+    if (query.includes("PromoEngineNodesActive")) {
+      const ids = variables!.ids as string[];
+      return {
+        nodes: ids.map((id) => {
+          const n = nodes.find((x) => x.id === id);
+          return n ? { id, automaticDiscount: { status: n.status ?? "ACTIVE" } } : null;
+        }),
       };
     }
     if (query.includes("PromoEngineNodesExist")) {
@@ -160,7 +170,10 @@ describe("cart shard pool", () => {
         { namespace: "$app:promo_engine", key: "function_config", type: "json", value: EMPTY_CART_SHARD_CONFIG },
       ]);
     }
-    expect(JSON.parse(EMPTY_CART_SHARD_CONFIG)).toEqual({ offers: [] });
+    const value = JSON.parse(EMPTY_CART_SHARD_CONFIG);
+    expect(value).toMatchObject({ offers: [], c1: "_promo_engine_unused", c2: "_promo_engine_unused", c3: "_promo_engine_unused", version: "1", compiledAt: "1970-01-01T00:00:00.000Z" });
+    expect(Object.keys(value)).toEqual(expect.arrayContaining(["c1", "c2", "c3", "customerTags", "version", "compiledAt"]));
+    expect(JSON.parse((shopify.creates[0]!.metafields as Array<{ value: string }>)[0]!.value)).toEqual(value);
     expect(JSON.parse(h.settings.get(CART_SHARD_POOL_SETTING)!)).toEqual(ids);
   });
 
@@ -300,6 +313,27 @@ describe("automaticNodeBudget", () => {
 
     setup({ active: null });
     expect((await automaticNodeBudget(SHOP_ID, DOMAIN, "t")).maxCartSlots).toBe(2);
+  });
+
+  it("does not count our inactive nodes, which Shopify's active count excludes", async () => {
+    setup({ active: 10, shards: 2 });
+    h.gql.mockImplementation(((impl) => async (arg: { query: string; variables?: { ids: string[] } }) => {
+      if (arg.query.includes("PromoEngineNodesActive")) {
+        return {
+          nodes: arg.variables!.ids.map((id) => ({ id, automaticDiscount: { status: id === nodeId("s1") ? "EXPIRED" : "ACTIVE" } })),
+        };
+      }
+      return impl(arg);
+    })(h.gql.getMockImplementation()!));
+    const budget = await automaticNodeBudget(SHOP_ID, DOMAIN, "t");
+    expect(budget.ours).toBe(3);
+    expect(budget.others).toBe(7);
+  });
+
+  it("writes the last known value only when the live count was obtained", async () => {
+    setup({ active: null });
+    await automaticNodeBudget(SHOP_ID, DOMAIN, "t");
+    expect(h.settings.has(AUTOMATIC_OTHERS_SETTING)).toBe(false);
   });
 
   it("ignores recorded ids that no longer exist in Shopify", async () => {

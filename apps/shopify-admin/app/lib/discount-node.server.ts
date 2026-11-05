@@ -10,6 +10,7 @@
 import { appSettings, getDb, shops } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import { ShopifyOutcomeUnknownError, shopifyGraphQL } from "./shopify-fetch.server.js";
+import { serializeFunctionConfig } from "./sync/compile-config.js";
 
 const CART_DISCOUNT_TITLE = "Promo Engine";
 const DELIVERY_DISCOUNT_TITLE = "Promo Engine Shipping";
@@ -483,7 +484,7 @@ export interface AutomaticDiscountMatch {
   exactTitle?: boolean;
 }
 
-/** Cart shard nodes share slot 0's Function, so a function-only match must never pick one. */
+/** Cart shard nodes share slot 0's Function, so a function-only match must never pick one. A slot-0 node renamed to this pattern would be treated as a shard. */
 const CART_SHARD_TITLE_PATTERN = new RegExp(`^${CART_DISCOUNT_TITLE.toLocaleLowerCase()} \\d+$`);
 
 const normalizedTitle = (title: string | undefined) => (title ?? "").trim().toLocaleLowerCase();
@@ -1118,6 +1119,27 @@ export async function ensureCodeDiscountNode(
   return id;
 }
 
+/** Which of these automatic node ids are ACTIVE: only those count against Shopify's 25. */
+async function activeAutomaticNodeIds(shopDomain: string, accessToken: string, ids: string[]): Promise<Set<string>> {
+  const found = new Set<string>();
+  for (const group of chunk([...new Set(ids)], 100)) {
+    const data = await shopifyGraphQL<{
+      nodes: Array<{ id?: string; automaticDiscount?: { status?: string } | null } | null>;
+    }>({
+      shopDomain,
+      accessToken,
+      query: `query PromoEngineNodesActive($ids: [ID!]!) {
+        nodes(ids: $ids) {
+          ... on DiscountAutomaticNode { id automaticDiscount { ... on DiscountAutomaticApp { status } } }
+        }
+      }`,
+      variables: { ids: group },
+    });
+    for (const node of data.nodes) if (node?.id && node.automaticDiscount?.status === "ACTIVE") found.add(node.id);
+  }
+  return found;
+}
+
 /** Which of these discount node ids (automatic or code) still exist in Shopify. */
 export async function existingDiscountNodeIds(
   shopDomain: string,
@@ -1416,8 +1438,13 @@ export async function ensureCodedShippingNodes(
   });
 }
 
-/** Inert cart config: parses, holds no offers, so the node does nothing until the publisher fills it. */
-export const EMPTY_CART_SHARD_CONFIG = JSON.stringify({ offers: [] });
+/** Inert cart config: the metafield also feeds the Function's input-query variables, so it carries the full envelope (c1..c3, customerTags, version) with no offers. */
+export const EMPTY_CART_SHARD_CONFIG = serializeFunctionConfig({
+  offers: [],
+  shippingOffers: [],
+  version: "1",
+  compiledAt: "1970-01-01T00:00:00.000Z",
+});
 
 /** Shard titles start at "Promo Engine 2": the plain "Promo Engine" title belongs to slot 0. */
 export const cartShardTitle = (slot: number): string => `${CART_DISCOUNT_TITLE} ${slot + 1}`;
@@ -1444,7 +1471,7 @@ export function ensureCartShardNodes(
 export interface AutomaticNodeBudget {
   /** Active automatic discounts in the store (all apps), or null when Shopify couldn't say. */
   storeActive: number | null;
-  /** Live automatic nodes this app owns: cart slot 0, delivery, backend B, coded shipping pool, cart shards. */
+  /** Active automatic nodes this app owns: cart slot 0, delivery, backend B, coded shipping pool, cart shards. */
   ours: number;
   /** Active automatic discounts that aren't ours (last known value when the count is unavailable), or null when never known. */
   others: number | null;
@@ -1487,7 +1514,7 @@ export async function automaticNodeBudget(
   const candidates = [
     ...new Set([shop?.discountId, shop?.deliveryDiscountId, codeId, ...pool, ...shards].filter((id): id is string => Boolean(id))),
   ];
-  const liveIds = candidates.length > 0 ? await existingDiscountNodeIds(shopDomain, accessToken, candidates) : new Set<string>();
+  const liveIds = candidates.length > 0 ? await activeAutomaticNodeIds(shopDomain, accessToken, candidates) : new Set<string>();
   const ours = candidates.filter((id) => liveIds.has(id)).length;
   const liveShards = new Set(shards.filter((id) => liveIds.has(id))).size;
   const slotZero = shop?.discountId && liveIds.has(shop.discountId) ? 1 : 0;
