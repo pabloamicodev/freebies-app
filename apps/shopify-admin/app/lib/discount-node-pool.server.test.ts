@@ -78,6 +78,7 @@ import {
   automaticNodeBudget,
   cartShardTitle,
   ensureCartShardNodes,
+  migrateLegacyCartShardIds,
   ensureCodedShippingNodes,
   readCartShardNodeIds,
 } from "./discount-node.server.js";
@@ -248,13 +249,23 @@ describe("cart shard pool", () => {
     expect(storedShards()).toEqual([nodeId("s2")]);
   });
 
-  it("moves a list an earlier release kept in app_settings into discount_shards on first read", async () => {
+  it("reads a list an earlier release kept in app_settings without writing anything", async () => {
     h.settings.set(CART_SHARD_POOL_SETTING, JSON.stringify([nodeId("s2"), nodeId("s3")]));
 
     expect(await readCartShardNodeIds(SHOP_ID)).toEqual([nodeId("s2"), nodeId("s3")]);
 
+    expect(storedShards()).toEqual([]);
+    expect(h.settings.has(CART_SHARD_POOL_SETTING)).toBe(true);
+  });
+
+  it("migrates that list into discount_shards once, and drops the setting", async () => {
+    h.settings.set(CART_SHARD_POOL_SETTING, JSON.stringify([nodeId("s2"), nodeId("s3")]));
+
+    await migrateLegacyCartShardIds(SHOP_ID);
+
     expect(storedShards()).toEqual([nodeId("s2"), nodeId("s3")]);
     expect(h.settings.has(CART_SHARD_POOL_SETTING)).toBe(false);
+    await migrateLegacyCartShardIds(SHOP_ID);
     expect(await readCartShardNodeIds(SHOP_ID)).toEqual([nodeId("s2"), nodeId("s3")]);
   });
 

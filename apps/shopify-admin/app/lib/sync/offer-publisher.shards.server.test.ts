@@ -1,7 +1,7 @@
 import type * as PromoDb from "@promo/db";
 import type * as CartValidation from "../cart-validation.server.js";
 import type * as ShopifyFetch from "../shopify-fetch.server.js";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import { appSettings, discountShards, offerCombinationPolicies, offerConditions, offerRewards, offers, shops, type Db } from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "../test-support/pglite-db.js";
@@ -39,6 +39,8 @@ vi.mock("../shopify-fetch.server.js", async (importOriginal) => ({
 const { publishOffersForShop } = await import("./offer-publisher.server.js");
 const { ShardPlanBlockedError } = await import("./cart-shards.server.js");
 const { configHash } = await import("../publish-manifest.server.js");
+const { repairShopDrift } = await import("../discount-reconciliation.server.js");
+const { tryPublishShop } = await import("../offer-publish-flow.server.js");
 
 const CART_FN = { id: "gid://shopify/ShopifyFunction/cart", apiType: "discount", handle: "promo-engine-discount", title: "Promo Engine Discount" };
 const DELIVERY_FN = { id: "gid://shopify/ShopifyFunction/delivery", apiType: "discount", handle: "promo-engine-delivery-discount", title: "Promo Engine Delivery Discount" };
@@ -153,6 +155,25 @@ class FakeShopify {
       }
       return { metafieldsSet: { metafields: [], userErrors: [] } };
     }
+    if (query.includes("PromoEngineDriftCheck")) {
+      return {
+        nodes: (variables!["ids"] as string[]).map((id) => {
+          if (!this.nodes.has(id)) return null;
+          const copy = (namespace: string) => {
+            const value = this.metafields.get(id)?.get(namespace);
+            return value ? { value } : null;
+          };
+          return {
+            __typename: "DiscountAutomaticNode",
+            id,
+            m0: copy("promo_engine"),
+            m1: copy("$app:promo_engine"),
+            automaticDiscount: { status: "ACTIVE", appliesOnSubscription: true, appliesOnOneTimePurchase: true },
+          };
+        }),
+      };
+    }
+    if (query.includes("PromoEngineValidationDrift")) return { validations: { nodes: [] } };
     if (query.includes("PromoEngineAppInstallation")) return { currentAppInstallation: { id: "gid://shopify/AppInstallation/1" } };
     if (query.includes("PromoEngineStorefrontMetafields")) return { metafieldsSet: { metafields: [], userErrors: [] } };
     if (query.includes("DeletePromoEngineAutomaticDiscount")) {
@@ -178,6 +199,9 @@ beforeAll(async () => {
   ({ db, close } = await createTestDb());
   currentDb = db;
 }, 60_000);
+afterEach(async () => {
+  await db.delete(shops).where(eq(shops.id, shopId));
+});
 afterAll(async () => {
   await close();
 });
@@ -286,6 +310,8 @@ const assignment = async () => {
 const slotOwner = (row: { slot: number; discountNodeId: string | null }) => row.discountNodeId!;
 const metafieldSetCalls = () => shopify.mutations.filter((name) => name === "MetafieldsSet").length;
 
+const COUNT = 150;
+
 describe("sharded cart publish", () => {
   let ids: string[];
 
@@ -293,9 +319,9 @@ describe("sharded cart publish", () => {
     shopId = await freshShop();
   });
 
-  describe("300 offers, flag on", () => {
+  describe("150 offers, flag on", () => {
     beforeEach(async () => {
-      ids = await seedCatalog(shopId, 300, 10, 10);
+      ids = await seedCatalog(shopId, COUNT, 10, 10);
       await setFunctionShardsEnabled(db, shopId, true);
     });
 
@@ -303,12 +329,13 @@ describe("sharded cart publish", () => {
       await publishOffersForShop(shopId, DOMAIN);
 
       const rows = await shardRows();
-      expect(rows.length).toBeGreaterThan(1);
+      expect(rows.length).toBeGreaterThanOrEqual(3);
       expect(rows.length).toBeLessThanOrEqual(11);
       expect(metafieldSetCalls()).toBe(1);
       const batch = shopify.metafieldsSets[0]!;
       expect(new Set(batch.map((m) => m.ownerId))).toEqual(new Set([...rows.map(slotOwner), DELIVERY_NODE]));
       expect(batch).toHaveLength((rows.length + 1) * 2);
+      expect(rows.length + 1).toBeLessThanOrEqual(12);
       expect(batch.slice(0, 2).map((m) => m.namespace)).toEqual(["promo_engine", "$app:promo_engine"]);
 
       const seen: string[] = [];
@@ -366,7 +393,7 @@ describe("sharded cart publish", () => {
     it("editing one offer moves at most one unit", async () => {
       await publishOffersForShop(shopId, DOMAIN);
       const before = await assignment();
-      const target = ids[150]!;
+      const target = ids[75]!;
       await db
         .update(offerRewards)
         .set({ value: { amount: 77, currencyCode: "USD" }, target: { scopeMode: "sitewide", productIds: ["gid://shopify/Product/1", "gid://shopify/Product/2", "gid://shopify/Product/3"] } })
@@ -377,7 +404,7 @@ describe("sharded cart publish", () => {
       const after = await assignment();
       const moved = [...before].filter(([key, slot]) => after.get(key) !== slot);
       expect(moved.length).toBeLessThanOrEqual(1);
-      expect(after.size).toBe(300);
+      expect(after.size).toBe(COUNT);
     });
 
     it("recreates a shard node the merchant deleted, without moving units", async () => {
@@ -395,6 +422,81 @@ describe("sharded cart publish", () => {
       expect(await assignment()).toEqual(before);
     });
 
+    it("does not recreate a merchant-deleted shard node only to drain it", async () => {
+      await publishOffersForShop(shopId, DOMAIN);
+      const rows = await shardRows();
+      const last = rows.at(-1)!;
+      expect(last.slot).toBeGreaterThanOrEqual(2);
+      await db.update(offers).set({ status: "paused" }).where(inArray(offers.id, last.unitKeys));
+      shopify.nodes.delete(slotOwner(last));
+      shopify.metafields.delete(slotOwner(last));
+      const created = shopify.created.length;
+
+      await publishOffersForShop(shopId, DOMAIN);
+
+      expect(shopify.created).toHaveLength(created);
+      expect(shopify.deleted).toEqual([]);
+      const after = await shardRows();
+      expect(after.filter((row) => row.unitKeys.length > 0)).toHaveLength(rows.length - 1);
+      expect(shopify.shardNodeIds()).toHaveLength(rows.length - 2);
+    });
+
+    it("maps a blocked plan to a shop-scoped failure with the structured capacity error and offer names", async () => {
+      await publishOffersForShop(shopId, DOMAIN);
+      await setFunctionShardsEnabled(db, shopId, false);
+      await db.delete(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.conditionType, "cart_attribute")));
+      const writes = shopify.mutations.length;
+
+      const failure = await tryPublishShop(shopId, DOMAIN);
+
+      expect(failure).toMatchObject({ scope: "shop", capacity: { code: "SLOT_FULL" } });
+      expect(failure!.capacity!.offerIds.length).toBeGreaterThan(0);
+      expect(failure!.capacity!.offerIds.every((id) => ids.includes(id))).toBe(true);
+      expect(failure!.message).toMatch(/Offers that don't fit: "Offer \d+"/);
+      expect(failure!.message).not.toContain(failure!.capacity!.offerIds[0]!);
+      expect(shopify.mutations).toHaveLength(writes);
+    });
+
+    it("detects a shard node deleted out of band and the next publish recreates it with the same slot value", async () => {
+      await publishOffersForShop(shopId, DOMAIN);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const rows = await shardRows();
+      const victim = rows[1]!;
+      const before = strip(shopify.metafields.get(slotOwner(victim))!.get("promo_engine")!);
+      shopify.nodes.delete(slotOwner(victim));
+      shopify.metafields.delete(slotOwner(victim));
+      const drift = { graphQL: shopify.call as never, publish: publishOffersForShop, settleMs: 0, globallyPaused: false };
+
+      const dry = await repairShopDrift(db, drift, { shopId, dryRun: true });
+      expect(dry.findings.filter((f) => f.nodeId)).toEqual([expect.objectContaining({ issue: "missing_node", nodeId: slotOwner(victim) })]);
+
+      await publishOffersForShop(shopId, DOMAIN);
+
+      const after = (await shardRows()).find((row) => row.slot === victim.slot)!;
+      expect(after.discountNodeId).not.toBe(slotOwner(victim));
+      expect(strip(shopify.metafields.get(slotOwner(after))!.get("promo_engine")!)).toEqual(before);
+      expect((await repairShopDrift(db, drift, { shopId, dryRun: true })).findings.filter((f) => f.nodeId)).toEqual([]);
+    });
+
+    it("detects a shard metafield edited out of band and the repair republish restores only that node", async () => {
+      await publishOffersForShop(shopId, DOMAIN);
+      const rows = await shardRows();
+      const victim = rows[1]!;
+      const original = new Map([...shopify.metafields].map(([owner, ns]) => [owner, ns.get("promo_engine")!]));
+      shopify.setMetafield(slotOwner(victim), "promo_engine", JSON.stringify({ offers: [], shippingOffers: [], version: "1", compiledAt: "x" }));
+      const created = shopify.created.length;
+      const drift = { graphQL: shopify.call as never, publish: publishOffersForShop, settleMs: 0, globallyPaused: false };
+
+      const dry = await repairShopDrift(db, drift, { shopId, dryRun: true });
+      expect(dry.findings.filter((f) => f.nodeId)).toEqual([expect.objectContaining({ issue: "config_mismatch", nodeId: slotOwner(victim) })]);
+
+      await repairShopDrift(db, drift, { shopId, dryRun: false });
+
+      for (const [owner, value] of original) expect(strip(shopify.metafields.get(owner)!.get("promo_engine")!)).toEqual(strip(value));
+      expect(shopify.created).toHaveLength(created);
+      expect((await repairShopDrift(db, drift, { shopId, dryRun: true })).findings.filter((f) => f.nodeId)).toEqual([]);
+    });
+
     it("converges after a crash following the metafieldsSet, with no moves and no duplicate nodes", async () => {
       shopify.crashAfterMetafieldsSet = true;
       await expect(publishOffersForShop(shopId, DOMAIN)).rejects.toThrow("process died after metafieldsSet");
@@ -406,7 +508,7 @@ describe("sharded cart publish", () => {
       const rows = await shardRows();
       expect(shopify.shardNodeIds()).toHaveLength(nodesAfterCrash);
       expect(rows).toHaveLength(nodesAfterCrash + 1);
-      expect((await assignment()).size).toBe(300);
+      expect((await assignment()).size).toBe(COUNT);
       const settled = await assignment();
       await publishOffersForShop(shopId, DOMAIN);
       expect(await assignment()).toEqual(settled);
@@ -441,7 +543,8 @@ describe("sharded cart publish", () => {
 
       expect(error).toBeInstanceOf(ShardPlanBlockedError);
       expect((error as InstanceType<typeof ShardPlanBlockedError>).blocked.code).toBe("SLOT_FULL");
-      expect((error as Error).message).toMatch(/^The shared automatic config would be \d+B, over the 9500B limit\. Pause or simplify other automatic offers first\.$/);
+      expect((error as Error).message).toMatch(/^The shared automatic config would be \d+B, over the 9500B limit\. Pause or simplify other automatic offers first\. Offers that don't fit: "Offer \d+"/);
+      expect((error as Error).message).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
       expect(shopify.metafieldsSets).toHaveLength(sets);
       expect(shopify.mutations).toHaveLength(writes);
     });

@@ -79,6 +79,7 @@ export function lifecycleToolError(failure: OfferLifecycleFailure, refForAction?
           ? `Publishing to Shopify failed and the change was rolled back (${safeText(failure.error)}).`
           : `The change was saved but publishing to Shopify failed (${safeText(failure.error)}). The offer may have been paused so the shop stays consistent.`,
         {
+          ...(failure.capacity ? { details: { capacity: failure.capacity } } : {}),
           suggestedAction: refForAction
             ? { mcp: "promo-engine", tool: "promo_detail", args: { ref: refForAction }, why: "Check the offer's current status and publish errors, then retry." }
             : { mcp: "promo-engine", tool: "promo_health", args: {}, why: "Check publish errors, then retry." },

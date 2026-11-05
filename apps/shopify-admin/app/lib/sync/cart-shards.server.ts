@@ -1,35 +1,66 @@
 import { discountShards, type Db } from "@promo/db";
 import { and, eq, gt } from "drizzle-orm";
 import {
+  automaticDiscountCountUnknownMessage,
   automaticDiscountLimitMessage,
   offerTooLargeMessage,
   sharedConfigTooLargeMessage,
   slot0GroupTooLargeMessage,
 } from "../capacity-copy.js";
-import type { PlanBlocked } from "./shard-planner.js";
+import { baseOfferId } from "./plan-units.js";
+import type { PlanBlocked, PlanBlockCode } from "./shard-planner.js";
+
+export interface ShardPlanBlockedContext {
+  storeActive?: number | null;
+  /** Flag off: a too-big single slot reads as the shared config being full, as the preflight reports it. */
+  shardsEnabled?: boolean;
+  /** Offer id to display name, so messages quote names and not ids. */
+  names?: ReadonlyMap<string, string>;
+}
 
 /** The planner refused the plan: nothing was written and the live Shopify state is untouched. */
 export class ShardPlanBlockedError extends Error {
+  readonly capacity: { code: PlanBlockCode; offerIds: string[]; numbers: Record<string, number> };
+
   constructor(
     readonly blocked: PlanBlocked,
-    storeActive: number | null = null,
+    context: ShardPlanBlockedContext = {},
   ) {
-    super(shardPlanBlockedMessage(blocked, storeActive));
+    const offerIds = [...new Set(blocked.unitKeys.map(baseOfferId))];
+    const names = offerIds.map((id) => context.names?.get(id) ?? id);
+    const { code, numbers } = shardPlanBlockedCapacity(blocked, context);
+    super(shardPlanBlockedMessage(code, numbers, blocked, names, context.storeActive ?? null));
     this.name = "ShardPlanBlockedError";
+    this.capacity = { code, offerIds, numbers };
   }
 }
 
-function shardPlanBlockedMessage(blocked: PlanBlocked, storeActive: number | null): string {
-  const { code, numbers, unitKeys } = blocked;
+function shardPlanBlockedCapacity(blocked: PlanBlocked, context: ShardPlanBlockedContext) {
+  if (context.shardsEnabled === false && blocked.reason === "bytes" && (blocked.code === "OFFER_TOO_LARGE" || blocked.code === "GROUP_TOO_LARGE")) {
+    return { code: "SLOT_FULL" as PlanBlockCode, numbers: { ...blocked.numbers, neededBytes: blocked.numbers["bytes"] ?? 0 } };
+  }
+  if (blocked.code === "AUTOMATIC_DISCOUNT_LIMIT") {
+    return { code: blocked.code, numbers: { ...blocked.numbers, needed: Math.max(1, (blocked.numbers["needed"] ?? 0) - (blocked.numbers["allowed"] ?? 0)) } };
+  }
+  return { code: blocked.code, numbers: blocked.numbers };
+}
+
+function shardPlanBlockedMessage(
+  code: PlanBlockCode,
+  numbers: Record<string, number>,
+  blocked: PlanBlocked,
+  names: string[],
+  storeActive: number | null,
+): string {
   switch (code) {
     case "SLOT_FULL":
-      return sharedConfigTooLargeMessage(numbers["neededBytes"] ?? 0);
+      return sharedConfigTooLargeMessage(numbers["neededBytes"] ?? numbers["bytes"] ?? 0, names);
     case "AUTOMATIC_DISCOUNT_LIMIT":
-      return automaticDiscountLimitMessage(storeActive ?? 0, Math.max(1, (numbers["needed"] ?? 0) - (numbers["allowed"] ?? 0)));
+      return storeActive === null ? automaticDiscountCountUnknownMessage() : automaticDiscountLimitMessage(storeActive, numbers["needed"] ?? 1);
     case "SLOT0_GROUP_TOO_LARGE":
-      return slot0GroupTooLargeMessage(numbers["groupUnits"] ?? unitKeys.length, unitKeys);
+      return slot0GroupTooLargeMessage(numbers["groupUnits"] ?? names.length, names);
     default:
-      return offerTooLargeMessage(unitKeys, blocked.reason ?? "bytes", numbers, code === "GROUP_TOO_LARGE");
+      return offerTooLargeMessage(names, blocked.reason ?? "bytes", numbers, code === "GROUP_TOO_LARGE");
   }
 }
 

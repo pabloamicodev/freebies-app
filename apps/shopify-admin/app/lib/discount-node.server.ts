@@ -1252,7 +1252,8 @@ const writeCodedShippingNodeIds = (shopId: string, ids: string[]): Promise<void>
 
 /**
  * Cart shard nodes in slot order: element 0 is "Promo Engine 2". Slot 0 is `shops.discount_id` and never listed here.
- * They live in `discount_shards` (slots >= 1); a list still kept in app_settings by an earlier release moves over on first read.
+ * They live in `discount_shards` (slots >= 1). Read-only: a list still kept in app_settings by an earlier release is
+ * returned as is until `migrateLegacyCartShardIds` (the publisher, under its lock) moves it over.
  */
 export async function readCartShardNodeIds(shopId: string): Promise<string[]> {
   const rows = await getDb()
@@ -1264,13 +1265,20 @@ export async function readCartShardNodeIds(shopId: string): Promise<string[]> {
     .sort((a, b) => a.slot - b.slot)
     .map((row) => row.id as string);
   if (ids.length > 0) return ids;
+  return readIdList(shopId, CART_SHARD_POOL_SETTING);
+}
+
+export async function migrateLegacyCartShardIds(shopId: string): Promise<void> {
   const legacy = await readIdList(shopId, CART_SHARD_POOL_SETTING);
-  if (legacy.length === 0) return [];
-  await writeCartShardNodeIds(shopId, legacy);
+  if (legacy.length === 0) return;
+  const rows = await getDb()
+    .select({ slot: discountShards.slot })
+    .from(discountShards)
+    .where(and(eq(discountShards.shopId, shopId), eq(discountShards.kind, "cart"), gt(discountShards.slot, 0)));
+  if (rows.length === 0) await writeCartShardNodeIds(shopId, legacy);
   await getDb()
     .delete(appSettings)
     .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, CART_SHARD_POOL_SETTING)));
-  return legacy;
 }
 
 export async function writeCartShardNodeIds(shopId: string, ids: string[]): Promise<void> {

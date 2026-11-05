@@ -10,6 +10,9 @@ export interface CompiledEntry {
   offer: CompiledOffer;
 }
 
+/** Offer id of a planner unit key (split parts are keyed `offerId#k`). */
+export const baseOfferId = (unitKey: string): string => unitKey.split("#")[0]!;
+
 export function cartAttributeKeysOf(conditions: readonly ConditionRow[]): string[] {
   const keys = conditions.flatMap((condition) => {
     if (condition.conditionType !== "cart_attribute" || condition.isEnabled === false) return [];

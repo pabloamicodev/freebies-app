@@ -17,7 +17,7 @@ import {
 } from "./sync/compile-config.js";
 import { buildAttributeQueryVariables, MAX_CUSTOM_CART_ATTRIBUTE_KEYS } from "./sync/attribute-query-variables.js";
 import { planShards, SLOT_LIMITS, type PlanBlockCode } from "./sync/shard-planner.js";
-import { buildPlanUnits, cartAttributeKeysOf } from "./sync/plan-units.js";
+import { baseOfferId, buildPlanUnits, cartAttributeKeysOf } from "./sync/plan-units.js";
 import { isCheckoutCodeGated } from "./code-redemption.js";
 import { MAX_METAFIELD_BYTES } from "./sync/offer-publisher.server.js";
 import { buildCartValidationConfig, MAX_VALIDATION_CONFIG_BYTES } from "./cart-validation.server.js";
@@ -259,8 +259,6 @@ async function fallbackMaxSlots(db: Db, shopId: string): Promise<number> {
   }
   return Math.min(MAX_CART_SLOTS, Math.max(shards, await countShardNodes(db, shopId)) + 2);
 }
-
-const baseOfferId = (unitKey: string) => unitKey.split("#")[0]!;
 
 /**
  * Plans the cart shards in memory exactly as the publisher will and returns a structured, attributable
