@@ -1,13 +1,12 @@
-import { discountShards, type Db, type OfferCondition } from "@promo/db";
+import { discountShards, type Db } from "@promo/db";
 import { and, eq, gt } from "drizzle-orm";
-import { AutomaticDiscountLimitError } from "../discount-node.server.js";
-import { cartAttributeKeys } from "./attribute-query-variables.js";
-import type { CompiledOffer } from "./compile-config.js";
-import { unitBytes, type PlanBlocked, type PlanUnit } from "./shard-planner.js";
-
-export function sharedConfigTooLargeMessage(bytes: number, limit = 9500): string {
-  return `The shared automatic config would be ${bytes}B, over the ${limit}B limit. Pause or simplify other automatic offers first.`;
-}
+import {
+  automaticDiscountLimitMessage,
+  offerTooLargeMessage,
+  sharedConfigTooLargeMessage,
+  slot0GroupTooLargeMessage,
+} from "../capacity-copy.js";
+import type { PlanBlocked } from "./shard-planner.js";
 
 /** The planner refused the plan: nothing was written and the live Shopify state is untouched. */
 export class ShardPlanBlockedError extends Error {
@@ -21,40 +20,17 @@ export class ShardPlanBlockedError extends Error {
 }
 
 function shardPlanBlockedMessage(blocked: PlanBlocked, storeActive: number | null): string {
-  const { code, numbers } = blocked;
-  if (code === "SLOT_FULL") return sharedConfigTooLargeMessage(numbers["neededBytes"] ?? 0, numbers["slotBytes"]);
-  if (code === "AUTOMATIC_DISCOUNT_LIMIT") {
-    const wanted = Math.max(1, (numbers["needed"] ?? 0) - (numbers["allowed"] ?? 0));
-    return new AutomaticDiscountLimitError(storeActive ?? 0, wanted, "cart-shard").message;
+  const { code, numbers, unitKeys } = blocked;
+  switch (code) {
+    case "SLOT_FULL":
+      return sharedConfigTooLargeMessage(numbers["neededBytes"] ?? 0);
+    case "AUTOMATIC_DISCOUNT_LIMIT":
+      return automaticDiscountLimitMessage(storeActive ?? 0, Math.max(1, (numbers["needed"] ?? 0) - (numbers["allowed"] ?? 0)));
+    case "SLOT0_GROUP_TOO_LARGE":
+      return slot0GroupTooLargeMessage(numbers["groupUnits"] ?? unitKeys.length, unitKeys);
+    default:
+      return offerTooLargeMessage(unitKeys, blocked.reason ?? "bytes", numbers, code === "GROUP_TOO_LARGE");
   }
-  if (code === "SLOT0_GROUP_TOO_LARGE") {
-    return `Offers that apply order discounts or stop lower-priority offers must run together in one Shopify discount, and together they are ${numbers["groupBytes"]}B, over the ${numbers["slotBytes"]}B limit. Pause or simplify these offers first.`;
-  }
-  const limit = blocked.reason === "keys" ? "cart attribute keys" : blocked.reason === "tags" ? "customer tags" : "size";
-  return `An offer is too large for one Shopify discount (limit: ${limit}). Pause or simplify these offers first.`;
-}
-
-const rewardProductIds = (offer: CompiledOffer): string[] | null => {
-  const ids = new Set<string>();
-  for (const reward of offer.productRewards) {
-    if (reward.targetProductIds.length === 0) return null;
-    reward.targetProductIds.forEach((id) => ids.add(id));
-  }
-  return [...ids];
-};
-
-export function buildPlanUnits(offers: readonly CompiledOffer[], conditionRows: readonly OfferCondition[]): PlanUnit[] {
-  return offers.map((offer) => ({
-    key: offer.id,
-    bytes: unitBytes(offer),
-    cartAttributeKeys: cartAttributeKeys(conditionRows.filter((row) => row.offerId === offer.id)),
-    customerTags: [...new Set([...(offer.requiredCustomerTags ?? []), ...(offer.excludedCustomerTags ?? [])])],
-    priority: offer.priority,
-    hasOrderRewards: offer.orderRewards.length > 0,
-    stopLowerPriority: offer.stopLowerPriority,
-    targetProductIds: rewardProductIds(offer),
-    multiLineFixed: offer.productRewards.some((reward) => reward.scopeMode === "quiz_bundle"),
-  }));
 }
 
 export interface PersistedShards {
@@ -62,6 +38,7 @@ export interface PersistedShards {
   bytesBySlot: Map<number, number>;
 }
 
+/** Last persisted slot of each unit and byte size of each slot; the one reader the preflight and the publisher share. */
 export async function readShardState(db: Db, shopId: string): Promise<PersistedShards> {
   const rows = await db
     .select({ slot: discountShards.slot, unitKeys: discountShards.unitKeys, configBytes: discountShards.configBytes })
@@ -74,6 +51,19 @@ export async function readShardState(db: Db, shopId: string): Promise<PersistedS
     if (row.configBytes !== null) bytesBySlot.set(row.slot, row.configBytes);
   }
   return { previous, bytesBySlot };
+}
+
+export async function readPreviousAssignment(db: Db, shopId: string): Promise<Map<string, number>> {
+  return (await readShardState(db, shopId)).previous;
+}
+
+/** Shard nodes (slots >= 1) recorded for the shop. */
+export async function countShardNodes(db: Db, shopId: string): Promise<number> {
+  const rows = await db
+    .select({ slot: discountShards.slot })
+    .from(discountShards)
+    .where(and(eq(discountShards.shopId, shopId), eq(discountShards.kind, "cart"), gt(discountShards.slot, 0)));
+  return rows.length;
 }
 
 export interface PublishedSlot {

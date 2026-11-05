@@ -29,9 +29,9 @@ import {
 } from "../publish-manifest.server.js";
 import { isFunctionShardsEnabled } from "../function-shards-flag.server.js";
 import { SLOT_LIMITS, planShards } from "./shard-planner.js";
+import { buildPlanUnits } from "./plan-units.js";
 import {
   ShardPlanBlockedError,
-  buildPlanUnits,
   readShardState,
   saveShardState,
 } from "./cart-shards.server.js";
@@ -523,7 +523,11 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const persisted = shardMode ? await readShardState(db, shopId) : null;
     const combination = compileDiscountCombinationPolicy(compiledOffers);
     const plan = planShards(
-      buildPlanUnits(compiledOffers, conditionRows),
+      buildPlanUnits(
+        compiledOffers.map((offer) => ({ offerId: offer.id, offer })),
+        conditionRows,
+        policyRows,
+      ),
       persisted?.previous ?? new Map(),
       { ...SLOT_LIMITS, maxSlots: budget?.maxCartSlots ?? 1 },
       { productDiscounts: combination.productDiscounts, orderDiscounts: combination.orderDiscounts },
