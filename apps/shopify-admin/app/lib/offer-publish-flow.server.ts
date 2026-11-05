@@ -20,6 +20,7 @@ import {
   validateRewardPayload,
 } from "@promo/shared-types";
 import { publishOffersForShop } from "./sync/offer-publisher.server.js";
+import { ShardPlanBlockedError } from "./sync/cart-shards.server.js";
 import { isCheckoutCodeGated, type CodeRedemptionMode } from "./code-redemption.js";
 import { isCodeRedeemable } from "./discount-code-generation.js";
 import { invalidateOfferDefinitions } from "./offer-definitions.server.js";
@@ -53,6 +54,8 @@ export interface PublishFailure {
   message: string;
   scope: PublishScope;
   offerId?: string;
+  /** Structured capacity failure when the planner refused the publish; shop-scoped, nothing was written. */
+  capacity?: CapacityDetails;
 }
 
 export interface SystemOfferEvent {
@@ -448,6 +451,7 @@ export async function tryPublishShop(shopId: string, shopDomain: string): Promis
       message: err instanceof Error ? err.message : "Failed to publish offer configuration to Shopify.",
       scope,
       offerId: offerScoped ? err.offerId : undefined,
+      ...(err instanceof ShardPlanBlockedError ? { capacity: err.capacity } : {}),
     };
   }
 }

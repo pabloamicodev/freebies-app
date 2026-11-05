@@ -17,12 +17,13 @@ import {
 } from "./sync/compile-config.js";
 import { buildAttributeQueryVariables, MAX_CUSTOM_CART_ATTRIBUTE_KEYS } from "./sync/attribute-query-variables.js";
 import { planShards, SLOT_LIMITS, type PlanBlockCode } from "./sync/shard-planner.js";
-import { buildPlanUnits, cartAttributeKeysOf } from "./sync/plan-units.js";
+import { baseOfferId, buildPlanUnits, cartAttributeKeysOf } from "./sync/plan-units.js";
 import { isCheckoutCodeGated } from "./code-redemption.js";
 import { MAX_METAFIELD_BYTES } from "./sync/offer-publisher.server.js";
 import { buildCartValidationConfig, MAX_VALIDATION_CONFIG_BYTES } from "./cart-validation.server.js";
 import { OfferPublishError, offerCompileError } from "./offer-publish-errors.server.js";
 import { isFunctionShardsEnabled } from "./function-shards-flag.server.js";
+import { countShardNodes, readPreviousAssignment } from "./sync/cart-shards.server.js";
 import {
   automaticNodeBudget,
   CART_SHARD_POOL_SETTING,
@@ -241,10 +242,7 @@ export async function loadAutomaticBudget(db: Db, shopId: string): Promise<Autom
   }
 }
 
-/** Last persisted slot of each unit. `discount_shards` does not exist yet, so every unit is new. */
-export async function readPreviousAssignment(_db: Db, _shopId: string): Promise<Map<string, number>> {
-  return new Map();
-}
+export { readPreviousAssignment };
 
 async function fallbackMaxSlots(db: Db, shopId: string): Promise<number> {
   const [row] = await db
@@ -259,10 +257,8 @@ async function fallbackMaxSlots(db: Db, shopId: string): Promise<number> {
   } catch {
     /* unreadable pool: treat as none */
   }
-  return Math.min(MAX_CART_SLOTS, shards + 2);
+  return Math.min(MAX_CART_SLOTS, Math.max(shards, await countShardNodes(db, shopId)) + 2);
 }
-
-const baseOfferId = (unitKey: string) => unitKey.split("#")[0]!;
 
 /**
  * Plans the cart shards in memory exactly as the publisher will and returns a structured, attributable

@@ -114,7 +114,10 @@ export function promosPauseAllTool(ctx: McpContext, call: CallInfo, args: Contro
           throw new ToolError(
             "PUBLISH_FAILED",
             `Publishing to Shopify failed and the change was rolled back; ${summary} offer(s) kept their status (${result.error.replace(/\s+/g, " ").slice(0, 300)}).`,
-            { suggestedAction: { mcp: "promo-engine", tool: "promo_health", args: { shops: [shop!.myshopifyDomain] }, why: "Check publish errors, then retry." } },
+            {
+              suggestedAction: { mcp: "promo-engine", tool: "promo_health", args: { shops: [shop!.myshopifyDomain] }, why: "Check publish errors, then retry." },
+              ...(result.capacity ? { details: { capacity: result.capacity } } : {}),
+            },
           );
         }
         return {
