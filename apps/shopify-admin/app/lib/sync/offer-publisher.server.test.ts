@@ -1,6 +1,7 @@
 import type * as ShopifyFetch from "../shopify-fetch.server.js";
 import type * as PublishPending from "../publish-pending.server.js";
 import { ShopifyOutcomeUnknownError } from "../shopify-fetch.server.js";
+import { configHash } from "../publish-manifest.server.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Sentry from "@sentry/node";
 import type * as DrizzleOrm from "drizzle-orm";
@@ -116,6 +117,7 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
     offers: [] as FakeOffer[],
     shops: [] as FakeShop[],
     metafieldPushes: [] as MetafieldPush[],
+    metafieldsSetCalls: 0,
     knownDiscountIds: new Set<string>(),
     nextCodeDiscountId: null as string | null,
     codeRows: [] as FakeCode[],
@@ -549,11 +551,15 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
       if (state.failMetafieldsFor && metafields.some((m) => m.ownerId.includes(state.failMetafieldsFor!))) {
         return { metafieldsSet: { metafields: [], userErrors: [{ message: "Shopify says no" }] } };
       }
-      state.metafieldPushes.push({
-        ownerIds: [...new Set(metafields.map((m) => m.ownerId))],
-        namespaces: [...new Set(metafields.map((m) => m.namespace))],
-        value: metafields[0]?.value ?? "{}",
-      });
+      state.metafieldsSetCalls += 1;
+      for (const ownerId of new Set(metafields.map((m) => m.ownerId))) {
+        const own = metafields.filter((m) => m.ownerId === ownerId);
+        state.metafieldPushes.push({
+          ownerIds: [ownerId],
+          namespaces: [...new Set(own.map((m) => m.namespace))],
+          value: own[0]?.value ?? "{}",
+        });
+      }
       return { metafieldsSet: { metafields: [], userErrors: [] } };
     }
     throw new Error(`Unhandled GraphQL query in offer-publisher.server.test.ts: ${query.slice(0, 80)}`);
@@ -829,13 +835,8 @@ describe("publishOffersForShop — code-gated offers", () => {
     // reward on a code-gated offer would fail validation as if no offer had
     // authorized it, even though its own discount node was live and correct.
     expect(cartValidationCalls).toHaveLength(1);
-    expect(Object.keys(cartValidationCalls[0]!.offerRules).sort()).toEqual(["code-6", "regular-4"]);
-    const ruleVariants = Object.values(cartValidationCalls[0]!.offerRules).flatMap((rule) =>
-      Object.values(rule.rewards).flatMap((reward) => reward.variantIds),
-    );
-    expect([...new Set(ruleVariants)].sort()).toEqual(
-      ["gid://shopify/ProductVariant/1", "gid://shopify/ProductVariant/2"].sort(),
-    );
+    expect(cartValidationCalls[0]!.offerRules).toEqual({});
+    expect(JSON.stringify(cartValidationCalls[0])).not.toContain("ProductVariant");
   });
 
   it("does not neutralize an active code offer's node even if a stale archived row shares the same codeDiscountId", async () => {
@@ -869,6 +870,44 @@ describe("publishOffersForShop — code-gated offers", () => {
     expect(parsedConfig(pushesToSharedNode.at(-1)!.value).offers.map((o) => o.id)).toEqual([
       "active-new",
     ]);
+  });
+
+  it("splits the payloads: cart node without shippingOffers, delivery node without offers, one metafieldsSet", async () => {
+    state.offers = [makeOffer({ id: "cart-offer" }), makeOffer({ id: "ship", priority: 2 })];
+    state.rewardRows = [shippingRewardFor("ship")];
+    state.metafieldsSetCalls = 0;
+
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+    expect(state.metafieldsSetCalls).toBe(1);
+    const cart = state.metafieldPushes.find((p) => p.ownerIds.includes(CART_DISCOUNT_ID))!;
+    const delivery = state.metafieldPushes.find((p) => p.ownerIds.includes(DELIVERY_DISCOUNT_ID))!;
+    expect(cart.namespaces).toEqual([...FUNCTION_CONFIG_NAMESPACES]);
+    expect(delivery.namespaces).toEqual([...FUNCTION_CONFIG_NAMESPACES]);
+    const cartConfig = JSON.parse(cart.value) as { offers: Array<{ id: string }>; shippingOffers?: unknown[] };
+    const deliveryConfig = JSON.parse(delivery.value) as { offers: unknown[]; shippingOffers: Array<{ id: string }> };
+    expect(cartConfig.offers.map((o) => o.id)).toContain("cart-offer");
+    expect(cartConfig).not.toHaveProperty("shippingOffers");
+    expect(deliveryConfig.offers).toEqual([]);
+    expect(deliveryConfig.shippingOffers.map((o) => o.id)).toEqual(["ship:ship-ship"]);
+
+    const manifest = JSON.parse(state.settings.find((row) => row.key === "publish_manifest.v1")!.value) as {
+      nodes: Record<string, { hash: string }>;
+    };
+    expect(manifest.nodes[CART_DISCOUNT_ID]!.hash).toBe(configHash(cart.value));
+    expect(manifest.nodes[DELIVERY_DISCOUNT_ID]!.hash).toBe(configHash(delivery.value));
+    expect(manifest.nodes[CART_DISCOUNT_ID]!.hash).not.toBe(manifest.nodes[DELIVERY_DISCOUNT_ID]!.hash);
+  });
+
+  it("splits the empty config too, in one metafieldsSet", async () => {
+    state.offers = [];
+    state.metafieldsSetCalls = 0;
+
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+    expect(state.metafieldsSetCalls).toBe(1);
+    const owners = state.metafieldPushes.flatMap((p) => p.ownerIds).sort();
+    expect(owners).toEqual([CART_DISCOUNT_ID, DELIVERY_DISCOUNT_ID].sort());
   });
 });
 
@@ -1239,7 +1278,7 @@ describe("publishOffersForShop — offers with their own discount codes", () => 
     expect(
       state.metafieldPushes.some((p) => p.ownerIds.includes(NODE) && parsedConfig(p.value).offers.length > 0),
     ).toBe(false);
-    expect(Object.keys(cartValidationCalls[0]!.offerRules)).toEqual(["regular"]);
+    expect(cartValidationCalls[0]!.offerRules).toEqual({});
   });
 
   describe("automatic redemption mode", () => {
@@ -1572,7 +1611,7 @@ describe("publishOffersForShop — code backend B (code Function)", () => {
     expect(config).toHaveProperty("customerTags");
     const shared = state.metafieldPushes.find((p) => p.ownerIds.includes(CART_DISCOUNT_ID));
     expect(parsedConfig(shared!.value).offers.map((o) => o.id)).toEqual(["regular"]);
-    expect(Object.keys(cartValidationCalls[0]!.offerRules).sort()).toEqual(["coded", "regular"]);
+    expect(cartValidationCalls[0]!.offerRules).toEqual({});
     expect(state.settings.find((row) => row.key === "code_discount_node.id")?.value).toBe(JSON.stringify(CODE_NODE));
   });
 

@@ -74,11 +74,21 @@ async function compileSharedOffers(
     config: (extraFields: Record<string, string> = {}) =>
       serializeFunctionConfig({
         offers: compiled.map((entry) => entry.offer),
-        shippingOffers: compiled.flatMap((entry) => entry.shipping),
+        shippingOffers: [],
         version: "1",
         compiledAt: "2026-01-01T00:00:00.000Z",
         ...extraFields,
       }),
+    deliveryConfig: () =>
+      serializeFunctionConfig(
+        {
+          offers: [],
+          shippingOffers: compiled.flatMap((entry) => entry.shipping),
+          version: "1",
+          compiledAt: "2026-01-01T00:00:00.000Z",
+        },
+        { omitQueryVariables: true },
+      ),
   };
 }
 
@@ -95,6 +105,8 @@ export async function estimateSharedConfigBytes(
 
 export interface SharedConfigBreakdown {
   totalBytes: number;
+  /** Size of the delivery node's config (shipping offers only). */
+  deliveryBytes: number;
   validationBytes: number;
   perOffer: Array<{ offerId: string; name: string; bytes: number }>;
 }
@@ -106,14 +118,15 @@ export async function sharedConfigBreakdown(
   shopCurrencyCode: string,
 ): Promise<SharedConfigBreakdown> {
   const shared = await compileSharedOffers(db, shopId, shopCurrencyCode, [], false);
-  if (!shared) return { totalBytes: 0, validationBytes: 0, perOffer: [] };
+  if (!shared) return { totalBytes: 0, deliveryBytes: 0, validationBytes: 0, perOffer: [] };
   return {
     totalBytes: encodedBytes(shared.config()),
+    deliveryBytes: encodedBytes(shared.deliveryConfig()),
     validationBytes: encodedBytes(JSON.stringify(buildCartValidationConfig(shared.compiled.map((entry) => entry.offer)))),
     perOffer: shared.compiled.map((entry) => ({
       offerId: entry.offerId,
       name: entry.name,
-      bytes: encodedBytes(JSON.stringify(entry.offer)) + entry.shipping.reduce((sum, s) => sum + encodedBytes(JSON.stringify(s)), 0),
+      bytes: encodedBytes(JSON.stringify(entry.offer)),
     })),
   };
 }
@@ -156,6 +169,8 @@ export async function preflightSharedConfig(
 
   const bytes = encodedBytes(shared.config(attributeVariables));
   if (bytes > MAX_METAFIELD_BYTES) return { error: sharedConfigTooLargeMessage(bytes) };
+  const deliveryBytes = encodedBytes(shared.deliveryConfig());
+  if (deliveryBytes > MAX_METAFIELD_BYTES) return { error: shippingConfigTooLargeMessage(deliveryBytes) };
 
   const validationBytes = encodedBytes(
     JSON.stringify(buildCartValidationConfig(shared.compiled.map((entry) => entry.offer))),
@@ -166,6 +181,10 @@ export async function preflightSharedConfig(
     };
   }
   return null;
+}
+
+export function shippingConfigTooLargeMessage(bytes: number): string {
+  return `The shipping config would be ${bytes}B, over the ${MAX_METAFIELD_BYTES}B limit. Pause or simplify other shipping offers first.`;
 }
 
 export function sharedConfigTooLargeMessage(bytes: number): string {

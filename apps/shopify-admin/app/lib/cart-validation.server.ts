@@ -8,21 +8,10 @@ export const VALIDATION_APP_METAFIELD_NAMESPACE = "$app:promo_engine";
 export const VALIDATION_METAFIELD_KEY = "validation_config";
 export const MAX_VALIDATION_CONFIG_BYTES = 9_500;
 
-export interface GiftRewardValidationRule {
-  maxQuantity: number;
-  variantIds: string[];
-}
-
-export interface GiftOfferValidationRule {
-  version: number;
-  maxQuantity: number;
-  rewards: Record<string, GiftRewardValidationRule>;
-}
-
 export interface CartValidationConfig {
-  offerRules: Record<string, GiftOfferValidationRule>;
-  /** Legacy, read by the Function only when `offerRules` is empty. Always empty: every gift variant
-   * id is stored once, under its reward, which keeps the metafield half the size. */
+  /** No longer read by the Function (gift limits are enforced by the discount Function); always empty. */
+  offerRules: Record<string, never>;
+  /** Legacy, always empty. */
   offerMaxQuantities: Record<string, number>;
   /** Legacy, see `offerMaxQuantities`. */
   allowedGiftVariantIds: string[];
@@ -31,32 +20,15 @@ export interface CartValidationConfig {
 }
 
 export function buildCartValidationConfig(compiledOffers: CompiledOffer[]): CartValidationConfig {
-  const offerRules: Record<string, GiftOfferValidationRule> = {};
   const cloneProductIds = new Set<string>();
-
   for (const offer of compiledOffers) {
-    if (offer.giftRewards.length === 0) continue;
-
-    const rewards: Record<string, GiftRewardValidationRule> = {};
-    let offerMaxQuantity = 0;
-
     for (const reward of offer.giftRewards) {
-      const variantIds = [...new Set(reward.targetVariantIds)].sort();
-      const maxQuantity = Math.max(1, Math.trunc(reward.maxQuantity));
-      rewards[reward.id] = { maxQuantity, variantIds };
-      offerMaxQuantity += maxQuantity;
       for (const productId of reward.targetProductIds) cloneProductIds.add(productId);
     }
-
-    offerRules[offer.id] = {
-      version: Math.max(1, Math.trunc(offer.version)),
-      maxQuantity: offerMaxQuantity,
-      rewards,
-    };
   }
 
   return {
-    offerRules,
+    offerRules: {},
     offerMaxQuantities: {},
     allowedGiftVariantIds: [],
     cloneProductIds: [...cloneProductIds].sort(),

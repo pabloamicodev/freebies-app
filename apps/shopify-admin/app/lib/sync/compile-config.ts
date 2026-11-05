@@ -1311,11 +1311,13 @@ export function compactCompiledOffer(offer: CompiledOffer): Record<string, unkno
 /** The metafield value: Function metafield input is capped at 10,000 bytes. */
 export function serializeFunctionConfig(
   config: CompiledFunctionConfig,
-  options: { omitCartAttributeSlots?: boolean } = {},
+  options: { omitCartAttributeSlots?: boolean; omitQueryVariables?: boolean } = {},
 ): string {
   // The code Function's query has no c1-c3 slots (they cost complexity); only declared variables go in.
   const withoutSlots = options.omitCartAttributeSlots === true;
-  const queryVariables = withoutSlots
+  const queryVariables = options.omitQueryVariables
+    ? {}
+    : withoutSlots
     ? { customerTags: FUNCTION_QUERY_VARIABLE_DEFAULTS.customerTags }
     : FUNCTION_QUERY_VARIABLE_DEFAULTS;
   return JSON.stringify(

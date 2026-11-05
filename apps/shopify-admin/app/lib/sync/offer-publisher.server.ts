@@ -180,11 +180,14 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     { discountId: discountNodes.cartLinesDiscountId, discountClasses: CART_DISCOUNT_CLASSES },
     { discountId: discountNodes.deliveryDiscountId, discountClasses: DELIVERY_DISCOUNT_CLASSES },
   ];
-  const discountIds = discountNodesWithClasses.map(({ discountId }) => discountId);
   const manifest = new ManifestCollector();
-  const recordShared = (value: string) => {
-    manifest.record(discountNodes.cartLinesDiscountId, "cart", value);
-    manifest.record(discountNodes.deliveryDiscountId, "delivery", value);
+  const pushSharedConfigs = async (cartValue: string, deliveryValue: string) => {
+    await pushMetafields(shopDomain, accessToken, [
+      { ownerId: discountNodes.cartLinesDiscountId, value: cartValue },
+      { ownerId: discountNodes.deliveryDiscountId, value: deliveryValue },
+    ]);
+    manifest.record(discountNodes.cartLinesDiscountId, "cart", cartValue);
+    manifest.record(discountNodes.deliveryDiscountId, "delivery", deliveryValue);
   };
 
   // Shadow mode runs in parallel with BOGOS: publishing live config would double-discount.
@@ -346,10 +349,11 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     // Stop discount generation first. The remaining writes only loosen/remove
     // validation and combination state, so a later failure cannot grant an
     // offer that was meant to be disabled.
-    const emptyValue = serializeFunctionConfig(emptyConfig);
-    assertConfigFits(emptyValue);
-    await pushMetafields(shopDomain, accessToken, discountIds, emptyValue);
-    recordShared(emptyValue);
+    const emptyCartValue = serializeFunctionConfig(emptyConfig);
+    const emptyDeliveryValue = serializeFunctionConfig(emptyConfig, { omitQueryVariables: true });
+    assertConfigFits(emptyCartValue);
+    assertConfigFits(emptyDeliveryValue);
+    await pushSharedConfigs(emptyCartValue, emptyDeliveryValue);
     await pushStorefrontMetafields(shopDomain, accessToken, [
       ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
       ...compiledBackendB.flatMap((entry) => entry.conditionRows),
@@ -458,21 +462,26 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       );
     }
 
-    const config: CompiledFunctionConfig = {
+    const compiledAt = new Date().toISOString();
+    const cartConfig: CompiledFunctionConfig = {
       offers: compiledOffers,
-      shippingOffers,
+      shippingOffers: [],
       version: "1",
-      compiledAt: new Date().toISOString(),
+      compiledAt,
       ...(customerTags.length > 0 ? { customerTags } : {}),
       ...buildAttributeQueryVariables(conditionRows),
     };
+    const deliveryConfig: CompiledFunctionConfig = { offers: [], shippingOffers, version: "1", compiledAt };
 
-    const value = serializeFunctionConfig(config);
-    const sizeBytes = new TextEncoder().encode(value).byteLength;
-    if (sizeBytes > MAX_METAFIELD_BYTES) {
-      throw new Error(
-        `Function config is ${sizeBytes}B, exceeding the safe ${MAX_METAFIELD_BYTES}B limit. Pause or simplify active offers before publishing.`,
-      );
+    const cartValue = serializeFunctionConfig(cartConfig);
+    const deliveryValue = serializeFunctionConfig(deliveryConfig, { omitQueryVariables: true });
+    for (const [label, value] of [["cart", cartValue], ["delivery", deliveryValue]] as const) {
+      const sizeBytes = new TextEncoder().encode(value).byteLength;
+      if (sizeBytes > MAX_METAFIELD_BYTES) {
+        throw new Error(
+          `Function config (${label}) is ${sizeBytes}B, exceeding the safe ${MAX_METAFIELD_BYTES}B limit. Pause or simplify active offers before publishing.`,
+        );
+      }
     }
 
     // Publish guardrails before the discount config. If either prerequisite
@@ -495,8 +504,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
         ),
       ),
     );
-    await pushMetafields(shopDomain, accessToken, discountIds, value);
-    recordShared(value);
+    await pushSharedConfigs(cartValue, deliveryValue);
     await pushStorefrontMetafields(shopDomain, accessToken, [
       ...conditionRows,
       ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
@@ -1010,7 +1018,7 @@ async function pushCodeOfferConfigs(
       kind === "delivery" ? DELIVERY_DISCOUNT_CLASSES : CART_DISCOUNT_CLASSES,
       entry.nodeOptions,
     );
-    await pushMetafields(shopDomain, accessToken, [discountId], value);
+    await pushMetafields(shopDomain, accessToken, [{ ownerId: discountId, value }]);
     manifest.record(discountId, kind === "delivery" ? "code-delivery" : "code", value, {
       purchaseTypes: entry.nodeOptions.purchaseTypes,
     });
@@ -1176,7 +1184,7 @@ async function pushBackendBConfig(
     const nodeId = await findCodeDiscountNode(shopId, shopDomain, accessToken);
     if (nodeId) {
       const emptyValue = serializeFunctionConfig(emptyFunctionConfig(), { omitCartAttributeSlots: true });
-      await pushMetafields(shopDomain, accessToken, [nodeId], emptyValue);
+      await pushMetafields(shopDomain, accessToken, [{ ownerId: nodeId, value: emptyValue }]);
       manifest.record(nodeId, "code-b", emptyValue);
     }
     return;
@@ -1211,7 +1219,7 @@ async function pushBackendBConfig(
     compileDiscountCombinationPolicy(compiled.map((entry) => entry.compiledOffer)),
     CART_DISCOUNT_CLASSES,
   );
-  await pushMetafields(shopDomain, accessToken, [nodeId], value);
+  await pushMetafields(shopDomain, accessToken, [{ ownerId: nodeId, value }]);
   manifest.record(nodeId, "code-b", value);
   const db = getDb();
   for (const entry of compiled) {
@@ -1267,7 +1275,7 @@ async function neutralizeStaleCodeOffers(
 
   const emptyValue = serializeFunctionConfig(emptyFunctionConfig());
   for (const discountId of staleDiscountIds.filter((id) => liveIds.has(id))) {
-    await pushMetafields(shopDomain, accessToken, [discountId], emptyValue);
+    await pushMetafields(shopDomain, accessToken, [{ ownerId: discountId, value: emptyValue }]);
     await expireCodeDiscountNode(shopDomain, accessToken, discountId);
     manifest?.record(discountId, "code", emptyValue, { active: false });
   }
@@ -1388,7 +1396,7 @@ async function pushCodedShippingPool(
       });
       assertConfigFits(value);
       await syncDiscountCombinationPolicy(shopDomain, accessToken, nodeId, combination, DELIVERY_DISCOUNT_CLASSES);
-      await pushMetafields(shopDomain, accessToken, [nodeId], value);
+      await pushMetafields(shopDomain, accessToken, [{ ownerId: nodeId, value }]);
       manifest.record(nodeId, "pool", value);
     } catch (error) {
       fail(offerIdsOf(group), error);
@@ -1513,7 +1521,7 @@ export async function neutralizeCodeDiscountNode(
   const accessToken = await decryptToken(shopRow.accessTokenEncrypted);
 
   const emptyValue = serializeFunctionConfig(emptyFunctionConfig());
-  await pushMetafields(shopDomain, accessToken, [discountId], emptyValue);
+  await pushMetafields(shopDomain, accessToken, [{ ownerId: discountId, value: emptyValue }]);
   await expireCodeDiscountNode(shopDomain, accessToken, discountId);
   // The next drift check must not read this deliberately emptied node as damage.
   const stored = await readPublishManifest(shopId);
@@ -1599,10 +1607,8 @@ async function resolveLegacyGiftVariants(
 async function pushMetafields(
   shopDomain: string,
   accessToken: string,
-  ownerIds: string[],
-  value: string,
+  entries: Array<{ ownerId: string; value: string }>,
 ): Promise<void> {
-  const owners = [...new Set(ownerIds)];
   const data = await shopifyGraphQL<{ metafieldsSet: { userErrors: Array<{ message: string }> } }>({
     shopDomain,
     accessToken,
@@ -1615,7 +1621,7 @@ async function pushMetafields(
       }
     }`,
     variables: {
-      metafields: owners.flatMap((ownerId) =>
+      metafields: entries.flatMap(({ ownerId, value }) =>
         FUNCTION_CONFIG_NAMESPACES.map((namespace) => ({
           ownerId,
           namespace,

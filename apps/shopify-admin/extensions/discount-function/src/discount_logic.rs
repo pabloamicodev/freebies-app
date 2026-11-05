@@ -5359,4 +5359,43 @@ mod tests {
         assert_eq!(discounted(&with_fields(&config, r#""mpc":1"#)), 1);
         assert_eq!(discounted(&with_fields(&config, r#""mpc":5"#)), 2);
     }
+
+    #[test]
+    fn shipping_offers_in_the_cart_config_are_inert() {
+        const COMPACT: &str = include_str!("fixtures/ambrosia-function-config.compact.json");
+        let mut config: serde_json::Value = serde_json::from_str(COMPACT).unwrap();
+        assert!(config.get("shippingOffers").is_some_and(|v| v.as_array().is_some_and(|a| !a.is_empty())));
+        let with = config.to_string();
+        config.as_object_mut().unwrap().remove("shippingOffers");
+        let without = config.to_string();
+        let lines = format!(
+            "[{},{}]",
+            regular_line(
+                "gid://shopify/CartLine/1",
+                "gid://shopify/ProductVariant/50000000000001",
+                "gid://shopify/Product/10000000000001",
+                "90.00",
+                1
+            ),
+            gift_line_with_metadata(
+                "gid://shopify/CartLine/2",
+                "gid://shopify/ProductVariant/50000000000012",
+                "gid://shopify/Product/10000000000005",
+                (
+                    "00000001-0000-4000-8000-000000000002",
+                    "00000002-0000-4000-8000-000000000020",
+                    "154423745"
+                ),
+                "20.00",
+                1
+            ),
+        );
+        let run_with = |config: &str| {
+            let payload = cart_json_with_classes(&lines, "110.00", config, r#"["PRODUCT","ORDER"]"#);
+            format!("{:?}", run_function_with_input(run, &payload).expect("valid input"))
+        };
+        let output = run_with(&with);
+        assert!(output.contains("Add"), "fixture cart must exercise live offers");
+        assert_eq!(output, run_with(&without));
+    }
 }
