@@ -32,6 +32,7 @@ import {
 import { redisGetString, redisSetString } from "./redis.server.js";
 import { decryptToken } from "./token-crypto.server.js";
 import {
+  automaticDiscountCountUnknownMessage,
   automaticDiscountLimitMessage,
   offerTooLargeMessage,
   sharedConfigTooLargeMessage,
@@ -198,6 +199,8 @@ export type CapacityFailure = Extract<CapacityPreflight, { ok: false }>;
 export interface CapacityOptions {
   /** Overrides the per-shop flag (tests, diagnostics). */
   shardsEnabled?: boolean;
+  /** Count the offers in `offerIds` even when code-gated (an offer about to switch to automatic). */
+  forceInclude?: boolean;
   /** Overrides how the live automatic-discount budget is read (default: Redis-cached `automaticNodeBudget`). */
   loadBudget?: (db: Db, shopId: string) => Promise<AutomaticNodeBudget | null>;
 }
@@ -275,7 +278,7 @@ export async function preflightCapacity(
   const [shop] = await db.select({ currencyCode: shops.currencyCode }).from(shops).where(eq(shops.id, shopId));
   let shared;
   try {
-    shared = await compileSharedOffers(db, shopId, shop?.currencyCode ?? "USD", offerIds, false);
+    shared = await compileSharedOffers(db, shopId, shop?.currencyCode ?? "USD", offerIds, opts.forceInclude === true);
   } catch (error) {
     if (error instanceof OfferPublishError) {
       return { ok: false, code: "COMPILE_ERROR", offerIds: [error.offerId], offerNames: [], numbers: {}, message: error.message };
@@ -322,11 +325,11 @@ export async function preflightCapacity(
   const units = buildPlanUnits(shared.compiled, conditions, shared.policies);
   const previous = await readPreviousAssignment(db, shopId);
   const policy = compileDiscountCombinationPolicy(shared.compiled.map((entry) => entry.offer));
-  const plan = planShards(units, previous, { ...SLOT_LIMITS, maxSlots }, policy);
+  const plan = planShards(units, previous, { ...SLOT_LIMITS, maxSlots, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, policy);
   let blocked = plan.blocked;
   if (blocked && enabled && maxSlots < MAX_CART_SLOTS && blocked.code !== "AUTOMATIC_DISCOUNT_LIMIT") {
     // The budget, not the offers, may be what is short: replan with every slot to learn how many are needed.
-    const wide = planShards(units, previous, { ...SLOT_LIMITS, maxSlots: MAX_CART_SLOTS }, policy);
+    const wide = planShards(units, previous, { ...SLOT_LIMITS, maxSlots: MAX_CART_SLOTS, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, policy);
     if (!wide.blocked) {
       blocked = {
         code: "AUTOMATIC_DISCOUNT_LIMIT",
@@ -343,11 +346,14 @@ export async function preflightCapacity(
         return fail("SLOT_FULL", ids, numbers, (n) => sharedConfigTooLargeMessage(numbers["neededBytes"] ?? 0, n));
       case "AUTOMATIC_DISCOUNT_LIMIT": {
         const needed = (numbers["needed"] ?? 0) - (numbers["allowed"] ?? 0);
-        const storeActive = budget?.storeActive ?? (budget ? (budget.others ?? 0) + budget.ours : 0);
+        const storeActive = budget?.storeActive ?? (budget && budget.others !== null ? budget.others + budget.ours : null);
+        if (storeActive === null) {
+          return fail("AUTOMATIC_DISCOUNT_LIMIT", ids, { ...numbers, needed }, automaticDiscountCountUnknownMessage);
+        }
         return fail(
           "AUTOMATIC_DISCOUNT_LIMIT",
           ids,
-          { ...numbers, needed, storeActive, others: budget?.others ?? -1 },
+          { ...numbers, needed, storeActive, ...(budget?.others != null ? { others: budget.others } : {}) },
           () => automaticDiscountLimitMessage(storeActive, needed),
         );
       }
@@ -355,6 +361,9 @@ export async function preflightCapacity(
         return fail("SLOT0_GROUP_TOO_LARGE", ids, numbers, (n) => slot0GroupTooLargeMessage(numbers["groupUnits"] ?? n.length, n));
       case "OFFER_TOO_LARGE":
       case "GROUP_TOO_LARGE":
+        if (!enabled && blocked.reason === "bytes") {
+          return fail("SLOT_FULL", ids, { ...numbers, neededBytes: numbers["bytes"] ?? 0 }, (n) => sharedConfigTooLargeMessage(numbers["bytes"] ?? 0, n));
+        }
         return fail(
           blocked.code,
           ids,
