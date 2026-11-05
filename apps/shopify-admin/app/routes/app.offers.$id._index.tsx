@@ -310,7 +310,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const set: Record<string, unknown> = {
         discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
         value: {
-          ...(editedReward.rewardType === "product_discount" ? (editedReward.value as Record<string, unknown>) : null),
+          ...(editedReward.rewardType === "product_discount" && Array.isArray((editedReward.value as { tiers?: unknown } | null)?.tiers)
+            ? { tiers: (editedReward.value as { tiers: unknown[] }).tiers }
+            : null),
           amount: discountValue,
           currencyCode: shopCurrencyCode,
         },
@@ -1597,7 +1599,7 @@ export default function OfferDetailPage() {
                   />
                 </div>
                 <DiscountMessageField value={publicTitle} onChange={setPublicTitle} onBlur={() => saveInfo()} />
-<CartLabelsField name="" value={cartLabels} onChange={(labels) => { setCartLabels(labels); saveInfo(labels); }} />
+                <CartLabelsField name="" value={cartLabels} onChange={(labels) => { setCartLabels(labels); saveInfo(labels); }} />
                 <div className="b-datetime-row">
                   <div>
                     <label className="b-label" htmlFor="offer-start-time">Start time</label>
@@ -1744,7 +1746,7 @@ export default function OfferDetailPage() {
                 <div className="b-help">For internal use only, not shown to customers..</div>
               </div>
               <DiscountMessageField value={publicTitle} onChange={setPublicTitle} onBlur={() => saveInfo()} />
-<CartLabelsField name="" value={cartLabels} onChange={(labels) => { setCartLabels(labels); saveInfo(labels); }} />
+              <CartLabelsField name="" value={cartLabels} onChange={(labels) => { setCartLabels(labels); saveInfo(labels); }} />
               <div className="b-datetime-row">
                 <div>
                   <label className="b-label" htmlFor="offer-start-time">Start time</label>

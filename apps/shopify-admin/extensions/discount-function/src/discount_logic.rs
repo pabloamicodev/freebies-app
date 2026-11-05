@@ -1,6 +1,6 @@
 use crate::config::{
     is_zero_decimal, minor_units, to_cents, CompiledConfig, CompiledOffer, CompiledOrderReward,
-    CompiledProductReward, ProductDiscountTier,
+    CompiledProductReward,
 };
 use crate::page_match::{metadata_matches, LineMetadata};
 use crate::schema;
@@ -450,10 +450,9 @@ fn evaluate_product_reward(
         if discount_value <= 0.0 {
             continue;
         }
-        let message = quantity_tier.map_or_else(
-            || "Discount".to_string(),
-            |tier| format!("{TIER_MESSAGE_MARK}{}", tier_message(tier)),
-        );
+        let message = quantity_tier
+            .and_then(|tier| tier.cart_message.as_deref().filter(|message| !message.is_empty()))
+            .map_or_else(|| "Discount".to_string(), |message| format!("{TIER_MESSAGE_MARK}{message}"));
         candidates.push(make_candidate(
             line.id().clone(),
             quantity,
@@ -470,30 +469,6 @@ const MAX_MESSAGE_CHARS: usize = 64;
 
 fn cap_message(message: String) -> String {
     message.chars().take(MAX_MESSAGE_CHARS).collect()
-}
-
-fn tier_message(tier: &ProductDiscountTier) -> String {
-    if let Some(message) = tier.cart_message.as_deref().filter(|message| !message.is_empty()) {
-        return message.to_string();
-    }
-    let value = plain_number(tier.discount_value);
-    match tier.discount_type.as_str() {
-        "percentage" | "most_expensive_item_discount" => format!("{value}% off"),
-        "free" | "cheapest_item_free" => "Free".to_string(),
-        "fixed_price" => format!("Price {value}"),
-        _ => format!("{value} off"),
-    }
-}
-
-/// Integer-only formatting (up to 2 decimals): `f64` Display costs ~18 KB of wasm.
-fn plain_number(value: f64) -> String {
-    let hundredths = (value * 100.0).round() as i64;
-    let (whole, fraction) = (hundredths / 100, hundredths % 100);
-    match fraction {
-        0 => whole.to_string(),
-        f if f % 10 == 0 => format!("{whole}.{}", f / 10),
-        f => format!("{whole}.{f:02}"),
-    }
 }
 
 /// Per-cart cap (`mpc`): only ever lowers a limit that already exists.
@@ -3926,18 +3901,10 @@ mod tests {
     }
 
     #[test]
-    fn tier_without_cart_message_falls_back_to_the_discount() {
-        assert_eq!(tiered_message(Some("Sale"), FOUR_TIERS, 3).as_deref(), Some("Sale \u{b7} 25% off"));
-        assert_eq!(tiered_message(Some("Sale"), FOUR_TIERS, 5).as_deref(), Some("Sale \u{b7} 5 off"));
-        assert_eq!(tiered_message(None, FOUR_TIERS, 3).as_deref(), Some("25% off"));
-    }
-
-    #[test]
-    fn fallback_amounts_print_without_trailing_zeros() {
-        assert_eq!(plain_number(20.0), "20");
-        assert_eq!(plain_number(12.5), "12.5");
-        assert_eq!(plain_number(7.25), "7.25");
-        assert_eq!(plain_number(0.05), "0.05");
+    fn tier_without_cart_message_leaves_the_message_untouched() {
+        assert_eq!(tiered_message(Some("Sale"), FOUR_TIERS, 3).as_deref(), Some("Sale"));
+        assert_eq!(tiered_message(Some("Sale"), FOUR_TIERS, 5).as_deref(), Some("Sale"));
+        assert_eq!(tiered_message(None, FOUR_TIERS, 3).as_deref(), Some("Discount"));
     }
 
     #[test]

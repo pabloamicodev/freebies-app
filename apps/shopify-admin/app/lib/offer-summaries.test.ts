@@ -141,6 +141,13 @@ describe("conditionTypeLabel / rewardTypeLabel", () => {
       { minimumQuantity: 3, maximumQuantity: 3, discountType: "percentage", discountValue: 25 },
       { minimumQuantity: 4, discountType: "percentage", discountValue: 30 },
     ];
+    expect(
+      rewardSummary({
+        rewardType: "product_discount",
+        discountType: "percentage",
+        value: { amount: 0, currencyCode: "EUR", tiers: [{ minimumQuantity: 2, discountType: "fixed_amount", discountValue: 5 }] },
+      }),
+    ).toBe("Product discount — Tiers: 2+→EUR 5");
     expect(rewardSummary({ rewardType: "product_discount", discountType: "percentage", value: { amount: 0, tiers } })).toBe(
       "Product discount — Tiers: 1→15%, 2→20%, 3→25%, 4+→30%",
     );

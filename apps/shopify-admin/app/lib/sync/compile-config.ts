@@ -256,7 +256,7 @@ export interface CompiledOffer {
   offerType: string;
   /** Customer-facing discount name shown in cart and checkout. */
   title?: string;
-  /** Title plus cart labels ("Title · A · B"); wins over `title`. Absent without labels. */
+  /** Title plus cart labels ("Title - A - B"); wins over `title`. Absent without labels. */
   cartMessage?: string;
   /** Max applications per cart (units, sets or bundles, by reward shape). Only lowers existing caps. */
   mpc?: number;
@@ -393,7 +393,7 @@ export interface CompiledProductDiscountTier {
   discountType: "percentage" | "fixed_amount" | "fixed_price" | "free";
   discountValue: number;
   discountedQuantity?: number;
-  /** Cart labels joined; the Function falls back to the discount amount when absent. */
+  /** Cart labels joined; the Function appends it to the offer message. Absent without labels. */
   cartMessage?: string;
 }
 

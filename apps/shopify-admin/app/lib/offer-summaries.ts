@@ -240,7 +240,6 @@ export function rewardTypeLabel(rewardType: string): string {
   return REWARD_TYPE_LABELS[rewardType] ?? rewardType.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 }
 
-/** "Product discount — 20% off"; gifts and free shipping already read as a full phrase. */
 export interface RewardTier {
   minQuantity: number;
   maxQuantity: number | null;
@@ -278,12 +277,13 @@ function tierSummary(tiers: RewardTier[], currency: string): string {
     const amount =
       tier.discountType === "percentage" ? `${tier.discountValue}%`
       : tier.discountType === "free" ? "free"
-      : `${currency} ${fromStoredAmount(tier.discountValue, currency).toFixed(2)}`;
+      : `${currency} ${tier.discountValue}`;
     return `${range}→${amount}`;
   });
   return `Tiers: ${parts.join(", ")}`;
 }
 
+/** "Product discount — 20% off"; gifts and free shipping already read as a full phrase. */
 export function rewardSummary(reward: { rewardType: string; discountType: string; value: unknown; target?: unknown }): string {
   const tiers = reward.rewardType === "shipping_discount" || reward.rewardType === "product_gift" ? [] : readRewardTiers(reward.value);
   if (tiers.length > 0) {

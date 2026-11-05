@@ -114,10 +114,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (intent === "add_reward" || intent === "update_reward") {
     const editedId = intent === "update_reward" ? (formData.get("rewardId") as string) : "";
     const [current] = editedId
-      ? await db.select({ value: offerRewards.value }).from(offerRewards)
+      ? await db.select({ rewardType: offerRewards.rewardType, value: offerRewards.value }).from(offerRewards)
           .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, editedId))).limit(1)
       : [];
-    const built = await buildRewardRecord(formData, db, shopId, shopCurrencyCode, (current?.value ?? null) as Record<string, unknown> | null);
+    const built = await buildRewardRecord(formData, db, shopId, shopCurrencyCode, current ?? null);
     if ("error" in built) return { error: built.error };
     const { rewardType, discountType, value, target, quantity, isAutoAdd, isCustomerSelectable, trackMode, label } = built.data;
 

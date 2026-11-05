@@ -16,11 +16,23 @@ function productDiscountForm(): FormData {
 }
 
 describe("buildRewardRecord product_discount", () => {
-  it("keeps the existing tiers and other value keys when the form carries none", async () => {
-    const built = await buildRewardRecord(productDiscountForm(), {} as never, "shop", "USD", { amount: 5, currencyCode: "USD", tiers });
+  it("keeps only the existing tiers when the form carries none", async () => {
+    const built = await buildRewardRecord(productDiscountForm(), {} as never, "shop", "USD", {
+      rewardType: "product_discount",
+      value: { amount: 5, currencyCode: "USD", tiers, stale: "dropped" },
+    });
     expect(built).toHaveProperty("data");
     if ("error" in built) throw new Error(built.error);
     expect(built.data.value).toEqual({ amount: 10, currencyCode: "USD", tiers });
+  });
+
+  it("leaves no keys of the old reward when it was not a product discount", async () => {
+    const built = await buildRewardRecord(productDiscountForm(), {} as never, "shop", "USD", {
+      rewardType: "product_gift",
+      value: { amount: 100, currencyCode: "USD", tiers, giftKey: "x" },
+    });
+    if ("error" in built) throw new Error(built.error);
+    expect(built.data.value).toEqual({ amount: 10, currencyCode: "USD" });
   });
 
   it("builds a plain value when there is nothing to preserve", async () => {

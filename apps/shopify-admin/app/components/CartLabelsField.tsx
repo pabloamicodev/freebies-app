@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { CART_LABEL_MAX_COUNT, CART_LABEL_MAX_LENGTH } from "../lib/cart-labels.js";
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
 }
 
 export function CartLabelsField({ value, onChange, name = "cartLabels", label = "Cart & checkout labels", compact, onBlur }: Props) {
+  const inputId = useId();
   const [draft, setDraft] = useState("");
   const full = value.length >= CART_LABEL_MAX_COUNT;
 
@@ -24,7 +25,7 @@ export function CartLabelsField({ value, onChange, name = "cartLabels", label = 
 
   return (
     <div>
-      {!compact && <label className="b-label">{label}</label>}
+      {!compact && <label className="b-label" htmlFor={inputId}>{label}</label>}
       {name && <input type="hidden" name={name} value={JSON.stringify(value)} />}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
         {value.map((item) => (
@@ -44,6 +45,7 @@ export function CartLabelsField({ value, onChange, name = "cartLabels", label = 
           </span>
         ))}
         <input
+          id={inputId}
           className="b-input"
           style={{ flex: "1 1 140px", minWidth: 140 }}
           aria-label={label}
