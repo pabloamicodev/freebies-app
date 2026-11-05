@@ -18,9 +18,12 @@ import {
   parseJsonRecord,
   parseJsonStringArray,
   requiredText,
+  cartLabelsFromForm,
   discountMessageText,
   nowInZone,
 } from "../lib/offer-validation.server.js";
+import { CartLabelsField } from "../components/CartLabelsField.js";
+import { resolveCartLabels } from "../lib/cart-labels.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { PurchaseTypeField } from "../components/PurchaseTypeField.js";
 import { parseSubscriptionMode, withSubscriptionMode } from "../lib/purchase-type.js";
@@ -67,6 +70,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (publicTitleResult.error) return { error: publicTitleResult.error };
   const internalName = internalNameResult.data!;
   const publicTitle = publicTitleResult.data!;
+  const cartLabelsResult = cartLabelsFromForm(formData);
+  if (cartLabelsResult.error) return { error: cartLabelsResult.error };
+  const cartLabels = cartLabelsResult.data!;
   const description = (formData.get("description") as string)?.trim() || null;
   const dateRange = parseDateRange(formData, timezone);
   if (dateRange.error) return { error: dateRange.error };
@@ -102,6 +108,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const tierTags1 = formData.getAll("tier_tag_1[]") as string[];
   const tierTags2 = formData.getAll("tier_tag_2[]") as string[];
   const tierPreselected = formData.getAll("tier_preselected[]") as string[];
+  const tierCartLabels = formData.getAll("tier_cart_labels[]") as string[];
 
   const volumeTiers = tierQtys.map((qty, i) => ({
     qty: parseInt(qty, 10) || 1,
@@ -112,6 +119,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     tag1: tierTags1[i] ?? "",
     tag2: tierTags2[i] ?? "",
     preselected: tierPreselected[i] === "true",
+    cartLabels: tierCartLabels[i] ?? "",
   }));
 
   // ── Parse cheapest tiers ──
@@ -121,6 +129,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const cheapestDiscountTypes = formData.getAll("cheapest_discount_type[]") as string[];
   const cheapestDiscountValues = formData.getAll("cheapest_discount_value[]") as string[];
   const cheapestLabels = formData.getAll("cheapest_label[]") as string[];
+  const cheapestCartLabels = formData.getAll("cheapest_cart_labels[]") as string[];
 
   const cheapestTiers = cheapestRequiredQtys.map((rq, i) => ({
     requiredQty: parseInt(rq, 10) || 1,
@@ -129,6 +138,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     discountType: cheapestDiscountTypes[i] ?? "percentage",
     discountValue: parseFloat(cheapestDiscountValues[i] ?? "100"),
     label: cheapestLabels[i] ?? "",
+    cartLabels: cheapestCartLabels[i] ?? "",
   }));
 
   // ── Parse cart tiers ──
@@ -223,7 +233,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           includeGiftValues: false,
         };
 
-  const productTiers = (discountTemplate === "volume" ? volumeTiers : cheapestTiers).map((tier) => {
+  const productTierLabels: string[][] = [];
+  for (const tier of discountTemplate === "volume" ? volumeTiers : cheapestTiers) {
+    const labels = resolveCartLabels(tier.cartLabels);
+    if (!labels.ok) return { error: labels.error };
+    productTierLabels.push(labels.labels);
+  }
+  const productTiers = (discountTemplate === "volume" ? volumeTiers : cheapestTiers).map((tier, index) => {
+    const cartLabels = productTierLabels[index]!;
+    const labels = cartLabels.length > 0 ? { cartLabels } : {};
     if ("qty" in tier)
       return {
         minimumQuantity: tier.qty,
@@ -231,6 +249,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         discountType: tier.discountType,
         discountValue: tier.discountValue,
         label: tier.label,
+        ...labels,
       };
     return {
       minimumQuantity: tier.requiredQty,
@@ -239,6 +258,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       discountValue: tier.discountValue,
       discountedQuantity: tier.discountedQty,
       label: tier.label,
+      ...labels,
     };
   });
   const orderTiers = cartTiers.map((tier) => ({
@@ -270,6 +290,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           status,
           internalName: candidateName,
           publicTitle,
+          cartLabels,
           description: description ?? undefined,
           priority: 100,
           startsAt: startsAt ?? new Date(),
@@ -411,6 +432,7 @@ interface VolumeTier {
   tag1: string;
   tag2: string;
   preselected: boolean;
+  cartLabels: string[];
 }
 
 interface CheapestTier {
@@ -421,6 +443,7 @@ interface CheapestTier {
   discountType: string;
   discountValue: string;
   label: string;
+  cartLabels: string[];
 }
 
 interface CartTier {
@@ -436,12 +459,12 @@ function createClientId(prefix: string): string {
   return globalThis.crypto?.randomUUID?.() ?? `${prefix}-${Date.now()}-${Math.random()}`;
 }
 
-function createVolumeTier(values: Omit<VolumeTier, "id">): VolumeTier {
-  return { id: createClientId("volume-tier"), ...values };
+function createVolumeTier(values: Omit<VolumeTier, "id" | "cartLabels">): VolumeTier {
+  return { id: createClientId("volume-tier"), cartLabels: [], ...values };
 }
 
-function createCheapestTier(values: Omit<CheapestTier, "id">): CheapestTier {
-  return { id: createClientId("cheapest-tier"), ...values };
+function createCheapestTier(values: Omit<CheapestTier, "id" | "cartLabels">): CheapestTier {
+  return { id: createClientId("cheapest-tier"), cartLabels: [], ...values };
 }
 
 function createCartTier(values: Omit<CartTier, "id">): CartTier {
@@ -474,6 +497,7 @@ export default function NewDiscountOfferPage() {
     toastMsg: "",
     internalName: defaults.internalName,
     publicTitle: defaults.publicTitle,
+    cartLabels: [] as string[],
     description: "",
     startsAt: nowLocal,
     endsAt: "",
@@ -538,6 +562,7 @@ export default function NewDiscountOfferPage() {
     toastMsg,
     internalName,
     publicTitle,
+    cartLabels,
     description,
     startsAt,
     endsAt,
@@ -565,6 +590,7 @@ export default function NewDiscountOfferPage() {
   const setToastMsg = createFieldSetter(setFormField, "toastMsg");
   const setInternalName = createFieldSetter(setFormField, "internalName");
   const setPublicTitle = createFieldSetter(setFormField, "publicTitle");
+  const setCartLabels = createFieldSetter(setFormField, "cartLabels");
   const setDescription = createFieldSetter(setFormField, "description");
   const setStartsAt = createFieldSetter(setFormField, "startsAt");
   const setEndsAt = createFieldSetter(setFormField, "endsAt");
@@ -622,7 +648,7 @@ export default function NewDiscountOfferPage() {
   );
 
   const updateVolumeTier = useCallback(
-    (i: number, field: keyof VolumeTier, val: string | boolean) => {
+    (i: number, field: keyof VolumeTier, val: string | boolean | string[]) => {
       setTiers((prev) =>
         prev.map((t, idx) => (idx === i ? ({ ...t, [field]: val } as VolumeTier) : t)),
       );
@@ -652,7 +678,7 @@ export default function NewDiscountOfferPage() {
   );
 
   const updateCheapestTier = useCallback(
-    (i: number, field: keyof CheapestTier, val: string) => {
+    (i: number, field: keyof CheapestTier, val: string | string[]) => {
       setCheapestTiers((prev) =>
         prev.map((t, idx) => (idx === i ? ({ ...t, [field]: val } as CheapestTier) : t)),
       );
@@ -782,6 +808,7 @@ export default function NewDiscountOfferPage() {
               <input type="hidden" name="tier_tag_1[]" value={tier.tag1} />
               <input type="hidden" name="tier_tag_2[]" value={tier.tag2} />
               <input type="hidden" name="tier_preselected[]" value={String(tier.preselected)} />
+              <input type="hidden" name="tier_cart_labels[]" value={JSON.stringify(tier.cartLabels)} />
             </span>
           ))}
 
@@ -795,6 +822,7 @@ export default function NewDiscountOfferPage() {
               <input type="hidden" name="cheapest_discount_type[]" value={tier.discountType} />
               <input type="hidden" name="cheapest_discount_value[]" value={tier.discountValue} />
               <input type="hidden" name="cheapest_label[]" value={tier.label} />
+              <input type="hidden" name="cheapest_cart_labels[]" value={JSON.stringify(tier.cartLabels)} />
             </span>
           ))}
 
@@ -878,6 +906,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                         />
 <div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
                         {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
+                        <div style={{ marginTop: 12 }}><CartLabelsField value={cartLabels} onChange={setCartLabels} /></div>
                       </div>
                       <PurchaseTypeField idPrefix="discount-wizard-purchase-type" />
                       <div>
@@ -980,6 +1009,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                         />
 <div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
                         {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
+                        <div style={{ marginTop: 12 }}><CartLabelsField value={cartLabels} onChange={setCartLabels} /></div>
                       </div>
                       <PurchaseTypeField idPrefix="discount-wizard-purchase-type" />
                       <div>
@@ -1082,6 +1112,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                         />
 <div className="b-help">{publicTitle.length}/{DISCOUNT_MESSAGE_MAX_LENGTH} · Leave empty to use the offer name.</div>
                         {fieldErrors.publicTitle && <div id="publicTitle-error" className="b-help-error" role="alert">{fieldErrors.publicTitle}</div>}
+                        <div style={{ marginTop: 12 }}><CartLabelsField value={cartLabels} onChange={setCartLabels} /></div>
                       </div>
                       <PurchaseTypeField idPrefix="discount-wizard-purchase-type" />
                       <div>
@@ -1467,6 +1498,12 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                             />
                           </div>
                         </div>
+                        <CartLabelsField
+                          name=""
+                          label={`Tier ${i + 1} cart & checkout labels`}
+                          value={tier.cartLabels}
+                          onChange={(labels) => updateVolumeTier(i, "cartLabels", labels)}
+                        />
                         <div className="b-grid-2">
                           <div>
                             <label
@@ -1777,6 +1814,12 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                             autoComplete="off"
                           />
                         </div>
+                        <CartLabelsField
+                          name=""
+                          label={`Tier ${i + 1} cart & checkout labels`}
+                          value={tier.cartLabels}
+                          onChange={(labels) => updateCheapestTier(i, "cartLabels", labels)}
+                        />
                       </div>
                     </div>
                   ))}

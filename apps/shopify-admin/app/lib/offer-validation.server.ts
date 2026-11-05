@@ -1,3 +1,4 @@
+import { resolveCartLabels } from "./cart-labels.js";
 import { resolveDiscountMessage } from "./discount-message.js";
 export interface ValidationResult<T> {
   data: T | null;
@@ -21,6 +22,12 @@ export function requiredText(formData: FormData, name: string, label: string): V
 export function discountMessageText(formData: FormData, internalName: string): ValidationResult<string> {
   const result = resolveDiscountMessage(formData.get("publicTitle"), internalName);
   return result.ok ? ok(result.value) : fail(result.error);
+}
+
+/** Offer cart labels from the `cartLabels` JSON field; empty when the form carries none. */
+export function cartLabelsFromForm(formData: FormData): ValidationResult<string[]> {
+  const result = resolveCartLabels(formData.get("cartLabels"));
+  return result.ok ? ok(result.labels) : fail(result.error);
 }
 
 export function optionalText(formData: FormData, name: string): string | null {
