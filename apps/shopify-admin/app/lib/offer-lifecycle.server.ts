@@ -8,6 +8,7 @@ import {
   republishIfActive,
   tryPublishShop,
   validateActivation,
+  type CapacityDetails,
   type PublishScope,
   type ShopPublishFn,
 } from "./offer-publish-flow.server.js";
@@ -65,7 +66,7 @@ export interface OfferLifecycleSuccess {
 
 export type OfferLifecycleFailure =
   | { ok: false; code: "not_found" }
-  | { ok: false; code: "validation"; error: string; scope?: PublishScope; offerId?: string }
+  | { ok: false; code: "validation"; error: string; scope?: PublishScope; offerId?: string; capacity?: CapacityDetails }
   | { ok: false; code: "state"; error: string; reason: "invalid_status" | "already_in_state" | "stale" | "no_condition" }
   | {
       ok: false;
@@ -169,6 +170,7 @@ async function changeStatus(
         error: validation.error ?? "Offer is not publishable.",
         scope: validation.scope,
         offerId: validation.offerId,
+        capacity: validation.capacity,
       };
     }
     statusAfter = activationStatus(current.startsAt, current.endsAt);
@@ -311,6 +313,7 @@ export async function bulkResumeOffers(
       error: validation.error ?? "Offer is not publishable.",
       scope: validation.scope,
       offerId: validation.offerId,
+        capacity: validation.capacity,
     };
   }
   const previous = await db
@@ -409,6 +412,7 @@ export async function setOfferSchedule(
         error: activation.error ?? "Offer is not publishable.",
         scope: activation.scope,
         offerId: activation.offerId,
+        capacity: activation.capacity,
       };
     }
   }
@@ -601,7 +605,7 @@ export async function activateDraftOffer(
   }
   const validation = await validateActivation(db, ctx.shopId, [ctx.offerId]);
   if (!validation.ok) {
-    return { ok: false, code: "validation", error: validation.error ?? "Offer is not publishable.", scope: validation.scope, offerId: validation.offerId };
+    return { ok: false, code: "validation", error: validation.error ?? "Offer is not publishable.", scope: validation.scope, offerId: validation.offerId, capacity: validation.capacity };
   }
   const now = new Date();
   const statusAfter = activationStatus(offer.startsAt, offer.endsAt, now);

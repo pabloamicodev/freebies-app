@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { shops, type Db } from "@promo/db";
-import { sharedConfigBreakdown } from "../../shared-config-size.server.js";
+import { preflightCapacity, sharedConfigBreakdown, type CapacityBudget, type CapacityOptions } from "../../capacity-preflight.server.js";
 import { MAX_VALIDATION_CONFIG_BYTES } from "../../cart-validation.server.js";
 import { MAX_METAFIELD_BYTES } from "../../sync/offer-publisher.server.js";
 import { shopifyGraphQL } from "../../shopify-fetch.server.js";
@@ -32,12 +32,21 @@ export type CapacityRow = {
   offerCount: number;
   perOffer: { offerId: string; name: string; bytes: number }[];
   cartValidation: { bytesUsed: number; limit: number; pct: number };
+  /** Slots the planner needs for the active offers (null when the plan is blocked or could not be computed). */
+  plannedSlots: number | null;
+  /** Cart slots the shop may use: 1 with sharding off, else the live automatic-discount budget. */
+  maxCartSlots: number | null;
+  deliveryBytes: number;
+  budget: CapacityBudget | null;
+  /** Code of the preflight failure the next publish would hit, if any. */
+  blockedBy: string | null;
   live?: { checked: boolean; nodes: LiveNode[]; driftBytes: number | null; error?: string };
 };
 
 export type CapacityDeps = {
   graphQL?: typeof shopifyGraphQL;
   decrypt?: (stored: string) => Promise<string>;
+  capacity?: CapacityOptions;
 };
 
 const pct = (used: number, limit: number) => Math.round((used / limit) * 1000) / 10;
@@ -83,6 +92,7 @@ export async function discountCapacity(
       db.select({ discountId: shops.discountId, deliveryDiscountId: shops.deliveryDiscountId }).from(shops).where(eq(shops.id, shop.id)),
     ]);
     const ratio = breakdown.totalBytes / MAX_METAFIELD_BYTES;
+    const plan = await preflightCapacity(db, shop.id, [], deps.capacity).catch(() => null);
     const row: CapacityRow = {
       shopDomain: shop.myshopifyDomain,
       nodeCount: [nodes?.discountId, nodes?.deliveryDiscountId].filter(Boolean).length,
@@ -92,6 +102,11 @@ export async function discountCapacity(
       headroom: MAX_METAFIELD_BYTES - breakdown.totalBytes,
       risk: ratio > 1 ? "block" : ratio >= WARN_AT ? "warn" : "ok",
       offerCount: breakdown.perOffer.length,
+      plannedSlots: plan?.ok ? plan.plan.slots : null,
+      maxCartSlots: plan?.ok ? plan.plan.maxSlots : null,
+      deliveryBytes: breakdown.deliveryBytes,
+      budget: plan?.ok ? plan.plan.budget : null,
+      blockedBy: plan && !plan.ok ? plan.code : null,
       perOffer: [...breakdown.perOffer].sort((a, b) => b.bytes - a.bytes).slice(0, TOP_OFFERS),
       cartValidation: {
         bytesUsed: breakdown.validationBytes,
@@ -119,6 +134,7 @@ export async function discountCapacity(
         message: `${r.shopDomain} uses ${r.bytesUsed} of ${r.limit} bytes (${r.pct}%)${r.risk === "block" ? ": the next publish will fail" : ""}.`,
       });
     }
+    if (r.blockedBy) warnings.push({ code: `CAPACITY_${r.blockedBy}`, severity: "block", message: `${r.shopDomain}: the capacity preflight fails with ${r.blockedBy}; the next activation would be refused.` });
     if (r.cartValidation.pct >= WARN_AT * 100) {
       warnings.push({ code: "VALIDATION_CAPACITY_HIGH", severity: r.cartValidation.pct > 100 ? "block" : "warn", message: `${r.shopDomain} cart validation config is at ${r.cartValidation.pct}% of its limit.` });
     }
@@ -128,7 +144,7 @@ export async function discountCapacity(
 
   const summary = [
     `Shared config capacity (limit ${MAX_METAFIELD_BYTES} bytes per node):`,
-    ...rows.map((r) => `- ${r.shopDomain}: ${r.bytesUsed} B (${r.pct}%), headroom ${r.headroom} B, ${r.offerCount} offers, ${r.risk}${r.perOffer[0] ? `; heaviest "${r.perOffer[0].name}" ${r.perOffer[0].bytes} B` : ""}`),
+    ...rows.map((r) => `- ${r.shopDomain}: ${r.bytesUsed} B (${r.pct}%), headroom ${r.headroom} B, ${r.offerCount} offers, slots ${r.plannedSlots ?? "?"}/${r.maxCartSlots ?? "?"}, ${r.risk}${r.perOffer[0] ? `; heaviest "${r.perOffer[0].name}" ${r.perOffer[0].bytes} B` : ""}`),
   ].join("\n");
 
   return buildResult(

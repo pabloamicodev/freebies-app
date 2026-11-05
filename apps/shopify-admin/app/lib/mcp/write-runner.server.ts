@@ -69,7 +69,7 @@ export function lifecycleToolError(failure: OfferLifecycleFailure, refForAction?
     case "not_found":
       return new ToolError("NOT_FOUND", "Offer not found in that shop.");
     case "validation":
-      return new ToolError("VALIDATION", safeText(failure.error));
+      return new ToolError("VALIDATION", safeText(failure.error), failure.capacity ? { details: { capacity: failure.capacity } } : {});
     case "state":
       return new ToolError(failure.reason === "stale" ? "STATE_CONFLICT" : "INVALID_STATE", safeText(failure.error));
     case "publish_failed":
