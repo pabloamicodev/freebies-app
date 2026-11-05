@@ -1,4 +1,6 @@
 import type * as PromoDb from "@promo/db";
+import type * as CartValidation from "../cart-validation.server.js";
+import type * as ShopifyFetch from "../shopify-fetch.server.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import { appSettings, discountShards, offerCombinationPolicies, offerConditions, offerRewards, offers, shops, type Db } from "@promo/db";
@@ -22,7 +24,7 @@ vi.mock("@promo/db", async (importOriginal) => ({
 vi.mock("../token-crypto.server.js", () => ({ decryptToken: async () => "token" }));
 vi.mock("../offer-definitions.server.js", () => ({ invalidateOfferDefinitions: async () => undefined }));
 vi.mock("../cart-validation.server.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../cart-validation.server.js")>()),
+  ...(await importOriginal<typeof CartValidation>()),
   syncCartValidation: async () => "validation",
 }));
 
@@ -30,7 +32,7 @@ const world = vi.hoisted(() => ({
   gql: undefined as unknown as (arg: { query: string; variables?: Record<string, unknown> }) => Promise<unknown>,
 }));
 vi.mock("../shopify-fetch.server.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../shopify-fetch.server.js")>()),
+  ...(await importOriginal<typeof ShopifyFetch>()),
   shopifyGraphQL: (arg: { query: string; variables?: Record<string, unknown> }) => world.gql(arg),
 }));
 
