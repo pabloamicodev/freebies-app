@@ -8,6 +8,7 @@ import {
   republishIfActive,
   tryPublishShop,
   validateActivation,
+  type CapacityDetails,
   type PublishScope,
   type ShopPublishFn,
 } from "./offer-publish-flow.server.js";
@@ -65,12 +66,13 @@ export interface OfferLifecycleSuccess {
 
 export type OfferLifecycleFailure =
   | { ok: false; code: "not_found" }
-  | { ok: false; code: "validation"; error: string; scope?: PublishScope; offerId?: string }
+  | { ok: false; code: "validation"; error: string; scope?: PublishScope; offerId?: string; capacity?: CapacityDetails }
   | { ok: false; code: "state"; error: string; reason: "invalid_status" | "already_in_state" | "stale" | "no_condition" }
   | {
       ok: false;
       code: "publish_failed";
       error: string;
+      capacity?: CapacityDetails;
       /** True when the status written by this call was put back. False when the saved change stays (schedule, page URLs). */
       rolledBack: boolean;
       statusBefore: OfferStatus;
@@ -92,13 +94,15 @@ export type BulkLifecycleResult =
       offers: Array<{ offerId: string; statusBefore: OfferStatus; statusAfter: OfferStatus; warnings?: string[] }>;
     }
   | Extract<OfferLifecycleFailure, { code: "validation" }>
-  | { ok: false; code: "publish_failed"; error: string; rolledBack: true };
+  | { ok: false; code: "publish_failed"; error: string; capacity?: CapacityDetails; rolledBack: true };
 
 export type RepublishShopResult =
   | { ok: true; dryRun: boolean }
-  | { ok: false; code: "publish_failed"; error: string; rolledBack: false; scope: PublishScope; offerId?: string };
+  | { ok: false; code: "publish_failed"; error: string; capacity?: CapacityDetails; rolledBack: false; scope: PublishScope; offerId?: string };
 
 const notFound = { ok: false, code: "not_found" } as const;
+
+const capacityOf = (failure: { capacity?: CapacityDetails }) => (failure.capacity ? { capacity: failure.capacity } : {});
 const key = (ctx: OfferLifecycleContext) => and(eq(offers.shopId, ctx.shopId), eq(offers.id, ctx.offerId));
 
 async function audit(
@@ -169,6 +173,7 @@ async function changeStatus(
         error: validation.error ?? "Offer is not publishable.",
         scope: validation.scope,
         offerId: validation.offerId,
+        capacity: validation.capacity,
       };
     }
     statusAfter = activationStatus(current.startsAt, current.endsAt);
@@ -197,7 +202,7 @@ async function changeStatus(
       .update(offers)
       .set({ status: statusBefore, updatedAt: new Date() })
       .where(and(key(ctx), eq(offers.status, statusAfter)));
-    return { ok: false, code: "publish_failed", error: failure.message, rolledBack: true, statusBefore, statusAfter: statusBefore };
+    return { ok: false, code: "publish_failed", error: failure.message, ...capacityOf(failure), rolledBack: true, statusBefore, statusAfter: statusBefore };
   }
   await audit(db, ctx, opts, {
     entityId: ctx.offerId,
@@ -249,7 +254,7 @@ export async function archiveOffer(
       .update(offers)
       .set({ status: previous.status, archivedAt: previous.archivedAt, updatedAt: new Date() })
       .where(key(ctx));
-    return { ok: false, code: "publish_failed", error: failure.message, rolledBack: true, statusBefore, statusAfter: statusBefore };
+    return { ok: false, code: "publish_failed", error: failure.message, ...capacityOf(failure), rolledBack: true, statusBefore, statusAfter: statusBefore };
   }
   await audit(db, ctx, opts, {
     entityId: ctx.offerId,
@@ -287,7 +292,7 @@ export async function bulkPauseOffers(
   const failure = await publish(ctx.shopId, ctx.shopDomain);
   if (failure) {
     await restoreStatuses(db, ctx.shopId, previous);
-    return { ok: false, code: "publish_failed", error: failure.message, rolledBack: true };
+    return { ok: false, code: "publish_failed", error: failure.message, ...capacityOf(failure), rolledBack: true };
   }
   await audit(db, ctx, opts, {
     entityId: ctx.offerIds.join(","),
@@ -311,6 +316,7 @@ export async function bulkResumeOffers(
       error: validation.error ?? "Offer is not publishable.",
       scope: validation.scope,
       offerId: validation.offerId,
+        capacity: validation.capacity,
     };
   }
   const previous = await db
@@ -340,7 +346,7 @@ export async function bulkResumeOffers(
   const failure = await publish(ctx.shopId, ctx.shopDomain);
   if (failure) {
     await restoreStatuses(db, ctx.shopId, previous);
-    return { ok: false, code: "publish_failed", error: failure.message, rolledBack: true };
+    return { ok: false, code: "publish_failed", error: failure.message, ...capacityOf(failure), rolledBack: true };
   }
   await audit(db, ctx, opts, {
     entityId: ctx.offerIds.join(","),
@@ -409,6 +415,7 @@ export async function setOfferSchedule(
         error: activation.error ?? "Offer is not publishable.",
         scope: activation.scope,
         offerId: activation.offerId,
+        capacity: activation.capacity,
       };
     }
   }
@@ -559,7 +566,7 @@ export async function republishShop(
   if (opts.dryRun) return { ok: true, dryRun: true };
   const failure = await (opts.publish ?? tryPublishShop)(ctx.shopId, ctx.shopDomain);
   if (failure) {
-    return { ok: false, code: "publish_failed", error: failure.message, rolledBack: false, scope: failure.scope, offerId: failure.offerId };
+    return { ok: false, code: "publish_failed", error: failure.message, ...capacityOf(failure), rolledBack: false, scope: failure.scope, offerId: failure.offerId };
   }
   await audit(db, ctx, opts, { entityType: "shop", entityId: ctx.shopId, action: "republish_shop" });
   return { ok: true, dryRun: false };
@@ -601,7 +608,7 @@ export async function activateDraftOffer(
   }
   const validation = await validateActivation(db, ctx.shopId, [ctx.offerId]);
   if (!validation.ok) {
-    return { ok: false, code: "validation", error: validation.error ?? "Offer is not publishable.", scope: validation.scope, offerId: validation.offerId };
+    return { ok: false, code: "validation", error: validation.error ?? "Offer is not publishable.", scope: validation.scope, offerId: validation.offerId, capacity: validation.capacity };
   }
   const now = new Date();
   const statusAfter = activationStatus(offer.startsAt, offer.endsAt, now);
@@ -616,7 +623,7 @@ export async function activateDraftOffer(
       .update(offers)
       .set({ status: statusBefore, updatedAt: new Date() })
       .where(and(key(ctx), eq(offers.status, statusAfter)));
-    return { ok: false, code: "publish_failed", error: failure.message, rolledBack: true, statusBefore, statusAfter: statusBefore };
+    return { ok: false, code: "publish_failed", error: failure.message, ...capacityOf(failure), rolledBack: true, statusBefore, statusAfter: statusBefore };
   }
   const [offerSnapshot, condSnapshot, rewSnapshot, policySnapshot] = await Promise.all([
     db.select().from(offers).where(key(ctx)).limit(1),

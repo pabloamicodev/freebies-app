@@ -1,6 +1,7 @@
 import { appSettings, offers, shops, type Db } from "@promo/db";
 import { and, eq, inArray } from "drizzle-orm";
-import { CODED_SHIPPING_POOL_SETTING, CODE_NODE_SETTING } from "../discount-node.server.js";
+import { CART_SHARD_POOL_SETTING, CODED_SHIPPING_POOL_SETTING, CODE_NODE_SETTING } from "../discount-node.server.js";
+import { clearShardState } from "../sync/cart-shards.server.js";
 import { PUBLISH_MANIFEST_SETTING } from "../publish-manifest.server.js";
 import { recordUninstallArchive } from "../restore-archived-offers.server.js";
 import { invalidateOfferDefinitions } from "../offer-definitions.server.js";
@@ -75,9 +76,15 @@ export async function handleAppUninstalled(
       .where(
         and(
           eq(appSettings.shopId, shopRecord.id),
-          inArray(appSettings.key, [CODE_NODE_SETTING, CODED_SHIPPING_POOL_SETTING, PUBLISH_MANIFEST_SETTING]),
+          inArray(appSettings.key, [
+            CODE_NODE_SETTING,
+            CODED_SHIPPING_POOL_SETTING,
+            CART_SHARD_POOL_SETTING,
+            PUBLISH_MANIFEST_SETTING,
+          ]),
         ),
       );
+    await clearShardState(db, shopRecord.id);
   }
 
   // The storefront proxy caches the shop row and its offer definitions for ~30 s: drop both now.

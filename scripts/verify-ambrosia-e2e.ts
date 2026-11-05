@@ -330,9 +330,11 @@ async function main(): Promise<void> {
       assert.ok(node.metafield?.value, `${node.automaticDiscount.title} has no function config.`);
       return JSON.parse(node.metafield.value) as CompiledConfig;
     });
-    assertJsonEqual(configs[0], configs[1], "Cart and delivery discount metafields");
-
+    // Since FIX-cap-01 the cart node holds `offers` and the delivery node holds `shippingOffers`.
     const published = configs[0]!;
+    const delivery = configs[1]!;
+    assert.deepEqual(delivery.offers ?? [], [], "The delivery node must carry no cart offers.");
+    assert.equal(delivery.compiledAt, published.compiledAt, "Cart and delivery nodes were not published together.");
     assert.equal(published.version, "1");
     assert.ok(
       !Number.isNaN(Date.parse(published.compiledAt)),

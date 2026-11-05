@@ -8,7 +8,7 @@ import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { cartLabelsFromForm, ok, parseJsonRecord, parseJsonStringArray, parseDateRange, toZonedLocalInput } from "../lib/offer-validation.server.js";
 import { readCartLabels } from "../lib/cart-labels.js";
 import { normalizeConditionValue } from "../lib/offer-config-normalization.server.js";
-import { getPublishWarnings, publishShopConfig, republishIfActive, validateActivation } from "../lib/offer-publish-flow.server.js";
+import { getPublishWarnings, publishShopConfig, republishIfActive, validateActivationWithPreflight } from "../lib/offer-publish-flow.server.js";
 import { activateDraftOffer } from "../lib/offer-lifecycle.server.js";
 import { statusForScheduleSave } from "../lib/offer-scheduling.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
@@ -123,9 +123,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         : { data: { startsAt: offer.startsAt, endsAt: offer.endsAt }, error: undefined };
       if (dateResult.error) return { error: dateResult.error };
       const status = offer.status === "paused" ? offer.status : statusForScheduleSave(offer.status, dateResult.data!.startsAt, dateResult.data!.endsAt);
+      let preflight;
       if (status === "active" && offer.status !== "active") {
-        const activation = await validateActivation(db, shopId, [offerId]);
-        if (!activation.ok) return { error: activation.error };
+        const activation = await validateActivationWithPreflight(db, shopId, [offerId]);
+        if (!activation.validation.ok) return { error: activation.validation.error };
+        preflight = activation.preflight;
       }
       await db.update(offers).set({
         publicTitle, internalName, cartLabels,
@@ -135,7 +137,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         status,
         updatedAt: new Date(),
       }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-      const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active" || status === "active");
+      const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active" || status === "active", undefined, preflight);
       if (publishError) return { error: publishError };
       void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "update", before: { publicTitle: offer.publicTitle, cartLabels: offer.cartLabels, internalName: offer.internalName, startsAt: offer.startsAt, endsAt: offer.endsAt }, after: { publicTitle, cartLabels, internalName, startsAt: dateResult.data!.startsAt, endsAt: dateResult.data!.endsAt }, performedBy: session.shop });
       break;

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   settings: new Map<string, string>(),
+  shards: [] as Array<{ slot: number; discountNodeId: string }>,
   shopRow: { discountId: null as string | null, deliveryDiscountId: null as string | null },
   gql: vi.fn(),
 }));
@@ -13,6 +14,7 @@ vi.mock("drizzle-orm", async (importOriginal) => ({
   ...(await importOriginal<typeof DrizzleOrm>()),
   eq: (column: { name: string }, value: unknown) => ({ column, value }),
   and: (...conds: unknown[]) => ({ conds }),
+  gt: (column: { name: string }, value: number) => ({ column, value }),
 }));
 
 vi.mock("@promo/db", async (importOriginal) => {
@@ -20,21 +22,39 @@ vi.mock("@promo/db", async (importOriginal) => {
   const getDb = () => ({
     select: () => ({
       from: (table: unknown) => ({
-        where: (cond: { conds?: Array<{ column: { name: string }; value: string }> }) => ({
-          limit: async () => {
+        where: (cond: { conds?: Array<{ column: { name: string }; value: string }> }) => {
+          const run = () => {
             if (table === actual.shops) return [h.shopRow];
+            if (table === actual.discountShards) {
+              return h.shards.map((row) => ({ slot: row.slot, id: row.discountNodeId }));
+            }
             const key = cond.conds?.find((c) => c.column.name === "key")?.value as string;
             return h.settings.has(key) ? [{ value: h.settings.get(key) }] : [];
-          },
-        }),
-      }),
-    }),
-    insert: () => ({
-      values: (row: { key: string; value: string }) => ({
-        onConflictDoUpdate: async () => {
-          h.settings.set(row.key, row.value);
+          };
+          return {
+            limit: async () => run(),
+            then: (resolve: (rows: unknown[]) => unknown, reject: (error: unknown) => unknown) =>
+              Promise.resolve(run()).then(resolve, reject),
+          };
         },
       }),
+    }),
+    insert: (table: unknown) => ({
+      values: (row: { key: string; value: string; slot?: number; discountNodeId?: string }) => ({
+        onConflictDoUpdate: async () => {
+          if (table === actual.discountShards) {
+            h.shards = [...h.shards.filter((s) => s.slot !== row.slot), { slot: row.slot!, discountNodeId: row.discountNodeId! }];
+          } else h.settings.set(row.key, row.value);
+        },
+      }),
+    }),
+    delete: (table: unknown) => ({
+      where: async (cond: { conds: Array<{ column: { name: string }; value: unknown }> }) => {
+        if (table === actual.discountShards) {
+          const above = cond.conds.find((c) => c.column.name === "slot")!.value as number;
+          h.shards = h.shards.filter((s) => s.slot <= above);
+        } else h.settings.delete(cond.conds.find((c) => c.column.name === "key")!.value as string);
+      },
     }),
   });
   return { ...actual, getDb };
@@ -58,7 +78,9 @@ import {
   automaticNodeBudget,
   cartShardTitle,
   ensureCartShardNodes,
+  migrateLegacyCartShardIds,
   ensureCodedShippingNodes,
+  readCartShardNodeIds,
 } from "./discount-node.server.js";
 
 
@@ -138,10 +160,16 @@ function installShopify(opts: { nodes?: FakeNode[]; active?: number | null; fail
   return { nodes, creates, deletes };
 }
 
+const seedShards = (ids: string[]) => {
+  h.shards = ids.map((discountNodeId, index) => ({ slot: index + 1, discountNodeId }));
+};
+const storedShards = () => [...h.shards].sort((a, b) => a.slot - b.slot).map((row) => row.discountNodeId);
+
 const cartNode = (n: string, title: string): FakeNode => ({ id: nodeId(n), title, functionId: CART_FN.id });
 
 beforeEach(() => {
   h.settings.clear();
+  h.shards = [];
   h.shopRow = { discountId: null, deliveryDiscountId: null };
   h.gql.mockReset();
 });
@@ -174,7 +202,8 @@ describe("cart shard pool", () => {
     expect(value).toMatchObject({ offers: [], c1: "_promo_engine_unused", c2: "_promo_engine_unused", c3: "_promo_engine_unused", version: "1", compiledAt: "1970-01-01T00:00:00.000Z" });
     expect(Object.keys(value)).toEqual(expect.arrayContaining(["c1", "c2", "c3", "customerTags", "version", "compiledAt"]));
     expect(JSON.parse((shopify.creates[0]!.metafields as Array<{ value: string }>)[0]!.value)).toEqual(value);
-    expect(JSON.parse(h.settings.get(CART_SHARD_POOL_SETTING)!)).toEqual(ids);
+    expect(storedShards()).toEqual(ids);
+    expect(h.settings.has(CART_SHARD_POOL_SETTING)).toBe(false);
   });
 
   it("reuses an existing shard by exact title instead of creating or picking slot 0", async () => {
@@ -210,14 +239,34 @@ describe("cart shard pool", () => {
       cartNode("s3", "Promo Engine 3"),
       cartNode("s4", "Promo Engine 4"),
     ];
-    h.settings.set(CART_SHARD_POOL_SETTING, JSON.stringify([nodeId("s2"), nodeId("s3"), nodeId("s4")]));
+    seedShards([nodeId("s2"), nodeId("s3"), nodeId("s4")]);
     const shopify = installShopify({ nodes, active: 5 });
 
     const ids = await ensureCartShardNodes(SHOP_ID, DOMAIN, "t", 1);
 
     expect(ids).toEqual([nodeId("s2")]);
     expect(shopify.deletes).toEqual([nodeId("s3"), nodeId("s4")]);
-    expect(JSON.parse(h.settings.get(CART_SHARD_POOL_SETTING)!)).toEqual([nodeId("s2")]);
+    expect(storedShards()).toEqual([nodeId("s2")]);
+  });
+
+  it("reads a list an earlier release kept in app_settings without writing anything", async () => {
+    h.settings.set(CART_SHARD_POOL_SETTING, JSON.stringify([nodeId("s2"), nodeId("s3")]));
+
+    expect(await readCartShardNodeIds(SHOP_ID)).toEqual([nodeId("s2"), nodeId("s3")]);
+
+    expect(storedShards()).toEqual([]);
+    expect(h.settings.has(CART_SHARD_POOL_SETTING)).toBe(true);
+  });
+
+  it("migrates that list into discount_shards once, and drops the setting", async () => {
+    h.settings.set(CART_SHARD_POOL_SETTING, JSON.stringify([nodeId("s2"), nodeId("s3")]));
+
+    await migrateLegacyCartShardIds(SHOP_ID);
+
+    expect(storedShards()).toEqual([nodeId("s2"), nodeId("s3")]);
+    expect(h.settings.has(CART_SHARD_POOL_SETTING)).toBe(false);
+    await migrateLegacyCartShardIds(SHOP_ID);
+    expect(await readCartShardNodeIds(SHOP_ID)).toEqual([nodeId("s2"), nodeId("s3")]);
   });
 
   it("persists each id as soon as it is created, so a later failed create loses nothing", async () => {
@@ -225,7 +274,7 @@ describe("cart shard pool", () => {
 
     await expect(ensureCartShardNodes(SHOP_ID, DOMAIN, "t", 3)).rejects.toThrow("boom");
 
-    expect(JSON.parse(h.settings.get(CART_SHARD_POOL_SETTING)!)).toHaveLength(1);
+    expect(storedShards()).toHaveLength(1);
   });
 
   it("refuses to create past Shopify's 25 with cart-shard copy", async () => {
@@ -264,7 +313,7 @@ describe("automaticNodeBudget", () => {
     shardIds.forEach((id, i) => nodes.push(cartNode(id.split("/").pop()!, `Promo Engine ${i + 2}`)));
     const poolIds = Array.from({ length: opts.pool ?? 0 }, (_, i) => nodeId(`p${i}`));
     poolIds.forEach((id, i) => nodes.push({ id, title: `Promo Engine Coded Shipping ${i + 1}`, functionId: DELIVERY_FN.id }));
-    if (shardIds.length) h.settings.set(CART_SHARD_POOL_SETTING, JSON.stringify(shardIds));
+    seedShards(shardIds);
     if (poolIds.length) h.settings.set(CODED_SHIPPING_POOL_SETTING, JSON.stringify(poolIds));
     if (opts.code) {
       nodes.push({ id: nodeId("code"), title: "Promo Engine Codes", functionId: "x" });
@@ -338,7 +387,7 @@ describe("automaticNodeBudget", () => {
 
   it("ignores recorded ids that no longer exist in Shopify", async () => {
     setup({ active: 5, shards: 1 });
-    h.settings.set(CART_SHARD_POOL_SETTING, JSON.stringify([nodeId("s0"), nodeId("gone")]));
+    seedShards([nodeId("s0"), nodeId("gone")]);
     const budget = await automaticNodeBudget(SHOP_ID, DOMAIN, "t");
     expect(budget.ours).toBe(3);
   });

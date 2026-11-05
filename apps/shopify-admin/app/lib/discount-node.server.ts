@@ -7,8 +7,8 @@
  * Idempotent: runs once per shop (afterAuth), persists the discount GID on
  * `shops.discountId`, and is a no-op on reinstall if it's already set.
  */
-import { appSettings, getDb, shops } from "@promo/db";
-import { and, eq } from "drizzle-orm";
+import { appSettings, discountShards, getDb, shops } from "@promo/db";
+import { and, eq, gt } from "drizzle-orm";
 import { ShopifyOutcomeUnknownError, shopifyGraphQL } from "./shopify-fetch.server.js";
 import { serializeFunctionConfig } from "./sync/compile-config.js";
 
@@ -1250,12 +1250,52 @@ export const readCodedShippingNodeIds = (shopId: string): Promise<string[]> =>
 const writeCodedShippingNodeIds = (shopId: string, ids: string[]): Promise<void> =>
   writeSetting(shopId, CODED_SHIPPING_POOL_SETTING, JSON.stringify(ids));
 
-/** Cart shard nodes in slot order: element 0 is "Promo Engine 2". Slot 0 is `shops.discount_id` and never listed here. */
-export const readCartShardNodeIds = (shopId: string): Promise<string[]> =>
-  readIdList(shopId, CART_SHARD_POOL_SETTING);
+/**
+ * Cart shard nodes in slot order: element 0 is "Promo Engine 2". Slot 0 is `shops.discount_id` and never listed here.
+ * They live in `discount_shards` (slots >= 1). Read-only: a list still kept in app_settings by an earlier release is
+ * returned as is until `migrateLegacyCartShardIds` (the publisher, under its lock) moves it over.
+ */
+export async function readCartShardNodeIds(shopId: string): Promise<string[]> {
+  const rows = await getDb()
+    .select({ slot: discountShards.slot, id: discountShards.discountNodeId })
+    .from(discountShards)
+    .where(and(eq(discountShards.shopId, shopId), eq(discountShards.kind, "cart")));
+  const ids = rows
+    .filter((row) => row.slot > 0 && row.id)
+    .sort((a, b) => a.slot - b.slot)
+    .map((row) => row.id as string);
+  if (ids.length > 0) return ids;
+  return readIdList(shopId, CART_SHARD_POOL_SETTING);
+}
 
-const writeCartShardNodeIds = (shopId: string, ids: string[]): Promise<void> =>
-  writeSetting(shopId, CART_SHARD_POOL_SETTING, JSON.stringify(ids));
+export async function migrateLegacyCartShardIds(shopId: string): Promise<void> {
+  const legacy = await readIdList(shopId, CART_SHARD_POOL_SETTING);
+  if (legacy.length === 0) return;
+  const rows = await getDb()
+    .select({ slot: discountShards.slot })
+    .from(discountShards)
+    .where(and(eq(discountShards.shopId, shopId), eq(discountShards.kind, "cart"), gt(discountShards.slot, 0)));
+  if (rows.length === 0) await writeCartShardNodeIds(shopId, legacy);
+  await getDb()
+    .delete(appSettings)
+    .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, CART_SHARD_POOL_SETTING)));
+}
+
+export async function writeCartShardNodeIds(shopId: string, ids: string[]): Promise<void> {
+  const db = getDb();
+  for (const [index, id] of ids.entries()) {
+    await db
+      .insert(discountShards)
+      .values({ shopId, kind: "cart", slot: index + 1, discountNodeId: id })
+      .onConflictDoUpdate({
+        target: [discountShards.shopId, discountShards.kind, discountShards.slot],
+        set: { discountNodeId: id, updatedAt: new Date() },
+      });
+  }
+  await db
+    .delete(discountShards)
+    .where(and(eq(discountShards.shopId, shopId), eq(discountShards.kind, "cart"), gt(discountShards.slot, ids.length)));
+}
 
 /** Shopify allows this many active automatic discounts per shop, across every app. */
 export const SHOPIFY_AUTOMATIC_DISCOUNT_LIMIT = 25;

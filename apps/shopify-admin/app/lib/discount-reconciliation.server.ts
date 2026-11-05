@@ -3,6 +3,7 @@ import { discountCodes, getDb, offers, shops, type Db } from "@promo/db";
 import { and, count, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { FUNCTION_CONFIG_NAMESPACES, publishOffersForShop } from "./sync/offer-publisher.server.js";
+import { ShardPlanBlockedError } from "./sync/cart-shards.server.js";
 import { decryptToken } from "./token-crypto.server.js";
 import { shopifyGraphQL } from "./shopify-fetch.server.js";
 import { configHash, readPublishManifest, type PublishManifest } from "./publish-manifest.server.js";
@@ -23,7 +24,7 @@ export interface DiscountReconciliationTarget {
 export interface DiscountReconciliationResult {
   attempted: number;
   succeeded: number;
-  failures: Array<{ shopId: string; error: string }>;
+  failures: Array<{ shopId: string; error: string; capacity?: ShardPlanBlockedError["capacity"] }>;
 }
 
 export function needsDiscountReconciliation(state: {
@@ -54,6 +55,7 @@ export async function executeDiscountNodeReconciliation(
       failures.push({
         shopId: target.shopId,
         error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof ShardPlanBlockedError ? { capacity: error.capacity } : {}),
       });
     }
   }
