@@ -87,6 +87,19 @@ describe("byte accounting", () => {
     expect(expected).toBe(new TextEncoder().encode(config).byteLength);
   });
 
+  it("envelope includes l1/l2 when present", () => {
+    const config = serializeFunctionConfig({
+      offers: [],
+      shippingOffers: [],
+      version: "1",
+      compiledAt: "1970-01-01T00:00:00.000Z",
+      l1: "line-a",
+      l2: "line-b",
+    });
+    expect(envelopeBytes([], [], { l1: "line-a", l2: "line-b" })).toBe(new TextEncoder().encode(config).byteLength);
+    expect(envelopeBytes([], [], { l1: "line-a" })).toBeLessThan(envelopeBytes([], [], { l1: "line-a", l2: "line-b" }));
+  });
+
   it("planned slot bytes match the formula", () => {
     const plan = planShards([unit("a", 700, { cartAttributeKeys: ["k"] }), unit("b", 900, { customerTags: ["t"] })], NONE, limits(), POLICY);
     expect(plan.slots[0]!.bytes).toBe(envelopeBytes(["k"], ["t"]) + 700 + 900 - 1);
@@ -216,7 +229,37 @@ describe("slot limits", () => {
       limits(),
       POLICY,
     );
-    expect(plan.blocked).toMatchObject({ code: "OFFER_TOO_LARGE", unitKeys: ["keys", "tags"] });
+    expect(plan.blocked).toMatchObject({ code: "OFFER_TOO_LARGE", unitKeys: ["keys", "tags"], reason: "keys" });
+    expect(plan.blocked!.numbers).toMatchObject({ keys: 4, maxKeys: 3, maxTags: 100, slotBytes: 9500 });
+  });
+
+  it("reports the tag overflow of a single unit with its numbers", () => {
+    const tags = Array.from({ length: 101 }, (_, i) => `t${i}`);
+    const plan = planShards([unit("tags", 300, { customerTags: tags })], NONE, limits(), POLICY);
+    expect(plan.blocked).toMatchObject({ code: "OFFER_TOO_LARGE", unitKeys: ["tags"], reason: "tags" });
+    expect(plan.blocked!.numbers).toMatchObject({ tags: 101, maxTags: 100 });
+  });
+
+  it("a C5 group over the hard cap is blocked as GROUP_TOO_LARGE and no slot is emitted", () => {
+    const ids = ["p1", "p2", "p3", "p4", "p5"];
+    const units = [
+      unit("quiz", 1500, { multiLineFixed: true, targetProductIds: ids }),
+      ...ids.map((id) => unit(`m-${id}`, 2000, { targetProductIds: [id] })),
+    ];
+    const plan = planShards(units, NONE, limits(), POLICY);
+    expect(plan.blocked).toMatchObject({ code: "GROUP_TOO_LARGE", reason: "bytes" });
+    expect(plan.blocked!.unitKeys).toEqual(["m-p1", "m-p2", "m-p3", "m-p4", "m-p5", "quiz"]);
+    expect(plan.blocked!.numbers["bytes"]).toBeGreaterThan(9500);
+    expect(plan.slots).toEqual([]);
+  });
+
+  it("a C5 group with more than 3 cart attribute keys is blocked with reason keys", () => {
+    const units = [
+      unit("quiz", 500, { multiLineFixed: true, targetProductIds: ["p1"] }),
+      ...["a", "b", "c", "d"].map((k) => unit(`m-${k}`, 500, { targetProductIds: ["p1"], cartAttributeKeys: [k] })),
+    ];
+    const plan = planShards(units, NONE, limits(), POLICY);
+    expect(plan.blocked).toMatchObject({ code: "GROUP_TOO_LARGE", reason: "keys" });
   });
 });
 
@@ -366,7 +409,8 @@ describe("single-shard mode", () => {
 describe("oversize units", () => {
   it("an unsplittable unit bigger than a slot is blocked with OFFER_TOO_LARGE", () => {
     const plan = planShards([unit("huge", 12000), unit("ok", 500)], NONE, limits(), POLICY);
-    expect(plan.blocked).toMatchObject({ code: "OFFER_TOO_LARGE", unitKeys: ["huge"] });
+    expect(plan.blocked).toMatchObject({ code: "OFFER_TOO_LARGE", unitKeys: ["huge"], reason: "bytes" });
+    expect(plan.blocked!.numbers["bytes"]).toBeGreaterThan(12000);
   });
 
   it("a splittable unit is replaced by its parts", () => {

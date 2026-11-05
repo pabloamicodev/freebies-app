@@ -34,12 +34,17 @@ export interface CombinationPolicy {
 export type PlanBlockCode =
   | "SLOT0_GROUP_TOO_LARGE"
   | "OFFER_TOO_LARGE"
+  | "GROUP_TOO_LARGE"
   | "AUTOMATIC_DISCOUNT_LIMIT"
   | "SLOT_FULL";
+
+export type PlanBlockReason = "bytes" | "keys" | "tags";
 
 export interface PlanBlocked {
   code: PlanBlockCode;
   unitKeys: string[];
+  /** For the too-large codes: which limit the (first) offender broke. */
+  reason?: PlanBlockReason;
   numbers: Record<string, number>;
 }
 
@@ -79,8 +84,12 @@ export function unitBytes(offer: CompiledOffer): number {
   return utf8Bytes(JSON.stringify(compactCompiledOffer(offer))) + 1;
 }
 
-/** Per-slot envelope: version, compiledAt, c1..c3 query variables, customerTags and the empty `offers` array. */
-export function envelopeBytes(cartAttributeKeys: readonly string[], customerTags: readonly string[]): number {
+/** Per-slot envelope: version, compiledAt, c1..c3 query variables, customerTags (and l1/l2 when set) and the empty `offers` array. */
+export function envelopeBytes(
+  cartAttributeKeys: readonly string[],
+  customerTags: readonly string[],
+  lineAttributeKeys: { l1?: string; l2?: string } = {},
+): number {
   const [c1, c2, c3] = [...cartAttributeKeys].sort(compareText);
   return utf8Bytes(
     serializeFunctionConfig({
@@ -88,6 +97,8 @@ export function envelopeBytes(cartAttributeKeys: readonly string[], customerTags
       shippingOffers: [],
       version: "1",
       compiledAt: "1970-01-01T00:00:00.000Z",
+      ...(lineAttributeKeys.l1 !== undefined ? { l1: lineAttributeKeys.l1 } : {}),
+      ...(lineAttributeKeys.l2 !== undefined ? { l2: lineAttributeKeys.l2 } : {}),
       ...(c1 !== undefined ? { c1 } : {}),
       ...(c2 !== undefined ? { c2 } : {}),
       ...(c3 !== undefined ? { c3 } : {}),
@@ -240,6 +251,10 @@ function compactOne(bins: Map<number, Group[]>, cap: number, fits: Fits): void {
 /**
  * Pure bin-packing of compiled cart offers into automatic discount nodes (slot 0 = the existing
  * node). Deterministic: ties break on (priority, key). `previous` makes placement sticky.
+ *
+ * A plan carrying `blocked` must never be written to Shopify: its slots are partial or empty.
+ * Single-shard mode packs greedily in priority order, so on overflow it may skip a higher-priority
+ * unit while still packing smaller lower-priority ones; `blocked.unitKeys` names the skipped units.
  */
 export function planShards(
   inputUnits: readonly PlanUnit[],
@@ -249,11 +264,24 @@ export function planShards(
 ): ShardPlan {
   const hard = limits.slotBytes;
   const soft = Math.floor(hard * limits.targetFill);
-  const fits: Fits = (groups, cap) => {
+  const overLimit = (groups: readonly Group[], cap: number): { reason: PlanBlockReason; m: Measure } | null => {
     const m = measure(groups);
-    return m.bytes <= cap && m.keys.length <= limits.maxKeys && m.tags.length <= limits.maxTags;
+    if (m.bytes > cap) return { reason: "bytes", m };
+    if (m.keys.length > limits.maxKeys) return { reason: "keys", m };
+    if (m.tags.length > limits.maxTags) return { reason: "tags", m };
+    return null;
   };
+  const fits: Fits = (groups, cap) => overLimit(groups, cap) === null;
   const fitsAlone = (unit: PlanUnit) => fits([makeGroup([unit], false)], hard);
+  const tooLargeNumbers = (m: Measure, extra: Record<string, number> = {}): Record<string, number> => ({
+    slotBytes: hard,
+    maxKeys: limits.maxKeys,
+    maxTags: limits.maxTags,
+    bytes: m.bytes,
+    keys: m.keys.length,
+    tags: m.tags.length,
+    ...extra,
+  });
 
   const hasOrders = inputUnits.some((unit) => unit.hasOrderRewards);
   const single = limits.maxSlots <= 1 || !policy.productDiscounts || (hasOrders && !policy.orderDiscounts);
@@ -267,7 +295,12 @@ export function planShards(
     } else tooLarge.push(unit.key);
   }
   if (tooLarge.length > 0) {
-    return { slots: [], moves: [], blocked: { code: "OFFER_TOO_LARGE", unitKeys: tooLarge, numbers: { slotBytes: hard } } };
+    const first = overLimit([makeGroup([inputUnits.find((unit) => unit.key === tooLarge[0])!], false)], hard)!;
+    return {
+      slots: [],
+      moves: [],
+      blocked: { code: "OFFER_TOO_LARGE", unitKeys: tooLarge, reason: first.reason, numbers: tooLargeNumbers(first.m) },
+    };
   }
   units.sort(compareUnits);
   const everyone = units.map((unit) => makeGroup([unit], false));
@@ -308,6 +341,22 @@ export function planShards(
         numbers: { slotBytes: hard, groupBytes: measure([pinned]).bytes, groupUnits: pinned.units.length },
       },
     };
+  }
+
+  for (const group of groups.filter((g) => !g.pinned)) {
+    const over = overLimit([group], hard);
+    if (over) {
+      return {
+        slots: [],
+        moves: [],
+        blocked: {
+          code: "GROUP_TOO_LARGE",
+          unitKeys: group.units.map((unit) => unit.key),
+          reason: over.reason,
+          numbers: tooLargeNumbers(over.m, { groupUnits: group.units.length }),
+        },
+      };
+    }
   }
 
   const bins = new Map<number, Group[]>([[0, pinned ? [pinned] : []]]);
