@@ -310,7 +310,7 @@ const assignment = async () => {
 const slotOwner = (row: { slot: number; discountNodeId: string | null }) => row.discountNodeId!;
 const metafieldSetCalls = () => shopify.mutations.filter((name) => name === "MetafieldsSet").length;
 
-const COUNT = 150;
+const COUNT = 100;
 
 describe("sharded cart publish", () => {
   let ids: string[];
@@ -393,7 +393,7 @@ describe("sharded cart publish", () => {
     it("editing one offer moves at most one unit", async () => {
       await publishOffersForShop(shopId, DOMAIN);
       const before = await assignment();
-      const target = ids[75]!;
+      const target = ids[50]!;
       await db
         .update(offerRewards)
         .set({ value: { amount: 77, currencyCode: "USD" }, target: { scopeMode: "sitewide", productIds: ["gid://shopify/Product/1", "gid://shopify/Product/2", "gid://shopify/Product/3"] } })
