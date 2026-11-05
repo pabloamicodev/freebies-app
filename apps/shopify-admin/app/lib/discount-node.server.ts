@@ -10,6 +10,7 @@
 import { appSettings, getDb, shops } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import { ShopifyOutcomeUnknownError, shopifyGraphQL } from "./shopify-fetch.server.js";
+import { serializeFunctionConfig } from "./sync/compile-config.js";
 
 const CART_DISCOUNT_TITLE = "Promo Engine";
 const DELIVERY_DISCOUNT_TITLE = "Promo Engine Shipping";
@@ -21,11 +22,16 @@ export const CODE_NODE_SETTING = "code_discount_node.id";
 /** Automatic delivery nodes that carry the code-gated shipping of mixed code offers (hashes live there, not in the shared delivery config). */
 export const CODED_SHIPPING_TITLE_PREFIX = "Promo Engine Coded Shipping";
 export const CODED_SHIPPING_POOL_SETTING = "coded_shipping_pool.ids";
+export const CART_SHARD_POOL_SETTING = "cart_shard_node_ids";
+const FUNCTION_CONFIG_KEY = "function_config";
+/** Mirrors FUNCTION_CONFIG_NAMESPACES in offer-publisher (importing it would pull the publisher into every discount-node consumer); a test pins them together. */
+const FUNCTION_CONFIG_NAMESPACES: readonly string[] = ["promo_engine", "$app:promo_engine"];
 export type DiscountClass = "ORDER" | "PRODUCT" | "SHIPPING";
 export const CART_DISCOUNT_CLASSES = [
   "PRODUCT",
   "ORDER",
 ] as const satisfies readonly DiscountClass[];
+export const CART_SHARD_CLASSES = ["PRODUCT"] as const satisfies readonly DiscountClass[];
 export const DELIVERY_DISCOUNT_CLASSES = ["SHIPPING"] as const satisfies readonly DiscountClass[];
 
 interface ShopifyFunctionSummary {
@@ -291,6 +297,7 @@ export async function createOrFindAutomaticDiscount(
   title: string,
   discountClasses: readonly DiscountClass[],
   match: AutomaticDiscountMatch = { functionId: shopifyFunction.id, title },
+  metafields?: readonly { namespace: string; key: string; type: string; value: string }[],
 ): Promise<string> {
   const existingId = await findExistingAutomaticDiscount(shopDomain, accessToken, match);
   if (existingId) return existingId;
@@ -311,7 +318,10 @@ export async function createOrFindAutomaticDiscount(
       }
     }`,
       variables: {
-        discount: buildAutomaticDiscountCreateInput(shopifyFunction.handle, title, discountClasses),
+        discount: {
+          ...buildAutomaticDiscountCreateInput(shopifyFunction.handle, title, discountClasses),
+          ...(metafields ? { metafields } : {}),
+        },
       },
     });
   let created: Awaited<ReturnType<typeof create>>;
@@ -474,6 +484,9 @@ export interface AutomaticDiscountMatch {
   exactTitle?: boolean;
 }
 
+/** Cart shard nodes share slot 0's Function, so a function-only match must never pick one. A slot-0 node renamed to this pattern would be treated as a shard. */
+const CART_SHARD_TITLE_PATTERN = new RegExp(`^${CART_DISCOUNT_TITLE.toLocaleLowerCase()} \\d+$`);
+
 const normalizedTitle = (title: string | undefined) => (title ?? "").trim().toLocaleLowerCase();
 
 async function scanAutomaticDiscounts(
@@ -497,7 +510,7 @@ async function scanAutomaticDiscounts(
       if (node.discount.appDiscountType?.functionId !== match.functionId) continue;
       const title = normalizedTitle(node.discount.title);
       if (title === wanted) return node.id;
-      if (!match.exactTitle && !title.startsWith(poolPrefix)) fallback ??= node.id;
+      if (!match.exactTitle && !title.startsWith(poolPrefix) && !CART_SHARD_TITLE_PATTERN.test(title)) fallback ??= node.id;
     }
     const pageInfo = data.discountNodes.pageInfo;
     if (!pageInfo.hasNextPage || !pageInfo.endCursor) break;
@@ -1106,6 +1119,27 @@ export async function ensureCodeDiscountNode(
   return id;
 }
 
+/** Which of these automatic node ids are ACTIVE: only those count against Shopify's 25. */
+async function activeAutomaticNodeIds(shopDomain: string, accessToken: string, ids: string[]): Promise<Set<string>> {
+  const found = new Set<string>();
+  for (const group of chunk([...new Set(ids)], 100)) {
+    const data = await shopifyGraphQL<{
+      nodes: Array<{ id?: string; automaticDiscount?: { status?: string } | null } | null>;
+    }>({
+      shopDomain,
+      accessToken,
+      query: `query PromoEngineNodesActive($ids: [ID!]!) {
+        nodes(ids: $ids) {
+          ... on DiscountAutomaticNode { id automaticDiscount { ... on DiscountAutomaticApp { status } } }
+        }
+      }`,
+      variables: { ids: group },
+    });
+    for (const node of data.nodes) if (node?.id && node.automaticDiscount?.status === "ACTIVE") found.add(node.id);
+  }
+  return found;
+}
+
 /** Which of these discount node ids (automatic or code) still exist in Shopify. */
 export async function existingDiscountNodeIds(
   shopDomain: string,
@@ -1158,12 +1192,6 @@ async function automaticNodeTitles(
   return found;
 }
 
-/** Slot number of a pool node title ("Promo Engine Coded Shipping 3" -> 3), or null for any other title. */
-function codedShippingSlot(title: string | null | undefined): number | null {
-  const match = new RegExp(`^${CODED_SHIPPING_TITLE_PREFIX} (\\d+)$`, "i").exec((title ?? "").trim());
-  return match ? Number(match[1]) : null;
-}
-
 export async function deleteAutomaticDiscountNode(
   shopDomain: string,
   accessToken: string,
@@ -1191,11 +1219,11 @@ export async function deleteAutomaticDiscountNode(
   }
 }
 
-export async function readCodedShippingNodeIds(shopId: string): Promise<string[]> {
+async function readIdList(shopId: string, key: string): Promise<string[]> {
   const [row] = await getDb()
     .select({ value: appSettings.value })
     .from(appSettings)
-    .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, CODED_SHIPPING_POOL_SETTING)))
+    .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, key)))
     .limit(1);
   if (!row) return [];
   try {
@@ -1206,27 +1234,53 @@ export async function readCodedShippingNodeIds(shopId: string): Promise<string[]
   }
 }
 
-async function writeCodedShippingNodeIds(shopId: string, ids: string[]): Promise<void> {
+async function writeSetting(shopId: string, key: string, value: string): Promise<void> {
   await getDb()
     .insert(appSettings)
-    .values({ shopId, key: CODED_SHIPPING_POOL_SETTING, value: JSON.stringify(ids) })
+    .values({ shopId, key, value })
     .onConflictDoUpdate({
       target: [appSettings.shopId, appSettings.key],
-      set: { value: JSON.stringify(ids), updatedAt: new Date() },
+      set: { value, updatedAt: new Date() },
     });
 }
 
+export const readCodedShippingNodeIds = (shopId: string): Promise<string[]> =>
+  readIdList(shopId, CODED_SHIPPING_POOL_SETTING);
+
+const writeCodedShippingNodeIds = (shopId: string, ids: string[]): Promise<void> =>
+  writeSetting(shopId, CODED_SHIPPING_POOL_SETTING, JSON.stringify(ids));
+
+/** Cart shard nodes in slot order: element 0 is "Promo Engine 2". Slot 0 is `shops.discount_id` and never listed here. */
+export const readCartShardNodeIds = (shopId: string): Promise<string[]> =>
+  readIdList(shopId, CART_SHARD_POOL_SETTING);
+
+const writeCartShardNodeIds = (shopId: string, ids: string[]): Promise<void> =>
+  writeSetting(shopId, CART_SHARD_POOL_SETTING, JSON.stringify(ids));
+
 /** Shopify allows this many active automatic discounts per shop, across every app. */
 export const SHOPIFY_AUTOMATIC_DISCOUNT_LIMIT = 25;
+
+/** Automatic discounts kept free so the merchant can add a native one without our next publish failing. */
+export const AUTOMATIC_DISCOUNT_RESERVE = 2;
+
+/** Cart slots (slot 0 plus shards) per shop: 12 metafield owners per atomic metafieldsSet, one of them the delivery node. */
+export const MAX_CART_SLOTS = 11;
+
+export type AutomaticPoolKind = "coded-shipping" | "cart-shard";
 
 /** Merchant-facing: the shop has no room under Shopify's automatic-discount limit for the nodes we need. */
 export class AutomaticDiscountLimitError extends Error {
   constructor(
     readonly active: number,
     readonly wanted: number,
+    readonly kind: AutomaticPoolKind = "coded-shipping",
   ) {
+    const more = `${wanted} more automatic discount${wanted === 1 ? "" : "s"}`;
+    const store = `your store already has ${active} active and Shopify allows ${SHOPIFY_AUTOMATIC_DISCOUNT_LIMIT}`;
     super(
-      `Free shipping on code offers needs ${wanted} more automatic discount${wanted === 1 ? "" : "s"} in Shopify, but your store already has ${active} active and Shopify allows ${SHOPIFY_AUTOMATIC_DISCOUNT_LIMIT}. Deactivate or delete some automatic discounts in Shopify, then publish again.`,
+      kind === "cart-shard"
+        ? `Your offers need ${more} in Shopify to fit, but ${store}. Deactivate or delete some automatic discounts in Shopify, or simplify your offers, then publish again.`
+        : `Free shipping on code offers needs ${more} in Shopify, but ${store}. Deactivate or delete some automatic discounts in Shopify, then publish again.`,
     );
     this.name = "AutomaticDiscountLimitError";
   }
@@ -1256,12 +1310,111 @@ export async function countActiveAutomaticDiscounts(
 /** Most automatic delivery nodes a shop may dedicate to code-gated shipping (Shopify caps automatic discounts at 25 per shop). */
 export const MAX_CODED_SHIPPING_NODES = 12;
 
+export interface AutomaticNodePoolSpec {
+  kind: AutomaticPoolKind;
+  functionKind: "cart" | "delivery";
+  /** Exact title of pool slot `slot` (1-based). */
+  titleFor(slot: number): string;
+  classes: readonly DiscountClass[];
+  needed: number;
+  /** function_config written in the create input, so a new node does nothing until a later metafieldsSet fills it. */
+  initialMetafieldValue?: string;
+  read(): Promise<string[]>;
+  write(ids: string[]): Promise<void>;
+}
+
+const POOL_SLOT_SCAN = 100;
+
+function poolSlot(titleFor: (slot: number) => string, title: string | null | undefined): number | null {
+  const wanted = (title ?? "").trim().toLocaleLowerCase();
+  for (let slot = 1; slot <= POOL_SLOT_SCAN; slot += 1) {
+    if (titleFor(slot).toLocaleLowerCase() === wanted) return slot;
+  }
+  return null;
+}
+
+/**
+ * A pool of automatic app discount nodes on one Function. Returns exactly `needed` live node ids:
+ * missing ones (deleted by the merchant, or lost on reinstall) are created, and surplus ones are
+ * deleted so they don't count against Shopify's automatic-discount limit. Each node is created at
+ * most once: ids are persisted after every create and a timed-out create is looked up by title
+ * before it is repeated.
+ */
+export async function ensureAutomaticNodePool(
+  shopDomain: string,
+  accessToken: string,
+  spec: AutomaticNodePoolSpec,
+): Promise<string[]> {
+  const { needed, titleFor } = spec;
+  const stored = await spec.read();
+  const live = stored.length > 0 ? await automaticNodeTitles(shopDomain, accessToken, stored) : new Map<string, string | null>();
+  const kept = stored.filter((id) => live.has(id));
+  const surplus = kept.slice(needed);
+  const ids = kept.slice(0, needed);
+
+  if (ids.length < needed) {
+    const active = await countActiveAutomaticDiscounts(shopDomain, accessToken);
+    if (active !== null && active + (needed - ids.length) > SHOPIFY_AUTOMATIC_DISCOUNT_LIMIT) {
+      throw new AutomaticDiscountLimitError(active, needed - ids.length, spec.kind);
+    }
+    const nodeFunction =
+      spec.functionKind === "cart"
+        ? await findCartDiscountFunction(shopDomain, accessToken)
+        : await findDeliveryDiscountFunction(shopDomain, accessToken);
+    const metafields =
+      spec.initialMetafieldValue === undefined
+        ? undefined
+        : FUNCTION_CONFIG_NAMESPACES.map((namespace) => ({
+            namespace,
+            key: FUNCTION_CONFIG_KEY,
+            type: "json",
+            value: spec.initialMetafieldValue as string,
+          }));
+    // Titles come from the nodes that actually exist: after the merchant deletes node 2 of 1..3,
+    // "count + 1" would be 3 again, and the exact-title lookup would hand back node 3's id twice.
+    const usedSlots = new Set(
+      ids.flatMap((id) => {
+        const slot = poolSlot(titleFor, live.get(id));
+        return slot === null ? [] : [slot];
+      }),
+    );
+    // Surplus nodes are deleted below, so their titles are still taken while this publish runs.
+    for (const id of surplus) {
+      const slot = poolSlot(titleFor, live.get(id));
+      if (slot !== null) usedSlots.add(slot);
+    }
+    for (let created = ids.length; created < needed; created += 1) {
+      let slot = 1;
+      while (usedSlots.has(slot)) slot += 1;
+      usedSlots.add(slot);
+      const title = titleFor(slot);
+      const id = await createOrFindAutomaticDiscount(
+        shopDomain,
+        accessToken,
+        nodeFunction,
+        title,
+        spec.classes,
+        { functionId: nodeFunction.id, title, exactTitle: true },
+        metafields,
+      );
+      if (ids.includes(id)) {
+        const label = spec.kind === "cart-shard" ? "Cart shard slot" : "Coded shipping slot";
+        throw new Error(`${label} "${title}" resolved to a node that is already in the pool (${id}).`);
+      }
+      ids.push(id);
+      await spec.write(ids);
+    }
+  }
+  if (ids.length !== stored.length || ids.some((id, i) => stored[i] !== id)) {
+    await spec.write(ids);
+  }
+  for (const id of surplus) await deleteAutomaticDiscountNode(shopDomain, accessToken, id);
+  return ids;
+}
+
 /**
  * The shop's pool of automatic delivery nodes for the shipping part of mixed code offers.
- * Returns exactly `needed` live node ids: missing ones (deleted by the merchant, or lost on
- * reinstall) are created, and surplus ones are deleted so they don't count against Shopify's
- * automatic-discount limit. Each node is created at most once: ids are persisted after every
- * create and a timed-out create is looked up by title before it is repeated.
+ * Returns exactly `needed` live node ids (see `ensureAutomaticNodePool`).
  */
 export async function ensureCodedShippingNodes(
   shopId: string,
@@ -1274,54 +1427,115 @@ export async function ensureCodedShippingNodes(
       `Code-gated shipping needs ${needed} delivery discounts, more than the ${MAX_CODED_SHIPPING_NODES} this app may use. Reduce the number of codes on offers with free shipping.`,
     );
   }
-  const stored = await readCodedShippingNodeIds(shopId);
-  const live = stored.length > 0 ? await automaticNodeTitles(shopDomain, accessToken, stored) : new Map<string, string | null>();
-  const kept = stored.filter((id) => live.has(id));
-  const surplus = kept.slice(needed);
-  const ids = kept.slice(0, needed);
+  return ensureAutomaticNodePool(shopDomain, accessToken, {
+    kind: "coded-shipping",
+    functionKind: "delivery",
+    titleFor: (slot) => `${CODED_SHIPPING_TITLE_PREFIX} ${slot}`,
+    classes: DELIVERY_DISCOUNT_CLASSES,
+    needed,
+    read: () => readCodedShippingNodeIds(shopId),
+    write: (ids) => writeCodedShippingNodeIds(shopId, ids),
+  });
+}
 
-  if (ids.length < needed) {
-    const active = await countActiveAutomaticDiscounts(shopDomain, accessToken);
-    if (active !== null && active + (needed - ids.length) > SHOPIFY_AUTOMATIC_DISCOUNT_LIMIT) {
-      throw new AutomaticDiscountLimitError(active, needed - ids.length);
-    }
-    const deliveryFunction = await findDeliveryDiscountFunction(shopDomain, accessToken);
-    // Titles come from the nodes that actually exist: after the merchant deletes node 2 of 1..3,
-    // "count + 1" would be 3 again, and the exact-title lookup would hand back node 3's id twice.
-    const usedSlots = new Set(
-      ids.flatMap((id) => {
-        const slot = codedShippingSlot(live.get(id));
-        return slot === null ? [] : [slot];
-      }),
-    );
-    // Surplus nodes are deleted below, so their titles are still taken while this publish runs.
-    for (const id of surplus) {
-      const slot = codedShippingSlot(live.get(id));
-      if (slot !== null) usedSlots.add(slot);
-    }
-    for (let created = ids.length; created < needed; created += 1) {
-      let slot = 1;
-      while (usedSlots.has(slot)) slot += 1;
-      usedSlots.add(slot);
-      const title = `${CODED_SHIPPING_TITLE_PREFIX} ${slot}`;
-      const id = await createOrFindAutomaticDiscount(
-        shopDomain,
-        accessToken,
-        deliveryFunction,
-        title,
-        DELIVERY_DISCOUNT_CLASSES,
-        { functionId: deliveryFunction.id, title, exactTitle: true },
-      );
-      if (ids.includes(id)) {
-        throw new Error(`Coded shipping slot "${title}" resolved to a node that is already in the pool (${id}).`);
-      }
-      ids.push(id);
-      await writeCodedShippingNodeIds(shopId, ids);
-    }
+/** Inert cart config: the metafield also feeds the Function's input-query variables, so it carries the full envelope (c1..c3, customerTags, version) with no offers. */
+export const EMPTY_CART_SHARD_CONFIG = serializeFunctionConfig({
+  offers: [],
+  shippingOffers: [],
+  version: "1",
+  compiledAt: "1970-01-01T00:00:00.000Z",
+});
+
+/** Shard titles start at "Promo Engine 2": the plain "Promo Engine" title belongs to slot 0. */
+export const cartShardTitle = (slot: number): string => `${CART_DISCOUNT_TITLE} ${slot + 1}`;
+
+/** Cart shard nodes (slots 1..`shards`), PRODUCT class only. Slot 0 is `shops.discount_id` and is never created or deleted here. */
+export function ensureCartShardNodes(
+  shopId: string,
+  shopDomain: string,
+  accessToken: string,
+  shards: number,
+): Promise<string[]> {
+  return ensureAutomaticNodePool(shopDomain, accessToken, {
+    kind: "cart-shard",
+    functionKind: "cart",
+    titleFor: cartShardTitle,
+    classes: CART_SHARD_CLASSES,
+    needed: shards,
+    initialMetafieldValue: EMPTY_CART_SHARD_CONFIG,
+    read: () => readCartShardNodeIds(shopId),
+    write: (ids) => writeCartShardNodeIds(shopId, ids),
+  });
+}
+
+export interface AutomaticNodeBudget {
+  /** Active automatic discounts in the store (all apps), or null when Shopify couldn't say. */
+  storeActive: number | null;
+  /** Active automatic nodes this app owns: cart slot 0, delivery, backend B, coded shipping pool, cart shards. */
+  ours: number;
+  /** Active automatic discounts that aren't ours (last known value when the count is unavailable), or null when never known. */
+  others: number | null;
+  /** Cart slots (slot 0 plus shards) the shop can afford, 1..11. */
+  maxCartSlots: number;
+}
+
+/** Last known `others`, kept for when `discountNodesCount` is unavailable. */
+export const AUTOMATIC_OTHERS_SETTING = "automatic_discounts.others";
+
+function parseNumber(value: string): number | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "number" && Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  } catch {
+    return null;
   }
-  if (ids.length !== stored.length || ids.some((id, i) => stored[i] !== id)) {
-    await writeCodedShippingNodeIds(shopId, ids);
+}
+
+/**
+ * How many cart slots fit under Shopify's 25 automatic discounts:
+ * `min(11, 25 - others - ourNonShardNodes - 2)`, never below 1. With no count and no last known value,
+ * the shop may grow by one slot beyond its current shards.
+ */
+export async function automaticNodeBudget(
+  shopId: string,
+  shopDomain: string,
+  accessToken: string,
+): Promise<AutomaticNodeBudget> {
+  const [shop] = await getDb()
+    .select({ discountId: shops.discountId, deliveryDiscountId: shops.deliveryDiscountId })
+    .from(shops)
+    .where(eq(shops.id, shopId))
+    .limit(1);
+  const [codeId, pool, shards] = await Promise.all([
+    readCodeNodeId(shopId),
+    readCodedShippingNodeIds(shopId),
+    readCartShardNodeIds(shopId),
+  ]);
+  const candidates = [
+    ...new Set([shop?.discountId, shop?.deliveryDiscountId, codeId, ...pool, ...shards].filter((id): id is string => Boolean(id))),
+  ];
+  const liveIds = candidates.length > 0 ? await activeAutomaticNodeIds(shopDomain, accessToken, candidates) : new Set<string>();
+  const ours = candidates.filter((id) => liveIds.has(id)).length;
+  const liveShards = new Set(shards.filter((id) => liveIds.has(id))).size;
+  const slotZero = shop?.discountId && liveIds.has(shop.discountId) ? 1 : 0;
+  const nonShard = ours - liveShards - slotZero;
+
+  const storeActive = await countActiveAutomaticDiscounts(shopDomain, accessToken);
+  let others: number | null;
+  if (storeActive !== null) {
+    others = Math.max(0, storeActive - ours);
+    await writeSetting(shopId, AUTOMATIC_OTHERS_SETTING, JSON.stringify(others));
+  } else {
+    const [row] = await getDb()
+      .select({ value: appSettings.value })
+      .from(appSettings)
+      .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, AUTOMATIC_OTHERS_SETTING)))
+      .limit(1);
+    others = row ? parseNumber(row.value) : null;
   }
-  for (const id of surplus) await deleteAutomaticDiscountNode(shopDomain, accessToken, id);
-  return ids;
+  const maxCartSlots =
+    others === null
+      ? Math.min(MAX_CART_SLOTS, liveShards + 2)
+      : Math.min(MAX_CART_SLOTS, SHOPIFY_AUTOMATIC_DISCOUNT_LIMIT - others - nonShard - AUTOMATIC_DISCOUNT_RESERVE);
+  return { storeActive, ours, others, maxCartSlots: Math.max(1, maxCartSlots) };
 }
