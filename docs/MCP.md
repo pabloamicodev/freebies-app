@@ -19,7 +19,7 @@ project (`freebies-app-shopify-admin`). Never add `alias` to a `vercel.json`.
 | `MCP_ENABLED` | `true` turns the endpoint on. Anything else: 404. |
 | `MCP_TOKEN_PEPPER` | 16+ chars. PATs are stored as `sha256(pepper + token)`. Changing it invalidates every PAT. |
 | `MCP_PUBLIC_URL` | Optional. Pins the public origin (issuer, OAuth endpoints, `resource_metadata`) when the request host is not the public one. Defaults to the request origin. |
-| `MCP_WRITE_SHOPS` | Comma list of myshopify domains that may ever be write-enabled (only `hpn-test-store.myshopify.com`). |
+| `MCP_WRITE_SHOPS` | Comma list of myshopify domains that may ever be write-enabled (today all 5 shops). |
 | `MCP_CONFIRM_SECRET` | 32+ chars. HMAC key of the write `confirmToken`s. Missing or short: every write tool (dry runs too) answers `UPSTREAM_UNAVAILABLE`; reads are unaffected. Rotating it only invalidates tokens in flight (5 min). |
 
 Write mode needs both locks: the env list above AND `app_settings` key `mcp.writeMode` = `"write"` for that shop.
@@ -122,7 +122,7 @@ Every write calls the `offer-lifecycle.server.ts` service (validate, update, pub
 
 ### Phase 4.1 critical tools (`lib/mcp/tools/critical-tools.server.ts`)
 
-All admin-only, `destructiveHint`, 3 executions a minute, audited as `mcp:<operatorId>`, and locked exactly like the tools above (`MCP_WRITE_SHOPS` AND `mcp.writeMode`: today only hpn-test-store; any other shop answers `SHOP_READ_ONLY` even for admins). `dryRun` defaults to `true` and the same confirmToken / idempotencyKey flow applies.
+All admin-only, `destructiveHint`, 3 executions a minute, audited as `mcp:<operatorId>`, and locked exactly like the tools above (`MCP_WRITE_SHOPS` AND `mcp.writeMode`: today all 5 shops; a shop outside either lock answers `SHOP_READ_ONLY` even for admins). `dryRun` defaults to `true` and the same confirmToken / idempotencyKey flow applies.
 
 | Tool | What it does |
 |---|---|
@@ -154,12 +154,12 @@ Optional TOTP (RFC 6238, SHA-1, 6 digits, 30 s, +-1 step) on `/mcp/authorize`: `
 Load check: `scripts/load/mcp.k6.js` (read tools, hpn-test-store only, 2 VUs by default; see its header).
 Retention: the daily `analytics-cleanup` cron (`call-log-retention.server.ts`, next to the OAuth cleanup) deletes `mcp_call_log` rows older than 90 days and PATs expired for more than 7 days.
 
-### Enabling writes on hpn-test-store
+### Enabling writes on a shop
 
-1. Vercel (HPN project only): set `MCP_WRITE_SHOPS=hpn-test-store.myshopify.com` and `MCP_CONFIRM_SECRET` (32+ random chars), redeploy.
-2. Open the per-shop lock: `pnpm mcp:operator write-mode --shop hpn-test-store --mode write --env <file>` (upserts `app_settings` key `mcp.writeMode`; fails if the shop does not exist; prints the resulting mode). `write-mode --list` shows every shop's stored mode. Use `--mode read_only` to lock the shop again; removing the domain from `MCP_WRITE_SHOPS` also locks it (the env lock always applies on top of this setting).
+1. Vercel (HPN project only): add the shop to `MCP_WRITE_SHOPS` (comma list) and set `MCP_CONFIRM_SECRET` (32+ random chars), redeploy.
+2. Open the per-shop lock: `pnpm mcp:operator write-mode --shop <handle> --mode write --env <file>` (upserts `app_settings` key `mcp.writeMode`; fails if the shop does not exist; prints the resulting mode). `write-mode --list` shows every shop's stored mode. Use `--mode read_only` to lock the shop again; removing the domain from `MCP_WRITE_SHOPS` also locks it (the env lock always applies on top of this setting).
 3. Give the operator the `editor` (or `admin`) role: `pnpm mcp:operator create ... --role editor --shops '*'`.
-4. Test only on offers named `[MCP test] ...`: hpn-test-store shares the app with HPN and TRU. Any other shop answers `SHOP_READ_ONLY` even for admins.
+4. Test only on hpn-test-store, on offers named `[MCP test] ...`: it shares the app with HPN and TRU. A shop outside either lock answers `SHOP_READ_ONLY` even for admins.
 
 ## Resources and prompts (`lib/mcp/resources.server.ts`)
 
