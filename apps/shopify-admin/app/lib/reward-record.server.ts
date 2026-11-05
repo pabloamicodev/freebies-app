@@ -42,6 +42,7 @@ export async function buildRewardRecord(
   db: ShopDb,
   shopId: string,
   shopCurrencyCode: string,
+  existingValue?: Record<string, unknown> | null,
 ): Promise<
   | {
       data: {
@@ -326,6 +327,7 @@ export async function buildRewardRecord(
             : ordinaryTarget;
       }
       value = {
+        ...(rewardType === "product_discount" ? existingValue : null),
         amount: discountType === "percentage" ? discountValue : toStoredAmount(discountValue, currencyCode),
         currencyCode,
       };

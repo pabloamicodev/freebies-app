@@ -234,7 +234,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const discountValue = Number.isFinite(parsedValue) ? parsedValue : 100;
       const isAutoAdd = formData.get("isAutoAdd") === "on";
 
-      const [editedReward] = await db.select({ rewardType: offerRewards.rewardType }).from(offerRewards)
+      const [editedReward] = await db.select({ rewardType: offerRewards.rewardType, value: offerRewards.value }).from(offerRewards)
         .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId))).limit(1);
       if (!editedReward) return { error: "Reward not found." };
       if (editedReward.rewardType === "product_gift") {
@@ -304,7 +304,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const targetRaw = formData.get("targetVariantIds");
       const set: Record<string, unknown> = {
         discountType: discountType as "percentage" | "fixed_amount" | "fixed_price" | "free" | "cheapest_item_free" | "most_expensive_item_discount",
-        value: { amount: discountValue, currencyCode: shopCurrencyCode },
+        value: {
+          ...(editedReward.rewardType === "product_discount" ? (editedReward.value as Record<string, unknown>) : null),
+          amount: discountValue,
+          currencyCode: shopCurrencyCode,
+        },
         quantity,
         isAutoAdd,
       };
