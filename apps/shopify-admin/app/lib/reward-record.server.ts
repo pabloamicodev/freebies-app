@@ -11,6 +11,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { toStoredAmount } from "./money.js";
 import { parseSubscriptionMode, withSubscriptionMode } from "./purchase-type.js";
 import { splitTextareaList } from "./textarea-list.js";
+import { parseQuantityTiers, type QuantityTier } from "./quantity-tiers.js";
 import type { getShopContext } from "./shop-context.server.js";
 
 function parseShippingTiers(
@@ -76,6 +77,14 @@ export async function buildRewardRecord(
       shippingTiers = parsedTiers.tiers;
       discountType = shippingTiers[0]!.discountType;
     }
+    let postedTiers: QuantityTier[] | undefined;
+    const tiersField = formData.get("productTiers");
+    if (rewardType === "product_discount" && typeof tiersField === "string") {
+      const parsedTiers = parseQuantityTiers(tiersField);
+      if (!parsedTiers.ok) return { error: parsedTiers.error };
+      postedTiers = parsedTiers.tiers;
+      if (postedTiers.length > 0) discountType = "percentage";
+    }
     const rewardTypeResult = RewardTypeSchema.safeParse(rewardType);
     if (!rewardTypeResult.success) return { error: "Reward type is invalid." };
     const discountTypeResult = DiscountTypeSchema.safeParse(discountType);
@@ -110,6 +119,7 @@ export async function buildRewardRecord(
     if (!rewardType) return { error: "Reward type is required." };
 
     const needsValue =
+      !postedTiers?.length &&
       rewardType !== "shipping_discount" &&
       discountType !== "free" &&
       discountType !== "cheapest_item_free";
@@ -333,11 +343,13 @@ export async function buildRewardRecord(
               }
             : ordinaryTarget;
       }
-      value = {
-        ...keptTiers(rewardType, existing),
-        amount: discountType === "percentage" ? discountValue : toStoredAmount(discountValue, currencyCode),
-        currencyCode,
-      };
+      value = postedTiers?.length
+        ? { amount: 0, currencyCode, tiers: postedTiers }
+        : {
+            ...(postedTiers ? null : keptTiers(rewardType, existing)),
+            amount: discountType === "percentage" ? discountValue : toStoredAmount(discountValue, currencyCode),
+            currencyCode,
+          };
     }
     if (rewardType === "order_discount") {
       target = withSubscriptionMode({ ...target }, parseSubscriptionMode(formData));

@@ -24,7 +24,8 @@ import { splitTextareaList } from "../lib/textarea-list.js";
 import { and, eq } from "drizzle-orm";
 import { fromStoredAmount } from "../lib/money.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
-import { targetSummaryParts } from "../lib/offer-summaries.js";
+import { readRewardTiers, rewardSummary, targetSummaryParts } from "../lib/offer-summaries.js";
+import { CartLabelsField } from "../components/CartLabelsField.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -258,6 +259,30 @@ interface ProductPriceTierDraft {
   targetPricePerUnit: string;
 }
 
+interface QuantityTierDraft {
+  key: string;
+  minimumQuantity: string;
+  maximumQuantity: string;
+  discountType: string;
+  discountValue: string;
+  discountedQuantity: string;
+  label: string;
+  cartLabels: string[];
+}
+
+function newQuantityTier(minimumQuantity: string): QuantityTierDraft {
+  return {
+    key: `quantity-tier-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    minimumQuantity,
+    maximumQuantity: "",
+    discountType: "percentage",
+    discountValue: "",
+    discountedQuantity: "",
+    label: "",
+    cartLabels: [],
+  };
+}
+
 const DEFAULT_SHIPPING_TIER: ShippingTierDraft = {
   key: "shipping-tier-1",
   minimumSubtotal: "0",
@@ -297,6 +322,7 @@ export default function OfferRewardsPage() {
     productPriceTiers: [
       { key: "product-tier-1", quantity: "1", targetPricePerUnit: "" },
     ] as ProductPriceTierDraft[],
+    quantityTiers: null as QuantityTierDraft[] | null,
     confirmDeleteRewardId: null as string | null,
   });
   const {
@@ -320,6 +346,7 @@ export default function OfferRewardsPage() {
     productScopeMode,
     productTargetType,
     productPriceTiers,
+    quantityTiers,
     confirmDeleteRewardId,
   } = rewardState;
   const setConfirmDeleteRewardId = createFieldSetter(setRewardField, "confirmDeleteRewardId");
@@ -352,10 +379,12 @@ export default function OfferRewardsPage() {
   const setProductScopeMode = createFieldSetter(setRewardField, "productScopeMode");
   const setProductTargetType = createFieldSetter(setRewardField, "productTargetType");
   const setProductPriceTiers = createFieldSetter(setRewardField, "productPriceTiers");
+  const setQuantityTiers = createFieldSetter(setRewardField, "quantityTiers");
 
   function closeRewardForm() {
     setAdding(false);
     setEditingId(null);
+    setQuantityTiers(null);
   }
 
   function startEditReward(r: (typeof rewards)[number]) {
@@ -382,6 +411,21 @@ export default function OfferRewardsPage() {
     );
     setFallbackGids(Array.isArray(target["fallbackVariantIds"]) ? target["fallbackVariantIds"] as string[] : []);
     setProductTargetType(targetProductIds.length > 0 ? "products" : "variants");
+    const savedTiers = r.rewardType === "product_discount" ? readRewardTiers(value) : [];
+    setQuantityTiers(
+      savedTiers.length > 0
+        ? savedTiers.map((tier, index) => ({
+            key: `edit-quantity-tier-${index}`,
+            minimumQuantity: String(tier.minQuantity),
+            maximumQuantity: tier.maxQuantity === null ? "" : String(tier.maxQuantity),
+            discountType: tier.discountType,
+            discountValue: String(tier.discountValue),
+            discountedQuantity: String(((value["tiers"] as Array<Record<string, unknown>>)[index] ?? {})["discountedQuantity"] ?? ""),
+            label: tier.label ?? "",
+            cartLabels: tier.cartLabels,
+          }))
+        : null,
+    );
 
     const scopeMode = target["scopeMode"];
     const resolvedScopeMode = scopeMode === "landing" || scopeMode === "quiz_bundle" ? scopeMode : "sitewide";
@@ -427,7 +471,9 @@ export default function OfferRewardsPage() {
   const editingTarget = (editingReward?.target ?? {}) as Record<string, unknown>;
   const editingRewardValue = (editingReward?.value ?? {}) as Record<string, unknown>;
 
+  const tiered = rewardType === "product_discount" && quantityTiers !== null;
   const needsValue =
+    !tiered &&
     rewardType !== "shipping_discount" &&
     discountType !== "free" &&
     discountType !== "cheapest_item_free";
@@ -439,6 +485,12 @@ export default function OfferRewardsPage() {
   ) {
     setShippingTiers((current) =>
       current.map((tier, tierIndex) => (tierIndex === index ? { ...tier, [field]: value } : tier)),
+    );
+  }
+
+  function updateQuantityTier(index: number, patch: Partial<QuantityTierDraft>) {
+    setQuantityTiers((current) =>
+      (current ?? []).map((tier, tierIndex) => (tierIndex === index ? { ...tier, ...patch } : tier)),
     );
   }
 
@@ -459,6 +511,17 @@ export default function OfferRewardsPage() {
       discountType: tier.discountType,
       discountValue: Number(tier.discountValue || 0),
       ...(tier.appliesWhen ? { appliesWhen: tier.appliesWhen } : {}),
+    })),
+  );
+  const serializedQuantityTiers = JSON.stringify(
+    (quantityTiers ?? []).map((tier) => ({
+      minimumQuantity: Number(tier.minimumQuantity),
+      ...(tier.maximumQuantity ? { maximumQuantity: Number(tier.maximumQuantity) } : {}),
+      discountType: tier.discountType,
+      discountValue: tier.discountType === "free" ? 0 : Number(tier.discountValue || 0),
+      ...(tier.discountedQuantity ? { discountedQuantity: Number(tier.discountedQuantity) } : {}),
+      ...(tier.label.trim() ? { label: tier.label.trim() } : {}),
+      cartLabels: tier.cartLabels,
     })),
   );
   const serializedProductPriceTiers = JSON.stringify(
@@ -593,6 +656,9 @@ export default function OfferRewardsPage() {
                       {r.isCustomerSelectable && (
                         <span className="b-badge b-badge-orange">Customer selects</span>
                       )}
+                      {r.rewardType === "product_discount" && readRewardTiers(r.value).length > 0 && (
+                        <span className="b-text-sm b-text-sub">{rewardSummary(r).split(" — ")[1]?.split(" · ")[0]}</span>
+                      )}
                       {targetSummaryParts(r.target).map((part) => (
                         <span key={part} className="b-text-sm b-text-sub">
                           {part}
@@ -629,7 +695,7 @@ export default function OfferRewardsPage() {
               <button
                 type="button"
                 className="b-btn b-btn-secondary b-mt-4"
-                onClick={() => { setEditingId(null); setAdding(true); }}
+                onClick={() => { setEditingId(null); setQuantityTiers(null); setAdding(true); }}
               >
                 + Add Reward
               </button>
@@ -684,6 +750,8 @@ export default function OfferRewardsPage() {
                       name="discountType"
                       value={shippingTiers[0]?.discountType ?? "percentage"}
                     />
+                  ) : tiered ? (
+                    <input type="hidden" name="discountType" value="percentage" />
                   ) : (
                     <div>
                       <label className="b-label" htmlFor="discountType">
@@ -764,6 +832,159 @@ export default function OfferRewardsPage() {
                         />
                       </div>
                     </div>
+                  )}
+
+                  {rewardType === "product_discount" && (
+                    <fieldset className="b-card b-p-4" style={{ marginBottom: 12 }}>
+                      <legend className="b-label">Quantity tiers</legend>
+                      {quantityTiers === null ? (
+                        <div className="b-stack b-gap-3">
+                          <p className="b-help" style={{ margin: 0 }}>
+                            Give different discounts by quantity (for example 1 for 15%, 2 for 20%). Tiered rewards replace the single discount value above.
+                          </p>
+                          <div>
+                            <button
+                              type="button"
+                              className="b-btn b-btn-secondary b-btn-sm"
+                              onClick={() => setQuantityTiers([newQuantityTier("1")])}
+                            >
+                              Add quantity tiers
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="b-stack b-gap-3">
+                          <input type="hidden" name="productTiers" value={serializedQuantityTiers} />
+                          <input type="hidden" name="discountValue" value="0" />
+                          {quantityTiers.map((tier, index) => (
+                            <div key={tier.key} className="b-card b-p-4" style={{ background: "var(--bg-hover)" }}>
+                              <div className="b-row-between" style={{ marginBottom: 8 }}>
+                                <span className="b-text-sm b-text-bold">Tier {index + 1}</span>
+                                <button
+                                  type="button"
+                                  className="b-btn-icon b-btn-icon-red"
+                                  aria-label={`Remove tier ${index + 1}`}
+                                  onClick={() => {
+                                    const next = quantityTiers.filter((_, tierIndex) => tierIndex !== index);
+                                    setQuantityTiers(next.length > 0 ? next : null);
+                                  }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                              <div className="b-grid-3">
+                                <div>
+                                  <label className="b-label" htmlFor={`qt-${tier.key}-min`}>Minimum quantity</label>
+                                  <input
+                                    id={`qt-${tier.key}-min`}
+                                    className="b-input"
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    value={tier.minimumQuantity}
+                                    onChange={(e) => updateQuantityTier(index, { minimumQuantity: e.target.value })}
+                                    autoComplete="off"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="b-label" htmlFor={`qt-${tier.key}-max`}>Maximum quantity</label>
+                                  <input
+                                    id={`qt-${tier.key}-max`}
+                                    className="b-input"
+                                    type="number"
+                                    min={tier.minimumQuantity || "1"}
+                                    step="1"
+                                    value={tier.maximumQuantity}
+                                    placeholder="No maximum"
+                                    onChange={(e) => updateQuantityTier(index, { maximumQuantity: e.target.value })}
+                                    autoComplete="off"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="b-label" htmlFor={`qt-${tier.key}-label`}>Title</label>
+                                  <input
+                                    id={`qt-${tier.key}-label`}
+                                    className="b-input"
+                                    value={tier.label}
+                                    onChange={(e) => updateQuantityTier(index, { label: e.target.value })}
+                                    autoComplete="off"
+                                  />
+                                </div>
+                              </div>
+                              <div className="b-grid-2" style={{ marginTop: 8 }}>
+                                <div>
+                                  <label className="b-label" htmlFor={`qt-${tier.key}-type`}>Discount type</label>
+                                  <select
+                                    id={`qt-${tier.key}-type`}
+                                    className="b-select"
+                                    value={tier.discountType}
+                                    onChange={(e) => updateQuantityTier(index, { discountType: e.target.value })}
+                                  >
+                                    <option value="percentage">Percentage</option>
+                                    <option value="fixed_amount">Fixed amount</option>
+                                    <option value="fixed_price">Fixed price</option>
+                                    <option value="free">Free</option>
+                                  </select>
+                                </div>
+                                {tier.discountType !== "free" && (
+                                  <div>
+                                    <label className="b-label" htmlFor={`qt-${tier.key}-value`}>
+                                      Discount value ({tier.discountType === "percentage" ? "%" : "$"})
+                                    </label>
+                                    <input
+                                      id={`qt-${tier.key}-value`}
+                                      className="b-input"
+                                      type="number"
+                                      min="0"
+                                      step="0.01"
+                                      value={tier.discountValue}
+                                      onChange={(e) => updateQuantityTier(index, { discountValue: e.target.value })}
+                                      autoComplete="off"
+                                    />
+                                  </div>
+                                )}
+                                {tier.discountedQuantity !== "" && (
+                                  <div>
+                                    <label className="b-label" htmlFor={`qt-${tier.key}-discounted`}>Discounted units</label>
+                                    <input
+                                      id={`qt-${tier.key}-discounted`}
+                                      className="b-input"
+                                      type="number"
+                                      min="1"
+                                      step="1"
+                                      value={tier.discountedQuantity}
+                                      onChange={(e) => updateQuantityTier(index, { discountedQuantity: e.target.value })}
+                                      autoComplete="off"
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                              <div style={{ marginTop: 8 }}>
+                                <CartLabelsField
+                                  name=""
+                                  label={`Tier ${index + 1} cart & checkout labels`}
+                                  value={tier.cartLabels}
+                                  onChange={(cartLabels) => updateQuantityTier(index, { cartLabels })}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                          <div>
+                            <button
+                              type="button"
+                              className="b-btn b-btn-secondary b-btn-sm"
+                              onClick={() => {
+                                const last = quantityTiers[quantityTiers.length - 1];
+                                const next = last ? Number(last.maximumQuantity || last.minimumQuantity || 0) + 1 : 1;
+                                setQuantityTiers([...quantityTiers, newQuantityTier(String(next))]);
+                              }}
+                            >
+                              + Add tier
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </fieldset>
                   )}
 
                   {/* Hidden discount value for fixed/free types */}
