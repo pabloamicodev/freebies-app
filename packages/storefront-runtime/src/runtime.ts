@@ -580,6 +580,8 @@ export class PromoEngineRuntime {
         }),
         outcome,
       );
+      // A repeated add (stale snapshot) may have doubled the line: our own requests raise no cart event, so look once more.
+      if ([...outcome.added].some((key) => this.giftAddedAt.has(key))) this.debouncedEvaluate.call();
       for (const key of outcome.added) this.giftAddedAt.set(key, Date.now());
       for (const key of outcome.removed) this.seenGiftKeys.delete(key);
       emit(PromoEvents.GiftsReady);
@@ -667,8 +669,11 @@ export class PromoEngineRuntime {
         return key ? [key] : [];
       }),
     );
-    for (const key of currentGiftKeys) this.seenGiftKeys.add(key);
-    if (!this.knownGiftKeys || cartReplaced) return; // nothing observed yet (first load)
+    for (const key of currentGiftKeys) {
+      this.seenGiftKeys.add(key);
+      this.giftAddedAt.delete(key);
+    }
+    if (!this.knownGiftKeys || cartReplaced) return; // first load, or the cart was replaced: no baseline to compare
     const now = Date.now();
     let changed = false;
     for (const key of this.knownGiftKeys) {

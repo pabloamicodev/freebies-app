@@ -214,9 +214,9 @@ function scriptedHarness(steps: Step[]) {
     [/cart\/add\.js/, () => json({})],
     [/cart\/change\.js/, () => json({ ...emptyCart, items: cart })],
     [/cart\.js/, () => json({ ...emptyCart, items: cart })],
-    [/evaluate/, () => json(okResult({
+    [/evaluate/, (init) => json(okResult({
       qualifiedOffers: [{ offerId: "o1" }],
-      cartActions: cart.some((i) => i.properties["_promo_engine_offer_id"] === "o1") ? [] : [{ action: "add_line", variantId: "gid://shopify/ProductVariant/55", quantity: 1, properties: GIFT_PROPS }],
+      cartActions: cart.some((i) => i.properties["_promo_engine_offer_id"] === "o1") || JSON.parse(String(init?.body)).declinedGiftRewards.includes("o1:r1") ? [] : [{ action: "add_line", variantId: "gid://shopify/ProductVariant/55", quantity: 1, properties: GIFT_PROPS }],
     }))],
   ]);
   const rt = new PromoEngineRuntime(CONFIG);
@@ -271,6 +271,38 @@ describe("declined-gift false positive", () => {
 
     it("is not a decline when the next page's first snapshot is stale right after our add", async () => {
       expect(await scripted([{ items: [item("a1")], settle: 800 }, { items: [item("a1")] }])).toEqual([]);
+    });
+
+    it("a gift seen in a snapshot is declined when removed within the grace window and is not re-added", async () => {
+      const h = scriptedHarness([{ items: [item("a1")], settle: 800 }, { items: [item("a1"), giftItem("g1")], settle: 800 }, { items: [item("a1")] }]);
+      expect(await h.run()).toEqual(["o1:r1"]);
+      expect(h.adds()).toBe(1);
+    });
+
+    it("a second add after a stale snapshot is shrunk back by the next evaluation without a manual trigger", async () => {
+      let cart = [item("a1")];
+      const actionsSeen: string[] = [];
+      const h = harness([
+        [/cart\/add\.js/, () => json({})],
+        [/cart\/change\.js/, () => json({ ...emptyCart, items: cart })],
+        [/cart\.js/, () => json({ ...emptyCart, items: cart })],
+        [/evaluate/, () => {
+          const gift = cart.find((i) => i.properties["_promo_engine_offer_id"] === "o1");
+          const action = !gift
+            ? { action: "add_line", variantId: "gid://shopify/ProductVariant/55", quantity: 1, properties: GIFT_PROPS }
+            : gift.quantity > 1 ? { action: "update_line", lineKey: gift.key, quantity: 1, offerId: "o1", variantId: "gid://shopify/ProductVariant/55" } : null;
+          if (action) actionsSeen.push(action.action);
+          return json(okResult({ qualifiedOffers: [{ offerId: "o1" }], cartActions: action ? [action] : [] }));
+        }],
+      ]);
+      const rt = new PromoEngineRuntime(CONFIG);
+      await rt.api.validateGiftOffer("o1");
+      await vi.advanceTimersByTimeAsync(800);
+      await rt.api.validateGiftOffer("o1");
+      cart = [item("a1"), { ...giftItem("g1"), key: "g1", quantity: 2 }];
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(actionsSeen).toEqual(["add_line", "add_line", "update_line"]);
+      expect(h.count(/evaluate/)).toBe(3);
     });
 
     it("is not a decline when the gift was never seen in a snapshot, even after the grace", async () => {
