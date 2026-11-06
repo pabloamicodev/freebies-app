@@ -204,6 +204,36 @@ describe("429 + Retry-After", () => {
   });
 });
 
+const item = (key: string) => ({ key, variant_id: 1, product_id: 1, quantity: 1, price: 2000, properties: {} as Record<string, string> });
+const giftItem = (key: string) => ({ ...item(key), properties: { ...GIFT_PROPS } });
+type Step = { items: ReturnType<typeof item>[]; settle?: number };
+
+function scriptedHarness(steps: Step[]) {
+  let cart: Step["items"] = [];
+  const h = harness([
+    [/cart\/add\.js/, () => json({})],
+    [/cart\/change\.js/, () => json({ ...emptyCart, items: cart })],
+    [/cart\.js/, () => json({ ...emptyCart, items: cart })],
+    [/evaluate/, () => json(okResult({
+      qualifiedOffers: [{ offerId: "o1" }],
+      cartActions: cart.some((i) => i.properties["_promo_engine_offer_id"] === "o1") ? [] : [{ action: "add_line", variantId: "gid://shopify/ProductVariant/55", quantity: 1, properties: GIFT_PROPS }],
+    }))],
+  ]);
+  const rt = new PromoEngineRuntime(CONFIG);
+  return {
+    run: async () => {
+      for (const step of steps) {
+        cart = step.items;
+        await rt.api.validateGiftOffer("o1");
+        if (step.settle) await vi.advanceTimersByTimeAsync(step.settle);
+      }
+      return [...(rt as unknown as { declinedGiftRewards: Set<string> }).declinedGiftRewards];
+    },
+    adds: () => h.count(/cart\/add\.js/),
+  };
+}
+const scripted = (steps: Step[]) => scriptedHarness(steps).run();
+
 describe("declined-gift false positive", () => {
   const giftAction = {
     action: "add_line",
@@ -226,40 +256,31 @@ describe("declined-gift false positive", () => {
     expect((rt as unknown as { declinedGiftRewards: Set<string> }).declinedGiftRewards.size).toBe(0);
   });
 
-  it("a gift that was added and then vanished IS recorded as declined", async () => {
-    evaluateWith(200);
-    const rt = new PromoEngineRuntime(CONFIG);
-    await rt.api.evaluate();
-    await rt.api.evaluate();
-    expect([...(rt as unknown as { declinedGiftRewards: Set<string> }).declinedGiftRewards]).toEqual(["o1:r1"]);
+  it("a gift seen in the cart and then removed by the shopper IS recorded as declined", async () => {
+    expect(await scripted([{ items: [item("a1")], settle: 11_000 }, { items: [item("a1"), giftItem("g1")], settle: 0 }, { items: [item("a1")] }])).toEqual(["o1:r1"]);
   });
 
-  describe("a gift that disappears with its whole cart", () => {
-    const item = (key: string) => ({ key, variant_id: 1, product_id: 1, quantity: 1, price: 2000, properties: {} });
-    const run = async (secondCartItems: ReturnType<typeof item>[]) => {
-      let cart = [item("a1")];
-      harness([
-        [/cart\/add\.js/, () => json({})],
-        [/cart\.js/, () => json({ ...emptyCart, items: cart })],
-        [/evaluate/, () => json(okResult({ qualifiedOffers: [{ offerId: "o1" }], cartActions: cart.some((i) => i.key === "a1") && cart.length === 1 ? [giftAction] : [] }))],
-      ]);
-      const rt = new PromoEngineRuntime(CONFIG);
-      await rt.api.evaluate();
-      cart = secondCartItems;
-      await rt.api.evaluate();
-      return [...(rt as unknown as { declinedGiftRewards: Set<string> }).declinedGiftRewards];
-    };
-
+  describe("a gift that disappears without the shopper removing it", () => {
     it("is not a decline when every other line was replaced (cart cleared, then refilled)", async () => {
-      expect(await run([item("b1")])).toEqual([]);
+      expect(await scripted([{ items: [item("a1")], settle: 11_000 }, { items: [item("a1"), giftItem("g1")], settle: 0 }, { items: [item("b1")] }])).toEqual([]);
     });
 
     it("is not a decline when the cart was emptied", async () => {
-      expect(await run([])).toEqual([]);
+      expect(await scripted([{ items: [item("a1")], settle: 11_000 }, { items: [item("a1"), giftItem("g1")], settle: 0 }, { items: [] }])).toEqual([]);
     });
 
-    it("is still a decline when the shopper keeps shopping and removes only the gift", async () => {
-      expect(await run([item("a1")])).toEqual(["o1:r1"]);
+    it("is not a decline when the next page's first snapshot is stale right after our add", async () => {
+      expect(await scripted([{ items: [item("a1")], settle: 800 }, { items: [item("a1")] }])).toEqual([]);
+    });
+
+    it("is not a decline when the gift was never seen in a snapshot, even after the grace", async () => {
+      expect(await scripted([{ items: [item("a1")], settle: 11_000 }, { items: [item("a1")] }])).toEqual([]);
+    });
+
+    it("re-adds the gift on the next evaluation after a stale snapshot instead of treating it as declined", async () => {
+      const h = scriptedHarness([{ items: [item("a1")], settle: 11_000 }, { items: [item("a1")] }]);
+      await h.run();
+      expect(h.adds()).toBe(2);
     });
   });
 
@@ -286,21 +307,21 @@ describe("declined-gift false positive", () => {
   });
 
   it("does not overwrite a newly dismissed reward when detecting another removed gift", async () => {
-    let addGift = true;
+    let cart: ReturnType<typeof item>[] = [item("a1")];
     const h = harness([
       [/cart\/add\.js/, () => json(emptyCart)],
-      [/cart\.js/, () => json(emptyCart)],
-      [/evaluate/, () => json(okResult({
-        qualifiedOffers: [{ offerId: "o1" }, { offerId: "o2" }],
-        cartActions: addGift ? [giftAction] : [],
-      }))],
+      [/cart\/change\.js/, () => json({ ...emptyCart, items: cart })],
+      [/cart\.js/, () => json({ ...emptyCart, items: cart })],
+      [/evaluate/, () => json(okResult({ qualifiedOffers: [{ offerId: "o1" }, { offerId: "o2" }] }))],
     ]);
     const rt = new PromoEngineRuntime(CONFIG);
     await rt.api.evaluate();
-    saveDeclinedGiftRewards(new Set(["o2:r2"]));
-    addGift = false;
+    cart = [item("a1"), giftItem("g1")];
     await rt.api.validateGiftOffer("o1");
-    const body = JSON.parse(String(h.calls.filter(({ url }) => /evaluate/.test(url))[1]!.init?.body));
+    saveDeclinedGiftRewards(new Set(["o2:r2"]));
+    cart = [item("a1")];
+    await rt.api.validateGiftOffer("o1");
+    const body = JSON.parse(String(h.calls.filter(({ url }) => /evaluate/.test(url))[2]!.init?.body));
     expect(new Set(body.declinedGiftRewards)).toEqual(new Set(["o1:r1", "o2:r2"]));
     expect(loadDeclinedGiftRewards()).toEqual(new Set(["o1:r1", "o2:r2"]));
   });
