@@ -1,7 +1,9 @@
 import { z } from "zod";
-import { eq } from "drizzle-orm";
-import { shops, type Db } from "@promo/db";
+import { and, eq } from "drizzle-orm";
+import { discountShards, shops, type Db } from "@promo/db";
 import { preflightCapacity, sharedConfigBreakdown, type CapacityBudget, type CapacityOptions } from "../../capacity-preflight.server.js";
+import { isFunctionShardsEnabled } from "../../function-shards-flag.server.js";
+import { configHash } from "../../publish-manifest.server.js";
 import { MAX_VALIDATION_CONFIG_BYTES } from "../../cart-validation.server.js";
 import { MAX_METAFIELD_BYTES } from "../../sync/offer-publisher.server.js";
 import { shopifyGraphQL } from "../../shopify-fetch.server.js";
@@ -20,7 +22,16 @@ const WARN_AT = 0.8;
 const TOP_OFFERS = 10;
 const LIVE_METAFIELD_NAMESPACE = "$app:promo_engine";
 
-export type LiveNode = { role: "cart" | "delivery"; found: boolean; bytes: number | null };
+export type LiveNode = {
+  role: "cart" | "delivery";
+  found: boolean;
+  bytes: number | null;
+  /** Sharded shops: the cart slot this node serves. */
+  slot?: number;
+  /** Sharded shops: whether the live value differs from what the last publish stored for the slot (null when unknown). */
+  drifted?: boolean | null;
+};
+export type SlotRow = { index: number; nodeId: string | null; bytes: number; pct: number; offerCount: number };
 export type CapacityRow = {
   shopDomain: string;
   nodeCount: number;
@@ -38,6 +49,10 @@ export type CapacityRow = {
   maxCartSlots: number | null;
   deliveryBytes: number;
   budget: CapacityBudget | null;
+  /** Sharded shops (flag on): planned bytes per cart slot. `bytesUsed` is then the fullest slot and `headroom` the free bytes across all allowed slots. */
+  slots?: SlotRow[];
+  /** Sharded shops: why the risk is `warn`. */
+  pressure?: string;
   /** Why the planner uses a single node, when it does (null when it can spread over several). */
   singleShardReason: "flag_off" | "combination" | "budget" | null;
   /** Offers whose combination flags force a single node (only with reason "combination"). */
@@ -53,6 +68,12 @@ export type CapacityDeps = {
   capacity?: CapacityOptions;
 };
 
+function slotPressure(slots: SlotRow[], maxSlots: number): string | undefined {
+  if (maxSlots > 1 && slots.length / maxSlots >= WARN_AT) return `${slots.length} of ${maxSlots} allowed cart slots are in use`;
+  const near = slots.find((s) => s.offerCount === 1 && s.bytes / MAX_METAFIELD_BYTES >= WARN_AT);
+  return near ? `slot ${near.index} holds a single offer that uses ${near.pct}% of the ${MAX_METAFIELD_BYTES} byte limit and cannot be split` : undefined;
+}
+
 const singleNodeNote = (r: CapacityRow) =>
   r.singleShardReason === "combination"
     ? ` (single node: ${r.combinationBlockers.length} offers don't combine with product discounts: ${r.combinationBlockers.map((b) => b.name).join(", ")})`
@@ -64,13 +85,31 @@ const singleNodeNote = (r: CapacityRow) =>
 
 const pct = (used: number, limit: number) => Math.round((used / limit) * 1000) / 10;
 
-async function liveCheck(db: Db, shop: ShopRef, computed: number, deps: CapacityDeps): Promise<NonNullable<CapacityRow["live"]>> {
+type ShardRow = { slot: number; nodeId: string | null; bytes: number | null; hash: string | null };
+
+async function shardRows(db: Db, shopId: string): Promise<ShardRow[]> {
+  return db
+    .select({ slot: discountShards.slot, nodeId: discountShards.discountNodeId, bytes: discountShards.configBytes, hash: discountShards.configHash })
+    .from(discountShards)
+    .where(and(eq(discountShards.shopId, shopId), eq(discountShards.kind, "cart")));
+}
+
+async function liveCheck(db: Db, shop: ShopRef, computed: number, deps: CapacityDeps, sharded = false): Promise<NonNullable<CapacityRow["live"]>> {
   const [row] = await db
     .select({ token: shops.accessTokenEncrypted, discountId: shops.discountId, deliveryDiscountId: shops.deliveryDiscountId })
     .from(shops)
     .where(eq(shops.id, shop.id));
-  const targets: { role: LiveNode["role"]; id: string }[] = [
-    ...(row?.discountId ? [{ role: "cart" as const, id: row.discountId }] : []),
+  const stored = sharded ? await shardRows(db, shop.id) : [];
+  const cartTargets: { slot: number; id: string }[] = sharded
+    ? [
+        ...(row?.discountId ? [{ slot: 0, id: row.discountId }] : []),
+        ...stored.filter((s) => s.slot > 0 && s.nodeId).map((s) => ({ slot: s.slot, id: s.nodeId! })),
+      ].sort((a, b) => a.slot - b.slot)
+    : row?.discountId
+      ? [{ slot: 0, id: row.discountId }]
+      : [];
+  const targets: { role: LiveNode["role"]; id: string; slot?: number }[] = [
+    ...cartTargets.map((t) => ({ role: "cart" as const, id: t.id, ...(sharded ? { slot: t.slot } : {}) })),
     ...(row?.deliveryDiscountId ? [{ role: "delivery" as const, id: row.deliveryDiscountId }] : []),
   ];
   if (!row || targets.length === 0) return { checked: false, nodes: [], driftBytes: null, error: "The shop has no discount nodes recorded yet." };
@@ -85,8 +124,19 @@ async function liveCheck(db: Db, shop: ShopRef, computed: number, deps: Capacity
   });
   const nodes = targets.map((t, i): LiveNode => {
     const value = data.nodes[i]?.metafield?.value;
-    return { role: t.role, found: typeof value === "string", bytes: typeof value === "string" ? new TextEncoder().encode(value).byteLength : null };
+    const found = typeof value === "string";
+    const base: LiveNode = { role: t.role, found, bytes: found ? new TextEncoder().encode(value).byteLength : null };
+    if (!sharded || t.slot === undefined) return base;
+    const hash = stored.find((s) => s.slot === t.slot)?.hash;
+    return { ...base, slot: t.slot, drifted: found && hash ? configHash(value) !== hash : null };
   });
+  if (sharded) {
+    const compared = nodes.flatMap((n) => {
+      const bytes = stored.find((s) => s.slot === n.slot)?.bytes;
+      return n.slot !== undefined && n.bytes !== null && bytes != null ? [n.bytes - bytes] : [];
+    });
+    return { checked: true, nodes, driftBytes: nodes.some((n) => n.drifted) ? compared.reduce((a, b) => a + Math.abs(b), 0) : 0 };
+  }
   const cart = nodes.find((n) => n.role === "cart");
   return { checked: true, nodes, driftBytes: cart?.bytes == null ? null : cart.bytes - computed };
 }
@@ -106,14 +156,42 @@ export async function discountCapacity(
     ]);
     const ratio = breakdown.totalBytes / MAX_METAFIELD_BYTES;
     const plan = await preflightCapacity(db, shop.id, [], deps.capacity).catch(() => null);
+    const enabled = deps.capacity?.shardsEnabled ?? (await isFunctionShardsEnabled(db, shop.id).catch(() => false));
+    const planned = enabled && plan?.ok ? plan.plan : null;
+    const stored = enabled ? await shardRows(db, shop.id) : [];
+    const slots = planned
+      ? planned.bytesPerSlot.map((bytes, index): SlotRow => ({
+          index,
+          nodeId: index === 0 ? (nodes?.discountId ?? null) : (stored.find((s) => s.slot === index)?.nodeId ?? null),
+          bytes,
+          pct: pct(bytes, MAX_METAFIELD_BYTES),
+          offerCount: planned.offersPerSlot?.[index] ?? 0,
+        }))
+      : undefined;
+    const fullest = slots ? Math.max(...slots.map((s) => s.bytes)) : breakdown.totalBytes;
+    const pressure = slots && planned ? slotPressure(slots, planned.maxSlots) : undefined;
     const row: CapacityRow = {
       shopDomain: shop.myshopifyDomain,
-      nodeCount: [nodes?.discountId, nodes?.deliveryDiscountId].filter(Boolean).length,
-      bytesUsed: breakdown.totalBytes,
+      nodeCount: enabled
+        ? [nodes?.discountId, ...stored.filter((s) => s.slot > 0).map((s) => s.nodeId), nodes?.deliveryDiscountId].filter(Boolean).length
+        : [nodes?.discountId, nodes?.deliveryDiscountId].filter(Boolean).length,
+      bytesUsed: fullest,
       limit: MAX_METAFIELD_BYTES,
-      pct: pct(breakdown.totalBytes, MAX_METAFIELD_BYTES),
-      headroom: MAX_METAFIELD_BYTES - breakdown.totalBytes,
-      risk: ratio > 1 ? "block" : ratio >= WARN_AT ? "warn" : "ok",
+      pct: pct(fullest, MAX_METAFIELD_BYTES),
+      headroom: slots && planned ? planned.maxSlots * MAX_METAFIELD_BYTES - slots.reduce((sum, s) => sum + s.bytes, 0) : MAX_METAFIELD_BYTES - breakdown.totalBytes,
+      risk: enabled && plan
+        ? !plan.ok
+          ? "block"
+          : pressure
+            ? "warn"
+            : "ok"
+        : ratio > 1
+          ? "block"
+          : ratio >= WARN_AT
+            ? "warn"
+            : "ok",
+      ...(slots ? { slots } : {}),
+      ...(pressure ? { pressure } : {}),
       offerCount: breakdown.perOffer.length,
       plannedSlots: plan?.ok ? plan.plan.slots : null,
       maxCartSlots: plan?.ok ? plan.plan.maxSlots : null,
@@ -131,7 +209,7 @@ export async function discountCapacity(
     };
     if (args.live) {
       try {
-        row.live = await liveCheck(db, shop, breakdown.totalBytes, deps);
+        row.live = await liveCheck(db, shop, breakdown.totalBytes, deps, planned !== null);
       } catch {
         row.live = { checked: false, nodes: [], driftBytes: null, error: "The live metafield could not be read from Shopify." };
       }
@@ -146,7 +224,7 @@ export async function discountCapacity(
       warnings.push({
         code: r.risk === "block" ? "CAPACITY_EXCEEDED" : "CAPACITY_HIGH",
         severity: r.risk === "block" ? "block" : "warn",
-        message: `${r.shopDomain} uses ${r.bytesUsed} of ${r.limit} bytes (${r.pct}%)${r.risk === "block" ? ": the next publish will fail" : ""}.`,
+        message: r.pressure ? `${r.shopDomain}: ${r.pressure}.` : `${r.shopDomain} uses ${r.bytesUsed} of ${r.limit} bytes (${r.pct}%)${r.risk === "block" ? ": the next publish will fail" : ""}.`,
       });
     }
     if (r.blockedBy) warnings.push({ code: `CAPACITY_${r.blockedBy}`, severity: "block", message: `${r.shopDomain}: the capacity preflight fails with ${r.blockedBy}; the next activation would be refused.` });
@@ -165,8 +243,8 @@ export async function discountCapacity(
   }
 
   const summary = [
-    `Shared config capacity (limit ${MAX_METAFIELD_BYTES} bytes per node):`,
-    ...rows.map((r) => `- ${r.shopDomain}: ${r.bytesUsed} B (${r.pct}%), headroom ${r.headroom} B, ${r.offerCount} offers, slots ${r.plannedSlots ?? "?"}/${r.maxCartSlots ?? "?"}${singleNodeNote(r)}, ${r.risk}${r.perOffer[0] ? `; heaviest "${r.perOffer[0].name}" ${r.perOffer[0].bytes} B` : ""}`),
+    `Shared config capacity (limit ${MAX_METAFIELD_BYTES} bytes per node${rows.some((r) => r.slots) ? "; sharded shops show the fullest slot, and headroom is the free bytes across all allowed slots" : ""}):`,
+    ...rows.map((r) => `- ${r.shopDomain}: ${r.bytesUsed} B (${r.pct}%), headroom ${r.headroom} B, ${r.offerCount} offers, slots ${r.plannedSlots ?? "?"}/${r.maxCartSlots ?? "?"}${singleNodeNote(r)}, ${r.risk}${r.perOffer[0] ? `; heaviest "${r.perOffer[0].name}" ${r.perOffer[0].bytes} B` : ""}${r.slots ? `; per slot: ${r.slots.map((s) => `#${s.index} ${s.bytes} B (${s.pct}%, ${s.offerCount} offers)`).join(", ")}` : ""}`),
   ].join("\n");
 
   return buildResult(

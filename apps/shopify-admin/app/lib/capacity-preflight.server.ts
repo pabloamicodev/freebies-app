@@ -183,6 +183,7 @@ export type CapacityPreflight =
       plan: {
         slots: number;
         bytesPerSlot: number[];
+        offersPerSlot?: number[];
         deliveryBytes: number;
         maxSlots: number;
         budget: CapacityBudget | null;
@@ -413,6 +414,7 @@ export async function preflightCapacity(
     plan: {
       slots: plan.slots.length,
       bytesPerSlot: plan.slots.map((slot) => slot.bytes),
+      offersPerSlot: plan.slots.map((slot) => new Set(slot.unitKeys.map(baseOfferId)).size),
       deliveryBytes,
       maxSlots,
       budget: budget ? { storeActive: budget.storeActive, ours: budget.ours, others: budget.others } : null,
