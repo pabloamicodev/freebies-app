@@ -236,3 +236,71 @@ describe("limits", () => {
     expect((await readPreviousAssignment(db, shopId)).size).toBe(0);
   });
 });
+
+describe("combination policy forcing a single shard", () => {
+  const noProductCombine = (shopId: string, offerId: string) =>
+    db.insert(offerCombinationPolicies).values({ shopId, offerId, combinesWithProductDiscounts: false });
+
+  it("is COMBINATION_SINGLE_SHARD naming the offer when the flag is on and the single node overflows", async () => {
+    const shopId = await seedShop(db, "combo-full.myshopify.com");
+    const sitewide = await giftOffer(shopId, 1, { internalName: "sitewide-no-combine", priority: 1 });
+    await noProductCombine(shopId, sitewide);
+    for (let i = 0; i < 12; i++) await giftOffer(shopId, 60, { internalName: `c-${i}`, priority: 10 + i });
+    const result = await preflightCapacity(db, shopId, [], withBudget(11));
+    expect(result).toMatchObject({
+      ok: false,
+      code: "COMBINATION_SINGLE_SHARD",
+      reason: "combination",
+      offerIds: [sitewide],
+      offerNames: ["sitewide-no-combine"],
+    });
+    if (result.ok) return;
+    expect(result.numbers).toMatchObject({ slotBytes: 9500, offersBlocking: 1 });
+    expect(result.numbers["bytes"]).toBeGreaterThan(9500);
+    expect(result.message).toContain("1 active offers don't combine with other product discounts");
+    expect(result.message).toContain('"sitewide-no-combine"');
+  });
+
+  it("stays SLOT_FULL with the flag off", async () => {
+    const shopId = await seedShop(db, "combo-off.myshopify.com");
+    const sitewide = await giftOffer(shopId, 1, { internalName: "off-no-combine", priority: 1 });
+    await noProductCombine(shopId, sitewide);
+    for (let i = 0; i < 12; i++) await giftOffer(shopId, 60, { internalName: `o-${i}`, priority: 10 + i });
+    expect(await preflightCapacity(db, shopId, [], { shardsEnabled: false })).toMatchObject({ ok: false, code: "SLOT_FULL" });
+  });
+
+  it("is not a combination failure when the policy combines and only one slot is allowed", async () => {
+    const shopId = await seedShop(db, "combo-one-slot.myshopify.com");
+    for (let i = 0; i < 12; i++) await giftOffer(shopId, 60, { internalName: `s-${i}`, priority: i });
+    expect(await preflightCapacity(db, shopId, [], withBudget(1))).toMatchObject({ ok: false, code: "AUTOMATIC_DISCOUNT_LIMIT" });
+  });
+
+  it("is ok and reports the cause and blockers when it fits on one node", async () => {
+    const shopId = await seedShop(db, "combo-fits.myshopify.com");
+    const a = await giftOffer(shopId, 1, { internalName: "A", priority: 1 });
+    const b = await giftOffer(shopId, 1, { internalName: "B", priority: 2 });
+    await giftOffer(shopId, 1, { internalName: "C", priority: 3 });
+    await noProductCombine(shopId, a);
+    await noProductCombine(shopId, b);
+    const result = await preflightCapacity(db, shopId, [], withBudget(11));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.slots).toBe(1);
+    expect(result.plan.singleShardReason).toBe("combination");
+    expect(result.plan.combinationBlockers).toEqual([
+      { offerId: a, name: "A" },
+      { offerId: b, name: "B" },
+    ]);
+  });
+
+  it("reports flag_off and budget causes", async () => {
+    const shopId = await seedShop(db, "combo-causes.myshopify.com");
+    await giftOffer(shopId, 1, { internalName: "X", priority: 1 });
+    const off = await preflightCapacity(db, shopId, [], { shardsEnabled: false });
+    expect(off.ok && off.plan.singleShardReason).toBe("flag_off");
+    const tight = await preflightCapacity(db, shopId, [], withBudget(1));
+    expect(tight.ok && tight.plan.singleShardReason).toBe("budget");
+    const wide = await preflightCapacity(db, shopId, [], withBudget(11));
+    expect(wide.ok && wide.plan.singleShardReason).toBeUndefined();
+  });
+});

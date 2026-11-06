@@ -6,6 +6,7 @@ import {
   bundleTiers,
   discountCodeBatches,
   discountCodes,
+  discountShards,
   offerCombinationPolicies,
   offerConditions,
   offerRewards,
@@ -25,6 +26,7 @@ import { ToolError } from "../result.server.js";
 import { visibleShops, type VisibleShop } from "../shops.server.js";
 import { eq } from "drizzle-orm";
 import { createTestDb, seedOffer } from "../../test-support/pglite-db.js";
+import { configHash } from "../../publish-manifest.server.js";
 import { setOfferPublishErrors } from "../../offer-publish-errors.server.js";
 import { promosActive } from "./promos-active.server.js";
 import { promoDetail } from "./promo-detail.server.js";
@@ -425,6 +427,82 @@ describe("discount_capacity", () => {
       capacity: { shardsEnabled: true, loadBudget: async () => budget },
     });
     expect(result.data.shops[0]).toMatchObject({ plannedSlots: 1, maxCartSlots: 7, budget: { storeActive: 9, ours: 3, others: 6 } });
+  });
+
+  it("explains a single node forced by offers that do not combine with product discounts", async () => {
+    const domain = "combo.myshopify.com";
+    const shopId = await insertShop(domain);
+    const names = ["No combine A", "No combine B"];
+    for (const [i, name] of names.entries()) {
+      const offerId = await seedOffer(db, shopId, { type: "gift", status: "active", internalName: name, priority: i, requiresCode: false });
+      await db.insert(offerRewards).values({ shopId, offerId, rewardType: "product_gift", discountType: "free", value: {}, target: { variantIds: [V1] }, quantity: 1 });
+      await db.insert(offerCombinationPolicies).values({ shopId, offerId, combinesWithProductDiscounts: false });
+    }
+    const only = await visibleShops(db, operator([domain]));
+    const budget = { storeActive: 9, ours: 3, others: 6, maxCartSlots: 11 };
+    const result = await discountCapacity(db, only, {}, undefined, { capacity: { shardsEnabled: true, loadBudget: async () => budget } });
+    const row = result.data.shops[0]!;
+    expect(row).toMatchObject({ plannedSlots: 1, maxCartSlots: 11, singleShardReason: "combination" });
+    expect(row.combinationBlockers.map((b) => b.name)).toEqual(names);
+    expect(result.summary).toContain("slots 1/11 (single node: 2 offers don't combine with product discounts: No combine A, No combine B)");
+    expect(result.warnings).toContainEqual(expect.objectContaining({ code: "CAPACITY_SINGLE_SHARD", severity: "warn" }));
+
+    const off = await discountCapacity(db, only, {}, undefined, { capacity: { shardsEnabled: false } });
+    expect(off.data.shops[0]!.singleShardReason).toBe("flag_off");
+    expect(off.warnings.some((w) => w.code === "CAPACITY_SINGLE_SHARD")).toBe(false);
+  });
+
+  it("reports a sharded shop per slot, reads every shard node live and flags drift only on the node that changed", async () => {
+    const domain = "sharded.myshopify.com";
+    const shopId = await insertShop(domain, { discountId: "gid://shopify/DiscountAutomaticNode/10", deliveryDiscountId: "gid://shopify/DiscountAutomaticNode/11" });
+    let variant = 1000;
+    for (let i = 0; i < 8; i++) {
+      const offerId = await seedOffer(db, shopId, { type: "gift", status: "active", internalName: `Heavy ${i}`, priority: i, requiresCode: false });
+      await db.insert(offerConditions).values({ shopId, offerId, scope: "main", conditionType: "cart_value", operator: "gte", value: { thresholdCents: 1000, currencyCode: "USD" } });
+      await db.insert(offerRewards).values({
+        shopId, offerId, rewardType: "product_gift", discountType: "free", value: {},
+        target: { variantIds: Array.from({ length: 60 }, () => `gid://shopify/ProductVariant/${++variant}`) }, quantity: 1,
+      });
+    }
+    const only = await visibleShops(db, operator([domain]));
+    const capacity = { shardsEnabled: true, loadBudget: async () => ({ storeActive: 9, ours: 3, others: 6, maxCartSlots: 11 }) };
+    const result = await discountCapacity(db, only, {}, undefined, { capacity });
+    const row = result.data.shops[0]!;
+    const n = row.plannedSlots!;
+    expect(n).toBeGreaterThanOrEqual(2);
+    expect(row.slots).toHaveLength(n);
+    expect(row.slots!.map((s) => s.index)).toEqual([...Array(n).keys()]);
+    expect(row.slots!.every((s) => s.bytes <= 9500 && s.offerCount > 0)).toBe(true);
+    expect(row.bytesUsed).toBe(Math.max(...row.slots!.map((s) => s.bytes)));
+    expect(row.headroom).toBe(11 * 9500 - row.slots!.reduce((sum, s) => sum + s.bytes, 0));
+    expect(row.risk).toBe("ok");
+    expect(result.warnings.map((w) => w.code)).not.toContain("CAPACITY_EXCEEDED");
+    expect(result.summary).toContain("per slot: #0");
+
+    const value = (slot: number) => JSON.stringify({ offers: [], slot });
+    const nodeId = (slot: number) => (slot === 0 ? "gid://shopify/DiscountAutomaticNode/10" : `gid://shopify/DiscountAutomaticNode/${100 + slot}`);
+    await db.insert(discountShards).values(
+      Array.from({ length: n }, (_, slot) => ({ shopId, kind: "cart" as const, slot, discountNodeId: nodeId(slot), unitKeys: [], configBytes: value(slot).length, configHash: configHash(value(slot)) })),
+    );
+    let live: Record<string, string> = Object.fromEntries(Array.from({ length: n }, (_, slot) => [nodeId(slot), value(slot)]));
+    const graphQL = vi.fn(async (options: unknown) => {
+      const ids = (options as { variables: { ids: string[] } }).variables.ids;
+      return { nodes: ids.map((id) => (live[id] ? { id, metafield: { value: live[id]! } } : { id, metafield: null })) };
+    });
+    const deps = { capacity, graphQL: graphQL as never, decrypt: async () => "t" };
+
+    const clean = await discountCapacity(db, only, { live: true }, undefined, deps);
+    const cleanRow = clean.data.shops[0]!;
+    expect(cleanRow.nodeCount).toBe(n + 1);
+    expect(cleanRow.live!.nodes.filter((node) => node.role === "cart")).toHaveLength(n);
+    expect(cleanRow.live!.nodes.some((node) => node.drifted)).toBe(false);
+    expect(cleanRow.live!.driftBytes).toBe(0);
+    expect(clean.warnings.map((w) => w.code)).not.toContain("LIVE_DRIFT");
+
+    live = { ...live, [nodeId(1)]: JSON.stringify({ offers: [], slot: 1, changed: true }) };
+    const drifted = await discountCapacity(db, only, { live: true }, undefined, deps);
+    expect(drifted.data.shops[0]!.live!.nodes.filter((node) => node.drifted).map((node) => node.slot)).toEqual([1]);
+    expect(drifted.warnings.map((w) => w.code)).toContain("LIVE_DRIFT");
   });
 
   it("live:true reads the metafield through the injected Admin client and reports drift; no token reaches the output", async () => {

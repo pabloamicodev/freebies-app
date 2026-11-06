@@ -30,6 +30,7 @@ import {
 import { isFunctionShardsEnabled } from "../function-shards-flag.server.js";
 import { SLOT_LIMITS, planShards } from "./shard-planner.js";
 import { buildPlanUnits } from "./plan-units.js";
+import { combinationBlockers } from "./combination-blockers.js";
 import {
   ShardPlanBlockedError,
   readShardState,
@@ -515,21 +516,30 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const budget = shardsEnabled ? await automaticNodeBudget(shopId, shopDomain, accessToken) : null;
     const persisted = shardMode ? await readShardState(db, shopId) : null;
     const combination = compileDiscountCombinationPolicy(compiledOffers);
+    const planUnits = buildPlanUnits(
+      compiledOffers.map((offer) => ({ offerId: offer.id, offer })),
+      conditionRows,
+      policyRows,
+    );
     const plan = planShards(
-      buildPlanUnits(
-        compiledOffers.map((offer) => ({ offerId: offer.id, offer })),
-        conditionRows,
-        policyRows,
-      ),
+      planUnits,
       persisted?.previous ?? new Map(),
       { ...SLOT_LIMITS, maxSlots: budget?.maxCartSlots ?? 1 },
       { productDiscounts: combination.productDiscounts, orderDiscounts: combination.orderDiscounts },
     );
     if (plan.blocked) {
+      const names = new Map(regularOffers.map((offer) => [offer.id, offer.internalName]));
       throw new ShardPlanBlockedError(plan.blocked, {
         storeActive: budget?.storeActive ?? null,
         shardsEnabled,
-        names: new Map(regularOffers.map((offer) => [offer.id, offer.internalName])),
+        names,
+        combinationBlockers:
+          shardsEnabled && (budget?.maxCartSlots ?? 1) > 1
+            ? combinationBlockers(
+                compiledOffers.map((offer) => ({ offerId: offer.id, name: names.get(offer.id) ?? offer.id, offer })),
+                planUnits.some((unit) => unit.hasOrderRewards),
+              )
+            : [],
       });
     }
     // Empty slots are omitted by the planner; renumber so node ids stay a dense list.
