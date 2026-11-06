@@ -136,6 +136,7 @@ export class PromoEngineRuntime {
   // Gift lines we expect to be in the cart, predicted from our own last
   // add/remove actions — used to detect a customer-initiated removal.
   private knownGiftKeys: Set<string> | null = null;
+  private knownPaidLineKeys: Set<string> = new Set();
   private declinedGiftRewards: Set<string> = loadDeclinedGiftRewards();
 
   constructor(config: RuntimeConfig) {
@@ -649,7 +650,11 @@ export class PromoEngineRuntime {
     // The slider can record a dismissal after this runtime was constructed.
     // Read it before saving a newly removed gift so neither choice is lost.
     this.declinedGiftRewards = loadDeclinedGiftRewards(this.declinedGiftRewards);
-    if (!this.knownGiftKeys) return; // nothing observed yet (first load)
+    const paidLineKeys = new Set(cart.items.filter((item) => !giftKeyOfItem(item)).map((item) => item.key));
+    // A gift that vanishes together with every line seen last time left with a cleared or replaced cart, not a decision.
+    const cartReplaced = this.knownPaidLineKeys.size > 0 && ![...paidLineKeys].some((key) => this.knownPaidLineKeys.has(key));
+    this.knownPaidLineKeys = paidLineKeys;
+    if (!this.knownGiftKeys || cartReplaced) return; // nothing observed yet (first load)
     const currentGiftKeys = new Set(
       cart.items.flatMap((item) => {
         const key = giftKeyOfItem(item);

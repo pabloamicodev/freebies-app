@@ -234,6 +234,35 @@ describe("declined-gift false positive", () => {
     expect([...(rt as unknown as { declinedGiftRewards: Set<string> }).declinedGiftRewards]).toEqual(["o1:r1"]);
   });
 
+  describe("a gift that disappears with its whole cart", () => {
+    const item = (key: string) => ({ key, variant_id: 1, product_id: 1, quantity: 1, price: 2000, properties: {} });
+    const run = async (secondCartItems: ReturnType<typeof item>[]) => {
+      let cart = [item("a1")];
+      harness([
+        [/cart\/add\.js/, () => json({})],
+        [/cart\.js/, () => json({ ...emptyCart, items: cart })],
+        [/evaluate/, () => json(okResult({ qualifiedOffers: [{ offerId: "o1" }], cartActions: cart.some((i) => i.key === "a1") && cart.length === 1 ? [giftAction] : [] }))],
+      ]);
+      const rt = new PromoEngineRuntime(CONFIG);
+      await rt.api.evaluate();
+      cart = secondCartItems;
+      await rt.api.evaluate();
+      return [...(rt as unknown as { declinedGiftRewards: Set<string> }).declinedGiftRewards];
+    };
+
+    it("is not a decline when every other line was replaced (cart cleared, then refilled)", async () => {
+      expect(await run([item("b1")])).toEqual([]);
+    });
+
+    it("is not a decline when the cart was emptied", async () => {
+      expect(await run([])).toEqual([]);
+    });
+
+    it("is still a decline when the shopper keeps shopping and removes only the gift", async () => {
+      expect(await run([item("a1")])).toEqual(["o1:r1"]);
+    });
+  });
+
   it("clears a dismissal recorded while evaluation was pending, preserving other qualified offers", async () => {
     let finishEvaluation!: (response: Response) => void;
     const h = harness([
