@@ -51,6 +51,7 @@ function giftKeyOfItem(item: CartItem): string | null {
   return offerId && rewardId ? giftRewardKey(offerId, rewardId) : null;
 }
 
+const GIFT_ADD_GRACE_MS = 10_000;
 const DEFAULT_EVAL_DEBOUNCE_MS = 300;
 const DEFAULT_EVAL_ENDPOINT = "/apps/promo-engine/evaluate";
 const SESSION_KEY = "promo_engine_session_id";
@@ -136,6 +137,11 @@ export class PromoEngineRuntime {
   // Gift lines we expect to be in the cart, predicted from our own last
   // add/remove actions — used to detect a customer-initiated removal.
   private knownGiftKeys: Set<string> | null = null;
+  private knownPaidLineKeys: Set<string> = new Set();
+  /** Gifts observed in a cart snapshot the runtime fetched: only those can later be "removed by the shopper". */
+  private seenGiftKeys: Set<string> = new Set();
+  /** When this runtime last issued the add for a gift; a stale snapshot right after it proves nothing. */
+  private giftAddedAt: Map<string, number> = new Map();
   private declinedGiftRewards: Set<string> = loadDeclinedGiftRewards();
 
   constructor(config: RuntimeConfig) {
@@ -574,6 +580,10 @@ export class PromoEngineRuntime {
         }),
         outcome,
       );
+      // A repeated add (stale snapshot) may have doubled the line: our own requests raise no cart event, so look once more.
+      if ([...outcome.added].some((key) => this.giftAddedAt.has(key))) this.debouncedEvaluate.call();
+      for (const key of outcome.added) this.giftAddedAt.set(key, Date.now());
+      for (const key of outcome.removed) this.seenGiftKeys.delete(key);
       emit(PromoEvents.GiftsReady);
       if (actions.length > 0 || this.widgetChangedCart) {
         this.widgetChangedCart = false;
@@ -649,19 +659,31 @@ export class PromoEngineRuntime {
     // The slider can record a dismissal after this runtime was constructed.
     // Read it before saving a newly removed gift so neither choice is lost.
     this.declinedGiftRewards = loadDeclinedGiftRewards(this.declinedGiftRewards);
-    if (!this.knownGiftKeys) return; // nothing observed yet (first load)
+    const paidLineKeys = new Set(cart.items.filter((item) => !giftKeyOfItem(item)).map((item) => item.key));
+    // A gift that vanishes together with every line seen last time left with a cleared or replaced cart, not a decision.
+    const cartReplaced = this.knownPaidLineKeys.size > 0 && ![...paidLineKeys].some((key) => this.knownPaidLineKeys.has(key));
+    this.knownPaidLineKeys = paidLineKeys;
     const currentGiftKeys = new Set(
       cart.items.flatMap((item) => {
         const key = giftKeyOfItem(item);
         return key ? [key] : [];
       }),
     );
+    for (const key of currentGiftKeys) {
+      this.seenGiftKeys.add(key);
+      this.giftAddedAt.delete(key);
+    }
+    if (!this.knownGiftKeys || cartReplaced) return; // first load, or the cart was replaced: no baseline to compare
+    const now = Date.now();
     let changed = false;
     for (const key of this.knownGiftKeys) {
-      if (!currentGiftKeys.has(key) && !this.declinedGiftRewards.has(key)) {
-        this.declinedGiftRewards.add(key);
-        changed = true;
-      }
+      if (currentGiftKeys.has(key) || this.declinedGiftRewards.has(key)) continue;
+      // Never seen in a snapshot, or right after our own add: the snapshot is stale (e.g. a page change), not a removal.
+      const addedAt = this.giftAddedAt.get(key);
+      if (!this.seenGiftKeys.has(key) || (addedAt !== undefined && now - addedAt < GIFT_ADD_GRACE_MS)) continue;
+      this.declinedGiftRewards.add(key);
+      this.seenGiftKeys.delete(key);
+      changed = true;
     }
     if (changed) saveDeclinedGiftRewards(this.declinedGiftRewards);
   }
@@ -692,12 +714,10 @@ export class PromoEngineRuntime {
     const outcome: GiftOutcome = { added: new Set(), removed: new Set() };
     for (const action of actions) {
       try {
+        this.log("[PromoEngine] →", action);
         switch (action.action) {
           case "add_line": {
             if (!action.variantId) break;
-            this.log(
-              `[PromoEngine] → add_line variantId=${action.variantId} qty=${action.quantity ?? 1}`,
-            );
             // The cache can lag a sale: on a sold-out rejection fall back to the merchant's
             // fallback gifts in order, and give up quietly if they're all gone too.
             let addedVariantId: string | null = null;
@@ -734,9 +754,6 @@ export class PromoEngineRuntime {
           }
 
           case "update_line": {
-            this.log(
-              `[PromoEngine] → update_line key=${action.lineKey ?? "?"} qty=${action.quantity ?? 1}`,
-            );
             const freshCart = await fetchFreshCart();
             const currentLine =
               freshCart.items.find((item) => item.key === action.lineKey) ??
@@ -772,9 +789,6 @@ export class PromoEngineRuntime {
           }
 
           case "remove_line": {
-            this.log(
-              `[PromoEngine] → remove_line key=${action.lineKey ?? "?"} reason=${action.reason ?? "offer_disqualified"}`,
-            );
             const freshCart = await fetchFreshCart();
             const currentLine =
               freshCart.items.find((item) => item.key === action.lineKey) ??
