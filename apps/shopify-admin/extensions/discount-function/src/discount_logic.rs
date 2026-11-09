@@ -282,7 +282,7 @@ fn evaluate_product_reward(
         .cart()
         .lines()
         .iter()
-        .filter(|line| !is_gift_line(line) && !outside_matched_lines(offer, line))
+        .filter(|line| !is_gift_line(line) && !is_zero_cost(line) && !outside_matched_lines(offer, line))
         .filter(|line| {
             reward.scope_mode != "landing"
                 || landing_source(line).as_deref()
@@ -796,6 +796,7 @@ fn evaluate_order_offer(
                 .sum();
             let qualifying_quantity: i64 = eligible_lines
                 .iter()
+                .filter(|line| !is_zero_cost(line))
                 .map(|line| i64::from(*line.quantity()))
                 .sum();
             make_order_candidate(
@@ -1597,6 +1598,12 @@ fn line_type(line: &Lines) -> Option<String> {
         .and_then(|attribute| attribute.value())
         .cloned()
         .or_else(|| metadata_value(line, "_promo_engine_line_type"))
+}
+
+// A $0 line (another app's free gift) is not a paid unit: it must not raise a quantity tier,
+// consume a unit cap or be picked as the cheapest item.
+fn is_zero_cost(line: &Lines) -> bool {
+    line.cost().subtotal_amount().amount().as_f64() <= 0.0
 }
 
 fn is_gift_line(line: &Lines) -> bool {
@@ -3231,6 +3238,161 @@ mod tests {
         )
         .expect("should not error");
         assert_eq!(inside.operations.len(), 1);
+    }
+
+    fn zero_cost_config(reward_extra: &str) -> String {
+        format!(
+            r#"{{"offers":[{{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[],"orderRewards":[],"productRewards":[{{
+                "id":"tiered","targetProductIds":[],"targetVariantIds":[],"discountType":"percentage","discountValue":0,
+                "subscriptionMode":"any","scopeMode":"sitewide","priceTiers":[],"selectionMode":"all",
+                {reward_extra}
+            }}]
+        }}]}}"#
+        )
+    }
+
+    const TRU_TIERS: &str = r#""countRule":"total","quantityTiers":[
+        {"minimumQuantity":1,"discountType":"percentage","discountValue":15},
+        {"minimumQuantity":2,"discountType":"percentage","discountValue":20},
+        {"minimumQuantity":3,"discountType":"percentage","discountValue":25},
+        {"minimumQuantity":4,"discountType":"percentage","discountValue":30}]"#;
+
+    /// (percentage, [(line id, units)]) per product candidate.
+    fn product_percentages(lines: &[String], subtotal: &str, config: &str) -> Vec<(f64, Vec<(String, Option<i32>)>)> {
+        let result = run_function_with_input(run, &cart_json(&format!("[{}]", lines.join(",")), subtotal, config))
+            .expect("should not error");
+        let mut out = vec![];
+        for operation in &result.operations {
+            if let schema::CartOperation::ProductDiscountsAdd(op) = operation {
+                for candidate in &op.candidates {
+                    let schema::ProductDiscountCandidateValue::Percentage(value) = &candidate.value else {
+                        panic!("expected percentage");
+                    };
+                    let targets = candidate
+                        .targets
+                        .iter()
+                        .map(|target| match target {
+                            schema::ProductDiscountCandidateTarget::CartLine(line) => (line.id.clone(), line.quantity),
+                        })
+                        .collect();
+                    out.push((value.value.0, targets));
+                }
+            }
+        }
+        out
+    }
+
+    fn paid(id: &str, product: &str, qty: i64) -> String {
+        regular_line(
+            &format!("gid://shopify/CartLine/{id}"),
+            &format!("gid://shopify/ProductVariant/{product}"),
+            &format!("gid://shopify/Product/{product}"),
+            "10.00",
+            qty,
+        )
+    }
+
+    fn free(id: &str) -> String {
+        regular_line(
+            &format!("gid://shopify/CartLine/{id}"),
+            "gid://shopify/ProductVariant/jug",
+            "gid://shopify/Product/jug",
+            "0.00",
+            1,
+        )
+    }
+
+    #[test]
+    fn zero_cost_line_from_another_app_does_not_raise_the_quantity_tier() {
+        let config = zero_cost_config(TRU_TIERS);
+        let two_paid = product_percentages(&[paid("1", "meta", 2), free("2")], "20.00", &config);
+        assert_eq!(two_paid.len(), 1);
+        assert_eq!(two_paid[0].0, 20.0);
+        assert_eq!(two_paid[0].1, vec![("gid://shopify/CartLine/1".to_string(), Some(2))]);
+
+        let three_paid = product_percentages(&[paid("1", "meta", 3), free("2")], "30.00", &config);
+        assert_eq!(three_paid[0].0, 25.0);
+    }
+
+    #[test]
+    fn cart_without_a_zero_cost_line_keeps_its_tier() {
+        let config = zero_cost_config(TRU_TIERS);
+        assert_eq!(product_percentages(&[paid("1", "energy", 2)], "20.00", &config)[0].0, 20.0);
+        let split = product_percentages(&[paid("1", "a", 2), paid("2", "b", 2)], "40.00", &config);
+        assert_eq!(split[0].0, 30.0);
+    }
+
+    #[test]
+    fn only_zero_cost_lines_get_no_tier_discount() {
+        let config = zero_cost_config(TRU_TIERS);
+        assert!(product_percentages(&[free("2")], "0.00", &config).is_empty());
+    }
+
+    #[test]
+    fn zero_cost_and_promo_gift_lines_together_do_not_raise_the_quantity_tier() {
+        let config = zero_cost_config(TRU_TIERS);
+        let gift = gift_line("gid://shopify/CartLine/3", "gid://shopify/ProductVariant/gift", "gid://shopify/Product/gift", "offer-1", "0.00", 1);
+        let result = product_percentages(&[paid("1", "meta", 3), free("2"), gift], "30.00", &config);
+        assert_eq!(result[0].0, 25.0);
+        assert_eq!(result[0].1, vec![("gid://shopify/CartLine/1".to_string(), Some(3))]);
+    }
+
+    #[test]
+    fn zero_cost_line_does_not_count_as_a_unique_product() {
+        let config = zero_cost_config(
+            r#""countRule":"unique","quantityTiers":[{"minimumQuantity":2,"discountType":"percentage","discountValue":20}]"#,
+        );
+        assert!(product_percentages(&[paid("1", "a", 3), free("2")], "30.00", &config).is_empty());
+        let with_second_product = product_percentages(&[paid("1", "a", 1), paid("2", "b", 1), free("3")], "20.00", &config);
+        assert_eq!(with_second_product[0].0, 20.0);
+    }
+
+    #[test]
+    fn zero_cost_line_does_not_consume_the_unit_cap() {
+        // The $0 line sorts first by id; before the fix it took the single capped unit.
+        let config = zero_cost_config(
+            r#""countRule":"total","maxUnitsTotal":1,"quantityTiers":[{"minimumQuantity":1,"discountType":"percentage","discountValue":20}]"#,
+        );
+        let result = product_percentages(&[free("0"), paid("1", "a", 2)], "20.00", &config);
+        assert_eq!(result[0].1, vec![("gid://shopify/CartLine/1".to_string(), Some(1))]);
+    }
+
+    #[test]
+    fn zero_cost_line_is_not_the_cheapest_item_free() {
+        let config = zero_cost_config(r#""countRule":"total","quantityTiers":[]"#).replace(
+            r#""discountType":"percentage","discountValue":0,"#,
+            r#""discountType":"cheapest_item_free","discountValue":100,"#,
+        );
+        let result = product_percentages(&[free("0"), paid("1", "a", 1), paid("2", "b", 1)], "20.00", &config);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1[0].0, "gid://shopify/CartLine/1");
+    }
+
+    #[test]
+    fn zero_cost_line_does_not_count_toward_an_order_quantity_tier() {
+        let config = r#"{"offers":[{
+            "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+            "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+            "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+            "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+            "requirements":[],"productRewards":[],
+            "orderRewards":[{"id":"order-1","discountType":"percentage","discountValue":0,
+              "subtotalTiers":[{"minimumQuantity":3,"discountType":"percentage","discountValue":15}]}]
+        }]}"#;
+        let run_with = |lines: Vec<String>, subtotal: &str| {
+            run_function_with_input(
+                run,
+                &cart_json_with_classes(&format!("[{}]", lines.join(",")), subtotal, config, r#"["ORDER"]"#),
+            )
+            .expect("should not error")
+        };
+        assert!(run_with(vec![paid("1", "a", 2), free("2")], "20.00").operations.is_empty());
+        assert_eq!(run_with(vec![paid("1", "a", 3), free("2")], "30.00").operations.len(), 1);
     }
 
     #[test]
