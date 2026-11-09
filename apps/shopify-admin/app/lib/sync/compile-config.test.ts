@@ -1431,3 +1431,41 @@ describe("usage limits (mpc, mpu, ri) behind the per-shop limits.enforced flag",
     expect(off).toBe(none);
   });
 });
+
+describe("gift tiers (reward.minCartSubtotalCents, offer.tierMode)", () => {
+  const giftReward = (id: string, variant: number, extra: Record<string, unknown> = {}) =>
+    shippingReward({
+      id, rewardType: "product_gift", discountType: "free", value: { amount: 100, currencyCode: "USD" },
+      target: { variantIds: [`gid://shopify/ProductVariant/${variant}`] }, quantity: 1, isAutoAdd: true, ...extra,
+    });
+  const compile = (offerExtra: Record<string, unknown>, rewards: ReturnType<typeof giftReward>[]) =>
+    compileOfferConfig(offer({ type: "gift", ...offerExtra }), [condition("cart_value", { thresholdCents: 7000 })], rewards, null, 1);
+
+  it("compiles each tier's threshold as mcs, and tm for highest mode only", () => {
+    const rewards = [giftReward("r1", 1, { minCartSubtotalCents: 7000 }), giftReward("r2", 2, { minCartSubtotalCents: 11000 })];
+    expect(compile({ tierMode: "highest" }, rewards)).toMatchObject({ tm: "h", giftRewards: [{ mcs: 7000 }, { mcs: 11000 }] });
+    const cumulative = compile({ tierMode: "cumulative" }, rewards);
+    expect(cumulative).not.toHaveProperty("tm");
+    expect(cumulative.giftRewards.map((r) => r.mcs)).toEqual([7000, 11000]);
+    expect(compile({ tierMode: null }, rewards)).not.toHaveProperty("tm");
+  });
+
+  it("an offer without tiers compiles byte-identically to one without the columns", () => {
+    const plain = [giftReward("r1", 1), giftReward("r2", 2)];
+    const withNulls = [giftReward("r1", 1, { minCartSubtotalCents: null }), giftReward("r2", 2, { minCartSubtotalCents: null })];
+    const bytes = (compiled: ReturnType<typeof compile>) => serializeFunctionConfig({ offers: [compiled], shippingOffers: [], customerTags: [], version: "v", compiledAt: "t" } as never);
+    expect(bytes(compile({ tierMode: null }, withNulls))).toBe(bytes(compile({}, plain)));
+    expect(bytes(compile({ tierMode: "highest" }, plain))).not.toContain('"tm"');
+    expect(bytes(compile({}, plain))).not.toMatch(/"mcs"|"tm"/);
+  });
+
+  it("the tiers of one offer are one planner unit, a few bytes per tier", async () => {
+    const { buildPlanUnits } = await import("./plan-units.js");
+    const rewards = [1, 2, 3].map((n) => giftReward(`r${n}`, n, { minCartSubtotalCents: n * 5000 }));
+    const tiered = compile({ id: OFFER_ID, tierMode: "highest" }, rewards);
+    const untiered = compile({ id: OFFER_ID }, [1, 2, 3].map((n) => giftReward(`r${n}`, n)));
+    const [unit] = buildPlanUnits([{ offerId: OFFER_ID, offer: tiered }], [], []);
+    const [base] = buildPlanUnits([{ offerId: OFFER_ID, offer: untiered }], [], []);
+    expect(unit!.bytes - base!.bytes).toBeLessThanOrEqual(10 + 3 * 14);
+  });
+});

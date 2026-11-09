@@ -43,6 +43,9 @@ export function computeOfferVersion(
   return (hash >>> 0) & 0x7fffffff || 1;
 }
 
+// Unset tier columns hash like the columns not existing, so adding them does not re-version every published offer.
+const UNSET_HASHES_AS_ABSENT = new Set(["tierMode", "minCartSubtotalCents"]);
+
 // Empty cart labels hash like the column not existing, so adding it did not re-version every published offer.
 function normalize(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString();
@@ -51,7 +54,7 @@ function normalize(value: unknown): unknown {
 
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key, entry]) => !VOLATILE_KEYS.has(key) && !(key === "cartLabels" && Array.isArray(entry) && entry.length === 0))
+      .filter(([key, entry]) => !VOLATILE_KEYS.has(key) && !(key === "cartLabels" && Array.isArray(entry) && entry.length === 0) && !(UNSET_HASHES_AS_ABSENT.has(key) && entry === null))
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, entry]) => [key, normalize(entry)]),
   );
