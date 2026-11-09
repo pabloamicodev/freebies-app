@@ -87,6 +87,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     version: 1,
     type: offer.type,
     priority: offer.priority,
+    ...(offer.tierMode ? { tierMode: offer.tierMode } : {}),
     stopLowerPriority: policyRows[0]?.stopLowerPriority ?? false,
     startsAt: offer.startsAt,
     endsAt: offer.endsAt,
@@ -111,6 +112,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       trackMode: r.trackMode as "product" | "variant",
       sortOrder: r.sortOrder,
       label: r.label,
+      ...(r.minCartSubtotalCents != null ? { minCartSubtotalCents: r.minCartSubtotalCents } : {}),
     })),
     combinationPolicy: {
       combinesWithOrderDiscounts: policyRows[0]?.combinesWithOrderDiscounts ?? true,

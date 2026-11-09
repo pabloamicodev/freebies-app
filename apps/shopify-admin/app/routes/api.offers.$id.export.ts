@@ -76,6 +76,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     "condition_type", "condition_value_threshold_cents",
     "reward_type", "discount_type", "reward_value",
     "gift_variant_gids", "gift_quantity", "is_auto_add", "track_mode",
+    "gift_tier_mode", "gift_min_cart_subtotal_cents",
     "created_at", "updated_at",
   ];
 
@@ -113,6 +114,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         reward?.quantity ?? "",
         reward?.isAutoAdd ?? "",
         reward?.trackMode ?? "",
+        reward?.minCartSubtotalCents != null ? (offer.tierMode ?? "cumulative") : "",
+        reward?.minCartSubtotalCents ?? "",
         offer.createdAt.toISOString(),
         offer.updatedAt.toISOString(),
       ]));

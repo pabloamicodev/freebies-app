@@ -24,10 +24,19 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
   const [fallbackPickerIndex, setFallbackPickerIndex] = useState<number | null>(null);
 
+  const slug = campaignId || name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "gift-tiers";
+  const thresholds = tiers.map((tier) => Math.round(Number(tier.minimumSubtotal) * 100));
+  const tierError = thresholds.some((cents) => !(cents > 0))
+    ? "Every tier needs a minimum subtotal greater than 0."
+    : new Set(thresholds).size !== thresholds.length
+      ? "Two tiers cannot have the same minimum subtotal."
+      : null;
+  const incomplete = tierError !== null || tiers.some((tier) => tier.variantIds.length === 0);
+
   const serialized = useMemo(
     () =>
       JSON.stringify({
-        campaignId,
+        campaignId: slug,
         name,
         stackingMode,
         tiers: tiers.map((tier) => ({
@@ -38,7 +47,7 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
           ...(tier.fallbackVariantIds.length ? { fallbackVariantIds: tier.fallbackVariantIds } : {}),
         })),
       }),
-    [campaignId, name, stackingMode, tiers],
+    [slug, name, stackingMode, tiers],
   );
 
   const updateTier = (index: number, patch: Partial<TierDraft>) =>
@@ -75,12 +84,11 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
         }}
       />
       <Form method="post" action={action} className="b-card b-p-5 b-stack b-gap-5">
-        <input type="hidden" name="intent" value="create-campaign" />
         <input type="hidden" name="campaign" value={serialized} />
         <div className="b-grid-3">
           <div>
             <label className="b-label" htmlFor="giftCampaignName">
-              Campaign name
+              Offer name
             </label>
             <input
               id="giftCampaignName"
@@ -92,12 +100,11 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
           </div>
           <div>
             <label className="b-label" htmlFor="giftCampaignId">
-              Campaign ID
+              Campaign ID (optional)
             </label>
             <input
               id="giftCampaignId"
               className="b-input"
-              required
               pattern="[a-z0-9][a-z0-9-]*"
               value={campaignId}
               onChange={(event) =>
@@ -107,7 +114,7 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
           </div>
           <div>
             <label className="b-label" htmlFor="giftStacking">
-              Stacking
+              When a cart reaches several tiers
             </label>
             <select
               id="giftStacking"
@@ -235,10 +242,15 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
         </div>
 
         <OfferConditionsBuilder
-          title="Campaign eligibility conditions"
-          description="Apply the same URL, customer, location, subscription, attribute, and usage conditions to every generated tier."
+          title="Offer eligibility conditions"
+          description="Apply the same URL, customer, location, subscription, attribute, and usage conditions to every tier."
         />
 
+        {tierError && (
+          <p className="b-help b-m-0" role="alert" style={{ color: "var(--red, #b42318)" }}>
+            {tierError}
+          </p>
+        )}
         <div className="b-form-actions">
           <button
             type="button"
@@ -260,15 +272,36 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
           </button>
           <button
             type="submit"
+            name="intent"
+            value="create-tiered-offer"
+            className="b-btn b-btn-secondary"
+            disabled={incomplete}
+          >
+            Save as draft
+          </button>
+          <button
+            type="submit"
+            name="intent"
+            value="publish-tiered-offer"
             className="b-btn b-btn-primary"
+            disabled={incomplete}
+          >
+            Publish
+          </button>
+          <button
+            type="submit"
+            name="intent"
+            value="create-campaign"
+            className="b-btn b-btn-secondary"
             disabled={tiers.some((tier) => tier.variantIds.length === 0)}
           >
-            Create draft offers
+            Create separate draft offers instead
           </button>
         </div>
         <p className="b-help b-m-0">
-          Each tier becomes a normal draft offer with an inclusive lower bound and an automatically
-          derived upper bound, so tiers never overlap.
+          One offer holds every tier, so publishing, pausing and scheduling happen once. The cart subtotal
+          that unlocks each gift never counts the gifts themselves. "Create separate draft offers instead" makes one
+          draft offer per tier.
         </p>
       </Form>
     </>

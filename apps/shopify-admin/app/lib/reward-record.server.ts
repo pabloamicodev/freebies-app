@@ -63,6 +63,8 @@ export async function buildRewardRecord(
         isCustomerSelectable: boolean;
         trackMode: "product" | "variant";
         label: string | null;
+        /** Gift rewards: the cart subtotal that unlocks the gift (null clears it); undefined when the form did not post the field. */
+        minCartSubtotalCents?: number | null;
       };
       error?: never;
     }
@@ -117,6 +119,16 @@ export async function buildRewardRecord(
       return { error: "Currency code must contain exactly 3 letters." };
 
     if (!rewardType) return { error: "Reward type is required." };
+
+    let minCartSubtotalCents: number | null | undefined;
+    const rawMinSubtotal = formData.get("minCartSubtotal");
+    if (rewardType === "product_gift" && typeof rawMinSubtotal === "string") {
+      const amount = rawMinSubtotal.trim() === "" ? null : Number(rawMinSubtotal);
+      if (amount !== null && (!Number.isFinite(amount) || amount <= 0 || Math.round(amount * 100) > 1_000_000_000)) {
+        return { error: "Cart subtotal that unlocks this gift must be greater than 0." };
+      }
+      minCartSubtotalCents = amount === null ? null : Math.round(amount * 100);
+    }
 
     const needsValue =
       !postedTiers?.length &&
@@ -371,6 +383,7 @@ export async function buildRewardRecord(
         isCustomerSelectable,
         trackMode,
         label,
+        ...(minCartSubtotalCents !== undefined ? { minCartSubtotalCents } : {}),
       },
     };
 }

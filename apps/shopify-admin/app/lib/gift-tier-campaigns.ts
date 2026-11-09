@@ -80,3 +80,60 @@ export function buildGiftTierOfferDrafts(raw: GiftTierCampaign, currencyCode: st
     };
   });
 }
+
+/** One offer with several subtotal tiers (not one offer per tier): thresholds must be positive. */
+export const giftTieredOfferSchema = giftTierCampaignSchema.superRefine((config, ctx) => {
+  config.tiers.forEach((tier, index) => {
+    if (tier.minimumSubtotalCents <= 0) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["tiers", index, "minimumSubtotalCents"], message: "Tier thresholds must be greater than 0." });
+  });
+});
+
+export const giftTierModeSchema = z.enum(["cumulative", "highest"]);
+export type GiftTierMode = z.infer<typeof giftTierModeSchema>;
+
+/** Campaign stacking wording to the stored offer.tierMode. */
+export const tierModeOfStacking = (mode: GiftTierCampaign["stackingMode"]): GiftTierMode =>
+  mode === "highest_tier_only" ? "highest" : "cumulative";
+
+export interface TieredGiftRewardRow {
+  rewardType: "product_gift";
+  discountType: "free";
+  value: { amount: 100; currencyCode: string };
+  target: { scope: "cart"; variantIds: string[]; fallbackVariantIds?: string[] };
+  quantity: number;
+  isAutoAdd: boolean;
+  isCustomerSelectable: boolean;
+  trackMode: "variant";
+  sortOrder: number;
+  label: string;
+  minCartSubtotalCents: number;
+}
+
+/** The single-offer shape of a campaign: rewards by ascending threshold, main condition at the lowest tier. */
+export function buildTieredGiftOffer(raw: GiftTierCampaign, currencyCode: string) {
+  const campaign = giftTieredOfferSchema.parse(raw);
+  const tiers = [...campaign.tiers].sort((a, b) => a.minimumSubtotalCents - b.minimumSubtotalCents);
+  const rewards: TieredGiftRewardRow[] = tiers.map((tier, index) => ({
+    rewardType: "product_gift",
+    discountType: "free",
+    value: { amount: 100, currencyCode },
+    target: {
+      scope: "cart",
+      variantIds: tier.variantIds,
+      ...(tier.fallbackVariantIds?.length ? { fallbackVariantIds: tier.fallbackVariantIds.filter((id) => !tier.variantIds.includes(id)) } : {}),
+    },
+    quantity: tier.quantity,
+    isAutoAdd: tier.variantIds.length === 1,
+    isCustomerSelectable: tier.variantIds.length > 1,
+    trackMode: "variant",
+    sortOrder: index,
+    label: `Gift at ${(tier.minimumSubtotalCents / 100).toFixed(2)}`,
+    minCartSubtotalCents: tier.minimumSubtotalCents,
+  }));
+  return {
+    name: campaign.name,
+    tierMode: tierModeOfStacking(campaign.stackingMode),
+    condition: { thresholdCents: tiers[0]!.minimumSubtotalCents, currencyCode, includeGiftValues: false as const },
+    rewards,
+  };
+}
