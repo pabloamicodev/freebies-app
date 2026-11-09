@@ -33,9 +33,9 @@
               "tiers": [
                 {
                   "minimumQuantity": 2,
+                  "maximumQuantity": 2,
                   "discountType": "percentage",
-                  "discountValue": 10,
-                  "maximumQuantity": 2
+                  "discountValue": 10
                 }
               ]
             },
@@ -70,9 +70,9 @@
             "quantityTiers": [
               {
                 "minimumQuantity": 2,
+                "maximumQuantity": 2,
                 "discountType": "percentage",
-                "discountValue": 10,
-                "maximumQuantity": 2
+                "discountValue": 10
               }
             ]
           }
