@@ -232,6 +232,15 @@ describe("zero-decimal amounts phase (fixed discount values, fixed-amount overri
     expect((await runFor("amt-marked.myshopify.com", true)).alreadyMigrated).toEqual(["amt-marked.myshopify.com"]);
   });
 
+  it("--allow-rerun on a shop with both markers divides no amount a second time", async () => {
+    // amt-fresh ran both phases at NOW; its rows are stamped NOW, which a stale "earlier run" read would make eligible again.
+    const before = [await rewardOf(ids["orderFixed"]!), await rewardOf(ids["productPrice"]!), await conditionOf(ids["cart"]!)];
+    const result = await migrateZeroDecimalThresholds(db, { before: BEFORE, apply: true, now: new Date(NOW.getTime() + 1000), shopDomains: ["amt-fresh.myshopify.com"], allowRerun: true });
+    expect(result.changes.filter((change) => change.field === "amount" || change.field.startsWith("fixedAmountOverrides"))).toEqual([]);
+    expect([await rewardOf(ids["orderFixed"]!), await rewardOf(ids["productPrice"]!), await conditionOf(ids["cart"]!)]).toEqual(before);
+    expect((await rewardOf(ids["orderFixed"]!)).value).toMatchObject({ amount: 500 });
+  });
+
   it("reports the widget's per-market thresholds instead of guessing their currency", async () => {
     const result = await runFor("amt-marked.myshopify.com", false, { allowRerun: true });
     expect(result.skipped.some((skip) => skip.table === "app_settings" && /market currency is not stored/.test(skip.reason))).toBe(true);

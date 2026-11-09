@@ -9,6 +9,7 @@
  * whatever the cutoff, unless --allow-rerun is passed. Use the moment the unit fix was deployed. Shops on two-decimal currencies are never read.
  * Two phases, marked separately: thresholds, and amounts (fixed discount values, multicurrency fixed overrides). A shop marked by the
  * thresholds-only version still gets the amounts phase (printed as AMOUNTS-ONLY); only a shop with both markers is refused.
+ * If the thresholds and amounts fixes shipped at different times, run thresholds with the first deploy's --before and amounts with the second's.
  * After --apply, republish the shop's active offers (the Functions read the compiled config, not these rows).
  */
 

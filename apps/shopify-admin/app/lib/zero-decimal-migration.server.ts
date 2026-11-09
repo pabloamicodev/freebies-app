@@ -190,7 +190,8 @@ export async function migrateZeroDecimalThresholds(db: Db, options: ZeroDecimalM
     }
     if (!phases.thresholds) result.amountsOnly.push(shop.domain);
     // The thresholds-only version stamped the rows it rewrote with its run time; their amounts were never touched.
-    const earlierRun = phases.amounts ? stampOf(thresholdsMarker.get(shop.id)) : null;
+    // Only while the amounts phase has never run: after it, rows stamped at that time already hold whole amounts.
+    const earlierRun = phases.amounts && !amountsMarked.has(shop.id) ? stampOf(thresholdsMarker.get(shop.id)) : null;
     const eligible = (updatedAt: Date) => ({
       thresholds: phases.thresholds && updatedAt < options.before,
       amounts: phases.amounts && (updatedAt < options.before || updatedAt.getTime() === earlierRun),
