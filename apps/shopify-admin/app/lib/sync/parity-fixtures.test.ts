@@ -269,6 +269,7 @@ const anchorLine = line("a1", 10, null, { unitPrice: "50.00" });
 const themeGift = (id: string, n: number, quantity: number): LineSpec => line(id, n, { _promo_gift: "true" }, { quantity });
 
 const secondAnchorLine = line("a2", 10, null, { unitPrice: "50.00" });
+const zeroCostRequirement: Cond = ["specific_product", { requirements: [{ productId: P(1), variantId: V(1), trackMode: "variant", minQuantity: 2 }], multiplyByGroups: false }, "main"];
 const giftFor = (id: string, offerId: string, n: number) =>
   gift(id, offerId, {}, { variantId: V(n), productId: P(n) });
 
@@ -632,6 +633,57 @@ function limitsScenarios(): Scenario[] {
       lines: [unitLine("l1", 1, 2), line("l2", 2, page("/products/l2"), { unitPrice: "0.00" })],
       qualified: [A],
       discounted: { [A]: ["l1"] },
+    },
+    {
+      name: "zero-cost-unit-does-not-meet-a-product-requirement",
+      description: "A requirement of 2 units of one variant is not met by 1 paid unit plus 1 unit at $0 from another app.",
+      offers: [discountOffer(A, [zeroCostRequirement])],
+      lines: [unitLine("l1", 1, 1), line("l2", 1, page("/products/l2"), { unitPrice: "0.00" })],
+      qualified: [],
+      discounted: {},
+    },
+    {
+      name: "paid-units-plus-a-zero-cost-line-meet-a-product-requirement",
+      description: "2 paid units plus a $0 unit of the same variant meet the requirement; only the paid line is discounted.",
+      offers: [discountOffer(A, [zeroCostRequirement])],
+      lines: [unitLine("l1", 1, 2), line("l2", 1, page("/products/l2"), { unitPrice: "0.00" })],
+      qualified: [A],
+      discounted: { [A]: ["l1"] },
+    },
+    {
+      name: "zero-cost-line-does-not-satisfy-a-line-attribute",
+      description: "A line_attribute condition is not met by a $0 line carrying the attribute; a paid one meets it.",
+      offers: [discountOffer(A, [["line_attribute", { key: "vip", value: "yes", matchMode: "equals", minMatchingQuantity: 1 }, "main"]])],
+      lines: [unitLine("l1", 1, 1), line("l2", 2, page("/products/l2", { vip: "yes" }), { unitPrice: "0.00" })],
+      qualified: [],
+      discounted: {},
+    },
+    {
+      name: "paid-line-meets-a-line-attribute-next-to-a-zero-cost-line",
+      description: "The paid tagged line satisfies the attribute; the $0 tagged line is never discounted.",
+      offers: [discountOffer(A, [["line_attribute", { key: "vip", value: "yes", matchMode: "equals", minMatchingQuantity: 1 }, "main"]])],
+      lines: [line("l1", 1, page("/products/l1", { vip: "yes" })), line("l2", 2, page("/products/l2", { vip: "yes" }), { unitPrice: "0.00" })],
+      qualified: [A],
+      discounted: { [A]: ["l1"] },
+    },
+    {
+      name: "paid-anchor-next-to-a-zero-cost-anchor-unlocks-the-landing-gift",
+      description: "A paid anchor unlocks the landing gift whether or not a $0 anchor-variant line sits beside it.",
+      offers: [landingOffer(null)],
+      lines: [landingLine("anchor", 1, 1), line("anchor0", 1, { __landing_source: "tru-landing" }, { unitPrice: "0.00" }), landingLine("target2", 2, 1), landingLine("target3", 3, 1)],
+      qualified: [A],
+      discounted: { [A]: ["target2", "target3"] },
+    },
+    {
+      name: "zero-cost-line-is-not-a-consumable-gift-anchor",
+      description: "Two no-stack gift offers: the only paid anchor goes to the higher-priority one and the $0 anchor line cannot unlock the other.",
+      offers: [
+        { ...giftOffer(A, [anchorCondition], 1, [51]), priority: 10, canStack: false },
+        { ...giftOffer(B, [anchorCondition], 1, [52]), priority: 20, canStack: false },
+      ],
+      lines: [anchorLine, line("a0", 10, null, { unitPrice: "0.00" }), giftFor("g51", A, 51), giftFor("g52", B, 52)],
+      qualified: [A],
+      discounted: { [A]: ["g51"] },
     },
     {
       name: "zero-cost-line-does-not-consume-the-unit-cap",
