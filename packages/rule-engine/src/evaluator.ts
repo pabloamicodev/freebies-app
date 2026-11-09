@@ -9,7 +9,7 @@ import type {
 import { err, type Result } from "@promo/shared-types";
 import { buildCartHash, extractGiftLines, extractQualifyingLines, sumQualifyingValueNet } from "./cart-parser.js";
 import { evaluateCartValue, type CartValueConditionValue } from "./conditions/cart-value.js";
-import { evaluateCartQuantity, type CartQuantityConditionValue } from "./conditions/cart-quantity.js";
+import { cartQuantityCount, evaluateCartQuantity, type CartQuantityConditionValue } from "./conditions/cart-quantity.js";
 import { evaluateSpecificProduct, type SpecificProductConditionValue } from "./conditions/specific-product.js";
 import {
   evaluateCustomerTags,
@@ -646,7 +646,9 @@ function buildProgressBars(
       condition.conditionType === "cart_value"
         ? sumQualifyingValueNet(extractQualifyingLines(cart, { includeGiftValues: includeGifts }))
         : cart.subtotalCents;
-    const currentQuantity = cart.totalQuantity;
+    const currentQuantity = targetQuantity
+      ? cartQuantityCount(cart, condition.value as CartQuantityConditionValue)
+      : cart.totalQuantity;
     const current = targetQuantity ? currentQuantity : currentCents;
     const target = targetQuantity ?? targetCents;
     const progressPercent = target > 0 ? Math.min(100, Math.round((current / target) * 100)) : 100;
