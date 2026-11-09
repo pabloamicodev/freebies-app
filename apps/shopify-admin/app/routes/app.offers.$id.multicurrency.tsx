@@ -265,7 +265,7 @@ export default function MultiCurrencyPage() {
                                     defaultValue={existingThreshold}
                                     placeholder={`Base (${baseCurrency} ${baseThreshold.toFixed(decimals)})`}
                                     min="0"
-                                    step="0.01"
+                                    step={isZeroDecimalCurrency(overrideUnit(shopCurrency, market.currencyCode)) ? "1" : "0.01"}
                                     autoComplete="off"
                                     style={{ maxWidth: 200 }}
                                   />
@@ -286,7 +286,7 @@ export default function MultiCurrencyPage() {
                                       defaultValue={existingMaximum}
                                       placeholder={`${baseCurrency} ${fromStoredAmount(baseMaxCents, shopCurrency).toFixed(decimals)}`}
                                       min="0"
-                                      step="0.01"
+                                      step={isZeroDecimalCurrency(overrideUnit(shopCurrency, market.currencyCode)) ? "1" : "0.01"}
                                       autoComplete="off"
                                       style={{ maxWidth: 200 }}
                                     />

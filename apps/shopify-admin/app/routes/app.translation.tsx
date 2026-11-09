@@ -35,6 +35,9 @@ const TRANSLATION_KEYS: Array<{ key: keyof WidgetTranslations; label: string; hi
   { key: "upsell.no_thanks", label: "Upsell dismiss text" },
 ];
 
+/** Widget strings are one line of storefront text. */
+const MAX_STRING_LENGTH = 300;
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   if (!shopId) return { translations: {} as Record<string, Partial<WidgetTranslations>>, shopId: "" };
@@ -69,6 +72,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // The form names each field `<locale>.<key>`.
     const val = (formData.get(`${locale}.${key}`) ?? formData.get(key)) as string | null;
     if (!val?.trim()) continue;
+    if (val.trim().length > MAX_STRING_LENGTH) return { error: `${label}: keep it under ${MAX_STRING_LENGTH} characters.` };
     const problem = placeholderError(label, val.trim(), vars ?? []);
     if (problem) return { error: problem };
     (strings as Partial<Record<keyof WidgetTranslations, string>>)[key] = val.trim();
@@ -141,7 +145,7 @@ export default function TranslationPage() {
           <div className="b-banner-body">{actionData.error}</div>
         </div>
       )}
-      <Form id="translation-form" method="POST">
+      <Form key={locale} id="translation-form" method="POST">
         <input type="hidden" name="locale" value={locale} />
 
         <div className="b-card">

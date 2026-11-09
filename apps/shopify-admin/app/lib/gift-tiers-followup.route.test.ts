@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { appSettings, offerConditions, offerRewards, offers, productCache, shops, variantCache, type Db } from "@promo/db";
@@ -149,6 +151,14 @@ describe("zero-decimal currencies: thresholds are stored in the currency's own m
     await run(conditionsRoute.action, post({ intent: "add_condition", conditionType: "cart_value", scope: "main", threshold: "5000", currencyCode: "USD" }), { id: jpyOffer });
     const [other] = await db.select().from(offerConditions).where(eq(offerConditions.offerId, jpyOffer));
     expect(other!.value).toMatchObject({ thresholdCents: 5000 });
+  });
+
+  it("re-saving a condition keeps its stored tag exactly as posted", async () => {
+    useShop("usd");
+    const id = await seedOffer(db, usdShop, { type: "gift", status: "draft", internalName: "tag-kept" });
+    await run(conditionsRoute.action, post({ intent: "add_condition", conditionType: "cart_value", scope: "main", threshold: "30", currencyCode: "usd" }), { id });
+    const [stored] = await db.select().from(offerConditions).where(eq(offerConditions.offerId, id));
+    expect((stored!.value as { currencyCode: string }).currencyCode).toBe("usd");
   });
 
   it("customer-spend amounts are whole yen on a JPY shop and cents on a USD shop", async () => {
@@ -332,8 +342,19 @@ describe("Translation page", () => {
     expect((await stored())["es"]).toMatchObject({ locale: "es", "progress.gift_tier_before_goal": "Gastá {{remaining_amount}} más", "progress.gift_tier_after_goal": "Listo" });
   });
 
+  it("refuses a string over the length limit", async () => {
+    useShop("usd");
+    expect((await save({ locale: "es", "es.gift_slider.title": "x".repeat(301) }))?.error).toMatch(/under 300 characters/);
+    expect((await save({ locale: "es", "es.gift_slider.title": "x".repeat(300) }))?.error).toBeUndefined();
+  });
+
+  it("the form is remounted per locale, so one language's text is never posted under another", () => {
+    expect(readFileSync(resolve(__dirname, "../routes/app.translation.tsx"), "utf8")).toMatch(/<Form key=\{locale\} id="translation-form"/);
+  });
+
   it("refuses placeholders the widget would print as typed, and keeps what was saved", async () => {
     useShop("usd");
+    await save({ locale: "es", "es.progress.gift_tier_after_goal": "Listo" });
     for (const [field, text] of [
       ["progress.gift_tier_before_goal", "Gastá {{ remaining_amount }} más"],
       ["progress.gift_tier_before_goal", "Gastá {{remaining_amout}} más"],

@@ -131,7 +131,7 @@ function buildConditionValue(
         const thresh = parseFloat(formData.get("threshold") as string);
         if (!Number.isFinite(thresh) || thresh < 0) return { error: "Threshold must be a valid positive number." };
         // The unit is the shop's, whatever tag is typed: a free-text "JPY" on a USD shop must not store whole units.
-        const currencyCode = String(formData.get("currencyCode") || shopCurrency).trim().toUpperCase();
+        const currencyCode = String(formData.get("currencyCode") || shopCurrency);
         value = {
           thresholdCents: toStoredAmount(thresh, shopCurrency),
           currencyCode,
@@ -156,7 +156,7 @@ function buildConditionValue(
         if (!Number.isFinite(multThresh) || multThresh < 0) return { error: "Threshold must be a valid positive number." };
         const multRaw = formData.get("maxMultiplier");
         const maxMult = multRaw ? parseInt(multRaw as string, 10) : undefined;
-        const multCurrency = String(formData.get("currencyCode") || shopCurrency).trim().toUpperCase();
+        const multCurrency = String(formData.get("currencyCode") || shopCurrency);
         value = {
           thresholdCents: toStoredAmount(multThresh, shopCurrency),
           currencyCode: multCurrency,
