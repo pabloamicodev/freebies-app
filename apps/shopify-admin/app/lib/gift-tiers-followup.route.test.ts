@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { offerConditions, offerRewards, offers, productCache, shops, variantCache, type Db } from "@promo/db";
+import { appSettings, offerConditions, offerRewards, offers, productCache, shops, variantCache, type Db } from "@promo/db";
 import type * as PromoDb from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
@@ -41,6 +41,7 @@ const rewardsRoute = await import("../routes/app.offers.$id.rewards.js");
 const conditionsRoute = await import("../routes/app.offers.$id.conditions.js");
 const exportRoute = await import("../routes/api.offers.$id.export.js");
 const importRoute = await import("../routes/app.offers.import.js");
+const translationRoute = await import("../routes/app.translation.js");
 
 let db: Db;
 let close: () => Promise<void>;
@@ -318,5 +319,30 @@ describe("CSV round trip keeps gift tiers and tier mode", () => {
     const [headers, row] = parseCSV(await exportCsv(id));
     const cell = (name: string) => row![headers!.indexOf(name)];
     expect([cell("gift_tier_mode"), cell("gift_min_cart_subtotal_cents"), cell("gift_fallback_variant_gids")]).toEqual(["", "", ""]);
+  });
+});
+
+describe("Translation page", () => {
+  const save = (fields: Record<string, string>) => run(translationRoute.action, post(fields));
+  const stored = async () => JSON.parse((await db.select().from(appSettings).where(and(eq(appSettings.shopId, usdShop), eq(appSettings.key, "translations.strings"))))[0]!.value) as Record<string, Record<string, string>>;
+
+  it("saves the strings the form posts under <locale>.<key>", async () => {
+    useShop("usd");
+    expect((await save({ locale: "es", "es.progress.gift_tier_before_goal": " Gastá {{remaining_amount}} más ", "es.progress.gift_tier_after_goal": "Listo" }))?.error).toBeUndefined();
+    expect((await stored())["es"]).toMatchObject({ locale: "es", "progress.gift_tier_before_goal": "Gastá {{remaining_amount}} más", "progress.gift_tier_after_goal": "Listo" });
+  });
+
+  it("refuses placeholders the widget would print as typed, and keeps what was saved", async () => {
+    useShop("usd");
+    for (const [field, text] of [
+      ["progress.gift_tier_before_goal", "Gastá {{ remaining_amount }} más"],
+      ["progress.gift_tier_before_goal", "Gastá {{remaining_amout}} más"],
+      ["progress.gift_tier_before_goal", "Gastá {{remaining_amount más"],
+      ["gift_slider.title", "Regalo {{max}}"],
+    ] as const) {
+      expect((await save({ locale: "es", [`es.${field}`]: text }))?.error).toMatch(/placeholder|not available/);
+    }
+    expect((await stored())["es"]!["progress.gift_tier_after_goal"]).toBe("Listo");
+    expect((await save({ locale: "xx", "xx.gift_slider.title": "x" }))?.error).toMatch(/supported language/);
   });
 });
