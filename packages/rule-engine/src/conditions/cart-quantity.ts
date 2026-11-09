@@ -1,6 +1,6 @@
 import type { NormalizedCart, EligibilityReason } from "@promo/shared-types";
 import { ok, err, type Result } from "@promo/shared-types";
-import { extractQualifyingLines, sumQualifyingQuantity } from "../cart-parser.js";
+import { extractQualifyingLines, isZeroCostLine, sumQualifyingQuantity } from "../cart-parser.js";
 
 export interface CartQuantityConditionValue {
   minQuantity: number;
@@ -18,7 +18,7 @@ export function cartQuantityCount(cart: NormalizedCart, condition: CartQuantityC
   const qualifyingLines = extractQualifyingLines(cart, {
     includeGiftValues: condition.includeGiftValues,
   }).filter((line) => {
-    if (!condition.includeGiftValues && (line.lineSubtotalCents ?? line.priceCents * line.quantity) <= 0) return false;
+    if (!condition.includeGiftValues && isZeroCostLine(line)) return false;
     const f = condition.scopeFilter;
     if (!f) return true;
     if (f.excludeProductIds?.includes(line.productId)) return false;

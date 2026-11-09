@@ -1,6 +1,6 @@
 import type { NormalizedCart, EligibilityReason } from "@promo/shared-types";
 import { ok, err, type Result } from "@promo/shared-types";
-import { extractQualifyingLines } from "../cart-parser.js";
+import { extractQualifyingLines, isZeroCostLine } from "../cart-parser.js";
 
 export interface SpecificProductConditionValue {
   /**
@@ -29,7 +29,7 @@ export function evaluateSpecificProduct(
   condition: SpecificProductConditionValue,
   operator = "all",
 ): Result<EligibilityReason & { qualifiedGroups: number }, EligibilityReason> {
-  const qualifyingLines = extractQualifyingLines(cart, { includeGiftValues: false });
+  const qualifyingLines = extractQualifyingLines(cart, { includeGiftValues: false }).filter((line) => !isZeroCostLine(line));
 
   // Legacy format: { variantIds: string[], minQtyPerProduct?: number }
   // Semantics: OR — any of the listed variants counts toward the minimum

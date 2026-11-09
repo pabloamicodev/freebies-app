@@ -278,6 +278,7 @@ function referenceDiscounts(fixture: Fixture, offer: SourceOffer, lockedGiftRewa
     const setScoped = landing || reward.scopeMode === "tagged_offer";
     if (landing) {
       const anchorQuantity = nonGift
+        .filter((line) => Number(line.unitPrice) > 0)
         .filter((line) => line.metadata?.["__landing_source"] === reward.requiredLineAttributeValue)
         .filter((line) => (reward.requiredAnchorVariantIds ?? []).includes(line.variantId))
         .reduce((sum, line) => sum + line.quantity, 0);

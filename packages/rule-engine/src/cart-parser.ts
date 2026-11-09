@@ -54,6 +54,11 @@ export function extractQualifyingLines(
   });
 }
 
+/** A $0 line (another app's free gift) is not a paid unit: it never counts toward a requirement or anchor. */
+export function isZeroCostLine(line: NormalizedCartLine): boolean {
+  return (line.lineSubtotalCents ?? line.priceCents * line.quantity) <= 0;
+}
+
 /** Sum of final line subtotals across qualifying lines, in cents. */
 export function sumQualifyingValue(lines: NormalizedCartLine[]): number {
   return lines.reduce(

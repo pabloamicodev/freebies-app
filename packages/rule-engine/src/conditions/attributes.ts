@@ -1,6 +1,6 @@
 import type { NormalizedCart } from "@promo/shared-types";
 import { err, ok, type Result, type EligibilityReason } from "@promo/shared-types";
-import { extractQualifyingLines } from "../cart-parser.js";
+import { extractQualifyingLines, isZeroCostLine } from "../cart-parser.js";
 
 export interface LineAttributeConditionValue {
   key: string;
@@ -17,6 +17,7 @@ export interface CartAttributeConditionValue {
 
 export function evaluateLineAttribute(cart: NormalizedCart, condition: LineAttributeConditionValue): Result<EligibilityReason, EligibilityReason> {
   const matchingQuantity = extractQualifyingLines(cart, { includeGiftValues: false })
+    .filter((line) => !isZeroCostLine(line))
     .filter((line) => line.properties[condition.key] === condition.value)
     .reduce((sum, line) => sum + line.quantity, 0);
   const passed = condition.matchMode === "not_equals"
