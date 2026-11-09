@@ -72,6 +72,28 @@ describe("cart_value on a JPY shop", () => {
   });
 });
 
+describe("the unit is the shop's, whatever the row's tag says", () => {
+  it.each(["JPY", "jpy"])("a USD shop's 500000 threshold tagged %s still needs a 500000 cart", async (tag) => {
+    const offer = offerOf({ thresholdCents: 500_000, currencyCode: tag }, [gift("g", 0)]);
+    expect(await qualified(offer, cartOf(500_000, "USD"), "USD")).toBe(true);
+    expect(await qualified(offer, cartOf(499_999, "USD"), "USD")).toBe(false);
+  });
+  it("a JPY shop's 5000 threshold tagged USD is still 5000 yen", async () => {
+    const offer = offerOf({ thresholdCents: 5000, currencyCode: "USD" }, [gift("g", 0)]);
+    expect(await qualified(offer, cartOf(500_000, "JPY"), "JPY")).toBe(true);
+    expect(await qualified(offer, cartOf(499_900, "JPY"), "JPY")).toBe(false);
+  });
+  it("tiers, the multiplier and the progress bar ignore the tag too", async () => {
+    const tagged = (shop: string) => offerOf({ thresholdCents: shop === "JPY" ? 5000 : 500_000, currencyCode: shop === "JPY" ? "USD" : "JPY" }, [gift("51", 0, shop === "JPY" ? 5000 : 500_000)]);
+    expect(await granted(tagged("USD"), cartOf(500_000, "USD"), "USD")).toEqual(["51"]);
+    expect(await granted(tagged("JPY"), cartOf(500_000, "JPY"), "JPY")).toEqual(["51"]);
+    const multiplier = offerOf({ thresholdCents: 500_000, currencyCode: "JPY" }, [gift("g", 0)], undefined, "cart_value_multiplier");
+    expect(await qualified(multiplier, cartOf(500_000, "USD"), "USD")).toBe(true);
+    const plain = offerOf({ thresholdCents: 500_000, currencyCode: "JPY" }, [gift("g", 0)]);
+    expect((await run(plain, cartOf(200_000, "USD"), "USD")).progressBars[0]).toMatchObject({ targetCents: 500_000 });
+  });
+});
+
 describe("gift tiers on a JPY shop", () => {
   const tiers = (mode?: "cumulative" | "highest") => offerOf({ thresholdCents: 5000, currencyCode: "JPY" }, [gift("51", 0, 5000), gift("52", 1, 12000)], mode);
   it("a 5000 yen tier is reached at a 5000 yen cart and not at 4999", async () => {

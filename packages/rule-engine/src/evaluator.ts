@@ -695,8 +695,8 @@ function buildProgressBars(
       .find((item) => item.conditionType === "cart_value" || item.conditionType === "cart_quantity");
     if (!condition) return [];
 
-    const value = condition.value as { thresholdCents?: number; minQuantity?: number; currencyCode?: string };
-    const targetCents = condition.conditionType === "cart_value" ? Math.max(0, toCartUnits(value.thresholdCents ?? 0, value.currencyCode ?? shopCurrencyCode)) : 0;
+    const value = condition.value as { thresholdCents?: number; minQuantity?: number };
+    const targetCents = condition.conditionType === "cart_value" ? Math.max(0, toCartUnits(value.thresholdCents ?? 0, shopCurrencyCode)) : 0;
     const targetQuantity = condition.conditionType === "cart_quantity" ? Math.max(1, value.minQuantity ?? 1) : null;
     // Same qualifying value the cart_value condition checks: gift lines out, net of volume discounts.
     const includeGifts = (condition.value as { includeGiftValues?: boolean }).includeGiftValues === true;

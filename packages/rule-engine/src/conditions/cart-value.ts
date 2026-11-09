@@ -54,18 +54,20 @@ export function evaluateCartValue(
   const activeCurrency = currency.activeCurrencyCode.toUpperCase();
   // Saved conditions may lack currencyCode; their thresholds are in the shop currency.
   const conditionCurrency = (condition.currencyCode ?? currency.shopCurrencyCode).toUpperCase();
-  let thresholdCents = toCartUnits(condition.thresholdCents, conditionCurrency);
-  let maxCents = condition.maxCents === undefined ? undefined : toCartUnits(condition.maxCents, conditionCurrency);
+  // The stored unit is the shop currency's (what the Functions read); the free-text tag only decides whether to convert.
+  const unit = currency.shopCurrencyCode;
+  let thresholdCents = toCartUnits(condition.thresholdCents, unit);
+  let maxCents = condition.maxCents === undefined ? undefined : toCartUnits(condition.maxCents, unit);
   if (condition.currencyOverrides?.[activeCurrency] !== undefined) {
-    thresholdCents = overrideToCartUnits(condition.currencyOverrides[activeCurrency]!, activeCurrency, conditionCurrency);
+    thresholdCents = overrideToCartUnits(condition.currencyOverrides[activeCurrency]!, activeCurrency, unit);
   } else if (
     activeCurrency !== conditionCurrency &&
     currency.exchangeRate
   ) {
-    thresholdCents = Math.ceil(toCartUnits(condition.thresholdCents, conditionCurrency) * currency.exchangeRate);
+    thresholdCents = Math.ceil(toCartUnits(condition.thresholdCents, unit) * currency.exchangeRate);
   }
   if (condition.maxCurrencyOverrides?.[activeCurrency] !== undefined) {
-    maxCents = overrideToCartUnits(condition.maxCurrencyOverrides[activeCurrency]!, activeCurrency, conditionCurrency);
+    maxCents = overrideToCartUnits(condition.maxCurrencyOverrides[activeCurrency]!, activeCurrency, unit);
   } else if (
     maxCents !== undefined &&
     activeCurrency !== conditionCurrency &&

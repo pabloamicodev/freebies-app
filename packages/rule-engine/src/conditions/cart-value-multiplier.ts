@@ -51,15 +51,17 @@ export function evaluateCartValueMultiplier(
   // Resolve threshold for active currency
   const activeCurrency = currency.activeCurrencyCode.toUpperCase();
   const conditionCurrency = (condition.currencyCode ?? currency.shopCurrencyCode).toUpperCase();
-  let thresholdCents = toCartUnits(condition.thresholdCents, conditionCurrency);
+  // The stored unit is the shop currency's; the tag only decides whether to convert.
+  const unit = currency.shopCurrencyCode;
+  let thresholdCents = toCartUnits(condition.thresholdCents, unit);
   if (condition.currencyOverrides?.[activeCurrency] !== undefined) {
-    thresholdCents = overrideToCartUnits(condition.currencyOverrides[activeCurrency]!, activeCurrency, conditionCurrency);
+    thresholdCents = overrideToCartUnits(condition.currencyOverrides[activeCurrency]!, activeCurrency, unit);
   } else if (
     // Saved conditions may lack currencyCode; their thresholds are in the shop currency.
     activeCurrency !== conditionCurrency &&
     currency.exchangeRate
   ) {
-    thresholdCents = Math.ceil(toCartUnits(condition.thresholdCents, conditionCurrency) * currency.exchangeRate);
+    thresholdCents = Math.ceil(toCartUnits(condition.thresholdCents, unit) * currency.exchangeRate);
   }
 
   if (thresholdCents <= 0) {
