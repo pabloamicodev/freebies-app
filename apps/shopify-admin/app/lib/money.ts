@@ -18,3 +18,8 @@ export function toStoredAmount(value: number, currency: string | null | undefine
 export function fromStoredAmount(stored: number, currency: string | null | undefined): number {
   return isZeroDecimalCurrency(currency) ? stored : stored / 100;
 }
+
+/** A stored amount as plain text for labels: two decimals, none for zero-decimal currencies. */
+export function formatStoredAmount(stored: number, currency: string | null | undefined): string {
+  return fromStoredAmount(stored, currency).toFixed(isZeroDecimalCurrency(currency) ? 0 : 2);
+}

@@ -22,7 +22,7 @@ import type { DeliveryGroupType } from "@promo/shared-types";
 import { buildRewardRecord } from "../lib/reward-record.server.js";
 import { splitTextareaList } from "../lib/textarea-list.js";
 import { and, eq } from "drizzle-orm";
-import { fromStoredAmount } from "../lib/money.js";
+import { formatStoredAmount, fromStoredAmount } from "../lib/money.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { lowerMainThresholdToLowestTier } from "../lib/gift-tiered-offer.server.js";
 import { giftTierModeSchema } from "../lib/gift-tier-campaigns.js";
@@ -434,7 +434,7 @@ export default function OfferRewardsPage() {
     setDiscountType(r.discountType);
     setCurrencyCode(typeof value["currencyCode"] === "string" ? (value["currencyCode"] as string) : shopCurrencyCode);
     setGiftQuantity(r.quantity != null ? String(r.quantity) : "1");
-    setGiftMinSubtotal(r.minCartSubtotalCents ? String(r.minCartSubtotalCents / 100) : "");
+    setGiftMinSubtotal(r.minCartSubtotalCents ? String(fromStoredAmount(r.minCartSubtotalCents, shopCurrencyCode)) : "");
 
     const targetVariantIds = Array.isArray(target["variantIds"]) ? target["variantIds"] as string[] : [];
     const targetProductIds = Array.isArray(target["productIds"]) ? target["productIds"] as string[] : [];
@@ -687,7 +687,7 @@ export default function OfferRewardsPage() {
                         <span className="b-text-sm b-text-sub">Qty: {r.quantity}</span>
                       )}
                       {r.minCartSubtotalCents ? (
-                        <span className="b-badge b-badge-gray">Unlocks at {(r.minCartSubtotalCents / 100).toFixed(2)}</span>
+                        <span className="b-badge b-badge-gray">Unlocks at {formatStoredAmount(r.minCartSubtotalCents, shopCurrencyCode)}</span>
                       ) : null}
                       {r.isAutoAdd && <span className="b-badge b-badge-blue">Auto-add</span>}
                       {r.isCustomerSelectable && (

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fromStoredAmount, toStoredAmount } from "./money.js";
+import { formatStoredAmount, fromStoredAmount, toStoredAmount } from "./money.js";
 
 describe("money", () => {
   it("keeps x100 for two-decimal currencies", () => {
@@ -14,6 +14,11 @@ describe("money", () => {
   });
   it("round-trips", () => {
     for (const c of ["USD", "JPY", "VND"]) expect(fromStoredAmount(toStoredAmount(12, c), c)).toBe(12);
+  });
+  it("formats a stored amount for labels in the currency's own units", () => {
+    expect(formatStoredAmount(5000, "USD")).toBe("50.00");
+    expect(formatStoredAmount(5000, "JPY")).toBe("5000");
+    expect(formatStoredAmount(12550, undefined)).toBe("125.50");
   });
   it("falls back to two decimals for unknown currency", () => {
     expect(toStoredAmount(5, undefined)).toBe(500);

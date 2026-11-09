@@ -19,6 +19,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { lowestGiftTier } from "../lib/gift-tiered-offer.server.js";
+import { formatStoredAmount, isZeroDecimalCurrency, toStoredAmount } from "../lib/money.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { discountCodes, offerConditions } from "@promo/db";
 import {
@@ -93,7 +94,7 @@ function LineMatchFields({
 }
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { shopId, db, currencyCode: shopCurrencyCode } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
@@ -111,15 +112,22 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
   return {
     offer,
+    defaultCurrency: defaultConditionCurrency(shopCurrencyCode),
     conditions: conditionRows.sort((a, b) => a.sortOrder - b.sortOrder),
     markets,
     isCodePromo: isCheckoutCodeGated(offer, Boolean(firstCode)),
   };
 };
 
+/** Conditions have always defaulted to USD; only zero-decimal shops need their own currency so amounts convert at the right scale. */
+function defaultConditionCurrency(shopCurrencyCode: string): string {
+  return isZeroDecimalCurrency(shopCurrencyCode) ? shopCurrencyCode.toUpperCase() : "USD";
+}
+
 function buildConditionValue(
   conditionType: string,
   formData: FormData,
+  fallbackCurrency: string,
 ): { value: Record<string, unknown>; operator: ConditionOperator; error?: never } | { error: string; value?: never; operator?: never } {
     let value: Record<string, unknown> = {};
     let conditionOperator: ConditionOperator = "gte";
@@ -127,9 +135,10 @@ function buildConditionValue(
       case "cart_value": {
         const thresh = parseFloat(formData.get("threshold") as string);
         if (!Number.isFinite(thresh) || thresh < 0) return { error: "Threshold must be a valid positive number." };
+        const currencyCode = String(formData.get("currencyCode") ?? fallbackCurrency);
         value = {
-          thresholdCents: Math.round(thresh * 100),
-          currencyCode: formData.get("currencyCode") ?? "USD",
+          thresholdCents: toStoredAmount(thresh, currencyCode),
+          currencyCode,
           includeGiftValues: formData.get("includeGiftValues") === "on",
         };
         break;
@@ -151,9 +160,10 @@ function buildConditionValue(
         if (!Number.isFinite(multThresh) || multThresh < 0) return { error: "Threshold must be a valid positive number." };
         const multRaw = formData.get("maxMultiplier");
         const maxMult = multRaw ? parseInt(multRaw as string, 10) : undefined;
+        const multCurrency = String(formData.get("currencyCode") ?? fallbackCurrency);
         value = {
-          thresholdCents: Math.round(multThresh * 100),
-          currencyCode: formData.get("currencyCode") ?? "USD",
+          thresholdCents: toStoredAmount(multThresh, multCurrency),
+          currencyCode: multCurrency,
           maxMultiplier: maxMult !== undefined && Number.isFinite(maxMult) ? maxMult : undefined,
           includeGiftValues: false,
         };
@@ -305,7 +315,7 @@ function buildConditionValue(
 }
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session, shopId, db } = await getShopContext(request);
+  const { session, shopId, db, currencyCode: shopCurrencyCode } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
@@ -318,13 +328,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const scopeRaw = formData.get("scope") as string | null;
     const scope = scopeRaw === "sub" ? "sub" : "main";
 
-    const built = buildConditionValue(conditionType, formData);
+    const built = buildConditionValue(conditionType, formData, defaultConditionCurrency(shopCurrencyCode));
     if ("error" in built) return { error: built.error };
     const { value, operator: conditionOperator } = built;
     if (scope === "main" && conditionType === "cart_value" && typeof (value as { thresholdCents?: unknown }).thresholdCents === "number") {
       const lowestTier = await lowestGiftTier(db, shopId, offerId);
       if (lowestTier !== null && (value as { thresholdCents: number }).thresholdCents > lowestTier) {
-        return { error: `The minimum cart value cannot be above this offer's lowest gift tier (${(lowestTier / 100).toFixed(2)}), or that tier could never unlock. Lower it, or raise the tier on the rewards page.` };
+        return { error: `The minimum cart value cannot be above this offer's lowest gift tier (${formatStoredAmount(lowestTier, value["currencyCode"] as string)}), or that tier could never unlock. Lower it, or raise the tier on the rewards page.` };
       }
     }
     if (conditionType === "specific_product" && conditionOperator === "any") {
@@ -421,8 +431,8 @@ const SUB_CONDITION_TYPES = [
 /** Pulls the edit-form-relevant fields out of a condition's stored value —
  * shared by startEditCondition and the initial state below, so the first
  * condition can open pre-filled exactly like a real click would produce. */
-function deriveConditionEditFields(value: Record<string, unknown>, operator?: string) {
-  const currencyCode = typeof value["currencyCode"] === "string" ? (value["currencyCode"] as string) : "USD";
+function deriveConditionEditFields(value: Record<string, unknown>, operator: string | undefined, defaultCurrency: string) {
+  const currencyCode = typeof value["currencyCode"] === "string" ? (value["currencyCode"] as string) : defaultCurrency;
   const includeMarketIds = Array.isArray(value["includeMarketIds"]) ? (value["includeMarketIds"] as string[]) : [];
   const excludeMarketIds = Array.isArray(value["excludeMarketIds"]) ? (value["excludeMarketIds"] as string[]) : [];
   let requiredVariantGids: string[] = [];
@@ -439,7 +449,7 @@ function deriveConditionEditFields(value: Record<string, unknown>, operator?: st
 }
 
 export default function OfferConditionsPage() {
-  const { offer, conditions, markets, isCodePromo } = useLoaderData<typeof loader>();
+  const { offer, defaultCurrency, conditions, markets, isCodePromo } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const submit = useSubmit();
@@ -451,7 +461,7 @@ export default function OfferConditionsPage() {
     // obvious these rows are clickable and what clicking one reveals —
     // instead of a wall of collapsed summaries with no visible affordance.
     const first = conditions[0];
-    const fields = first ? deriveConditionEditFields((first.value ?? {}) as Record<string, unknown>, first.operator) : null;
+    const fields = first ? deriveConditionEditFields((first.value ?? {}) as Record<string, unknown>, first.operator, defaultCurrency) : null;
     return {
       addingScope: (first?.scope as "main" | "sub" | undefined) ?? null,
       editingId: first?.id ?? null,
@@ -464,7 +474,7 @@ export default function OfferConditionsPage() {
       matchRule: (fields?.matchRule ?? "any") as MatchRule,
       pickedProducts: [] as SelectedProduct[],
       excludeVariantGids: [] as string[],
-      currencyCode: fields?.currencyCode ?? "USD",
+      currencyCode: fields?.currencyCode ?? defaultCurrency,
       minQtyPerProduct: fields?.minQtyPerProduct ?? "1",
       includeMarketIds: fields?.includeMarketIds ?? [],
       excludeMarketIds: fields?.excludeMarketIds ?? [],
@@ -527,7 +537,7 @@ export default function OfferConditionsPage() {
       return;
     }
     const value = (c.value ?? {}) as Record<string, unknown>;
-    const fields = deriveConditionEditFields(value, c.operator);
+    const fields = deriveConditionEditFields(value, c.operator, defaultCurrency);
     setAddingScope(c.scope as "main" | "sub");
     setSelectedType(c.conditionType);
     setEditingId(c.id);
@@ -783,7 +793,7 @@ export default function OfferConditionsPage() {
                           step="0.01"
                           required
                           autoComplete="off"
-                          defaultValue={typeof editingValue["thresholdCents"] === "number" ? (editingValue["thresholdCents"] / 100).toFixed(2) : undefined}
+                          defaultValue={typeof editingValue["thresholdCents"] === "number" ? formatStoredAmount(editingValue["thresholdCents"], typeof editingValue["currencyCode"] === "string" ? editingValue["currencyCode"] : defaultCurrency) : undefined}
                         />
                       </div>
                       <div>
