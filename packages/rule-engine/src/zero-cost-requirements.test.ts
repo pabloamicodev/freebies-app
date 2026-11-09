@@ -3,6 +3,7 @@ import type { NormalizedCart, NormalizedCartLine } from "@promo/shared-types";
 import { evaluateSpecificProduct } from "./conditions/specific-product.js";
 import { evaluatePack } from "./conditions/pack.js";
 import { evaluateLineAttribute } from "./conditions/attributes.js";
+import { cartQuantityCount } from "./conditions/cart-quantity.js";
 import { consumeAnchors, freeUnits, giftAnchors } from "./gift-anchors.js";
 import type { OfferDefinition } from "./evaluator.js";
 
@@ -108,6 +109,47 @@ const baseOffer = (over: Partial<OfferDefinition>): OfferDefinition => ({
   },
   giftValueCountsForOtherOffers: false,
   ...over,
+});
+
+describe("a line discounted to $0 by another offer is still a paid unit", () => {
+  // /cart.js reports final prices (after discounts); the original subtotal is what the Function sees.
+  const discountedToZero = (key: string, variant: string, quantity: number, original?: number, props: Record<string, string> = {}) => ({
+    ...line(key, variant, 0, quantity, props),
+    lineSubtotalCents: 0,
+    ...(original === undefined ? {} : { originalLineSubtotalCents: original }),
+  });
+
+  it("final 0 with original > 0 counts toward a requirement", () => {
+    expect(evaluateSpecificProduct(cartOf(discountedToZero("a", "x", 2, 2000)), need2).ok).toBe(true);
+  });
+  it("original 0 is zero-cost even when a final price is present", () => {
+    expect(evaluateSpecificProduct(cartOf({ ...line("a", "x", 1000, 2), originalLineSubtotalCents: 0 }), need2).ok).toBe(false);
+  });
+  it("falls back to the final price when the original is absent", () => {
+    expect(evaluateSpecificProduct(cartOf(discountedToZero("a", "x", 2)), need2).ok).toBe(false);
+  });
+  it("counts toward cart_quantity", () => {
+    const counted = cartQuantityCount(cartOf(discountedToZero("a", "x", 2, 2000)), { minQuantity: 1, includeGiftValues: false });
+    expect(counted).toBe(2);
+    expect(cartQuantityCount(cartOf(discountedToZero("a", "x", 2)), { minQuantity: 1, includeGiftValues: false })).toBe(0);
+  });
+  it("counts as a landing anchor", () => {
+    const landing = baseOffer({
+      type: "discount",
+      rewards: [
+        {
+          id: "r",
+          rewardType: "product_discount",
+          discountType: "free",
+          value: { amount: 100 },
+          target: { scopeMode: "landing", requiredLineAttributeValue: "lp", requiredAnchorVariantIds: ["x"], requiredAnchorMinQuantity: 1, productIds: ["p-t"] },
+          sortOrder: 0,
+        } as never,
+      ],
+    });
+    const anchors = giftAnchors(landing, cartOf(discountedToZero("a", "x", 1, 2000, { __landing_source: "lp" })), new Set())!;
+    expect(anchors.lines).toEqual([{ key: "a", quantity: 1 }]);
+  });
 });
 
 describe("gift anchors with a $0 line from another app", () => {

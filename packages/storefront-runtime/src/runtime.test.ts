@@ -234,6 +234,28 @@ function scriptedHarness(steps: Step[]) {
 }
 const scripted = (steps: Step[]) => scriptedHarness(steps).run();
 
+describe("normalized cart lines", () => {
+  const evaluatedLines = async (items: Array<Record<string, unknown>>) => {
+    const h = harness([
+      [/cart\.js/, () => json({ ...emptyCart, items })],
+      [/evaluate/, () => json(okResult())],
+    ]);
+    await new PromoEngineRuntime(CONFIG).api.evaluate();
+    const call = h.calls.find((c) => /evaluate/.test(c.url))!;
+    return (JSON.parse(String(call.init?.body)) as { cart: { lines: Array<Record<string, unknown>> } }).cart.lines;
+  };
+
+  it("sends the pre-discount line price next to the final one", async () => {
+    const [line] = await evaluatedLines([{ ...item("a1"), final_line_price: 0, original_line_price: 2000 }]);
+    expect(line).toMatchObject({ lineSubtotalCents: 0, originalLineSubtotalCents: 2000 });
+  });
+
+  it("omits it when the storefront does not report original_line_price", async () => {
+    const [line] = await evaluatedLines([{ ...item("a1"), final_line_price: 1500 }]);
+    expect(line).not.toHaveProperty("originalLineSubtotalCents");
+  });
+});
+
 describe("declined-gift false positive", () => {
   const giftAction = {
     action: "add_line",
