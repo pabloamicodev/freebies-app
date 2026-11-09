@@ -18,6 +18,8 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 const TRANSLATION_KEYS: Array<{ key: keyof WidgetTranslations; label: string; hint?: string }> = [
   { key: "progress.before_goal", label: "Progress bar — before goal", hint: "Use {{remaining_amount}} for the amount, {{remaining_quantity}} for quantity." },
   { key: "progress.after_goal", label: "Progress bar — after goal" },
+  { key: "progress.gift_tier_before_goal", label: "Gift tiers bar — before next tier", hint: "Use {{remaining_amount}} for the amount left to the next gift tier." },
+  { key: "progress.gift_tier_after_goal", label: "Gift tiers bar — all gifts unlocked" },
   { key: "gift_slider.title", label: "Gift slider title" },
   { key: "gift_slider.confirm_button", label: "Gift slider confirm button" },
   { key: "gift_slider.out_of_stock", label: "Gift out of stock label" },

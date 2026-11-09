@@ -120,6 +120,21 @@ describe("progress and picker", () => {
     expect(high.progressBars[0]).toMatchObject({ currentCents: 12000, isGoalReached: true });
   });
 
+  it("without a translation the bar keeps its English wording", async () => {
+    const low = await run(tiers(), cartOf(line("a", V("1"), 8000)));
+    expect(low.progressBars[0]!.messageBeforeGoal).toBe("Spend $30.00 more to unlock your next gift.");
+    const high = await run(tiers(), cartOf(line("a", V("1"), 12000)));
+    expect(high.progressBars[0]!.messageAfterGoal).toBe("All gifts unlocked.");
+    const blank = await evaluate(inputOf(cartOf(line("a", V("1"), 8000))), { offers: [tiers()], usageStates: [], now: NOW, progressMessages: { giftTierBeforeGoal: "", giftTierAfterGoal: undefined } });
+    expect(blank.progressBars[0]!.messageBeforeGoal).toBe("Spend $30.00 more to unlock your next gift.");
+  });
+
+  it("merchant translations replace both messages and fill {{remaining_amount}}", async () => {
+    const progressMessages = { giftTierBeforeGoal: "Gastá {{remaining_amount}} más para tu próximo regalo.", giftTierAfterGoal: "Todos los regalos desbloqueados." };
+    const low = await evaluate(inputOf(cartOf(line("a", V("1"), 8000))), { offers: [tiers()], usageStates: [], now: NOW, progressMessages });
+    expect(low.progressBars[0]).toMatchObject({ messageBeforeGoal: "Gastá $30.00 más para tu próximo regalo.", messageAfterGoal: "Todos los regalos desbloqueados." });
+  });
+
   it("the picker lists only the reached tiers' gifts", async () => {
     const offer = offerWith([reward("r-kit", [KIT], 0, 7000), reward("r-pick", [V("60"), V("61")], 1, 11000)]);
     expect((await run(offer, cartOf(line("a", V("1"), 8000)))).giftSlider).toBeNull();

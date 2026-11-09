@@ -297,20 +297,28 @@ export async function handleEvaluationRequest(
     customer,
   };
 
+  const rawLocale = (body as { locale?: unknown } | null)?.locale;
+  const locale = typeof rawLocale === "string" && /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})?$/.test(rawLocale) ? rawLocale : "en";
+  // Only shops with tiered gifts have a server-built "spend more" bar to translate.
+  const tierStrings = offerDefinitions.some((offer) => offer.rewards.some((reward) => reward.minCartSubtotalCents))
+    ? await loadGiftSliderTranslations(shop.id, locale).catch(() => null)
+    : null;
+
   const result = await evaluate(input, {
     offers: offerDefinitions,
     usageStates,
     identifiedCustomer: customerGid !== null,
     now: new Date(),
     shopCurrencyCode: shop.currencyCode ?? undefined,
+    ...(tierStrings
+      ? { progressMessages: { giftTierBeforeGoal: tierStrings["progress.gift_tier_before_goal"]?.trim(), giftTierAfterGoal: tierStrings["progress.gift_tier_after_goal"]?.trim() } }
+      : {}),
   });
   timer.mark("evaluate");
 
   // enrichGiftSlider and resolveSoldOutGiftAdds both need pricing/stock for
   // largely the same gift + fallback variants — one shared query instead of
   // each hitting the database on its own.
-  const rawLocale = (body as { locale?: unknown } | null)?.locale;
-  const locale = typeof rawLocale === "string" && /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})?$/.test(rawLocale) ? rawLocale : "en";
   const [giftCatalog, upsells, giftLabels] = await Promise.all([
     loadGiftCatalogData(shop.id, [
       ...collectGiftCatalogVariantIds(result.giftSlider, result.cartActions, offerDefinitions),

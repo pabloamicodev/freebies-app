@@ -58,6 +58,8 @@ const { redisGetString, redisSetString } = await import("./redis.server.js");
 const { resetMemoryCaches } = await import("./memory-cache.server.js");
 const { applyCodeGatesDetailed } = await import("./code-gate.server.js");
 const { waitUntil } = await import("@vercel/functions");
+const { evaluate } = await import("@promo/rule-engine");
+const { loadGiftSliderTranslations } = await import("./gift-enrichment.server.js");
 
 function makeRequest(cartToken: string | null, discountCodes: string[] = [], extra: Record<string, unknown> = {}) {
   const body = {
@@ -295,10 +297,10 @@ describe("collectStampTargets", () => {
 describe("pageGate (eligibility context)", () => {
   const cond = (conditionType: string, value: unknown, isEnabled = true) => ({ id: "c", conditionType, value, isEnabled });
   const offers = [
-    { id: "no-page", conditions: [cond("cart_value", { thresholdCents: 100 })] },
-    { id: "by-template", conditions: [cond("template", { templates: ["product"] })] },
-    { id: "disabled-page", conditions: [cond("template", { templates: ["product"] }, false)] },
-    { id: "broken", conditions: [cond("experiment", null)] },
+    { id: "no-page", rewards: [], conditions: [cond("cart_value", { thresholdCents: 100 })] },
+    { id: "by-template", rewards: [], conditions: [cond("template", { templates: ["product"] })] },
+    { id: "disabled-page", rewards: [], conditions: [cond("template", { templates: ["product"] }, false)] },
+    { id: "broken", rewards: [], conditions: [cond("experiment", null)] },
   ];
   const gate = async (extra: Record<string, unknown>) => {
     vi.mocked(getOfferDefinitions).mockClear().mockResolvedValueOnce(offers as never);
@@ -337,5 +339,37 @@ describe("ENABLE_STOREFRONT_RUNTIME kill switch", () => {
     } finally {
       delete process.env["ENABLE_STOREFRONT_RUNTIME"];
     }
+  });
+});
+
+describe("gift-tier bar translations", () => {
+  const offerWith = (minCartSubtotalCents?: number) => [{ id: "o1", rewards: [{ id: "r1", ...(minCartSubtotalCents ? { minCartSubtotalCents } : {}) }], conditions: [] }] as never;
+  const translated = { locale: "es", "progress.gift_tier_before_goal": " Gastá {{remaining_amount}} más ", "progress.gift_tier_after_goal": "Listo" };
+  beforeEach(() => {
+    resetMemoryCaches();
+    vi.mocked(evaluate).mockClear();
+    vi.mocked(loadGiftSliderTranslations).mockReset().mockResolvedValue(translated as never);
+  });
+
+  it("hands the shop's translated bar texts for the request locale to the evaluator when an offer has tiers", async () => {
+    vi.mocked(getOfferDefinitions).mockResolvedValueOnce(offerWith(5000));
+    await handleEvaluationRequest(makeRequest("cart-tok-t1", [], { locale: "es" }), shop, null);
+    expect(loadGiftSliderTranslations).toHaveBeenCalledWith("shop-1", "es");
+    expect(vi.mocked(evaluate).mock.calls[0]![1]).toMatchObject({ progressMessages: { giftTierBeforeGoal: "Gastá {{remaining_amount}} más", giftTierAfterGoal: "Listo" } });
+  });
+
+  it("loads nothing and passes nothing for shops without tiered offers", async () => {
+    vi.mocked(getOfferDefinitions).mockResolvedValueOnce(offerWith());
+    await handleEvaluationRequest(makeRequest("cart-tok-t2"), shop, null);
+    expect(loadGiftSliderTranslations).not.toHaveBeenCalled();
+    expect(vi.mocked(evaluate).mock.calls[0]![1]).not.toHaveProperty("progressMessages");
+  });
+
+  it("keeps the English bar when the shop has no translations or the lookup fails", async () => {
+    vi.mocked(getOfferDefinitions).mockResolvedValueOnce(offerWith(5000));
+    vi.mocked(loadGiftSliderTranslations).mockRejectedValueOnce(new Error("db down"));
+    const response = await handleEvaluationRequest(makeRequest("cart-tok-t3"), shop, null);
+    expect(response.status).toBe(200);
+    expect(vi.mocked(evaluate).mock.calls[0]![1]).not.toHaveProperty("progressMessages");
   });
 });
