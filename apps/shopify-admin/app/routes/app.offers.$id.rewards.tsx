@@ -135,13 +135,19 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     // Gift tier: posted blank clears it, an absent field keeps it, and a reward that stops being a gift loses it.
     const tierColumn = rewardType !== "product_gift" ? { minCartSubtotalCents: null } : minCartSubtotalCents !== undefined ? { minCartSubtotalCents } : {};
 
+    const tierChanged = minCartSubtotalCents !== undefined && (intent === "add_reward" || minCartSubtotalCents !== ((await db
+      .select({ min: offerRewards.minCartSubtotalCents }).from(offerRewards)
+      .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, editedId))).limit(1))[0]?.min ?? null));
+    if (intent === "update_reward" && !editedId) return { error: "Reward ID missing." };
+
+    await db.transaction(async (tx) => {
     if (intent === "add_reward") {
-      const existing = await db
+      const existing = await tx
         .select({ id: offerRewards.id })
         .from(offerRewards)
         .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
 
-      await db.insert(offerRewards).values({
+      await tx.insert(offerRewards).values({
         shopId,
         offerId,
         rewardType,
@@ -157,14 +163,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         ...tierColumn,
       });
     } else {
-      const rewardId = formData.get("rewardId") as string;
-      if (!rewardId) return { error: "Reward ID missing." };
-      await db
+      await tx
         .update(offerRewards)
         .set({ rewardType, discountType, value, target, quantity, isAutoAdd, isCustomerSelectable, trackMode, label, ...tierColumn })
-        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId)));
+        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, editedId)));
     }
-    await lowerMainThresholdToLowestTier(db, shopId, offerId);
+    if (tierChanged) await lowerMainThresholdToLowestTier(tx as unknown as typeof db, shopId, offerId);
+    });
     const publishError = await republishIfActive(
       db,
       shopId,

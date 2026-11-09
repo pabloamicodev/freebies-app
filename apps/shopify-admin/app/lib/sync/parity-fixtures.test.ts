@@ -328,25 +328,47 @@ function stackingScenarios(): Scenario[] {
 
 /** One gift offer, a gift per cart-subtotal tier ($70 -> product 50, $110 -> product 51), main condition at the lowest tier. */
 function tierScenarios(): Scenario[] {
-  const tiered = (tierMode?: "cumulative" | "highest", scopeFilter?: Record<string, unknown>): OfferSpec => ({
+  // `plain`: a gift of this product in the same offer with no threshold. `pickerTier`: the $110 tier is a size picker.
+  const tiered = (tierMode?: "cumulative" | "highest", scopeFilter?: Record<string, unknown>, extra: { plain?: number; pickerTier?: boolean } = {}): OfferSpec => ({
     id: A,
     type: "gift",
     ...(tierMode ? { tierMode } : {}),
     conditions: [cartValue(7000, scopeFilter)],
-    rewards: [[50, 7000], [51, 11000]].map(([n, minCartSubtotalCents], sortOrder) => ({
-      id: setRewardId(n!),
-      rewardType: "product_gift",
-      discountType: "free",
-      value: { percentage: 100, currencyCode: "USD" },
-      target: { scope: "cart", variantIds: [V(n!)], productIds: [P(n!)] },
-      quantity: 1,
-      isAutoAdd: true,
-      isCustomerSelectable: false,
-      trackMode: "variant",
-      sortOrder,
-      label: null,
-      minCartSubtotalCents,
-    })),
+    rewards: [
+      ...[[50, 7000], [51, 11000]].map(([n, minCartSubtotalCents], sortOrder) => {
+        const picker = extra.pickerTier === true && n === 51;
+        const products = picker ? [60, 61] : [n!];
+        return {
+          id: setRewardId(n!),
+          rewardType: "product_gift",
+          discountType: "free",
+          value: { percentage: 100, currencyCode: "USD" },
+          target: { scope: "cart", variantIds: products.map(V), productIds: products.map(P) },
+          quantity: 1,
+          isAutoAdd: !picker,
+          isCustomerSelectable: picker,
+          trackMode: picker ? "product" : "variant",
+          sortOrder,
+          label: null,
+          minCartSubtotalCents,
+        };
+      }),
+      ...(extra.plain
+        ? [{
+            id: setRewardId(extra.plain),
+            rewardType: "product_gift",
+            discountType: "free",
+            value: { percentage: 100, currencyCode: "USD" },
+            target: { scope: "cart", variantIds: [V(extra.plain)], productIds: [P(extra.plain)] },
+            quantity: 1,
+            isAutoAdd: true,
+            isCustomerSelectable: false,
+            trackMode: "variant",
+            sortOrder: 2,
+            label: null,
+          }]
+        : []),
+    ],
   });
   const tierGift = (id: string, n: number, unitPrice = "30.00") =>
     gift(id, A, { _promo_engine_reward_id: setRewardId(n) }, { variantId: V(n), productId: P(n), unitPrice });
@@ -410,6 +432,27 @@ function tierScenarios(): Scenario[] {
       qualified: [A],
       discounted: { [A]: ["g1"] },
     },
+    ...(["cumulative", "highest"] as const).map((mode): Scenario => ({
+      name: `gift-tiers-gift-without-threshold-is-always-given-${mode}`,
+      description:
+        mode === "highest"
+          ? "Highest mode: a gift without a threshold is always given; only the gifts that have one are ranked, so a $120 cart gets the top tier's gift and the plain gift, not the $70 one."
+          : "Cumulative: a gift without a threshold is given next to the reached tiers; an $80 cart gets the $70 gift and the plain gift, not the $110 one.",
+      offers: [tiered(mode, undefined, { plain: 52 })],
+      lines: [paid("l1", 1, mode === "highest" ? "120.00" : "80.00"), ...gifts, tierGift("g3", 52)],
+      qualified: [A],
+      discounted: { [A]: mode === "highest" ? ["g2", "g3"] : ["g1", "g3"] },
+    })),
+    ...([["80.00", []], ["120.00", ["gp"]]] as const).map(([price, discounted]): Scenario => ({
+      name: `gift-tiers-picker-tier-${discounted.length ? "unlocked" : "locked"}`,
+      description: discounted.length
+        ? "A tier whose gift is a size picker: at $120 the chosen size is discounted."
+        : "A tier whose gift is a size picker: at $80 the tier is locked, so the chosen size is charged.",
+      offers: [tiered("cumulative", undefined, { pickerTier: true })],
+      lines: [paid("l1", 1, price), tierGift("g1", 50), gift("gp", A, { _promo_engine_reward_id: setRewardId(51) }, { variantId: V(60), productId: P(60), unitPrice: "30.00" })],
+      qualified: [A],
+      discounted: { [A]: ["g1", ...discounted] },
+    })),
     {
       name: "gift-tiers-thresholds-scale-with-currency",
       description: "Shop currency USD, cart in EUR at 1.5: the $70 and $110 tiers become 105 and 165 EUR, so a 120 EUR cart reaches only the first.",

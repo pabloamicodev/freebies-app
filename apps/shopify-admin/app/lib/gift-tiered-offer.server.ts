@@ -73,21 +73,33 @@ export async function createTieredGiftOffer(
   }
 }
 
-/** A tiered offer qualifies at its lowest tier: a stricter main cart-value threshold would make the lower tiers unreachable. */
-export async function lowerMainThresholdToLowestTier(db: Db, shopId: string, offerId: string): Promise<void> {
+export async function lowestGiftTier(db: Pick<Db, "select">, shopId: string, offerId: string): Promise<number | null> {
   const rewards = await db
     .select({ min: offerRewards.minCartSubtotalCents })
     .from(offerRewards)
     .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.rewardType, "product_gift")));
   const tiers = rewards.flatMap((reward) => (reward.min ? [reward.min] : []));
-  if (tiers.length === 0) return;
-  const lowest = Math.min(...tiers);
+  return tiers.length > 0 ? Math.min(...tiers) : null;
+}
+
+/**
+ * A tiered offer qualifies at its lowest tier: a stricter main cart-value threshold would make the lower tiers unreachable.
+ * Call it only after a save that changed a tier. Per-currency overrides were set against the old threshold, so they go too
+ * (the threshold then converts with the exchange rate like the tiers do).
+ */
+export async function lowerMainThresholdToLowestTier(db: Pick<Db, "select" | "update">, shopId: string, offerId: string): Promise<void> {
+  const lowest = await lowestGiftTier(db, shopId, offerId);
+  if (lowest === null) return;
   const [main] = await db
     .select({ id: offerConditions.id, value: offerConditions.value })
     .from(offerConditions)
     .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.scope, "main"), eq(offerConditions.conditionType, "cart_value")))
     .limit(1);
-  const value = main?.value as { thresholdCents?: number } | null | undefined;
+  const value = main?.value as { thresholdCents?: number; currencyOverrides?: unknown } | null | undefined;
   if (!main || typeof value?.thresholdCents !== "number" || value.thresholdCents <= lowest) return;
-  await db.update(offerConditions).set({ value: { ...value, thresholdCents: lowest } }).where(eq(offerConditions.id, main.id));
+  const { currencyOverrides: _dropped, ...rest } = value;
+  await db
+    .update(offerConditions)
+    .set({ value: { ...rest, thresholdCents: lowest } })
+    .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.id, main.id)));
 }

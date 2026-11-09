@@ -1021,7 +1021,8 @@ fn gift_tier_cut(offer: &CompiledOffer, input: &Input) -> Option<(i64, i64)> {
 }
 
 fn gift_tier_unlocked(reward: &CompiledGiftReward, cut: Option<(i64, i64)>) -> bool {
-    let threshold = reward.min_cart_subtotal_cents.unwrap_or(0);
+    // A gift without a threshold is always granted, even in "highest" mode (which only ranks the gifts that have one).
+    let Some(threshold) = reward.min_cart_subtotal_cents else { return true };
     cut.is_none_or(|(cart_value, floor)| threshold <= cart_value && threshold >= floor)
 }
 

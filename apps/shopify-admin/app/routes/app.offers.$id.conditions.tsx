@@ -18,6 +18,7 @@ import { anyOfConflictError } from "../lib/any-of-guard.server.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
+import { lowestGiftTier } from "../lib/gift-tiered-offer.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { discountCodes, offerConditions } from "@promo/db";
 import {
@@ -320,6 +321,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const built = buildConditionValue(conditionType, formData);
     if ("error" in built) return { error: built.error };
     const { value, operator: conditionOperator } = built;
+    if (scope === "main" && conditionType === "cart_value" && typeof (value as { thresholdCents?: unknown }).thresholdCents === "number") {
+      const lowestTier = await lowestGiftTier(db, shopId, offerId);
+      if (lowestTier !== null && (value as { thresholdCents: number }).thresholdCents > lowestTier) {
+        return { error: `The minimum cart value cannot be above this offer's lowest gift tier (${(lowestTier / 100).toFixed(2)}), or that tier could never unlock. Lower it, or raise the tier on the rewards page.` };
+      }
+    }
     if (conditionType === "specific_product" && conditionOperator === "any") {
       const conflict = await anyOfConflictError(db, shopId, offerId, intent === "update_condition" ? (formData.get("conditionId") as string | null) ?? undefined : undefined);
       if (conflict) return { error: conflict };

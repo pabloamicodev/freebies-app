@@ -4,7 +4,7 @@ import { offerCombinationPolicies, offerConditions, offerRewards, offers, produc
 import type * as PromoDb from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
-const ctx = vi.hoisted(() => ({ db: null as unknown, shopId: "" }));
+const ctx = vi.hoisted(() => ({ db: null as unknown, shopId: "", finalizeError: null as string | null }));
 
 vi.mock("./shop-context.server.js", () => ({
   getShopContext: async () => ({
@@ -27,7 +27,7 @@ vi.mock("./offer-publish-flow.server.js", () => ({
   tryPublishShop: async () => null,
   getPublishWarnings: async () => [] as string[],
   republishIfActive: async () => null,
-  finalizeCreatedOffer: async () => null,
+  finalizeCreatedOffer: async () => ctx.finalizeError,
   validateOffersPublishable: async () => ({ ok: true }),
   validateActivation: async () => ({ ok: true }),
 }));
@@ -41,6 +41,8 @@ import { rewardSummary } from "./offer-summaries.js";
 
 const wizard = await import("../routes/app.offers.new.gift.$template.js");
 const rewardsRoute = await import("../routes/app.offers.$id.rewards.js");
+const offerPage = await import("../routes/app.offers.$id._index.js");
+const conditionsRoute = await import("../routes/app.offers.$id.conditions.js");
 
 let db: Db;
 let close: () => Promise<void>;
@@ -110,6 +112,20 @@ describe("create: one gift offer with several tiers", () => {
     expect((await create("create-tiered-offer", campaign([], "cumulative", "Empty")))?.error).toBeTruthy();
     expect((await run(wizard.action, post({ intent: "create-tiered-offer", campaign: "{nope" }), { template: "tiered" }))?.error).toMatch(/JSON/);
     expect((await db.select().from(offers)).length).toBe(before);
+  });
+
+  it("a failed publish saves nothing, so retrying does not leave a suffixed duplicate", async () => {
+    const body = campaign([tier("a", 5000, [V(3)])], "cumulative", "Publish retry");
+    ctx.finalizeError = "Shopify said no.";
+    try {
+      expect((await create("publish-tiered-offer", body))?.error).toMatch(/Shopify said no\./);
+    } finally {
+      ctx.finalizeError = null;
+    }
+    expect((await db.select().from(offers)).filter((o) => o.internalName.startsWith("Publish retry"))).toHaveLength(0);
+    await create("publish-tiered-offer", body);
+    const rows = (await db.select().from(offers)).filter((o) => o.internalName.startsWith("Publish retry"));
+    expect(rows.map((o) => o.internalName)).toEqual(["Publish retry"]);
   });
 
   it("a second offer with the same name gets a suffixed name instead of failing", async () => {
@@ -194,6 +210,37 @@ describe("edit: tiers on an existing gift offer", () => {
     await run(rewardsRoute.action, post(rewardForm({ rewardId: rewards[0]!, minCartSubtotal: "90" })), { id });
     const [after] = await db.select().from(offerConditions).where(and(eq(offerConditions.offerId, id), eq(offerConditions.scope, "main")));
     expect(after!.value).toMatchObject({ thresholdCents: 5000 });
+  });
+
+  it("a save that did not change a tier leaves a raised main threshold and its overrides alone; a tier change lowers both", async () => {
+    const { id, rewards } = await seedTieredOffer("draft", "edit-main-raised");
+    await db.update(offerConditions).set({ value: { thresholdCents: 9000, currencyCode: "USD", includeGiftValues: false, currencyOverrides: { EUR: 9500 } } }).where(and(eq(offerConditions.offerId, id), eq(offerConditions.scope, "main")));
+    const main = async () => (await db.select().from(offerConditions).where(and(eq(offerConditions.offerId, id), eq(offerConditions.scope, "main"))))[0]!.value;
+    await run(rewardsRoute.action, post(rewardForm({ rewardId: rewards[0]!, minCartSubtotal: "70", quantity: "2" })), { id });
+    expect(await main()).toMatchObject({ thresholdCents: 9000, currencyOverrides: { EUR: 9500 } });
+    await run(rewardsRoute.action, post(rewardForm({ rewardId: rewards[0]!, minCartSubtotal: "65" })), { id });
+    const lowered = (await main()) as Record<string, unknown>;
+    expect(lowered["thresholdCents"]).toBe(6500);
+    expect(lowered).not.toHaveProperty("currencyOverrides");
+  });
+
+  it("the conditions editor refuses a main cart value above the lowest gift tier", async () => {
+    const { id } = await seedTieredOffer("draft", "edit-conditions");
+    const [main] = await db.select().from(offerConditions).where(and(eq(offerConditions.offerId, id), eq(offerConditions.scope, "main")));
+    const save = (amount: string) => run(conditionsRoute.action, post({ intent: "update_condition", conditionId: main!.id, conditionType: "cart_value", scope: "main", threshold: amount }), { id });
+    expect((await save("90"))?.error).toMatch(/lowest gift tier/);
+    expect((await db.select().from(offerConditions).where(eq(offerConditions.id, main!.id)))[0]!.value).toMatchObject({ thresholdCents: 7000 });
+    expect((await save("60"))?.error).toBeUndefined();
+    expect((await db.select().from(offerConditions).where(eq(offerConditions.id, main!.id)))[0]!.value).toMatchObject({ thresholdCents: 6000 });
+  });
+
+  it("the main editor's gifts block refuses to replan tiered gifts and leaves every tier as it was", async () => {
+    const { id, rewards } = await seedTieredOffer("draft", "edit-main-editor", "highest");
+    const before = await rewardsOf(id);
+    const result = await run(offerPage.action, post({ intent: "update_reward", rewardId: rewards[1]!, discountType: "free", discountValue: "100", quantity: "1", isAutoAdd: "on", targetVariantIds: JSON.stringify([V(3)]) }), { id });
+    expect(result?.error).toMatch(/gift tiers/);
+    const after = await rewardsOf(id);
+    expect(after.map((r) => [r.id, r.minCartSubtotalCents, r.target])).toEqual(before.map((r) => [r.id, r.minCartSubtotalCents, r.target]));
   });
 
   it("changes the tier mode, validates it, and leaves tiers alone", async () => {

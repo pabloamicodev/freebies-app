@@ -28,6 +28,7 @@ import {
 import { CartLabelsField } from "../components/CartLabelsField.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
+import { and, eq } from "drizzle-orm";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { PerGiftFallbacks } from "../components/PerGiftFallbacks.js";
@@ -190,7 +191,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const result = await createTieredGiftOffer(context, formData, status);
     if ("error" in result) return { error: result.error };
     const publishError = await finalizeCreatedOffer(db, shopId, session.shop, result.offerId, status);
-    if (publishError) return { error: publishError };
+    if (publishError) {
+      // Retrying the form would otherwise create a second, suffixed copy next to the draft this failure left behind.
+      await db.delete(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, result.offerId)));
+      return { error: `${publishError} Nothing was saved: fix the problem and publish again.` };
+    }
     return redirect(`/app/offers/${result.offerId}`);
   }
   if (intent === "create-campaign") {

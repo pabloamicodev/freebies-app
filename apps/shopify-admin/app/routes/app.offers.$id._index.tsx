@@ -248,6 +248,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         // The editor shows ONE Gifts block over all of the offer's product_gift rewards.
         const giftRewards = await db.select().from(offerRewards)
           .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.rewardType, "product_gift")));
+        if (giftRewards.some((reward) => reward.minCartSubtotalCents)) {
+          return { error: "This offer has gift tiers. Edit them on the rewards page." };
+        }
         const current = deriveGiftBlock(giftRewards);
         let variantIds = current.variantIds;
         let fallbackVariantIds = current.fallbackVariantIds;
@@ -1329,6 +1332,7 @@ export default function OfferDetailPage() {
 
   const giftRewards = rewards.filter((r) => r.rewardType === "product_gift");
   const giftBlock = deriveGiftBlock(giftRewards);
+  const giftTiered = giftRewards.some((r) => r.minCartSubtotalCents);
   const firstReward = (giftRewards[0] ?? rewards[0]) as typeof rewards[0] | undefined;
   const [detailState, setDetailField] = useObjectState(() => ({
     internalName: offer.internalName,
@@ -1903,6 +1907,18 @@ export default function OfferDetailPage() {
           />
 
           {/* Select gifts ────────────────────────────────── */}
+          {giftTiered ? (
+            <div className="b-editor-section" id="section-gift-reward">
+              <p className="b-editor-section-title">Select gifts</p>
+              <div className="b-editor-section-body">
+                {giftRewards.map((reward) => (
+                  <p key={reward.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>{rewardSummary(reward)}</p>
+                ))}
+                <p className="b-help">This offer gives a different gift at each cart subtotal. Edit the tiers, their gifts and how they combine on the rewards page.</p>
+                <button type="button" className="b-btn b-btn-secondary" onClick={() => void navigate(`/app/offers/${offer.id}/rewards`)}>Edit gift tiers</button>
+              </div>
+            </div>
+          ) : (
           <div className="b-editor-section" id="section-gift-reward">
             <p className="b-editor-section-title">Select gifts</p>
             <div className="b-editor-section-body">
@@ -2062,6 +2078,7 @@ export default function OfferDetailPage() {
               )}
             </div>
           </div>
+          )}
 
           {/* Advanced accordion ──────────────────────────── */}
           <div className="b-accordion">

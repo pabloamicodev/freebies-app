@@ -101,6 +101,15 @@ describe("highest-tier-only gift tiers", () => {
   });
 });
 
+describe("a gift without a threshold inside a tiered offer", () => {
+  const withPlain = (mode?: "cumulative" | "highest") => offerWith([reward("r-kit", [KIT], 0, 7000), reward("r-greens", [GREENS], 1, 11000), reward("r-plain", [V("52")], 2)], mode);
+  it("is always given; highest ranks only the gifts that have a threshold", async () => {
+    expect(addedVariants(await run(withPlain("cumulative"), cartOf(line("a", V("1"), 8000))))).toEqual([KIT, V("52")]);
+    expect(addedVariants(await run(withPlain("highest"), cartOf(line("a", V("1"), 12000))))).toEqual([GREENS, V("52")]);
+    expect(addedVariants(await run(withPlain("highest"), cartOf(line("a", V("1"), 8000))))).toEqual([KIT, V("52")]);
+  });
+});
+
 describe("progress and picker", () => {
   it("one progress bar per offer points at the next tier, then reports every gift unlocked", async () => {
     const low = await run(tiers(), cartOf(line("a", V("1"), 8000)));

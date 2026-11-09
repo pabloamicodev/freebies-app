@@ -39,7 +39,8 @@ export function giftTierState(
     return { met: result.ok, requiredCents: Number(reason.required ?? 0), currentCents: Number(reason.actual ?? 0) };
   };
 
-  const tiers = gifts.map((reward) => ({ id: reward.id, ...measure(reward.minCartSubtotalCents ?? 0) }));
+  // A gift without a threshold is always granted, even in "highest" mode, which only ranks the gifts that have one.
+  const tiers = gifts.filter((reward) => (reward.minCartSubtotalCents ?? 0) > 0).map((reward) => ({ id: reward.id, ...measure(reward.minCartSubtotalCents!) }));
   const metThresholds = tiers.filter((tier) => tier.met).map((tier) => tier.requiredCents);
   const floor = offer.tierMode === "highest" && metThresholds.length > 0 ? Math.max(...metThresholds) : 0;
   const above = tiers.filter((tier) => !tier.met).map((tier) => tier.requiredCents);
