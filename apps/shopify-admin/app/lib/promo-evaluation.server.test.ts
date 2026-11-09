@@ -365,6 +365,20 @@ describe("gift-tier bar translations", () => {
     expect(vi.mocked(evaluate).mock.calls[0]![1]).not.toHaveProperty("progressMessages");
   });
 
+  it("reads the shop's strings once per locale across evaluations, and again after a failed read", async () => {
+    vi.mocked(getOfferDefinitions).mockResolvedValue(offerWith(5000));
+    await handleEvaluationRequest(makeRequest("cart-tok-c1", [], { locale: "es" }), shop, null);
+    await handleEvaluationRequest(makeRequest("cart-tok-c2", [], { locale: "es" }), shop, null);
+    expect(loadGiftSliderTranslations).toHaveBeenCalledTimes(1);
+    await handleEvaluationRequest(makeRequest("cart-tok-c3", [], { locale: "fr" }), shop, null);
+    expect(loadGiftSliderTranslations).toHaveBeenCalledTimes(2);
+    vi.mocked(loadGiftSliderTranslations).mockRejectedValueOnce(new Error("db down"));
+    await handleEvaluationRequest(makeRequest("cart-tok-c4", [], { locale: "de" }), shop, null);
+    await handleEvaluationRequest(makeRequest("cart-tok-c5", [], { locale: "de" }), shop, null);
+    expect(loadGiftSliderTranslations).toHaveBeenCalledTimes(4);
+    vi.mocked(getOfferDefinitions).mockReset().mockResolvedValue([]);
+  });
+
   it("keeps the English bar when the shop has no translations or the lookup fails", async () => {
     vi.mocked(getOfferDefinitions).mockResolvedValueOnce(offerWith(5000));
     vi.mocked(loadGiftSliderTranslations).mockRejectedValueOnce(new Error("db down"));

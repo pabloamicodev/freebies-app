@@ -164,6 +164,21 @@ export function evaluateLimits(env: NodeJS.ProcessEnv = process.env) {
   };
 }
 
+type ShopStrings = Awaited<ReturnType<typeof loadGiftSliderTranslations>>;
+const shopStrings = createMemoryCache<Promise<ShopStrings>>(60_000);
+/** The shop's translation row, read once per shop and locale per minute (a saved edit shows within that); a failed read is not kept. */
+function shopTranslations(shopId: string, locale: string): Promise<ShopStrings> {
+  const key = `${shopId}:${locale}`;
+  const cached = shopStrings.get(key);
+  if (cached) return cached;
+  const pending = loadGiftSliderTranslations(shopId, locale).catch(() => {
+    shopStrings.delete(key);
+    return null;
+  });
+  shopStrings.set(key, pending);
+  return pending;
+}
+
 const SEEN_CART_TTL_SECONDS = 30 * 60;
 const knownCarts = createMemoryCache<true>(60_000);
 const seenCartKey = (shopId: string, cartToken: string) => `evaluate:seen:${shopId}:${cartToken.slice(0, 100)}`;
@@ -301,7 +316,7 @@ export async function handleEvaluationRequest(
   const locale = typeof rawLocale === "string" && /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})?$/.test(rawLocale) ? rawLocale : "en";
   // Only shops with tiered gifts have a server-built "spend more" bar to translate.
   const tierStrings = offerDefinitions.some((offer) => offer.rewards.some((reward) => reward.minCartSubtotalCents))
-    ? await loadGiftSliderTranslations(shop.id, locale).catch(() => null)
+    ? await shopTranslations(shop.id, locale)
     : null;
 
   const result = await evaluate(input, {
@@ -325,7 +340,7 @@ export async function handleEvaluationRequest(
       ...(result.additionalGiftSliders ?? []).flatMap((slider) => collectGiftCatalogVariantIds(slider, [], offerDefinitions)),
     ]),
     buildUpsells(shop.id, result.qualifiedOffers, offerDefinitions),
-    result.giftSlider || result.additionalGiftSliders?.length ? loadGiftSliderTranslations(shop.id, locale).catch(() => null) : Promise.resolve(null),
+    result.giftSlider || result.additionalGiftSliders?.length ? shopTranslations(shop.id, locale) : Promise.resolve(null),
   ]);
   timer.mark("enrich");
   result.upsells = upsells;
