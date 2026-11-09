@@ -1,5 +1,5 @@
 import type { NormalizedCart, EligibilityReason, CurrencyContext } from "@promo/shared-types";
-import { ok, err, type Result } from "@promo/shared-types";
+import { ok, err, toCartUnits, type Result } from "@promo/shared-types";
 import { extractQualifyingLines, sumQualifyingValueNet } from "../cart-parser.js";
 
 export interface CartValueConditionValue {
@@ -51,21 +51,21 @@ export function evaluateCartValue(
   const cartValueCents = sumQualifyingValueNet(qualifyingLines);
 
   // Resolve threshold — prefer currency override, fallback to auto-conversion
-  let thresholdCents = condition.thresholdCents;
-  let maxCents = condition.maxCents;
   const activeCurrency = currency.activeCurrencyCode.toUpperCase();
   // Saved conditions may lack currencyCode; their thresholds are in the shop currency.
   const conditionCurrency = (condition.currencyCode ?? currency.shopCurrencyCode).toUpperCase();
+  let thresholdCents = toCartUnits(condition.thresholdCents, conditionCurrency);
+  let maxCents = condition.maxCents === undefined ? undefined : toCartUnits(condition.maxCents, conditionCurrency);
   if (condition.currencyOverrides?.[activeCurrency] !== undefined) {
-    thresholdCents = condition.currencyOverrides[activeCurrency]!;
+    thresholdCents = toCartUnits(condition.currencyOverrides[activeCurrency]!, activeCurrency);
   } else if (
     activeCurrency !== conditionCurrency &&
     currency.exchangeRate
   ) {
-    thresholdCents = Math.ceil(condition.thresholdCents * currency.exchangeRate);
+    thresholdCents = Math.ceil(toCartUnits(condition.thresholdCents, conditionCurrency) * currency.exchangeRate);
   }
   if (condition.maxCurrencyOverrides?.[activeCurrency] !== undefined) {
-    maxCents = condition.maxCurrencyOverrides[activeCurrency]!;
+    maxCents = toCartUnits(condition.maxCurrencyOverrides[activeCurrency]!, activeCurrency);
   } else if (
     maxCents !== undefined &&
     activeCurrency !== conditionCurrency &&

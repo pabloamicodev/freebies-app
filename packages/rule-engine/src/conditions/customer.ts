@@ -1,5 +1,5 @@
 import type { NormalizedCustomer, EligibilityReason } from "@promo/shared-types";
-import { ok, err, type Result } from "@promo/shared-types";
+import { ok, err, toCartUnits, type Result } from "@promo/shared-types";
 
 // ─── Customer Tags ────────────────────────────────────────────────────────────
 
@@ -69,6 +69,8 @@ export interface OrderHistoryConditionValue {
 export function evaluateOrderHistory(
   customer: NormalizedCustomer | null,
   condition: OrderHistoryConditionValue,
+  /** The shop currency: `valueCents` is stored in its own minor unit, the customer's spend is in x100 cart units. */
+  shopCurrencyCode?: string,
 ): Result<EligibilityReason, EligibilityReason> {
   if (!customer) {
     return err({
@@ -85,12 +87,12 @@ export function evaluateOrderHistory(
   switch (condition.type) {
     case "total_spent":
       actual = customer.totalSpentCents;
-      required = condition.valueCents ?? 0;
+      required = toCartUnits(condition.valueCents ?? 0, shopCurrencyCode);
       label = "total spent";
       break;
     case "last_order_spent":
       actual = customer.lastOrderSpentCents ?? 0;
-      required = condition.valueCents ?? 0;
+      required = toCartUnits(condition.valueCents ?? 0, shopCurrencyCode);
       label = "last order spent";
       break;
     case "total_orders":

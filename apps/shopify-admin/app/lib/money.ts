@@ -3,13 +3,9 @@
  * compiler (functionDiscountValue in sync/compile-config.ts) reads them as whole units. Keep this list
  * identical to that one.
  */
-export const ZERO_DECIMAL_CURRENCIES: ReadonlySet<string> = new Set([
-  "JPY", "KRW", "VND", "BIF", "CLP", "GNF", "ISK", "KMF", "MGA", "DJF", "PYG", "RWF", "UGX", "VUV", "XAF", "XOF", "XPF",
-]);
+import { isZeroDecimalCurrency } from "@promo/shared-types";
 
-export function isZeroDecimalCurrency(currency: string | null | undefined): boolean {
-  return ZERO_DECIMAL_CURRENCIES.has((currency ?? "").toUpperCase());
-}
+export { ZERO_DECIMAL_CURRENCIES, isZeroDecimalCurrency } from "@promo/shared-types";
 
 export function toStoredAmount(value: number, currency: string | null | undefined): number {
   return isZeroDecimalCurrency(currency) ? Math.round(value) : Math.round(value * 100);

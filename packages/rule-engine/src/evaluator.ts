@@ -6,7 +6,7 @@ import type {
   CartAction,
   EligibilityReason,
 } from "@promo/shared-types";
-import { err, interpolate, type Result } from "@promo/shared-types";
+import { err, interpolate, toCartUnits, type Result } from "@promo/shared-types";
 import { buildCartHash, extractGiftLines, extractQualifyingLines, sumQualifyingValueNet } from "./cart-parser.js";
 import { evaluateCartValue, type CartValueConditionValue } from "./conditions/cart-value.js";
 import { cartQuantityCount, evaluateCartQuantity, type CartQuantityConditionValue } from "./conditions/cart-quantity.js";
@@ -546,7 +546,7 @@ export async function evaluate(
   ];
 
   const [giftSlider = null, ...additionalGiftSliders] = buildGiftSliderPayloads(finalQualified, ctx.offers, input.cart, giftTiersByOffer);
-  const progressBars = buildProgressBars([...finalQualified, ...disqualifiedOffers], ctx.offers, input.cart, giftTiersByOffer, ctx.progressMessages);
+  const progressBars = buildProgressBars([...finalQualified, ...disqualifiedOffers], ctx.offers, input.cart, giftTiersByOffer, ctx.progressMessages, ctx.shopCurrencyCode ?? input.cart.currencyCode);
   const cartMessages = progressBars.map((bar) => ({
     offerId: bar.offerId,
     widgetId: bar.offerId,
@@ -683,6 +683,7 @@ function buildProgressBars(
   cart: EvaluationInput["cart"],
   giftTiersByOffer: ReadonlyMap<string, GiftTierState>,
   messages?: GiftTierProgressMessages,
+  shopCurrencyCode?: string,
 ): EvaluationResult["progressBars"] {
   return evaluatedOffers.flatMap((evaluated) => {
     const offer = offers.find((item) => item.id === evaluated.offerId);
@@ -694,8 +695,8 @@ function buildProgressBars(
       .find((item) => item.conditionType === "cart_value" || item.conditionType === "cart_quantity");
     if (!condition) return [];
 
-    const value = condition.value as { thresholdCents?: number; minQuantity?: number };
-    const targetCents = condition.conditionType === "cart_value" ? Math.max(0, value.thresholdCents ?? 0) : 0;
+    const value = condition.value as { thresholdCents?: number; minQuantity?: number; currencyCode?: string };
+    const targetCents = condition.conditionType === "cart_value" ? Math.max(0, toCartUnits(value.thresholdCents ?? 0, value.currencyCode ?? shopCurrencyCode)) : 0;
     const targetQuantity = condition.conditionType === "cart_quantity" ? Math.max(1, value.minQuantity ?? 1) : null;
     // Same qualifying value the cart_value condition checks: gift lines out, net of volume discounts.
     const includeGifts = (condition.value as { includeGiftValues?: boolean }).includeGiftValues === true;
@@ -752,7 +753,7 @@ function evaluateCondition(
     case "order_history_total_spent":
     case "order_history_last_order_spent":
     case "order_history_total_orders":
-      return evaluateOrderHistory(input.customer, cond.value as OrderHistoryConditionValue);
+      return evaluateOrderHistory(input.customer, cond.value as OrderHistoryConditionValue, currency.shopCurrencyCode);
 
     case "markets":
       return evaluateMarket(input.market?.id ?? null, cond.value as { includeMarketIds?: string[]; excludeMarketIds?: string[] });
