@@ -55,7 +55,7 @@ fn line_json(line: &Value, currency: &str) -> Value {
         "merchandise": {
             "__typename": "ProductVariant",
             "id": line["variantId"],
-            "product": { "id": line["productId"], "volumeDiscountTiers": null }
+            "product": { "id": line["productId"], "volumeDiscountTiers": line.get("volumeDiscountTiers").map(|tiers| json!({ "value": tiers.to_string() })) }
         },
         "sellingPlanAllocation": if line["sellingPlan"] == true { json!({ "sellingPlan": { "id": "gid://shopify/SellingPlan/1" } }) } else { Value::Null },
         "lineType": attribute(line_type),

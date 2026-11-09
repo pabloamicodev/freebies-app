@@ -27,6 +27,7 @@ import { evaluatePageConditionGroup, isPageConditionType } from "./page-match.js
 import { evaluateCountry, type CountryConditionValue } from "./conditions/country.js";
 import { applyPriority } from "./priority-resolver.js";
 import { consumeAnchors, freeUnits, giftAnchors } from "./gift-anchors.js";
+import { giftTierState, type GiftTierState } from "./gift-tiers.js";
 import { evaluateCartAttribute, evaluateLineAttribute, evaluateDiscountCode, type CartAttributeConditionValue, type LineAttributeConditionValue, type DiscountCodeConditionValue } from "./conditions/attributes.js";
 
 /**
@@ -49,6 +50,8 @@ export interface OfferDefinition {
   version: number;
   type: string;
   priority: number;
+  /** How gift rewards with a cart-subtotal tier combine; absent means cumulative. */
+  tierMode?: "cumulative" | "highest";
   stopLowerPriority: boolean;
   startsAt: Date | null;
   endsAt: Date | null;
@@ -80,6 +83,8 @@ export interface RewardDefinition {
   trackMode: "product" | "variant";
   sortOrder: number;
   label: string | null;
+  /** Gift rewards only: the cart subtotal that unlocks this gift. Absent means no tier. */
+  minCartSubtotalCents?: number;
 }
 
 export interface CombinationPolicyDefinition {
@@ -154,6 +159,7 @@ export async function evaluate(
 
   // Priority order, ties by id: a non-stacking gift offer takes its anchor units before lower offers see them.
   const consumedAnchorUnits = new Map<string, number>();
+  const giftTiersByOffer = new Map<string, GiftTierState>();
   const orderedOffers = [...ctx.offers].sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   for (const offer of orderedOffers) {
@@ -273,6 +279,9 @@ export async function evaluate(
     const discountCodesToRemove: string[] = [];
 
     if (passed) {
+      const giftTiers = giftTierState(offer, input.cart, currency, offerExcludedProductIds(offer.conditions));
+      if (giftTiers) giftTiersByOffer.set(offer.id, giftTiers);
+      const unmetRewardIds = giftTiers?.unmetRewardIds;
       const existingOfferGifts = extractGiftLines(input.cart).filter((gift) => gift.offerId === offer.id);
       const giftRewards = offer.rewards.filter((reward) => reward.rewardType === "product_gift");
       const giftRewardById = new Map(giftRewards.map((reward) => [reward.id, reward]));
@@ -308,12 +317,21 @@ export async function evaluate(
             variantId: gift.variantId,
             reason: "stale_or_invalid_gift",
           });
+        } else if (unmetRewardIds?.has(gift.rewardId)) {
+          // Removed by the app, not the customer: the runtime never records this as a decline (gift-tiers.e2e.test.ts).
+          cartActions.push({
+            action: "remove_line",
+            lineKey: gift.lineKey,
+            offerId: offer.id,
+            variantId: gift.variantId,
+            reason: "gift_tier_not_met",
+          });
         }
       }
 
       // Generate cart actions for rewards
       for (const reward of offer.rewards.sort((a, b) => a.sortOrder - b.sortOrder)) {
-        if (reward.rewardType === "product_gift" && isAutoAddGift(reward)) {
+        if (reward.rewardType === "product_gift" && isAutoAddGift(reward) && !unmetRewardIds?.has(reward.id)) {
           // Customer explicitly declined this reward (removed the gift line or
           // dismissed the slider without picking) — don't force it back in.
           if (declinedGiftRewards.has(`${offer.id}:${reward.id}`)) continue;
@@ -381,7 +399,7 @@ export async function evaluate(
       for (const reward of giftRewards) {
         const target = reward.target as { variantId?: string; variantIds?: string[]; fallbackVariantIds?: string[] };
         const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
-        if (isAutoAddGift(reward) && variantIds.length === 1) continue;
+        if ((isAutoAddGift(reward) && variantIds.length === 1) || unmetRewardIds?.has(reward.id)) continue;
         const allowed = new Set([...variantIds, ...(target.fallbackVariantIds ?? [])]);
         const limit = capPerCart(offer, Math.max(1, reward.quantity ?? 1));
         const isPicker = variantIds.length > 1 || reward.isCustomerSelectable;
@@ -517,8 +535,8 @@ export async function evaluate(
     ]),
   ];
 
-  const [giftSlider = null, ...additionalGiftSliders] = buildGiftSliderPayloads(finalQualified, ctx.offers, input.cart);
-  const progressBars = buildProgressBars([...finalQualified, ...disqualifiedOffers], ctx.offers, input.cart);
+  const [giftSlider = null, ...additionalGiftSliders] = buildGiftSliderPayloads(finalQualified, ctx.offers, input.cart, giftTiersByOffer);
+  const progressBars = buildProgressBars([...finalQualified, ...disqualifiedOffers], ctx.offers, input.cart, giftTiersByOffer);
   const cartMessages = progressBars.map((bar) => ({
     offerId: bar.offerId,
     widgetId: bar.offerId,
@@ -552,12 +570,14 @@ function buildGiftSliderPayloads(
   qualifiedOffers: EvaluatedOffer[],
   offers: OfferDefinition[],
   cart: EvaluationInput["cart"],
+  giftTiersByOffer: ReadonlyMap<string, GiftTierState>,
 ): NonNullable<EvaluationResult["giftSlider"]>[] {
   const payloads: NonNullable<EvaluationResult["giftSlider"]>[] = [];
   for (const evaluated of qualifiedOffers) {
     const offer = offers.find((item) => item.id === evaluated.offerId);
+    const unmetRewardIds = giftTiersByOffer.get(evaluated.offerId)?.unmetRewardIds;
     const selectableRewards = offer?.rewards.filter((reward) => {
-      if (reward.rewardType !== "product_gift") return false;
+      if (reward.rewardType !== "product_gift" || unmetRewardIds?.has(reward.id)) return false;
       const target = reward.target as { variantId?: string; variantIds?: string[] };
       const variantIds = target.variantIds ?? (target.variantId ? [target.variantId] : []);
       return variantIds.length !== 1 && (reward.isCustomerSelectable || variantIds.length > 1);
@@ -624,14 +644,39 @@ function formatMoney(cents: number, currencyCode: string): string {
   }
 }
 
+/** One bar per offer (the widget shows one per offer id): it always points at the next tier to reach. */
+function giftTierProgressBar(
+  offerId: string,
+  tiers: GiftTierState,
+  cart: EvaluationInput["cart"],
+): EvaluationResult["progressBars"][number] {
+  const targetCents = tiers.nextThresholdCents ?? tiers.topThresholdCents;
+  const remaining = Math.max(0, targetCents - tiers.currentCents);
+  return {
+    offerId,
+    widgetId: offerId,
+    currentCents: tiers.currentCents,
+    targetCents,
+    currentQuantity: cart.totalQuantity,
+    targetQuantity: null,
+    progressPercent: targetCents > 0 ? Math.min(100, Math.round((tiers.currentCents / targetCents) * 100)) : 100,
+    messageBeforeGoal: `Spend ${formatMoney(remaining, cart.currencyCode)} more to unlock your next gift.`,
+    messageAfterGoal: "All gifts unlocked.",
+    isGoalReached: tiers.nextThresholdCents === null,
+  };
+}
+
 function buildProgressBars(
   evaluatedOffers: EvaluatedOffer[],
   offers: OfferDefinition[],
   cart: EvaluationInput["cart"],
+  giftTiersByOffer: ReadonlyMap<string, GiftTierState>,
 ): EvaluationResult["progressBars"] {
   return evaluatedOffers.flatMap((evaluated) => {
     const offer = offers.find((item) => item.id === evaluated.offerId);
     if (!offer) return [];
+    const giftTiers = giftTiersByOffer.get(offer.id);
+    if (giftTiers) return [giftTierProgressBar(offer.id, giftTiers, cart)];
     const condition = offer.conditions
       .filter((item) => item.scope === "main" && item.isEnabled)
       .find((item) => item.conditionType === "cart_value" || item.conditionType === "cart_quantity");

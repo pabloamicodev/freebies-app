@@ -66,6 +66,8 @@ de_struct! {
         "ri" => require_identified: bool = false,
         // false: the anchor units that unlock this gift offer cannot unlock any other gift offer.
         "canStackWithGiftOffers" => can_stack_with_gift_offers: bool = true,
+        // offer.tierMode: "h" keeps only the highest gift tier reached; absent is cumulative.
+        "tm" => tier_mode: Option<String> = None,
         "requiredProductIds" => required_product_ids: Vec<String> = Vec::new(),
         "requiredVariantIds" => required_variant_ids: Vec<String> = Vec::new(),
         "anyRequiredProductIds" => any_required_product_ids: Vec<String> = Vec::new(),
@@ -143,6 +145,7 @@ impl CompiledConfig {
             localize_threshold(&mut offer.cart_value_max_cents, &offer.max_currency_overrides, cents_rate);
             for reward in &mut offer.gift_rewards {
                 scale_money(&reward.discount_type, &mut reward.discount_value, rate);
+                scale_cents(&mut reward.min_cart_subtotal_cents, cents_rate);
             }
             for reward in &mut offer.product_rewards {
                 scale_money(&reward.discount_type, &mut reward.discount_value, rate);
@@ -210,6 +213,8 @@ de_struct! {
         "selectable" => selectable: bool = false,
         // How many gifts the shopper may pick from a selectable reward (default 1).
         "selectionCount" => selection_count: Option<i64> = None,
+        // reward.minCartSubtotalCents: the cart subtotal that unlocks this gift; absent means no tier.
+        "mcs" => min_cart_subtotal_cents: Option<i64> = None,
     }
 }
 

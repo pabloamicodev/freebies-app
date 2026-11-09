@@ -1,6 +1,6 @@
 use crate::config::{
-    is_zero_decimal, minor_units, to_cents, CompiledConfig, CompiledOffer, CompiledOrderReward,
-    CompiledProductReward,
+    is_zero_decimal, minor_units, to_cents, CompiledConfig, CompiledGiftReward, CompiledOffer,
+    CompiledOrderReward, CompiledProductReward,
 };
 use crate::page_match::{metadata_matches, LineMetadata};
 use crate::schema;
@@ -926,6 +926,7 @@ fn evaluate_gift_offer(
         let mut applied_by_product: HashMap<String, i64> = HashMap::new();
         let mut applied_by_reward: HashMap<String, i64> = HashMap::new();
         let mut candidates = Vec::new();
+        let tier_cut = gift_tier_cut(offer, input);
 
         // Tagged lines claim the quota first; untagged lines (a theme adding the gift itself) fill
         // what is left, so a variant only ever counts as a gift of an offer that qualifies.
@@ -951,6 +952,7 @@ fn evaluate_gift_offer(
                     .gift_rewards
                     .iter()
                     .filter(|reward| !tagged || reward_id.as_deref() == Some(reward.id.as_str()))
+                    .filter(|reward| gift_tier_unlocked(reward, tier_cut))
                 {
                     let target_matches = if !reward.target_variant_ids.is_empty() {
                         reward.target_variant_ids.iter().any(|id| id == &variant_id)
@@ -996,6 +998,31 @@ fn evaluate_gift_offer(
     }
 
     vec![]
+}
+
+/// (cart value, lowest threshold still granted). None when no gift reward has a tier: every reward is granted.
+fn gift_tier_cut(offer: &CompiledOffer, input: &Input) -> Option<(i64, i64)> {
+    if offer.gift_rewards.iter().all(|reward| reward.min_cart_subtotal_cents.is_none()) {
+        return None;
+    }
+    let cart_value = cart_value_cents(&qualifying_lines(offer, input), input);
+    let floor = if offer.tier_mode.as_deref() == Some("h") {
+        offer
+            .gift_rewards
+            .iter()
+            .filter_map(|reward| reward.min_cart_subtotal_cents)
+            .filter(|threshold| *threshold <= cart_value)
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    Some((cart_value, floor))
+}
+
+fn gift_tier_unlocked(reward: &CompiledGiftReward, cut: Option<(i64, i64)>) -> bool {
+    let threshold = reward.min_cart_subtotal_cents.unwrap_or(0);
+    cut.is_none_or(|(cart_value, floor)| threshold <= cart_value && threshold >= floor)
 }
 
 fn evaluate_discount_offer(
@@ -1106,6 +1133,47 @@ fn is_eligible_line(
         && (required_set.is_empty() || required_set.contains(product_id.as_str()))
 }
 
+/// The non-gift lines an offer's cart thresholds count (its excluded products never do).
+fn qualifying_lines<'a>(offer: &CompiledOffer, input: &'a Input) -> Vec<&'a Lines> {
+    let excluded_products: HashSet<&str> = offer
+        .excluded_product_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+    input
+        .cart()
+        .lines()
+        .iter()
+        .filter(|line| *line.quantity() > 0 && !is_gift_line(line))
+        .filter(|line| {
+            variant_and_product_id(line)
+                .map(|(_, product_id)| !excluded_products.contains(product_id.as_str()))
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+fn cart_value_cents(lines: &[&Lines], input: &Input) -> i64 {
+    let active_currency = input
+        .cart()
+        .cost()
+        .subtotal_amount()
+        .currency_code()
+        .to_string();
+    let raw_cart_value_cents: i64 = lines
+        .iter()
+        .map(|line| {
+            let amount = line.cost().subtotal_amount().amount().as_f64();
+            to_cents(amount, &active_currency)
+        })
+        .sum();
+    // Discount Functions execute concurrently, so the input does not
+    // contain discounts emitted by the store's separate volume-discount
+    // Function. Mirror only its qualification math here; this Function
+    // still emits no volume-discount candidate of its own.
+    (raw_cart_value_cents - projected_volume_discount_cents(lines, &active_currency)).max(0)
+}
+
 /// Cart value / cart quantity / required-product checks, evaluated against the
 /// current cart at checkout time — the merchant may have edited the offer, or
 /// the cart may have changed, since the storefront runtime's own evaluation.
@@ -1124,28 +1192,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
     ) {
         return false;
     }
-    let active_currency = input
-        .cart()
-        .cost()
-        .subtotal_amount()
-        .currency_code()
-        .to_string();
-    let excluded_products: HashSet<&str> = offer
-        .excluded_product_ids
-        .iter()
-        .map(String::as_str)
-        .collect();
-    let non_gift_lines: Vec<_> = input
-        .cart()
-        .lines()
-        .iter()
-        .filter(|line| *line.quantity() > 0 && !is_gift_line(line))
-        .filter(|line| {
-            variant_and_product_id(line)
-                .map(|(_, product_id)| !excluded_products.contains(product_id.as_str()))
-                .unwrap_or(false)
-        })
-        .collect();
+    let non_gift_lines = qualifying_lines(offer, input);
 
     // Offer-level thresholds below still count the whole cart even when
     // restrict_to_matched_lines narrows which lines the rewards touch.
@@ -1198,26 +1245,12 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
     }
 
     if let Some(threshold_cents) = offer.cart_value_threshold_cents {
-        let raw_cart_value_cents: i64 = non_gift_lines
-            .iter()
-            .map(|line| {
-                let amount = line.cost().subtotal_amount().amount().as_f64();
-                to_cents(amount, &active_currency)
-            })
-            .sum();
-        // Discount Functions execute concurrently, so the input does not
-        // contain discounts emitted by the store's separate volume-discount
-        // Function. Mirror only its qualification math here; this Function
-        // still emits no volume-discount candidate of its own.
-        let cart_value_cents = (raw_cart_value_cents
-            - projected_volume_discount_cents(&non_gift_lines, &active_currency))
-        .max(0);
-
-        if cart_value_cents < threshold_cents {
+        let cart_value = cart_value_cents(&non_gift_lines, input);
+        if cart_value < threshold_cents {
             return false;
         }
         if let Some(maximum) = offer.cart_value_max_cents {
-            if cart_value_cents > maximum {
+            if cart_value > maximum {
                 return false;
             }
         }
