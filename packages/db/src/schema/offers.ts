@@ -49,6 +49,8 @@ export const offers = pgTable(
     publicTitle: text("public_title").notNull(),
     /** Up to 3 short labels appended to the discount name in cart and checkout. */
     cartLabels: jsonb("cart_labels").$type<string[]>().notNull().default([]),
+    /** How gift rewards with a cart-subtotal tier combine. Null behaves as "cumulative". */
+    tierMode: text("tier_mode").$type<"cumulative" | "highest">(),
     description: text("description"),
     priority: integer("priority").notNull().default(100),
     startsAt: timestamp("starts_at", { withTimezone: true }),
@@ -181,6 +183,8 @@ export const offerRewards = pgTable(
     trackMode: text("track_mode").notNull().default("product"),
     sortOrder: integer("sort_order").notNull().default(0),
     label: text("label"),
+    /** Gift rewards only: the cart subtotal that unlocks this gift. Null means no tier. */
+    minCartSubtotalCents: integer("min_cart_subtotal_cents"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

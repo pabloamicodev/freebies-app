@@ -284,7 +284,12 @@ function tierSummary(tiers: RewardTier[], currency: string): string {
 }
 
 /** "Product discount — 20% off"; gifts and free shipping already read as a full phrase. */
-export function rewardSummary(reward: { rewardType: string; discountType: string; value: unknown; target?: unknown }): string {
+export function rewardSummary(reward: { rewardType: string; discountType: string; value: unknown; target?: unknown; minCartSubtotalCents?: number | null }): string {
+  if (reward.rewardType === "product_gift" && reward.minCartSubtotalCents) {
+    const currency = typeof (reward.value as Record<string, unknown> | null)?.["currencyCode"] === "string" ? String((reward.value as Record<string, unknown>)["currencyCode"]) : "USD";
+    const { minCartSubtotalCents: _tier, ...untiered } = reward;
+    return `${rewardSummary(untiered)} from ${currency} ${fromStoredAmount(reward.minCartSubtotalCents, currency).toFixed(2)}`;
+  }
   const tiers = reward.rewardType === "shipping_discount" || reward.rewardType === "product_gift" ? [] : readRewardTiers(reward.value);
   if (tiers.length > 0) {
     const currency = typeof (reward.value as Record<string, unknown>)["currencyCode"] === "string" ? String((reward.value as Record<string, unknown>)["currencyCode"]) : "USD";

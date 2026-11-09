@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import type { EvaluationInput, NormalizedCart, NormalizedCartLine } from "@promo/shared-types";
 import { evaluate, type ConditionDefinition, type OfferDefinition, type RewardDefinition } from "./evaluator.js";
 import { lineMatchesPageConditions } from "./page-match.js";
+import { giftTierState } from "./gift-tiers.js";
 
 const DIR = fileURLToPath(new URL("../test-fixtures/parity/", import.meta.url));
 
@@ -22,6 +23,7 @@ interface FixtureLine {
   unitPrice: string;
   lineType: "gift" | "upsell" | null;
   metadata: Record<string, string> | null;
+  volumeDiscountTiers?: Array<{ qty: number; percent: number }>;
 }
 interface SourceOffer {
   id: string;
@@ -30,6 +32,7 @@ interface SourceOffer {
   priority: number;
   stopLowerPriority: boolean;
   canStackWithGiftOffers?: boolean;
+  tierMode?: "cumulative" | "highest";
   conditions: Array<Omit<ConditionDefinition, "id" | "isEnabled">>;
   rewards: Array<Omit<RewardDefinition, "sortOrder"> & { sortOrder?: number }>;
 }
@@ -37,8 +40,10 @@ interface Fixture {
   name: string;
   source: { offers: SourceOffer[] };
   config: { offers: ConfigOffer[] };
+  /** The shop currency when it differs from the cart currency (the cart's presentmentCurrencyRate is the exchange rate). */
+  shopCurrency?: string;
   /** `customer`: absent or null is a guest; an object is an identified customer, `usage` its per-offer use counts. */
-  cart: { currency: string; country: string | null; lines: FixtureLine[]; customer?: { usage?: Record<string, number> } | null };
+  cart: { currency: string; presentmentCurrencyRate?: number; country: string | null; lines: FixtureLine[]; customer?: { usage?: Record<string, number> } | null };
   expected: {
     qualifiedOfferIds: string[];
     discountedLineIds: Record<string, string[]>;
@@ -107,6 +112,7 @@ function toCart(fixture: Fixture): NormalizedCart {
     availableForSale: true,
     inventoryPolicy: "DENY",
     inventoryQuantity: null,
+    ...(line.volumeDiscountTiers ? { volumeDiscountTiers: line.volumeDiscountTiers } : {}),
   }));
   return {
     token: "t",
@@ -142,6 +148,7 @@ function toInput(fixture: Fixture): EvaluationInput {
           currencyCode: fixture.cart.currency,
           countryCode: fixture.cart.country,
           primaryLocale: "en",
+          ...(fixture.cart.presentmentCurrencyRate && fixture.cart.presentmentCurrencyRate !== 1 ? { exchangeRate: fixture.cart.presentmentCurrencyRate } : {}),
         }
       : null,
     locale: "en",
@@ -159,6 +166,7 @@ function toOffers(fixture: Fixture): OfferDefinition[] {
     version: offer.version,
     type: offer.type,
     priority: offer.priority,
+    ...(offer.tierMode ? { tierMode: offer.tierMode } : {}),
     stopLowerPriority: offer.stopLowerPriority,
     startsAt: null,
     endsAt: null,
@@ -205,7 +213,7 @@ function quizBundles(fixture: Fixture, config: ConfigOffer, reward: ConfigReward
   }
 }
 
-function referenceDiscounts(fixture: Fixture, offer: SourceOffer): Record<string, number> {
+function referenceDiscounts(fixture: Fixture, offer: SourceOffer, lockedGiftRewards: ReadonlySet<string> = new Set()): Record<string, number> {
   const config = fixture.config.offers.find((candidate) => candidate.id === offer.id)!;
   const excluded = new Set(config.excludedProductIds ?? []);
   const restrict = config.restrictToMatchedLines === true;
@@ -217,7 +225,7 @@ function referenceDiscounts(fixture: Fixture, offer: SourceOffer): Record<string
   // Every limit is the number of times a reward's gift SET is granted: each target product (each
   // target variant, for variant-targeted landing/tagged rewards) gets at most `limit` free units,
   // however high the shopper raises a quantity or however many anchors are present.
-  const giftRewards = config.giftRewards ?? [];
+  const giftRewards = (config.giftRewards ?? []).filter((reward) => !lockedGiftRewards.has(reward.id));
   const givenByProduct: Record<string, Record<string, number>> = {};
   const remainingForReward: Record<string, number> = {};
   for (const reward of giftRewards) {
@@ -325,13 +333,21 @@ describe("golden parity fixtures", () => {
   });
 
   it.each(fixtures.map((fixture) => [fixture.name, fixture] as const))("%s", async (_name, fixture) => {
-    const result = await evaluate(toInput(fixture), { offers: toOffers(fixture), usageStates: usageStatesOf(fixture), now: NOW });
+    const result = await evaluate(toInput(fixture), { offers: toOffers(fixture), usageStates: usageStatesOf(fixture), now: NOW, ...(fixture.shopCurrency ? { shopCurrencyCode: fixture.shopCurrency } : {}) });
     expect(result.qualifiedOffers.map((offer) => offer.offerId).sort()).toEqual([...fixture.expected.qualifiedOfferIds].sort());
 
     const discountedLineIds: Record<string, string[]> = {};
     const discountedQuantities: Record<string, Record<string, number>> = {};
     for (const offerId of result.qualifiedOffers.map((offer) => offer.offerId)) {
-      const units = referenceDiscounts(fixture, fixture.source.offers.find((offer) => offer.id === offerId)!);
+      const source = fixture.source.offers.find((offer) => offer.id === offerId)!;
+      // The Function skips gift rewards whose tier is not reached: take the locked set from the TS evaluator's own tier state.
+      const tiers = giftTierState(
+        toOffers(fixture).find((offer) => offer.id === offerId)!,
+        toCart(fixture),
+        { activeCurrencyCode: fixture.cart.currency, shopCurrencyCode: fixture.shopCurrency ?? fixture.cart.currency, exchangeRate: fixture.cart.presentmentCurrencyRate },
+        new Set(fixture.config.offers.find((offer) => offer.id === offerId)?.excludedProductIds ?? []),
+      );
+      const units = referenceDiscounts(fixture, source, tiers?.unmetRewardIds);
       const lineIds = Object.keys(units).sort();
       if (lineIds.length > 0) discountedLineIds[offerId] = lineIds;
       discountedQuantities[offerId] = units;

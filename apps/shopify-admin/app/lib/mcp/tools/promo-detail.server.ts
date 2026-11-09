@@ -95,6 +95,7 @@ export async function promoDetail(
     subtype: subtypeOf(loaded),
     status: offer.status,
     priority: offer.priority,
+    ...(rewards.some((r) => r.minCartSubtotalCents != null) ? { giftTierMode: offer.tierMode ?? "cumulative" } : {}),
     schedule: { startsAt: iso(offer.startsAt), endsAt: iso(offer.endsAt), timezone: offer.timezone ?? shop.timezone, shopTimezone: shop.timezone },
     conditions: conditions.map((c) => ({
       type: c.conditionType,
@@ -110,6 +111,7 @@ export async function promoDetail(
       discountType: r.discountType,
       summary: rewardSummary(r),
       tiers: readRewardTiers(r.value),
+      ...(r.minCartSubtotalCents != null ? { unlocksAtCartSubtotalCents: r.minCartSubtotalCents } : {}),
       quantity: r.quantity,
       autoAdd: r.isAutoAdd,
       customerSelectable: r.isCustomerSelectable,

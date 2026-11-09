@@ -93,6 +93,7 @@ export async function loadOfferDefinitions(shopId: string, db: Db): Promise<Offe
       internalName: offers.internalName,
       publicTitle: offers.publicTitle,
       cartLabels: offers.cartLabels,
+      tierMode: offers.tierMode,
       description: offers.description,
       priority: offers.priority,
       startsAt: offers.startsAt,
@@ -132,6 +133,7 @@ export async function loadOfferDefinitions(shopId: string, db: Db): Promise<Offe
       version: computeOfferVersion(offer, offerConditionsForVersion, offerRewardsForVersion, policy ?? null),
       type: offer.type,
       priority: offer.priority,
+      ...(offer.tierMode ? { tierMode: offer.tierMode } : {}),
       stopLowerPriority: policy?.stopLowerPriority ?? false,
       startsAt: offer.startsAt,
       endsAt: offer.endsAt,
@@ -163,6 +165,7 @@ export async function loadOfferDefinitions(shopId: string, db: Db): Promise<Offe
           trackMode: reward.trackMode as "product" | "variant",
           sortOrder: reward.sortOrder,
           label: reward.label,
+          ...(reward.minCartSubtotalCents != null ? { minCartSubtotalCents: reward.minCartSubtotalCents } : {}),
         })),
       combinationPolicy: {
         combinesWithOrderDiscounts: policy?.combinesWithOrderDiscounts ?? true,

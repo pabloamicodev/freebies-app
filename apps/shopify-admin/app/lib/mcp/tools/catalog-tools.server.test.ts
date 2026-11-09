@@ -257,6 +257,22 @@ describe("promo_detail", () => {
     }
   });
 
+  it("shows gift tiers: tier mode, each gift's threshold, and a threshold in the summary", async () => {
+    const a = ids["alpha"]!;
+    const id = await seedOffer(db, a, { type: "gift", status: "draft", internalName: "Tiered gifts", publicTitle: "Tiered gifts", tierMode: "highest" });
+    for (const [sortOrder, min] of [7000, 11000].entries()) {
+      await db.insert(offerRewards).values({ shopId: a, offerId: id, rewardType: "product_gift", discountType: "free", value: { amount: 100, currencyCode: "USD" }, target: { variantIds: [`gid://shopify/ProductVariant/${sortOrder + 1}`] }, sortOrder, minCartSubtotalCents: min });
+    }
+    try {
+      const d = track(await promoDetail(db, visible, { ref: `promo:alpha:${id}` })).data as Record<string, any>;
+      expect(d.giftTierMode).toBe("highest");
+      expect(d.rewards.map((r: { unlocksAtCartSubtotalCents: number }) => r.unlocksAtCartSubtotalCents)).toEqual([7000, 11000]);
+      expect(d.rewards[0].summary).toBe("Free gift from USD 70.00");
+    } finally {
+      await db.delete(offers).where(eq(offers.id, id));
+    }
+  });
+
   it("returns the full definition with page conditions, test group, versions and coarse audit events", async () => {
     const result = track(await promoDetail(db, visible, { ref: `promo:alpha:${offerIds["page"]}` }));
     const d = result.data as Record<string, any>;

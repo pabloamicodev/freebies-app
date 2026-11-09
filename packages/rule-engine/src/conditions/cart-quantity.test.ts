@@ -120,4 +120,38 @@ describe("evaluateCartQuantity", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.actual).toBe(0);
   });
+
+  describe("zero-cost lines (another app's free gift)", () => {
+    const paid = { variantId: "v1", productId: "p1", priceCents: 1000, quantity: 2 };
+    const free = { variantId: "v2", productId: "p2", priceCents: 0, quantity: 1 };
+
+    it("does not reach the min with a $0 line", () => {
+      const result = evaluateCartQuantity(makeCart([paid, free]), { minQuantity: 3, includeGiftValues: false });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.actual).toBe(2);
+    });
+
+    it("does not exceed the max with a $0 line", () => {
+      const result = evaluateCartQuantity(makeCart([paid, free]), { minQuantity: 1, maxQuantity: 2, includeGiftValues: false });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value.actual).toBe(2);
+    });
+
+    it("leaves a cart with no $0 line unchanged", () => {
+      const result = evaluateCartQuantity(makeCart([paid, { ...paid, variantId: "v3", productId: "p3" }]), { minQuantity: 4, includeGiftValues: false });
+      expect(result.ok).toBe(true);
+    });
+
+    it("uses lineSubtotalCents when present (fully discounted line is $0)", () => {
+      const cart = makeCart([paid, { ...free, priceCents: 1000 }]);
+      cart.lines[1]!.lineSubtotalCents = 0;
+      const result = evaluateCartQuantity(cart, { minQuantity: 3, includeGiftValues: false });
+      expect(result.ok).toBe(false);
+    });
+
+    it("counts $0 lines when includeGiftValues is true", () => {
+      const result = evaluateCartQuantity(makeCart([paid, free]), { minQuantity: 3, includeGiftValues: true });
+      expect(result.ok).toBe(true);
+    });
+  });
 });

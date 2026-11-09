@@ -17,13 +17,15 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
-import { offerRewards } from "@promo/db";
+import { offerRewards, offers } from "@promo/db";
 import type { DeliveryGroupType } from "@promo/shared-types";
 import { buildRewardRecord } from "../lib/reward-record.server.js";
 import { splitTextareaList } from "../lib/textarea-list.js";
 import { and, eq } from "drizzle-orm";
 import { fromStoredAmount } from "../lib/money.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { lowerMainThresholdToLowestTier } from "../lib/gift-tiered-offer.server.js";
+import { giftTierModeSchema } from "../lib/gift-tier-campaigns.js";
 import { readRewardTiers, rewardSummary, targetSummaryParts } from "../lib/offer-summaries.js";
 import { CartLabelsField } from "../components/CartLabelsField.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -120,15 +122,32 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       : [];
     const built = await buildRewardRecord(formData, db, shopId, shopCurrencyCode, current ?? null);
     if ("error" in built) return { error: built.error };
-    const { rewardType, discountType, value, target, quantity, isAutoAdd, isCustomerSelectable, trackMode, label } = built.data;
+    const { rewardType, discountType, value, target, quantity, isAutoAdd, isCustomerSelectable, trackMode, label, minCartSubtotalCents } = built.data;
+    if (minCartSubtotalCents) {
+      const siblings = await db
+        .select({ id: offerRewards.id, min: offerRewards.minCartSubtotalCents })
+        .from(offerRewards)
+        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.rewardType, "product_gift")));
+      if (siblings.some((sibling) => sibling.id !== editedId && sibling.min === minCartSubtotalCents)) {
+        return { error: "Another gift in this offer already unlocks at that cart subtotal. Each tier needs its own amount." };
+      }
+    }
+    // Gift tier: posted blank clears it, an absent field keeps it, and a reward that stops being a gift loses it.
+    const tierColumn = rewardType !== "product_gift" ? { minCartSubtotalCents: null } : minCartSubtotalCents !== undefined ? { minCartSubtotalCents } : {};
 
+    const tierChanged = minCartSubtotalCents !== undefined && (intent === "add_reward" || minCartSubtotalCents !== ((await db
+      .select({ min: offerRewards.minCartSubtotalCents }).from(offerRewards)
+      .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, editedId))).limit(1))[0]?.min ?? null));
+    if (intent === "update_reward" && !editedId) return { error: "Reward ID missing." };
+
+    await db.transaction(async (tx) => {
     if (intent === "add_reward") {
-      const existing = await db
+      const existing = await tx
         .select({ id: offerRewards.id })
         .from(offerRewards)
         .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
 
-      await db.insert(offerRewards).values({
+      await tx.insert(offerRewards).values({
         shopId,
         offerId,
         rewardType,
@@ -141,15 +160,16 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         trackMode,
         sortOrder: existing.length,
         label,
+        ...tierColumn,
       });
     } else {
-      const rewardId = formData.get("rewardId") as string;
-      if (!rewardId) return { error: "Reward ID missing." };
-      await db
+      await tx
         .update(offerRewards)
-        .set({ rewardType, discountType, value, target, quantity, isAutoAdd, isCustomerSelectable, trackMode, label })
-        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, rewardId)));
+        .set({ rewardType, discountType, value, target, quantity, isAutoAdd, isCustomerSelectable, trackMode, label, ...tierColumn })
+        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, editedId)));
     }
+    if (tierChanged) await lowerMainThresholdToLowestTier(tx as unknown as typeof db, shopId, offerId);
+    });
     const publishError = await republishIfActive(
       db,
       shopId,
@@ -166,6 +186,15 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       after: { rewardType, discountType },
       performedBy: session.shop,
     });
+  }
+
+  if (intent === "set_tier_mode") {
+    const mode = giftTierModeSchema.safeParse(formData.get("tierMode"));
+    if (!mode.success) return { error: "Choose how several reached tiers combine." };
+    await db.update(offers).set({ tierMode: mode.data, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
+    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
+    if (publishError) return { error: publishError };
+    void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "set_tier_mode", after: { tierMode: mode.data }, performedBy: session.shop });
   }
 
   if (intent === "delete_reward") {
@@ -310,6 +339,7 @@ export default function OfferRewardsPage() {
     fallbackGids: [] as string[],
     currencyCode: shopCurrencyCode,
     giftQuantity: "1",
+    giftMinSubtotal: "",
     shippingTiers: [{ ...DEFAULT_SHIPPING_TIER }],
     deliveryGroupTypes: ["ONE_TIME_PURCHASE", "SUBSCRIPTION"] as DeliveryGroupType[],
     shippingScopeMode: "sitewide" as "sitewide" | "landing" | "quiz_bundle",
@@ -336,6 +366,7 @@ export default function OfferRewardsPage() {
     fallbackGids,
     currencyCode,
     giftQuantity,
+    giftMinSubtotal,
     shippingTiers,
     deliveryGroupTypes,
     shippingScopeMode,
@@ -360,6 +391,7 @@ export default function OfferRewardsPage() {
   const setFallbackGids = createFieldSetter(setRewardField, "fallbackGids");
   const setCurrencyCode = createFieldSetter(setRewardField, "currencyCode");
   const setGiftQuantity = createFieldSetter(setRewardField, "giftQuantity");
+  const setGiftMinSubtotal = createFieldSetter(setRewardField, "giftMinSubtotal");
   const setShippingTiers = createFieldSetter(setRewardField, "shippingTiers");
   const setDeliveryGroupTypes = createFieldSetter(setRewardField, "deliveryGroupTypes");
   const setShippingScopeMode = createFieldSetter(setRewardField, "shippingScopeMode");
@@ -385,6 +417,7 @@ export default function OfferRewardsPage() {
     setAdding(false);
     setEditingId(null);
     setQuantityTiers(null);
+    setGiftMinSubtotal("");
   }
 
   function startEditReward(r: (typeof rewards)[number]) {
@@ -401,6 +434,7 @@ export default function OfferRewardsPage() {
     setDiscountType(r.discountType);
     setCurrencyCode(typeof value["currencyCode"] === "string" ? (value["currencyCode"] as string) : shopCurrencyCode);
     setGiftQuantity(r.quantity != null ? String(r.quantity) : "1");
+    setGiftMinSubtotal(r.minCartSubtotalCents ? String(r.minCartSubtotalCents / 100) : "");
 
     const targetVariantIds = Array.isArray(target["variantIds"]) ? target["variantIds"] as string[] : [];
     const targetProductIds = Array.isArray(target["productIds"]) ? target["productIds"] as string[] : [];
@@ -652,6 +686,9 @@ export default function OfferRewardsPage() {
                       {r.quantity != null && (
                         <span className="b-text-sm b-text-sub">Qty: {r.quantity}</span>
                       )}
+                      {r.minCartSubtotalCents ? (
+                        <span className="b-badge b-badge-gray">Unlocks at {(r.minCartSubtotalCents / 100).toFixed(2)}</span>
+                      ) : null}
                       {r.isAutoAdd && <span className="b-badge b-badge-blue">Auto-add</span>}
                       {r.isCustomerSelectable && (
                         <span className="b-badge b-badge-orange">Customer selects</span>
@@ -695,13 +732,35 @@ export default function OfferRewardsPage() {
               <button
                 type="button"
                 className="b-btn b-btn-secondary b-mt-4"
-                onClick={() => { setEditingId(null); setQuantityTiers(null); setAdding(true); }}
+                onClick={() => { setEditingId(null); setQuantityTiers(null); setGiftMinSubtotal(""); setAdding(true); }}
               >
                 + Add Reward
               </button>
             )}
           </div>
         </div>
+
+        {rewards.some((r) => r.rewardType === "product_gift" && r.minCartSubtotalCents) && (
+          <div className="b-card b-mt-4">
+            <div className="b-card-header">Gift tiers</div>
+            <div className="b-card-body">
+              <Form method="post" className="b-stack b-gap-3">
+                <input type="hidden" name="intent" value="set_tier_mode" />
+                <div>
+                  <label className="b-label" htmlFor="tierMode">When a cart reaches several tiers</label>
+                  <select id="tierMode" name="tierMode" className="b-select" defaultValue={offer.tierMode ?? "cumulative"}>
+                    <option value="cumulative">Give every reached tier's gift</option>
+                    <option value="highest">Give only the highest reached tier's gift</option>
+                  </select>
+                  <p className="b-help">Applies to the gifts above that have a cart subtotal. The cart subtotal never counts the gifts themselves.</p>
+                </div>
+                <div className="b-form-actions">
+                  <button type="submit" className="b-btn b-btn-secondary" disabled={isSubmitting}>Save tier setting</button>
+                </div>
+              </Form>
+            </div>
+          </div>
+        )}
 
         {/* ── Add/edit reward form ──────────────────────────── */}
         {adding && (
@@ -1443,6 +1502,30 @@ export default function OfferRewardsPage() {
                             required
                             autoComplete="off"
                           />
+                        </div>
+                      )}
+
+                      {rewardType === "product_gift" && (
+                        <div>
+                          <label className="b-label" htmlFor="minCartSubtotal">
+                            Unlocks at cart subtotal (optional)
+                          </label>
+                          <input
+                            id="minCartSubtotal"
+                            name="minCartSubtotal"
+                            type="number"
+                            className="b-input"
+                            value={giftMinSubtotal}
+                            onChange={(e) => setGiftMinSubtotal(e.target.value)}
+                            min="0.01"
+                            step="0.01"
+                            placeholder="No threshold"
+                            autoComplete="off"
+                          />
+                          <p className="b-help">
+                            Give this gift only once the cart reaches this amount. Add one gift reward per tier, each with its own
+                            amount, to run several spend tiers in this single offer.
+                          </p>
                         </div>
                       )}
 

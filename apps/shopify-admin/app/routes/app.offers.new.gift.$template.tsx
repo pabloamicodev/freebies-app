@@ -28,6 +28,7 @@ import {
 import { CartLabelsField } from "../components/CartLabelsField.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies } from "@promo/db";
+import { and, eq } from "drizzle-orm";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { PerGiftFallbacks } from "../components/PerGiftFallbacks.js";
@@ -45,6 +46,7 @@ import { normalizeGiftSubconditions } from "../lib/gift-subconditions.js";
 import { GiftTierCampaignBuilder } from "../components/GiftTierCampaignBuilder.js";
 import { OfferWizardHeader } from "../components/offers/OfferWizardLayout.js";
 import { createGiftTierCampaignOffers } from "../lib/gift-tier-campaigns.server.js";
+import { createTieredGiftOffer } from "../lib/gift-tiered-offer.server.js";
 import { giftTierCampaignNamePrefix } from "../lib/gift-tier-campaigns.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
 
@@ -184,6 +186,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
+  if (intent === "create-tiered-offer" || intent === "publish-tiered-offer") {
+    const status = intent === "publish-tiered-offer" ? "active" : "draft";
+    const result = await createTieredGiftOffer(context, formData, status);
+    if ("error" in result) return { error: result.error };
+    const publishError = await finalizeCreatedOffer(db, shopId, session.shop, result.offerId, status);
+    if (publishError) {
+      // Retrying the form would otherwise create a second, suffixed copy next to the draft this failure left behind.
+      await db.delete(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, result.offerId)));
+      return { error: `${publishError} Nothing was saved: fix the problem and publish again.` };
+    }
+    return redirect(`/app/offers/${result.offerId}`);
+  }
   if (intent === "create-campaign") {
     const result = await createGiftTierCampaignOffers(context, formData);
     if ("error" in result) return { error: result.error };
@@ -588,7 +602,7 @@ export default function NewGiftOfferPage() {
       <div className="b-page">
         <OfferWizardHeader
           title="New Gift Offer"
-          subtitle="Tiered spend with gifts — each tier becomes a draft gift offer"
+          subtitle="Tiered spend with gifts — one offer, a gift for each spend tier"
           badge="Gift"
           accent={{
             color: "var(--gift-color)",

@@ -55,7 +55,7 @@ fn line_json(line: &Value, currency: &str) -> Value {
         "merchandise": {
             "__typename": "ProductVariant",
             "id": line["variantId"],
-            "product": { "id": line["productId"], "volumeDiscountTiers": null }
+            "product": { "id": line["productId"], "volumeDiscountTiers": line.get("volumeDiscountTiers").map(|tiers| json!({ "value": tiers.to_string() })) }
         },
         "sellingPlanAllocation": if line["sellingPlan"] == true { json!({ "sellingPlan": { "id": "gid://shopify/SellingPlan/1" } }) } else { Value::Null },
         "lineType": attribute(line_type),
@@ -327,6 +327,107 @@ mod budget {
                 assert!(elapsed_ms < 3.0, "{label}: {elapsed_ms:.3} ms per run");
             }
         }
+    }
+
+    /// Allocations and wall time per run of one prepared Function input.
+    fn measure_input(input: &str) -> (u64, f64) {
+        run_function_with_input(run, input).expect("should not error");
+        const RUNS: u32 = 20;
+        let before = ALLOCATIONS.with(Cell::get);
+        let started = Instant::now();
+        for _ in 0..RUNS {
+            run_function_with_input(run, input).expect("should not error");
+        }
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0 / f64::from(RUNS);
+        ((ALLOCATIONS.with(Cell::get) - before) / u64::from(RUNS), elapsed_ms)
+    }
+
+    /// Gift tiers recompute the cart value (and its projected volume discount) once per qualifying tiered
+    /// offer. Ten tiered gift offers (three tiers each) over a 100-line cart whose products all carry volume
+    /// tiers must stay close to the same offers without tiers.
+    #[test]
+    fn ten_tiered_gift_offers_over_a_100_line_cart_stay_inside_the_instruction_budget() {
+        let offers = |tiered: bool| -> Vec<Value> {
+            (0..10)
+                .map(|offer| {
+                    let rewards: Vec<Value> = (0..3)
+                        .map(|tier| {
+                            let mut reward = json!({
+                                "id": format!("reward-{offer}-{tier}"),
+                                "targetProductIds": [format!("gid://shopify/Product/{}", 1000 + offer * 3 + tier)],
+                                "targetVariantIds": [format!("gid://shopify/ProductVariant/{}", 1000 + offer * 3 + tier)],
+                                "discountType": "free",
+                                "discountValue": 100,
+                                "maxQuantity": 1
+                            });
+                            if tiered {
+                                reward["mcs"] = json!(5000 * (tier + 1));
+                            }
+                            reward
+                        })
+                        .collect();
+                    let mut config = json!({
+                        "id": format!("offer-{offer}"),
+                        "version": 1,
+                        "offerType": "gift",
+                        "priority": 100 + offer,
+                        "giftRewards": rewards,
+                        "cartValueThresholdCents": 5000,
+                        "maxGiftQuantity": 1
+                    });
+                    if tiered && offer % 2 == 0 {
+                        config["tm"] = json!("h");
+                    }
+                    config
+                })
+                .collect()
+        };
+        let input = |tiered: bool| {
+            let mut lines: Vec<Value> = (0..100)
+                .map(|index| {
+                    json!({
+                        "id": format!("l{index}"),
+                        "variantId": format!("gid://shopify/ProductVariant/{index}"),
+                        "productId": format!("gid://shopify/Product/{index}"),
+                        "quantity": 2,
+                        "unitPrice": "20.00",
+                        "lineType": Value::Null,
+                        "metadata": Value::Null,
+                        "volumeDiscountTiers": [{ "qty": 2, "percent": 10 }]
+                    })
+                })
+                .collect();
+            for offer in 0..10 {
+                for tier in 0..3 {
+                    lines.push(json!({
+                        "id": format!("g{offer}-{tier}"),
+                        "variantId": format!("gid://shopify/ProductVariant/{}", 1000 + offer * 3 + tier),
+                        "productId": format!("gid://shopify/Product/{}", 1000 + offer * 3 + tier),
+                        "quantity": 1,
+                        "unitPrice": "10.00",
+                        "lineType": "gift",
+                        "metadata": {
+                            "_promo_engine_offer_id": format!("offer-{offer}"),
+                            "_promo_engine_reward_id": format!("reward-{offer}-{tier}"),
+                        }
+                    }));
+                }
+            }
+            let fixture = json!({
+                "config": { "offers": offers(tiered), "version": "budget", "compiledAt": "t" },
+                "cart": { "currency": "USD", "presentmentCurrencyRate": 1, "country": "US", "customerTags": [], "enteredCodes": [], "lines": lines },
+            });
+            function_input(&fixture).to_string()
+        };
+        let (plain_allocations, plain_ms) = measure_input(&input(false));
+        let (tiered_allocations, tiered_ms) = measure_input(&input(true));
+        println!(
+            "budget[tiered 10x3, 100 lines]: {tiered_allocations} allocations/run, {tiered_ms:.3} ms/run (untiered: {plain_allocations}, {plain_ms:.3} ms)"
+        );
+        // Wall time is only printed: this cart is far heavier than the Ambrosia one the 3 ms limit was set for, and
+        // the untiered run alone takes about as long. The ratio is what tiers add.
+        assert!(tiered_allocations * 2 < plain_allocations * 3, "tiers added over 50% allocations: {tiered_allocations} vs {plain_allocations}");
+        assert!(tiered_allocations < 30_000, "{tiered_allocations} allocations per run");
     }
 
     /// Live Ambrosia kinetic landing reward (free, no configured limit, two target products): the

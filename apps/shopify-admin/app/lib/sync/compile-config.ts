@@ -258,6 +258,8 @@ export interface CompiledOffer {
   title?: string;
   /** Title plus cart labels ("Title - A - B"); wins over `title`. Absent without labels. */
   cartMessage?: string;
+  /** offer.tierMode: "h" keeps only the highest gift tier reached. Absent means cumulative. */
+  tm?: "h";
   /** Max applications per cart (units, sets or bundles, by reward shape). Only lowers existing caps. */
   mpc?: number;
   /** Max paid orders per customer that may use this offer (Function: uses >= mpu skips it). */
@@ -352,6 +354,8 @@ export interface CompiledGiftReward {
   selectable?: true;
   /** Gifts the shopper may pick from a selectable reward; the Function defaults to 1. */
   selectionCount?: number;
+  /** reward.minCartSubtotalCents: the cart subtotal that unlocks this gift. Absent means no tier. */
+  mcs?: number;
 }
 
 export interface CompiledProductReward {
@@ -494,6 +498,9 @@ export function compileOfferConfig(
     title: clampDiscountMessage(offer.publicTitle) ?? clampDiscountMessage(offer.internalName),
     ...offerCartMessage(offer),
     priority: offer.priority,
+    ...(offer.tierMode === "highest" && rewards.some((reward) => reward.rewardType === "product_gift" && reward.minCartSubtotalCents)
+      ? { tm: "h" as const }
+      : {}),
     stopLowerPriority: policy?.stopLowerPriority ?? false,
     ...(policy?.canStackWithGiftOffers === false ? { canStackWithGiftOffers: false as const } : {}),
     requiredProductIds: [],
@@ -757,6 +764,7 @@ export function compileOfferConfig(
         ...(primaryVariantIds.length > 1 || (reward.isCustomerSelectable && primaryVariantIds.length !== 1)
           ? { selectable: true as const }
           : {}),
+        ...(reward.minCartSubtotalCents ? { mcs: reward.minCartSubtotalCents } : {}),
       });
     }
     if (
