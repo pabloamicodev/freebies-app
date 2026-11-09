@@ -14,12 +14,7 @@ import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { offerConditions } from "@promo/db";
 import { eq, and } from "drizzle-orm";
-import { fromStoredAmount, isZeroDecimalCurrency, toStoredAmount } from "../lib/money.js";
-
-/** Overrides are in the market currency's own unit on zero-decimal shops; two-decimal shops keep writing x100 for every market. */
-function overrideUnit(shopCurrency: string, marketCurrency: string): string {
-  return isZeroDecimalCurrency(shopCurrency) ? marketCurrency : "USD";
-}
+import { fromStoredAmount, isZeroDecimalCurrency, overrideUnit, toStoredAmount } from "../lib/money.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -116,7 +111,7 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<A
   for (let i = 0; i < currencies.length; i++) {
     const currency = currencies[i]?.toUpperCase();
     const raw = parseFloat(fixedAmounts[i] ?? "0");
-    const fixed = Number.isFinite(raw) && raw > 0 ? Math.round(raw * 100) : 0;
+    const fixed = Number.isFinite(raw) && raw > 0 ? toStoredAmount(raw, overrideUnit(shopCurrency, currency ?? "")) : 0;
     if (currency && fixed > 0) {
       fixedOverrides[currency] = fixed;
     }
@@ -310,7 +305,7 @@ export default function MultiCurrencyPage() {
                                     defaultValue=""
                                     placeholder="Optional"
                                     min="0"
-                                    step="0.01"
+                                    step={isZeroDecimalCurrency(overrideUnit(shopCurrency, market.currencyCode)) ? "1" : "0.01"}
                                     autoComplete="off"
                                     style={{ maxWidth: 200 }}
                                   />

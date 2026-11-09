@@ -905,10 +905,10 @@ function ConditionCard({
                     className="b-input"
                     type="number"
                     style={{ paddingLeft: 22 }}
-                    value={String((val.maxCents as number ?? 0) / 100)}
-                    onChange={(e) => update({ maxCents: Math.round(parseFloat(e.target.value || "0") * 100) })}
+                    value={String(fromStoredAmount(val.maxCents as number ?? 0, shopCurrency))}
+                    onChange={(e) => update({ maxCents: toStoredAmount(parseFloat(e.target.value || "0"), shopCurrency) })}
                     onBlur={() => save()}
-                    step="0.01"
+                    step={isZeroDecimalCurrency(shopCurrency) ? "1" : "0.01"}
                   />
                 </div>
               </div>
@@ -1664,8 +1664,8 @@ export default function OfferDetailPage() {
                       {rewards.length > 0 ? rewards.filter((reward) => reward.id !== giftRewards[0]?.id ? reward.rewardType !== "product_gift" : true).map((reward) => (
                         <p key={reward.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>
                           {reward.id === giftRewards[0]?.id && giftRewards.length > 1
-                            ? `${rewardSummary(reward)} (${giftRewards.length} gift products)`
-                            : rewardSummary(reward)}
+                            ? `${rewardSummary(reward, shopCurrencyCode)} (${giftRewards.length} gift products)`
+                            : rewardSummary(reward, shopCurrencyCode)}
                         </p>
                       )) : <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>No rewards configured.</p>}
                     </div>
@@ -1916,7 +1916,7 @@ export default function OfferDetailPage() {
               <p className="b-editor-section-title">Select gifts</p>
               <div className="b-editor-section-body">
                 {giftRewards.map((reward) => (
-                  <p key={reward.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>{rewardSummary(reward)}</p>
+                  <p key={reward.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>{rewardSummary(reward, shopCurrencyCode)}</p>
                 ))}
                 <p className="b-help">This offer gives a different gift at each cart subtotal. Edit the tiers, their gifts and how they combine on the rewards page.</p>
                 <button type="button" className="b-btn b-btn-secondary" onClick={() => void navigate(`/app/offers/${offer.id}/rewards`)}>Edit gift tiers</button>

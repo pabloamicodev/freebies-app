@@ -134,7 +134,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       requiresCode: offer.requiresCode,
       codeRedemption: offer.codeRedemption,
     },
-    headline: rewardRows[0] ? rewardHeadline(rewardRows[0]) : null,
+    headline: rewardRows[0] ? rewardHeadline(rewardRows[0], shopCurrencyCode) : null,
     conditions,
     rewards,
     urls,

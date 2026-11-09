@@ -206,6 +206,35 @@ const sliderPayload = (selectableGifts: Gift[], offerId = "offer-1"): GiftSlider
 const fb = (variantId: string, over: Partial<Gift> = {}) => gift(variantId, { isFallback: true, ...over });
 const catalogOf = (...rows: GiftCatalogRow[]) => new Map(rows.map((r) => [r.variantGid, r]));
 
+describe("enrichGiftSlider: fixed amounts follow the shop currency's unit", () => {
+  const offerWithReward = (discountType: string, amount: number) => {
+    const offer = offerWithFallback("offer-1", "reward-1", []);
+    (offer.rewards[0] as { discountType: string; value: unknown }).discountType = discountType;
+    (offer.rewards[0] as { value: unknown }).value = { amount };
+    return [offer];
+  };
+  const priced = (shopCurrency: string, discountType: string, amount: number) =>
+    enrichGiftSlider(catalogOf(row({ variantGid: "g", price: "5000.00" })), sliderPayload([gift("g")]), offerWithReward(discountType, amount), [], null, shopCurrency)!
+      .selectableGifts[0]!.discountedPriceCents;
+
+  it("a JPY shop's whole-yen amount is lifted to the payload's price x100", () => {
+    // 5000 yen gift, 1000 yen off: payload prices are x100 in every currency.
+    expect(priced("JPY", "fixed_amount", 1000)).toBe(400_000);
+    expect(priced("JPY", "fixed_price", 1000)).toBe(100_000);
+  });
+
+  it("a USD shop's cents are used as stored, and no shop currency keeps the old reading", () => {
+    expect(priced("USD", "fixed_amount", 100_000)).toBe(400_000);
+    expect(priced("USD", "fixed_price", 100_000)).toBe(100_000);
+    const unknown = enrichGiftSlider(catalogOf(row({ variantGid: "g", price: "5000.00" })), sliderPayload([gift("g")]), offerWithReward("fixed_amount", 100_000), [])!;
+    expect(unknown.selectableGifts[0]!.discountedPriceCents).toBe(400_000);
+  });
+
+  it("percentages are never lifted", () => {
+    expect(priced("JPY", "percentage", 50)).toBe(250_000);
+  });
+});
+
 describe("enrichGiftSlider", () => {
   it("marks a sold-out gift unavailable when no fallback is configured", () => {
     const catalog = catalogOf(row({ variantGid: "gift-1", availableForSale: false, productHandle: "tee" }));

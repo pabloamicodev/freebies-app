@@ -359,7 +359,7 @@ export async function buildRewardRecord(
         ? { amount: 0, currencyCode, tiers: postedTiers }
         : {
             ...(postedTiers ? null : keptTiers(rewardType, existing)),
-            amount: discountType === "percentage" ? discountValue : toStoredAmount(discountValue, currencyCode),
+            amount: discountType === "percentage" ? discountValue : toStoredAmount(discountValue, shopCurrencyCode),
             currencyCode,
           };
     }

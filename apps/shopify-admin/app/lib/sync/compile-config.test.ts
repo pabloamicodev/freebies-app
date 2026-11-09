@@ -1293,6 +1293,25 @@ describe("currency comes from the shop, never an implicit USD", () => {
     expect(unknown).not.toHaveProperty("currencyCode");
   });
 
+  it("offers: the shop currency sizes a fixed amount, not the reward's own tag", () => {
+    const compile = (tag: string, shopCurrencyCode: string | undefined, discountType = "fixed_amount") =>
+      compileOfferConfig(
+        offer() as never,
+        [] as never,
+        [{ id: REWARD_ID, rewardType: "order_discount", discountType, value: { amount: 500, currencyCode: tag }, target: {}, quantity: null, sortOrder: 0 }] as never,
+        { stopLowerPriority: false } as never,
+        1,
+        { shopCurrencyCode },
+      );
+    expect(compile("USD", "JPY").orderRewards).toMatchObject([{ discountValue: 500 }]);
+    expect(compile("JPY", "USD").orderRewards).toMatchObject([{ discountValue: 5 }]);
+    // Unchanged: matching tag, other tag on a two-decimal shop, no shop known, percentages.
+    expect(compile("USD", "USD").orderRewards).toMatchObject([{ discountValue: 5 }]);
+    expect(compile("EUR", "USD").orderRewards).toMatchObject([{ discountValue: 5 }]);
+    expect(compile("JPY", undefined).orderRewards).toMatchObject([{ discountValue: 500 }]);
+    expect(compile("JPY", "JPY", "percentage").orderRewards).toMatchObject([{ discountValue: 500 }]);
+  });
+
   it("offers: a fixed amount without a reward currency is read in the shop's currency (no /100 for JPY)", () => {
     const compile = (shopCurrencyCode?: string) =>
       compileOfferConfig(
