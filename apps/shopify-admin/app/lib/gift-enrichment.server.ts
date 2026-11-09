@@ -6,7 +6,7 @@
  */
 import { appSettings, getDb, productCache, variantCache } from "@promo/db";
 import { and, eq, inArray } from "drizzle-orm";
-import type { GiftSliderPayload, WidgetTranslations } from "@promo/shared-types";
+import { toCartUnits, type GiftSliderPayload, type WidgetTranslations } from "@promo/shared-types";
 import type { OfferDefinition } from "@promo/rule-engine";
 
 export interface GiftCatalogRow {
@@ -199,8 +199,12 @@ export async function loadGiftSliderTranslations(
 function priceAfterReward(
   reward: { discountType?: string; value?: unknown } | undefined,
   originalPriceCents: number,
+  shopCurrency?: string | null,
 ): number {
-  const amount = Number((reward?.value as { amount?: number } | undefined)?.amount ?? 0);
+  // The payload prices are price x100 in every currency, while a zero-decimal shop stores its fixed amounts in whole units.
+  const amount = reward?.discountType === "percentage"
+    ? Number((reward?.value as { amount?: number } | undefined)?.amount ?? 0)
+    : toCartUnits(Number((reward?.value as { amount?: number } | undefined)?.amount ?? 0), shopCurrency);
   if (reward?.discountType === "free") return 0;
   if (reward?.discountType === "percentage") {
     return Math.max(0, Math.round(originalPriceCents * (1 - Math.min(100, amount) / 100)));
@@ -216,6 +220,7 @@ export function enrichGiftSlider(
   offerDefinitions: OfferDefinition[],
   _cartLines: Array<{ variantId: string; properties: Record<string, string> }> = [],
   labelOverrides?: Partial<WidgetTranslations> | null,
+  shopCurrency?: string | null,
 ): GiftSliderPayload | null {
   if (!payload || payload.selectableGifts.length === 0) return payload;
 
@@ -236,7 +241,7 @@ export function enrichGiftSlider(
       // the variant cache is webhook-fed and can lag a sale by minutes.
       productHandle: variant?.productHandle ?? null,
       originalPriceCents,
-      discountedPriceCents: priceAfterReward(rewardById.get(gift.rewardId), originalPriceCents),
+      discountedPriceCents: priceAfterReward(rewardById.get(gift.rewardId), originalPriceCents, shopCurrency),
       isAvailable: isGiftVariantAvailable(variant),
     };
   });

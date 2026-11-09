@@ -5,7 +5,7 @@ import { purchaseTypeLabel } from "./purchase-type.js";
 
 import { normalizeExcludedPageUrls, normalizeStorePageUrls } from "@promo/shared-types";
 import { pageTypeLabel } from "./page-types.js";
-import { formatStoredAmount, fromStoredAmount } from "./money.js";
+import { formatStoredAmount, fromStoredAmount, isZeroDecimalCurrency } from "./money.js";
 import { readCartLabels } from "./cart-labels.js";
 import { readMatchBy, readMatchRule } from "./product-condition.js";
 
@@ -165,10 +165,12 @@ export function urlsFromCondition(conditionType: string, value: unknown): string
  * "$10 off". `value.amount` is a raw percentage for discountType "percentage",
  * cents for every other discount type (matches how compile-config.ts and the
  * add/update_reward actions store it). Used as the row-preview's title. */
-export function rewardHeadline(reward: { rewardType: string; discountType: string; value: unknown }): string {
+export function rewardHeadline(reward: { rewardType: string; discountType: string; value: unknown }, shopCurrency?: string): string {
   const v = (reward.value ?? {}) as Record<string, unknown>;
   const amount = typeof v["amount"] === "number" ? v["amount"] : 0;
   const currency = typeof v["currencyCode"] === "string" ? v["currencyCode"] : "USD";
+  // The stored unit comes from the shop currency; the tag only labels the amount.
+  const unit = shopCurrency ?? currency;
 
   if (reward.discountType === "cheapest_item_free") return "Cheapest item free";
   if (reward.discountType === "free") {
@@ -178,13 +180,13 @@ export function rewardHeadline(reward: { rewardType: string; discountType: strin
   }
   if (reward.discountType === "percentage") return `${amount}% off`;
   if (reward.discountType === "most_expensive_item_discount") return `${amount}% off most expensive item`;
-  if (reward.discountType === "fixed_price") return `Fixed price ${currency} ${fromStoredAmount(amount, currency).toFixed(2)}`;
+  if (reward.discountType === "fixed_price") return `Fixed price ${currency} ${formatStoredAmount(amount, unit)}`;
   if (reward.discountType === "fixed_amount") {
     // Shipping rewards store this raw (dollars), not in cents like every
     // other reward type — see the shipping vs. generic value-building
     // branches in app.offers.$id.rewards.tsx's action.
-    const dollars = reward.rewardType === "shipping_discount" ? amount : fromStoredAmount(amount, currency);
-    return `${currency} ${dollars.toFixed(2)} off`;
+    const wholeUnits = reward.rewardType === "shipping_discount" ? amount : fromStoredAmount(amount, unit);
+    return `${currency} ${wholeUnits.toFixed(isZeroDecimalCurrency(unit) ? 0 : 2)} off`;
   }
   return reward.discountType;
 }
@@ -285,11 +287,11 @@ function tierSummary(tiers: RewardTier[], currency: string): string {
 }
 
 /** "Product discount — 20% off"; gifts and free shipping already read as a full phrase. */
-export function rewardSummary(reward: { rewardType: string; discountType: string; value: unknown; target?: unknown; minCartSubtotalCents?: number | null }): string {
+export function rewardSummary(reward: { rewardType: string; discountType: string; value: unknown; target?: unknown; minCartSubtotalCents?: number | null }, shopCurrency?: string): string {
   if (reward.rewardType === "product_gift" && reward.minCartSubtotalCents) {
     const currency = typeof (reward.value as Record<string, unknown> | null)?.["currencyCode"] === "string" ? String((reward.value as Record<string, unknown>)["currencyCode"]) : "USD";
     const { minCartSubtotalCents: _tier, ...untiered } = reward;
-    return `${rewardSummary(untiered)} from ${currency} ${fromStoredAmount(reward.minCartSubtotalCents, currency).toFixed(2)}`;
+    return `${rewardSummary(untiered, shopCurrency)} from ${currency} ${formatStoredAmount(reward.minCartSubtotalCents, shopCurrency ?? currency)}`;
   }
   const tiers = reward.rewardType === "shipping_discount" || reward.rewardType === "product_gift" ? [] : readRewardTiers(reward.value);
   if (tiers.length > 0) {
@@ -298,7 +300,7 @@ export function rewardSummary(reward: { rewardType: string; discountType: string
     if (reward.target === undefined) return base;
     return `${base} · ${purchaseTypeLabel((reward.target as Record<string, unknown> | null)?.["subscriptionMode"])}`;
   }
-  const headline = rewardHeadline(reward);
+  const headline = rewardHeadline(reward, shopCurrency);
   if (headline === "Free gift" || headline === "Free shipping") return headline;
   const base = `${rewardTypeLabel(reward.rewardType)} — ${headline}`;
   if (reward.rewardType === "shipping_discount" || reward.rewardType === "product_gift" || reward.target === undefined) return base;

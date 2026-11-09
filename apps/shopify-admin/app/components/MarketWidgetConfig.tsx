@@ -12,10 +12,11 @@ import {
   Banner, Collapsible, Button, Box, Divider,
 } from "@shopify/polaris";
 import type { ShopifyMarket } from "../lib/markets.server.js";
+import { baseThresholdLabel, marketThresholdStep, marketThresholdToInput, marketThresholdToStored } from "../lib/market-threshold.js";
 
 interface MarketOverride {
   marketId: string;
-  /** Custom threshold in this market's currency (cents). Null = use auto-converted base. */
+  /** Custom threshold in this market's currency: x100 on two-decimal shops, the currency's own unit on zero-decimal shops (see overrideUnit). Null = use auto-converted base. */
   thresholdCents: number | null;
   /** Custom widget title for this market. Null = use default. */
   widgetTitle: string | null;
@@ -27,6 +28,8 @@ interface MarketWidgetConfigProps {
   widgetId: string;
   baseThresholdCents?: number;
   baseCurrencyCode?: string;
+  /** The shop's currency: it fixes the unit of every stored amount here. */
+  shopCurrencyCode?: string;
   markets: ShopifyMarket[];
   /** Current overrides (loaded from DB). */
   defaultOverrides?: MarketOverride[];
@@ -39,6 +42,7 @@ export function MarketWidgetConfig({
   widgetId: _widgetId,
   baseThresholdCents,
   baseCurrencyCode = "USD",
+  shopCurrencyCode = "USD",
   markets,
   defaultOverrides = EMPTY_MARKET_OVERRIDES,
   onSave,
@@ -96,7 +100,7 @@ export function MarketWidgetConfig({
         <Text as="p" tone="subdued">
           Customize the widget for each market. Leave fields empty to use the global default.
           {baseThresholdCents && (
-            <> Base threshold: <strong>${(baseThresholdCents / 100).toFixed(2)} {baseCurrencyCode}</strong> — auto-converted for markets without a custom threshold.</>
+            <> Base threshold: <strong>{baseThresholdLabel(baseThresholdCents, shopCurrencyCode, baseCurrencyCode)}</strong> — auto-converted for markets without a custom threshold.</>
           )}
         </Text>
 
@@ -147,11 +151,12 @@ export function MarketWidgetConfig({
 
                     <TextField
                       label={`Custom threshold (${market.currencyCode})`}
-                      helpText={`Leave empty to auto-convert from ${baseThresholdCents ? `$${(baseThresholdCents / 100).toFixed(2)} ${baseCurrencyCode}` : "base threshold"}.`}
+                      helpText={`Leave empty to auto-convert from ${baseThresholdCents ? baseThresholdLabel(baseThresholdCents, shopCurrencyCode, baseCurrencyCode) : "base threshold"}.`}
                       type="number"
-                      value={override.thresholdCents !== null ? String(override.thresholdCents / 100) : ""}
+                      step={marketThresholdStep(shopCurrencyCode, market.currencyCode)}
+                      value={marketThresholdToInput(override.thresholdCents, shopCurrencyCode, market.currencyCode)}
                       onChange={(v) => updateOverride(market.id, {
-                        thresholdCents: v ? Math.round(parseFloat(v) * 100) : null,
+                        thresholdCents: marketThresholdToStored(v, shopCurrencyCode, market.currencyCode),
                       })}
                       prefix={market.currencyCode}
                       autoComplete="off"

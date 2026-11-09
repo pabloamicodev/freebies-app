@@ -511,6 +511,8 @@ export default function OfferRewardsPage() {
     rewardType !== "shipping_discount" &&
     discountType !== "free" &&
     discountType !== "cheapest_item_free";
+  const isWholeUnitAmount =
+    isZeroDecimalCurrency(shopCurrencyCode) && discountType !== "percentage" && discountType !== "most_expensive_item_discount";
 
   function updateShippingTier(
     index: number,
@@ -694,7 +696,7 @@ export default function OfferRewardsPage() {
                         <span className="b-badge b-badge-orange">Customer selects</span>
                       )}
                       {r.rewardType === "product_discount" && readRewardTiers(r.value).length > 0 && (
-                        <span className="b-text-sm b-text-sub">{rewardSummary(r).split(" — ")[1]?.split(" · ")[0]}</span>
+                        <span className="b-text-sm b-text-sub">{rewardSummary(r, shopCurrencyCode).split(" — ")[1]?.split(" · ")[0]}</span>
                       )}
                       {targetSummaryParts(r.target).map((part) => (
                         <span key={part} className="b-text-sm b-text-sub">
@@ -860,15 +862,15 @@ export default function OfferRewardsPage() {
                           name="discountValue"
                           type="number"
                           className="b-input"
-                          min="0.01"
-                          step="0.01"
+                          min={isWholeUnitAmount ? "1" : "0.01"}
+                          step={isWholeUnitAmount ? "1" : "0.01"}
                           required
                           autoComplete="off"
                           defaultValue={
                             typeof editingRewardValue["amount"] === "number"
                               ? (discountType === "percentage" || discountType === "most_expensive_item_discount"
                                   ? editingRewardValue["amount"]
-                                  : fromStoredAmount(editingRewardValue["amount"] as number, typeof editingRewardValue["currencyCode"] === "string" ? editingRewardValue["currencyCode"] : shopCurrencyCode))
+                                  : fromStoredAmount(editingRewardValue["amount"] as number, shopCurrencyCode))
                               : undefined
                           }
                         />

@@ -29,7 +29,7 @@ export interface CompileOfferOptions {
   /** Backend B: hashes of the offer's redeemable codes (see code-hash.ts); the code Function accepts them. */
   codeHashes?: string[];
   /**
-   * The shop's currency. Rewards that don't carry their own currency fall back to it, never to USD:
+   * The shop's currency. It sizes every fixed amount (a reward's own currency tag does not), and is the fallback instead of USD:
    * a zero-decimal shop (JPY, KRW) read as USD turns 500 yen into 5 and every fixed amount wrong.
    */
   shopCurrencyCode?: string;
@@ -39,12 +39,15 @@ export interface CompileOfferOptions {
 
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 
-/** The reward's own currency when it has a valid one, else the shop's, else USD (shop unknown, e.g. tests). */
+/**
+ * The currency that sizes a reward's amounts: the shop's when known, since the stored unit comes from it and not from the
+ * (typed, sometimes hard-coded) tag on the reward; the tag only when the shop is unknown (tests), else USD.
+ */
 function rewardCurrency(valueCurrency: unknown, shopCurrencyCode?: string): string {
-  const own = typeof valueCurrency === "string" ? valueCurrency.trim().toUpperCase() : "";
-  if (CURRENCY_PATTERN.test(own)) return own;
   const shop = (shopCurrencyCode ?? "").trim().toUpperCase();
-  return CURRENCY_PATTERN.test(shop) ? shop : "USD";
+  if (CURRENCY_PATTERN.test(shop)) return shop;
+  const own = typeof valueCurrency === "string" ? valueCurrency.trim().toUpperCase() : "";
+  return CURRENCY_PATTERN.test(own) ? own : "USD";
 }
 
 function onlyMatchedLines(

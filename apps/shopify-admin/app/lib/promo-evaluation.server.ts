@@ -344,9 +344,9 @@ export async function handleEvaluationRequest(
   ]);
   timer.mark("enrich");
   result.upsells = upsells;
-  result.giftSlider = enrichGiftSlider(giftCatalog, result.giftSlider, offerDefinitions, input.cart.lines, giftLabels);
+  result.giftSlider = enrichGiftSlider(giftCatalog, result.giftSlider, offerDefinitions, input.cart.lines, giftLabels, shop.currencyCode);
   result.additionalGiftSliders = (result.additionalGiftSliders ?? []).flatMap((slider) => {
-    const enriched = enrichGiftSlider(giftCatalog, slider, offerDefinitions, input.cart.lines, giftLabels);
+    const enriched = enrichGiftSlider(giftCatalog, slider, offerDefinitions, input.cart.lines, giftLabels, shop.currencyCode);
     return enriched ? [enriched] : [];
   });
   result.cartActions = resolveSoldOutGiftAdds(giftCatalog, result.cartActions, offerDefinitions);

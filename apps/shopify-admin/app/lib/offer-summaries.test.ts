@@ -2,6 +2,30 @@ import { describe, expect, it } from "vitest";
 import { ConditionTypeSchema, RewardTypeSchema } from "@promo/shared-types";
 import { codesSummary, collectGids, conditionSummary, conditionTypeLabel, rewardHeadline, rewardSummary, rewardTypeLabel, urlsFromCondition } from "./offer-summaries.js";
 
+describe("fixed reward amounts are labelled in the shop currency's unit", () => {
+  const fixed = (amount: number, tag: string, discountType = "fixed_amount", rewardType = "order_discount") => ({ rewardType, discountType, value: { amount, currencyCode: tag } });
+
+  it("a JPY shop reads whole yen, with no decimals", () => {
+    expect(rewardHeadline(fixed(500, "JPY"), "JPY")).toBe("JPY 500 off");
+    expect(rewardHeadline(fixed(500, "USD"), "JPY")).toBe("USD 500 off");
+    expect(rewardHeadline(fixed(1200, "JPY", "fixed_price", "product_discount"), "JPY")).toBe("Fixed price JPY 1200");
+    expect(rewardSummary({ ...fixed(0, "JPY", "free", "product_gift"), minCartSubtotalCents: 5000 }, "JPY")).toBe("Free gift from JPY 5000");
+  });
+
+  it("a two-decimal shop reads cents as before, whatever the tag", () => {
+    expect(rewardHeadline(fixed(550, "USD"), "USD")).toBe("USD 5.50 off");
+    expect(rewardHeadline(fixed(550, "JPY"), "USD")).toBe("JPY 5.50 off");
+    expect(rewardHeadline(fixed(550, "USD"))).toBe("USD 5.50 off");
+    expect(rewardHeadline(fixed(1200, "USD", "fixed_price", "product_discount"), "USD")).toBe("Fixed price USD 12.00");
+    expect(rewardSummary({ ...fixed(0, "USD", "free", "product_gift"), minCartSubtotalCents: 5000 }, "USD")).toBe("Free gift from USD 50.00");
+  });
+
+  it("shipping amounts are whole units in every currency", () => {
+    expect(rewardHeadline(fixed(5, "USD", "fixed_amount", "shipping_discount"), "USD")).toBe("USD 5.00 off");
+    expect(rewardHeadline(fixed(500, "JPY", "fixed_amount", "shipping_discount"), "JPY")).toBe("JPY 500 off");
+  });
+});
+
 describe("collectGids", () => {
   it("collects variant and product GIDs from every target shape", () => {
     expect(collectGids({ variantIds: ["v1", "v2"] })).toEqual(["v1", "v2"]);

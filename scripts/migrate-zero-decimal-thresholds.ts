@@ -7,6 +7,9 @@
  * --before is required: rows updated at or after it are taken as already migrated (every write stamps updated_at with now,
  * so a second run with the same cutoff is a no-op). Each migrated shop is also marked in app_settings and refused afterwards,
  * whatever the cutoff, unless --allow-rerun is passed. Use the moment the unit fix was deployed. Shops on two-decimal currencies are never read.
+ * Two phases, marked separately: thresholds, and amounts (fixed discount values, multicurrency fixed overrides). A shop marked by the
+ * thresholds-only version still gets the amounts phase (printed as AMOUNTS-ONLY); only a shop with both markers is refused.
+ * If the thresholds and amounts fixes shipped at different times, run thresholds with the first deploy's --before and amounts with the second's.
  * After --apply, republish the shop's active offers (the Functions read the compiled config, not these rows).
  */
 
@@ -49,6 +52,7 @@ async function main() {
     for (const change of result.changes) {
       console.log(`${change.shop} ${change.table} ${change.id} (offer ${change.offerId}) ${change.field}: ${change.from} -> ${change.to}`);
     }
+    for (const domain of result.amountsOnly) console.log(`AMOUNTS-ONLY ${domain}: thresholds were migrated before, only the amounts phase runs`);
     for (const domain of result.alreadyMigrated) console.log(`REFUSED ${domain}: already migrated (pass --allow-rerun to run it again)`);
     for (const skip of result.skipped) console.log(`SKIPPED ${skip.shop} ${skip.table} ${skip.id}: ${skip.reason}`);
     console.log(`summary: shops=${result.shopsScanned} changes=${result.changes.length} skipped=${result.skipped.length} rowsWritten=${result.rowsWritten}`);

@@ -48,7 +48,7 @@ function normalizeMarketOverrides(items: unknown[]): StoredMarketOverride[] {
 }
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { shopId, db, currencyCode: shopCurrencyCode } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   await loadOwnedOffer(db, shopId, offerId);
 
@@ -80,6 +80,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     markets,
     marketOverrides,
     baseThresholdCents,
+    shopCurrencyCode,
   };
 };
 
@@ -113,7 +114,7 @@ async function saveMarketOverrides(overrides: Array<{ marketId: string; threshol
 }
 
 export default function WidgetMarketPage() {
-  const { offerId, markets, marketOverrides, baseThresholdCents, widgetId } = useLoaderData<typeof loader>();
+  const { offerId, markets, marketOverrides, baseThresholdCents, widgetId, shopCurrencyCode } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
 
   return (
@@ -189,6 +190,7 @@ export default function WidgetMarketPage() {
                   <MarketWidgetConfig
                     widgetId={widgetId}
                     baseThresholdCents={baseThresholdCents}
+                    shopCurrencyCode={shopCurrencyCode}
                     markets={markets}
                     defaultOverrides={marketOverrides}
                     onSave={saveMarketOverrides}

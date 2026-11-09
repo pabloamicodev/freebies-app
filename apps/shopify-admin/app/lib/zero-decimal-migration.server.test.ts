@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { offerConditions, offerRewards, shops, type Db } from "@promo/db";
+import { appSettings, offerConditions, offerRewards, shops, type Db } from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
-import { migrateConditionValue, migrateReward, migrateZeroDecimalThresholds } from "./zero-decimal-migration.server.js";
+import { AMOUNTS_MARKER_KEY, MIGRATION_MARKER_KEY, migrateConditionValue, migrateReward, migrateZeroDecimalThresholds } from "./zero-decimal-migration.server.js";
 
 let db: Db;
 let close: () => Promise<void>;
@@ -126,6 +126,133 @@ describe("zero-decimal threshold migration", () => {
 
   it("refuses a cutoff in the future", async () => {
     await expect(migrateZeroDecimalThresholds(db, { before: new Date(NOW.getTime() + 1000), apply: true, now: NOW })).rejects.toThrow(/past ISO timestamp/);
+  });
+});
+
+describe("zero-decimal amounts phase (fixed discount values, fixed-amount overrides)", () => {
+  const EARLIER_RUN = new Date("2026-11-03T00:00:00Z");
+  let fresh = "";
+  let marked = "";
+  let usdAmounts = "";
+  const reward = async (shopId: string, offerId: string, rewardType: "order_discount" | "product_discount" | "shipping_discount" | "product_gift", discountType: "fixed_amount" | "fixed_price" | "percentage", amount: number, updatedAt: Date, min: number | null = null) =>
+    (await db.insert(offerRewards).values({ shopId, offerId, rewardType, discountType, value: { amount, currencyCode: "JPY" }, target: { scope: "cart" }, quantity: 1, trackMode: "variant", sortOrder: 0, minCartSubtotalCents: min, updatedAt }).returning({ id: offerRewards.id }))[0]!.id;
+  const condition = async (shopId: string, offerId: string, value: Record<string, unknown>, updatedAt: Date) =>
+    (await db.insert(offerConditions).values({ shopId, offerId, scope: "main", conditionType: "cart_value", operator: "gte", value, sortOrder: 0, isEnabled: true, updatedAt }).returning({ id: offerConditions.id }))[0]!.id;
+  const rewardOf = async (id: string) => (await db.select().from(offerRewards).where(eq(offerRewards.id, id)))[0]!;
+  const conditionOf = async (id: string) => (await db.select().from(offerConditions).where(eq(offerConditions.id, id)))[0]!;
+  const markersOf = async (shopId: string) => (await db.select({ key: appSettings.key }).from(appSettings).where(eq(appSettings.shopId, shopId))).map((row) => row.key).sort();
+  const runFor = (domain: string, apply: boolean, extra: { allowRerun?: boolean } = {}) => migrateZeroDecimalThresholds(db, { before: BEFORE, apply, now: NOW, shopDomains: [domain], ...extra });
+
+  const ids = {} as Record<string, string>;
+  beforeAll(async () => {
+    fresh = await seedShop(db, "amt-fresh.myshopify.com");
+    marked = await seedShop(db, "amt-marked.myshopify.com");
+    usdAmounts = await seedShop(db, "amt-usd.myshopify.com");
+    for (const id of [fresh, marked]) await db.update(shops).set({ currencyCode: "JPY" }).where(eq(shops.id, id));
+
+    const offer = await seedOffer(db, fresh, { internalName: "amt-fresh", publicTitle: "amt" });
+    ids["orderFixed"] = await reward(fresh, offer, "order_discount", "fixed_amount", 50000, OLD);
+    ids["productPrice"] = await reward(fresh, offer, "product_discount", "fixed_price", 120000, OLD);
+    ids["shipping"] = await reward(fresh, offer, "shipping_discount", "fixed_amount", 5, OLD);
+    ids["percent"] = await reward(fresh, offer, "product_discount", "percentage", 20, OLD);
+    ids["odd"] = await reward(fresh, offer, "order_discount", "fixed_amount", 55050, OLD);
+    ids["savedAfter"] = await reward(fresh, offer, "order_discount", "fixed_amount", 50000, NEW);
+    ids["gift"] = await reward(fresh, offer, "product_gift", "fixed_amount", 30000, OLD, 1200000);
+    ids["cart"] = await condition(fresh, offer, { thresholdCents: 500000, currencyCode: "JPY", fixedAmountOverrides: { JPY: 50000, USD: 525, KRW: 700000 } }, OLD);
+
+    const earlier = await seedOffer(db, marked, { internalName: "amt-marked", publicTitle: "amt" });
+    // What the thresholds-only run left: its rows stamped with its run time, thresholds already whole, amounts untouched.
+    ids["markedStamped"] = await reward(marked, earlier, "order_discount", "fixed_amount", 50000, EARLIER_RUN);
+    ids["markedGift"] = await reward(marked, earlier, "product_gift", "fixed_amount", 30000, EARLIER_RUN, 12000);
+    ids["markedCart"] = await condition(marked, earlier, { thresholdCents: 5000, currencyCode: "JPY", fixedAmountOverrides: { JPY: 50000 } }, EARLIER_RUN);
+    ids["markedOld"] = await reward(marked, earlier, "product_discount", "fixed_amount", 20000, OLD);
+    ids["markedSavedAfter"] = await reward(marked, earlier, "order_discount", "fixed_amount", 50000, new Date("2026-11-04T00:00:00Z"));
+    await db.insert(appSettings).values({ shopId: marked, key: MIGRATION_MARKER_KEY, value: JSON.stringify({ at: EARLIER_RUN.toISOString(), before: BEFORE.toISOString(), rows: 3 }) });
+    await db.insert(appSettings).values({ shopId: marked, key: "widget.market_overrides." + earlier, value: JSON.stringify([{ marketId: "gid://shopify/Market/1", thresholdCents: 500000, widgetTitle: null, enabled: true }]), updatedAt: OLD });
+
+    const usdOffer = await seedOffer(db, usdAmounts, { internalName: "amt-usd", publicTitle: "amt" });
+    ids["usdFixed"] = await reward(usdAmounts, usdOffer, "order_discount", "fixed_amount", 50000, OLD);
+    ids["usdCart"] = await condition(usdAmounts, usdOffer, { thresholdCents: 500000, currencyCode: "USD", fixedAmountOverrides: { JPY: 50000 } }, OLD);
+  }, 60_000);
+
+  it("dry-run lists each amount and writes nothing", async () => {
+    const before = [await rewardOf(ids["orderFixed"]!), await conditionOf(ids["cart"]!)];
+    const result = await runFor("amt-fresh.myshopify.com", false);
+    expect(result.rowsWritten).toBe(0);
+    const fields = result.changes.map((change) => `${change.id === ids["cart"] ? "cart" : "reward"}:${change.field}:${change.from}->${change.to}`);
+    expect(fields).toEqual(expect.arrayContaining([
+      "reward:amount:50000->500",
+      "reward:amount:120000->1200",
+      "reward:amount:30000->300",
+      "cart:fixedAmountOverrides.JPY:50000->500",
+      "cart:fixedAmountOverrides.KRW:700000->7000",
+    ]));
+    expect(await markersOf(fresh)).toEqual([]);
+    expect([await rewardOf(ids["orderFixed"]!), await conditionOf(ids["cart"]!)]).toEqual(before);
+  });
+
+  it("apply divides fixed amounts and prices once, leaving shipping, percentages, odd values and later saves alone", async () => {
+    const result = await runFor("amt-fresh.myshopify.com", true);
+    expect(result.skipped.filter((skip) => skip.table === "offer_rewards").map((skip) => skip.id)).toEqual([ids["odd"]]);
+    expect((await rewardOf(ids["orderFixed"]!)).value).toEqual({ amount: 500, currencyCode: "JPY" });
+    expect((await rewardOf(ids["productPrice"]!)).value).toMatchObject({ amount: 1200 });
+    expect((await rewardOf(ids["gift"]!)).value).toMatchObject({ amount: 300 });
+    expect((await rewardOf(ids["gift"]!)).minCartSubtotalCents).toBe(12000);
+    expect((await rewardOf(ids["shipping"]!)).value).toMatchObject({ amount: 5 });
+    expect((await rewardOf(ids["percent"]!)).value).toMatchObject({ amount: 20 });
+    expect((await rewardOf(ids["odd"]!)).value).toMatchObject({ amount: 55050 });
+    expect((await rewardOf(ids["savedAfter"]!)).value).toMatchObject({ amount: 50000 });
+    // One write per row: the thresholds and the fixed overrides of the same condition land together, USD stays x100.
+    expect((await conditionOf(ids["cart"]!)).value).toEqual({ thresholdCents: 5000, currencyCode: "JPY", fixedAmountOverrides: { JPY: 500, USD: 525, KRW: 7000 } });
+    expect(await markersOf(fresh)).toEqual([AMOUNTS_MARKER_KEY, MIGRATION_MARKER_KEY]);
+  });
+
+  it("a shop with both markers is refused, and nothing is divided twice", async () => {
+    const before = await rewardOf(ids["orderFixed"]!);
+    const again = await runFor("amt-fresh.myshopify.com", true);
+    expect(again.alreadyMigrated).toEqual(["amt-fresh.myshopify.com"]);
+    expect(again.changes).toEqual([]);
+    expect(await rewardOf(ids["orderFixed"]!)).toEqual(before);
+  });
+
+  it("a shop marked by the thresholds-only version still gets the amounts, and only those", async () => {
+    const dry = await runFor("amt-marked.myshopify.com", false);
+    expect(dry.alreadyMigrated).toEqual([]);
+    expect(dry.amountsOnly).toEqual(["amt-marked.myshopify.com"]);
+    expect(await markersOf(marked)).not.toContain(AMOUNTS_MARKER_KEY);
+
+    const result = await runFor("amt-marked.myshopify.com", true);
+    expect(result.changes.every((change) => !/threshold|Subtotal|currencyCode/i.test(change.field))).toBe(true);
+    expect((await rewardOf(ids["markedStamped"]!)).value).toMatchObject({ amount: 500 });
+    expect((await rewardOf(ids["markedOld"]!)).value).toMatchObject({ amount: 200 });
+    expect((await rewardOf(ids["markedGift"]!))).toMatchObject({ value: { amount: 300 }, minCartSubtotalCents: 12000 });
+    expect((await conditionOf(ids["markedCart"]!)).value).toEqual({ thresholdCents: 5000, currencyCode: "JPY", fixedAmountOverrides: { JPY: 500 } });
+    expect((await rewardOf(ids["markedSavedAfter"]!)).value).toMatchObject({ amount: 50000 });
+    expect(await markersOf(marked)).toContain(AMOUNTS_MARKER_KEY);
+    expect((await runFor("amt-marked.myshopify.com", true)).alreadyMigrated).toEqual(["amt-marked.myshopify.com"]);
+  });
+
+  it("--allow-rerun on a shop with both markers divides no amount a second time", async () => {
+    // amt-fresh ran both phases at NOW; its rows are stamped NOW, which a stale "earlier run" read would make eligible again.
+    const before = [await rewardOf(ids["orderFixed"]!), await rewardOf(ids["productPrice"]!), await conditionOf(ids["cart"]!)];
+    const result = await migrateZeroDecimalThresholds(db, { before: BEFORE, apply: true, now: new Date(NOW.getTime() + 1000), shopDomains: ["amt-fresh.myshopify.com"], allowRerun: true });
+    expect(result.changes.filter((change) => change.field === "amount" || change.field.startsWith("fixedAmountOverrides"))).toEqual([]);
+    expect([await rewardOf(ids["orderFixed"]!), await rewardOf(ids["productPrice"]!), await conditionOf(ids["cart"]!)]).toEqual(before);
+    expect((await rewardOf(ids["orderFixed"]!)).value).toMatchObject({ amount: 500 });
+  });
+
+  it("reports the widget's per-market thresholds instead of guessing their currency", async () => {
+    const result = await runFor("amt-marked.myshopify.com", false, { allowRerun: true });
+    expect(result.skipped.some((skip) => skip.table === "app_settings" && /market currency is not stored/.test(skip.reason))).toBe(true);
+    expect(result.rowsWritten).toBe(0);
+  });
+
+  it("never touches a two-decimal shop, even with the same numbers", async () => {
+    const before = [await rewardOf(ids["usdFixed"]!), await conditionOf(ids["usdCart"]!)];
+    const result = await migrateZeroDecimalThresholds(db, { before: BEFORE, apply: true, now: NOW });
+    expect(result.changes.every((change) => change.shop !== "amt-usd.myshopify.com")).toBe(true);
+    expect([await rewardOf(ids["usdFixed"]!), await conditionOf(ids["usdCart"]!)]).toEqual(before);
+    expect(await markersOf(usdAmounts)).toEqual([]);
   });
 });
 
