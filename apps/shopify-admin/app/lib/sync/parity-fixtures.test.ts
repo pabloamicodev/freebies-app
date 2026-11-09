@@ -39,6 +39,8 @@ interface LineSpec {
   unitPrice: string;
   lineType: "gift" | "upsell" | null;
   metadata: Record<string, string> | null;
+  /** The store volume-discount tiers of the line's product (the Function nets them out of cart-value thresholds). */
+  volumeDiscountTiers?: Array<{ qty: number; percent: number }>;
 }
 
 function line(id: string, n: number, metadata: Record<string, string> | null, extra: Partial<LineSpec> = {}): LineSpec {
@@ -56,6 +58,8 @@ interface OfferSpec {
   /** false: the cart units that unlock this gift offer cannot unlock another gift offer. */
   canStack?: false;
   codePromo?: boolean;
+  /** Gift offers with tiered rewards (reward.minCartSubtotalCents): absent means cumulative. */
+  tierMode?: "cumulative" | "highest";
   conditions: Cond[];
   rewards: Array<Record<string, unknown>>;
 }
@@ -203,6 +207,8 @@ interface Scenario {
   customer?: { usage?: Record<string, number> };
   /** Compiled gift-reward keys no source field produces yet (selectionCount), set by hand. */
   giftRewardPatch?: Record<string, unknown>;
+  /** The shop sells in USD; the cart is presented in another currency at this rate. */
+  presentment?: { currency: string; rate: number };
 }
 
 const gift = (id: string, offerId: string, metadata: Record<string, string> = {}, extra: Partial<LineSpec> = {}): LineSpec =>
@@ -316,6 +322,102 @@ function stackingScenarios(): Scenario[] {
       lines: [landingLine("anchor", 1, 1), landingLine("target2", 2, 1), landingLine("target3", 3, 1), giftFor("g52", B, 52)],
       qualified: [A],
       discounted: { [A]: ["target2", "target3"] },
+    },
+  ];
+}
+
+/** One gift offer, a gift per cart-subtotal tier ($70 -> product 50, $110 -> product 51), main condition at the lowest tier. */
+function tierScenarios(): Scenario[] {
+  const tiered = (tierMode?: "cumulative" | "highest", scopeFilter?: Record<string, unknown>): OfferSpec => ({
+    id: A,
+    type: "gift",
+    ...(tierMode ? { tierMode } : {}),
+    conditions: [cartValue(7000, scopeFilter)],
+    rewards: [[50, 7000], [51, 11000]].map(([n, minCartSubtotalCents], sortOrder) => ({
+      id: setRewardId(n!),
+      rewardType: "product_gift",
+      discountType: "free",
+      value: { percentage: 100, currencyCode: "USD" },
+      target: { scope: "cart", variantIds: [V(n!)], productIds: [P(n!)] },
+      quantity: 1,
+      isAutoAdd: true,
+      isCustomerSelectable: false,
+      trackMode: "variant",
+      sortOrder,
+      label: null,
+      minCartSubtotalCents,
+    })),
+  });
+  const tierGift = (id: string, n: number, unitPrice = "30.00") =>
+    gift(id, A, { _promo_engine_reward_id: setRewardId(n) }, { variantId: V(n), productId: P(n), unitPrice });
+  const gifts = [tierGift("g1", 50), tierGift("g2", 51)];
+  const paid = (id: string, n: number, unitPrice: string, extra: Partial<LineSpec> = {}) => line(id, n, null, { unitPrice, ...extra });
+  return [
+    {
+      name: "gift-tiers-cumulative-every-reached-tier",
+      description: "Cumulative gift tiers at $70 and $110: a $120 cart unlocks both gifts.",
+      offers: [tiered()],
+      lines: [paid("l1", 1, "120.00"), ...gifts],
+      qualified: [A],
+      discounted: { [A]: ["g1", "g2"] },
+    },
+    {
+      name: "gift-tiers-cumulative-lower-tier-only",
+      description: "Cumulative gift tiers at $70 and $110: an $80 cart unlocks only the first gift; the second gift line is not discounted.",
+      offers: [tiered("cumulative")],
+      lines: [paid("l1", 1, "80.00"), ...gifts],
+      qualified: [A],
+      discounted: { [A]: ["g1"] },
+    },
+    {
+      name: "gift-tiers-highest-mode-top-tier-only",
+      description: "Highest mode: a $120 cart that reached both tiers only gets the top tier's gift.",
+      offers: [tiered("highest")],
+      lines: [paid("l1", 1, "120.00"), ...gifts],
+      qualified: [A],
+      discounted: { [A]: ["g2"] },
+    },
+    {
+      name: "gift-tiers-highest-mode-lower-tier-when-top-unmet",
+      description: "Highest mode: an $80 cart has only reached the first tier, so that tier's gift is discounted.",
+      offers: [tiered("highest")],
+      lines: [paid("l1", 1, "80.00"), ...gifts],
+      qualified: [A],
+      discounted: { [A]: ["g1"] },
+    },
+    {
+      name: "gift-tiers-excluded-products-do-not-count",
+      description: "A $50 line of an excluded product does not count toward the tiers: $100 of eligible items reaches only the $70 tier.",
+      offers: [tiered(undefined, { excludeProductIds: [P(9)] })],
+      lines: [paid("l1", 1, "100.00"), paid("l2", 9, "50.00"), ...gifts],
+      qualified: [A],
+      discounted: { [A]: ["g1"] },
+    },
+    {
+      name: "gift-tiers-gift-lines-do-not-count",
+      description: "Gift lines never count toward a tier: $100 of paid items plus $120 of gifts reaches only the $70 tier.",
+      offers: [tiered()],
+      lines: [paid("l1", 1, "100.00"), tierGift("g1", 50, "60.00"), tierGift("g2", 51, "60.00")],
+      qualified: [A],
+      discounted: { [A]: ["g1"] },
+    },
+    {
+      name: "gift-tiers-projected-volume-discount-counts",
+      description:
+        "The projected volume discount is netted out of the tier cart value: 3 x $40 with a 20% volume tier is $96, below the $110 tier although the raw subtotal is $120.",
+      offers: [tiered()],
+      lines: [paid("l1", 2, "40.00", { quantity: 3, volumeDiscountTiers: [{ qty: 3, percent: 20 }] }), ...gifts],
+      qualified: [A],
+      discounted: { [A]: ["g1"] },
+    },
+    {
+      name: "gift-tiers-thresholds-scale-with-currency",
+      description: "Shop currency USD, cart in EUR at 1.5: the $70 and $110 tiers become 105 and 165 EUR, so a 120 EUR cart reaches only the first.",
+      offers: [tiered()],
+      presentment: { currency: "EUR", rate: 1.5 },
+      lines: [paid("l1", 1, "120.00"), ...gifts],
+      qualified: [A],
+      discounted: { [A]: ["g1"] },
     },
   ];
 }
@@ -1258,12 +1360,13 @@ const SCENARIOS: Scenario[] = [
   },
   ...stackingScenarios(),
   ...limitsScenarios(),
+  ...tierScenarios(),
 ];
 
 function build(scenario: Scenario) {
   const compiled = scenario.offers.map((spec) =>
     compileOfferConfig(
-      { id: spec.id, type: spec.type, priority: spec.priority ?? 100, publicTitle: null } as never,
+      { id: spec.id, type: spec.type, priority: spec.priority ?? 100, publicTitle: null, ...(spec.tierMode ? { tierMode: spec.tierMode } : {}) } as never,
       spec.conditions.map(([conditionType, value, scope], index) => ({
         id: `${spec.id}-c${index}`,
         conditionType,
@@ -1302,6 +1405,7 @@ function build(scenario: Scenario) {
         priority: spec.priority ?? 100,
         stopLowerPriority: spec.stopLowerPriority ?? false,
         ...(spec.canStack === false ? { canStackWithGiftOffers: false } : {}),
+        ...(spec.tierMode ? { tierMode: spec.tierMode } : {}),
         conditions: spec.conditions.map(([conditionType, value, scope], index) => ({
           conditionType,
           value,
@@ -1313,9 +1417,10 @@ function build(scenario: Scenario) {
       })),
     },
     config,
+    ...(scenario.presentment ? { shopCurrency: "USD" } : {}),
     cart: {
-      currency: "USD",
-      presentmentCurrencyRate: 1,
+      currency: scenario.presentment?.currency ?? "USD",
+      presentmentCurrencyRate: scenario.presentment?.rate ?? 1,
       country: scenario.country === undefined ? "US" : scenario.country,
       customerTags: [] as string[],
       enteredCodes: [] as string[],

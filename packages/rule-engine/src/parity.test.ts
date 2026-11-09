@@ -55,7 +55,6 @@ interface ConfigReward {
   targetProductIds?: string[];
   targetVariantIds?: string[];
   maxQuantity?: number;
-  mcs?: number;
   selectable?: boolean;
   selectionCount?: number;
   maxUnitsTotal?: number;

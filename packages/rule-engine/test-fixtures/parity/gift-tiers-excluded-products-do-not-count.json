@@ -29,7 +29,7 @@
         ],
         "rewards": [
           {
-            "id": "dddddddd-0000-4000-8000-000000000051",
+            "id": "dddddddd-0000-4000-8000-000000000050",
             "rewardType": "product_gift",
             "discountType": "free",
             "value": {
@@ -37,6 +37,7 @@
               "currencyCode": "USD"
             },
             "target": {
+              "scope": "cart",
               "variantIds": [
                 "gid://shopify/ProductVariant/50"
               ],
@@ -53,7 +54,7 @@
             "minCartSubtotalCents": 7000
           },
           {
-            "id": "dddddddd-0000-4000-8000-000000000052",
+            "id": "dddddddd-0000-4000-8000-000000000051",
             "rewardType": "product_gift",
             "discountType": "free",
             "value": {
@@ -61,6 +62,7 @@
               "currencyCode": "USD"
             },
             "target": {
+              "scope": "cart",
               "variantIds": [
                 "gid://shopify/ProductVariant/51"
               ],
@@ -72,7 +74,7 @@
             "isAutoAdd": true,
             "isCustomerSelectable": false,
             "trackMode": "variant",
-            "sortOrder": 0,
+            "sortOrder": 1,
             "label": null,
             "minCartSubtotalCents": 11000
           }
@@ -91,6 +93,9 @@
         "version": 1,
         "offerType": "gift",
         "priority": 100,
+        "excludedProductIds": [
+          "gid://shopify/Product/9"
+        ],
         "giftVariantIds": [
           "gid://shopify/ProductVariant/50",
           "gid://shopify/ProductVariant/51"
@@ -101,7 +106,7 @@
         ],
         "giftRewards": [
           {
-            "id": "dddddddd-0000-4000-8000-000000000051",
+            "id": "dddddddd-0000-4000-8000-000000000050",
             "targetProductIds": [
               "gid://shopify/Product/50"
             ],
@@ -114,7 +119,7 @@
             "mcs": 7000
           },
           {
-            "id": "dddddddd-0000-4000-8000-000000000052",
+            "id": "dddddddd-0000-4000-8000-000000000051",
             "targetProductIds": [
               "gid://shopify/Product/51"
             ],
@@ -127,11 +132,8 @@
             "mcs": 11000
           }
         ],
-        "excludedProductIds": [
-          "gid://shopify/Product/9"
-        ],
         "cartValueThresholdCents": 7000,
-        "maxGiftQuantity": 1
+        "maxGiftQuantity": 2
       }
     ],
     "version": "parity",
@@ -171,7 +173,7 @@
         "lineType": "gift",
         "metadata": {
           "_promo_engine_offer_id": "aaaaaaaa-0000-4000-8000-000000000001",
-          "_promo_engine_reward_id": "dddddddd-0000-4000-8000-000000000051",
+          "_promo_engine_reward_id": "dddddddd-0000-4000-8000-000000000050",
           "_promo_engine_offer_version": "1"
         }
       },
@@ -184,7 +186,7 @@
         "lineType": "gift",
         "metadata": {
           "_promo_engine_offer_id": "aaaaaaaa-0000-4000-8000-000000000001",
-          "_promo_engine_reward_id": "dddddddd-0000-4000-8000-000000000052",
+          "_promo_engine_reward_id": "dddddddd-0000-4000-8000-000000000051",
           "_promo_engine_offer_version": "1"
         }
       }

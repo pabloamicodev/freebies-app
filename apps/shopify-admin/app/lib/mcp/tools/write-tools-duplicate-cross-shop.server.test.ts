@@ -186,6 +186,21 @@ describe("promo_duplicate across shops", () => {
     expect(source!.value).toMatchObject({ productIds: [P(1)] });
   });
 
+  it("a tiered gift offer keeps its tier mode and every tier threshold", async () => {
+    const shopId = shopIds["src"]!;
+    const id = await seedOffer(db, shopId, { type: "gift", status: "active", internalName: `[MCP test] tiers ${Math.random().toString(36).slice(2, 8)}`, tierMode: "highest" });
+    for (const [sortOrder, [variant, min]] of ([[1, 7000], [2, 11000]] as const).entries()) {
+      await db.insert(offerRewards).values({ shopId, offerId: id, rewardType: "product_gift", discountType: "free", value: { amount: 100 }, target: { variantIds: [V(variant)] }, isAutoAdd: true, sortOrder, minCartSubtotalCents: min });
+    }
+    const { done } = await twoStep({ ref: refOf(id), targetShop: DST });
+    const newId = body(done).data["offerId"] as string;
+    const [copy] = await db.select().from(offers).where(eq(offers.id, newId));
+    expect(copy).toMatchObject({ shopId: shopIds["dst"], tierMode: "highest" });
+    const rewards = (await db.select().from(offerRewards).where(eq(offerRewards.offerId, newId))).sort((x, y) => x.sortOrder - y.sortOrder);
+    expect(rewards.map((r) => r.minCartSubtotalCents)).toEqual([7000, 11000]);
+    expect(rewards.map((r) => r.target)).toEqual([{ variantIds: [V(1001)] }, { variantIds: [V(1002)] }]);
+  });
+
   it("partial match: unmatched references are stripped and listed in warnings, the draft stays draft", async () => {
     const id = await sourceOffer({ gone: true });
     const { dry, done } = await twoStep({ ref: refOf(id), targetShop: DST });
