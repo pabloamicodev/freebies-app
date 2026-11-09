@@ -43,7 +43,7 @@ const snapshot = async (shopId: string) => ({
   conditions: (await db.select({ id: offerConditions.id, value: offerConditions.value, updatedAt: offerConditions.updatedAt }).from(offerConditions).where(eq(offerConditions.shopId, shopId))).sort((a, b) => a.id.localeCompare(b.id)),
   rewards: (await db.select({ id: offerRewards.id, value: offerRewards.value, min: offerRewards.minCartSubtotalCents, updatedAt: offerRewards.updatedAt }).from(offerRewards).where(eq(offerRewards.shopId, shopId))).sort((a, b) => a.id.localeCompare(b.id)),
 });
-const run = (apply: boolean, extra: { before?: Date; shopDomains?: string[] } = {}) => migrateZeroDecimalThresholds(db, { before: BEFORE, apply, now: NOW, ...extra });
+const run = (apply: boolean, extra: { before?: Date; shopDomains?: string[]; allowRerun?: boolean } = {}) => migrateZeroDecimalThresholds(db, { before: BEFORE, apply, now: NOW, ...extra });
 
 describe("zero-decimal threshold migration", () => {
   it("dry-run reports every field and writes nothing", async () => {
@@ -94,12 +94,34 @@ describe("zero-decimal threshold migration", () => {
     await seed(jpy, "saved-after-fix", NEW, "JPY");
     const odd = await seed(jpy, "odd-values", OLD, "JPY");
     await db.update(offerConditions).set({ value: { thresholdCents: 5050, currencyCode: "JPY", includeGiftValues: false }, updatedAt: OLD }).where(eq(offerConditions.id, odd.cartValue));
-    const result = await run(true);
+    const result = await run(true, { allowRerun: true });
     expect(result.changes.some((change) => change.table === "offer_conditions" && change.id === odd.cartValue)).toBe(false);
     expect(result.skipped.some((skip) => skip.id === odd.cartValue && /not a multiple of 100/.test(skip.reason))).toBe(true);
     const rows = await snapshot(jpy);
     expect(rows.conditions.some((row) => (row.value as { thresholdCents?: number }).thresholdCents === 500000)).toBe(true);
     expect((rows.conditions.find((row) => (row.value as { thresholdCents?: number }).thresholdCents === 5050))!.value).toMatchObject({ thresholdCents: 5050 });
+  });
+
+  it("a later cutoff does not divide a migrated shop again unless asked to", async () => {
+    const before = await snapshot(jpy);
+    const later = new Date("2026-11-20T00:00:00Z");
+    const refused = await migrateZeroDecimalThresholds(db, { before: later, apply: true, now: new Date("2026-11-21T00:00:00Z") });
+    expect(refused.alreadyMigrated).toEqual(["mig-jpy.myshopify.com"]);
+    expect(refused.changes).toEqual([]);
+    expect(refused.rowsWritten).toBe(0);
+    expect(await snapshot(jpy)).toEqual(before);
+    const forced = await migrateZeroDecimalThresholds(db, { before: later, apply: false, now: new Date("2026-11-21T00:00:00Z"), allowRerun: true });
+    expect(forced.alreadyMigrated).toEqual([]);
+    expect(forced.changes.length).toBeGreaterThan(0);
+  });
+
+  it("a dry run does not mark a shop", async () => {
+    const fresh = await seedShop(db, "mig-fresh.myshopify.com");
+    await db.update(shops).set({ currencyCode: "KRW" }).where(eq(shops.id, fresh));
+    await run(false, { shopDomains: ["mig-fresh.myshopify.com"] });
+    const result = await run(true, { shopDomains: ["mig-fresh.myshopify.com"] });
+    expect(result.alreadyMigrated).toEqual([]);
+    expect((await run(true, { shopDomains: ["mig-fresh.myshopify.com"] })).alreadyMigrated).toEqual(["mig-fresh.myshopify.com"]);
   });
 
   it("refuses a cutoff in the future", async () => {

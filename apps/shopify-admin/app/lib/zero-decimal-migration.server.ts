@@ -1,5 +1,5 @@
 import { and, eq, lt } from "drizzle-orm";
-import { offerConditions, offerRewards, shops, type Db } from "@promo/db";
+import { appSettings, offerConditions, offerRewards, shops, type Db } from "@promo/db";
 import { isZeroDecimalCurrency } from "./money.js";
 
 /**
@@ -14,7 +14,12 @@ export interface ZeroDecimalMigrationOptions {
   /** myshopify domains; every zero-decimal shop when empty. */
   shopDomains?: string[];
   now?: Date;
+  /** A shop already migrated is refused (a later cutoff would divide it again) unless this is set. */
+  allowRerun?: boolean;
 }
+
+/** app_settings key written, in the same transaction as the rows, for each migrated shop. */
+export const MIGRATION_MARKER_KEY = "migrations.zero_decimal_thresholds";
 
 export interface ThresholdChange {
   shop: string;
@@ -30,6 +35,8 @@ export interface ZeroDecimalMigrationResult {
   shopsScanned: number;
   changes: ThresholdChange[];
   skipped: Array<{ shop: string; table: string; id: string; reason: string }>;
+  /** Shops left alone because an earlier --apply already migrated them. */
+  alreadyMigrated: string[];
   rowsWritten: number;
 }
 
@@ -123,9 +130,17 @@ export async function migrateZeroDecimalThresholds(db: Db, options: ZeroDecimalM
   const targets = allShops.filter(
     (shop) => isZeroDecimalCurrency(shop.currencyCode) && (!options.shopDomains?.length || options.shopDomains.includes(shop.domain)),
   );
-  const result: ZeroDecimalMigrationResult = { shopsScanned: targets.length, changes: [], skipped: [], rowsWritten: 0 };
+  const result: ZeroDecimalMigrationResult = { shopsScanned: targets.length, changes: [], skipped: [], alreadyMigrated: [], rowsWritten: 0 };
+
+  const marked = new Set(
+    (await db.select({ shopId: appSettings.shopId }).from(appSettings).where(eq(appSettings.key, MIGRATION_MARKER_KEY))).map((row) => row.shopId),
+  );
 
   for (const shop of targets) {
+    if (marked.has(shop.id) && !options.allowRerun) {
+      result.alreadyMigrated.push(shop.domain);
+      continue;
+    }
     const currency = shop.currencyCode!;
     const conditions = await db
       .select({ id: offerConditions.id, offerId: offerConditions.offerId, conditionType: offerConditions.conditionType, value: offerConditions.value })
@@ -168,9 +183,14 @@ export async function migrateZeroDecimalThresholds(db: Db, options: ZeroDecimalM
       writes.push((executor) => executor.update(offerRewards).set({ ...set, updatedAt: now }).where(and(eq(offerRewards.shopId, shop.id), eq(offerRewards.id, reward.id))));
     }
 
-    if (options.apply && writes.length > 0) {
+    if (options.apply) {
+      const value = JSON.stringify({ at: now.toISOString(), before: options.before.toISOString(), rows: writes.length });
       await db.transaction(async (tx) => {
         for (const write of writes) await write(tx);
+        await tx
+          .insert(appSettings)
+          .values({ shopId: shop.id, key: MIGRATION_MARKER_KEY, value })
+          .onConflictDoUpdate({ target: [appSettings.shopId, appSettings.key], set: { value, updatedAt: now } });
       });
       result.rowsWritten += writes.length;
     }

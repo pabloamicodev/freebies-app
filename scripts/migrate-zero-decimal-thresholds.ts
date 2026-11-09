@@ -1,11 +1,12 @@
 /**
  * One-off: divides the x100 thresholds that zero-decimal shops (JPY, KRW, ...) saved before the unit fix.
  *
- *   tsx scripts/migrate-zero-decimal-thresholds.ts --before <ISO timestamp> [--shop <domain>]... [--env <file>] [--apply]
+ *   tsx scripts/migrate-zero-decimal-thresholds.ts --before <ISO timestamp> [--shop <domain>]... [--env <file>] [--apply] [--allow-rerun]
  *
  * Dry-run (default) only reads and prints each change. --apply writes, in one transaction per shop.
  * --before is required: rows updated at or after it are taken as already migrated (every write stamps updated_at with now,
- * so a second run is a no-op). Use the moment the unit fix was deployed. Shops on two-decimal currencies are never read.
+ * so a second run with the same cutoff is a no-op). Each migrated shop is also marked in app_settings and refused afterwards,
+ * whatever the cutoff, unless --allow-rerun is passed. Use the moment the unit fix was deployed. Shops on two-decimal currencies are never read.
  * After --apply, republish the shop's active offers (the Functions read the compiled config, not these rows).
  */
 
@@ -44,10 +45,11 @@ async function main() {
   ]);
   console.log(apply ? "APPLY mode: writing changes." : "DRY-RUN: no writes. Pass --apply to write.");
   try {
-    const result = await migrateZeroDecimalThresholds(getDb(), { before, apply, shopDomains: args("--shop") });
+    const result = await migrateZeroDecimalThresholds(getDb(), { before, apply, shopDomains: args("--shop"), allowRerun: process.argv.includes("--allow-rerun") });
     for (const change of result.changes) {
       console.log(`${change.shop} ${change.table} ${change.id} (offer ${change.offerId}) ${change.field}: ${change.from} -> ${change.to}`);
     }
+    for (const domain of result.alreadyMigrated) console.log(`REFUSED ${domain}: already migrated (pass --allow-rerun to run it again)`);
     for (const skip of result.skipped) console.log(`SKIPPED ${skip.shop} ${skip.table} ${skip.id}: ${skip.reason}`);
     console.log(`summary: shops=${result.shopsScanned} changes=${result.changes.length} skipped=${result.skipped.length} rowsWritten=${result.rowsWritten}`);
   } finally {
