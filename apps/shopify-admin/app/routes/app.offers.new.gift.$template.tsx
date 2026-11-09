@@ -324,7 +324,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const stopLowerPriority = formData.get("stopLower") === "true";
   const giftValueCountsForOther = formData.get("giftAppliesOther") === "true";
 
-  const normalizedSubconditions = normalizeGiftSubconditions(subconditions);
+  const normalizedSubconditions = normalizeGiftSubconditions(subconditions, shopCurrency);
   if (!normalizedSubconditions.success) return { error: normalizedSubconditions.error };
   const normalizedSubconditionRows = normalizedSubconditions.data;
 

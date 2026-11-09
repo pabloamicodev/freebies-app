@@ -105,7 +105,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
-  const { shopId, db, session, timezone } = context;
+  const { shopId, db, session, timezone, currencyCode: shopCurrency } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
@@ -274,7 +274,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
   const subconditionsResult = parseJsonRecord(formData, "subconditions");
   if (subconditionsResult.error) return { error: subconditionsResult.error };
-  const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!);
+  const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!, shopCurrency);
   if (!normalizedSubconditions.success) return { error: normalizedSubconditions.error };
   const normalizedSubconditionRows = normalizedSubconditions.data;
 

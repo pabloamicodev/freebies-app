@@ -1,5 +1,5 @@
 import type { NormalizedCart, EligibilityReason, CurrencyContext } from "@promo/shared-types";
-import { ok, err, toCartUnits, type Result } from "@promo/shared-types";
+import { ok, err, overrideToCartUnits, toCartUnits, type Result } from "@promo/shared-types";
 import { extractQualifyingLines } from "../cart-parser.js";
 
 export interface CartValueMultiplierConditionValue {
@@ -53,7 +53,7 @@ export function evaluateCartValueMultiplier(
   const conditionCurrency = (condition.currencyCode ?? currency.shopCurrencyCode).toUpperCase();
   let thresholdCents = toCartUnits(condition.thresholdCents, conditionCurrency);
   if (condition.currencyOverrides?.[activeCurrency] !== undefined) {
-    thresholdCents = toCartUnits(condition.currencyOverrides[activeCurrency]!, activeCurrency);
+    thresholdCents = overrideToCartUnits(condition.currencyOverrides[activeCurrency]!, activeCurrency, conditionCurrency);
   } else if (
     // Saved conditions may lack currencyCode; their thresholds are in the shop currency.
     activeCurrency !== conditionCurrency &&

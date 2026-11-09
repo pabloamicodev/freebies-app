@@ -1,5 +1,5 @@
 import type { NormalizedCart, EligibilityReason, CurrencyContext } from "@promo/shared-types";
-import { ok, err, toCartUnits, type Result } from "@promo/shared-types";
+import { ok, err, overrideToCartUnits, toCartUnits, type Result } from "@promo/shared-types";
 import { extractQualifyingLines, sumQualifyingValueNet } from "../cart-parser.js";
 
 export interface CartValueConditionValue {
@@ -57,7 +57,7 @@ export function evaluateCartValue(
   let thresholdCents = toCartUnits(condition.thresholdCents, conditionCurrency);
   let maxCents = condition.maxCents === undefined ? undefined : toCartUnits(condition.maxCents, conditionCurrency);
   if (condition.currencyOverrides?.[activeCurrency] !== undefined) {
-    thresholdCents = toCartUnits(condition.currencyOverrides[activeCurrency]!, activeCurrency);
+    thresholdCents = overrideToCartUnits(condition.currencyOverrides[activeCurrency]!, activeCurrency, conditionCurrency);
   } else if (
     activeCurrency !== conditionCurrency &&
     currency.exchangeRate
@@ -65,7 +65,7 @@ export function evaluateCartValue(
     thresholdCents = Math.ceil(toCartUnits(condition.thresholdCents, conditionCurrency) * currency.exchangeRate);
   }
   if (condition.maxCurrencyOverrides?.[activeCurrency] !== undefined) {
-    maxCents = toCartUnits(condition.maxCurrencyOverrides[activeCurrency]!, activeCurrency);
+    maxCents = overrideToCartUnits(condition.maxCurrencyOverrides[activeCurrency]!, activeCurrency, conditionCurrency);
   } else if (
     maxCents !== undefined &&
     activeCurrency !== conditionCurrency &&

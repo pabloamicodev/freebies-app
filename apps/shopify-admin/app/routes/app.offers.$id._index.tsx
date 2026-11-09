@@ -3,6 +3,7 @@ import { parseUuidParam } from "../lib/route-params.js";
 import { useState } from "react";
 import { SUPPORTED_CURRENCIES, validateConditionValue, validateRewardPayload, ConditionTypeSchema, ConditionScopeSchema, resolveOnlyMatchedLines, resolveRejectUnmatchedLines } from "@promo/shared-types";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { formatStoredAmount, fromStoredAmount, isZeroDecimalCurrency, toStoredAmount } from "../lib/money.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { cartLabelsFromForm, ok, parseJsonRecord, parseJsonStringArray, parseDateRange, toZonedLocalInput } from "../lib/offer-validation.server.js";
@@ -367,7 +368,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     case "save_subconditions": {
       const subResult = parseJsonRecord(formData, "subconditions");
       if (subResult.error) return { error: subResult.error };
-      const normalized = normalizeOfferSubconditions(subResult.data!);
+      const normalized = normalizeOfferSubconditions(subResult.data!, shopCurrencyCode);
       if (!normalized.success) return { error: normalized.error };
 
       // Replace every sub-condition atomically: this editor manages the whole
@@ -784,6 +785,7 @@ function ConditionCard({
   initialValue,
   onDelete,
   isCodePromo,
+  shopCurrency,
 }: {
   conditionId: string;
   conditionType: string;
@@ -791,6 +793,7 @@ function ConditionCard({
   initialValue: ConditionValue;
   onDelete: () => void;
   isCodePromo: boolean;
+  shopCurrency: string;
 }) {
   const fetcher = useFetcher();
   const isSaving = fetcher.state !== "idle";
@@ -885,10 +888,10 @@ function ConditionCard({
                     className="b-input"
                     type="number"
                     style={{ paddingLeft: 22 }}
-                    value={String((val.thresholdCents as number ?? 50000) / 100)}
-                    onChange={(e) => update({ thresholdCents: Math.round(parseFloat(e.target.value || "0") * 100) })}
+                    value={String(fromStoredAmount(val.thresholdCents as number ?? 50000, shopCurrency))}
+                    onChange={(e) => update({ thresholdCents: toStoredAmount(parseFloat(e.target.value || "0"), shopCurrency) })}
                     onBlur={() => save()}
-                    step="0.01"
+                    step={isZeroDecimalCurrency(shopCurrency) ? "1" : "0.01"}
                   />
                 </div>
               </div>
@@ -936,8 +939,8 @@ function ConditionCard({
                 className="b-input"
                 type="number"
                 style={{ paddingLeft: 22 }}
-                value={String((val.thresholdCents as number ?? 50000) / 100)}
-                onChange={(e) => update({ thresholdCents: Math.round(parseFloat(e.target.value || "0") * 100) })}
+                value={String(fromStoredAmount(val.thresholdCents as number ?? 50000, shopCurrency))}
+                onChange={(e) => update({ thresholdCents: toStoredAmount(parseFloat(e.target.value || "0"), shopCurrency) })}
                 onBlur={() => save()}
               />
             </div>
@@ -1260,9 +1263,9 @@ function conditionSummary(conditionType: string, value: ConditionValue, currency
   const conditionCurrency = (v.currencyCode as string | undefined) ?? currencyCode;
   const fmt = (cents: number) => {
     try {
-      return getConditionCurrencyFormatter(conditionCurrency).format(cents / 100);
+      return getConditionCurrencyFormatter(conditionCurrency).format(fromStoredAmount(cents, currencyCode));
     } catch {
-      return `${conditionCurrency} ${(cents / 100).toFixed(2)}`;
+      return `${conditionCurrency} ${formatStoredAmount(cents, currencyCode)}`;
     }
   };
   switch (conditionType) {
@@ -1439,7 +1442,7 @@ export default function OfferDetailPage() {
   const mainConditions = conditions.filter((c) => c.scope === "main");
   const subConditions = conditions.filter((c) => c.scope === "sub");
 
-  const initialSubs = subconditionsFromRows(subConditions);
+  const initialSubs = subconditionsFromRows(subConditions, shopCurrencyCode);
   const [subState, setSubField] = useObjectState(() => ({
     subModalOpen: false,
     activeSubs: initialSubs.activeSubs,
@@ -1507,9 +1510,9 @@ export default function OfferDetailPage() {
     const valueFirst = valueFirstType(newCondType);
     if (valueFirst && !validateConditionValue(valueFirst, newCondValue).success) return;
     const defaults: Record<string, object> = {
-      cart_value: { thresholdCents: 50000, currencyCode: "USD", appliesTo: "any_product" },
+      cart_value: { thresholdCents: 50000, currencyCode: shopCurrencyCode, appliesTo: "any_product" },
       cart_quantity: { minQuantity: 1, appliesTo: "any_product" },
-      cart_value_multiplier: { thresholdCents: 50000, currencyCode: "USD", appliesTo: "any_product" },
+      cart_value_multiplier: { thresholdCents: 50000, currencyCode: shopCurrencyCode, appliesTo: "any_product" },
       specific_product: { minQtyPerProduct: 1, multiplyGifts: false, giftsMatchProducts: false, trackMode: "variant", appliesTo: "specific_products", variantIds: [] },
       page_url: { patterns: [""], matchMode: "starts_with", caseSensitive: false },
       page_types: { pageTypes: ["home", "collection", "product"] },
@@ -1796,6 +1799,7 @@ export default function OfferDetailPage() {
                   initialValue={c.value as ConditionValue}
                   onDelete={() => deleteCondition(c.id)}
                   isCodePromo={isCodePromo}
+                  shopCurrency={shopCurrencyCode}
                 />
               ))}
 

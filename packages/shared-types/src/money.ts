@@ -34,3 +34,11 @@ export function isZeroDecimalCurrency(currency: string | null | undefined): bool
 export function toCartUnits(stored: number, currency: string | null | undefined): number {
   return isZeroDecimalCurrency(currency) ? stored * 100 : stored;
 }
+
+/**
+ * A per-currency override is in the active currency's own minor unit. Only zero-decimal shops get it lifted: shops on two-decimal
+ * currencies keep comparing overrides as stored (the multicurrency editor wrote them x100 for every market currency).
+ */
+export function overrideToCartUnits(stored: number, activeCurrency: string, conditionCurrency: string | null | undefined): number {
+  return isZeroDecimalCurrency(conditionCurrency) ? toCartUnits(stored, activeCurrency) : stored;
+}

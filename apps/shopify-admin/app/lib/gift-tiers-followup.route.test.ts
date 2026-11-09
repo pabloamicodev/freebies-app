@@ -128,13 +128,37 @@ describe("zero-decimal currencies: thresholds are stored in the currency's own m
     await run(conditionsRoute.action, post({ intent: "add_condition", conditionType: "cart_value", scope: "main", threshold: "30", currencyCode: "USD" }), { id: usdOffer });
     const [usd] = await db.select().from(offerConditions).where(eq(offerConditions.offerId, usdOffer));
     expect(usd!.value).toMatchObject({ thresholdCents: 3000, currencyCode: "USD" });
-    // The default for a USD-or-other 2-decimal shop stays USD, exactly as before.
+    // A new condition is tagged with the shop currency, whichever it is; the stored amount is unchanged for two-decimal shops.
     useShop("usd");
     ctx.currency = "EUR";
     const eurOffer = await seedOffer(db, usdShop, { type: "gift", status: "draft", internalName: "eur-cond" });
     await run(conditionsRoute.action, post({ intent: "add_condition", conditionType: "cart_value", scope: "main", threshold: "30" }), { id: eurOffer });
     const [eur] = await db.select().from(offerConditions).where(eq(offerConditions.offerId, eurOffer));
-    expect(eur!.value).toMatchObject({ thresholdCents: 3000, currencyCode: "USD" });
+    expect(eur!.value).toMatchObject({ thresholdCents: 3000, currencyCode: "EUR" });
+  });
+
+  it("the unit comes from the shop currency, never from the typed currency tag", async () => {
+    useShop("usd");
+    const usdOffer = await seedOffer(db, usdShop, { type: "gift", status: "draft", internalName: "tag-jpy-on-usd" });
+    await run(conditionsRoute.action, post({ intent: "add_condition", conditionType: "cart_value", scope: "main", threshold: "50", currencyCode: "JPY" }), { id: usdOffer });
+    const [stored] = await db.select().from(offerConditions).where(eq(offerConditions.offerId, usdOffer));
+    expect(stored!.value).toMatchObject({ thresholdCents: 5000, currencyCode: "JPY" });
+    useShop("jpy");
+    const jpyOffer = await seedOffer(db, jpyShop, { type: "gift", status: "draft", internalName: "tag-usd-on-jpy" });
+    await run(conditionsRoute.action, post({ intent: "add_condition", conditionType: "cart_value", scope: "main", threshold: "5000", currencyCode: "USD" }), { id: jpyOffer });
+    const [other] = await db.select().from(offerConditions).where(eq(offerConditions.offerId, jpyOffer));
+    expect(other!.value).toMatchObject({ thresholdCents: 5000 });
+  });
+
+  it("customer-spend amounts are whole yen on a JPY shop and cents on a USD shop", async () => {
+    useShop("jpy");
+    const jpyOffer = await seedOffer(db, jpyShop, { type: "gift", status: "draft", internalName: "spend-jpy" });
+    await run(conditionsRoute.action, post({ intent: "add_condition", conditionType: "order_history_total_spent", scope: "sub", orderValue: "20000", operator: "gte" }), { id: jpyOffer });
+    expect((await db.select().from(offerConditions).where(eq(offerConditions.offerId, jpyOffer)))[0]!.value).toMatchObject({ valueCents: 20000 });
+    useShop("usd");
+    const usdOffer = await seedOffer(db, usdShop, { type: "gift", status: "draft", internalName: "spend-usd" });
+    await run(conditionsRoute.action, post({ intent: "add_condition", conditionType: "order_history_total_spent", scope: "sub", orderValue: "200", operator: "gte" }), { id: usdOffer });
+    expect((await db.select().from(offerConditions).where(eq(offerConditions.offerId, usdOffer)))[0]!.value).toMatchObject({ valueCents: 20000 });
   });
 
   it("the gift wizard stores its cart-value threshold in the shop currency's unit", async () => {
@@ -230,6 +254,61 @@ describe("CSV round trip keeps gift tiers and tier mode", () => {
       const [condition] = await db.select().from(offerConditions).where(eq(offerConditions.offerId, offer.id));
       expect(condition!.value).toEqual({ thresholdCents: cents, currencyCode: "USD", includeGiftValues: false });
     }
+  });
+
+  it("a gift without a threshold stays in its tiered offer instead of becoming another one", async () => {
+    useShop("usd");
+    const id = await seedGift(usdShop, "c1-src", "cumulative", [[5000, [V(1)]]]);
+    await db.insert(offerRewards).values({ shopId: usdShop, offerId: id, rewardType: "product_gift", discountType: "free", value: { amount: 100, currencyCode: "USD" }, target: { scope: "cart", variantIds: [V(3)] }, quantity: 1, isAutoAdd: true, trackMode: "variant", sortOrder: 1, minCartSubtotalCents: null });
+    const before = (await db.select({ id: offers.id }).from(offers)).length;
+    const result = await importCsv((await exportCsv(id)).replaceAll("c1-src", "c1-copy"));
+    expect(result?.errors).toEqual([]);
+    expect(result?.created).toHaveLength(1);
+    expect((await db.select({ id: offers.id }).from(offers)).length).toBe(before + 1);
+    const rewards = await rewardsOf((await offerNamed("c1-copy"))!.id);
+    expect(rewards.map((r) => r.minCartSubtotalCents)).toEqual([5000, null]);
+  });
+
+  it("keeps each tier's discount type, value, auto-add and track mode", async () => {
+    useShop("usd");
+    const id = await seedGift(usdShop, "c2-src", "cumulative", [[5000, [V(1)]], [9000, [V(2)]]]);
+    const [first, second] = await rewardsOf(id);
+    await db.update(offerRewards).set({ discountType: "percentage", value: { amount: 50, currencyCode: "USD" }, trackMode: "product" }).where(eq(offerRewards.id, first!.id));
+    await db.update(offerRewards).set({ discountType: "fixed_amount", value: { amount: 1000, currencyCode: "USD" }, isAutoAdd: false }).where(eq(offerRewards.id, second!.id));
+    await importCsv((await exportCsv(id)).replaceAll("c2-src", "c2-copy"));
+    const rewards = await rewardsOf((await offerNamed("c2-copy"))!.id);
+    expect(rewards.map((r) => [r.discountType, r.value, r.isAutoAdd, r.trackMode])).toEqual([
+      ["percentage", { amount: 50, currencyCode: "USD" }, true, "product"],
+      ["fixed_amount", { amount: 1000, currencyCode: "USD" }, false, "variant"],
+    ]);
+  });
+
+  it("a row with extra columns invalidates its whole offer", async () => {
+    useShop("usd");
+    const csv = `${header}\nW,wide-offer,t,gift,${V(1)},1,cumulative,5000\nW,wide-offer,t,gift,${V(2)},1,cumulative,9000,extra`;
+    const result = await importCsv(csv);
+    expect(result?.created).toEqual([]);
+    expect(result?.errors?.[0]).toMatchObject({ row: 3, message: expect.stringMatching(/more columns/) });
+    expect(await offerNamed("wide-offer")).toBeUndefined();
+  });
+
+  it("reports the row that actually failed", async () => {
+    useShop("usd");
+    const result = await importCsv(`${header}\nR,row-report,t,gift,${V(1)},1,cumulative,5000\nR,row-report,t,gift,${V(2)},1,cumulative,9000\nR,row-report,t,gift,${V(3)},1,cumulative,9000`);
+    expect(result?.errors?.[0]).toMatchObject({ row: 4, message: expect.stringMatching(/unique/) });
+  });
+
+  it("refuses a variant that is not in this shop's catalog, and a file exported from another currency", async () => {
+    useShop("usd");
+    const unknown = await importCsv(`${header}\nU,unknown-variant,t,gift,${V(999)},1,cumulative,5000`);
+    expect(unknown?.created).toEqual([]);
+    expect(unknown?.errors?.[0]?.message).toMatch(/not in this shop's catalog/);
+    expect(await offerNamed("unknown-variant")).toBeUndefined();
+    const foreign = await importCsv(`${header},shop_currency_code\nF,foreign-currency,t,gift,${V(1)},1,cumulative,5000,JPY`);
+    expect(foreign?.created).toEqual([]);
+    expect(foreign?.errors?.[0]?.message).toMatch(/differs from this shop's currency/);
+    const same = await importCsv(`${header},shop_currency_code\nS,same-currency,t,gift,${V(1)},1,cumulative,5000,usd`);
+    expect(same?.errors).toEqual([]);
   });
 
   it("an export of an untiered offer has empty tier columns and the new fallback column", async () => {

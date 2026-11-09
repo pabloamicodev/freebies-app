@@ -129,7 +129,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
   const subconditionsResult = parseJsonRecord(formData, "subconditions");
   if (subconditionsResult.error) return { error: subconditionsResult.error };
-  const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!);
+  const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!, shopCurrency);
   if (!normalizedSubconditions.success) return { error: normalizedSubconditions.error };
   const normalizedSubconditionRows = normalizedSubconditions.data;
 

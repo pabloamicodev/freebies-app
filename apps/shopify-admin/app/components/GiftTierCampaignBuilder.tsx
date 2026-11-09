@@ -3,7 +3,7 @@ import { Form } from "react-router";
 import { ProductPicker } from "./ProductPicker.js";
 import { SelectedProductsList } from "./SelectedProductsList.js";
 import { OfferConditionsBuilder } from "./OfferConditionsBuilder.js";
-import { toStoredAmount } from "../lib/money.js";
+import { isZeroDecimalCurrency, toStoredAmount } from "../lib/money.js";
 
 interface TierDraft {
   id: string;
@@ -174,7 +174,7 @@ export function GiftTierCampaignBuilder({ action, currencyCode }: { action?: str
                     required
                     type="number"
                     min="0"
-                    step="0.01"
+                    step={isZeroDecimalCurrency(currencyCode) ? "1" : "0.01"}
                     value={tier.minimumSubtotal}
                     onChange={(event) => updateTier(index, { minimumSubtotal: event.target.value })}
                   />

@@ -115,6 +115,12 @@ describe("two-decimal shops compare exactly as before", () => {
     expect(await qualified(offer, cartOf(4_500, "EUR"), "USD", { market })).toBe(true);
     expect(await qualified(offer, cartOf(4_499, "EUR"), "USD", { market })).toBe(false);
   });
+  it("a USD shop's JPY-market override is compared as stored, not lifted", async () => {
+    const offer = offerOf({ thresholdCents: 5000, currencyCode: "USD", currencyOverrides: { JPY: 500_000 } }, [gift("g", 0)]);
+    const market = { id: "gid://shopify/Market/4", handle: "jp", currencyCode: "JPY", countryCode: "JP", primaryLocale: "ja", exchangeRate: 150 };
+    expect(await qualified(offer, cartOf(500_000, "JPY"), "USD", { market })).toBe(true);
+    expect(await qualified(offer, cartOf(499_900, "JPY"), "USD", { market })).toBe(false);
+  });
   it("EUR tiers and customer spend are unscaled", async () => {
     const tiered = offerOf({ thresholdCents: 5000, currencyCode: "EUR" }, [gift("51", 0, 5000), gift("52", 1, 12000)]);
     expect(await granted(tiered, cartOf(8_000, "EUR"), "EUR")).toEqual(["51"]);
