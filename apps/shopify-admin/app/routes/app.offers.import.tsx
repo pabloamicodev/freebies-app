@@ -15,6 +15,7 @@ import { eq } from "drizzle-orm";
 import { ConditionTypeSchema, DiscountTypeSchema, RewardTypeSchema, validateConditionValue, validateRewardPayload, type ConditionType, type DiscountType, type RewardType } from "@promo/shared-types";
 import { toStoredAmount } from "../lib/money.js";
 import { MAX_CSV_BYTES, MAX_CSV_COLUMNS, MAX_CSV_ROWS, parseCSV } from "../lib/csv.js";
+import { parseTierGroup, tierGroupKey, type TierGroupResult } from "../lib/offer-csv-tiers.js";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -75,12 +76,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { error: "CSV headers must be unique", created: [], errors: [] };
   }
   const dataRows = parsedRows.slice(1);
-  const processRow = async (values: string[], i: number) => {
+  const toRecord = (values: string[]) => {
+    const record: Record<string, string> = {};
+    headerRow.forEach((h, idx) => { record[h] = (values[idx] ?? "").trim(); });
+    return record;
+  };
+  // Gift tiers are one offer spread over several rows (one per tier); files without the tier column never group.
+  const tierGroups = new Map<string, number[]>();
+  dataRows.forEach((values, index) => {
+    if (values.length > headerRow.length) return;
+    const key = tierGroupKey(toRecord(values));
+    if (key !== null) tierGroups.set(key, [...(tierGroups.get(key) ?? []), index]);
+  });
+  const processRow = async (values: string[], i: number, groupRows?: Array<Record<string, string>>) => {
     if (values.length > headerRow.length) {
       return { error: { row: i + 2, message: "Row has more columns than the header" } };
     }
-    const row: Record<string, string> = {};
-    headerRow.forEach((h, idx) => { row[h] = (values[idx] ?? "").trim(); });
+    const row = toRecord(values);
 
     const internalName = row["internal_name"];
     const rawPublicTitle = row["public_title"];
@@ -116,8 +128,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { error: { row: rowNumber, message: "code_redemption must be checkout_code or automatic" } };
     }
 
-    let validatedCondition: { conditionType: ConditionType; value: Record<string, unknown> } | null = null;
-    if (row["condition_type"] && row["condition_value_threshold_cents"]) {
+    let tiered: Exclude<TierGroupResult, { error: string }> | null = null;
+    if (groupRows) {
+      const tierResult = parseTierGroup(groupRows, shopCurrency);
+      if ("error" in tierResult) return { error: { row: rowNumber, message: tierResult.error } };
+      tiered = tierResult;
+    }
+
+    let validatedCondition: { conditionType: ConditionType; value: Record<string, unknown> } | null = tiered
+      ? { conditionType: "cart_value", value: tiered.condition }
+      : null;
+    if (!tiered && row["condition_type"] && row["condition_value_threshold_cents"]) {
       const conditionType = row["condition_type"] ?? "";
       const conditionTypeResult = ConditionTypeSchema.safeParse(conditionType);
       if (!conditionTypeResult.success) {
@@ -144,7 +165,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       value: Record<string, unknown>;
       target: Record<string, unknown>;
     } | null = null;
-    if (row["reward_type"] && row["discount_type"]) {
+    if (!tiered && row["reward_type"] && row["discount_type"]) {
       const rewardTypeResult = RewardTypeSchema.safeParse(row["reward_type"]);
       if (!rewardTypeResult.success) {
         return { error: { row: rowNumber, message: `Invalid reward_type "${row["reward_type"]}"` } };
@@ -183,6 +204,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           requiresCode,
           codeRedemption,
           discountTags: row["discount_tags"] ? row["discount_tags"].split("|") : [],
+          ...(tiered ? { tierMode: tiered.tierMode } : {}),
         }).returning({ id: offers.id });
 
         if (!newOffer) throw new Error("Failed to create offer");
@@ -205,6 +227,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             sortOrder: 0,
             isEnabled: true,
           });
+        }
+
+        if (tiered) {
+          await tx.insert(offerRewards).values(tiered.rewards.map((reward) => ({ shopId, offerId: newOffer.id, ...reward })));
         }
 
         if (validatedReward) {
@@ -241,8 +267,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   };
 
   const rowResults: Awaited<ReturnType<typeof processRow>>[] = [];
+  const grouped = new Set<number>();
   for (const [index, values] of dataRows.entries()) {
-    rowResults.push(await processRow(values, index));
+    if (grouped.has(index)) continue;
+    const key = values.length > headerRow.length ? null : tierGroupKey(toRecord(values));
+    const indices = key === null ? null : tierGroups.get(key)!;
+    indices?.forEach((groupIndex) => grouped.add(groupIndex));
+    rowResults.push(await processRow(values, index, indices?.map((groupIndex) => toRecord(dataRows[groupIndex]!))));
   }
 
   const created = rowResults.flatMap((result) => result.created ? [result.created] : []);
@@ -265,6 +296,9 @@ const COLUMNS = [
   { col: "gift_quantity", req: false, note: "Integer, default 1" },
   { col: "is_auto_add",   req: false, note: "true | false" },
   { col: "track_mode",    req: false, note: "product | variant" },
+  { col: "gift_min_cart_subtotal_cents", req: false, note: "Gift tiers: cart subtotal in minor units that unlocks this row's gift. Give one row per tier, sharing offer_id (or internal_name)" },
+  { col: "gift_tier_mode", req: false, note: "Gift tiers: cumulative (default) | highest; the same on every row of an offer" },
+  { col: "gift_fallback_variant_gids", req: false, note: "Gift tiers: replacement variant GIDs while the gift is sold out, pipe-separated (max 5)" },
   { col: "discount_tags", req: false, note: "Tag strings, pipe-separated" },
   { col: "requires_code", req: false, note: "true | false (offer stays inactive until it has discount codes)" },
   { col: "code_redemption", req: false, note: "checkout_code (default) | automatic (no code needed, gated by conditions)" },
