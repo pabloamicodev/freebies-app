@@ -618,6 +618,22 @@ function limitsScenarios(): Scenario[] {
       quantities: { [A]: { l1: 2 } },
     },
     {
+      name: "zero-cost-line-does-not-satisfy-cart-quantity",
+      description: "A min of 3 is not met by 2 paid units plus a $0 line from another app.",
+      offers: [discountOffer(A, [["cart_quantity", { minQuantity: 3, includeGiftValues: false }, "main"]])],
+      lines: [unitLine("l1", 1, 2), line("l2", 2, page("/products/l2"), { unitPrice: "0.00" })],
+      qualified: [],
+      discounted: {},
+    },
+    {
+      name: "zero-cost-line-does-not-exceed-cart-quantity-max",
+      description: "A max of 2 still holds for 2 paid units plus a $0 line from another app.",
+      offers: [discountOffer(A, [["cart_quantity", { minQuantity: 1, maxQuantity: 2, includeGiftValues: false }, "main"]])],
+      lines: [unitLine("l1", 1, 2), line("l2", 2, page("/products/l2"), { unitPrice: "0.00" })],
+      qualified: [A],
+      discounted: { [A]: ["l1"] },
+    },
+    {
       name: "zero-cost-line-does-not-consume-the-unit-cap",
       description: "The $0 line sorts first but the single capped unit goes to the paid line.",
       offers: [productRewardOffer({ target: { maxUnitsTotal: 1 } })],

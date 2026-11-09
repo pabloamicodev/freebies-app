@@ -13,13 +13,12 @@ export interface CartQuantityConditionValue {
   };
 }
 
-export function evaluateCartQuantity(
-  cart: NormalizedCart,
-  condition: CartQuantityConditionValue,
-): Result<EligibilityReason, EligibilityReason> {
+/** Units the condition counts. A $0 line (another app's free gift) is not a paid unit unless gifts are counted. */
+export function cartQuantityCount(cart: NormalizedCart, condition: CartQuantityConditionValue): number {
   const qualifyingLines = extractQualifyingLines(cart, {
     includeGiftValues: condition.includeGiftValues,
   }).filter((line) => {
+    if (!condition.includeGiftValues && (line.lineSubtotalCents ?? line.priceCents * line.quantity) <= 0) return false;
     const f = condition.scopeFilter;
     if (!f) return true;
     if (f.excludeProductIds?.includes(line.productId)) return false;
@@ -27,7 +26,14 @@ export function evaluateCartQuantity(
     return true;
   });
 
-  const totalQty = sumQualifyingQuantity(qualifyingLines);
+  return sumQualifyingQuantity(qualifyingLines);
+}
+
+export function evaluateCartQuantity(
+  cart: NormalizedCart,
+  condition: CartQuantityConditionValue,
+): Result<EligibilityReason, EligibilityReason> {
+  const totalQty = cartQuantityCount(cart, condition);
   const passedMin = totalQty >= condition.minQuantity;
   const passedMax = condition.maxQuantity === undefined || totalQty <= condition.maxQuantity;
   const passed = passedMin && passedMax;

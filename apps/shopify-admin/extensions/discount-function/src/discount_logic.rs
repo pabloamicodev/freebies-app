@@ -1261,6 +1261,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
     if let Some(threshold_qty) = offer.cart_quantity_threshold {
         let cart_qty: i64 = non_gift_lines
             .iter()
+            .filter(|line| !is_zero_cost(line))
             .map(|line| *line.quantity() as i64)
             .sum();
         if cart_qty < threshold_qty {
@@ -3350,6 +3351,34 @@ mod tests {
         assert!(product_percentages(&[paid("1", "a", 3), free("2")], "30.00", &config).is_empty());
         let with_second_product = product_percentages(&[paid("1", "a", 1), paid("2", "b", 1), free("3")], "20.00", &config);
         assert_eq!(with_second_product[0].0, 20.0);
+    }
+
+    fn cart_quantity_config(bounds: &str) -> String {
+        zero_cost_config(r#""countRule":"total","quantityTiers":[]"#)
+            .replace(r#""discountType":"percentage","discountValue":0,"#, r#""discountType":"percentage","discountValue":10,"#)
+            .replace(r#""requirements":[],"#, &format!(r#""requirements":[],{bounds},"#))
+    }
+
+    #[test]
+    fn zero_cost_line_does_not_reach_the_cart_quantity_minimum() {
+        let config = cart_quantity_config(r#""cartQuantityThreshold":3"#);
+        assert!(product_percentages(&[paid("1", "meta", 2), free("2")], "20.00", &config).is_empty());
+        assert_eq!(product_percentages(&[paid("1", "meta", 3), free("2")], "30.00", &config).len(), 1);
+    }
+
+    #[test]
+    fn zero_cost_line_does_not_exceed_the_cart_quantity_maximum() {
+        let config = cart_quantity_config(r#""cartQuantityThreshold":1,"cartQuantityMax":2"#);
+        assert_eq!(product_percentages(&[paid("1", "meta", 2), free("2")], "20.00", &config).len(), 1);
+        assert!(product_percentages(&[paid("1", "meta", 3), free("2")], "30.00", &config).is_empty());
+    }
+
+    #[test]
+    fn cart_quantity_without_a_zero_cost_line_is_unchanged() {
+        let config = cart_quantity_config(r#""cartQuantityThreshold":3,"cartQuantityMax":4"#);
+        assert!(product_percentages(&[paid("1", "a", 2)], "20.00", &config).is_empty());
+        assert!(!product_percentages(&[paid("1", "a", 2), paid("2", "b", 1)], "30.00", &config).is_empty());
+        assert!(product_percentages(&[paid("1", "a", 3), paid("2", "b", 2)], "50.00", &config).is_empty());
     }
 
     #[test]
