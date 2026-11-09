@@ -276,6 +276,7 @@ function referenceDiscounts(fixture: Fixture, offer: SourceOffer): Record<string
       if (anchorQuantity < (reward.requiredAnchorMinQuantity ?? 1)) continue;
     }
     const eligible = nonGift
+      .filter((line) => Number(line.unitPrice) > 0) // a $0 line (another app's gift) is not a paid unit
       .filter((line) => !excluded.has(line.productId))
       .filter((line) => !restrict || matches(line))
       .filter((line) => !landing || line.metadata?.["__landing_source"] === reward.requiredLineAttributeValue)
