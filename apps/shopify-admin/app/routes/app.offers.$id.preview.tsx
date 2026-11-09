@@ -140,6 +140,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           quantity: cartQty,
           priceCents: Math.round((cartValueUsd * 100) / Math.max(1, cartQty)),
           lineSubtotalCents: Math.round(cartValueUsd * 100),
+          // The simulated line is a paid unit whatever the typed cart total, so requirement conditions can pass.
+          originalLineSubtotalCents: Math.max(1, Math.round(cartValueUsd * 100)),
           compareAtPriceCents: null,
           properties: lineProperties,
           requiresSellingPlan: hasSellingPlan,

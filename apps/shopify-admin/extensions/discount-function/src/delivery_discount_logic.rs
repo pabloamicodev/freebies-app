@@ -335,6 +335,7 @@ fn landing_anchor_quantity(offer: &CompiledShippingOffer, lines: &[Lines]) -> i6
             }
         })
         .filter(|line| !offer.requires_anchor_subscription || line.selling_plan_allocation().is_some())
+        .filter(|line| line.cost().subtotal_amount().amount().as_f64() > 0.0)
         .map(|line| i64::from(*line.quantity()))
         .sum()
 }
@@ -1115,6 +1116,36 @@ mod tests {
 
         let complete = run_with_lines(r#"["SHIPPING"]"#, "10.00", &config, &groups, &complete_line);
         assert_eq!(complete.operations.len(), 1);
+    }
+
+    #[test]
+    fn zero_cost_line_does_not_unlock_a_landing_shipping_offer() {
+        let offer = r#"{
+            "id":"landing","priority":100,"scopeMode":"landing",
+            "requiredLineAttributeValue":"tru-landing",
+            "requiredAnchorVariantIds":[],"requiredAnchorMinQuantity":1,"requiresAnchorSubscription":false,
+            "targetGroupTypes":null,
+            "tiers":[{"minimumSubtotalCents":0,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}]
+        }"#;
+        let config = shipping_config(&format!("[{offer}]"));
+        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME", true));
+        let line = |price: &str| {
+            format!(
+                r#"{{
+                "quantity":1,
+                "cost":{{"subtotalAmount":{{"amount":"{price}","currencyCode":"USD"}}}},
+                "lineTypeAttribute":null,"cartGiftTierAttribute":null,
+                "landingSourceAttribute":{{"value":"tru-landing"}},
+                "quizBundleIdAttribute":null,"quizFreeGiftAttribute":null,"quizExpectedPaidCountAttribute":null,
+                "sellingPlanAllocation":null,
+                "merchandise":{{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/11"}}
+            }}"#
+            )
+        };
+        let run = |lines: String| run_with_lines(r#"["SHIPPING"]"#, "10.00", &config, &groups, &format!("[{lines}]"));
+        assert!(run(line("0.00")).operations.is_empty());
+        assert_eq!(run(line("10.00")).operations.len(), 1);
+        assert_eq!(run(format!("{},{}", line("0.00"), line("10.00"))).operations.len(), 1);
     }
 
     #[test]
