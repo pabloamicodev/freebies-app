@@ -1,4 +1,5 @@
 import type { SubconditionId } from "../components/subconditions/types.js";
+import { fromStoredAmount } from "./money.js";
 
 /* Sub-condition rows (scope="sub") → subcondition-picker form state.
  * Reverses normalizeOfferSubconditions() so existing sub-conditions reopen
@@ -10,6 +11,7 @@ import type { SubconditionId } from "../components/subconditions/types.js";
  * merchant to reconfigure if already present. */
 export function subconditionsFromRows(
   rows: Array<{ conditionType: string; value: Record<string, unknown> }>,
+  currencyCode?: string,
 ): { activeSubs: SubconditionId[]; subValues: Record<string, unknown> } {
   const activeSubs: SubconditionId[] = [];
   const subValues: Record<string, unknown> = {};
@@ -78,7 +80,7 @@ export function subconditionsFromRows(
             : "total_spent";
         const threshold = metric === "total_orders"
           ? Number(v["value"] ?? 0)
-          : Number(v["valueCents"] ?? 0) / 100;
+          : fromStoredAmount(Number(v["valueCents"] ?? 0), currencyCode);
         subValues["order_history"] = { metric, operator: v["operator"] ?? "gte", threshold };
         break;
       }

@@ -34,6 +34,7 @@ import { ProductPicker } from "../components/ProductPicker.js";
 import { SelectedProductsList } from "../components/SelectedProductsList.js";
 import { OfferConditionsBuilder } from "../components/OfferConditionsBuilder.js";
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
+import { toStoredAmount } from "../lib/money.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -60,7 +61,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
-  const { shopId, db, session, timezone } = context;
+  const { shopId, db, session, timezone, currencyCode: shopCurrency } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
@@ -194,7 +195,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const subconditionsResult = parseJsonRecord(formData, "subconditions");
   if (subconditionsResult.error) return { error: subconditionsResult.error };
-  const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!);
+  const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!, shopCurrency);
   if (!normalizedSubconditions.success) return { error: normalizedSubconditions.error };
   const normalizedSubconditionRows = normalizedSubconditions.data;
 
@@ -222,10 +223,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const conditionValue: Record<string, unknown> =
     conditionType === "cart_value"
       ? {
-          thresholdCents: Math.round(
-            (Number.isFinite(firstCartMinimum) ? firstCartMinimum : 0) * 100,
-          ),
-          currencyCode: "USD",
+          thresholdCents: toStoredAmount(Number.isFinite(firstCartMinimum) ? firstCartMinimum : 0, shopCurrency),
+          currencyCode: shopCurrency,
           includeGiftValues: false,
         }
       : {
@@ -268,10 +267,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           ...(tier.maximum === undefined ? {} : { maximumQuantity: Math.trunc(tier.maximum) }),
         }
       : {
-          minimumSubtotalCents: Math.round(tier.threshold * 100),
+          minimumSubtotalCents: toStoredAmount(tier.threshold, shopCurrency),
           ...(tier.maximum === undefined
             ? {}
-            : { maximumSubtotalCents: Math.round(tier.maximum * 100) }),
+            : { maximumSubtotalCents: toStoredAmount(tier.maximum, shopCurrency) }),
         }),
     discountType: cartDiscountType,
     discountValue: tier.discountValue,

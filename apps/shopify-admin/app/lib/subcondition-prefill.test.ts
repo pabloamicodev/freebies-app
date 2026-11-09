@@ -53,3 +53,21 @@ describe("sub-condition prefill round-trip: theme conditions", () => {
     expect(second).toEqual({ success: true, data: first });
   });
 });
+
+describe("customer-spend amounts follow the shop currency's unit", () => {
+  const spend = { order_history: { metric: "total_spent", operator: "gte", threshold: 20000 } };
+  it("stores whole yen on a JPY shop and reopens as the same yen", () => {
+    const stored = normalizeOfferSubconditions(spend, "JPY");
+    if (!stored.success) throw new Error(stored.error);
+    expect(stored.data[0]!.value).toMatchObject({ valueCents: 20000 });
+    expect(subconditionsFromRows(stored.data, "JPY").subValues["order_history"]).toMatchObject({ threshold: 20000 });
+  });
+  it("still stores cents on a USD shop, and without a currency", () => {
+    for (const currency of ["USD", undefined]) {
+      const stored = normalizeOfferSubconditions({ order_history: { metric: "total_spent", operator: "gte", threshold: 200 } }, currency);
+      if (!stored.success) throw new Error(stored.error);
+      expect(stored.data[0]!.value).toMatchObject({ valueCents: 20000 });
+      expect(subconditionsFromRows(stored.data, currency).subValues["order_history"]).toMatchObject({ threshold: 200 });
+    }
+  });
+});

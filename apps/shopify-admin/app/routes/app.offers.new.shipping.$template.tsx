@@ -17,6 +17,7 @@ import { cartLabelsFromForm, discountMessageText, nowInZone, parseDateRange, par
 import { OfferConditionsBuilder } from "../components/OfferConditionsBuilder.js";
 import { PAGE_SUBCONDITION_IDS } from "../components/subconditions/types.js";
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
+import { isZeroDecimalCurrency, toStoredAmount } from "../lib/money.js";
 import { statusForSubmit } from "../lib/offer-scheduling.server.js";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
@@ -81,8 +82,8 @@ function parseTierPayload(raw: FormDataEntryValue | null) {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { timezone } = await getShopContext(request);
-  return { timezone, nowLocal: nowInZone(timezone) };
+  const { timezone, currencyCode } = await getShopContext(request);
+  return { timezone, currencyCode, nowLocal: nowInZone(timezone) };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -141,7 +142,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const validatedPayload = payloadResult.data;
   const subconditionsResult = parseJsonRecord(formData, "subconditions");
   if (subconditionsResult.error) return { error: subconditionsResult.error };
-  const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!);
+  const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!, shopCurrency);
   if (!normalizedSubconditions.success) return { error: normalizedSubconditions.error };
   const subconditionRows = normalizedSubconditions.data;
   if (subconditionRows.some((row) => !isPageConditionType(row.conditionType))) {
@@ -246,7 +247,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function NewShippingOfferPage() {
-  const { nowLocal } = useLoaderData<typeof loader>();
+  const { nowLocal, currencyCode: shopCurrencyCode } = useLoaderData<typeof loader>();
   const { template: rawTemplate = "global" } = useParams();
   const template = (rawTemplate in TEMPLATE_SCOPE ? rawTemplate : "global") as ShippingTemplate;
   const actionData = useActionData<typeof action>();
@@ -272,14 +273,14 @@ export default function NewShippingOfferPage() {
     () =>
       JSON.stringify(
         tiers.map((tier) => ({
-          minimumSubtotalCents: Math.round((Number(tier.minimum) || 0) * 100),
-          ...(tier.maximum ? { maximumSubtotalCents: Math.round(Number(tier.maximum) * 100) } : {}),
+          minimumSubtotalCents: toStoredAmount(Number(tier.minimum) || 0, shopCurrencyCode),
+          ...(tier.maximum ? { maximumSubtotalCents: toStoredAmount(Number(tier.maximum), shopCurrencyCode) } : {}),
           discountType: tier.discountType,
           discountValue: Number(tier.discountValue) || 0,
           ...(tier.appliesWhen ? { appliesWhen: tier.appliesWhen } : {}),
         })),
       ),
-    [tiers],
+    [tiers, shopCurrencyCode],
   );
   const title =
     template === "global"
@@ -470,7 +471,7 @@ export default function NewShippingOfferPage() {
                         className="b-input"
                         type="number"
                         min="0"
-                        step="0.01"
+                        step={isZeroDecimalCurrency(shopCurrencyCode) ? "1" : "0.01"}
                         value={tier.minimum}
                         onChange={(event) =>
                           setTiers((current) =>
@@ -488,7 +489,7 @@ export default function NewShippingOfferPage() {
                         className="b-input"
                         type="number"
                         min={tier.minimum || "0"}
-                        step="0.01"
+                        step={isZeroDecimalCurrency(shopCurrencyCode) ? "1" : "0.01"}
                         placeholder="No max"
                         value={tier.maximum}
                         onChange={(event) =>

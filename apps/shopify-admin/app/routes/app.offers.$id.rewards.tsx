@@ -22,7 +22,7 @@ import type { DeliveryGroupType } from "@promo/shared-types";
 import { buildRewardRecord } from "../lib/reward-record.server.js";
 import { splitTextareaList } from "../lib/textarea-list.js";
 import { and, eq } from "drizzle-orm";
-import { fromStoredAmount } from "../lib/money.js";
+import { formatStoredAmount, fromStoredAmount, isZeroDecimalCurrency, toStoredAmount } from "../lib/money.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { lowerMainThresholdToLowestTier } from "../lib/gift-tiered-offer.server.js";
 import { giftTierModeSchema } from "../lib/gift-tier-campaigns.js";
@@ -434,7 +434,7 @@ export default function OfferRewardsPage() {
     setDiscountType(r.discountType);
     setCurrencyCode(typeof value["currencyCode"] === "string" ? (value["currencyCode"] as string) : shopCurrencyCode);
     setGiftQuantity(r.quantity != null ? String(r.quantity) : "1");
-    setGiftMinSubtotal(r.minCartSubtotalCents ? String(r.minCartSubtotalCents / 100) : "");
+    setGiftMinSubtotal(r.minCartSubtotalCents ? String(fromStoredAmount(r.minCartSubtotalCents, shopCurrencyCode)) : "");
 
     const targetVariantIds = Array.isArray(target["variantIds"]) ? target["variantIds"] as string[] : [];
     const targetProductIds = Array.isArray(target["productIds"]) ? target["productIds"] as string[] : [];
@@ -486,8 +486,8 @@ export default function OfferRewardsPage() {
         tiers.length > 0
           ? tiers.map((tier, index) => ({
               key: `edit-shipping-tier-${index}`,
-              minimumSubtotal: typeof tier["minimumSubtotalCents"] === "number" ? (tier["minimumSubtotalCents"] / 100).toString() : "0",
-              maximumSubtotal: typeof tier["maximumSubtotalCents"] === "number" ? (tier["maximumSubtotalCents"] / 100).toString() : "",
+              minimumSubtotal: typeof tier["minimumSubtotalCents"] === "number" ? fromStoredAmount(tier["minimumSubtotalCents"], shopCurrencyCode).toString() : "0",
+              maximumSubtotal: typeof tier["maximumSubtotalCents"] === "number" ? fromStoredAmount(tier["maximumSubtotalCents"], shopCurrencyCode).toString() : "",
               discountType: tier["discountType"] === "fixed_amount" ? "fixed_amount" : "percentage",
               discountValue: String(tier["discountValue"] ?? 0),
               appliesWhen: tier["appliesWhen"] === "has_subscription" || tier["appliesWhen"] === "one_time_only" ? tier["appliesWhen"] : "",
@@ -538,9 +538,9 @@ export default function OfferRewardsPage() {
 
   const serializedShippingTiers = JSON.stringify(
     shippingTiers.map((tier) => ({
-      minimumSubtotalCents: Math.round(Number(tier.minimumSubtotal || 0) * 100),
+      minimumSubtotalCents: toStoredAmount(Number(tier.minimumSubtotal || 0), shopCurrencyCode),
       ...(tier.maximumSubtotal
-        ? { maximumSubtotalCents: Math.round(Number(tier.maximumSubtotal) * 100) }
+        ? { maximumSubtotalCents: toStoredAmount(Number(tier.maximumSubtotal), shopCurrencyCode) }
         : {}),
       discountType: tier.discountType,
       discountValue: Number(tier.discountValue || 0),
@@ -687,7 +687,7 @@ export default function OfferRewardsPage() {
                         <span className="b-text-sm b-text-sub">Qty: {r.quantity}</span>
                       )}
                       {r.minCartSubtotalCents ? (
-                        <span className="b-badge b-badge-gray">Unlocks at {(r.minCartSubtotalCents / 100).toFixed(2)}</span>
+                        <span className="b-badge b-badge-gray">Unlocks at {formatStoredAmount(r.minCartSubtotalCents, shopCurrencyCode)}</span>
                       ) : null}
                       {r.isAutoAdd && <span className="b-badge b-badge-blue">Auto-add</span>}
                       {r.isCustomerSelectable && (
@@ -1237,7 +1237,7 @@ export default function OfferRewardsPage() {
                                     type="number"
                                     className="b-input"
                                     min="0"
-                                    step="0.01"
+                                    step={isZeroDecimalCurrency(shopCurrencyCode) ? "1" : "0.01"}
                                     value={tier.minimumSubtotal}
                                     onChange={(event) =>
                                       updateShippingTier(
@@ -1259,7 +1259,7 @@ export default function OfferRewardsPage() {
                                     type="number"
                                     className="b-input"
                                     min={tier.minimumSubtotal || "0"}
-                                    step="0.01"
+                                    step={isZeroDecimalCurrency(shopCurrencyCode) ? "1" : "0.01"}
                                     placeholder="No maximum"
                                     value={tier.maximumSubtotal}
                                     onChange={(event) =>
@@ -1517,8 +1517,8 @@ export default function OfferRewardsPage() {
                             className="b-input"
                             value={giftMinSubtotal}
                             onChange={(e) => setGiftMinSubtotal(e.target.value)}
-                            min="0.01"
-                            step="0.01"
+                            min={isZeroDecimalCurrency(shopCurrencyCode) ? "1" : "0.01"}
+                            step={isZeroDecimalCurrency(shopCurrencyCode) ? "1" : "0.01"}
                             placeholder="No threshold"
                             autoComplete="off"
                           />

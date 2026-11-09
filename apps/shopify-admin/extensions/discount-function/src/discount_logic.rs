@@ -2410,6 +2410,30 @@ mod tests {
         assert!(run_function_with_input(run, &eur("44.00")).unwrap().operations.is_empty());
     }
 
+    /// Parity with `evaluateCartValue` in the rule engine: a zero-decimal shop stores whole units, the cart is in whole units.
+    /// Keep the numbers in sync with packages/rule-engine/src/evaluator.zero-decimal.test.ts.
+    #[test]
+    fn zero_decimal_shop_threshold_is_whole_units_and_converts_through_minor_units() {
+        let run_cart = |currency: &str, rate: &str, amount: &str| {
+            let lines = format!(
+                "[{},{}]",
+                regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", amount, 1),
+                gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "0.00", 1),
+            );
+            let config = gift_offer_config(5000, 1).replace(r#""currencyCode":"USD""#, r#""currencyCode":"JPY""#);
+            let payload = cart_json(&lines, amount, &config)
+                .replace("\"currencyCode\": \"USD\"", &format!("\"currencyCode\": \"{currency}\""))
+                .replace("\"presentmentCurrencyRate\": \"1.0\"", &format!("\"presentmentCurrencyRate\": \"{rate}\""));
+            run_function_with_input(run, &payload).unwrap().operations.len()
+        };
+        // JPY shop, JPY cart: 5000 means 5,000 yen.
+        assert_eq!(run_cart("JPY", "1.0", "5000"), 1);
+        assert_eq!(run_cart("JPY", "1.0", "4999"), 0);
+        // JPY shop, USD market at 0.0067 USD/JPY: 5,000 yen is 33.50 USD.
+        assert_eq!(run_cart("USD", "0.0067", "34.00"), 1);
+        assert_eq!(run_cart("USD", "0.0067", "33.00"), 0);
+    }
+
     #[test]
     fn gift_discount_applies_to_valid_gift_line() {
         let lines = format!(

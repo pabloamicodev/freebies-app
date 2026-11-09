@@ -12,6 +12,9 @@ export const WidgetTranslationsSchema = z.object({
   /** Cart message / progress bar strings. */
   "progress.before_goal": z.string().default("Spend {{remaining_amount}} more for a free gift!"),
   "progress.after_goal": z.string().default("You've unlocked your free gift! 🎁"),
+  /** Gift-tier "spend more" bar: next tier to reach, then every tier reached. */
+  "progress.gift_tier_before_goal": z.string().default("Spend {{remaining_amount}} more to unlock your next gift."),
+  "progress.gift_tier_after_goal": z.string().default("All gifts unlocked."),
   /** Gift slider. */
   "gift_slider.title": z.string().default("Choose Your Free Gift"),
   "gift_slider.subtitle": z.string().optional(),

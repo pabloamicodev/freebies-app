@@ -42,6 +42,18 @@ describe("urlsFromCondition", () => {
   });
 });
 
+describe("conditionSummary amounts", () => {
+  it("reads the stored amount in the shop currency's unit", () => {
+    expect(conditionSummary("cart_value", { thresholdCents: 5000, currencyCode: "JPY" }, "gte", "JPY")).toBe("≥ JPY 5000");
+    expect(conditionSummary("order_history_total_spent", { type: "total_spent", operator: "gte", valueCents: 20000 }, "gte", "JPY")).toBe("total_spent gte 20000");
+  });
+  it("is unchanged for two-decimal shops and without a shop currency", () => {
+    expect(conditionSummary("cart_value", { thresholdCents: 5000, currencyCode: "EUR" }, "gte", "EUR")).toBe("≥ EUR 50.00");
+    expect(conditionSummary("cart_value", { thresholdCents: 5000 })).toBe("≥ USD 50.00");
+    expect(conditionSummary("order_history_total_spent", { type: "total_spent", operator: "gte", valueCents: 20000 })).toBe("total_spent gte 200.00");
+  });
+});
+
 describe("conditionSummary", () => {
   it("renders only the UTM fields that are set, using real query-string keys", () => {
     expect(conditionSummary("utm_parameters", { utmSource: "amazon", utmCampaign: "primeday" })).toBe(

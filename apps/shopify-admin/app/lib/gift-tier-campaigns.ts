@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { formatStoredAmount } from "./money.js";
 
 const variantGid = z.string().regex(/^gid:\/\/shopify\/ProductVariant\/\d+$/);
 
@@ -75,7 +76,7 @@ export function buildGiftTierOfferDrafts(raw: GiftTierCampaign, currencyCode: st
         quantity: tier.quantity,
         isAutoAdd: tier.variantIds.length === 1,
         isCustomerSelectable: tier.variantIds.length > 1,
-        label: `${campaign.name} gift at ${(tier.minimumSubtotalCents / 100).toFixed(2)}`,
+        label: `${campaign.name} gift at ${formatStoredAmount(tier.minimumSubtotalCents, currencyCode)}`,
       },
     };
   });
@@ -127,7 +128,7 @@ export function buildTieredGiftOffer(raw: GiftTierCampaign, currencyCode: string
     isCustomerSelectable: tier.variantIds.length > 1,
     trackMode: "variant",
     sortOrder: index,
-    label: `Gift at ${(tier.minimumSubtotalCents / 100).toFixed(2)}`,
+    label: `Gift at ${formatStoredAmount(tier.minimumSubtotalCents, currencyCode)}`,
     minCartSubtotalCents: tier.minimumSubtotalCents,
   }));
   return {

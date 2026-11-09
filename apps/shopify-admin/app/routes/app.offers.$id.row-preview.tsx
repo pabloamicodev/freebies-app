@@ -37,7 +37,7 @@ const WIDGET_TYPE_LABEL: Record<string, string> = {
 };
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { shopId, db, timezone: shopTimezone } = await getShopContext(request);
+  const { shopId, db, timezone: shopTimezone, currencyCode: shopCurrencyCode } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
@@ -83,7 +83,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       scope: c.scope,
       conditionType: c.conditionType,
       isEnabled: c.isEnabled,
-      summary: conditionSummary(c.conditionType, c.value, c.operator),
+      summary: conditionSummary(c.conditionType, c.value, c.operator, shopCurrencyCode),
     }));
 
   const urls = [...new Set(conditionRows.flatMap((c) => urlsFromCondition(c.conditionType, c.value)))];

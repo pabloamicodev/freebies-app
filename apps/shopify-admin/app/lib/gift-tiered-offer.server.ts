@@ -25,7 +25,7 @@ export async function createTieredGiftOffer(
   const campaign = parsed.data;
   const subconditionsResult = parseJsonRecord(formData, "subconditions");
   if (subconditionsResult.error) return { error: subconditionsResult.error };
-  const subconditions = normalizeOfferSubconditions(subconditionsResult.data!);
+  const subconditions = normalizeOfferSubconditions(subconditionsResult.data!, currencyCode);
   if (!subconditions.success) return { error: subconditions.error };
   const draft = buildTieredGiftOffer(campaign, currencyCode);
 

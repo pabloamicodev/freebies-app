@@ -10,11 +10,12 @@ import { BackButton } from "../components/BackButton.js";
 import { useState, useRef, useId } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
-import { offers, offerConditions, offerRewards, offerCombinationPolicies, shops } from "@promo/db";
-import { eq } from "drizzle-orm";
+import { offers, offerConditions, offerRewards, offerCombinationPolicies, shops, variantCache } from "@promo/db";
+import { and, eq, inArray } from "drizzle-orm";
 import { ConditionTypeSchema, DiscountTypeSchema, RewardTypeSchema, validateConditionValue, validateRewardPayload, type ConditionType, type DiscountType, type RewardType } from "@promo/shared-types";
 import { toStoredAmount } from "../lib/money.js";
 import { MAX_CSV_BYTES, MAX_CSV_COLUMNS, MAX_CSV_ROWS, parseCSV } from "../lib/csv.js";
+import { groupTierRows, parseTierGroup, SHOP_CURRENCY_COLUMN, type TierGroupResult } from "../lib/offer-csv-tiers.js";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -75,12 +76,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { error: "CSV headers must be unique", created: [], errors: [] };
   }
   const dataRows = parsedRows.slice(1);
-  const processRow = async (values: string[], i: number) => {
+  const toRecord = (values: string[]) => {
+    const record: Record<string, string> = {};
+    headerRow.forEach((h, idx) => { record[h] = (values[idx] ?? "").trim(); });
+    return record;
+  };
+  // Gift tiers are one offer spread over several rows (one per tier); files without the tier column never group.
+  const tierGroups = groupTierRows(dataRows.map(toRecord));
+  const processRow = async (values: string[], i: number, groupIndices?: number[]) => {
     if (values.length > headerRow.length) {
       return { error: { row: i + 2, message: "Row has more columns than the header" } };
     }
-    const row: Record<string, string> = {};
-    headerRow.forEach((h, idx) => { row[h] = (values[idx] ?? "").trim(); });
+    const row = toRecord(values);
+    const exportedCurrency = (row[SHOP_CURRENCY_COLUMN] ?? "").toUpperCase();
+    if (exportedCurrency && exportedCurrency !== shopCurrency.toUpperCase()) {
+      return { error: { row: i + 2, message: `${SHOP_CURRENCY_COLUMN} ${exportedCurrency} differs from this shop's currency ${shopCurrency}; amounts would be wrong` } };
+    }
 
     const internalName = row["internal_name"];
     const rawPublicTitle = row["public_title"];
@@ -116,8 +127,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { error: { row: rowNumber, message: "code_redemption must be checkout_code or automatic" } };
     }
 
-    let validatedCondition: { conditionType: ConditionType; value: Record<string, unknown> } | null = null;
-    if (row["condition_type"] && row["condition_value_threshold_cents"]) {
+    let tiered: Exclude<TierGroupResult, { error: string }> | null = null;
+    if (groupIndices) {
+      // One bad row (too wide to read safely, another currency, an unknown variant) invalidates the whole offer.
+      const tooWide = groupIndices.find((index) => dataRows[index]!.length > headerRow.length);
+      if (tooWide !== undefined) return { error: { row: tooWide + 2, message: "Row has more columns than the header" } };
+      const groupRecords = groupIndices.map((index) => toRecord(dataRows[index]!));
+      const foreign = groupIndices.find((_, position) => {
+        const code = (groupRecords[position]![SHOP_CURRENCY_COLUMN] ?? "").toUpperCase();
+        return code !== "" && code !== shopCurrency.toUpperCase();
+      });
+      if (foreign !== undefined) return { error: { row: foreign + 2, message: `${SHOP_CURRENCY_COLUMN} differs from this shop's currency ${shopCurrency}; amounts would be wrong` } };
+      const tierResult = parseTierGroup(groupRecords, shopCurrency);
+      if ("error" in tierResult) return { error: { row: groupIndices[tierResult.rowIndex]! + 2, message: tierResult.error } };
+      const wanted = [...new Set(tierResult.rewards.flatMap((reward) => [...((reward.target.variantIds as string[]) ?? []), ...((reward.target.fallbackVariantIds as string[] | undefined) ?? [])]))];
+      const known = new Set((await db.select({ gid: variantCache.variantGid }).from(variantCache).where(and(eq(variantCache.shopId, shopId), inArray(variantCache.variantGid, wanted)))).map((variant) => variant.gid));
+      const missingGid = wanted.find((gid) => !known.has(gid));
+      if (missingGid !== undefined) {
+        const at = groupRecords.findIndex((record) => (record["gift_variant_gids"] ?? "").includes(missingGid) || (record["gift_fallback_variant_gids"] ?? "").includes(missingGid));
+        return { error: { row: groupIndices[Math.max(0, at)]! + 2, message: `Variant ${missingGid} is not in this shop's catalog; sync the catalog or fix the GID` } };
+      }
+      tiered = tierResult;
+    }
+
+    let validatedCondition: { conditionType: ConditionType; value: Record<string, unknown> } | null = tiered
+      ? { conditionType: "cart_value", value: tiered.condition }
+      : null;
+    if (!tiered && row["condition_type"] && row["condition_value_threshold_cents"]) {
       const conditionType = row["condition_type"] ?? "";
       const conditionTypeResult = ConditionTypeSchema.safeParse(conditionType);
       if (!conditionTypeResult.success) {
@@ -144,7 +180,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       value: Record<string, unknown>;
       target: Record<string, unknown>;
     } | null = null;
-    if (row["reward_type"] && row["discount_type"]) {
+    if (!tiered && row["reward_type"] && row["discount_type"]) {
       const rewardTypeResult = RewardTypeSchema.safeParse(row["reward_type"]);
       if (!rewardTypeResult.success) {
         return { error: { row: rowNumber, message: `Invalid reward_type "${row["reward_type"]}"` } };
@@ -183,6 +219,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           requiresCode,
           codeRedemption,
           discountTags: row["discount_tags"] ? row["discount_tags"].split("|") : [],
+          ...(tiered ? { tierMode: tiered.tierMode } : {}),
         }).returning({ id: offers.id });
 
         if (!newOffer) throw new Error("Failed to create offer");
@@ -205,6 +242,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             sortOrder: 0,
             isEnabled: true,
           });
+        }
+
+        if (tiered) {
+          await tx.insert(offerRewards).values(tiered.rewards.map((reward) => ({ shopId, offerId: newOffer.id, ...reward })));
         }
 
         if (validatedReward) {
@@ -241,8 +282,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   };
 
   const rowResults: Awaited<ReturnType<typeof processRow>>[] = [];
+  const grouped = new Set<number>();
   for (const [index, values] of dataRows.entries()) {
-    rowResults.push(await processRow(values, index));
+    if (grouped.has(index)) continue;
+    const indices = tierGroups.get(index);
+    indices?.forEach((groupIndex) => grouped.add(groupIndex));
+    rowResults.push(await processRow(values, index, indices));
   }
 
   const created = rowResults.flatMap((result) => result.created ? [result.created] : []);
@@ -265,6 +310,10 @@ const COLUMNS = [
   { col: "gift_quantity", req: false, note: "Integer, default 1" },
   { col: "is_auto_add",   req: false, note: "true | false" },
   { col: "track_mode",    req: false, note: "product | variant" },
+  { col: "gift_min_cart_subtotal_cents", req: false, note: "Gift tiers: cart subtotal in minor units that unlocks this row's gift. Give one row per tier, sharing offer_id (or internal_name)" },
+  { col: "gift_tier_mode", req: false, note: "Gift tiers: cumulative (default) | highest; the same on every row of an offer" },
+  { col: "gift_fallback_variant_gids", req: false, note: "Gift tiers: replacement variant GIDs while the gift is sold out, pipe-separated (max 5)" },
+  { col: "shop_currency_code", req: false, note: "Written by export; the import is refused for a row whose currency differs from this shop's" },
   { col: "discount_tags", req: false, note: "Tag strings, pipe-separated" },
   { col: "requires_code", req: false, note: "true | false (offer stays inactive until it has discount codes)" },
   { col: "code_redemption", req: false, note: "checkout_code (default) | automatic (no code needed, gated by conditions)" },

@@ -244,7 +244,7 @@ function parseReward(formData: FormData, currencyCode: string): Result<{ target:
   };
 }
 
-function parseConditions(formData: FormData): Result<CodeOfferDraft["conditions"]> {
+function parseConditions(formData: FormData, currencyCode: string): Result<CodeOfferDraft["conditions"]> {
   const pageTypes = formData
     .getAll("pageTypes")
     .map(String)
@@ -274,7 +274,7 @@ function parseConditions(formData: FormData): Result<CodeOfferDraft["conditions"
     };
   }
 
-  const normalized = normalizeOfferSubconditions(payload);
+  const normalized = normalizeOfferSubconditions(payload, currencyCode);
   if (!normalized.success) return fail(normalized.error);
   return {
     ok: true,
@@ -312,7 +312,7 @@ export function parseCodeOfferForm(
 
   // Free shipping keeps the page and UTM steps: the delivery Function matches them with the
   // same page_match rules (D2), so shipping codes enforce them too.
-  const parsed = parseConditions(formData);
+  const parsed = parseConditions(formData, context.currencyCode);
   if (!parsed.ok) return parsed;
   const conditions = parsed.data;
 

@@ -5,7 +5,7 @@ import { purchaseTypeLabel } from "./purchase-type.js";
 
 import { normalizeExcludedPageUrls, normalizeStorePageUrls } from "@promo/shared-types";
 import { pageTypeLabel } from "./page-types.js";
-import { fromStoredAmount } from "./money.js";
+import { formatStoredAmount, fromStoredAmount } from "./money.js";
 import { readCartLabels } from "./cart-labels.js";
 import { readMatchBy, readMatchRule } from "./product-condition.js";
 
@@ -13,12 +13,13 @@ function stampSummary(text: string, v: Record<string, unknown>): string {
   return `${text}${v["scope"] === "page" ? " · this page only" : ""}${v["rejectUnmatchedLines"] === true ? " · other pages block it" : ""}`;
 }
 
-export function conditionSummary(conditionType: string, value: unknown, operator?: string): string {
+/** `shopCurrency` fixes the amount unit (the stored value is in the shop currency's minor unit); the tag only labels it. */
+export function conditionSummary(conditionType: string, value: unknown, operator?: string, shopCurrency?: string): string {
   const v = (value ?? {}) as Record<string, unknown>;
   switch (conditionType) {
     case "cart_value":
     case "cart_value_multiplier": {
-      const amount = typeof v["thresholdCents"] === "number" ? (v["thresholdCents"] / 100).toFixed(2) : "?";
+      const amount = typeof v["thresholdCents"] === "number" ? formatStoredAmount(v["thresholdCents"], shopCurrency ?? String(v["currencyCode"] ?? "USD")) : "?";
       return `≥ ${v["currencyCode"] ?? "USD"} ${amount}`;
     }
     case "cart_quantity":
@@ -107,7 +108,7 @@ export function conditionSummary(conditionType: string, value: unknown, operator
       return "One redemption per customer";
     default: {
       if (typeof v["type"] === "string") {
-        return `${v["type"]} ${v["operator"] ?? ""} ${v["value"] ?? (typeof v["valueCents"] === "number" ? (v["valueCents"] / 100).toFixed(2) : "")}`.trim();
+        return `${v["type"]} ${v["operator"] ?? ""} ${v["value"] ?? (typeof v["valueCents"] === "number" ? formatStoredAmount(v["valueCents"], shopCurrency) : "")}`.trim();
       }
       return JSON.stringify(value);
     }

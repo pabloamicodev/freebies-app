@@ -124,10 +124,10 @@ export async function buildRewardRecord(
     const rawMinSubtotal = formData.get("minCartSubtotal");
     if (rewardType === "product_gift" && typeof rawMinSubtotal === "string") {
       const amount = rawMinSubtotal.trim() === "" ? null : Number(rawMinSubtotal);
-      if (amount !== null && (!Number.isFinite(amount) || amount <= 0 || Math.round(amount * 100) > 1_000_000_000)) {
+      if (amount !== null && (!Number.isFinite(amount) || amount <= 0 || toStoredAmount(amount, shopCurrencyCode) > 1_000_000_000)) {
         return { error: "Cart subtotal that unlocks this gift must be greater than 0." };
       }
-      minCartSubtotalCents = amount === null ? null : Math.round(amount * 100);
+      minCartSubtotalCents = amount === null ? null : toStoredAmount(amount, shopCurrencyCode);
     }
 
     const needsValue =
