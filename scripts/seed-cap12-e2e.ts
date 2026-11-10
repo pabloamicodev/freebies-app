@@ -2,10 +2,15 @@
  * FIX-cap-12 dev-store proof: seeds offers that force several combination groups across 3+ Shopify nodes on
  * hpn-test-store, so the Shopify-resolution cases (g)-(k) of the architect's design can be observed.
  *
- *   pnpm tsx scripts/seed-cap12-e2e.ts seed       [--env path] [--padding 140]
+ *   pnpm tsx scripts/seed-cap12-e2e.ts seed       [--env path] [--padding N]
+ *   pnpm tsx scripts/seed-cap12-e2e.ts nc loosen|tighten | compact on|off   (debug helpers: flip the NC offers / compact ids, republish)
  *   pnpm tsx scripts/seed-cap12-e2e.ts status     [--env path]
  *   pnpm tsx scripts/seed-cap12-e2e.ts verify-k   [--env path]   (loosen slot 0, republish, compare Admin API vs manifest, restore)
  *   pnpm tsx scripts/seed-cap12-e2e.ts cleanup    [--env path]
+ *
+ * `--padding N` (default 0) adds N inert product ids to the heavy offers to force a size-driven split. Observed on
+ * 2026-11-10: with N=140 no Promo Engine node holding such an offer applied any discount (see the PR), so the default
+ * relies on the planner's sticky spread: nodes of the previous publish are kept, and each holds one combination group.
  *
  * Only ever touches hpn-test-store.myshopify.com (hard refusal otherwise). No production-code knobs: the split is forced
  * with function_compact_ids off plus heavy offers (many product targets), and publishing runs the branch's own publisher.
@@ -164,7 +169,7 @@ async function main(): Promise<void> {
 
     if (command === "seed") {
       if (await setting(SNAPSHOT_KEY)) throw new Error("A cap12 snapshot already exists: run `cleanup` first.");
-      const padding = Number(flag("--padding") ?? 140);
+      const padding = Number(flag("--padding") ?? 0);
       // Archived rows of an earlier run keep their names unique-constrained; they are this script's own rows.
       await db.delete(offers).where(and(eq(offers.shopId, shop.id), like(offers.internalName, `${PREFIX}%`), eq(offers.status, "archived")));
 
@@ -417,6 +422,12 @@ async function main(): Promise<void> {
       const live = await db.select({ n: sql<number>`count(*)` }).from(offers).where(and(eq(offers.shopId, shop.id), like(offers.internalName, `${PREFIX}%`), ne(offers.status, "archived")));
       out(`non-archived CAP12 offers: ${live[0]?.n}; compact ids now: ${await setting(FUNCTION_COMPACT_IDS_SETTING)} (before: ${snapshot.compactIds})`);
       out(`mismatch nodes: ${rows.filter((r) => !r.match).length}`);
+      const gone = await admin<{ codeDiscountNodeByCode: { id: string } | null }>(
+        `query Cap12Code($code: String!) { codeDiscountNodeByCode(code: $code) { id } }`, { code: CODE });
+      out(`native code ${CODE} still exists on Shopify: ${gone.codeDiscountNodeByCode ? "YES" : "no"}`);
+      const nodes = await admin<{ discountNodes: { nodes: Array<{ id: string; discount: { title?: string; status?: string } }> } }>(
+        `query { discountNodes(first: 50, query: "type:app") { nodes { id discount { ... on DiscountAutomaticApp { title status } } } } }`);
+      out(`automatic app nodes on Shopify: ${nodes.discountNodes.nodes.filter((n) => n.id.includes("DiscountAutomaticNode")).map((n) => `${n.discount.title}(${n.discount.status})`).join(", ")}`);
       await db.delete(appSettings).where(and(eq(appSettings.shopId, shop.id), eq(appSettings.key, SNAPSHOT_KEY)));
       if (existsSync(MARKER)) rmSync(MARKER);
       return;
