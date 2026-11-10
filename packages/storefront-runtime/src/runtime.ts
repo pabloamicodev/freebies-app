@@ -43,7 +43,6 @@ const PROMO_WIDGET_SELECTOR = [
   '[id^="pe-fbt-"]',
 ].join(",");
 
-
 const GIFT_ADD_GRACE_MS = 10_000;
 const DEFAULT_EVAL_DEBOUNCE_MS = 300;
 const DEFAULT_EVAL_ENDPOINT = "/apps/promo-engine/evaluate";
@@ -335,7 +334,8 @@ export class PromoEngineRuntime {
 
   /** Evaluate and apply gifts now; resolves when done or after GIFT_HOLD_MS, whichever comes first, and never rejects. */
   private settleGifts(): Promise<void> {
-    this.debouncedEvaluate.cancel();    let timer: ReturnType<typeof setTimeout>;
+    this.debouncedEvaluate.cancel();
+    let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<void>((resolve) => {
       timer = setTimeout(() => {
         console.warn(`[PromoEngine] Gifts not ready after ${GIFT_HOLD_MS} ms — releasing the add-to-cart`);
