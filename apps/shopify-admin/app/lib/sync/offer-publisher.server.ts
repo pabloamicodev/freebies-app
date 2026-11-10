@@ -28,6 +28,7 @@ import {
 } from "../publish-manifest.server.js";
 import { isFunctionCompactIdsEnabled } from "../function-compact-ids-flag.server.js";
 import { isFunctionShardsEnabled, isShardDomainsEnabled } from "../function-shards-flag.server.js";
+import { isRemoveUnfundedGiftsEnabled } from "../remove-unfunded-gifts-flag.server.js";
 import { SLOT_LIMITS, andPolicies, planShards, policyKey, type CombinationPolicy } from "./shard-planner.js";
 import { baseOfferId, buildPlanUnitSet, slotOffers } from "./plan-units.js";
 import { loadSplitOptions } from "./variant-products.server.js";
@@ -408,7 +409,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     await pushStorefrontMetafields(shopDomain, accessToken, [
       ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
       ...compiledBackendB.flatMap((entry) => entry.conditionRows),
-    ]);
+    ], await isRemoveUnfundedGiftsEnabled(db, shopId));
     await pushPool();
     const emptyValidation = buildCartValidationConfig(codeOfferConfigs);
     await syncCartValidation(shopDomain, accessToken, emptyValidation);
@@ -680,7 +681,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       ...conditionRows,
       ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
       ...compiledBackendB.flatMap((entry) => entry.conditionRows),
-    ]);
+    ], await isRemoveUnfundedGiftsEnabled(db, shopId));
     await pushPool();
 
     for (const compiledOffer of compiledOffers) {
@@ -1606,6 +1607,7 @@ async function pushStorefrontMetafields(
   shopDomain: string,
   accessToken: string,
   conditionRows: OfferCondition[],
+  removeUnfundedGifts: boolean,
 ): Promise<void> {
   try {
     // Theme Liquid's `app.metafields` only exposes app-data metafields owned by the app
@@ -1640,6 +1642,13 @@ async function pushStorefrontMetafields(
             key: "stamp_targets",
             type: "json",
             value: JSON.stringify(collectStampTargets(conditionRows)),
+          },
+          {
+            ownerId: installation.currentAppInstallation.id,
+            namespace: "promo_engine",
+            key: "remove_unfunded_gifts",
+            type: "boolean",
+            value: String(removeUnfundedGifts),
           },
         ],
       },
