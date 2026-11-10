@@ -246,7 +246,7 @@ async function pauseProposal(scope: Scope, candidateIds: string[] | "all"): Prom
     summary: copy.summary,
     customerChange: copy.customerChange(minimal.map((row) => row.offer.internalName)),
     semanticChange: true,
-    offerVersions: versions(minimal),
+    offerVersions: versions(rows.values()),
     params: {},
     options: { label: copy.optionsLabel, items, minSelected: 1 },
     note: copy.note,

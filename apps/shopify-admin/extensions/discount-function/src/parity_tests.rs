@@ -828,3 +828,84 @@ mod combination_groups {
         }
     }
 }
+
+/// Capacity workaround `use_whole_products`: a product reward that lists every variant of its products is rewritten
+/// in place to list the products. The Function must discount the same lines and units for every cart built from
+/// today's catalog (a variant added to the product later is covered on purpose, so no cart here has one).
+#[cfg(not(feature = "code_gate"))]
+mod whole_product_targets {
+    use super::*;
+
+    const PRODUCTS: [(u32, [u32; 3]); 2] = [(1, [11, 12, 13]), (2, [21, 22, 23])];
+
+    fn product(id: u32) -> String {
+        format!("gid://shopify/Product/{id}")
+    }
+
+    fn variant(id: u32) -> String {
+        format!("gid://shopify/ProductVariant/{id}")
+    }
+
+    fn offer(listed_by_variant: bool, shape: &Value) -> Value {
+        let mut reward = shape.clone();
+        reward["id"] = json!("reward");
+        reward["scopeMode"] = json!("sitewide");
+        if listed_by_variant {
+            reward["targetVariantIds"] = json!(PRODUCTS.iter().flat_map(|(_, variants)| variants.iter().map(|id| variant(*id))).collect::<Vec<_>>());
+        } else {
+            reward["targetProductIds"] = json!(PRODUCTS.iter().map(|(id, _)| product(*id)).collect::<Vec<_>>());
+        }
+        json!({ "offers": [{ "id": "whole", "version": 1, "offerType": "discount", "title": "whole", "priority": 10, "productRewards": [reward] }] })
+    }
+
+    fn cart(lines: &[(u32, u32, i64)]) -> Value {
+        let lines: Vec<Value> = lines
+            .iter()
+            .map(|(product_id, variant_id, quantity)| {
+                json!({
+                    "id": format!("gid://shopify/CartLine/{variant_id}"), "variantId": variant(*variant_id),
+                    "productId": product(*product_id), "quantity": quantity, "unitPrice": "20.00",
+                    "lineType": null, "metadata": {}
+                })
+            })
+            .collect();
+        json!({ "currency": "USD", "presentmentCurrencyRate": 1, "country": "US", "customerTags": [], "enteredCodes": [], "lines": lines })
+    }
+
+    fn discounted(config: &Value, cart: &Value) -> BTreeMap<String, BTreeMap<String, i64>> {
+        let config = json!({ "c1": "_promo_engine_unused", "c2": "_promo_engine_unused", "c3": "_promo_engine_unused", "customerTags": [], "offers": config["offers"] });
+        let input = function_input(&json!({ "config": config, "cart": cart })).to_string();
+        outcomes(&run_function_with_input(run, &input).expect("the function runs"))
+    }
+
+    #[test]
+    fn product_level_targets_discount_the_same_lines_and_units_as_the_variant_list() {
+        let shapes = [
+            json!({ "discountType": "percentage", "discountValue": 10 }),
+            json!({ "discountType": "percentage", "discountValue": 15, "maxUnitsTotal": 3 }),
+            json!({ "discountType": "percentage", "discountValue": 0, "quantityTiers": [
+                { "minimumQuantity": 2, "discountType": "percentage", "discountValue": 5 },
+                { "minimumQuantity": 4, "discountType": "percentage", "discountValue": 12 }
+            ] }),
+        ];
+        let carts = [
+            vec![(1, 11, 1)],
+            vec![(1, 11, 2), (1, 12, 1)],
+            vec![(1, 11, 1), (2, 21, 1), (2, 23, 3)],
+            vec![(9, 91, 2)],
+            vec![(9, 91, 1), (2, 22, 5)],
+            vec![(1, 13, 4), (9, 91, 1)],
+        ];
+        let mut discounting = 0;
+        for shape in &shapes {
+            for lines in &carts {
+                let cart = cart(lines);
+                let by_variant = discounted(&offer(true, shape), &cart);
+                let by_product = discounted(&offer(false, shape), &cart);
+                assert_eq!(by_product, by_variant, "shape {shape} cart {lines:?}");
+                discounting += usize::from(!by_variant.is_empty());
+            }
+        }
+        assert!(discounting >= 10, "the carts must actually discount something, got {discounting}");
+    }
+}

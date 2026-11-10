@@ -76,10 +76,12 @@ export async function applyEdits(tx: Db, shopId: string, edits: readonly Edit[],
         await tx.update(offerCombinationPolicies).set({ combinesWithProductDiscounts: (values as { combinesWithProductDiscounts: boolean }).combinesWithProductDiscounts, updatedAt: new Date() }).where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.id, edit.id)));
         touched.add(edit.offerId);
         break;
-      case "offer":
-        await tx.update(offers).set({ status: (values as { status: OfferStatus }).status, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, edit.id)));
+      case "offer": {
+        const { status } = values as { status: OfferStatus };
+        await tx.update(offers).set({ status, archivedAt: status === "archived" ? new Date() : null, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, edit.id)));
         touched.add(edit.id);
         break;
+      }
       case "setting": {
         const { value } = values as { value: string | null };
         if (value === null) await tx.delete(appSettings).where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, edit.key)));
@@ -97,7 +99,7 @@ export async function applyEdits(tx: Db, shopId: string, edits: readonly Edit[],
   return [...touched];
 }
 
-export const settingEdit = async (db: Db, shopId: string, key: string, value: string): Promise<Edit> => {
+export const settingEdit = async (db: Db, shopId: string, key: string, value: string): Promise<Extract<Edit, { table: "setting" }>> => {
   const [row] = await db.select({ value: appSettings.value }).from(appSettings).where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, key)));
   return { table: "setting", key, before: { value: row?.value ?? null }, after: { value } };
 };
@@ -251,8 +253,8 @@ export function planAllowCombine(rows: Iterable<OfferRows>): Edit[] {
 
 export interface SplitOutcome {
   partIds: string[];
-  /** Status edit of the original (active to paused); empty when it was not live. */
-  originalEdits: Edit[];
+  /** Parts archived to active, then the original active to paused (when it was live): replaying or reverting them is the whole Undo. */
+  edits: Edit[];
 }
 
 /**
@@ -279,5 +281,6 @@ export async function runSplit(tx: Db, shopId: string, rows: OfferRows, rewardId
   }
   const originalEdits = pauseEdits([rows]);
   await applyEdits(tx, shopId, originalEdits);
-  return { partIds, originalEdits };
+  const partEdits = partIds.map((id): Edit => ({ table: "offer", id, before: { status: "archived" }, after: { status: "active" } }));
+  return { partIds, edits: [...partEdits, ...originalEdits] };
 }
