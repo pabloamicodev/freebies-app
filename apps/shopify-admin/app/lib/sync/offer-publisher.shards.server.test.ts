@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { and, eq, inArray } from "drizzle-orm";
 import { appSettings, discountShards, offerCombinationPolicies, offerConditions, offerRewards, offers, shops, type Db } from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "../test-support/pglite-db.js";
-import { setFunctionShardsEnabled } from "../function-shards-flag.server.js";
+import { setFunctionShardsEnabled, setShardDomainsEnabled } from "../function-shards-flag.server.js";
 import { SLOT_LIMITS } from "./shard-planner.js";
 
 let currentDb: Db | null = null;
@@ -41,6 +41,7 @@ const { ShardPlanBlockedError } = await import("./cart-shards.server.js");
 const { configHash } = await import("../publish-manifest.server.js");
 const { repairShopDrift } = await import("../discount-reconciliation.server.js");
 const { tryPublishShop } = await import("../offer-publish-flow.server.js");
+const { preflightCapacity } = await import("../capacity-preflight.server.js");
 
 const CART_FN = { id: "gid://shopify/ShopifyFunction/cart", apiType: "discount", handle: "promo-engine-discount", title: "Promo Engine Discount" };
 const DELIVERY_FN = { id: "gid://shopify/ShopifyFunction/delivery", apiType: "discount", handle: "promo-engine-delivery-discount", title: "Promo Engine Delivery Discount" };
@@ -63,6 +64,9 @@ class FakeShopify {
   created: string[] = [];
   deleted: string[] = [];
   policyUpdates: string[] = [];
+  /** Every combinesWith update and metafieldsSet, in call order, so tests can assert strict-first ordering. */
+  timeline: string[] = [];
+  policies = new Map<string, { orderDiscounts: boolean; productDiscounts: boolean; shippingDiscounts: boolean }>();
   others = 3;
   crashAfterMetafieldsSet = false;
   private seq = 100;
@@ -78,6 +82,8 @@ class FakeShopify {
     this.created = [];
     this.deleted = [];
     this.policyUpdates = [];
+    this.timeline = [];
+    this.policies = new Map();
     this.others = 3;
     this.crashAfterMetafieldsSet = false;
   }
@@ -142,12 +148,16 @@ class FakeShopify {
     }
     if (query.includes("UpdatePromoEngineDiscountCombination")) {
       this.policyUpdates.push(variables!["id"] as string);
+      const combinesWith = (variables!["discount"] as { combinesWith: { orderDiscounts: boolean; productDiscounts: boolean; shippingDiscounts: boolean } }).combinesWith;
+      this.policies.set(variables!["id"] as string, combinesWith);
+      this.timeline.push(`policy:${variables!["id"] as string}:${combinesWith.productDiscounts ? "open" : "closed"}`);
       return { discountAutomaticAppUpdate: { automaticAppDiscount: { discountId: variables!["id"] }, userErrors: [] } };
     }
     if (query.includes("mutation MetafieldsSet")) {
       const batch = variables!["metafields"] as MetafieldInput[];
       for (const m of batch) if (!this.nodes.has(m.ownerId)) throw new Error(`metafieldsSet on missing node ${m.ownerId}`);
       this.metafieldsSets.push(batch);
+      this.timeline.push("swap");
       for (const m of batch) this.setMetafield(m.ownerId, m.namespace, m.value);
       if (this.crashAfterMetafieldsSet) {
         this.crashAfterMetafieldsSet = false;
@@ -168,7 +178,12 @@ class FakeShopify {
             id,
             m0: copy("promo_engine"),
             m1: copy("$app:promo_engine"),
-            automaticDiscount: { status: "ACTIVE", appliesOnSubscription: true, appliesOnOneTimePurchase: true },
+            automaticDiscount: {
+              status: "ACTIVE",
+              appliesOnSubscription: true,
+              appliesOnOneTimePurchase: true,
+              ...(this.policies.has(id) ? { combinesWith: this.policies.get(id) } : {}),
+            },
           };
         }),
       };
@@ -547,6 +562,160 @@ describe("sharded cart publish", () => {
       expect((error as Error).message).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
       expect(shopify.metafieldsSets).toHaveLength(sets);
       expect(shopify.mutations).toHaveLength(writes);
+    });
+  });
+
+  describe("combination domains", () => {
+    const nonCombining = async (offerIds: string[], productDiscounts = false) => {
+      await db.delete(offerCombinationPolicies).where(inArray(offerCombinationPolicies.offerId, offerIds));
+      await db.insert(offerCombinationPolicies).values(
+        offerIds.map((offerId) => ({ shopId, offerId, combinesWithProductDiscounts: productDiscounts })),
+      );
+    };
+    const budget = { storeActive: 5, ours: 2, others: 3, maxCartSlots: 11 };
+
+    beforeEach(async () => {
+      ids = await seedCatalog(shopId, COUNT, 0, 0);
+      await setFunctionShardsEnabled(db, shopId, true);
+    });
+
+    it("splits a shop with non-combining offers instead of blocking, each node carrying its own policy", async () => {
+      await setShardDomainsEnabled(db, shopId, true);
+      const nc = [ids[3]!, ids[40]!];
+      await nonCombining(nc);
+
+      await publishOffersForShop(shopId, DOMAIN);
+
+      const rows = await shardRows();
+      expect(rows.length).toBeGreaterThan(2);
+      const closed = rows.filter((row) => !shopify.policies.get(slotOwner(row))!.productDiscounts);
+      expect(closed.map((row) => row.slot)).toEqual([0]);
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: false });
+      for (const row of rows.slice(1)) expect(shopify.policies.get(slotOwner(row))).toMatchObject({ productDiscounts: true });
+      const inSlot0 = new Set(shopify.value(CART_NODE).offers.map((offer) => offer.id));
+      for (const id of nc) expect(inSlot0.has(id)).toBe(true);
+      expect((await assignment()).size).toBe(COUNT);
+    });
+
+    it("records each node's combinesWith in the manifest so drift can compare it", async () => {
+      await setShardDomainsEnabled(db, shopId, true);
+      await nonCombining([ids[3]!]);
+      await publishOffersForShop(shopId, DOMAIN);
+
+      const { readPublishManifest } = await import("../publish-manifest.server.js");
+      const manifest = (await readPublishManifest(shopId, db))!;
+      expect(manifest.nodes[CART_NODE]!.combinesWith).toMatchObject({ productDiscounts: false });
+      const shardNode = (await shardRows())[1]!;
+      expect(manifest.nodes[slotOwner(shardNode)]!.combinesWith).toMatchObject({ productDiscounts: true });
+      const drift = { graphQL: shopify.call as never, publish: publishOffersForShop, settleMs: 0, globallyPaused: false };
+      expect((await repairShopDrift(db, drift, { shopId, dryRun: true })).findings.filter((f) => f.nodeId)).toEqual([]);
+    });
+
+    it("tightens before the config swap and loosens after it", async () => {
+      await setShardDomainsEnabled(db, shopId, true);
+      const nc = [ids[3]!, ids[40]!];
+      await nonCombining(nc);
+      await publishOffersForShop(shopId, DOMAIN);
+      shopify.timeline = [];
+
+      await nonCombining(nc, true);
+      await publishOffersForShop(shopId, DOMAIN);
+
+      const swap = shopify.timeline.indexOf("swap");
+      expect(swap).toBeGreaterThan(0);
+      const before = shopify.timeline.slice(0, swap).filter((entry) => entry.startsWith(`policy:${CART_NODE}`));
+      const after = shopify.timeline.slice(swap + 1).filter((entry) => entry.startsWith(`policy:${CART_NODE}`));
+      expect(before).toEqual([`policy:${CART_NODE}:closed`]);
+      expect(after).toEqual([`policy:${CART_NODE}:open`]);
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: true });
+    });
+
+    it("a crash after the swap leaves the node restrictive and the next publish converges", async () => {
+      await setShardDomainsEnabled(db, shopId, true);
+      const nc = [ids[3]!, ids[40]!];
+      await nonCombining(nc);
+      await publishOffersForShop(shopId, DOMAIN);
+
+      await nonCombining(nc, true);
+      shopify.crashAfterMetafieldsSet = true;
+      await expect(publishOffersForShop(shopId, DOMAIN)).rejects.toThrow("process died after metafieldsSet");
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: false });
+
+      await publishOffersForShop(shopId, DOMAIN);
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: true });
+    });
+
+    it("with the setting off a non-combining offer still blocks growth, writing nothing", async () => {
+      await setShardDomainsEnabled(db, shopId, false);
+      await nonCombining([ids[3]!]);
+
+      const error = await publishOffersForShop(shopId, DOMAIN).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(ShardPlanBlockedError);
+      expect((error as InstanceType<typeof ShardPlanBlockedError>).capacity.code).toBe("COMBINATION_SINGLE_SHARD");
+      expect(shopify.metafieldsSets).toEqual([]);
+    });
+
+    it("the global env switch overrides a shop that has the setting on", async () => {
+      await setShardDomainsEnabled(db, shopId, true);
+      await nonCombining([ids[3]!]);
+      vi.stubEnv("FUNCTION_SHARD_DOMAINS", "off");
+      try {
+        const error = await publishOffersForShop(shopId, DOMAIN).catch((caught: unknown) => caught);
+        expect((error as InstanceType<typeof ShardPlanBlockedError>).capacity.code).toBe("COMBINATION_SINGLE_SHARD");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it("an unset setting follows the default, which is on outside the test env", async () => {
+      await nonCombining([ids[3]!]);
+      vi.stubEnv("FUNCTION_SHARD_DOMAINS_DEFAULT", "on");
+      try {
+        await publishOffersForShop(shopId, DOMAIN);
+        expect((await shardRows()).length).toBeGreaterThan(1);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it("preflight uses the publisher's mode and reports the combination groups", async () => {
+      await setShardDomainsEnabled(db, shopId, true);
+      await nonCombining([ids[3]!, ids[40]!]);
+      const preflight = await preflightCapacity(db, shopId, [], { shardsEnabled: true, loadBudget: async () => budget });
+      expect(preflight.ok).toBe(true);
+      await publishOffersForShop(shopId, DOMAIN);
+      const rows = await shardRows();
+      if (!preflight.ok) return;
+      const closedNodes = rows.filter((row) => !shopify.policies.get(slotOwner(row))!.productDiscounts).length;
+      expect(preflight.plan.slots).toBeGreaterThan(1);
+      expect(preflight.plan.combinationGroups).toMatchObject({ nonCombining: 2, nonCombiningNodes: closedNodes });
+      expect(preflight.plan.combinationGroups!.nodes).toBe(preflight.plan.slots);
+    });
+
+    it("preflight with the setting off reports COMBINATION_SINGLE_SHARD", async () => {
+      await setShardDomainsEnabled(db, shopId, false);
+      await nonCombining([ids[3]!]);
+      const preflight = await preflightCapacity(db, shopId, [], { shardsEnabled: true, loadBudget: async () => budget });
+      expect(preflight).toMatchObject({ ok: false, code: "COMBINATION_SINGLE_SHARD" });
+    });
+
+    it("a shop that fits one node makes the same calls whatever the setting says", async () => {
+      await db.delete(offers).where(eq(offers.shopId, shopId));
+      ids = await seedCatalog(shopId, 6, 0, 0);
+      await nonCombining([ids[1]!]);
+      await setShardDomainsEnabled(db, shopId, false);
+      await publishOffersForShop(shopId, DOMAIN);
+      const off = { mutations: [...shopify.mutations], policies: new Map(shopify.policies), cart: strip(shopify.metafields.get(CART_NODE)!.get("promo_engine")!) };
+
+      shopify.reset();
+      await setShardDomainsEnabled(db, shopId, true);
+      await publishOffersForShop(shopId, DOMAIN);
+
+      expect(shopify.mutations).toEqual(off.mutations);
+      expect(shopify.policies).toEqual(off.policies);
+      expect(strip(shopify.metafields.get(CART_NODE)!.get("promo_engine")!)).toEqual(off.cart);
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: false });
     });
   });
 

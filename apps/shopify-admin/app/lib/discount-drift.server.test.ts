@@ -53,6 +53,8 @@ interface FakeNode {
   /** Purchase-type flags Shopify holds; omitted means the node reports both true. */
   appliesOnSubscription?: boolean;
   appliesOnOneTimePurchase?: boolean;
+  /** combinesWith Shopify holds; omitted means the response carries none. */
+  combinesWith?: { orderDiscounts: boolean; productDiscounts: boolean; shippingDiscounts: boolean };
 }
 
 /** A tiny stand-in for the part of Shopify the drift check reads, with a publish that can restore it. */
@@ -76,7 +78,12 @@ function fakeShopify(initial: Record<string, FakeNode>, validation: { present: b
             appliesOnOneTimePurchase: node.appliesOnOneTimePurchase ?? true,
           };
           return node.kind === "automatic"
-            ? { __typename: "DiscountAutomaticNode", id, ...copies, automaticDiscount: { status: node.status, ...flags } }
+            ? {
+                __typename: "DiscountAutomaticNode",
+                id,
+                ...copies,
+                automaticDiscount: { status: node.status, ...flags, ...(node.combinesWith ? { combinesWith: node.combinesWith } : {}) },
+              }
             : {
                 __typename: "DiscountCodeNode",
                 id,
@@ -242,6 +249,38 @@ describe("runDiscountDriftRepair", () => {
     expect(republished).toBe(true);
     expect(onlyMine(publish, shop.shopId)).toHaveLength(1);
     expect(result.unresolved.filter((f) => f.shopId === shop.shopId)).toEqual([]);
+  });
+
+  it("treats a node whose combinesWith differs from the manifest as drift and republishes", async () => {
+    const shop = await seedPublishedShop();
+    const closed = { orderDiscounts: true, productDiscounts: false, shippingDiscounts: true };
+    shop.collector.record(shop.cart, "cart", shop.cartValue, { combinesWith: closed });
+    await writePublishManifest(shop.shopId, shop.collector.build());
+    const fake = fakeShopify({
+      [shop.cart]: { kind: "automatic", value: shop.cartValue, status: "ACTIVE", combinesWith: { ...closed, productDiscounts: true } },
+      [shop.delivery]: { kind: "automatic", value: shop.cartValue, status: "ACTIVE" },
+    });
+    const publish = vi.fn(async (shopId: string) => {
+      if (shopId === shop.shopId) fake.nodes[shop.cart]!.combinesWith = closed;
+    });
+
+    const { result } = await run(fake.graphQL, publish);
+
+    expect(onlyMine(publish, shop.shopId)).toHaveLength(1);
+    expect(result.unresolved.filter((f) => f.shopId === shop.shopId)).toEqual([]);
+  });
+
+  it("leaves a node whose combinesWith matches the manifest alone", async () => {
+    const shop = await seedPublishedShop();
+    const closed = { orderDiscounts: true, productDiscounts: false, shippingDiscounts: true };
+    shop.collector.record(shop.cart, "cart", shop.cartValue, { combinesWith: closed });
+    await writePublishManifest(shop.shopId, shop.collector.build());
+    const fake = fakeShopify({
+      [shop.cart]: { kind: "automatic", value: shop.cartValue, status: "ACTIVE", combinesWith: closed },
+      [shop.delivery]: { kind: "automatic", value: shop.cartValue, status: "ACTIVE" },
+    });
+    const { publish } = await run(fake.graphQL);
+    expect(onlyMine(publish, shop.shopId)).toHaveLength(0);
   });
 
   it("expects the flags the manifest recorded for a per-offer code node", async () => {

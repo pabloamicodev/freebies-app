@@ -10,7 +10,6 @@ import {
   type Db,
 } from "@promo/db";
 import {
-  compileDiscountCombinationPolicy,
   compileOfferConfig,
   compileShippingOfferConfigs,
   serializeFunctionConfig,
@@ -25,7 +24,8 @@ import { isCheckoutCodeGated } from "./code-redemption.js";
 import { MAX_METAFIELD_BYTES } from "./sync/offer-publisher.server.js";
 import { buildCartValidationConfig, MAX_VALIDATION_CONFIG_BYTES } from "./cart-validation.server.js";
 import { OfferPublishError, offerCompileError } from "./offer-publish-errors.server.js";
-import { isFunctionShardsEnabled } from "./function-shards-flag.server.js";
+import { isFunctionShardsEnabled, isShardDomainsEnabled } from "./function-shards-flag.server.js";
+import { summarizeCombinationGroups, type CombinationGroupsSummary } from "./sync/combination-groups.js";
 import { countShardNodes, readPreviousAssignment } from "./sync/cart-shards.server.js";
 import {
   automaticNodeBudget,
@@ -191,6 +191,8 @@ export type CapacityPreflight =
         budget: CapacityBudget | null;
         singleShardReason?: "flag_off" | "combination" | "budget";
         combinationBlockers?: CombinationBlocker[];
+        /** Set when combination domains split the offers over several nodes. */
+        combinationGroups?: CombinationGroupsSummary;
       };
     }
   | {
@@ -210,6 +212,8 @@ export type CapacityFailure = Extract<CapacityPreflight, { ok: false }>;
 export interface CapacityOptions {
   /** Overrides the per-shop flag (tests, diagnostics). */
   shardsEnabled?: boolean;
+  /** Overrides the combination-domains setting (tests, diagnostics). */
+  domainsEnabled?: boolean;
   /** Count the offers in `offerIds` even when code-gated (an offer about to switch to automatic). */
   forceInclude?: boolean;
   /** Overrides how the live automatic-discount budget is read (default: Redis-cached `automaticNodeBudget`). */
@@ -269,6 +273,8 @@ async function fallbackMaxSlots(db: Db, shopId: string): Promise<number> {
   }
   return Math.min(MAX_CART_SLOTS, Math.max(shards, await countShardNodes(db, shopId)) + 2);
 }
+
+const summaryOf = (summary: CombinationGroupsSummary | null) => (summary ? { combinationGroups: summary } : {});
 
 /**
  * Plans the cart shards in memory exactly as the publisher will and returns a structured, attributable
@@ -341,14 +347,15 @@ export async function preflightCapacity(
   const splitOptions = enabled ? await loadSplitOptions(db, shopId, shared.compiled.map((entry) => entry.offer)) : {};
   const { units } = buildPlanUnitSet(shared.compiled, conditions, shared.policies, splitOptions);
   const previous = await readPreviousAssignment(db, shopId);
-  const policy = compileDiscountCombinationPolicy(shared.compiled.map((entry) => entry.offer));
-  const plan = planShards(units, previous, { ...SLOT_LIMITS, maxSlots, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, policy);
+  const domains = enabled && (opts.domainsEnabled ?? (await isShardDomainsEnabled(db, shopId)));
+  const mode = domains ? "domains" : "uniform";
+  const plan = planShards(units, previous, { ...SLOT_LIMITS, maxSlots, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, mode);
   const blockers = combinationBlockers(shared.compiled, units.some((unit) => unit.hasOrderRewards));
-  const combinationForcesSingle = enabled && maxSlots > 1 && blockers.length > 0;
+  const combinationForcesSingle = enabled && !domains && maxSlots > 1 && blockers.length > 0;
   let blocked = plan.blocked;
   if (blocked && enabled && maxSlots < MAX_CART_SLOTS && blocked.code !== "AUTOMATIC_DISCOUNT_LIMIT") {
     // The budget, not the offers, may be what is short: replan with every slot to learn how many are needed.
-    const wide = planShards(units, previous, { ...SLOT_LIMITS, maxSlots: MAX_CART_SLOTS, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, policy);
+    const wide = planShards(units, previous, { ...SLOT_LIMITS, maxSlots: MAX_CART_SLOTS, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, mode);
     if (!wide.blocked) {
       blocked = {
         code: "AUTOMATIC_DISCOUNT_LIMIT",
@@ -441,6 +448,7 @@ export async function preflightCapacity(
           : maxSlots <= 1
             ? { singleShardReason: "budget" as const }
             : {}),
+      ...(domains ? summaryOf(summarizeCombinationGroups(units, plan)) : {}),
     },
   };
 }
