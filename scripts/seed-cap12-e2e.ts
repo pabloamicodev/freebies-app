@@ -18,7 +18,7 @@
  * are not polluted by the store's QA offers; `cleanup` restores their exact status.
  */
 import { resolve } from "node:path";
-import { writeFileSync, existsSync, rmSync } from "node:fs";
+import { writeFileSync, existsSync, rmSync, readFileSync } from "node:fs";
 import process from "node:process";
 
 const DEV_SHOP = "hpn-test-store.myshopify.com";
@@ -334,6 +334,38 @@ async function main(): Promise<void> {
         }, null, 2)}\n`,
       );
       out(`marker written: ${MARKER}`);
+      return;
+    }
+
+    if (command === "lists") {
+      for (const id of await cartNodeIds()) {
+        const r = await admin<{ node: { metafield: { value: string } | null } | null }>(
+          `query($id: ID!) { node(id: $id) { ... on DiscountAutomaticNode { metafield(namespace: "promo_engine", key: "function_config") { value } } } }`, { id });
+        const config = JSON.parse(r.node?.metafield?.value ?? "{}") as { offers?: Array<Record<string, unknown>> };
+        for (const offer of config.offers ?? []) {
+          const rewards = (offer["productRewards"] ?? offer["pr"] ?? []) as Array<Record<string, unknown>>;
+          for (const reward of rewards) {
+            for (const [key, value] of Object.entries(reward)) {
+              if (/ProductIds$|^tp/.test(key)) out(`${id.split("/").pop()} ${String(offer["title"] ?? offer["id"]).slice(0, 28)} ${key}: ${Array.isArray(value) ? `array(${value.length})` : `${typeof value} len=${String(value).length} commas=${String(value).split(",").length - 1}`}`);
+            }
+          }
+        }
+      }
+      return;
+    }
+
+    if (command === "unfunded") {
+      const mode = args[1];
+      if (mode !== "on" && mode !== "off") throw new Error("usage: unfunded on|off");
+      await putSetting("storefront.remove_unfunded_gifts", String(mode === "on"));
+      await publish();
+      if (existsSync(MARKER)) {
+        const marker = JSON.parse(readFileSync(MARKER, "utf8")) as Record<string, unknown>;
+        marker["unfunded"] = mode === "on";
+        writeFileSync(MARKER, `${JSON.stringify(marker, null, 2)}
+`);
+      }
+      out(`storefront.remove_unfunded_gifts = ${await setting("storefront.remove_unfunded_gifts")}`);
       return;
     }
 

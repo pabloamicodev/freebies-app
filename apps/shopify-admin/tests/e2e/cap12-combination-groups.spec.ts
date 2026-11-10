@@ -32,6 +32,8 @@ interface SeedProduct {
   price: number;
 }
 interface Seed {
+  /** true when the seed ran with storefront.remove_unfunded_gifts on: losing auto-added gifts are removed by the runtime. */
+  unfunded?: boolean;
   code: string;
   percent: { cA: number; cB: number; code: number };
   products: { gift: SeedProduct; ncAnchor: SeedProduct; cA: SeedProduct; cB: SeedProduct; codeProduct: SeedProduct };
@@ -97,6 +99,16 @@ async function settledCart(page: Page, wantGift: boolean): Promise<RawCart> {
     last = fingerprint;
     if ((giftLine(cart) !== undefined) === wantGift && stable >= 2) return cart;
     await page.waitForTimeout(2_000);
+  }
+  return cart;
+}
+
+/** Waits until the cart has no gift line (the runtime removes a gift Shopify did not discount). */
+async function goneGift(page: Page): Promise<RawCart> {
+  let cart = await readCart(page);
+  for (let attempt = 0; attempt < 20 && giftLine(cart); attempt++) {
+    await page.waitForTimeout(2_000);
+    cart = await readCart(page);
   }
   return cart;
 }
@@ -192,6 +204,13 @@ test.describe("FIX-cap-12 combination groups on hpn-test-store", () => {
     await record("g2", cart, `A x${quantity} -20% (${cValue}c) beats gift (${giftValue}c): A discounted, gift line full price`);
     expect(cValue, "case construction: combining offer must be the bigger one").toBeGreaterThan(giftValue);
     expect(near(discountOf(a), cValue), "combining offer applies").toBe(true);
+    if (seed!.unfunded) {
+      const after = await goneGift(page);
+      await record("g2-unfunded", after, "gift line removed, A discount intact");
+      expect(giftLine(after), "unfunded gift is removed").toBeUndefined();
+      expect(near(discountOf(lineOf(after, cA)), cValue), "winning % offer intact").toBe(true);
+      return;
+    }
     const g = giftLine(cart);
     expect(g, "the engine still adds the gift line").toBeTruthy();
     expect(discountOf(g), "non-combining gift loses best-of").toBe(0);
@@ -224,6 +243,29 @@ test.describe("FIX-cap-12 combination groups on hpn-test-store", () => {
     const codeValue = Math.round(c.original_line_price * seed!.percent.code / 100);
     const giftValue = Math.round(gift.price * 100);
     await record("i", cart, `code (${codeValue}c) vs NC gift (${giftValue}c): exactly one applies`);
+    if (seed!.unfunded) {
+      const after = await goneGift(page);
+      await record("i-unfunded", after, "gift line removed, code discount intact");
+      expect(giftLine(after), "unfunded gift is removed").toBeUndefined();
+      expect(near(discountOf(lineOf(after, codeProduct)), codeValue), "code discount intact").toBe(true);
+      // Removing the code frees the gift again once the cart changes.
+      await storefrontFetch(page, "/cart/update.js", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ discount: "" }),
+      });
+      const line = lineOf(await readCart(page), codeProduct)!;
+      await storefrontFetch(page, "/cart/change.js", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ id: String(line.variant_id), quantity: 2 }),
+      });
+      const back = await settledCart(page, true);
+      await record("i-code-removed", back, "gift back and free (NC gift is the only discount)");
+      expect(giftLine(back), "gift returns").toBeTruthy();
+      expect(giftLine(back)!.final_line_price, "gift free again").toBe(0);
+      return;
+    }
     const g = giftLine(cart);
     expect(g, "the engine adds the gift line").toBeTruthy();
     const codeApplied = discountOf(c) > 0;
