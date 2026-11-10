@@ -1466,6 +1466,20 @@ fn best_candidate_per_line(
     input: &Input,
 ) -> Vec<schema::ProductDiscountCandidate> {
     let lines = input.cart().lines();
+    // Index of the first line with an id. A handful of candidates is cheaper to scan than to hash every id.
+    let mut index_by_id: HashMap<&str, usize> = HashMap::default();
+    if candidates.len() >= 8 {
+        for (index, line) in lines.iter().enumerate() {
+            index_by_id.entry(line.id().as_str()).or_insert(index);
+        }
+    }
+    let line_index = |id: &str| {
+        if index_by_id.is_empty() {
+            lines.iter().position(|line| line.id() == id)
+        } else {
+            index_by_id.get(id).copied()
+        }
+    };
     // (line index, saving) for single-line candidates; None passes through untouched.
     let savings: Vec<Option<(usize, f64)>> = candidates
         .iter()
@@ -1473,7 +1487,7 @@ fn best_candidate_per_line(
             let [schema::ProductDiscountCandidateTarget::CartLine(target)] = candidate.targets.as_slice() else {
                 return None;
             };
-            let index = lines.iter().position(|line| line.id() == &target.id)?;
+            let index = line_index(target.id.as_str())?;
             let quantity = f64::from(target.quantity.unwrap_or(1));
             let saving = match &candidate.value {
                 schema::ProductDiscountCandidateValue::Percentage(pct) => {
