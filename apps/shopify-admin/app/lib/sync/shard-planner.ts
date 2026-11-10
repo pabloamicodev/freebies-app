@@ -112,8 +112,8 @@ function compareText(a: string, b: string): number {
  * weighs `envelopeBytes + sum(unitBytes) - 1`. `sharedConfigBreakdown` measures the uncompacted
  * offer, so it overstates; the planner uses this exact figure.
  */
-export function unitBytes(offer: CompiledOffer): number {
-  return utf8Bytes(JSON.stringify(compactCompiledOffer(offer))) + 1;
+export function unitBytes(offer: CompiledOffer, compactIds = false): number {
+  return utf8Bytes(JSON.stringify(compactCompiledOffer(offer, compactIds))) + 1;
 }
 
 /** Per-slot envelope: version, compiledAt, c1..c3 query variables, customerTags (and l1/l2 when set) and the empty `offers` array. */

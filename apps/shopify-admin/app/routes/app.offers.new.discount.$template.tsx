@@ -103,7 +103,8 @@ export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) 
   if (discountProductsResult.error) return { error: discountProductsResult.error };
   const discountProducts = discountProductsResult.data!;
   const wholeProductsResult = parseJsonStringArray(formData, "discountWholeProducts");
-  const discountSelection = await resolveSelection(db, shopId, discountProducts, wholeProductsResult.data ?? []);
+  if (wholeProductsResult.error) return { error: wholeProductsResult.error };
+  const discountSelection = await resolveSelection(db, shopId, discountProducts, wholeProductsResult.data!);
   if (intent === "publish" && applyTo === "selected_products" && discountProducts.length === 0) {
     return { error: "Select at least one product before publishing." };
   }

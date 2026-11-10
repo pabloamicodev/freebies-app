@@ -19,7 +19,11 @@ fn lenient_shipping_offers<'de, D: Deserializer<'de>>(
     let raw = Vec::<Box<RawValue>>::deserialize(deserializer)?;
     Ok(raw
         .iter()
-        .filter_map(|offer| serde_json::from_str(offer.get()).ok())
+        .filter_map(|offer| serde_json::from_str::<CompiledShippingOffer>(offer.get()).ok())
+        .map(|mut offer| {
+            crate::de::gids(&mut offer.required_anchor_variant_ids, "ProductVariant");
+            offer
+        })
         .collect())
 }
 
@@ -128,6 +132,20 @@ pub fn to_cents(amount: f64, currency_code: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_anchor_ids_normalize_to_the_gid_form() {
+        let parse = |ids: &str| {
+            serde_json::from_str::<CompiledConfig>(&format!(
+                r#"{{"shippingOffers":[{{"id":"s","priority":1,"tiers":[],"requiredAnchorVariantIds":[{ids}]}}]}}"#
+            ))
+            .unwrap()
+        };
+        let old = parse(r#""gid://shopify/ProductVariant/9","gid://shopify/ProductVariant/10""#);
+        assert_eq!(parse(r#""9","10""#), old);
+        assert_eq!(parse(r#""9","gid://shopify/ProductVariant/10""#), old);
+        assert_eq!(old.shipping_offers[0].required_anchor_variant_ids[0], "gid://shopify/ProductVariant/9");
+    }
 
     #[test]
     fn compact_metafield_deserializes_to_the_full_config() {

@@ -27,6 +27,7 @@ import {
   writePublishManifest,
   type ManifestNodeKind,
 } from "../publish-manifest.server.js";
+import { isFunctionCompactIdsEnabled } from "../function-compact-ids-flag.server.js";
 import { isFunctionShardsEnabled, isShardDomainsEnabled } from "../function-shards-flag.server.js";
 import { SLOT_LIMITS, andPolicies, planShards, policyKey, type CombinationPolicy } from "./shard-planner.js";
 import { baseOfferId, buildPlanUnitSet, slotOffers } from "./plan-units.js";
@@ -502,6 +503,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     );
     const shippingOffers = compiledByOffer.flatMap((entry) => entry.shippingOffers);
     const shardsEnabled = await isFunctionShardsEnabled(db, shopId);
+    const compactIds = await isFunctionCompactIdsEnabled(db, shopId);
     const storedShardIds = await readCartShardNodeIds(shopId);
     const shardMode = shardsEnabled || storedShardIds.length > 0;
     const domainsMode = shardsEnabled && (await isShardDomainsEnabled(db, shopId));
@@ -526,7 +528,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       compiledOffers.map((offer) => ({ offerId: offer.id, offer })),
       conditionRows,
       policyRows,
-      shardsEnabled ? await loadSplitOptions(db, shopId, compiledOffers) : {},
+      shardsEnabled ? { ...(await loadSplitOptions(db, shopId, compiledOffers)), compactIds } : { compactIds },
     );
     const plan = planShards(
       planUnits,
@@ -563,10 +565,10 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
         ...(slot.tags.length > 0 ? { customerTags: slot.tags } : {}),
         ...buildAttributeQueryVariables(conditionRows.filter((row) => members.has(row.offerId))),
       };
-      return serializeFunctionConfig(cartConfig);
+      return serializeFunctionConfig(cartConfig, { compactIds });
     });
     const deliveryConfig: CompiledFunctionConfig = { offers: [], shippingOffers, version: "1", compiledAt };
-    const deliveryValue = serializeFunctionConfig(deliveryConfig, { omitQueryVariables: true });
+    const deliveryValue = serializeFunctionConfig(deliveryConfig, { omitQueryVariables: true, compactIds });
     for (const [label, value] of [
       ...slotValues.map((slotValue) => ["cart", slotValue] as const),
       ["delivery", deliveryValue] as const,

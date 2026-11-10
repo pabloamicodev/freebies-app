@@ -34,6 +34,7 @@ import { MatchRuleField } from "../components/ProductConditionFields.js";
 import { matchRuleOperator, type MatchRule } from "../lib/product-condition.js";
 import { OfferConditionsBuilder } from "../components/OfferConditionsBuilder.js";
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
+import { resolveSelection } from "../lib/whole-product-selection.server.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
 import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
 import { withCapacityModal } from "../lib/capacity-capture.server.js";
@@ -116,6 +117,9 @@ export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) 
   const upsellProductsResult = parseJsonStringArray(formData, "upsellProducts");
   if (upsellProductsResult.error) return { error: upsellProductsResult.error };
   const upsellProducts = upsellProductsResult.data!;
+  const wholeProductsResult = parseJsonStringArray(formData, "upsellWholeProducts");
+  if (wholeProductsResult.error) return { error: wholeProductsResult.error };
+  const upsellSelection = await resolveSelection(db, shopId, upsellProducts, wholeProductsResult.data!);
   if (intent === "publish" && upsellProducts.length === 0) {
     return { error: "Select at least one upsell product before publishing." };
   }
@@ -250,8 +254,9 @@ export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) 
             ...(parseSubscriptionMode(formData) === "any" ? {} : { subscriptionMode: parseSubscriptionMode(formData) }),
             scopeMode: "sitewide",
             scope: "cart",
-            productIds: upsellProducts.filter((id) => id.includes("/Product/")),
-            variantIds: upsellProducts.filter((id) => id.includes("/ProductVariant/")),
+            productIds: upsellSelection.productIds,
+            variantIds: upsellSelection.variantIds,
+            ...(upsellSelection.selectionLevel ? { selectionLevel: upsellSelection.selectionLevel } : {}),
           },
           isAutoAdd: false,
           isCustomerSelectable: true,
@@ -323,6 +328,7 @@ export default function NewUpsellOfferPage() {
     allowCustomerQty: false,
     checkoutTarget: "",
     upsellProducts: [] as string[],
+    upsellWholeProducts: [] as string[],
     triggerProducts: [] as string[],
     triggerMatchRule: "any" as MatchRule,
     triggerPickerOpen: false,
@@ -354,6 +360,7 @@ export default function NewUpsellOfferPage() {
     allowCustomerQty,
     checkoutTarget,
     upsellProducts,
+    upsellWholeProducts,
     triggerProducts,
     triggerMatchRule,
     triggerPickerOpen,
@@ -382,6 +389,7 @@ export default function NewUpsellOfferPage() {
   const setAllowCustomerQty = createFieldSetter(setFormField, "allowCustomerQty");
   const setCheckoutTarget = createFieldSetter(setFormField, "checkoutTarget");
   const setUpsellProducts = createFieldSetter(setFormField, "upsellProducts");
+  const setUpsellWholeProducts = createFieldSetter(setFormField, "upsellWholeProducts");
   const setTriggerProducts = createFieldSetter(setFormField, "triggerProducts");
   const setTriggerMatchRule = createFieldSetter(setFormField, "triggerMatchRule");
   const setTriggerPickerOpen = createFieldSetter(setFormField, "triggerPickerOpen");
@@ -513,6 +521,7 @@ export default function NewUpsellOfferPage() {
         <input type="hidden" name="widgetType" value={widgetType} />
         <input type="hidden" name="allowCustomerQty" value={String(allowCustomerQty)} />
         <input type="hidden" name="upsellProducts" value={JSON.stringify(upsellProducts)} />
+        <input type="hidden" name="upsellWholeProducts" value={JSON.stringify(upsellWholeProducts)} />
         <input
           type="hidden"
           name="combinesOrderDiscounts"
@@ -905,9 +914,10 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                     </button>
                     <SelectedProductsList
                       gids={upsellProducts}
-                      onRemove={(gid) =>
-                        setUpsellProducts(upsellProducts.filter((id) => id !== gid))
-                      }
+                      onRemove={(gid) => {
+                        setUpsellProducts(upsellProducts.filter((id) => id !== gid));
+                        setUpsellWholeProducts([]);
+                      }}
                     />
                   </div>
 
@@ -1385,7 +1395,11 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
         availabilityPolicy="block"
         allowMultiple
         selectedIds={upsellProducts}
-        onSelect={(gids) => setUpsellProducts(gids)}
+        selectedWholeProducts={upsellWholeProducts}
+        onSelect={(gids, wholeSelected) => {
+          setUpsellProducts(gids);
+          setUpsellWholeProducts(wholeSelected);
+        }}
       />
       <ProductPicker
         open={triggerPickerOpen}

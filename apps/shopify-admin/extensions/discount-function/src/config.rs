@@ -35,7 +35,31 @@ fn lenient_offers<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Comp
     Ok(raw
         .iter()
         .filter_map(|offer| serde_json::from_str(offer.get()).ok())
+        .map(normalize_offer_ids)
         .collect())
+}
+
+fn normalize_offer_ids(mut offer: CompiledOffer) -> CompiledOffer {
+    use crate::de::{gid_opt, gids};
+    gids(&mut offer.required_product_ids, "Product");
+    gids(&mut offer.any_required_product_ids, "Product");
+    gids(&mut offer.excluded_product_ids, "Product");
+    gids(&mut offer.required_variant_ids, "ProductVariant");
+    gids(&mut offer.any_required_variant_ids, "ProductVariant");
+    for requirement in &mut offer.requirements {
+        gid_opt(&mut requirement.product_id, "Product");
+        gid_opt(&mut requirement.variant_id, "ProductVariant");
+    }
+    for reward in &mut offer.gift_rewards {
+        gids(&mut reward.target_product_ids, "Product");
+        gids(&mut reward.target_variant_ids, "ProductVariant");
+    }
+    for reward in &mut offer.product_rewards {
+        gids(&mut reward.target_product_ids, "Product");
+        gids(&mut reward.target_variant_ids, "ProductVariant");
+        gids(&mut reward.required_anchor_variant_ids, "ProductVariant");
+    }
+    offer
 }
 
 fn default_shipping_scope() -> String {
@@ -424,6 +448,42 @@ mod tests {
         assert_eq!((offer.discount_type.as_str(), offer.discount_value), ("free", 100.0));
         assert!(offer.treat_guest_as_no_tags && offer.title.is_none() && offer.required_product_ids.is_empty());
         assert_eq!(offer.gift_rewards[0].selection_count, None);
+    }
+
+    fn id_forms(variant: &str, product: &str) -> String {
+        format!(
+            r#"[{{"id":"a","version":1,"offerType":"gift","priority":1,
+            "requiredProductIds":[{product}],"requiredVariantIds":[{variant}],"anyRequiredProductIds":[{product}],
+            "anyRequiredVariantIds":[{variant}],"excludedProductIds":[{product}],
+            "requirements":[{{"productId":{product},"variantId":{variant},"trackMode":"any","minQuantity":1}}],
+            "giftRewards":[{{"id":"g","targetProductIds":[{product}],"targetVariantIds":[{variant}],"discountType":"free","discountValue":100,"maxQuantity":1}}],
+            "productRewards":[{{"targetProductIds":[{product}],"targetVariantIds":[{variant}],"requiredAnchorVariantIds":[{variant}],"discountType":"percentage","discountValue":10}}]}}]"#
+        )
+    }
+
+    #[test]
+    fn compact_numeric_ids_normalize_to_the_gid_form() {
+        let old = parse(&id_forms(
+            r#""gid://shopify/ProductVariant/42""#,
+            r#""gid://shopify/Product/7""#,
+        ));
+        assert_eq!(parse(&id_forms(r#""42""#, r#""7""#)), old);
+        assert_eq!(old.offers[0].required_variant_ids, ["gid://shopify/ProductVariant/42"]);
+    }
+
+    #[test]
+    fn mixed_id_forms_in_one_list_all_normalize() {
+        let config = parse(
+            r#"[{"id":"a","version":1,"offerType":"gift","priority":1,
+            "requiredVariantIds":["1","gid://shopify/ProductVariant/2","gid://shopify/ProductVariant/3"],
+            "excludedProductIds":["gid://shopify/Product/4","5"]}]"#,
+        );
+        let offer = &config.offers[0];
+        assert_eq!(
+            offer.required_variant_ids,
+            ["gid://shopify/ProductVariant/1", "gid://shopify/ProductVariant/2", "gid://shopify/ProductVariant/3"]
+        );
+        assert_eq!(offer.excluded_product_ids, ["gid://shopify/Product/4", "gid://shopify/Product/5"]);
     }
 
     #[test]

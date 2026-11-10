@@ -59,7 +59,7 @@ export function buildPlanUnitSet(
     const customerTags = [...new Set([...(offer.requiredCustomerTags ?? []), ...(offer.excludedCustomerTags ?? [])])].sort();
     const unit: PlanUnit = {
       key: offerId,
-      bytes: unitBytes(offer),
+      bytes: unitBytes(offer, options.compactIds),
       cartAttributeKeys,
       customerTags,
       domain: {
@@ -92,7 +92,7 @@ export function buildPlanUnitSet(
         splittable: result.parts.map((part) => ({
           ...unit,
           key: `${offerId}#${part.index}`,
-          bytes: unitBytes(part.offer),
+          bytes: unitBytes(part.offer, options.compactIds),
           targetProductIds: targetProductIdsOf(part.offer),
         })),
       };
