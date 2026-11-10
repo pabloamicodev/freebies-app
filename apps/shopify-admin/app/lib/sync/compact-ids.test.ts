@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   serializeFunctionConfig,
   type CompiledFunctionConfig,
@@ -77,8 +77,6 @@ function expandIds(value: unknown, key = ""): unknown {
   return kind && typeof value === "string" && /^\d+$/.test(value) ? `gid://shopify/${kind}/${value}` : value;
 }
 
-afterEach(() => vi.unstubAllEnvs());
-
 describe("FIX-cap-10 compact ids", () => {
   const withIds = (config: CompiledFunctionConfig) => ({
     ...config,
@@ -102,19 +100,16 @@ describe("FIX-cap-10 compact ids", () => {
     for (const { config } of fixtures) {
       for (const input of [config, withIds(config)]) {
         const old = JSON.parse(serializeFunctionConfig(input));
-        vi.stubEnv("FUNCTION_COMPACT_IDS", "1");
-        const compact = JSON.parse(serializeFunctionConfig(input));
-        vi.unstubAllEnvs();
+        const compact = JSON.parse(serializeFunctionConfig(input, { compactIds: true }));
         expect(expandIds(compact)).toEqual(old);
       }
     }
   });
 
   it("leaves non-numeric ids and collection gids untouched", () => {
-    vi.stubEnv("FUNCTION_COMPACT_IDS", "1");
     const base = fixtures[0]!.config;
     const offer = { ...base.offers[0]!, requiredVariantIds: ["gid://shopify/ProductVariant/12", "legacy-id", "gid://shopify/Collection/5"] };
-    const out = JSON.parse(serializeFunctionConfig({ ...base, offers: [offer] }));
+    const out = JSON.parse(serializeFunctionConfig({ ...base, offers: [offer] }, { compactIds: true }));
     expect(out.offers[0].requiredVariantIds).toEqual(["12", "legacy-id", "gid://shopify/Collection/5"]);
   });
 
@@ -123,19 +118,17 @@ describe("FIX-cap-10 compact ids", () => {
     const heavyOld = bytes(serializeFunctionConfig(heavy));
     const typicalConfig = { ...fixtures[0]!.config, offers: [{ ...heavyOffer(fixtures[0]!.config.offers[0]!), requiredVariantIds: range(2, V), anyRequiredProductIds: [], excludedProductIds: [], productRewards: [], giftRewards: [{ id: "g", targetVariantIds: range(3, V), targetProductIds: [], discountType: "free", discountValue: 100, maxQuantity: 1 } as unknown as CompiledOffer["giftRewards"][number]] }], shippingOffers: [] };
     const typicalOld = bytes(serializeFunctionConfig(typicalConfig));
-    vi.stubEnv("FUNCTION_COMPACT_IDS", "1");
-    const heavyNew = bytes(serializeFunctionConfig(heavy));
-    const typicalNew = bytes(serializeFunctionConfig(typicalConfig));
+    const heavyNew = bytes(serializeFunctionConfig(heavy, { compactIds: true }));
+    const typicalNew = bytes(serializeFunctionConfig(typicalConfig, { compactIds: true }));
     console.info("compact ids bytes", { heavyOld, heavyNew, typicalOld, typicalNew });
     expect(heavyNew).toBeLessThan(heavyOld * 0.62);
     expect(typicalNew).toBeLessThan(typicalOld - 100);
   });
 
   it("keeps the planner byte estimate exact with compact ids on", () => {
-    vi.stubEnv("FUNCTION_COMPACT_IDS", "1");
     const config = withIds(fixtures[0]!.config);
-    const serialized = serializeFunctionConfig({ ...config, offers: [config.offers[0]!], shippingOffers: [] });
+    const serialized = serializeFunctionConfig({ ...config, offers: [config.offers[0]!], shippingOffers: [] }, { compactIds: true });
     const empty = serializeFunctionConfig({ ...config, offers: [], shippingOffers: [] });
-    expect(bytes(serialized)).toBe(bytes(empty) + unitBytes(config.offers[0]!) - 1);
+    expect(bytes(serialized)).toBe(bytes(empty) + unitBytes(config.offers[0]!, true) - 1);
   });
 });

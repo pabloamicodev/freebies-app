@@ -23,6 +23,7 @@ import { isCheckoutCodeGated } from "./code-redemption.js";
 import { MAX_METAFIELD_BYTES } from "./sync/offer-publisher.server.js";
 import { buildCartValidationConfig, MAX_VALIDATION_CONFIG_BYTES } from "./cart-validation.server.js";
 import { OfferPublishError, offerCompileError } from "./offer-publish-errors.server.js";
+import { isFunctionCompactIdsEnabled } from "./function-compact-ids-flag.server.js";
 import { isFunctionShardsEnabled } from "./function-shards-flag.server.js";
 import { countShardNodes, readPreviousAssignment } from "./sync/cart-shards.server.js";
 import {
@@ -100,9 +101,11 @@ export async function compileSharedOffers(
       throw offerCompileError(offer, error);
     }
   });
+  const compactIds = await isFunctionCompactIdsEnabled(db, shopId);
   return {
     compiled,
     policies,
+    compactIds,
     config: (extraFields: Record<string, string> = {}) =>
       serializeFunctionConfig({
         offers: compiled.map((entry) => entry.offer),
@@ -110,7 +113,7 @@ export async function compileSharedOffers(
         version: "1",
         compiledAt: "2026-01-01T00:00:00.000Z",
         ...extraFields,
-      }),
+      }, { compactIds }),
     deliveryConfig: () =>
       serializeFunctionConfig(
         {
@@ -119,7 +122,7 @@ export async function compileSharedOffers(
           version: "1",
           compiledAt: "2026-01-01T00:00:00.000Z",
         },
-        { omitQueryVariables: true },
+        { omitQueryVariables: true, compactIds },
       ),
   };
 }
@@ -324,7 +327,7 @@ export async function preflightCapacity(
     }
   }
 
-  const units = buildPlanUnits(shared.compiled, conditions, shared.policies);
+  const units = buildPlanUnits(shared.compiled, conditions, shared.policies, shared.compactIds);
   const previous = await readPreviousAssignment(db, shopId);
   const policy = compileDiscountCombinationPolicy(shared.compiled.map((entry) => entry.offer));
   const plan = planShards(units, previous, { ...SLOT_LIMITS, maxSlots, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, policy);

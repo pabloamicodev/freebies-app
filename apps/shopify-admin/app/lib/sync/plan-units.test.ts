@@ -45,6 +45,13 @@ describe("buildPlanUnits", () => {
     expect(unit!.bytes).toBe(unitBytes(compiled));
   });
 
+  it("measures with compact ids when the shop flag is on", () => {
+    const compiled = offer({ id: "a", requiredVariantIds: ["gid://shopify/ProductVariant/123456789"] });
+    const [on] = buildPlanUnits([{ offerId: "a", offer: compiled }], [], [], true);
+    expect(on!.bytes).toBe(unitBytes(compiled, true));
+    expect(on!.bytes).toBeLessThan(unitBytes(compiled));
+  });
+
   it("takes sorted cart attribute keys only from enabled cart_attribute conditions of that offer", () => {
     const conditions = [
       condition("a", "cart_attribute", { key: " zeta " }),

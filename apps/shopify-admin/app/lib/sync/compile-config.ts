@@ -1323,11 +1323,10 @@ function omitDefaults(
 /**
  * FIX-cap-10: numeric ids without the `gid://shopify/ProductVariant|Product/` prefix (about -29 B per
  * list entry). The Functions rebuild the GID at deserialization and accept both forms, so this is only
- * emitted once the Functions that understand it are deployed: set FUNCTION_COMPACT_IDS=1 AFTER
- * `shopify app deploy` (Functions first, server second). Off by default.
+ * emitted per shop (`function_compact_ids.enabled`) once the Functions that understand it are
+ * deployed: Functions first, server second. Callers pass `compactIds`; off by default.
  */
 const GID_TAIL = /^gid:\/\/shopify\/(?:ProductVariant|Product)\/(\d+)$/;
-const compactIdsEnabled = () => process.env["FUNCTION_COMPACT_IDS"] === "1";
 const compactId = (id: string) => GID_TAIL.exec(id)?.[1] ?? id;
 const compactIds = (ids: readonly string[]) => ids.map(compactId);
 
@@ -1359,8 +1358,8 @@ function withCompactOfferIds(offer: CompiledOffer): CompiledOffer {
   };
 }
 
-export function compactCompiledOffer(source: CompiledOffer): Record<string, unknown> {
-  const offer = compactIdsEnabled() ? withCompactOfferIds(source) : source;
+export function compactCompiledOffer(source: CompiledOffer, compactIds = false): Record<string, unknown> {
+  const offer = compactIds ? withCompactOfferIds(source) : source;
   return omitDefaults(
     {
       ...offer,
@@ -1381,7 +1380,7 @@ export function compactCompiledOffer(source: CompiledOffer): Record<string, unkn
 /** The metafield value: Function metafield input is capped at 10,000 bytes. */
 export function serializeFunctionConfig(
   config: CompiledFunctionConfig,
-  options: { omitCartAttributeSlots?: boolean; omitQueryVariables?: boolean } = {},
+  options: { omitCartAttributeSlots?: boolean; omitQueryVariables?: boolean; compactIds?: boolean } = {},
 ): string {
   // The code Function's query has no c1-c3 slots (they cost complexity); only declared variables go in.
   const withoutSlots = options.omitCartAttributeSlots === true;
@@ -1396,11 +1395,11 @@ export function serializeFunctionConfig(
         ...queryVariables,
         ...config,
         ...(withoutSlots ? { c1: undefined, c2: undefined, c3: undefined } : {}),
-        offers: config.offers.map(compactCompiledOffer),
+        offers: config.offers.map((offer) => compactCompiledOffer(offer, options.compactIds)),
         shippingOffers: config.shippingOffers.map((offer) =>
           omitDefaults(
             {
-              ...(compactIdsEnabled() ? withCompactIds(offer, ["requiredAnchorVariantIds"]) : offer),
+              ...(options.compactIds ? withCompactIds(offer, ["requiredAnchorVariantIds"]) : offer),
               pageUrlConditions: offer.pageUrlConditions?.map((condition) =>
                 omitDefaults(condition, PAGE_URL_CONDITION_DEFAULTS),
               ),

@@ -34,10 +34,11 @@ export function buildPlanUnits(
   compiled: readonly CompiledEntry[],
   conditions: readonly ConditionRow[],
   policies: readonly PolicyRow[],
+  compactIds = false,
 ): PlanUnit[] {
   return compiled.map(({ offerId, offer }) => ({
     key: offerId,
-    bytes: unitBytes(offer),
+    bytes: unitBytes(offer, compactIds),
     cartAttributeKeys: cartAttributeKeysOf(conditions.filter((condition) => condition.offerId === offerId)),
     customerTags: [...new Set([...(offer.requiredCustomerTags ?? []), ...(offer.excludedCustomerTags ?? [])])].sort(),
     priority: offer.priority,
