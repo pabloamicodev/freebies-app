@@ -15,6 +15,8 @@ import { widgets, widgetPlacements } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
@@ -35,7 +37,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   };
 };
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
@@ -135,7 +137,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   return { error: "Unknown intent." };
-};
+});
 
 const WIDGET_TYPE_OPTIONS = [
   { label: "Gift Slider", value: "gift_slider" },
@@ -181,6 +183,7 @@ export default function OfferWidgetPage() {
 
   return (
     <div className="b-page">
+      <CapacityLimitModal data={actionData?.capacity} />
       {/* ── Header ── */}
       <PageHeader title="Widget Settings" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
 

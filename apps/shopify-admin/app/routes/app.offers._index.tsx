@@ -1,3 +1,6 @@
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
+import type { CapacityModalData } from "../lib/capacity-modal-copy.js";
 import { ShopifyLimitsBanner } from "../components/ShopifyLimits.js";
 import { loadLimitsMeter } from "../lib/capacity-meter.server.js";
 import { Link, useLoaderData, useNavigate, useSearchParams, useFetcher, redirect } from "react-router";
@@ -157,7 +160,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   };
 };
 
-export const action = async ({ request }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   const { session, shopId, db } = context;
   if (!shopId) throw new Response("Shop not found", { status: 404 });
@@ -278,7 +281,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   return null;
-};
+});
 
 /** A plain top-level `<a href>` navigation to an authenticated route can land
  * on Shopify's bounce-page redirect instead of the file, since embedded-app
@@ -807,12 +810,12 @@ export default function OffersPage() {
   const [confirmAction, setConfirmAction] = useState<ConfirmActionState | null>(null);
   const [searchOpen, setSearchOpen] = useState(loaderSearch.length > 0);
   const [searchInput, setSearchInput] = useState(loaderSearch);
-  const deleteFetcher = useFetcher<{ error?: string }>();
-  const archiveFetcher = useFetcher<{ error?: string }>();
-  const bulkFetcher = useFetcher<{ error?: string; bulkWarnings?: Array<{ name: string; warnings: string[] }> }>();
+  const deleteFetcher = useFetcher<{ error?: string; capacity?: CapacityModalData }>();
+  const archiveFetcher = useFetcher<{ error?: string; capacity?: CapacityModalData }>();
+  const bulkFetcher = useFetcher<{ error?: string; capacity?: CapacityModalData; bulkWarnings?: Array<{ name: string; warnings: string[] }> }>();
   const lastBulk = useRef<FormData | null>(null);
   const [dismissedBulk, setDismissedBulk] = useState<unknown>(null);
-  const duplicateFetcher = useFetcher<{ error?: string }>();
+  const duplicateFetcher = useFetcher<{ error?: string; capacity?: CapacityModalData }>();
   const [csvError, setCsvError] = useState<string | null>(null);
 
   // Modal state
@@ -967,6 +970,10 @@ export default function OffersPage() {
     [bulkFetcher, checkedIds],
   );
 
+  const limitCapacity = [deleteFetcher, archiveFetcher, bulkFetcher, duplicateFetcher]
+    .map((fetcher) => (fetcher.state === "idle" ? fetcher.data?.capacity : undefined))
+    .find(Boolean);
+
   const actionError =
     (deleteFetcher.state === "idle" ? deleteFetcher.data?.error : null) ||
     (archiveFetcher.state === "idle" ? archiveFetcher.data?.error : null) ||
@@ -977,6 +984,7 @@ export default function OffersPage() {
 
   return (
     <div className="b-page">
+      <CapacityLimitModal data={limitCapacity} />
       {/* ── Modals ──────────────────────────────────────────── */}
       {modal && (
         <Suspense fallback={<OfferCreateModalFallback onClose={closeModal} />}>

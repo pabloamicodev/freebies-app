@@ -16,6 +16,8 @@ import { offerConditions } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import { fromStoredAmount, isZeroDecimalCurrency, overrideUnit, toStoredAmount } from "../lib/money.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -70,7 +72,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   };
 };
 
-export const action = async ({ request, params }: ActionFunctionArgs): Promise<ActionResult> => {
+export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs): Promise<ActionResult> => {
   const { session, shopId, db, currencyCode: shopCurrency } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
@@ -142,7 +144,7 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<A
   }
 
   return updateResult;
-};
+});
 
 export default function MultiCurrencyPage() {
   const { offer, markets, currencyOverrides, maxCurrencyOverrides, baseThresholdCents, baseMaxCents, baseCurrency, shopCurrency } = useLoaderData<typeof loader>();
@@ -160,6 +162,7 @@ export default function MultiCurrencyPage() {
 
   return (
     <div className="b-page">
+      <CapacityLimitModal data={actionData?.capacity} />
       {/* Header */}
       <PageHeader title="Multi-Currency" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
 

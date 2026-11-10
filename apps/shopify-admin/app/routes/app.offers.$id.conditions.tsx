@@ -49,6 +49,8 @@ import { getMarketsForShop } from "../lib/markets.server.js";
 import { isCheckoutCodeGated } from "../lib/code-redemption.js";
 import { conditionSummary, conditionTypeLabel } from "../lib/offer-summaries.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
@@ -310,7 +312,7 @@ function buildConditionValue(
     return { value, operator: conditionOperator };
 }
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db, currencyCode: shopCurrencyCode } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
@@ -389,7 +391,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   return { success: true };
-};
+});
 
 const MAIN_CONDITION_TYPES = [
   { label: "Cart Value — spend threshold", value: "cart_value" },
@@ -592,6 +594,7 @@ export default function OfferConditionsPage() {
       />
 
       <div className="b-page">
+        <CapacityLimitModal data={actionData?.capacity} />
         {/* Action feedback banners */}
         {actionData && "error" in actionData && actionData.error && (
           <div className="b-banner b-banner-red b-mb-4">
