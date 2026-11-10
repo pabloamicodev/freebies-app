@@ -43,7 +43,7 @@ afterAll(async () => {
   await close();
 });
 
-async function hugeGift(name: string, status: string) {
+async function hugeGift(name: string, status: "active" | "paused") {
   const offerId = await seedOffer(db, shopId, { internalName: name, status });
   await db.insert(offerConditions).values({
     shopId, offerId, scope: "main", conditionType: "cart_value", operator: "gte",

@@ -8,7 +8,7 @@ import {
   slot0GroupTooLargeMessage,
   type TooLargeReason,
 } from "./capacity-copy.js";
-import { SLOT_LIMITS } from "./sync/shard-planner.js";
+import { SLOT_LIMITS } from "./sync/slot-limits.js";
 
 export const CAPACITY_MODAL_CODES = [
   "AUTOMATIC_DISCOUNT_LIMIT",
