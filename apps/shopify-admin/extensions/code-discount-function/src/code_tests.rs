@@ -1,6 +1,6 @@
 use crate::discount_logic::{code_hash, run};
 use crate::schema::{CartOperation, CartLinesDiscountsGenerateRunResult};
-use shopify_function::run_function_with_input;
+use crate::de::run_function_with_input;
 
 fn offer(id: &str, hashes: &[&str], threshold_cents: i64) -> String {
     let hashes = serde_json::to_string(hashes).unwrap();

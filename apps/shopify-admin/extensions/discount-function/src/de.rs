@@ -36,6 +36,39 @@ impl Hasher for Fnv {
     }
 }
 
+/// Test-only wrapper over `shopify_function::run_function_with_input`: with DUMP_FUNCTION_INPUTS=<dir> every input a
+/// unit test feeds the Function is also written to `<dir>/<crate>/<test name>-<n>.json`, which
+/// `scripts/compare-function-outputs.mjs` replays through the built wasm.
+#[cfg(test)]
+pub fn run_function_with_input<F, P: shopify_function::wasm_api::Deserialize, O>(
+    f: F,
+    payload: &str,
+) -> shopify_function::Result<O>
+where
+    F: Fn(P) -> shopify_function::Result<O>,
+{
+    thread_local! {
+        static CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    if let Some(dir) = std::env::var_os("DUMP_FUNCTION_INPUTS") {
+        let call = CALLS.with(|calls| {
+            calls.set(calls.get() + 1);
+            calls.get()
+        });
+        let thread = std::thread::current();
+        let name: String = thread
+            .name()
+            .unwrap_or("unnamed")
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect();
+        let dir = std::path::Path::new(&dir).join(env!("CARGO_PKG_NAME"));
+        std::fs::create_dir_all(&dir).expect("create dump dir");
+        std::fs::write(dir.join(format!("{name}-{call}.json")), payload).expect("write dump");
+    }
+    shopify_function::run_function_with_input(f, payload)
+}
+
 /// Stable sort without `slice::sort_by`: its driftsort/quicksort is monomorphized per element and comparator
 /// (~12 KB across the Function). The merge sort here is not generic: it sorts indices through a `dyn` comparator.
 pub fn sort_by<T>(items: &mut Vec<T>, mut cmp: impl FnMut(&T, &T) -> std::cmp::Ordering) {

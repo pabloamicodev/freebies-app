@@ -486,7 +486,7 @@ fn parse_config(input: &Input) -> Option<CompiledConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shopify_function::run_function_with_input;
+    use crate::de::run_function_with_input;
 
     fn shipping_config(offers_json: &str) -> String {
         format!(r#"{{"offers":[],"shippingOffers":{offers_json}}}"#)

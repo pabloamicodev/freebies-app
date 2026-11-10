@@ -1869,7 +1869,7 @@ fn parse_config(input: &Input) -> Option<CompiledConfig> {
 mod tests {
     use super::*;
     use crate::config::CompiledPageUrlCondition;
-    use shopify_function::run_function_with_input;
+    use crate::de::run_function_with_input;
     use serde_json::Value;
 
     fn page_url_condition_matches(page_url: &str, condition: &CompiledPageUrlCondition) -> bool {
