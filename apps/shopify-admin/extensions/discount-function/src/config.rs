@@ -31,7 +31,7 @@ pub struct CompiledConfig {
 
 /// Offers are parsed one at a time: a malformed offer is skipped and the others still apply.
 fn lenient_offers<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<CompiledOffer>, D::Error> {
-    let raw = Vec::<Box<RawValue>>::deserialize(deserializer)?;
+    let raw = Vec::<&'de RawValue>::deserialize(deserializer)?;
     Ok(raw
         .iter()
         .filter_map(|offer| serde_json::from_str(offer.get()).ok())
