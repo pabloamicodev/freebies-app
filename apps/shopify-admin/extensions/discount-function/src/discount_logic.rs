@@ -16,12 +16,20 @@ use std::rc::Rc;
 const LINE_TYPE_GIFT: &str = "gift";
 const LINE_TYPE_UPSELL: &str = "upsell";
 
+/// Per-line values every offer re-reads, computed on first use and kept for the run (indexed by the line's position in the cart).
+struct LineFacts {
+    metadata: Option<Rc<LineMetadata>>,
+    line_type: Option<String>,
+    gift: bool,
+}
+
 thread_local! {
-    // Each line's packed metadata is parsed once per run (it used to be re-parsed on every lookup).
-    static LINE_METADATA: RefCell<HashMap<String, Option<Rc<LineMetadata>>>> = RefCell::new(HashMap::default());
-    // Page-match result per condition-set fingerprint, then line id, so offers sharing the same page
+    static LINE_FACTS: RefCell<Vec<Option<LineFacts>>> = const { RefCell::new(Vec::new()) };
+    // Address and length of this run's cart-lines slice: `line_slot` maps a `&Lines` to its position by pointer offset.
+    static LINES_SPAN: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+    // Page-match result per condition-set fingerprint, then line slot, so offers sharing the same page
     // conditions match each line once per run instead of once per offer.
-    static PAGE_MATCH: RefCell<HashMap<u64, HashMap<String, bool>>> = RefCell::new(HashMap::default());
+    static PAGE_MATCH: RefCell<HashMap<u64, Vec<Option<bool>>>> = RefCell::new(HashMap::default());
     static ZERO_DECIMAL_CURRENCY: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -58,8 +66,8 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
             .map(|metafield| metafield.value().as_str()),
     );
     let currency = input.cart().cost().subtotal_amount().currency_code().to_string();
-    LINE_METADATA.with(|cache| cache.borrow_mut().clear());
     PAGE_MATCH.with(|cache| cache.borrow_mut().clear());
+    let _line_facts = LineFactsGuard::new(&input);
     ZERO_DECIMAL_CURRENCY.with(|flag| flag.set(is_zero_decimal(&currency)));
     config.localize(input.presentment_currency_rate().as_f64(), &currency);
 
@@ -415,10 +423,10 @@ fn evaluate_product_reward(
         }
         let (variant_id, product_id) = variant_and_product_id(line).unwrap_or_default();
         if let Some(per_product) = per_product_cap {
-            quantity = take_units(&mut applied_by_product, product_id, per_product, quantity);
+            quantity = take_units(&mut applied_by_product, product_id.to_string(), per_product, quantity);
         }
         if let Some(per_variant) = per_variant_cap {
-            quantity = take_units(&mut applied_by_variant, variant_id, per_variant, quantity);
+            quantity = take_units(&mut applied_by_variant, variant_id.to_string(), per_variant, quantity);
         }
         if quantity <= 0 {
             continue;
@@ -531,7 +539,7 @@ fn landing_anchor_lines<'a>(reward: &CompiledProductReward, input: &'a Input) ->
                 return !is_one_of(line, &target_product_ids, &target_variant_ids);
             }
             variant_and_product_id(line)
-                .map(|(variant_id, _)| anchor_ids.contains(variant_id.as_str()))
+                .map(|(variant_id, _)| anchor_ids.contains(variant_id))
                 .unwrap_or(false)
         })
         .filter(|line| {
@@ -604,17 +612,17 @@ fn product_gift_anchors(offer: &CompiledOffer, input: &Input) -> Option<Anchors>
             let Some((variant_id, product_id)) = variant_and_product_id(line) else {
                 return false;
             };
-            !offer.excluded_product_ids.contains(&product_id)
+            !offer.excluded_product_ids.iter().any(|id| id == product_id)
                 && (!has_products
                     || offer.requirements.iter().any(|requirement| {
                         if requirement.track_mode == "variant" {
-                            requirement.variant_id.as_deref() == Some(variant_id.as_str())
+                            requirement.variant_id.as_deref() == Some(variant_id)
                         } else {
-                            requirement.product_id.as_deref() == Some(product_id.as_str())
+                            requirement.product_id.as_deref() == Some(product_id)
                         }
                     })
-                    || product_lists.iter().any(|ids| ids.contains(&product_id))
-                    || variant_lists.iter().any(|ids| ids.contains(&variant_id)))
+                    || product_lists.iter().any(|ids| ids.iter().any(|id| id == product_id))
+                    || variant_lists.iter().any(|ids| ids.iter().any(|id| id == variant_id)))
         })
         .map(|line| (line.id().clone(), i64::from(*line.quantity())))
         .collect();
@@ -701,7 +709,7 @@ fn evaluate_quiz_bundle_reward(
             let product_id = variant_and_product_id(line).unwrap_or_default().1;
             let quantity = take_units(
                 &mut gift_units_by_product,
-                product_id,
+                product_id.to_string(),
                 cap_per_cart(offer, reward.max_quantity.unwrap_or(1)),
                 i64::from(*line.quantity()),
             );
@@ -1133,8 +1141,8 @@ fn is_eligible_line(
     let Some((_, product_id)) = variant_and_product_id(line) else {
         return false;
     };
-    !excluded_set.contains(product_id.as_str())
-        && (required_set.is_empty() || required_set.contains(product_id.as_str()))
+    !excluded_set.contains(product_id)
+        && (required_set.is_empty() || required_set.contains(product_id))
 }
 
 /// The non-gift lines an offer's cart thresholds count (its excluded products never do).
@@ -1151,7 +1159,7 @@ fn qualifying_lines<'a>(offer: &CompiledOffer, input: &'a Input) -> Vec<&'a Line
         .filter(|line| *line.quantity() > 0 && !is_gift_line(line))
         .filter(|line| {
             variant_and_product_id(line)
-                .map(|(_, product_id)| !excluded_products.contains(product_id.as_str()))
+                .map(|(_, product_id)| !excluded_products.contains(product_id))
                 .unwrap_or(false)
         })
         .collect()
@@ -1380,9 +1388,9 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
                 .filter_map(|line| variant_and_product_id(line).map(|ids| (line, ids)))
                 .filter(|(_, (variant_id, product_id))| {
                     if requirement.track_mode == "variant" {
-                        requirement.variant_id.as_deref() == Some(variant_id.as_str())
+                        requirement.variant_id.as_deref() == Some(variant_id)
                     } else {
-                        requirement.product_id.as_deref() == Some(product_id.as_str())
+                        requirement.product_id.as_deref() == Some(product_id)
                     }
                 })
                 .map(|(line, _)| i64::from(*line.quantity()))
@@ -1412,8 +1420,8 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         let has_required = input.cart().lines().iter().any(|line| {
             variant_and_product_id(line)
                 .map(|(variant_id, product_id)| {
-                    required_products.contains(product_id.as_str())
-                        || required_variants.contains(variant_id.as_str())
+                    required_products.contains(product_id)
+                        || required_variants.contains(variant_id)
                 })
                 .unwrap_or(false)
         });
@@ -1438,8 +1446,8 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         let has_any = input.cart().lines().iter().any(|line| {
             variant_and_product_id(line)
                 .map(|(variant_id, product_id)| {
-                    any_products.contains(product_id.as_str())
-                        || any_variants.contains(variant_id.as_str())
+                    any_products.contains(product_id)
+                        || any_variants.contains(variant_id)
                 })
                 .unwrap_or(false)
         });
@@ -1581,26 +1589,22 @@ fn line_price(line: &Lines) -> f64 {
 fn is_one_of(line: &Lines, product_ids: &HashSet<&str>, variant_ids: &HashSet<&str>) -> bool {
     variant_and_product_id(line)
         .map(|(variant_id, product_id)| {
-            variant_ids.contains(variant_id.as_str()) || product_ids.contains(product_id.as_str())
+            variant_ids.contains(variant_id) || product_ids.contains(product_id)
         })
         .unwrap_or(false)
 }
 
-fn variant_and_product_id(line: &Lines) -> Option<(String, String)> {
+fn variant_and_product_id(line: &Lines) -> Option<(&str, &str)> {
     match line.merchandise() {
         Merchandise::ProductVariant(variant) => {
-            Some((variant.id().to_string(), variant.product().id().to_string()))
+            Some((variant.id().as_str(), variant.product().id().as_str()))
         }
         Merchandise::Other => None,
     }
 }
 
 fn line_type(line: &Lines) -> Option<String> {
-    line.line_type()
-        .as_ref()
-        .and_then(|attribute| attribute.value())
-        .cloned()
-        .or_else(|| metadata_value(line, "_promo_engine_line_type"))
+    with_facts(line, |facts| facts.line_type.clone())
 }
 
 // A $0 line (another app's free gift) is not a paid unit: it must not raise a quantity tier,
@@ -1610,9 +1614,7 @@ fn is_zero_cost(line: &Lines) -> bool {
 }
 
 fn is_gift_line(line: &Lines) -> bool {
-    line_type(line).as_deref() == Some(LINE_TYPE_GIFT)
-        || cart_gift_tier(line).is_some()
-        || quiz_free_gift(line).as_deref() == Some("true")
+    with_facts(line, |facts| facts.gift)
 }
 
 fn line_offer_id(line: &Lines) -> Option<String> {
@@ -1720,22 +1722,26 @@ fn nektar_glp1(line: &Lines) -> Option<String> {
 /// The storefront stamps each line with the page it was added from, plus the
 /// session's last UTM landing URL (`source: "landing"` conditions read that).
 fn added_from_matching_page(line: &Lines, offer: &CompiledOffer) -> bool {
+    let matches = || metadata_matches(metadata_map(line).as_deref(), &offer.page_url_conditions);
+    let Some(slot) = line_slot(line) else {
+        return matches();
+    };
     let cached = PAGE_MATCH.with(|cache| {
         cache
             .borrow()
             .get(&offer.page_set_key)
-            .and_then(|lines| lines.get(line.id()).copied())
+            .and_then(|slots| slots.get(slot).copied().flatten())
     });
     if let Some(matched) = cached {
         return matched;
     }
-    let matched = metadata_matches(metadata_map(line).as_deref(), &offer.page_url_conditions);
+    let matched = matches();
+    let line_count = LINES_SPAN.with(Cell::get).1;
     PAGE_MATCH.with(|cache| {
         cache
             .borrow_mut()
             .entry(offer.page_set_key)
-            .or_default()
-            .insert(line.id().clone(), matched)
+            .or_insert_with(|| vec![None; line_count])[slot] = Some(matched);
     });
     matched
 }
@@ -1801,28 +1807,68 @@ fn quiz_free_gift(line: &Lines) -> Option<String> {
     metadata_value(line, "_quiz_free_gift")
 }
 
-fn cart_gift_tier(line: &Lines) -> Option<String> {
-    metadata_value(line, "__cart_gift_tier")
-}
-
 fn metadata_value(line: &Lines, key: &str) -> Option<String> {
-    metadata_map(line)?.get(key).cloned()
+    with_facts(line, |facts| facts.metadata.as_deref()?.get(key).cloned())
 }
 
 fn metadata_map(line: &Lines) -> Option<Rc<LineMetadata>> {
-    LINE_METADATA.with(|cache| {
-        if let Some(parsed) = cache.borrow().get(line.id()) {
-            return parsed.clone();
-        }
-        let parsed = line
-            .promo_metadata()
-            .as_ref()
-            .and_then(|attribute| attribute.value())
-            .and_then(|raw| serde_json::from_str::<LineMetadata>(raw).ok())
-            .map(Rc::new);
-        cache.borrow_mut().insert(line.id().clone(), parsed.clone());
-        parsed
-    })
+    with_facts(line, |facts| facts.metadata.clone())
+}
+
+fn compute_line_facts(line: &Lines) -> LineFacts {
+    let metadata = line
+        .promo_metadata()
+        .as_ref()
+        .and_then(|attribute| attribute.value())
+        .and_then(|raw| serde_json::from_str::<LineMetadata>(raw).ok())
+        .map(Rc::new);
+    let packed = |key: &str| metadata.as_deref().and_then(|map| map.get(key));
+    let line_type = line
+        .line_type()
+        .as_ref()
+        .and_then(|attribute| attribute.value())
+        .or_else(|| packed("_promo_engine_line_type"))
+        .cloned();
+    let gift = line_type.as_deref() == Some(LINE_TYPE_GIFT)
+        || packed("__cart_gift_tier").is_some()
+        || packed("_quiz_free_gift").map(String::as_str) == Some("true");
+    LineFacts { metadata, line_type, gift }
+}
+
+/// Position of `line` in this run's cart lines, or None for a `Lines` that is not from it.
+fn line_slot(line: &Lines) -> Option<usize> {
+    let (base, len) = LINES_SPAN.with(Cell::get);
+    let offset = (std::ptr::from_ref(line) as usize).checked_sub(base)?;
+    let size = std::mem::size_of::<Lines>();
+    (offset % size == 0 && offset / size < len).then_some(offset / size)
+}
+
+fn with_facts<R>(line: &Lines, read: impl FnOnce(&LineFacts) -> R) -> R {
+    match line_slot(line) {
+        Some(slot) => LINE_FACTS.with(|facts| {
+            let mut facts = facts.borrow_mut();
+            read(facts[slot].get_or_insert_with(|| compute_line_facts(line)))
+        }),
+        None => read(&compute_line_facts(line)),
+    }
+}
+
+/// Sizes the per-line facts for one run and forgets the lines' address when the run ends.
+struct LineFactsGuard;
+
+impl LineFactsGuard {
+    fn new(input: &Input) -> Self {
+        let lines = input.cart().lines();
+        LINE_FACTS.with(|facts| *facts.borrow_mut() = lines.iter().map(|_| None).collect());
+        LINES_SPAN.with(|span| span.set((lines.as_ptr() as usize, lines.len())));
+        LineFactsGuard
+    }
+}
+
+impl Drop for LineFactsGuard {
+    fn drop(&mut self) {
+        LINES_SPAN.with(|span| span.set((0, 0)));
+    }
 }
 
 /// Truncated FNV-1a-64 of the ASCII-uppercased code, 12 lowercase hex chars (mirrored by the TS publisher).
@@ -2435,6 +2481,34 @@ mod tests {
         // JPY shop, USD market at 0.0067 USD/JPY: 5,000 yen is 33.50 USD.
         assert_eq!(run_cart("USD", "0.0067", "34.00"), 1);
         assert_eq!(run_cart("USD", "0.0067", "33.00"), 0);
+    }
+
+    #[test]
+    fn line_facts_are_indexed_by_cart_position_and_scoped_to_the_run() {
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+        );
+        let payload = cart_json(&lines, "80.00", &gift_offer_config(5000, 1));
+        run_function_with_input(
+            |input: Input| {
+                {
+                    let _facts = LineFactsGuard::new(&input);
+                    let lines = input.cart().lines();
+                    let slots: Vec<_> = lines.iter().map(line_slot).collect();
+                    assert_eq!(slots, vec![Some(0), Some(1)]);
+                    let gifts: Vec<_> = lines.iter().map(is_gift_line).collect();
+                    assert_eq!(gifts, vec![false, true]);
+                    assert!(compute_line_facts(&lines[1]).gift);
+                    assert_eq!(line_type(&lines[1]).as_deref(), Some(LINE_TYPE_GIFT));
+                }
+                assert_eq!(line_slot(&input.cart().lines()[0]), None);
+                Ok(schema::CartLinesDiscountsGenerateRunResult { operations: vec![] })
+            },
+            &payload,
+        )
+        .expect("should not error");
     }
 
     #[test]
