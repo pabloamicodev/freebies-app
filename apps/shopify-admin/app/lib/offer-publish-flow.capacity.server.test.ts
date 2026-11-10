@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import { offerConditions, offerRewards, offers, type Db } from "@promo/db";
+import { capacityIncidents, offerConditions, offerRewards, offers, type Db } from "@promo/db";
 import { republishIfActive, validateActivation } from "./offer-publish-flow.server.js";
 import { lifecycleToolError } from "./mcp/write-runner.server.js";
+import { runWithCapacitySource } from "./capacity-source.server.js";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
 let db: Db;
@@ -67,5 +68,15 @@ describe("validateActivation capacity", () => {
     expect(await republishIfActive(db, shopId, "s.myshopify.com", id, true, publish, earlier)).toBeNull();
     expect(publish).toHaveBeenCalledTimes(1);
     expect(await db.select({ status: offers.status }).from(offers).where(eq(offers.id, id))).toEqual([{ status: "draft" }]);
+  });
+
+  it("persists a preflight block as an incident with the caller's source", async () => {
+    await db.delete(capacityIncidents);
+    const huge = await giftOffer(400, "huge-incident");
+    await runWithCapacitySource("mcp", true, () => validateActivation(db, shopId, [huge]));
+    const found = await db.select().from(capacityIncidents).where(eq(capacityIncidents.shopId, shopId));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ code: "SLOT_FULL", source: "mcp", attended: true, status: "open" });
+    expect(found[0]?.offerIds).toEqual([huge]);
   });
 });

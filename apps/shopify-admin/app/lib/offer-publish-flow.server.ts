@@ -28,7 +28,8 @@ import { normalizeConditionValue } from "./offer-config-normalization.server.js"
 import { OfferPublishError, addOfferPublishErrors } from "./offer-publish-errors.server.js";
 import { markPublishPending } from "./publish-pending.server.js";
 import { preflightCapacity, type CapacityFailure, type CapacityPreflight } from "./capacity-preflight.server.js";
-import { recordCapacityBlock } from "./capacity-capture.server.js";
+import { recordCapacityBlock, type CapturedCapacity } from "./capacity-capture.server.js";
+import { recordCapacityIncident } from "./capacity-incidents.server.js";
 import { insertAuditLog } from "./audit-log.server.js";
 import { limitedTitleError } from "./offer-usage.server.js";
 import { isLimitsEnforced } from "./limits-enforced.server.js";
@@ -413,6 +414,17 @@ export async function validateActivation(
   return (await validateActivationWithPreflight(db, shopId, offerIds)).validation;
 }
 
+/** A preflight block: kept for the save-time modal (ALS) and persisted as an incident. The publisher persists its own blocks. */
+async function noteCapacityBlock(
+  db: Db,
+  shopId: string,
+  block: Pick<CapturedCapacity, "code" | "offerIds" | "numbers" | "splitRefusal">,
+): Promise<void> {
+  const captured: CapturedCapacity = { shopId, code: block.code, offerIds: block.offerIds, numbers: block.numbers, ...(block.splitRefusal ? { splitRefusal: block.splitRefusal } : {}) };
+  recordCapacityBlock(captured);
+  await recordCapacityIncident(db, captured);
+}
+
 /** `validateActivation` that also returns the capacity result, so a following `republishIfActive` can reuse it. */
 export async function validateActivationWithPreflight(
   db: Db,
@@ -422,7 +434,7 @@ export async function validateActivationWithPreflight(
   const validation = await validateOffersPublishable(db, shopId, offerIds);
   if (!validation.ok) return { validation };
   const capacity = await preflightCapacity(db, shopId, offerIds);
-  if (!capacity.ok) recordCapacityBlock({ shopId, code: capacity.code, offerIds: capacity.offerIds, numbers: capacity.numbers, ...(capacity.splitRefusal ? { splitRefusal: capacity.splitRefusal } : {}) });
+  if (!capacity.ok) await noteCapacityBlock(db, shopId, capacity);
   return { validation: capacityValidation(capacity), preflight: capacity };
 }
 
@@ -564,7 +576,7 @@ export async function republishIfActive(
   const validation = await validateOffersPublishable(db, shopId, [offerId]);
   const capacity = validation.ok ? (earlierPreflight ?? (await preflightCapacity(db, shopId, [offerId]))) : null;
   const preflight = capacity && !capacity.ok ? capacity : null;
-  if (preflight) recordCapacityBlock({ shopId, code: preflight.code, offerIds: preflight.offerIds, numbers: preflight.numbers, ...(preflight.splitRefusal ? { splitRefusal: preflight.splitRefusal } : {}) });
+  if (preflight) await noteCapacityBlock(db, shopId, preflight);
   let reason = "validation_error";
   let failure: PublishFailure | null;
   if (!validation.ok) {

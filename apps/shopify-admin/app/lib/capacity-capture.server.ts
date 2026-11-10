@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { getDb, offers, shops, type Db } from "@promo/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { isCapacityModalCode, type CapacityModalData } from "./capacity-modal-copy.js";
+import { runWithCapacitySource } from "./capacity-source.server.js";
 
 export interface CapturedCapacity {
   shopId: string;
@@ -50,7 +51,7 @@ export function withCapacityModal<Args extends unknown[], Result>(
 ): (...args: Args) => Promise<Result & { capacity?: CapacityModalData }> {
   return async (...args) => {
     const scope: { captured?: CapturedCapacity } = {};
-    const result = await store.run(scope, () => action(...args));
+    const result = await store.run(scope, () => runWithCapacitySource("admin", true, () => action(...args)));
     const plain = result as Result & { capacity?: CapacityModalData };
     if (!scope.captured || !result || typeof result !== "object" || result instanceof Response) return plain;
     if (!(result as { error?: unknown }).error) return plain;

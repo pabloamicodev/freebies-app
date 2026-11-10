@@ -11,6 +11,7 @@ import {
   syncCollectionFromWebhook,
 } from "../lib/sync/collection-sync.server.js";
 import { syncMarketsForShop } from "../lib/sync/market-sync.server.js";
+import { runWithCapacitySource } from "../lib/capacity-source.server.js";
 import { publishOffersForShop } from "../lib/sync/offer-publisher.server.js";
 import { PermanentIntegrationError } from "../lib/integration-dispatcher.server.js";
 import { handleOrderPaid, type OrderWebhookPayload } from "../lib/webhooks/order-paid.server.js";
@@ -444,7 +445,7 @@ async function handleMarketChange(shop: string) {
     .limit(1);
   if (marketOffer) {
     waitUntil(
-      publishOffersForShop(shopRecord.id, shop).catch((error) => {
+      runWithCapacitySource("webhook", false, () => publishOffersForShop(shopRecord.id, shop)).catch((error) => {
         Sentry.captureException(error, { extra: { shop, context: "markets-republish" } });
       }),
     );
