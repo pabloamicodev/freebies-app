@@ -8,7 +8,9 @@ export async function isFunctionShardsEnabled(db: Db, shopId: string): Promise<b
     .select({ value: appSettings.value })
     .from(appSettings)
     .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, FUNCTION_SHARDS_SETTING)));
-  return row?.value === "true";
+  // Default ON since 2026-11-10: only an explicit "false" keeps a shop on one node (kill-switch).
+  if (!row) return process.env["FUNCTION_SHARDS_DEFAULT"] !== "off";
+  return row.value === "true";
 }
 
 export async function setFunctionShardsEnabled(db: Db, shopId: string, enabled: boolean): Promise<void> {
