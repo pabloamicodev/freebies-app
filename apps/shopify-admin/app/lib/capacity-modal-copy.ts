@@ -60,11 +60,14 @@ export interface CapacityModalCopy {
 
 const MAX_OFFER_ACTIONS = 3;
 
+const over = (used: number | undefined, max: number | undefined) => used !== undefined && max !== undefined && used > max;
+
+/** The planner reports every measure in `numbers`, so only the one that is over its limit names the reason. */
 export function tooLargeReason(numbers: Record<string, number>): TooLargeReason {
   if (numbers["listKind"] !== undefined) return "lists";
-  if (numbers["offers"] !== undefined && numbers["maxOffers"] !== undefined && numbers["offers"] > numbers["maxOffers"]) return "offers";
-  if (numbers["keys"] !== undefined && numbers["maxKeys"] !== undefined) return "keys";
-  if (numbers["tags"] !== undefined && numbers["maxTags"] !== undefined) return "tags";
+  if (over(numbers["offers"], numbers["maxOffers"])) return "offers";
+  if (over(numbers["keys"], numbers["maxKeys"])) return "keys";
+  if (over(numbers["tags"], numbers["maxTags"])) return "tags";
   return "bytes";
 }
 
