@@ -25,11 +25,19 @@ impl Default for Fnv {
 
 impl Hasher for Fnv {
     fn finish(&self) -> u64 {
-        self.0
+        // The word-wise mix below only carries entropy upward; fold it back down so the table's low bits are usable.
+        let hash = self.0;
+        (hash ^ (hash >> 32)).wrapping_mul(0x9e3779b97f4a7c15) ^ (hash >> 29)
     }
     fn write(&mut self, bytes: &[u8]) {
+        // FNV-1a over 8-byte words (ids are 40-100 bytes: a byte at a time dominated the hashing cost), then the tail.
         let mut hash = self.0;
-        for byte in bytes {
+        let mut words = bytes.chunks_exact(8);
+        for word in &mut words {
+            hash = (hash ^ u64::from_le_bytes([word[0], word[1], word[2], word[3], word[4], word[5], word[6], word[7]]))
+                .wrapping_mul(0x100000001b3);
+        }
+        for byte in words.remainder() {
             hash = (hash ^ *byte as u64).wrapping_mul(0x100000001b3);
         }
         self.0 = hash;
