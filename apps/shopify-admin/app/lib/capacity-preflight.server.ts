@@ -17,7 +17,8 @@ import {
 } from "./sync/compile-config.js";
 import { buildAttributeQueryVariables, MAX_CUSTOM_CART_ATTRIBUTE_KEYS } from "./sync/attribute-query-variables.js";
 import { planShards, SLOT_LIMITS, type PlanBlockCode } from "./sync/shard-planner.js";
-import { baseOfferId, buildPlanUnits, cartAttributeKeysOf } from "./sync/plan-units.js";
+import { baseOfferId, buildPlanUnitSet, cartAttributeKeysOf } from "./sync/plan-units.js";
+import { loadSplitOptions } from "./sync/variant-products.server.js";
 import { combinationBlockers, type CombinationBlocker } from "./sync/combination-blockers.js";
 import { isCheckoutCodeGated } from "./code-redemption.js";
 import { MAX_METAFIELD_BYTES } from "./sync/offer-publisher.server.js";
@@ -324,7 +325,8 @@ export async function preflightCapacity(
     }
   }
 
-  const units = buildPlanUnits(shared.compiled, conditions, shared.policies);
+  const splitOptions = enabled ? await loadSplitOptions(db, shopId, shared.compiled.map((entry) => entry.offer)) : {};
+  const { units } = buildPlanUnitSet(shared.compiled, conditions, shared.policies, splitOptions);
   const previous = await readPreviousAssignment(db, shopId);
   const policy = compileDiscountCombinationPolicy(shared.compiled.map((entry) => entry.offer));
   const plan = planShards(units, previous, { ...SLOT_LIMITS, maxSlots, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, policy);
