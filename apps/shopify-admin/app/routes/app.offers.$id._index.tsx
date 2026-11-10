@@ -54,6 +54,8 @@ import { duplicateOffer } from "../lib/offer-duplicate.server.js";
 import { buildRewardRecord } from "../lib/reward-record.server.js";
 import { deriveGiftBlock, mergeFallbacks, parseFallbackByGift, planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.js";
 import { applyGiftRewardPlan, loadProductOf } from "../lib/gift-rewards.server.js";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
@@ -101,7 +103,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   };
 };
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   const { session, shopId, currencyCode: shopCurrencyCode, db, timezone: shopTimezone } = context;
   const offerId = parseUuidParam(params);
@@ -459,7 +461,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   return { success: true };
-};
+});
 
 
 /* ── Currency chips shown on monetary conditions ────────── */
@@ -1676,6 +1678,7 @@ export default function OfferDetailPage() {
 
             <CodeNoticeBanners offerId={offer.id} notices={codeNotices} />
 {publishWarningsDialog}
+            <CapacityLimitModal data={actionData?.capacity} />
             {actionData && "error" in actionData && actionData.error && (
               <div className="b-banner b-banner-red" style={{ marginBottom: 12 }}>
                 <span className="b-banner-icon">!</span>

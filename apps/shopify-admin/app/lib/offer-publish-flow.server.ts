@@ -28,6 +28,7 @@ import { normalizeConditionValue } from "./offer-config-normalization.server.js"
 import { OfferPublishError, addOfferPublishErrors } from "./offer-publish-errors.server.js";
 import { markPublishPending } from "./publish-pending.server.js";
 import { preflightCapacity, type CapacityFailure, type CapacityPreflight } from "./capacity-preflight.server.js";
+import { recordCapacityBlock } from "./capacity-capture.server.js";
 import { insertAuditLog } from "./audit-log.server.js";
 import { limitedTitleError } from "./offer-usage.server.js";
 import { isLimitsEnforced } from "./limits-enforced.server.js";
@@ -421,6 +422,7 @@ export async function validateActivationWithPreflight(
   const validation = await validateOffersPublishable(db, shopId, offerIds);
   if (!validation.ok) return { validation };
   const capacity = await preflightCapacity(db, shopId, offerIds);
+  if (!capacity.ok) recordCapacityBlock({ shopId, code: capacity.code, offerIds: capacity.offerIds, numbers: capacity.numbers });
   return { validation: capacityValidation(capacity), preflight: capacity };
 }
 
@@ -447,6 +449,7 @@ export async function tryPublishShop(shopId: string, shopDomain: string): Promis
     const offerScoped = err instanceof OfferPublishError;
     const scope: PublishScope = offerScoped ? "offer" : "shop";
     Sentry.captureException(err, { tags: { shopId, scope, context: "publish-shop-config" } });
+    if (err instanceof ShardPlanBlockedError) recordCapacityBlock({ shopId, ...err.capacity });
     return {
       message: err instanceof Error ? err.message : "Failed to publish offer configuration to Shopify.",
       scope,
@@ -561,6 +564,7 @@ export async function republishIfActive(
   const validation = await validateOffersPublishable(db, shopId, [offerId]);
   const capacity = validation.ok ? (earlierPreflight ?? (await preflightCapacity(db, shopId, [offerId]))) : null;
   const preflight = capacity && !capacity.ok ? capacity : null;
+  if (preflight) recordCapacityBlock({ shopId, code: preflight.code, offerIds: preflight.offerIds, numbers: preflight.numbers });
   let reason = "validation_error";
   let failure: PublishFailure | null;
   if (!validation.ok) {

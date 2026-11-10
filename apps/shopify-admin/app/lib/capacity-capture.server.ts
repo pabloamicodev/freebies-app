@@ -1,0 +1,61 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { getDb, offers, shops, type Db } from "@promo/db";
+import { and, eq, inArray } from "drizzle-orm";
+import { isCapacityModalCode, type CapacityModalData } from "./capacity-modal-copy.js";
+
+export interface CapturedCapacity {
+  shopId: string;
+  code: string;
+  offerIds: string[];
+  numbers: Record<string, number>;
+}
+
+const store = new AsyncLocalStorage<{ captured?: CapturedCapacity }>();
+
+/** Called where a Shopify capacity limit blocks a publish; a no-op outside `withCapacityModal`. */
+export function recordCapacityBlock(captured: CapturedCapacity): void {
+  const scope = store.getStore();
+  if (scope) scope.captured = captured;
+}
+
+export async function buildCapacityModalData(db: Db, captured: CapturedCapacity): Promise<CapacityModalData | null> {
+  if (!isCapacityModalCode(captured.code)) return null;
+  const [rows, [shop]] = await Promise.all([
+    captured.offerIds.length > 0
+      ? db
+          .select({ id: offers.id, name: offers.internalName })
+          .from(offers)
+          .where(and(eq(offers.shopId, captured.shopId), inArray(offers.id, captured.offerIds)))
+      : Promise.resolve([] as { id: string; name: string }[]),
+    db.select({ domain: shops.myshopifyDomain }).from(shops).where(eq(shops.id, captured.shopId)).limit(1),
+  ]);
+  const nameById = new Map(rows.map((row) => [row.id, row.name]));
+  return {
+    code: captured.code,
+    offers: captured.offerIds.map((id) => ({ id, name: nameById.get(id) ?? id })),
+    numbers: captured.numbers,
+    ...(shop ? { discountsUrl: `https://${shop.domain}/admin/discounts` } : {}),
+  };
+}
+
+/**
+ * Wraps a route action: when it returns `{ error }` after a Shopify capacity limit blocked the publish, the
+ * result also carries `capacity` so the page opens the Shopify-limit modal. Other results pass through.
+ */
+export function withCapacityModal<Args extends unknown[], Result>(
+  action: (...args: Args) => Promise<Result>,
+): (...args: Args) => Promise<Result & { capacity?: CapacityModalData }> {
+  return async (...args) => {
+    const scope: { captured?: CapturedCapacity } = {};
+    const result = await store.run(scope, () => action(...args));
+    const plain = result as Result & { capacity?: CapacityModalData };
+    if (!scope.captured || !result || typeof result !== "object" || result instanceof Response) return plain;
+    if (!(result as { error?: unknown }).error) return plain;
+    try {
+      const capacity = await buildCapacityModalData(getDb(), scope.captured);
+      return capacity ? { ...plain, capacity } : plain;
+    } catch {
+      return plain;
+    }
+  };
+}
