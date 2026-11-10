@@ -656,7 +656,8 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
           ownerId: slotNodeId(index),
           value: slotValues[index]!,
           kind: index === 0 ? ("cart" as const) : ("cart-shard" as const),
-          combinesWith: wantedPolicy(index),
+          // After a failed live read nothing was loosened, so the manifest records what the node actually carries.
+          combinesWith: liveReadFailed ? (index === 0 ? slot0Node : shardNodes[index - 1]!).policy : wantedPolicy(index),
         })),
         ...drainIds.map((ownerId) => ({ ownerId, value: EMPTY_CART_SHARD_CONFIG, kind: null })),
         { ownerId: discountNodes.deliveryDiscountId, value: deliveryValue, kind: "delivery" as const },

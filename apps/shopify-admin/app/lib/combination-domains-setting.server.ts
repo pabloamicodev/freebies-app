@@ -1,13 +1,13 @@
 import type { Db } from "@promo/db";
 import { z } from "zod";
-import { isShardDomainsEnabled, setShardDomainsEnabled } from "./function-shards-flag.server.js";
+import { isFunctionShardsEnabled, isShardDomainsEnabled, setShardDomainsEnabled } from "./function-shards-flag.server.js";
 
 const formSchema = z.object({
   intent: z.literal("set_combination_domains"),
   enabled: z.enum(["true", "false"]),
 });
 
-export type CombinationDomainsResult = { success: true } | { error: string };
+export type CombinationDomainsResult = { success: true; note?: string } | { error: string };
 
 /**
  * Diagnostics toggle for combination groups. Refuses while the global FUNCTION_SHARD_DOMAINS=off switch is active
@@ -28,6 +28,9 @@ export async function changeCombinationDomains(
   const previous = await isShardDomainsEnabled(db, shopId);
   if (enabled === previous) return { success: true };
   await setShardDomainsEnabled(db, shopId, enabled);
+  if (!(await isFunctionShardsEnabled(db, shopId))) {
+    return { success: true, note: "Saved. It takes effect when sharding is turned on for this store." };
+  }
   const publishError = await publish();
   if (publishError) {
     await setShardDomainsEnabled(db, shopId, previous);

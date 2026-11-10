@@ -3,7 +3,7 @@ import { appSettings, type Db } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import { createTestDb, seedShop } from "./test-support/pglite-db.js";
 import { changeCombinationDomains } from "./combination-domains-setting.server.js";
-import { isShardDomainsEnabled, setShardDomainsEnabled, SHARD_DOMAINS_SETTING } from "./function-shards-flag.server.js";
+import { isShardDomainsEnabled, setFunctionShardsEnabled, setShardDomainsEnabled, SHARD_DOMAINS_SETTING } from "./function-shards-flag.server.js";
 
 let db: Db;
 let close: () => Promise<void>;
@@ -33,6 +33,7 @@ describe("changeCombinationDomains", () => {
 
   it("stores the setting and republishes", async () => {
     await fresh();
+    await setFunctionShardsEnabled(db, shopId, true);
     await setShardDomainsEnabled(db, shopId, false);
     const publish = vi.fn(async () => null);
     expect(await changeCombinationDomains(db, shopId, form({ intent: "set_combination_domains", enabled: "true" }), publish)).toEqual({ success: true });
@@ -42,10 +43,22 @@ describe("changeCombinationDomains", () => {
 
   it("reverts the setting when the republish fails", async () => {
     await fresh();
+    await setFunctionShardsEnabled(db, shopId, true);
     await setShardDomainsEnabled(db, shopId, false);
     const result = await changeCombinationDomains(db, shopId, form({ intent: "set_combination_domains", enabled: "true" }), async () => "boom");
     expect(result).toEqual({ error: expect.stringContaining("boom") });
     expect(await stored()).toBe("false");
+  });
+
+  it("with sharding off it stores the setting without republishing and says when it takes effect", async () => {
+    await fresh();
+    await setFunctionShardsEnabled(db, shopId, false);
+    await setShardDomainsEnabled(db, shopId, true);
+    const publish = vi.fn(async () => null);
+    const result = await changeCombinationDomains(db, shopId, form({ intent: "set_combination_domains", enabled: "false" }), publish);
+    expect(result).toEqual({ success: true, note: expect.stringContaining("takes effect when sharding is turned on") });
+    expect(await stored()).toBe("false");
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("refuses without storing or republishing while FUNCTION_SHARD_DOMAINS=off is active", async () => {

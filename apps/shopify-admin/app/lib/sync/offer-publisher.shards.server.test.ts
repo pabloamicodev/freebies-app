@@ -735,6 +735,12 @@ describe.each(["off", "on"])("sharded cart publish (combination groups default %
       expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: false });
       expect(shopify.timeline.filter((entry) => entry.startsWith(`policy:${CART_NODE}:open`))).toEqual([]);
 
+      // The manifest records what the node actually carries, so drift sees no mismatch and a repair never loosens it.
+      const { readPublishManifest } = await import("../publish-manifest.server.js");
+      expect((await readPublishManifest(shopId, db))!.nodes[CART_NODE]!.combinesWith).toMatchObject({ productDiscounts: false });
+      const drift = { graphQL: shopify.call as never, publish: publishOffersForShop, settleMs: 0, globallyPaused: false };
+      expect((await repairShopDrift(db, drift, { shopId, dryRun: true })).findings.map((f) => f.issue)).not.toContain("combination_mismatch");
+
       shopify.failLiveRead = false;
       await publishOffersForShop(shopId, DOMAIN);
       expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: true });
