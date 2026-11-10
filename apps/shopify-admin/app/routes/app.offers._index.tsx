@@ -3,7 +3,7 @@ import { withCapacityModal } from "../lib/capacity-capture.server.js";
 import type { CapacityModalData } from "../lib/capacity-modal-copy.js";
 import { ShopifyLimitsBanner } from "../components/ShopifyLimits.js";
 import { loadLimitsMeter } from "../lib/capacity-meter.server.js";
-import { Link, useLoaderData, useNavigate, useSearchParams, useFetcher, redirect } from "react-router";
+import { Await, Link, useLoaderData, useNavigate, useSearchParams, useFetcher, redirect } from "react-router";
 import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import {
   analyticsEvents,
@@ -66,7 +66,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     timer.done({ shopFound: false });
     return {
       offers: [],
-      limits: null,
+      limits: Promise.resolve(null),
       total: 0,
       page: 1,
       pageSize: PAGE_SIZE,
@@ -145,8 +145,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     hasSearch: search.length > 0,
   });
 
-  // The live automatic-discount count can take a Shopify round trip; the list never waits more than 2s for it.
-  const limits = await Promise.race([loadLimitsMeter(db, shopId), new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000))]);
+  // Not awaited: the live automatic-discount count can take a Shopify round trip, so it streams in after the list renders.
+  const limits = loadLimitsMeter(db, shopId);
 
   return {
     offers: serializedOffers,
@@ -1011,7 +1011,9 @@ export default function OffersPage() {
         </div>
       </div>
 
-      <ShopifyLimitsBanner meter={limits} />
+      <Suspense fallback={null}>
+        <Await resolve={limits}>{(meter) => <ShopifyLimitsBanner meter={meter} />}</Await>
+      </Suspense>
 
       {/* ── Action error banner ─────────────────────────────── */}
       {actionError && (

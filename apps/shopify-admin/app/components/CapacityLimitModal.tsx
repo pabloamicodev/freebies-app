@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Link } from "react-router";
 import { describeCapacityModal, type CapacityModalData } from "../lib/capacity-modal-copy.js";
 import { AccessibleModal } from "./AccessibleModal.js";
@@ -14,6 +14,7 @@ interface CapacityLimitModalProps {
  */
 export function CapacityLimitModal({ data }: CapacityLimitModalProps) {
   const [dismissed, setDismissed] = useState<CapacityModalData | null>(null);
+  const uid = useId();
   useEffect(() => setDismissed(null), [data]);
   if (!data || dismissed === data) return null;
 
@@ -32,14 +33,14 @@ export function CapacityLimitModal({ data }: CapacityLimitModalProps) {
         </button>
       </div>
       <div className="b-modal-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <section aria-labelledby="capacity-limit-heading">
-          <h3 id="capacity-limit-heading" style={{ fontSize: 13, fontWeight: 600, margin: "0 0 4px", color: "var(--text)" }}>
+        <section aria-labelledby={`${uid}-limit`}>
+          <h3 id={`${uid}-limit`} style={{ fontSize: 13, fontWeight: 600, margin: "0 0 4px", color: "var(--text)" }}>
             Shopify limit
           </h3>
           <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0, lineHeight: 1.6 }}>{copy.limit}</p>
         </section>
-        <section aria-labelledby="capacity-what-heading">
-          <h3 id="capacity-what-heading" style={{ fontSize: 13, fontWeight: 600, margin: "0 0 4px", color: "var(--text)" }}>
+        <section aria-labelledby={`${uid}-what`}>
+          <h3 id={`${uid}-what`} style={{ fontSize: 13, fontWeight: 600, margin: "0 0 4px", color: "var(--text)" }}>
             What happened
           </h3>
           <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0, lineHeight: 1.6 }}>{copy.body}</p>
@@ -51,8 +52,8 @@ export function CapacityLimitModal({ data }: CapacityLimitModalProps) {
             </ul>
           )}
         </section>
-        <section aria-labelledby="capacity-fix-heading">
-          <h3 id="capacity-fix-heading" style={{ fontSize: 13, fontWeight: 600, margin: "0 0 4px", color: "var(--text)" }}>
+        <section aria-labelledby={`${uid}-fix`}>
+          <h3 id={`${uid}-fix`} style={{ fontSize: 13, fontWeight: 600, margin: "0 0 4px", color: "var(--text)" }}>
             What to do
           </h3>
           <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0, lineHeight: 1.6 }}>{copy.fix}</p>
