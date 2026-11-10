@@ -266,7 +266,10 @@ export async function buildRewardRecord(
         }
         const productTargetType = formData.get("productTargetType") === "products" ? "products" : "variants";
         if (variantGids.length > 0) {
-          target = productTargetType === "products" ? { productIds: variantGids } : { variantIds: variantGids };
+          target =
+            productTargetType === "products"
+              ? { productIds: variantGids, selectionLevel: "product" }
+              : { variantIds: variantGids };
         }
         if (productScopeMode === "landing" && variantGids.length === 0) {
           return { error: "Choose the products this landing discount applies to." };

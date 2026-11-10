@@ -41,3 +41,27 @@ describe("buildRewardRecord product_discount", () => {
     expect(built.data.value).toEqual({ amount: 10, currencyCode: "USD" });
   });
 });
+
+describe("buildRewardRecord product target level", () => {
+  const picked = ["gid://shopify/Product/1", "gid://shopify/Product/2"];
+  const withTargets = (targetType: string) => {
+    const form = productDiscountForm();
+    form.set("productTargetType", targetType);
+    form.set("variantGids", picked.join("\n"));
+    return form;
+  };
+
+  it("marks a selection saved as whole products, so the compiler may ship product ids", async () => {
+    const built = await buildRewardRecord(withTargets("products"), {} as never, "shop", "USD");
+    if ("error" in built) throw new Error(built.error);
+    expect(built.data.target).toMatchObject({ productIds: picked, selectionLevel: "product" });
+    expect(built.data.target).not.toHaveProperty("variantIds");
+  });
+
+  it("leaves a variant selection unmarked", async () => {
+    const built = await buildRewardRecord(withTargets("variants"), {} as never, "shop", "USD");
+    if ("error" in built) throw new Error(built.error);
+    expect(built.data.target).toMatchObject({ variantIds: picked });
+    expect(built.data.target).not.toHaveProperty("selectionLevel");
+  });
+});
