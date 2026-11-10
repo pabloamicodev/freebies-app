@@ -16,6 +16,8 @@ import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { offerCombinationPolicies, offerRewards, offers } from "@promo/db";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -75,7 +77,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   return { offer, policy, restricting, titleCollisions, help, missingCustomerScope };
 };
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
@@ -136,7 +138,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (publishError) return { error: publishError };
 
   return { success: true, warning: titleWarning };
-};
+});
 
 const RESTRICTION_LABELS = {
   orderDiscounts: "order discounts",
@@ -157,6 +159,7 @@ export default function OfferCombinationPage() {
 
   return (
     <div className="b-page">
+      <CapacityLimitModal data={actionData?.capacity} />
       {/* Header */}
       <PageHeader title="Combination Policy" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
 

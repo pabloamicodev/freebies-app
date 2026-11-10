@@ -29,6 +29,8 @@ import { giftTierModeSchema } from "../lib/gift-tier-campaigns.js";
 import { readRewardTiers, rewardSummary, targetSummaryParts } from "../lib/offer-summaries.js";
 import { CartLabelsField } from "../components/CartLabelsField.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -107,7 +109,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db, currencyCode: shopCurrencyCode } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
@@ -240,7 +242,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   return { success: true };
-};
+});
 
 const REWARD_TYPES = [
   { label: "Product Gift — add a free or discounted product", value: "product_gift" },
@@ -614,6 +616,7 @@ export default function OfferRewardsPage() {
       />
 
       <div className="b-page">
+        <CapacityLimitModal data={actionData?.capacity} />
         {/* ── Page header ─────────────────────────────────── */}
         <PageHeader
           title="Rewards / Gifts"

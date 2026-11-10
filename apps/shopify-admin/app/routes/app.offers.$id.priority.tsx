@@ -4,7 +4,7 @@
  */
 
 import { parseUuidParam } from "../lib/route-params.js";
-import { useLoaderData, Form } from "react-router";
+import { useActionData, useLoaderData, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
@@ -13,6 +13,8 @@ import { eq, and, ne } from "drizzle-orm";
 import { detectConflicts } from "../lib/conflict-detection.server.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -46,7 +48,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   };
 };
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
@@ -66,13 +68,22 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (publishError) return { error: publishError };
 
   return null;
-};
+});
 
 export default function OfferPriorityPage() {
   const { offer, policy, otherActiveOffers, conflicts: offerConflicts } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
 
   return (
     <div className="b-page">
+      <CapacityLimitModal data={actionData?.capacity} />
+      {actionData?.error && (
+        <div className="b-banner b-banner-red" role="alert">
+          <div className="b-banner-body">
+            <p className="b-banner-text" style={{ margin: 0 }}>{actionData.error}</p>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <PageHeader title="Priority & Stacking" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
 

@@ -37,6 +37,10 @@ import { OfferConditionsBuilder } from "../components/OfferConditionsBuilder.js"
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
 import { toStoredAmount } from "../lib/money.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
+import { combinationOptOutWarning, productDiscountsField } from "../lib/capacity-modal-copy.js";
+import { isFunctionShardsEnabled } from "../lib/function-shards-flag.server.js";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -54,13 +58,13 @@ class CodeRejectedError extends Error {}
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { timezone } = await getShopContext(request);
-  return { timezone, nowLocal: nowInZone(timezone) };
+  const { timezone, db, shopId } = await getShopContext(request);
+  return { timezone, nowLocal: nowInZone(timezone), shardsEnabled: await isFunctionShardsEnabled(db, shopId) };
 };
 
 // ─── Action ──────────────────────────────────────────────────────────────────
 
-export const action = async ({ request }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   const { shopId, db, session, timezone, currencyCode: shopCurrency } = context;
   if (!shopId) return { error: "Shop not found" };
@@ -402,7 +406,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (publishError) return { error: publishError };
 
   return redirect(`/app/offers/${newOffer.id}`);
-};
+});
 
 // ─── Pre-filled defaults per template ────────────────────────────────────────
 
@@ -475,7 +479,7 @@ function createCartTier(values: Omit<CartTier, "id">): CartTier {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function NewDiscountOfferPage() {
-  const { nowLocal } = useLoaderData<typeof loader>();
+  const { nowLocal, shardsEnabled } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const { state } = useNavigation();
@@ -2150,7 +2154,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                 className="b-card-body"
                 style={{ display: "flex", flexDirection: "column", gap: 8 }}
               >
-                {templateId === "cart" && (
+                {productDiscountsField(templateId, shardsEnabled).visible && (
                   <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                     <input
                       type="checkbox"
@@ -2161,6 +2165,11 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                     />
                     <span style={{ fontSize: 13, color: "var(--text)" }}>Product discounts</span>
                   </label>
+                )}
+                {shardsEnabled && !combinesProductDiscounts && (
+                  <p className="b-help" role="note" style={{ margin: 0 }}>
+                    {combinationOptOutWarning}
+                  </p>
                 )}
                 <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                   <input
@@ -2270,6 +2279,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
         }}
       />
 
+      <CapacityLimitModal data={actionData?.capacity} />
       {(showToast || actionData?.error) && (
         <Toast
           message={actionData?.error ?? toastMsg}
