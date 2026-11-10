@@ -11,6 +11,7 @@ import { useCallback, useEffect } from "react";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { Toast } from "../components/Toast.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { resolveSelection } from "../lib/whole-product-selection.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
 import { statusForSubmit } from "../lib/offer-scheduling.server.js";
 import {
@@ -96,6 +97,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const discountProductsResult = parseJsonStringArray(formData, "discountProducts");
   if (discountProductsResult.error) return { error: discountProductsResult.error };
   const discountProducts = discountProductsResult.data!;
+  const wholeProductsResult = parseJsonStringArray(formData, "discountWholeProducts");
+  const discountSelection = await resolveSelection(db, shopId, discountProducts, wholeProductsResult.data ?? []);
   if (intent === "publish" && applyTo === "selected_products" && discountProducts.length === 0) {
     return { error: "Select at least one product before publishing." };
   }
@@ -346,10 +349,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                   scope: applyTo === "any_product" ? "all_products" : "cart",
                   ...(applyTo === "selected_products"
                     ? {
-                        productIds: discountProducts.filter((id) => id.includes("/Product/")),
-                        variantIds: discountProducts.filter((id) =>
-                          id.includes("/ProductVariant/"),
-                        ),
+                        productIds: discountSelection.productIds,
+                        variantIds: discountSelection.variantIds,
+                        ...(discountSelection.selectionLevel ? { selectionLevel: discountSelection.selectionLevel } : {}),
                       }
                     : {}),
                   selectionMode:
@@ -503,6 +505,7 @@ export default function NewDiscountOfferPage() {
     applyTo: templateId === "volume" ? "selected_products" : "any_product",
     productPickerOpen: false,
     selectedProducts: [] as string[],
+    wholeProducts: [] as string[],
     displayType: "quantity_options",
     countRule: "all",
     tiers: [
@@ -568,6 +571,7 @@ export default function NewDiscountOfferPage() {
     applyTo,
     productPickerOpen,
     selectedProducts,
+    wholeProducts,
     displayType,
     countRule,
     tiers,
@@ -596,6 +600,7 @@ export default function NewDiscountOfferPage() {
   const setApplyTo = createFieldSetter(setFormField, "applyTo");
   const setProductPickerOpen = createFieldSetter(setFormField, "productPickerOpen");
   const setSelectedProducts = createFieldSetter(setFormField, "selectedProducts");
+  const setWholeProducts = createFieldSetter(setFormField, "wholeProducts");
   const setDisplayType = createFieldSetter(setFormField, "displayType");
   const setCountRule = createFieldSetter(setFormField, "countRule");
   const setTiers = createFieldSetter(setFormField, "tiers");
@@ -794,6 +799,7 @@ export default function NewDiscountOfferPage() {
         {/* Hidden fields */}
         <input type="hidden" name="discountTemplate" value={templateId} />
         <input type="hidden" name="discountProducts" value={JSON.stringify(selectedProducts)} />
+        <input type="hidden" name="discountWholeProducts" value={JSON.stringify(wholeProducts)} />
 
         {/* Tier arrays — volume */}
         {templateId === "volume" &&
@@ -1277,9 +1283,10 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                       </div>
                       <SelectedProductsList
                         gids={selectedProducts}
-                        onRemove={(gid) =>
-                          setSelectedProducts(selectedProducts.filter((id) => id !== gid))
-                        }
+                        onRemove={(gid) => {
+                          setSelectedProducts(selectedProducts.filter((id) => id !== gid));
+                          setWholeProducts([]);
+                        }}
                       />
                     </div>
                   )}
@@ -1326,9 +1333,10 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                       </div>
                       <SelectedProductsList
                         gids={selectedProducts}
-                        onRemove={(gid) =>
-                          setSelectedProducts(selectedProducts.filter((id) => id !== gid))
-                        }
+                        onRemove={(gid) => {
+                          setSelectedProducts(selectedProducts.filter((id) => id !== gid));
+                          setWholeProducts([]);
+                        }}
                       />
                     </div>
                   )}
@@ -1393,9 +1401,10 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                       </div>
                       <SelectedProductsList
                         gids={selectedProducts}
-                        onRemove={(gid) =>
-                          setSelectedProducts(selectedProducts.filter((id) => id !== gid))
-                        }
+                        onRemove={(gid) => {
+                          setSelectedProducts(selectedProducts.filter((id) => id !== gid));
+                          setWholeProducts([]);
+                        }}
                       />
                     </div>
                   )}
@@ -2254,7 +2263,11 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
         title="Select products"
         allowMultiple
         selectedIds={selectedProducts}
-        onSelect={(gids) => setSelectedProducts(gids)}
+        selectedWholeProducts={wholeProducts}
+        onSelect={(gids, wholeSelected) => {
+          setSelectedProducts(gids);
+          setWholeProducts(wholeSelected);
+        }}
       />
 
       {(showToast || actionData?.error) && (

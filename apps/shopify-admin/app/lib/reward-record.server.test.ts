@@ -59,9 +59,12 @@ describe("buildRewardRecord product target level", () => {
   });
 
   it("leaves a variant selection unmarked", async () => {
-    const built = await buildRewardRecord(withTargets("variants"), {} as never, "shop", "USD");
+    const variants = ["gid://shopify/ProductVariant/11", "gid://shopify/ProductVariant/22"];
+    const form = withTargets("variants");
+    form.set("variantGids", variants.join("\n"));
+    const built = await buildRewardRecord(form, {} as never, "shop", "USD");
     if ("error" in built) throw new Error(built.error);
-    expect(built.data.target).toMatchObject({ variantIds: picked });
+    expect(built.data.target).toMatchObject({ variantIds: variants });
     expect(built.data.target).not.toHaveProperty("selectionLevel");
   });
 });

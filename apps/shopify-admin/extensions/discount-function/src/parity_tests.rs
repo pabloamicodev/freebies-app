@@ -573,6 +573,13 @@ mod split_parity {
             let name = scenario["name"].as_str().unwrap();
             let family = &fixture["families"][scenario["family"].as_str().unwrap()];
             let whole = discounted(&family["unsplit"], &scenario["cart"]);
+            if scenario["family"] == "selfAnchor" {
+                // The splitter refuses this shape: slicing the targets would make each part's targets the other's anchor.
+                assert!(whole.is_empty(), "{name}: the whole offer discounts nothing, got {whole:?}");
+                let naive = discounted(&family["naive"], &scenario["cart"]);
+                assert!(!naive.is_empty(), "{name}: a naive one-target-per-part split would free both targets");
+                continue;
+            }
             let parts = discounted(&family["split"], &scenario["cart"]);
             assert_eq!(parts, whole, "{name}: parts differ from the whole offer");
             let expects_discount = scenario["discounts"].as_bool().unwrap();

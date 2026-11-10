@@ -16,6 +16,7 @@ export type SplitRefusal =
   | "AGGREGATING_REWARD"
   | "CART_WIDE_CAP"
   | "MIXED_TARGETS"
+  | "LANDING_SELF_ANCHOR"
   | "NOT_LANDING_ANCHOR"
   | "ANCHOR_MIN_QUANTITY"
   | "GIFT_PICKER"
@@ -156,7 +157,10 @@ function buildSpecs(offer: CompiledOffer, options: SplitOptions): Spec[] {
     const variants = reward.targetVariantIds.length;
     const products = reward.targetProductIds.length;
     let reason: SplitRefusal | undefined;
-    if (!perLineReward(reward)) reason = "AGGREGATING_REWARD";
+    // Without anchor variants the Function takes every tagged line except the reward's own targets as the anchor, so a
+    // target sliced into another part would unlock this part's targets.
+    if (reward.scopeMode === "landing" && reward.requiredAnchorVariantIds.length === 0) reason = "LANDING_SELF_ANCHOR";
+    else if (!perLineReward(reward)) reason = "AGGREGATING_REWARD";
     else if (!setLimited(reward) && (reward.maxQuantity !== undefined || offer.mpc !== undefined)) reason = "CART_WIDE_CAP";
     else if (setLimited(reward) && variants > 0 && products > 0) reason = "MIXED_TARGETS";
     let groups: Group[] | null = null;

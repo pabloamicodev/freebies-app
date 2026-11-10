@@ -335,6 +335,7 @@ export default function OfferRewardsPage() {
     discountType: "free",
     pickerOpen: false,
     selectedGiftGids: [] as string[],
+    wholeProductGids: [] as string[],
     fallbackPickerOpen: false,
     fallbackGids: [] as string[],
     currencyCode: shopCurrencyCode,
@@ -362,6 +363,7 @@ export default function OfferRewardsPage() {
     discountType,
     pickerOpen,
     selectedGiftGids,
+    wholeProductGids,
     fallbackPickerOpen,
     fallbackGids,
     currencyCode,
@@ -387,6 +389,7 @@ export default function OfferRewardsPage() {
   const setDiscountType = createFieldSetter(setRewardField, "discountType");
   const setPickerOpen = createFieldSetter(setRewardField, "pickerOpen");
   const setSelectedGiftGids = createFieldSetter(setRewardField, "selectedGiftGids");
+  const setWholeProductGids = createFieldSetter(setRewardField, "wholeProductGids");
   const setFallbackPickerOpen = createFieldSetter(setRewardField, "fallbackPickerOpen");
   const setFallbackGids = createFieldSetter(setRewardField, "fallbackGids");
   const setCurrencyCode = createFieldSetter(setRewardField, "currencyCode");
@@ -593,7 +596,11 @@ export default function OfferRewardsPage() {
         allowMultiple={rewardType !== "product_gift"}
         availabilityPolicy={rewardType === "product_gift" ? "block" : "warn"}
         selectedIds={selectedGiftGids}
-        onSelect={setSelectedGiftGids}
+        selectedWholeProducts={wholeProductGids}
+        onSelect={(gids, wholeProducts) => {
+          setSelectedGiftGids(gids);
+          setWholeProductGids(wholeProducts);
+        }}
       />
       <ProductPicker
         open={fallbackPickerOpen}
@@ -1421,7 +1428,10 @@ export default function OfferRewardsPage() {
                         {/* Resolves real titles/thumbnails instead of showing raw GIDs */}
                         <SelectedProductsList
                           gids={selectedGiftGids}
-                          onRemove={(gid) => setSelectedGiftGids((prev) => prev.filter((g) => g !== gid))}
+                          onRemove={(gid) => {
+                            setSelectedGiftGids((prev) => prev.filter((g) => g !== gid));
+                            setWholeProductGids([]);
+                          }}
                           variantMode={
                             !(rewardType === "product_gift" || (rewardType === "product_discount" && productTargetType === "products"))
                           }
@@ -1431,6 +1441,7 @@ export default function OfferRewardsPage() {
                           name="variantGids"
                           value={selectedGiftGids.join("\n")}
                         />
+                        <input type="hidden" name="wholeProductGids" value={wholeProductGids.join("\n")} />
                       </div>
 
                       {rewardType === "product_gift" && (

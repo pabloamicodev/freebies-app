@@ -6,6 +6,86 @@
     "set": 2
   },
   "families": {
+    "selfAnchor": {
+      "unsplit": {
+        "c1": "_promo_engine_unused",
+        "c2": "_promo_engine_unused",
+        "c3": "_promo_engine_unused",
+        "customerTags": [],
+        "offers": [
+          {
+            "id": "aaaaaaaa-0000-4000-8000-0000000000a1",
+            "version": 1,
+            "offerType": "discount",
+            "title": "Kinetic landing",
+            "priority": 5,
+            "productRewards": [
+              {
+                "id": "reward-landing",
+                "targetProductIds": [
+                  "gid://shopify/Product/70000000001",
+                  "gid://shopify/Product/70000000002"
+                ],
+                "discountType": "free",
+                "discountValue": 100,
+                "scopeMode": "landing",
+                "requiredLineAttributeValue": "kinetic"
+              }
+            ]
+          }
+        ],
+        "version": "parity",
+        "compiledAt": "2026-01-01T00:00:00.000Z"
+      },
+      "naive": {
+        "c1": "_promo_engine_unused",
+        "c2": "_promo_engine_unused",
+        "c3": "_promo_engine_unused",
+        "customerTags": [],
+        "offers": [
+          {
+            "id": "aaaaaaaa-0000-4000-8000-0000000000a1",
+            "version": 1,
+            "offerType": "discount",
+            "title": "Kinetic landing",
+            "priority": 5,
+            "productRewards": [
+              {
+                "id": "reward-landing",
+                "targetProductIds": [
+                  "gid://shopify/Product/70000000001"
+                ],
+                "discountType": "free",
+                "discountValue": 100,
+                "scopeMode": "landing",
+                "requiredLineAttributeValue": "kinetic"
+              }
+            ]
+          },
+          {
+            "id": "aaaaaaaa-0000-4000-8000-0000000000a1",
+            "version": 1,
+            "offerType": "discount",
+            "title": "Kinetic landing",
+            "priority": 5,
+            "productRewards": [
+              {
+                "id": "reward-landing",
+                "targetProductIds": [
+                  "gid://shopify/Product/70000000002"
+                ],
+                "discountType": "free",
+                "discountValue": 100,
+                "scopeMode": "landing",
+                "requiredLineAttributeValue": "kinetic"
+              }
+            ]
+          }
+        ],
+        "version": "parity",
+        "compiledAt": "2026-01-01T00:00:00.000Z"
+      }
+    },
     "anchor": {
       "unsplit": {
         "c1": "_promo_engine_unused",
@@ -5978,6 +6058,44 @@
             "metadata": {
               "_promo_engine_offer_id": "aaaaaaaa-0000-4000-8000-0000000000a1",
               "_promo_engine_reward_id": "reward-gift"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "two tagged targets and no anchor",
+      "family": "selfAnchor",
+      "discounts": false,
+      "cart": {
+        "currency": "USD",
+        "presentmentCurrencyRate": 1,
+        "country": "US",
+        "customerTags": [],
+        "enteredCodes": [],
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/t1",
+            "variantId": "gid://shopify/ProductVariant/40000007001",
+            "productId": "gid://shopify/Product/70000000001",
+            "quantity": 1,
+            "unitPrice": "20.00",
+            "lineType": null,
+            "metadata": {
+              "_promo_page_url": "/pages/launch",
+              "__landing_source": "kinetic"
+            }
+          },
+          {
+            "id": "gid://shopify/CartLine/t2",
+            "variantId": "gid://shopify/ProductVariant/40000007002",
+            "productId": "gid://shopify/Product/70000000002",
+            "quantity": 1,
+            "unitPrice": "20.00",
+            "lineType": null,
+            "metadata": {
+              "_promo_page_url": "/pages/launch",
+              "__landing_source": "kinetic"
             }
           }
         ]

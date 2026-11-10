@@ -134,14 +134,23 @@ describe("splitOffer: product reward targets", () => {
     expect(refusal({ ...sitewide(), mpc: 2 })).toBe("CART_WIDE_CAP");
     const landing = offer({
       mpc: 2,
-      productRewards: [productReward({ scopeMode: "landing", discountType: "free", targetProductIds: range(600, P), requiredLineAttributeValue: "x" })],
+      productRewards: [
+        productReward({ scopeMode: "landing", discountType: "free", targetProductIds: range(600, P), requiredLineAttributeValue: "x", requiredAnchorVariantIds: [V(1)] }),
+      ],
     });
     expect(split(landing).parts.length).toBeGreaterThan(1);
   });
 
+  it("refuses a landing reward without anchors: its targets are the complement of the anchors, so a sliced target would unlock the others", () => {
+    const landing = offer({
+      productRewards: [productReward({ scopeMode: "landing", discountType: "free", targetProductIds: range(600, P), requiredLineAttributeValue: "x" })],
+    });
+    expect(refusal(landing)).toBe("LANDING_SELF_ANCHOR");
+  });
+
   it("refuses a set-limited reward whose targets mix products and variants (the Function caps them differently)", () => {
     const compiled = offer({
-      productRewards: [productReward({ scopeMode: "landing", discountType: "free", targetProductIds: range(300, P), targetVariantIds: range(300, V) })],
+      productRewards: [productReward({ scopeMode: "landing", discountType: "free", targetProductIds: range(300, P), targetVariantIds: range(300, V), requiredAnchorVariantIds: [V(9000)] })],
     });
     expect(refusal(compiled)).toBe("MIXED_TARGETS");
   });
