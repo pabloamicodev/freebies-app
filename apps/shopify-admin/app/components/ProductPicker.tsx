@@ -10,6 +10,7 @@ import { useEffect, useCallback, useRef } from "react";
 import { useDebouncedCallback } from "use-debounce";
 import { AccessibleModal } from "./AccessibleModal.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
+import { toggleProductSelection } from "../lib/picker-selection.js";
 import { variantEligibility, type AvailabilityPolicy } from "../lib/picker-eligibility.js";
 
 interface ProductVariant {
@@ -226,21 +227,10 @@ function ProductPickerContent({
     });
   }, [allowMultiple, setSelected, setWhole, products]);
 
-  const toggleProduct = useCallback((productGid: string, allVariantGids: string[]) => {
-    const next = new Set(selected);
-    if (mode === "products") {
-      if (next.has(productGid)) next.delete(productGid);
-      else { if (!allowMultiple) next.clear(); next.add(productGid); }
-    } else {
-      const allSelected = allVariantGids.every((v) => next.has(v));
-      if (allSelected) allVariantGids.forEach((v) => next.delete(v));
-      else allVariantGids.forEach((v) => next.add(v));
-      const marked = new Set(whole);
-      if (allSelected) marked.delete(productGid);
-      else marked.add(productGid);
-      setWhole(marked);
-    }
-    setSelected(next);
+  const toggleProduct = useCallback((productGid: string, allVariantGids: string[], coversAll: boolean) => {
+    const result = toggleProductSelection(selected, whole, productGid, allVariantGids, mode, allowMultiple, coversAll);
+    if (mode !== "products") setWhole(result.whole);
+    setSelected(result.selected);
   }, [mode, allowMultiple, selected, whole, setSelected, setWhole]);
 
   const handleConfirm = useCallback(() => {
@@ -362,11 +352,7 @@ function ProductPickerContent({
                   return;
                 }
                 setPickerField("notice", null);
-                if (product.variants?.length === 1 && mode === "variants") {
-                  toggleVariant(product.variants[0]!.id);
-                } else {
-                  toggleProduct(product.id, variantGids);
-                }
+                toggleProduct(product.id, variantGids, variantGids.length === (product.variants?.length ?? 0));
               };
 
               const rowOnClick = () => {
