@@ -17,7 +17,7 @@ import {
   gotoStorefront,
   waitForPromoEngine,
 } from "./helpers/storefront.js";
-import { evaluateNow, mountWidget } from "./helpers/widgets.js";
+import { allGiftSliders, dismissOpenGiftSliders, evaluateNow, mountWidget, requestGiftSlider } from "./helpers/widgets.js";
 
 const PRODUCT_HANDLE = process.env["E2E_PRODUCT_HANDLE"] ?? "test-product";
 
@@ -98,13 +98,24 @@ test.describe("Customer targeting", () => {
 
 test.describe("Accessibility", () => {
   test("gift slider is a keyboard-operable modal dialog", async ({ page }) => {
-    await gotoStorefront(page, `/products/${encodeURIComponent(PRODUCT_HANDLE)}`);
+    // Pin the market: the $85 fixture threshold is USD, and the runner's IP geolocation can land on the Canada
+    // market (CA$100.76), where the cart value and the pickers differ. The CA tests above select CA explicitly.
+    await gotoStorefront(page, `/products/${encodeURIComponent(PRODUCT_HANDLE)}?country=US`);
     await waitForPromoEngine(page);
     await clearCart(page);
     const anchor = await firstVariantId(page, PRODUCT_HANDLE);
     await addLines(page, [{ id: anchor, quantity: 1 }]);
 
-    const slider = page.locator("dialog.pe-slider-overlay");
+    // The store's QA gift offers can queue several pickers on this cart and decide which opens first; the
+    // dialog behaviour under test is the same for any of them, so open one deterministically.
+    const sliders = allGiftSliders(await evaluateNow(page)).filter((candidate) =>
+      candidate.selectableGifts.some((gift) => gift.isAvailable),
+    );
+    expect(sliders, "the cart must produce at least one selectable gift picker").not.toHaveLength(0);
+    await dismissOpenGiftSliders(page);
+    await requestGiftSlider(page, sliders[0]!.offerId);
+
+    const slider = page.locator("dialog.pe-slider-overlay[open]");
     await expect(slider).toBeVisible({ timeout: 20_000 });
     await expect(page.locator(".pe-slider-close")).toBeFocused();
 

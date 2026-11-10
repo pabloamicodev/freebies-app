@@ -4,6 +4,7 @@
     {
       "key": "nektar-glp1-shaker-gift",
       "source": "nektar-glp1-sk",
+      "title": "Nektar GLP-1 Starter Kit",
       "anchorVariant": 45727016157267,
       "anchorHandle": "nad3-60",
       "sellingPlan": 6553370707,
@@ -16,6 +17,7 @@
     {
       "key": "landing-nektar-skin-v2",
       "source": "nektar-skin-v2",
+      "title": "Frother and Gift Card unlocked!",
       "anchorVariant": 45727016157267,
       "anchorHandle": "nad3-60",
       "sellingPlan": 6553370707,
@@ -28,6 +30,7 @@
     {
       "key": "landing-kinetic-sk-otg-freegifts",
       "source": "kinetic-sk-otg",
+      "title": "Kinetic \"on the go\" Kit Gifts!",
       "anchorVariant": 45727020122195,
       "anchorHandle": "pa7-mediator-mtor-elevation",
       "sellingPlan": 6553370707,
@@ -41,6 +44,7 @@
     {
       "key": "landing-atlas-sk-otg-freegifts",
       "source": "atlas-sk-otg",
+      "title": "Atlas \"on the go\" Kit Gifts!",
       "anchorVariant": null,
       "anchorHandle": null,
       "sellingPlan": null,
@@ -55,6 +59,7 @@
     {
       "key": "landing-nektar-sk-otg-freegifts",
       "source": "nektar-sk-otg",
+      "title": "Nektar \"on the go\" Kit Gifts!",
       "anchorVariant": 45727016157267,
       "anchorHandle": "nad3-60",
       "sellingPlan": 6553370707,
@@ -67,6 +72,7 @@
     {
       "key": "landing-planta-sk-otg-freegifts",
       "source": "planta-sk-otg",
+      "title": "Planta \"on the go\" Kit Gifts!",
       "anchorVariant": 45727016321107,
       "anchorHandle": "planta-organic-plant-protein",
       "sellingPlan": 6553370707,
@@ -79,6 +85,7 @@
     {
       "key": "landing-scoped-product-mtvt54kq",
       "source": "planta-atlas-combo-sk",
+      "title": "Planta+Atlas Combo Gifts!",
       "anchorVariant": 45727016321107,
       "anchorHandle": "planta-organic-plant-protein",
       "sellingPlan": 6553370707,
@@ -92,6 +99,7 @@
     {
       "key": "landing-nektar-sk-special-nfgc10kit",
       "source": "nektar-sk-special-offer",
+      "title": "Congratulations! Free Gifts added",
       "anchorVariant": 45727016157267,
       "anchorHandle": "nad3-60",
       "sellingPlan": 6553370707,
@@ -109,5 +117,16 @@
       45726985945171,
       45726985977939
     ]
-  }
+  },
+  "fixtureTitles": [
+    "Nektar GLP-1 Starter Kit",
+    "Frother and Gift Card unlocked!",
+    "Labor Day Sale | FREE Ambrosia Athletic Club T-Shirt",
+    "Kinetic \"on the go\" Kit Gifts!",
+    "Atlas \"on the go\" Kit Gifts!",
+    "Nektar \"on the go\" Kit Gifts!",
+    "Planta \"on the go\" Kit Gifts!",
+    "Planta+Atlas Combo Gifts!",
+    "Congratulations! Free Gifts added"
+  ]
 }

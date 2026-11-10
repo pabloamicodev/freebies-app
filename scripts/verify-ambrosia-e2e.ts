@@ -88,6 +88,7 @@ async function main(): Promise<void> {
     { shopifyGraphQL },
     { decryptToken },
     { compactCompiledOffer },
+    { normalizeCompiledOffer },
   ] = await Promise.all([
     import("drizzle-orm"),
     import("@promo/db"),
@@ -95,6 +96,7 @@ async function main(): Promise<void> {
     import("../apps/shopify-admin/app/lib/shopify-fetch.server.js"),
     import("../apps/shopify-admin/app/lib/token-crypto.server.js"),
     import("../apps/shopify-admin/app/lib/sync/compile-config.js"),
+    import("../apps/shopify-admin/app/lib/sync/compiled-offer-compare.js"),
   ]);
 
   const db = getDb();
@@ -352,9 +354,12 @@ async function main(): Promise<void> {
     for (const row of activeRows) {
       const compiled = published.offers.find((offer) => offer.id === row.id);
       assert.ok(compiled, `${row.internalName} is absent from Shopify's published config.`);
+      // Semantic comparison: compact numeric ids and comma-packed lists (>100) equal their GID/array source.
       assertJsonEqual(
-        compiled,
-        compactCompiledOffer(row.compiledConfig as Parameters<typeof compactCompiledOffer>[0]),
+        normalizeCompiledOffer(compiled),
+        normalizeCompiledOffer(
+          compactCompiledOffer(row.compiledConfig as Parameters<typeof compactCompiledOffer>[0]),
+        ),
         `${row.internalName} published compiled config`,
       );
     }
@@ -464,6 +469,7 @@ const invokedUrl = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).hre
 if (import.meta.url === invokedUrl) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
+    if (error instanceof Error && error.cause) console.error("Cause:", error.cause);
     process.exitCode = 1;
   });
 }
