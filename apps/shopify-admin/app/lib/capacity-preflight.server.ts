@@ -89,7 +89,7 @@ export async function compileSharedOffers(
   );
   const sharedIds = new Set(shared.map((offer) => offer.id));
   const sharedPolicies = policies.filter((policy) => sharedIds.has(policy.offerId));
-  const entries = await compileCartOffers(db, shopId, shared, { conditions, rewards, policies: sharedPolicies, shopCurrencyCode, limitsEnforced });
+  const entries = await compileCartOffers(db, shopId, shared, { conditions, rewards, policies: sharedPolicies, shopCurrencyCode, limitsEnforced, caller: "capacity-preflight" });
   const compiled = entries.map(({ source, offer, shipping }) => ({
     offerId: source.id,
     offer,

@@ -23,6 +23,9 @@ export function legacyGatedOfferIds(conditions: readonly Pick<OfferCondition, "o
   return new Set(conditions.filter((row) => row.conditionType === "discount_code" && row.isEnabled).map((row) => row.offerId));
 }
 
+/** Who compiles: tags the logs and Sentry events of a skipped gift reward. */
+export type CartOffersCaller = "offer-publisher" | "capacity-preflight";
+
 export interface CartOfferEntry {
   source: Offer;
   offer: CompiledOffer;
@@ -45,6 +48,7 @@ export async function compileCartOffers(
     policies: readonly OfferCombinationPolicy[];
     shopCurrencyCode: string;
     limitsEnforced: boolean;
+    caller: CartOffersCaller;
   },
 ): Promise<CartOfferEntry[]> {
   const { shopCurrencyCode, limitsEnforced } = input;
@@ -66,7 +70,7 @@ export async function compileCartOffers(
         throw offerCompileError(offer, error);
       }
     });
-  const resolved = await resolveLegacyGiftVariants(db, shopId, entries.map((entry) => entry.offer));
+  const resolved = await resolveLegacyGiftVariants(db, shopId, entries.map((entry) => entry.offer), input.caller);
   return entries.map((entry, index) => ({ ...entry, offer: resolved[index]! }));
 }
 
@@ -79,6 +83,7 @@ export async function resolveLegacyGiftVariants(
   db: Db,
   shopId: string,
   compiledOffers: CompiledFunctionConfig["offers"],
+  caller: CartOffersCaller,
 ): Promise<CompiledFunctionConfig["offers"]> {
   const unresolvedProductIds = [
     ...new Set(
@@ -124,11 +129,11 @@ export async function resolveLegacyGiftVariants(
         // Don't fail the whole shop's publish over one stale reward — skip it
         // and keep publishing every other offer/reward that's still valid.
         console.error(
-          `[offer-publisher] Skipping gift reward ${reward.id} in offer ${offer.id}: no eligible one-time-purchase variants.`,
+          `[${caller}] Skipping gift reward ${reward.id} in offer ${offer.id}: no eligible one-time-purchase variants.`,
         );
         Sentry.captureMessage("Gift reward skipped: no eligible variants", {
           level: "warning",
-          tags: { offerId: offer.id, rewardId: reward.id },
+          tags: { offerId: offer.id, rewardId: reward.id, caller },
         });
         return [];
       }

@@ -472,6 +472,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       policies: policyRows,
       shopCurrencyCode,
       limitsEnforced,
+      caller: "offer-publisher",
     });
     const compiledOffers = compiledByOffer.map((entry) => entry.offer);
     const shippingOffers = compiledByOffer.flatMap((entry) => entry.shipping);
@@ -1039,7 +1040,7 @@ async function compileCodeOffers(
       computeOfferVersion(offer, conditionRows, rewardRows, policy),
       { codePromo: true, shopCurrencyCode, limitsEnforced },
     );
-    const [resolvedOffer] = await resolveLegacyGiftVariants(db, shopId, [compiledOffer]);
+    const [resolvedOffer] = await resolveLegacyGiftVariants(db, shopId, [compiledOffer], "offer-publisher");
     const finalCompiledOffer = resolvedOffer ?? compiledOffer;
 
     results.push({
@@ -1255,7 +1256,7 @@ async function compileBackendBOffers(
       computeOfferVersion(offer, conditionRows, rewardRows, policy),
       { codePromo: true, codeHashes: [...new Set(codes.map(codeHash))].sort(), shopCurrencyCode, limitsEnforced },
     );
-    const [resolved] = await resolveLegacyGiftVariants(db, shopId, [compiled]);
+    const [resolved] = await resolveLegacyGiftVariants(db, shopId, [compiled], "offer-publisher");
     const hashes = [...new Set(codes.map(codeHash))].sort();
     results.push({
       offer,

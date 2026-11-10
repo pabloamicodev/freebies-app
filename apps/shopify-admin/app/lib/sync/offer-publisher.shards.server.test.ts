@@ -713,12 +713,12 @@ describe("preflight plans the same cart slots the publish writes", () => {
 
   async function expectParity() {
     const preflight = await preflightCapacity(db, shopId, [], { loadBudget: (_db, id) => automaticNodeBudget(id, DOMAIN, "token") });
-    expect(preflight.ok).toBe(true);
-    const planned = preflight.ok ? preflight.plan : null;
+    if (!preflight.ok) throw new Error(`preflight blocked: ${preflight.code} ${preflight.message}`);
+    const planned = preflight.plan;
     await publishOffersForShop(shopId, DOMAIN);
     const rows = (await shardRows()).filter((row) => row.unitKeys.length > 0);
-    expect(planned!.slots).toBe(rows.length);
-    expect(planned!.bytesPerSlot).toEqual(rows.map((row) => row.configBytes!));
+    expect(planned.slots).toBe(rows.length);
+    expect(planned.bytesPerSlot).toEqual(rows.map((row) => row.configBytes!));
     return rows;
   }
 
