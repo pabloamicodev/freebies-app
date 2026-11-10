@@ -1,4 +1,4 @@
-import { UNPACKABLE_LISTS } from "./sync/compile-config.js";
+import { UNPACKABLE_LISTS } from "./sync/unpackable-lists.js";
 import { SLOT_LIMITS } from "./sync/slot-limits.js";
 
 export const SHOPIFY_AUTOMATIC_LIMIT = 25;

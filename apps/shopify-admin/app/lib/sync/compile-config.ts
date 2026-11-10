@@ -1382,22 +1382,9 @@ export function unpackList(value: unknown): string[] {
   return typeof value === "string" && value !== "" ? value.split(",") : [];
 }
 
-/** Lists that cannot be packed (arrays of objects). `listKind` in capacity numbers indexes this table. */
-export const UNPACKABLE_LISTS = [
-  ["requirements", "requirements"],
-  ["priceTiers", "price tiers"],
-  ["quantityTiers", "quantity tiers"],
-  ["subtotalTiers", "subtotal tiers"],
-  ["pageUrlConditions", "page URL conditions"],
-  ["patterns", "page URL patterns"],
-  ["giftRewards", "gift rewards"],
-  ["productRewards", "product rewards"],
-  ["orderRewards", "order rewards"],
-  ["lineAttributeConditions", "line attribute conditions"],
-  ["cartAttributeConditions", "cart attribute conditions"],
-  ["offers", "offers"],
-  ["customerTags", "customer tags"],
-] as const;
+import { UNPACKABLE_LISTS } from "./unpackable-lists.js";
+
+export { UNPACKABLE_LISTS };
 
 export const listKindOf = (key: string) => UNPACKABLE_LISTS.findIndex(([name]) => name === key);
 
