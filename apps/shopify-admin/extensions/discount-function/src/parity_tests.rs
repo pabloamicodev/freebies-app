@@ -594,3 +594,179 @@ mod split_parity {
         }
     }
 }
+
+/// FIX-cap-12: what Shopify does with several nodes of ours. Each node runs the Function on its own offers;
+/// nodes whose combination settings allow each other apply together, otherwise Shopify applies the best set
+/// for the customer cart-wide. The planner puts offers that do not combine in their own node, so against the
+/// one-node result the only carts that may differ are those where such a node and another node both emit.
+#[cfg(not(feature = "code_gate"))]
+mod combination_groups {
+    use super::*;
+
+    struct Node {
+        combines_with_product_discounts: bool,
+        offers: Vec<Value>,
+    }
+
+    fn product(id: u32) -> String {
+        format!("gid://shopify/Product/{id}")
+    }
+
+    fn offer(id: &str, product_id: u32, percent: f64) -> Value {
+        json!({
+            "id": id, "version": 1, "offerType": "discount", "title": id, "priority": 10,
+            "productRewards": [{
+                "id": format!("{id}-reward"), "targetProductIds": [product(product_id)],
+                "discountType": "percentage", "discountValue": percent, "scopeMode": "sitewide"
+            }]
+        })
+    }
+
+    fn cart(lines: &[(u32, i64)]) -> Value {
+        let lines: Vec<Value> = lines
+            .iter()
+            .map(|(product_id, quantity)| {
+                json!({
+                    "id": format!("gid://shopify/CartLine/{product_id}"),
+                    "variantId": format!("gid://shopify/ProductVariant/{}", product_id * 10),
+                    "productId": product(*product_id), "quantity": quantity, "unitPrice": "20.00",
+                    "lineType": null, "metadata": {}
+                })
+            })
+            .collect();
+        json!({ "currency": "USD", "presentmentCurrencyRate": 1, "country": "US", "customerTags": [], "enteredCodes": [], "lines": lines })
+    }
+
+    fn config(offers: &[Value]) -> Value {
+        json!({ "c1": "_promo_engine_unused", "c2": "_promo_engine_unused", "c3": "_promo_engine_unused", "customerTags": [], "offers": offers })
+    }
+
+    type Outcome = BTreeMap<String, BTreeMap<String, i64>>;
+
+    fn run_node(offers: &[Value], cart: &Value) -> Outcome {
+        let input = function_input(&json!({ "config": config(offers), "cart": cart })).to_string();
+        outcomes(&run_function_with_input(run, &input).expect("the function runs"))
+    }
+
+    fn all_offers(nodes: &[Node]) -> Vec<Value> {
+        nodes.iter().flat_map(|node| node.offers.clone()).collect()
+    }
+
+    /// Money saved: units x unit price x the offer percentage.
+    fn saving(outcome: &Outcome, offers: &[Value]) -> f64 {
+        outcome
+            .iter()
+            .map(|(offer_id, lines)| {
+                let percent = offers
+                    .iter()
+                    .find(|offer| offer["id"] == *offer_id)
+                    .map(|offer| offer["productRewards"][0]["discountValue"].as_f64().unwrap())
+                    .unwrap_or(0.0);
+                lines.values().map(|units| *units as f64 * 20.0 * percent / 100.0).sum::<f64>()
+            })
+            .sum()
+    }
+
+    fn one_node(nodes: &[Node], cart: &Value) -> Outcome {
+        run_node(&all_offers(nodes), cart)
+    }
+
+    /// Shopify resolution: the best set of emitting nodes that all allow each other (a pair combines when both allow product discounts).
+    fn resolved(nodes: &[Node], cart: &Value) -> Outcome {
+        let all = all_offers(nodes);
+        let emitted: Vec<(usize, Outcome)> = nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (index, run_node(&node.offers, cart)))
+            .filter(|(_, outcome)| !outcome.is_empty())
+            .collect();
+        let mut best: Option<(f64, Outcome)> = None;
+        for mask in 1u32..(1 << emitted.len()) {
+            let chosen: Vec<&(usize, Outcome)> =
+                emitted.iter().enumerate().filter(|(bit, _)| mask & (1 << bit) != 0).map(|(_, entry)| entry).collect();
+            let compatible = chosen.len() == 1 || chosen.iter().all(|(index, _)| nodes[*index].combines_with_product_discounts);
+            if !compatible {
+                continue;
+            }
+            let merged: Outcome = chosen.iter().flat_map(|(_, outcome)| outcome.clone()).collect();
+            let value = saving(&merged, &all);
+            if best.as_ref().map_or(true, |(top, _)| value > *top) {
+                best = Some((value, merged));
+            }
+        }
+        best.map(|(_, outcome)| outcome).unwrap_or_default()
+    }
+
+    /// What the planner produces for a shop with an offer that does not combine: it keeps slot 0, the rest get their own nodes.
+    fn planned() -> Vec<Node> {
+        vec![
+            Node { combines_with_product_discounts: false, offers: vec![offer("nc-gift", 3, 100.0)] },
+            Node { combines_with_product_discounts: true, offers: vec![offer("sale-a", 1, 10.0), offer("sale-b", 2, 20.0)] },
+            Node { combines_with_product_discounts: true, offers: vec![offer("sale-c", 4, 30.0)] },
+        ]
+    }
+
+    #[test]
+    fn carts_where_no_offer_that_does_not_combine_qualifies_match_the_one_node_result() {
+        let nodes = planned();
+        for lines in [vec![(1, 1)], vec![(1, 2), (2, 1)], vec![(1, 1), (2, 1), (4, 3)], vec![(9, 1)]] {
+            let cart = cart(&lines);
+            assert_eq!(resolved(&nodes, &cart), one_node(&nodes, &cart), "cart {lines:?}");
+        }
+    }
+
+    #[test]
+    fn two_combining_nodes_stack_on_different_lines_like_one_node() {
+        let nodes = planned();
+        let cart = cart(&[(1, 1), (4, 2)]);
+        let both = resolved(&nodes, &cart);
+        assert_eq!(both.keys().cloned().collect::<Vec<_>>(), vec!["sale-a".to_string(), "sale-c".to_string()]);
+        assert_eq!(both, one_node(&nodes, &cart));
+    }
+
+    #[test]
+    fn a_cart_that_only_the_non_combining_node_discounts_matches_the_one_node_result() {
+        let nodes = planned();
+        let cart = cart(&[(3, 1), (9, 2)]);
+        assert_eq!(resolved(&nodes, &cart), one_node(&nodes, &cart));
+        assert!(resolved(&nodes, &cart).contains_key("nc-gift"));
+    }
+
+    #[test]
+    fn a_cart_where_a_non_combining_node_and_another_node_both_emit_gets_the_better_set_only() {
+        let nodes = planned();
+        let all = all_offers(&nodes);
+        // The free gift (20 saved) beats one unit of the 10 % sale (2 saved): Shopify applies only the gift node.
+        let gift_wins = cart(&[(3, 1), (1, 1)]);
+        let best = resolved(&nodes, &gift_wins);
+        assert_eq!(best.keys().cloned().collect::<Vec<_>>(), vec!["nc-gift".to_string()]);
+        assert_ne!(best, one_node(&nodes, &gift_wins), "today both stack: the documented difference (E1)");
+        assert!(saving(&best, &all) < saving(&one_node(&nodes, &gift_wins), &all));
+
+        // Five units of each combinable sale (10 + 20 saved) beat one free unit (20 saved): the sales apply together, the gift does not.
+        let sales_win = cart(&[(3, 1), (1, 5), (2, 5)]);
+        let best = resolved(&nodes, &sales_win);
+        assert_eq!(best.keys().cloned().collect::<Vec<_>>(), vec!["sale-a".to_string(), "sale-b".to_string()]);
+        assert_ne!(best, one_node(&nodes, &sales_win));
+    }
+
+    #[test]
+    fn the_resolved_set_never_saves_more_than_the_one_node_result() {
+        let nodes = planned();
+        let all = all_offers(&nodes);
+        for lines in [vec![(3, 1), (1, 1)], vec![(3, 2), (4, 1), (2, 2)], vec![(1, 1), (2, 1)], vec![(3, 1)]] {
+            let cart = cart(&lines);
+            assert!(saving(&resolved(&nodes, &cart), &all) <= saving(&one_node(&nodes, &cart), &all) + 1e-9, "cart {lines:?}");
+        }
+    }
+
+    #[test]
+    fn when_every_node_combines_sharding_changes_nothing() {
+        let mut nodes = planned();
+        nodes[0].combines_with_product_discounts = true;
+        for lines in [vec![(3, 1), (1, 1)], vec![(3, 2), (4, 1), (2, 2)], vec![(1, 1), (2, 1)]] {
+            let cart = cart(&lines);
+            assert_eq!(resolved(&nodes, &cart), one_node(&nodes, &cart), "cart {lines:?}");
+        }
+    }
+}
