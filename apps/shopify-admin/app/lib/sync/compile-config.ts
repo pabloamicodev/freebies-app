@@ -782,12 +782,16 @@ export function compileOfferConfig(
       if (reward.rewardType === "upsell_discount" && configuredAmount <= 0 && !hasConfiguredTiers) {
         continue;
       }
-      const targetVariantIds =
+      const savedVariantIds =
         (target["variantIds"] as string[]) ??
         (target["variantId"] ? [target["variantId"] as string] : []);
       const targetProductIds =
         (target["productIds"] as string[]) ??
         (target["productId"] ? [target["productId"] as string] : []);
+      // Only a selection the merchant saved as whole products ships product ids alone (a variant added later is covered, as
+      // the merchant chose the product). Never inferred from which variants are cached: older rows keep their variants.
+      const targetVariantIds =
+        target["selectionLevel"] === "product" && targetProductIds.length > 0 ? [] : savedVariantIds;
       const currencyCode = rewardCurrency(value["currencyCode"], options.shopCurrencyCode);
       const subscriptionMode =
         target["subscriptionMode"] === "subscription_only" || target["subscriptionMode"] === "one_time_only"
@@ -1327,7 +1331,7 @@ function omitDefaults(
  * deployed: Functions first, server second. Callers pass `compactIds`; off by default.
  */
 const GID_TAIL = /^gid:\/\/shopify\/(?:ProductVariant|Product)\/(\d+)$/;
-const compactId = (id: string) => GID_TAIL.exec(id)?.[1] ?? id;
+export const compactId = (id: string) => GID_TAIL.exec(id)?.[1] ?? id;
 const compactIds = (ids: readonly string[]) => ids.map(compactId);
 
 function withCompactIds<T extends object>(value: T, keys: readonly string[]): T {

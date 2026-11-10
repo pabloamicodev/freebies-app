@@ -1,4 +1,5 @@
 import { compactCompiledOffer, serializeFunctionConfig, type CompiledOffer } from "./compile-config.js";
+import type { SplitRefusal } from "./offer-split.js";
 
 export interface PlanUnit {
   key: string;
@@ -14,6 +15,8 @@ export interface PlanUnit {
   multiLineFixed: boolean;
   /** Split hook: pre-sliced parts (keyed `offerId#k`) that replace this unit when it is bigger than a slot. */
   splittable?: PlanUnit[];
+  /** Why an oversize unit could not be split (offer-split.ts), so a blocked plan can say so. */
+  splitRefusal?: SplitRefusal;
 }
 
 export interface PlannerLimits {
@@ -46,6 +49,8 @@ export interface PlanBlocked {
   unitKeys: string[];
   /** For the too-large codes: which limit the (first) offender broke. */
   reason?: PlanBlockReason;
+  /** OFFER_TOO_LARGE only: why the first offender is not splittable. */
+  splitRefusal?: SplitRefusal;
   numbers: Record<string, number>;
 }
 
@@ -296,11 +301,18 @@ export function planShards(
     } else tooLarge.push(unit.key);
   }
   if (tooLarge.length > 0) {
-    const first = overLimit([makeGroup([inputUnits.find((unit) => unit.key === tooLarge[0])!], false)], hard)!;
+    const offender = inputUnits.find((unit) => unit.key === tooLarge[0])!;
+    const first = overLimit([makeGroup([offender], false)], hard)!;
     return {
       slots: [],
       moves: [],
-      blocked: { code: "OFFER_TOO_LARGE", unitKeys: tooLarge, reason: first.reason, numbers: tooLargeNumbers(first.m) },
+      blocked: {
+        code: "OFFER_TOO_LARGE",
+        unitKeys: tooLarge,
+        reason: first.reason,
+        ...(offender.splitRefusal ? { splitRefusal: offender.splitRefusal } : {}),
+        numbers: tooLargeNumbers(first.m),
+      },
     };
   }
   units.sort(compareUnits);

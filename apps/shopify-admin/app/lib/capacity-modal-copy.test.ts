@@ -35,6 +35,14 @@ describe("describeCapacityModal", () => {
     expect(tags.limit).toContain("100 customer tags");
   });
 
+  it("OFFER_TOO_LARGE says why the offer could not be split, and keeps the plain copy for an unknown reason", () => {
+    const base = { code: "OFFER_TOO_LARGE" as const, offers: [offers[0]!], numbers: { bytes: 12000, slotBytes: 9500 } };
+    const aggregating = describeCapacityModal(data({ ...base, splitRefusal: "AGGREGATING_REWARD" }));
+    expect(aggregating.body).toContain("counts quantities, tiers or prices across all the selected items");
+    expect(describeCapacityModal(data({ ...base, splitRefusal: "LANDING_SELF_ANCHOR" })).body).toContain("Choose the products that unlock it");
+    expect(describeCapacityModal(data({ ...base, splitRefusal: "SOMETHING_NEW" })).body).toBe(describeCapacityModal(data(base)).body);
+  });
+
   it("SLOT0_GROUP_TOO_LARGE lists the offers and links each one (max 3)", () => {
     const many = ["a", "b", "c", "d"].map((id) => ({ id, name: `Offer ${id}` }));
     const copy = describeCapacityModal(data({ code: "SLOT0_GROUP_TOO_LARGE", offers: many, numbers: { groupUnits: 4 } }));

@@ -422,7 +422,7 @@ export async function validateActivationWithPreflight(
   const validation = await validateOffersPublishable(db, shopId, offerIds);
   if (!validation.ok) return { validation };
   const capacity = await preflightCapacity(db, shopId, offerIds);
-  if (!capacity.ok) recordCapacityBlock({ shopId, code: capacity.code, offerIds: capacity.offerIds, numbers: capacity.numbers });
+  if (!capacity.ok) recordCapacityBlock({ shopId, code: capacity.code, offerIds: capacity.offerIds, numbers: capacity.numbers, ...(capacity.splitRefusal ? { splitRefusal: capacity.splitRefusal } : {}) });
   return { validation: capacityValidation(capacity), preflight: capacity };
 }
 
@@ -564,7 +564,7 @@ export async function republishIfActive(
   const validation = await validateOffersPublishable(db, shopId, [offerId]);
   const capacity = validation.ok ? (earlierPreflight ?? (await preflightCapacity(db, shopId, [offerId]))) : null;
   const preflight = capacity && !capacity.ok ? capacity : null;
-  if (preflight) recordCapacityBlock({ shopId, code: preflight.code, offerIds: preflight.offerIds, numbers: preflight.numbers });
+  if (preflight) recordCapacityBlock({ shopId, code: preflight.code, offerIds: preflight.offerIds, numbers: preflight.numbers, ...(preflight.splitRefusal ? { splitRefusal: preflight.splitRefusal } : {}) });
   let reason = "validation_error";
   let failure: PublishFailure | null;
   if (!validation.ok) {

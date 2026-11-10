@@ -1363,6 +1363,72 @@ describe("compileOfferConfig — product-level requirements", () => {
   });
 });
 
+describe("product reward targets: whole products versus variants", () => {
+  const PRODUCTS = ["gid://shopify/Product/1", "gid://shopify/Product/2"];
+  const VARIANTS = ["gid://shopify/ProductVariant/11", "gid://shopify/ProductVariant/21", "gid://shopify/ProductVariant/22"];
+  const compileTarget = (target: Record<string, unknown>) =>
+    compileOfferConfig(
+      offer(),
+      [],
+      [
+        {
+          id: REWARD_ID,
+          rewardType: "product_discount",
+          discountType: "percentage",
+          value: { amount: 10, currencyCode: "USD" },
+          target: { scopeMode: "sitewide", ...target },
+          sortOrder: 0,
+        } as CompileArgs[2][number],
+      ],
+      null,
+      1,
+    ).productRewards[0]!;
+
+  it("ships product ids alone when the merchant saved whole products, dropping the variants the picker expanded", () => {
+    const reward = compileTarget({ selectionLevel: "product", productIds: PRODUCTS, variantIds: VARIANTS });
+    expect(reward.targetProductIds).toEqual(PRODUCTS);
+    expect(reward.targetVariantIds).toEqual([]);
+    expect(JSON.stringify(compactCompiledOffer(compileOfferConfig(offer(), [], [{ id: REWARD_ID, rewardType: "product_discount", discountType: "percentage", value: { amount: 10, currencyCode: "USD" }, target: { scopeMode: "sitewide", selectionLevel: "product", productIds: PRODUCTS, variantIds: VARIANTS }, sortOrder: 0 } as CompileArgs[2][number]], null, 1)))).not.toContain("ProductVariant");
+  });
+
+  it("keeps the variants of a row saved before the marker existed, even when its products are known", () => {
+    const reward = compileTarget({ productIds: PRODUCTS, variantIds: VARIANTS });
+    expect(reward.targetProductIds).toEqual(PRODUCTS);
+    expect(reward.targetVariantIds).toEqual(VARIANTS);
+  });
+
+  it("keeps a hand-picked variant list as variants", () => {
+    const reward = compileTarget({ variantIds: VARIANTS });
+    expect(reward.targetVariantIds).toEqual(VARIANTS);
+    expect(reward.targetProductIds).toEqual([]);
+  });
+
+  it("never drops variants when the marker has no product ids to stand on", () => {
+    expect(compileTarget({ selectionLevel: "product", variantIds: VARIANTS }).targetVariantIds).toEqual(VARIANTS);
+  });
+
+  it("accepts the marker in the reward payload the wizards save", () => {
+    expect(
+      validateRewardPayload("product_discount", "percentage", { amount: 10, currencyCode: "USD" }, {
+        scopeMode: "sitewide",
+        scope: "cart",
+        subscriptionMode: "any",
+        selectionLevel: "product",
+        productIds: PRODUCTS,
+      }).success,
+    ).toBe(true);
+    expect(
+      validateRewardPayload("product_discount", "percentage", { amount: 10, currencyCode: "USD" }, {
+        scopeMode: "sitewide",
+        scope: "cart",
+        subscriptionMode: "any",
+        selectionLevel: "variant",
+        productIds: PRODUCTS,
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe("canStackWithGiftOffers", () => {
   const compile = (policy: Record<string, unknown> | null) =>
     compileOfferConfig(offer() as never, [] as never, [] as never, policy as never, 1);

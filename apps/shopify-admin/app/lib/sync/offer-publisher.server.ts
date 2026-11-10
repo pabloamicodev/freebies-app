@@ -30,7 +30,8 @@ import {
 import { isFunctionCompactIdsEnabled } from "../function-compact-ids-flag.server.js";
 import { isFunctionShardsEnabled } from "../function-shards-flag.server.js";
 import { SLOT_LIMITS, planShards } from "./shard-planner.js";
-import { buildPlanUnits } from "./plan-units.js";
+import { baseOfferId, buildPlanUnitSet, slotOffers } from "./plan-units.js";
+import { loadSplitOptions } from "./variant-products.server.js";
 import { combinationBlockers } from "./combination-blockers.js";
 import {
   ShardPlanBlockedError,
@@ -518,11 +519,11 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const budget = shardsEnabled ? await automaticNodeBudget(shopId, shopDomain, accessToken) : null;
     const persisted = shardMode ? await readShardState(db, shopId) : null;
     const combination = compileDiscountCombinationPolicy(compiledOffers);
-    const planUnits = buildPlanUnits(
+    const { units: planUnits, splits } = buildPlanUnitSet(
       compiledOffers.map((offer) => ({ offerId: offer.id, offer })),
       conditionRows,
       policyRows,
-      compactIds,
+      shardsEnabled ? { ...(await loadSplitOptions(db, shopId, compiledOffers)), compactIds } : { compactIds },
     );
     const plan = planShards(
       planUnits,
@@ -550,9 +551,9 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
 
     const compiledAt = new Date().toISOString();
     const slotValues = slots.map((slot) => {
-      const members = new Set(slot.unitKeys);
+      const members = new Set(slot.unitKeys.map(baseOfferId));
       const cartConfig: CompiledFunctionConfig = {
-        offers: compiledOffers.filter((offer) => members.has(offer.id)),
+        offers: slotOffers(compiledOffers, slot.unitKeys, splits),
         shippingOffers: [],
         version: "1",
         compiledAt,

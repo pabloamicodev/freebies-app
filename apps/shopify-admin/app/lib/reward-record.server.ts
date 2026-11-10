@@ -11,6 +11,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { toStoredAmount } from "./money.js";
 import { parseSubscriptionMode, withSubscriptionMode } from "./purchase-type.js";
 import { splitTextareaList } from "./textarea-list.js";
+import { resolveSelection } from "./whole-product-selection.server.js";
 import { parseQuantityTiers, type QuantityTier } from "./quantity-tiers.js";
 import type { getShopContext } from "./shop-context.server.js";
 
@@ -266,7 +267,16 @@ export async function buildRewardRecord(
         }
         const productTargetType = formData.get("productTargetType") === "products" ? "products" : "variants";
         if (variantGids.length > 0) {
-          target = productTargetType === "products" ? { productIds: variantGids } : { variantIds: variantGids };
+          if (productTargetType === "products") target = { productIds: variantGids, selectionLevel: "product" };
+          else {
+            // Products ticked as a whole in the variant picker go back to product ids (smaller config, same targets).
+            const picked = await resolveSelection(db, shopId, variantGids, splitTextareaList(formData.get("wholeProductGids") as string | null));
+            target = {
+              ...(picked.productIds.length > 0 ? { productIds: picked.productIds } : {}),
+              ...(picked.variantIds.length > 0 ? { variantIds: picked.variantIds } : {}),
+              ...(picked.selectionLevel ? { selectionLevel: picked.selectionLevel } : {}),
+            };
+          }
         }
         if (productScopeMode === "landing" && variantGids.length === 0) {
           return { error: "Choose the products this landing discount applies to." };
