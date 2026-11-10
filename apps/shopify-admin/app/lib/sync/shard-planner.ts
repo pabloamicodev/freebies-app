@@ -6,6 +6,8 @@ export interface PlanUnit {
   bytes: number;
   cartAttributeKeys: string[];
   customerTags: string[];
+  /** The offer's own combination flags; absent means it combines with everything. */
+  domain?: CombinationPolicy;
   priority: number;
   hasOrderRewards: boolean;
   stopLowerPriority: boolean;
@@ -30,10 +32,32 @@ export interface PlannerLimits {
 export { SLOT_LIMITS } from "./slot-limits.js";
 import { SLOT_LIMITS } from "./slot-limits.js";
 
+/** A node's Shopify combinesWith triple. An offer's combination group is the triple of its own flags. */
 export interface CombinationPolicy {
   productDiscounts: boolean;
   orderDiscounts: boolean;
+  shippingDiscounts: boolean;
 }
+
+export const OPEN_POLICY: CombinationPolicy = { productDiscounts: true, orderDiscounts: true, shippingDiscounts: true };
+
+/**
+ * `uniform`: one policy for every node, so an offer that does not combine forces a single node (today's behavior).
+ * `domains`: nodes are homogeneous by combination group and each gets its own members' policy.
+ */
+export type PlanMode = "uniform" | "domains";
+
+export const andPolicies = (policies: readonly CombinationPolicy[]): CombinationPolicy => ({
+  productDiscounts: policies.every((policy) => policy.productDiscounts),
+  orderDiscounts: policies.every((policy) => policy.orderDiscounts),
+  shippingDiscounts: policies.every((policy) => policy.shippingDiscounts),
+});
+
+export const policyKey = (policy: CombinationPolicy): string =>
+  `${policy.productDiscounts ? 1 : 0}${policy.orderDiscounts ? 1 : 0}${policy.shippingDiscounts ? 1 : 0}`;
+
+const restrictiveness = (policy: CombinationPolicy) =>
+  [policy.productDiscounts, policy.orderDiscounts, policy.shippingDiscounts].filter((flag) => !flag).length;
 
 export type PlanBlockCode =
   | "SLOT0_GROUP_TOO_LARGE"
@@ -60,6 +84,8 @@ export interface PlannedSlot {
   bytes: number;
   keys: string[];
   tags: string[];
+  /** combinesWith the node must carry: the AND of its members (the node's own group in `domains` mode). */
+  policy: CombinationPolicy;
 }
 
 export interface PlanMove {
@@ -121,6 +147,8 @@ interface Group {
   keys: Set<string>;
   tags: Set<string>;
   pinned: boolean;
+  domain: CombinationPolicy;
+  dkey: string;
   minPriority: number;
   minKey: string;
 }
@@ -150,12 +178,15 @@ function measure(groups: readonly Group[]): Measure {
 
 const makeGroup = (units: PlanUnit[], pinned: boolean): Group => {
   const sorted = [...units].sort(compareUnits);
+  const domain = andPolicies(sorted.map((unit) => unit.domain ?? OPEN_POLICY));
   return {
     units: sorted,
     sum: sorted.reduce((total, unit) => total + unit.bytes, 0),
     keys: new Set(sorted.flatMap((unit) => unit.cartAttributeKeys)),
     tags: new Set(sorted.flatMap((unit) => unit.customerTags)),
     pinned,
+    domain,
+    dkey: policyKey(domain),
     minPriority: sorted[0]?.priority ?? 0,
     minKey: sorted[0]?.key ?? "",
   };
@@ -208,13 +239,20 @@ function buildGroups(units: PlanUnit[]): Group[] {
   );
 }
 
-function assemble(bins: Map<number, Group[]>, previous: ReadonlyMap<string, number>, blocked?: PlanBlocked): ShardPlan {
+function assemble(
+  bins: Map<number, Group[]>,
+  previous: ReadonlyMap<string, number>,
+  blocked?: PlanBlocked,
+  binDomain: ReadonlyMap<number, CombinationPolicy> = new Map(),
+): ShardPlan {
   if (!bins.has(0)) bins.set(0, []);
   const slots: PlannedSlot[] = [...bins.entries()]
     .sort(([a], [b]) => a - b)
     .map(([index, groups]) => {
       const { bytes, keys, tags } = measure(groups);
+      const members = groups.flatMap((group) => group.units);
       return {
+        policy: members.length > 0 ? andPolicies(members.map((unit) => unit.domain ?? OPEN_POLICY)) : (binDomain.get(index) ?? OPEN_POLICY),
         index,
         unitKeys: groups.flatMap((group) => group.units).sort(compareUnits).map((unit) => unit.key),
         bytes,
@@ -235,7 +273,7 @@ function assemble(bins: Map<number, Group[]>, previous: ReadonlyMap<string, numb
 
 type Fits = (groups: readonly Group[], cap: number) => boolean;
 
-function compactOne(bins: Map<number, Group[]>, cap: number, fits: Fits): void {
+function compactOne(bins: Map<number, Group[]>, cap: number, fits: Fits, binDomain: Map<number, string>): void {
   const victim = [...bins.entries()]
     .filter(([index]) => index !== 0)
     .map(([index, binGroups]) => ({ index, binGroups, bytes: measure(binGroups).bytes }))
@@ -246,11 +284,12 @@ function compactOne(bins: Map<number, Group[]>, cap: number, fits: Fits): void {
   );
   const order = [...trial.keys()].sort((a, b) => a - b);
   for (const group of [...victim.binGroups].sort(compareBySize)) {
-    const target = order.find((index) => fits([...trial.get(index)!, group], cap));
+    const target = order.find((index) => binDomain.get(index) === group.dkey && fits([...trial.get(index)!, group], cap));
     if (target === undefined) return;
     trial.get(target)!.push(group);
   }
   bins.delete(victim.index);
+  binDomain.delete(victim.index);
   for (const [index, binGroups] of trial) bins.set(index, binGroups);
 }
 
@@ -266,7 +305,7 @@ export function planShards(
   inputUnits: readonly PlanUnit[],
   previous: ReadonlyMap<string, number>,
   limits: PlannerLimits,
-  policy: CombinationPolicy,
+  mode: PlanMode = "uniform",
 ): ShardPlan {
   const hard = limits.slotBytes;
   const soft = Math.floor(hard * limits.targetFill);
@@ -290,7 +329,9 @@ export function planShards(
   });
 
   const hasOrders = inputUnits.some((unit) => unit.hasOrderRewards);
-  const single = limits.maxSlots <= 1 || !policy.productDiscounts || (hasOrders && !policy.orderDiscounts);
+  const shared = andPolicies(inputUnits.map((unit) => unit.domain ?? OPEN_POLICY));
+  const single =
+    limits.maxSlots <= 1 || (mode === "uniform" && (!shared.productDiscounts || (hasOrders && !shared.orderDiscounts)));
 
   const units: PlanUnit[] = [];
   const tooLarge: string[] = [];
@@ -342,6 +383,7 @@ export function planShards(
   if (!spread && fits(everyone, hard)) return assemble(new Map([[0, everyone]]), previous);
 
   const groups = buildGroups(units);
+  if (mode === "uniform") for (const group of groups) group.dkey = "*";
   const pinned = groups.find((group) => group.pinned);
   if (pinned && !fits([pinned], hard)) {
     const named = pinned.units.filter((unit) => unit.hasOrderRewards || unit.stopLowerPriority);
@@ -373,12 +415,47 @@ export function planShards(
   }
 
   const bins = new Map<number, Group[]>([[0, pinned ? [pinned] : []]]);
-  const pending: Group[] = [];
-  for (const group of groups.filter((g) => !g.pinned).sort(compareGroups)) {
+  // Every bin holds one combination group (`dkey`); in uniform mode there is only one, so this never splits anything.
+  const binDomain = new Map<number, string>();
+  const domainOf = new Map<string, CombinationPolicy>(groups.map((group) => [group.dkey, group.domain]));
+  const prevSlotOf = (group: Group) => {
     const prevSlots = group.units.flatMap((unit) => previous.get(unit.key) ?? []).filter((slot) => slot < limits.maxSlots);
-    if (prevSlots.length === 0) pending.push(group);
+    return prevSlots.length === 0 ? null : Math.min(...prevSlots);
+  };
+  const free = groups.filter((g) => !g.pinned).sort(compareGroups);
+  // A bin's group is the one holding most of its previous bytes (ties on key), so one flipped offer moves alone.
+  const stickyDomain = new Map<number, string>();
+  const bytesByBin = new Map<number, Map<string, number>>();
+  for (const group of free) {
+    const slot = prevSlotOf(group);
+    if (slot === null) continue;
+    const byDomain = bytesByBin.get(slot) ?? new Map<string, number>();
+    byDomain.set(group.dkey, (byDomain.get(group.dkey) ?? 0) + group.sum);
+    bytesByBin.set(slot, byDomain);
+  }
+  for (const [slot, byDomain] of bytesByBin) {
+    stickyDomain.set(slot, [...byDomain.entries()].sort(([ka, a], [kb, b]) => b - a || compareText(ka, kb))[0]![0]);
+  }
+  if (pinned) binDomain.set(0, pinned.dkey);
+  else {
+    // First split: the restrictive offers were already in slot 0, so they stay and the permissive ones move out.
+    const present = [...domainOf.entries()].sort(
+      ([ka, a], [kb, b]) => restrictiveness(b) - restrictiveness(a) || compareText(ka, kb),
+    );
+    const slot0 = spread ? stickyDomain.get(0) : present[0]?.[0];
+    if (slot0 !== undefined) binDomain.set(0, slot0);
+  }
+  const pending: Group[] = [];
+  for (const group of free) {
+    const slot = prevSlotOf(group);
+    if (slot === null) {
+      pending.push(group);
+      continue;
+    }
+    const wanted = binDomain.get(slot) ?? stickyDomain.get(slot);
+    if (wanted !== group.dkey) pending.push(group);
     else {
-      const slot = Math.min(...prevSlots);
+      binDomain.set(slot, wanted);
       bins.set(slot, [...(bins.get(slot) ?? []), group]);
     }
   }
@@ -390,7 +467,12 @@ export function planShards(
       pending.push(victim);
     }
   }
-  for (const [index, binGroups] of [...bins.entries()]) if (index !== 0 && binGroups.length === 0) bins.delete(index);
+  for (const [index, binGroups] of [...bins.entries()]) {
+    if (index !== 0 && binGroups.length === 0) {
+      bins.delete(index);
+      binDomain.delete(index);
+    }
+  }
 
   const lowestFree = () => {
     let index = 0;
@@ -398,8 +480,10 @@ export function planShards(
     return index;
   };
   const place = (group: Group, cap: number) => {
-    for (const [, binGroups] of [...bins.entries()].sort(([a], [b]) => a - b)) {
-      if (fits([...binGroups, group], cap)) {
+    for (const [index, binGroups] of [...bins.entries()].sort(([a], [b]) => a - b)) {
+      const domain = binDomain.get(index);
+      if ((domain === undefined || domain === group.dkey) && fits([...binGroups, group], cap)) {
+        binDomain.set(index, group.dkey);
         binGroups.push(group);
         return true;
       }
@@ -409,11 +493,15 @@ export function planShards(
   for (const group of pending.sort(compareBySize)) {
     if (place(group, soft)) continue;
     if (bins.size >= limits.maxSlots && place(group, hard)) continue;
-    bins.set(lowestFree(), [group]);
+    const index = lowestFree();
+    bins.set(index, [group]);
+    binDomain.set(index, group.dkey);
   }
 
+  const policies = () => new Map([...binDomain].map(([index, key]) => [index, domainOf.get(key) ?? OPEN_POLICY]));
   const totalBytes = [...bins.values()].reduce((total, binGroups) => total + measure(binGroups).bytes, 0);
-  if (bins.size > Math.ceil(totalBytes / soft) + 1) compactOne(bins, soft, fits);
+  const domainCount = Math.max(1, new Set([...binDomain.values()]).size);
+  if (bins.size > Math.ceil(totalBytes / soft) + domainCount) compactOne(bins, soft, fits, binDomain);
 
   if (bins.size > limits.maxSlots) {
     const overflow = [...bins.entries()].filter(([index]) => index >= limits.maxSlots);
@@ -423,7 +511,7 @@ export function planShards(
         .flatMap(([, binGroups]) => binGroups.flatMap((group) => group.units.map((unit) => unit.key)))
         .sort(compareText),
       numbers: { needed: bins.size, allowed: limits.maxSlots },
-    });
+    }, policies());
   }
-  return assemble(bins, previous);
+  return assemble(bins, previous, undefined, policies());
 }

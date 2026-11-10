@@ -6,7 +6,8 @@ export default defineConfig({
     globals: true,
     environment: "node",
     // Most suites predate default-on sharding and assert the single-node path; shard suites opt in per shop.
-    env: { FUNCTION_SHARDS_DEFAULT: "off" },
+    // Combination domains (FIX-cap-12) are default-on in production too; suites assert today's behavior unless a shop opts in.
+    env: { FUNCTION_SHARDS_DEFAULT: "off", FUNCTION_SHARD_DOMAINS_DEFAULT: "off" },
     include: [
       "packages/**/*.test.ts",
       "workers/**/*.test.ts",

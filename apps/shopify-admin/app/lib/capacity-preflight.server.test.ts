@@ -288,7 +288,8 @@ describe("limits", () => {
   });
 });
 
-describe("combination policy forcing a single shard", () => {
+describe("combination policy forcing a single shard (combination groups off)", () => {
+  const withBudgetOff = (maxCartSlots: number): CapacityOptions => ({ ...withBudget(maxCartSlots), domainsEnabled: false });
   const noProductCombine = (shopId: string, offerId: string) =>
     db.insert(offerCombinationPolicies).values({ shopId, offerId, combinesWithProductDiscounts: false });
 
@@ -297,7 +298,7 @@ describe("combination policy forcing a single shard", () => {
     const sitewide = await giftOffer(shopId, 1, { internalName: "sitewide-no-combine", priority: 1 });
     await noProductCombine(shopId, sitewide);
     for (let i = 0; i < 12; i++) await giftOffer(shopId, 60, { internalName: `c-${i}`, priority: 10 + i });
-    const result = await preflightCapacity(db, shopId, [], withBudget(11));
+    const result = await preflightCapacity(db, shopId, [], withBudgetOff(11));
     expect(result).toMatchObject({
       ok: false,
       code: "COMBINATION_SINGLE_SHARD",
@@ -323,7 +324,7 @@ describe("combination policy forcing a single shard", () => {
   it("is not a combination failure when the policy combines and only one slot is allowed", async () => {
     const shopId = await seedShop(db, "combo-one-slot.myshopify.com");
     for (let i = 0; i < 12; i++) await giftOffer(shopId, 60, { internalName: `s-${i}`, priority: i });
-    expect(await preflightCapacity(db, shopId, [], withBudget(1))).toMatchObject({ ok: false, code: "AUTOMATIC_DISCOUNT_LIMIT" });
+    expect(await preflightCapacity(db, shopId, [], withBudgetOff(1))).toMatchObject({ ok: false, code: "AUTOMATIC_DISCOUNT_LIMIT" });
   });
 
   it("is ok and reports the cause and blockers when it fits on one node", async () => {
@@ -333,7 +334,7 @@ describe("combination policy forcing a single shard", () => {
     await giftOffer(shopId, 1, { internalName: "C", priority: 3 });
     await noProductCombine(shopId, a);
     await noProductCombine(shopId, b);
-    const result = await preflightCapacity(db, shopId, [], withBudget(11));
+    const result = await preflightCapacity(db, shopId, [], withBudgetOff(11));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.plan.slots).toBe(1);
@@ -349,9 +350,9 @@ describe("combination policy forcing a single shard", () => {
     await giftOffer(shopId, 1, { internalName: "X", priority: 1 });
     const off = await preflightCapacity(db, shopId, [], { shardsEnabled: false });
     expect(off.ok && off.plan.singleShardReason).toBe("flag_off");
-    const tight = await preflightCapacity(db, shopId, [], withBudget(1));
+    const tight = await preflightCapacity(db, shopId, [], withBudgetOff(1));
     expect(tight.ok && tight.plan.singleShardReason).toBe("budget");
-    const wide = await preflightCapacity(db, shopId, [], withBudget(11));
+    const wide = await preflightCapacity(db, shopId, [], withBudgetOff(11));
     expect(wide.ok && wide.plan.singleShardReason).toBeUndefined();
   });
 });

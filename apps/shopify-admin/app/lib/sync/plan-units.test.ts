@@ -45,6 +45,19 @@ describe("buildPlanUnits", () => {
     expect(unit!.bytes).toBe(unitBytes(compiled));
   });
 
+  it("carries the offer's own combination flags as the unit's group", () => {
+    const [open, closed] = buildPlanUnits(
+      [
+        { offerId: "open", offer: offer({ id: "open" }) },
+        { offerId: "closed", offer: offer({ id: "closed", combinesWithProductDiscounts: false, combinesWithShippingDiscounts: false }) },
+      ],
+      [],
+      [],
+    );
+    expect(open!.domain).toEqual({ productDiscounts: true, orderDiscounts: true, shippingDiscounts: true });
+    expect(closed!.domain).toEqual({ productDiscounts: false, orderDiscounts: true, shippingDiscounts: false });
+  });
+
   it("measures with compact ids when the shop flag is on", () => {
     const compiled = offer({ id: "a", requiredVariantIds: ["gid://shopify/ProductVariant/123456789"] });
     const [on] = buildPlanUnits([{ offerId: "a", offer: compiled }], [], [], { compactIds: true });

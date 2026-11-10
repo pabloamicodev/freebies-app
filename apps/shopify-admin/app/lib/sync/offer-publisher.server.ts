@@ -27,8 +27,8 @@ import {
   type ManifestNodeKind,
 } from "../publish-manifest.server.js";
 import { isFunctionCompactIdsEnabled } from "../function-compact-ids-flag.server.js";
-import { isFunctionShardsEnabled } from "../function-shards-flag.server.js";
-import { SLOT_LIMITS, planShards } from "./shard-planner.js";
+import { isFunctionShardsEnabled, isShardDomainsEnabled } from "../function-shards-flag.server.js";
+import { SLOT_LIMITS, andPolicies, planShards, policyKey, type CombinationPolicy } from "./shard-planner.js";
 import { baseOfferId, buildPlanUnitSet, slotOffers } from "./plan-units.js";
 import { loadSplitOptions } from "./variant-products.server.js";
 import { combinationBlockers } from "./combination-blockers.js";
@@ -73,6 +73,7 @@ import {
   findDeliveryDiscountFunction,
   getCodeDiscountFunctionId,
   removeRedeemCodes,
+  readLiveCombinations,
   syncDiscountCombinationPolicy,
   updateCodeDiscountCombination,
   type CodeDiscountNodeOptions,
@@ -125,6 +126,8 @@ interface SharedConfigEntry {
   value: string;
   /** Manifest kind to record for the owner; null for nodes that are being drained. */
   kind: ManifestNodeKind | null;
+  /** combinesWith the node carries (or will carry once the publish finishes), recorded in the manifest. */
+  combinesWith?: CombinationPolicy;
 }
 
 export type PublishOutcome = "published" | "pending";
@@ -218,11 +221,13 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       throw new Error(`Shared config touches ${entries.length} nodes, more than the ${MAX_OWNERS_PER_CALL} one metafieldsSet takes.`);
     }
     await pushMetafields(shopDomain, accessToken, entries);
-    for (const entry of entries) if (entry.kind) manifest.record(entry.ownerId, entry.kind, entry.value);
+    for (const entry of entries) {
+      if (entry.kind) manifest.record(entry.ownerId, entry.kind, entry.value, entry.combinesWith ? { combinesWith: entry.combinesWith } : {});
+    }
   };
-  const pushSharedConfigs = (cartValue: string, deliveryValue: string, drainIds: string[] = []) =>
+  const pushSharedConfigs = (cartValue: string, deliveryValue: string, drainIds: string[] = [], cartCombinesWith?: CombinationPolicy) =>
     pushSharedEntries([
-      { ownerId: discountNodes.cartLinesDiscountId, value: cartValue, kind: "cart" },
+      { ownerId: discountNodes.cartLinesDiscountId, value: cartValue, kind: "cart", ...(cartCombinesWith ? { combinesWith: cartCombinesWith } : {}) },
       ...drainIds.map((ownerId) => ({ ownerId, value: EMPTY_CART_SHARD_CONFIG, kind: null })),
       { ownerId: discountNodes.deliveryDiscountId, value: deliveryValue, kind: "delivery" as const },
     ]);
@@ -387,7 +392,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     assertConfigFits(emptyCartValue);
     assertConfigFits(emptyDeliveryValue);
     const strayShardIds = await liveCartShardIds(shopDomain, accessToken, await readCartShardNodeIds(shopId));
-    await pushSharedConfigs(emptyCartValue, emptyDeliveryValue, strayShardIds);
+    await pushSharedConfigs(emptyCartValue, emptyDeliveryValue, strayShardIds, compileDiscountCombinationPolicy([]));
     if (strayShardIds.length > 0) {
       await saveShardState(db, shopId, [
         {
@@ -480,6 +485,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const compactIds = await isFunctionCompactIdsEnabled(db, shopId);
     const storedShardIds = await readCartShardNodeIds(shopId);
     const shardMode = shardsEnabled || storedShardIds.length > 0;
+    const domainsMode = shardsEnabled && (await isShardDomainsEnabled(db, shopId));
     if (!shardsEnabled) {
       const allTags = new Set(
         compiledOffers.flatMap((offer) => [...(offer.requiredCustomerTags ?? []), ...(offer.excludedCustomerTags ?? [])]),
@@ -507,7 +513,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       planUnits,
       persisted?.previous ?? new Map(),
       { ...SLOT_LIMITS, maxSlots: budget?.maxCartSlots ?? 1 },
-      { productDiscounts: combination.productDiscounts, orderDiscounts: combination.orderDiscounts },
+      domainsMode ? "domains" : "uniform",
     );
     if (plan.blocked) {
       const names = new Map(regularOffers.map((offer) => [offer.id, offer.internalName]));
@@ -516,7 +522,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
         shardsEnabled,
         names,
         combinationBlockers:
-          shardsEnabled && (budget?.maxCartSlots ?? 1) > 1
+          shardsEnabled && !domainsMode && (budget?.maxCartSlots ?? 1) > 1
             ? combinationBlockers(
                 compiledOffers.map((offer) => ({ offerId: offer.id, name: names.get(offer.id) ?? offer.id, offer })),
                 planUnits.some((unit) => unit.hasOrderRewards),
@@ -564,15 +570,70 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const validationConfig = buildCartValidationConfig([...compiledOffers, ...codeOfferConfigs]);
     await syncCartValidation(shopDomain, accessToken, validationConfig);
     manifest.validationHash = configHash(JSON.stringify(validationConfig));
-    const syncCombination = (
-      nodes: Array<{ discountId: string; discountClasses: Parameters<typeof syncDiscountCombinationPolicy>[4] }>,
-    ) =>
+    // Domains mode gives each node its own group's policy and applies it strict-first: a node is tightened to
+    // AND(last published, new) before the config swap and loosened to the new policy only after the swap
+    // succeeded, so a failure in between leaves a node more restrictive, never more permissive, than either state.
+    // The manifest is only written when a publish finishes, so a publish that died after tightening would leave it
+    // stale. Two guards: the tightened policy is persisted to the manifest right after each tighten step, and the
+    // live policy is read from Shopify and folded into the AND. If that read fails the publish fails closed: it
+    // tightens to AND(manifest, new) and never loosens anything.
+    const lastPublished = domainsMode ? await readPublishManifest(shopId, db) : null;
+    let liveCombinations = new Map<string, CombinationPolicy>();
+    let liveReadFailed = false;
+    if (domainsMode) {
+      try {
+        liveCombinations = await readLiveCombinations(shopDomain, accessToken, [discountNodes.cartLinesDiscountId, ...storedShardIds]);
+      } catch (error) {
+        liveReadFailed = true;
+        Sentry.captureException(error, { extra: { shopId, step: "live-combination-read" } });
+      }
+    }
+    const wantedPolicy = (index: number): CombinationPolicy => (domainsMode ? slots[index]!.policy : combination);
+    const tightened = (nodeId: string, wanted: CombinationPolicy): CombinationPolicy => {
+      if (!domainsMode) return wanted;
+      const known = [liveCombinations.get(nodeId), lastPublished?.nodes[nodeId]?.combinesWith].filter(
+        (policy): policy is CombinationPolicy => policy !== undefined,
+      );
+      return andPolicies([...known, wanted]);
+    };
+    const persistTightened = async (nodes: PolicyNode[]) => {
+      if (!domainsMode || nodes.length === 0) return;
+      const stored = await readPublishManifest(shopId, db);
+      if (!stored) return;
+      let changed = false;
+      for (const { discountId, policy } of nodes) {
+        const entry = stored.nodes[discountId];
+        if (entry && (!entry.combinesWith || policyKey(entry.combinesWith) !== policyKey(policy))) {
+          entry.combinesWith = policy;
+          changed = true;
+        }
+      }
+      if (changed) await writePublishManifest(shopId, stored);
+    };
+    type PolicyNode = {
+      discountId: string;
+      discountClasses: Parameters<typeof syncDiscountCombinationPolicy>[4];
+      policy: CombinationPolicy;
+    };
+    const syncCombination = (nodes: PolicyNode[]) =>
       Promise.all(
-        nodes.map(({ discountId, discountClasses }) =>
-          syncDiscountCombinationPolicy(shopDomain, accessToken, discountId, combination, discountClasses),
+        nodes.map(({ discountId, discountClasses, policy }) =>
+          syncDiscountCombinationPolicy(shopDomain, accessToken, discountId, policy, discountClasses),
         ),
       );
-    await syncCombination(discountNodesWithClasses);
+    const loosenAfterSwap: PolicyNode[] = [];
+    const cartNode = (discountId: string, discountClasses: PolicyNode["discountClasses"], index: number): PolicyNode => {
+      const wanted = wantedPolicy(index);
+      const now = tightened(discountId, wanted);
+      if (policyKey(now) !== policyKey(wanted) && !liveReadFailed) loosenAfterSwap.push({ discountId, discountClasses, policy: wanted });
+      return { discountId, discountClasses, policy: now };
+    };
+    const slot0Node = cartNode(discountNodes.cartLinesDiscountId, CART_DISCOUNT_CLASSES, 0);
+    await syncCombination([
+      slot0Node,
+      { discountId: discountNodes.deliveryDiscountId, discountClasses: DELIVERY_DISCOUNT_CLASSES, policy: combination },
+    ]);
+    await persistTightened([slot0Node]);
     // Shard nodes come after the guardrails; a new one carries an inert config, so it grants nothing until the
     // metafieldsSet below. The drain floor counts only nodes still in Shopify: a merchant-deleted shard is not recreated to be drained.
     const wantedShards = slots.length - 1;
@@ -583,16 +644,20 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
         : liveShardIds;
     const activeShardIds = shardIds.slice(0, wantedShards);
     const drainIds = shardIds.slice(wantedShards);
-    await syncCombination(activeShardIds.map((discountId) => ({ discountId, discountClasses: CART_SHARD_CLASSES })));
+    const shardNodes = activeShardIds.map((discountId, index) => cartNode(discountId, CART_SHARD_CLASSES, index + 1));
+    await syncCombination(shardNodes);
+    await persistTightened(shardNodes);
     const slotNodeId = (index: number) =>
       index === 0 ? discountNodes.cartLinesDiscountId : activeShardIds[index - 1]!;
-    if (!shardMode) await pushSharedConfigs(cartValue, deliveryValue);
+    if (!shardMode) await pushSharedConfigs(cartValue, deliveryValue, [], combination);
     else {
       await pushSharedEntries([
         ...slots.map((slot, index) => ({
           ownerId: slotNodeId(index),
           value: slotValues[index]!,
           kind: index === 0 ? ("cart" as const) : ("cart-shard" as const),
+          // After a failed live read nothing was loosened, so the manifest records what the node actually carries.
+          combinesWith: liveReadFailed ? (index === 0 ? slot0Node : shardNodes[index - 1]!).policy : wantedPolicy(index),
         })),
         ...drainIds.map((ownerId) => ({ ownerId, value: EMPTY_CART_SHARD_CONFIG, kind: null })),
         { ownerId: discountNodes.deliveryDiscountId, value: deliveryValue, kind: "delivery" as const },
@@ -608,6 +673,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
           configHash: configHash(slotValues[index]!),
         })),
       );
+      await syncCombination(loosenAfterSwap);
       await deleteDrainedShards(shopId, shopDomain, accessToken, shardIds, drainIds);
     }
     await pushStorefrontMetafields(shopDomain, accessToken, [
