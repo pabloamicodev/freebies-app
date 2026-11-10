@@ -1390,6 +1390,80 @@ export async function countActiveAutomaticDiscounts(
   }
 }
 
+export interface AutomaticDiscountCandidate {
+  id: string;
+  title: string;
+  /** Shopify discount type, e.g. DiscountAutomaticBasic or DiscountAutomaticApp. */
+  type: string;
+  /** Title of the app that owns an app discount, when Shopify says. */
+  appTitle: string | null;
+}
+
+/** Active automatic discounts of the store that Promo Engine does not own: what a merchant could deactivate to make room. */
+export async function listAutomaticDiscountCandidates(
+  shopId: string,
+  shopDomain: string,
+  accessToken: string,
+): Promise<AutomaticDiscountCandidate[]> {
+  const [shop] = await getDb()
+    .select({ discountId: shops.discountId, deliveryDiscountId: shops.deliveryDiscountId })
+    .from(shops)
+    .where(eq(shops.id, shopId))
+    .limit(1);
+  const [codeId, pool, shards] = await Promise.all([readCodeNodeId(shopId), readCodedShippingNodeIds(shopId), readCartShardNodeIds(shopId)]);
+  const ours = new Set([shop?.discountId, shop?.deliveryDiscountId, codeId, ...pool, ...shards].filter((id): id is string => Boolean(id)));
+  const data = await shopifyGraphQL<{
+    discountNodes: {
+      nodes: Array<{
+        id: string;
+        discount: { __typename: string; title?: string | null; appDiscountType?: { app?: { title?: string | null } | null } | null } | null;
+      }>;
+    };
+  }>({
+    shopDomain,
+    accessToken,
+    query: `query PromoEngineDeactivationCandidates($query: String) {
+      discountNodes(first: 50, query: $query) {
+        nodes {
+          id
+          discount {
+            __typename
+            ... on DiscountAutomaticBasic { title }
+            ... on DiscountAutomaticBxgy { title }
+            ... on DiscountAutomaticFreeShipping { title }
+            ... on DiscountAutomaticApp { title appDiscountType { app { title } } }
+          }
+        }
+      }
+    }`,
+    variables: { query: "method:automatic AND status:active" },
+  });
+  return data.discountNodes.nodes
+    .filter((node) => node.discount?.__typename.startsWith("DiscountAutomatic") && !ours.has(node.id))
+    .map((node) => ({
+      id: node.id,
+      title: node.discount?.title ?? node.id,
+      type: node.discount!.__typename,
+      appTitle: node.discount?.appDiscountType?.app?.title ?? null,
+    }));
+}
+
+/** Deactivates or reactivates an automatic discount (any app's); a userError throws so the caller can roll back. */
+export async function setAutomaticDiscountActive(shopDomain: string, accessToken: string, id: string, active: boolean): Promise<void> {
+  const field = active ? "discountAutomaticActivate" : "discountAutomaticDeactivate";
+  const data = await shopifyGraphQL<Record<string, { userErrors?: Array<{ message: string }> } | null>>({
+    shopDomain,
+    accessToken,
+    retryable: true,
+    query: `mutation PromoEngineSetAutomatic($id: ID!) {
+      ${field}(id: $id) { userErrors { field message } }
+    }`,
+    variables: { id },
+  });
+  const errors = data[field]?.userErrors ?? [];
+  if (errors.length > 0) throw new Error(`Shopify could not ${active ? "reactivate" : "deactivate"} the discount: ${errors.map((error) => error.message).join("; ")}`);
+}
+
 /** Most automatic delivery nodes a shop may dedicate to code-gated shipping (Shopify caps automatic discounts at 25 per shop). */
 export const MAX_CODED_SHIPPING_NODES = 12;
 

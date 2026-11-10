@@ -18,6 +18,7 @@ import { normalizeSubscriptionMode } from "../purchase-type.js";
 import { eq, and, inArray, isNotNull, sql } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { decryptToken } from "../token-crypto.server.js";
+import { recordCapacityIncident, resolveCapacityIncidents } from "../capacity-incidents.server.js";
 import { ShopifyOutcomeUnknownError, shopifyGraphQL } from "../shopify-fetch.server.js";
 import {
   ManifestCollector,
@@ -47,6 +48,7 @@ import {
   scheduleBackgroundPublishRetry,
 } from "../publish-pending.server.js";
 import {
+  AutomaticDiscountLimitError,
   CART_DISCOUNT_CLASSES,
   CART_SHARD_CLASSES,
   DELIVERY_DISCOUNT_CLASSES,
@@ -165,7 +167,10 @@ export async function publishOffersForShop(
     // A request that timed out may or may not have been applied, and the publish is idempotent
     // (every create looks before it resends), so it is retried rather than failing the offer.
     const unknownOutcome = error instanceof ShopifyOutcomeUnknownError;
-    if (!isLockTimeoutError(error) && !unknownOutcome) throw error;
+    if (!isLockTimeoutError(error) && !unknownOutcome) {
+      await persistCapacityBlock(shopId, error);
+      throw error;
+    }
     if (unknownOutcome) {
       Sentry.captureMessage("Publish parked: a Shopify request timed out with an unknown outcome", {
         level: "warning",
@@ -183,7 +188,22 @@ export async function publishOffersForShop(
   }
   await clearPublishPending(shopId, startedAt);
   await invalidateOfferDefinitions(shopId);
+  await resolveCapacityIncidents(getDb(), shopId);
   return "published";
+}
+
+/** Chokepoint for every unattended and attended publish: a Shopify capacity block becomes a persisted incident. */
+async function persistCapacityBlock(shopId: string, error: unknown): Promise<void> {
+  if (error instanceof ShardPlanBlockedError) {
+    await recordCapacityIncident(getDb(), { shopId, ...error.capacity });
+  } else if (error instanceof AutomaticDiscountLimitError) {
+    await recordCapacityIncident(getDb(), {
+      shopId,
+      code: "AUTOMATIC_DISCOUNT_LIMIT",
+      offerIds: [],
+      numbers: { needed: error.wanted, storeActive: error.active },
+    });
+  }
 }
 
 async function publishOffersForShopLocked(shopId: string, shopDomain: string): Promise<void> {

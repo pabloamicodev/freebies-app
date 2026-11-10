@@ -33,7 +33,7 @@ import {
   MAX_CART_SLOTS,
   type AutomaticNodeBudget,
 } from "./discount-node.server.js";
-import { redisGetString, redisSetString } from "./redis.server.js";
+import { redisDelete, redisGetString, redisSetString } from "./redis.server.js";
 import { decryptToken } from "./token-crypto.server.js";
 import {
   automaticDiscountCountUnknownMessage,
@@ -266,6 +266,15 @@ export async function loadAutomaticBudget(db: Db, shopId: string): Promise<Autom
     return budget;
   } catch {
     return cached?.budget ?? null;
+  }
+}
+
+/** Drops the cached automatic-discount count (after Apply or Undo changed it) so the next preflight reads Shopify again. */
+export async function invalidateAutomaticBudgetCache(shopId: string): Promise<void> {
+  try {
+    await redisDelete(budgetKey(shopId));
+  } catch {
+    /* cache is best effort */
   }
 }
 

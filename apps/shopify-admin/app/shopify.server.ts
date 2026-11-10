@@ -49,6 +49,7 @@ import { encryptToken } from "./lib/token-crypto.server.js";
 import { shopifyGraphQL } from "./lib/shopify-fetch.server.js";
 import { waitUntil } from "@vercel/functions";
 import { drainProductSyncQueue, queueProductSync } from "./lib/sync/product-sync.server.js";
+import { runWithCapacitySource } from "./lib/capacity-source.server.js";
 import { publishOffersForShop } from "./lib/sync/offer-publisher.server.js";
 import { invalidateShopCache } from "./lib/proxy-shop.server.js";
 import { ensureCartTransform } from "./lib/cart-transform.server.js";
@@ -195,7 +196,7 @@ const shopify = shopifyApp({
         const shopRows3 = await db3.select({ id: shops.id }).from(shops).where(drizzleEq(shops.myshopifyDomain, session.shop)).limit(1);
         const shopRow3 = shopRows3[0];
         if (shopRow3 && session.accessToken) {
-          await publishOffersForShop(shopRow3.id, session.shop);
+          await runWithCapacitySource("auth", false, () => publishOffersForShop(shopRow3.id, session.shop));
         }
       } catch (discountErr) {
         Sentry.captureException(discountErr, { tags: { shop: session.shop }, extra: { context: "afterAuth-ensure-promotion-functions" } });
