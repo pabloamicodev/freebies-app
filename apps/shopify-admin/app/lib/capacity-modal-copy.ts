@@ -40,6 +40,8 @@ export interface CapacityModalData {
   splitRefusal?: string;
   /** Shopify admin page listing the store's automatic discounts. */
   discountsUrl?: string;
+  /** The persisted capacity incident, so the modal can offer its guided workarounds. */
+  incidentId?: string;
 }
 
 export type CapacityModalAction =
@@ -60,15 +62,18 @@ export interface CapacityModalCopy {
 
 const MAX_OFFER_ACTIONS = 3;
 
-function tooLargeReason(numbers: Record<string, number>): TooLargeReason {
+const over = (used: number | undefined, max: number | undefined) => used !== undefined && max !== undefined && used > max;
+
+/** The planner reports every measure in `numbers`, so only the one that is over its limit names the reason. */
+export function tooLargeReason(numbers: Record<string, number>): TooLargeReason {
   if (numbers["listKind"] !== undefined) return "lists";
-  if (numbers["offers"] !== undefined && numbers["maxOffers"] !== undefined && numbers["offers"] > numbers["maxOffers"]) return "offers";
-  if (numbers["keys"] !== undefined && numbers["maxKeys"] !== undefined) return "keys";
-  if (numbers["tags"] !== undefined && numbers["maxTags"] !== undefined) return "tags";
+  if (over(numbers["offers"], numbers["maxOffers"])) return "offers";
+  if (over(numbers["keys"], numbers["maxKeys"])) return "keys";
+  if (over(numbers["tags"], numbers["maxTags"])) return "tags";
   return "bytes";
 }
 
-const SPLIT_REFUSAL_COPY: Record<string, string> = {
+export const SPLIT_REFUSAL_COPY:Record<string, string> = {
   AGGREGATING_REWARD: "Promo Engine can't split it across several Shopify discounts because its discount counts quantities, tiers or prices across all the selected items.",
   CART_WIDE_CAP: "Promo Engine can't split it across several Shopify discounts because it caps the discounted units for the whole cart.",
   REQUIRED_TAGS_ALL_OF: "Promo Engine can't split it across several Shopify discounts because customers must have all of the required tags.",

@@ -7,6 +7,7 @@ const DEFAULTS = {
   close: "Close",
   giftOffer: "View free gift offer",
   giftSliderClose: "Close gift selection",
+  giftRemoved: "Your free gift was removed because it no longer applies to this cart.",
   giftsUpdating: "Updating gifts",
   progress: "Progress: {{percent}}%",
   todayOffers: "Today's offers",

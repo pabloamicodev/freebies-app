@@ -14,6 +14,7 @@ import { assertConfirmConfigured, hashArgs, issueConfirmToken, stripControlArgs,
 import type { ShopRef } from "./multi-shop.server.js";
 import { ToolError, buildResult, type Link, type NextAction, type ToolResult, type Warning } from "./result.server.js";
 import { toCallToolResult, toErrorCallToolResult, type McpContext } from "./server.server.js";
+import { runWithCapacitySource } from "../capacity-source.server.js";
 import { assertWriteAllowed } from "./write-guard.server.js";
 import type { OfferLifecycleFailure, ShopPublishFn } from "../offer-lifecycle.server.js";
 
@@ -185,13 +186,13 @@ async function runInner(
   }
   onClaim(claim.id);
 
-  const body = await spec.apply({
+  const body = await runWithCapacitySource("mcp", true, () => spec.apply({
     expectedUpdatedAt: verified.offerUpdatedAt,
     expectedSetHash: verified.setHash,
     performedBy: `mcp:${ctx.operator.id}`,
     auditExtra: { _mcp: { operator: ctx.operator.id, client: call.client ?? null, tool: spec.tool, requestId: call.requestId } },
     publish: ctx.publish,
-  });
+  }));
   return {
     replayed: false,
     value: buildResult(

@@ -407,6 +407,14 @@ export async function processProductSyncStep(shopId?: string) {
       updatedAt: completedAt,
     }).where(eq(catalogSyncJobs.id, job.id)).returning();
     console.info(`[product-sync] ${shop.domain}: completed ${syncedProducts} products`);
+    // A capacity "Sync products" workaround only queued this import; finish it with a republish. Never fails the sync.
+    // Dynamic import: capacity-apply imports this module.
+    try {
+      const { followUpSyncWorkaround } = await import("../capacity-apply.server.js");
+      await followUpSyncWorkaround(db, job.shopId);
+    } catch (followUpError) {
+      Sentry.captureException(followUpError, { tags: { shopId: job.shopId, context: "capacity-sync-followup" } });
+    }
     return completed ?? null;
   } catch (error) {
     const attemptCount = job.attemptCount + 1;

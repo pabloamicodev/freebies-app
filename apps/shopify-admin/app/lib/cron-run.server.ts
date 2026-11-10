@@ -5,6 +5,7 @@ import * as Sentry from "@sentry/node";
 import { waitUntil } from "@vercel/functions";
 import { isCronRequestAuthorized } from "./cron-auth.server.js";
 import { apiError, apiJson, handleApiError } from "./api-response.server.js";
+import { runWithCapacitySource } from "./capacity-source.server.js";
 import { redisAcquireLock, redisReleaseLock } from "./redis.server.js";
 
 /**
@@ -107,7 +108,7 @@ export async function runCron(request: Request, name: CronName, run: () => Promi
   };
 
   try {
-    const outcome = await run();
+    const outcome = await runWithCapacitySource("cron", false, run);
     const failed = (outcome.status ?? 200) >= 300 || outcome.body["ok"] === false;
     finish(failed ? "error" : "ok");
     return apiJson(request, outcome.body, { status: outcome.status ?? 200 });

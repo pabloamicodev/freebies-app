@@ -7,6 +7,9 @@ export const E2E_GIFT_OFFER_NAME = "E2E Gift Offer";
 export const E2E_GIFT_ANCHOR_HANDLE = "test-bundle-product";
 export const E2E_GIFT_REWARD_HANDLE = "test-gift-product";
 
+// "[Ambrosia E2E] cart-subtotal-free-gift" offers the four variants of this stand-in product at an $85 subtotal.
+export const E2E_SUBTOTAL_GIFT_HANDLE = "the-complete-snowboard";
+
 export const E2E_VOLUME_OFFER_ID = "e2e00000-0000-4000-8000-000000000001";
 export const E2E_VOLUME_OFFER_NAME = "E2E Volume Discount";
 export const E2E_VOLUME_PRODUCT_HANDLE = "test-volume-product";

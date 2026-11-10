@@ -6,6 +6,7 @@ import { runCron } from "../lib/cron-run.server.js";
 import { runDiscountCodeSchedule } from "../lib/discount-code-schedule.server.js";
 import { refreshStaleShopTimezones } from "../lib/shop-timezone-refresh.server.js";
 import { drainUsageSync } from "../lib/offer-usage.server.js";
+import { reclaimAllStalePending } from "../lib/capacity-apply.server.js";
 import { reconcileActiveShopDiscountNodes, runDiscountDriftRepair } from "../lib/discount-reconciliation.server.js";
 
 // Must be a literal (the Vercel preset parses it statically); cron-config.test.ts checks it equals CRON_JOBS.
@@ -17,6 +18,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const timezones = await refreshStaleShopTimezones().catch((error) => {
       Sentry.captureException(error, { tags: { cron: "offers", stage: "timezone-refresh" } });
       return { checked: 0, updated: 0 };
+    });
+    // First: a killed Apply holds its incident "busy" and leaves edits committed; revert them before anything republishes.
+    const capacityReclaimed = await reclaimAllStalePending(getDb()).catch((error) => {
+      Sentry.captureException(error, { tags: { cron: "offers", stage: "capacity-reclaim" } });
+      return 0;
     });
     const reconciliation = await reconcileActiveShopDiscountNodes();
     for (const failure of reconciliation.failures) {
@@ -58,6 +64,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       drift.failures.length > 0;
     // These are captureMessage, not thrown exceptions, so runCron's check-in flush is
     // what gets them out before Vercel freezes the function.
-    return { body: { ok: !hasFailures, timezones, reconciliation, codeSchedule, drift, usageSync, ...result }, status: hasFailures ? 207 : 200 };
+    return { body: { ok: !hasFailures, capacityReclaimed, timezones, reconciliation, codeSchedule, drift, usageSync, ...result }, status: hasFailures ? 207 : 200 };
   });
 }

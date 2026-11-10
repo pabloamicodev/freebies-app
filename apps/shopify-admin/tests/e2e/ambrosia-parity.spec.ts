@@ -2,14 +2,17 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { readFileSync } from "node:fs";
 
+import { E2E_SUBTOTAL_GIFT_HANDLE } from "./fixtures/live-offers.js";
 import {
   addLines,
   clearCart,
+  discountTitles,
   getCart,
   gotoStorefront,
   waitForPromoEngine,
   type Cart,
 } from "./helpers/storefront.js";
+import { allGiftSliders, dismissOpenGiftSliders, evaluateNow, requestGiftSlider } from "./helpers/widgets.js";
 
 interface AmbrosiaFixtureRule {
   key: string;
@@ -22,7 +25,13 @@ interface AmbrosiaFixtureRule {
 }
 const fixture = JSON.parse(
   readFileSync(new URL("./fixtures/ambrosia.json", import.meta.url), "utf8"),
-) as { rules: AmbrosiaFixtureRule[] };
+) as { rules: AmbrosiaFixtureRule[]; fixtureTitles: string[] };
+
+// hpn-test-store also holds merchant-like QA offers (sitewide %, gift tiers) that discount the same catalog, so
+// "paid" and "free" are judged only on discounts labelled with a fixture offer's title, never on the final price alone.
+const FIXTURE_TITLES = new Set(fixture.fixtureTitles);
+const fixtureDiscounts = (line: Parameters<typeof discountTitles>[0]) =>
+  discountTitles(line).filter((title) => FIXTURE_TITLES.has(title));
 
 // Regenerate fixtures/ambrosia.json after re-running `pnpm seed:ambrosia-e2e`.
 const ANCHOR_HANDLE = process.env["E2E_PRODUCT_HANDLE"] ?? "test-product";
@@ -57,6 +66,10 @@ function expectVariantsFree(cart: Cart, variants: number[]): void {
       `Variant ${variant} must have a non-zero list price`,
     ).toBeGreaterThan(0);
     expect(line?.final_line_price, `Variant ${variant} must be fully discounted`).toBe(0);
+    expect(
+      fixtureDiscounts(line),
+      `Variant ${variant} must be discounted by a fixture offer (saw: ${discountTitles(line).join(" | ")})`,
+    ).not.toHaveLength(0);
   }
 }
 
@@ -64,9 +77,7 @@ function expectVariantsPaid(cart: Cart, variants: number[]): void {
   for (const variant of variants) {
     const line = cart.items.find((item) => item.variant_id === variant);
     expect(line, `Variant ${variant} must be in the cart`).toBeDefined();
-    expect(line?.final_line_price, `Variant ${variant} must remain paid`).toBe(
-      line?.original_line_price,
-    );
+    expect(fixtureDiscounts(line), `Variant ${variant} must remain paid by the fixture offers`).toEqual([]);
   }
 }
 
@@ -121,29 +132,33 @@ test.describe("Ambrosia migration parity", () => {
   test("$85 subtotal exposes one selectable free gift and applies it", async ({ page }) => {
     await addLines(page, [{ id: FALLBACK_ANCHOR, quantity: 1 }]);
 
-    const slider = page.locator(".pe-slider-overlay");
-    await expect(slider).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator(".pe-gift-card")).toHaveCount(4);
-    await page.locator(".pe-gift-card").first().click();
-    await page.locator(".pe-btn-confirm").click();
-
-    await expect
-      .poll(
-        async () => {
-          const cart = await getCart(page);
-          const gift = cart.items.find(
-            (item) => item.properties["_promo_engine_line_type"] === "gift",
-          );
-          return gift?.final_line_price;
-        },
-        { timeout: 10_000 },
-      )
-      .toBe(0);
-
-    const cart = await getCart(page);
-    const gifts = cart.items.filter(
-      (item) => item.properties["_promo_engine_line_type"] === "gift",
+    // QA gift offers can open their own pickers first; this test owns the picker whose gifts are the fixture stand-in.
+    const evaluation = await evaluateNow(page);
+    const fixtureSlider = allGiftSliders(evaluation).find(
+      (slider) =>
+        slider.selectableGifts.length > 0 &&
+        slider.selectableGifts.every((gift) => gift.productHandle === E2E_SUBTOTAL_GIFT_HANDLE),
     );
+    expect(fixtureSlider, "the $85 subtotal fixture must produce a gift picker").toBeDefined();
+    const offerId = fixtureSlider!.offerId;
+
+    await dismissOpenGiftSliders(page);
+    await requestGiftSlider(page, offerId);
+    const slider = page.locator("dialog.pe-slider-overlay[open]");
+    await expect(slider).toBeVisible({ timeout: 10_000 });
+    await expect(slider.locator(".pe-gift-card")).toHaveCount(4);
+    await slider.locator(".pe-gift-card").first().click();
+    await slider.locator(".pe-btn-confirm").click();
+
+    const ownGifts = async () =>
+      (await getCart(page)).items.filter(
+        (item) =>
+          item.properties["_promo_engine_line_type"] === "gift" &&
+          item.properties["_promo_engine_offer_id"] === offerId,
+      );
+    await expect.poll(async () => (await ownGifts())[0]?.final_line_price, { timeout: 10_000 }).toBe(0);
+
+    const gifts = await ownGifts();
     expect(gifts).toHaveLength(1);
     expect(gifts[0]?.quantity).toBe(1);
   });

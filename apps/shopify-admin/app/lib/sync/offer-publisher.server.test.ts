@@ -581,6 +581,12 @@ vi.mock("../shopify-fetch.server.js", async (importOriginal) => ({
 
 vi.mock("@sentry/node", () => ({ captureMessage: vi.fn(), captureException: vi.fn() }));
 vi.mock("@vercel/functions", () => ({ waitUntil: () => undefined }));
+const recordIncident = vi.fn(async (..._args: unknown[]) => undefined);
+const resolveIncidents = vi.fn(async (..._args: unknown[]) => 0);
+vi.mock("../capacity-incidents.server.js", () => ({
+  recordCapacityIncident: (...args: unknown[]) => recordIncident(...args),
+  resolveCapacityIncidents: (...args: unknown[]) => resolveIncidents(...args),
+}));
 
 // The real retry sleeps for seconds and would republish into a later test's state.
 const scheduleRetry = vi.fn(async () => undefined);
@@ -737,6 +743,23 @@ describe("publishOffersForShop — code-gated offers", () => {
       expect(state.updatedCodeNodes).toEqual([]);
       expect(state.metafieldPushes).toEqual([]);
       expect(state.offers.find((o) => o.id === "huge")?.codeDiscountId).toBeNull();
+    });
+
+    it("persists the block as a capacity incident before rethrowing, and resolves incidents after a good publish", async () => {
+      recordIncident.mockClear();
+      resolveIncidents.mockClear();
+      state.offers = [makeOffer({ id: "huge", requiredDiscountCode: "HUGE10", codeDiscountId: null })];
+      state.conditionRows = [tagsCondition("huge", 101)];
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN).catch(() => undefined);
+      expect(recordIncident).toHaveBeenCalledTimes(1);
+      expect(recordIncident.mock.calls[0]?.[1]).toMatchObject({ shopId: SHOP_ID, code: "OFFER_TOO_LARGE", offerIds: ["huge"] });
+      expect(resolveIncidents).not.toHaveBeenCalled();
+
+      state.offers = [makeOffer({ id: "ok", requiredDiscountCode: "OK10", codeDiscountId: "gid://shopify/DiscountCodeNode/ok" })];
+      state.knownDiscountIds.add("gid://shopify/DiscountCodeNode/ok");
+      state.conditionRows = [];
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+      expect(resolveIncidents).toHaveBeenCalledTimes(1);
     });
 
     it("publishes a code offer with exactly 100 tags", async () => {

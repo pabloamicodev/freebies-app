@@ -28,7 +28,8 @@ import { normalizeConditionValue } from "./offer-config-normalization.server.js"
 import { OfferPublishError, addOfferPublishErrors } from "./offer-publish-errors.server.js";
 import { markPublishPending } from "./publish-pending.server.js";
 import { preflightCapacity, type CapacityFailure, type CapacityPreflight } from "./capacity-preflight.server.js";
-import { recordCapacityBlock } from "./capacity-capture.server.js";
+import { recordCapacityBlock, type CapturedCapacity } from "./capacity-capture.server.js";
+import { recordCapacityIncident, restampHeldOffer, snapshotHeldOffers } from "./capacity-incidents.server.js";
 import { insertAuditLog } from "./audit-log.server.js";
 import { limitedTitleError } from "./offer-usage.server.js";
 import { isLimitsEnforced } from "./limits-enforced.server.js";
@@ -413,6 +414,20 @@ export async function validateActivation(
   return (await validateActivationWithPreflight(db, shopId, offerIds)).validation;
 }
 
+/** A preflight block: kept for the save-time modal (ALS) and persisted as an incident. The publisher persists its own blocks. */
+async function noteCapacityBlock(
+  db: Db,
+  shopId: string,
+  block: Pick<CapturedCapacity, "code" | "offerIds" | "numbers" | "splitRefusal">,
+  /** The offers whose save, activation or start triggered this check: the only ones a fix may switch on later. */
+  activating: readonly string[],
+): Promise<void> {
+  const captured: CapturedCapacity = { shopId, code: block.code, offerIds: block.offerIds, numbers: block.numbers, ...(block.splitRefusal ? { splitRefusal: block.splitRefusal } : {}) };
+  recordCapacityBlock(captured);
+  const held = await snapshotHeldOffers(db, shopId, activating).catch(() => []);
+  await recordCapacityIncident(db, { ...captured, held });
+}
+
 /** `validateActivation` that also returns the capacity result, so a following `republishIfActive` can reuse it. */
 export async function validateActivationWithPreflight(
   db: Db,
@@ -422,7 +437,7 @@ export async function validateActivationWithPreflight(
   const validation = await validateOffersPublishable(db, shopId, offerIds);
   if (!validation.ok) return { validation };
   const capacity = await preflightCapacity(db, shopId, offerIds);
-  if (!capacity.ok) recordCapacityBlock({ shopId, code: capacity.code, offerIds: capacity.offerIds, numbers: capacity.numbers, ...(capacity.splitRefusal ? { splitRefusal: capacity.splitRefusal } : {}) });
+  if (!capacity.ok) await noteCapacityBlock(db, shopId, capacity, offerIds);
   return { validation: capacityValidation(capacity), preflight: capacity };
 }
 
@@ -439,22 +454,30 @@ function capacityValidation(capacity: CapacityPreflight): PublishValidationResul
 }
 
 export async function tryPublishShop(shopId: string, shopDomain: string): Promise<PublishFailure | null> {
+  return (await tryPublishShopOutcome(shopId, shopDomain)).failure;
+}
+
+/** `tryPublishShop` plus whether this very publish was parked behind another one (lock busy), judged from its own result. */
+export async function tryPublishShopOutcome(shopId: string, shopDomain: string): Promise<{ failure: PublishFailure | null; parked: boolean }> {
   try {
     // "pending" means another publish held the shop's lock: the shop is flagged and retried in the
     // background (and by the cron). That is not an error and must never pause or draft an offer.
-    await publishOffersForShop(shopId, shopDomain);
+    const outcome = await publishOffersForShop(shopId, shopDomain);
     await invalidateOfferDefinitions(shopId);
-    return null;
+    return { failure: null, parked: outcome === "pending" };
   } catch (err) {
     const offerScoped = err instanceof OfferPublishError;
     const scope: PublishScope = offerScoped ? "offer" : "shop";
     Sentry.captureException(err, { tags: { shopId, scope, context: "publish-shop-config" } });
     if (err instanceof ShardPlanBlockedError) recordCapacityBlock({ shopId, ...err.capacity });
     return {
-      message: err instanceof Error ? err.message : "Failed to publish offer configuration to Shopify.",
-      scope,
-      offerId: offerScoped ? err.offerId : undefined,
-      ...(err instanceof ShardPlanBlockedError ? { capacity: err.capacity } : {}),
+      parked: false,
+      failure: {
+        message: err instanceof Error ? err.message : "Failed to publish offer configuration to Shopify.",
+        scope,
+        offerId: offerScoped ? err.offerId : undefined,
+        ...(err instanceof ShardPlanBlockedError ? { capacity: err.capacity } : {}),
+      },
     };
   }
 }
@@ -564,7 +587,7 @@ export async function republishIfActive(
   const validation = await validateOffersPublishable(db, shopId, [offerId]);
   const capacity = validation.ok ? (earlierPreflight ?? (await preflightCapacity(db, shopId, [offerId]))) : null;
   const preflight = capacity && !capacity.ok ? capacity : null;
-  if (preflight) recordCapacityBlock({ shopId, code: preflight.code, offerIds: preflight.offerIds, numbers: preflight.numbers, ...(preflight.splitRefusal ? { splitRefusal: preflight.splitRefusal } : {}) });
+  if (preflight) await noteCapacityBlock(db, shopId, preflight, [offerId]);
   let reason = "validation_error";
   let failure: PublishFailure | null;
   if (!validation.ok) {
@@ -586,6 +609,7 @@ export async function republishIfActive(
 
   const publishError = failure.message;
   const { rollbackError } = await pauseOffer(db, shopId, shopDomain, offerId, reason, publishError, publish);
+  await restampHeldOffer(db, shopId, offerId);
   return rollbackError
     ? `${publishError} The offer was paused, but re-publishing the Shopify configuration also failed: ${rollbackError}`
     : `${publishError} The offer was paused so the change can't go live; fix it and activate it again.`;

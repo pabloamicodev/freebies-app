@@ -13,6 +13,8 @@ vi.mock("@promo/db", async (importOriginal) => ({
 const shopifyGraphQLMock = vi.fn();
 vi.mock("../shopify-fetch.server.js", () => ({ shopifyGraphQL: (...args: unknown[]) => shopifyGraphQLMock(...args) }));
 vi.mock("../token-crypto.server.js", () => ({ decryptToken: async () => "token" }));
+const followUp = vi.fn(async (..._args: unknown[]) => "resolved");
+vi.mock("../capacity-apply.server.js", () => ({ followUpSyncWorkaround: (...args: unknown[]) => followUp(...args) }));
 const captureMessage = vi.fn();
 vi.mock("@sentry/node", () => ({ captureMessage: (...args: unknown[]) => captureMessage(...args), captureException: vi.fn() }));
 
@@ -33,6 +35,7 @@ afterAll(async () => {
 beforeEach(() => {
   shopifyGraphQLMock.mockReset();
   captureMessage.mockClear();
+  followUp.mockClear();
 });
 
 const cost = (requested: number): ShopifyQueryCost => ({ requestedQueryCost: requested, actualQueryCost: 10 });
@@ -127,5 +130,34 @@ describe("runNightlyCatalogReconcile", () => {
     const [job] = await db.select().from(catalogSyncJobs).where(eq(catalogSyncJobs.shopId, running));
     expect(job).toMatchObject({ status: "running", cursor: "mid-way" });
     expect(await db.select().from(catalogSyncJobs).where(eq(catalogSyncJobs.shopId, gone))).toEqual([]);
+  });
+});
+
+describe("a finished import follows up a capacity Sync products workaround", () => {
+  const emptyCatalog = async () => ({ products: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } });
+
+  it("runs the follow-up once when the import completes, and not on a page that leaves work to do", async () => {
+    const shopId = await seedShop(db, `followup-${(counter += 1)}.myshopify.com`);
+    await queueProductSync(shopId);
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    shopifyGraphQLMock.mockImplementationOnce(async () => ({ products: { pageInfo: { hasNextPage: true, endCursor: "c1" }, nodes: [] } }));
+    await processProductSyncStep(shopId);
+    expect(followUp).not.toHaveBeenCalled();
+    shopifyGraphQLMock.mockImplementation(emptyCatalog);
+    await processProductSyncStep(shopId);
+    expect(followUp).toHaveBeenCalledTimes(1);
+    expect(followUp).toHaveBeenCalledWith(expect.anything(), shopId);
+    info.mockRestore();
+  });
+
+  it("a failing follow-up never fails the import", async () => {
+    const shopId = await seedShop(db, `followup-fail-${(counter += 1)}.myshopify.com`);
+    await queueProductSync(shopId);
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    followUp.mockRejectedValueOnce(new Error("publish exploded"));
+    shopifyGraphQLMock.mockImplementation(emptyCatalog);
+    const job = await processProductSyncStep(shopId);
+    expect(job?.status).toBe("completed");
+    info.mockRestore();
   });
 });
