@@ -222,6 +222,20 @@ describe("limits", () => {
     expect(await preflightCapacity(db, shopId, [coded], { shardsEnabled: false, forceInclude: true })).toMatchObject({ ok: false, code: "SLOT_FULL" });
   });
 
+  it("is OFFER_TOO_LARGE for lists when a code offer's customer tags go over 100, even though it is not in the shared config", async () => {
+    const shopId = await seedShop(db, "code-tags.myshopify.com");
+    const coded = await giftOffer(shopId, 2, { internalName: "coded-taggy", requiresCode: true });
+    await db.insert(discountCodes).values({ shopId, offerId: coded, code: "TAGS-1" });
+    await db.insert(offerConditions).values({
+      shopId, offerId: coded, scope: "main", conditionType: "customer_tags", operator: "any",
+      value: { includeTags: Array.from({ length: 101 }, (_, i) => `tag-${i}`), excludeTags: [] }, sortOrder: 1, isEnabled: true,
+    });
+    for (const options of [{ shardsEnabled: false }, withBudget(11)]) {
+      const result = await preflightCapacity(db, shopId, [], options);
+      expect(result).toMatchObject({ ok: false, code: "OFFER_TOO_LARGE", reason: "lists", offerIds: [coded], offerNames: ["coded-taggy"] });
+    }
+  });
+
   it("is OFFER_TOO_LARGE for keys when one offer checks more than 3 cart attributes", async () => {
     const shopId = await seedShop(db, "keys-one.myshopify.com");
     const offerId = await giftOffer(shopId, 2, { internalName: "attr-heavy" });
