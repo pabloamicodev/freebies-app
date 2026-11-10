@@ -47,7 +47,7 @@ async function main(): Promise<void> {
     .select({ value: appSettings.value })
     .from(appSettings)
     .where(and(eq(appSettings.shopId, shop.id), eq(appSettings.key, KEY)));
-  console.log(`${shop.domain} ${KEY} = ${row?.value ?? "(unset → false)"}`);
+  console.log(`${shop.domain} ${KEY} = ${row?.value ?? "(unset → true)"}`);
 }
 
 main().then(() => process.exit(0), (error) => { console.error(error); process.exit(1); });

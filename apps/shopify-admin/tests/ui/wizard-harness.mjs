@@ -27,8 +27,19 @@ const result = await build({
         children: [{
           path: 'offers/new/codes/:template', Component: Wizard,
           loader: () => ({nowLocal: '2026-10-02T10:00', currencyCode: 'USD'}),
-          action: async () => {
+          action: async ({request}) => {
             await new Promise(resolve => setTimeout(resolve, 400));
+            if ((await request.formData()).get('code') === 'LIMITTEST') {
+              return {
+                error: 'The shared automatic config would be 12000B, over the 9500B limit.',
+                capacity: {
+                  code: 'AUTOMATIC_DISCOUNT_LIMIT',
+                  offers: [{id: 'offer-1', name: 'Spring gift'}],
+                  numbers: {needed: 2, storeActive: 24, others: 20},
+                  discountsUrl: 'https://hpn-test-store.myshopify.com/admin/discounts',
+                },
+              };
+            }
             return {error: 'Test validation error'};
           },
         }, {
