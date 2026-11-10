@@ -19,6 +19,7 @@ import { firstVariantId } from "./helpers/fixtures.js";
 import {
   addLines,
   clearCart,
+  discountTitles,
   getCart,
   gotoStorefront,
   waitForPromoEngine,
@@ -68,7 +69,10 @@ test.describe("Classic bundle", () => {
     }
     const listed = lines.reduce((sum, line) => sum + line.original_line_price, 0);
     const charged = lines.reduce((sum, line) => sum + line.final_line_price, 0);
-    expect(charged, "the 10% bundle tier must discount the two components").toBeLessThan(listed);
+    expect(
+      charged,
+      `the 10% bundle tier must discount the two components (discounts seen: ${lines.map((line) => discountTitles(line).join(" | ")).join(" ; ")})`,
+    ).toBeLessThan(listed);
   });
 });
 

@@ -123,7 +123,12 @@ export type CartLine = {
   final_line_price: number;
   properties: Record<string, string>;
   selling_plan_allocation?: unknown;
+  line_level_discount_allocations?: Array<{ amount: number; discount_application: { title: string } }>;
 };
+
+/** Titles of the automatic discounts applied to a line (the Function labels each with its offer message). */
+export const discountTitles = (line: CartLine | undefined): string[] =>
+  (line?.line_level_discount_allocations ?? []).map((allocation) => allocation.discount_application.title);
 
 export type Cart = { item_count: number; items: CartLine[] };
 
