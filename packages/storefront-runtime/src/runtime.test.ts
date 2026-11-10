@@ -46,7 +46,7 @@ const okResult = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-function harness(routes: Array<[RegExp, Handler]>) {
+function harness(routes: Array<[RegExp, Handler]>, config: Record<string, unknown> = CONFIG) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const listeners: Record<string, Array<(e: unknown) => void>> = {};
   const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -62,7 +62,7 @@ function harness(routes: Array<[RegExp, Handler]>) {
     dispatchEvent: vi.fn(),
     addEventListener: (type: string, h: (e: unknown) => void) => void (listeners[type] ??= []).push(h),
     removeEventListener: vi.fn(),
-    __promoEngineConfig: CONFIG,
+    __promoEngineConfig: config,
   };
   vi.stubGlobal("window", win);
   vi.stubGlobal("fetch", fetchStub);
@@ -462,15 +462,17 @@ describe("gift hold on theme add-to-cart", () => {
   const giftAction = { action: "add_line", variantId: "gid://shopify/ProductVariant/55", quantity: 1, properties: GIFT_PROPS };
   const isOwn = (init?: RequestInit) => Boolean((init?.headers as Record<string, string> | undefined)?.[OWN_REQUEST_HEADER]);
 
-  function setup(offerType = "gift") {
+  function setup(offerType = "gift", config: Record<string, unknown> = CONFIG) {
     let actions: unknown[] = [];
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
+    let giftInCart = false;
+    const giftLine = { key: "g1", variant_id: 55, quantity: 1, properties: GIFT_PROPS, original_line_price: 1499, final_line_price: 0 };
     const h = harness([
-      [/cart\/add/, (init) => (isOwn(init) ? gate.then(() => json({})) : json({ items: [{ id: 1 }] }))],
-      [/cart\.js/, () => json({ ...emptyCart, total_price: ++cartVersion })],
+      [/cart\/add/, (init) => (isOwn(init) ? gate.then(() => ((giftInCart = true), json({}))) : json({ items: [{ id: 1 }] }))],
+      [/cart\.js/, () => json({ ...emptyCart, items: giftInCart ? [giftLine] : [], total_price: ++cartVersion })],
       [/evaluate/, () => json(okResult({ qualifiedOffers: [{ offerId: "o1", type: offerType }], cartActions: actions }))],
-    ]);
+    ], config);
     initRuntime();
     vi.stubGlobal("fetch", h.win.fetch);
     const api = (h.win as unknown as { PromoEngine: { evaluate: () => Promise<unknown>; whenGiftsReady: () => Promise<void> } }).PromoEngine;
@@ -505,6 +507,23 @@ describe("gift hold on theme add-to-cart", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(t.giftAdds()).toBe(1);
     expect(t.h.count(/evaluate/)).toBe(2);
+  });
+
+  it("with the unfunded-gift flag on, the 1.5 s funding re-check is the only extra evaluation after its own gift add", async () => {
+    const t = setup("gift", { ...CONFIG, removeUnfundedGifts: true });
+    await t.api.evaluate();
+    t.armGift();
+    const added = themeAdd(t.h);
+    await vi.advanceTimersByTimeAsync(0);
+    t.release();
+    await added;
+    const cartReads = t.h.count(/cart\.js/);
+    const evaluations = t.h.count(/evaluate/);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(t.giftAdds()).toBe(1);
+    // The 1.5 s re-check reads the cart once (funding check); an unchanged cart hash skips the POST.
+    expect(t.h.count(/cart\.js/) - cartReads).toBe(1);
+    expect(t.h.count(/evaluate/) - evaluations).toBe(0);
   });
 
   it("releases the theme add with the original response after 3 s and warns", async () => {

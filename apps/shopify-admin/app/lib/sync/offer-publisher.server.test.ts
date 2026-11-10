@@ -1876,9 +1876,9 @@ describe("publishOffersForShop — mixed code offers (product/order AND shipping
   it("refreshes the specific-link params on every publish (drift repair republishes), and a missing scope neither fails the publish nor pages", async () => {
     reset();
     await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
-    expect(state.shopMetafieldPushes).toHaveLength(2);
+    expect(state.shopMetafieldPushes).toHaveLength(3);
     await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
-    expect(state.shopMetafieldPushes).toHaveLength(4);
+    expect(state.shopMetafieldPushes).toHaveLength(6);
 
     state.appInstallationError = "Access denied for currentAppInstallation field. Required access: write_app_data";
     vi.mocked(Sentry.captureException).mockClear();
@@ -2221,7 +2221,22 @@ describe("publishOffersForShop — lock timeouts, retries, manifest and shop met
         type: "json",
         value: JSON.stringify({ s: [], t: [] }),
       },
+      {
+        ownerId: "gid://shopify/AppInstallation/1",
+        namespace: "promo_engine",
+        key: "remove_unfunded_gifts",
+        type: "boolean",
+        value: "false",
+      },
     ]);
+  });
+
+  it("writes the remove-unfunded-gifts flag from the per-shop setting (default false), in the same mutation", async () => {
+    reset();
+    state.settings = [{ shopId: SHOP_ID, key: "storefront.remove_unfunded_gifts", value: "true" }];
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    expect(state.shopMetafieldPushes.find((m) => m.key === "remove_unfunded_gifts")).toMatchObject({ type: "boolean", value: "true" });
+    expect(state.shopMetafieldPushes).toHaveLength(3);
   });
 
   it("writes the template, section and experiment stamp targets of live offers in the same mutation", async () => {
@@ -2237,7 +2252,7 @@ describe("publishOffersForShop — lock timeouts, retries, manifest and shop met
     await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
     const targets = state.shopMetafieldPushes.find((m) => m.key === "stamp_targets")!;
     expect(JSON.parse(targets.value)).toEqual({ s: ["page.landing-nektar/hero_abc"], t: ["page.landing-nektar"], e: ["abcd1234"] });
-    expect(state.shopMetafieldPushes.map((m) => m.key)).toEqual(["specific_link_params", "stamp_targets"]);
+    expect(state.shopMetafieldPushes.map((m) => m.key)).toEqual(["specific_link_params", "stamp_targets", "remove_unfunded_gifts"]);
   });
 
   it("a failure to write the shop metafield never fails the publish", async () => {
