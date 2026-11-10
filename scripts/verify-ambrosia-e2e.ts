@@ -464,6 +464,7 @@ const invokedUrl = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).hre
 if (import.meta.url === invokedUrl) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
+    if (error instanceof Error && error.cause) console.error("Cause:", error.cause);
     process.exitCode = 1;
   });
 }
