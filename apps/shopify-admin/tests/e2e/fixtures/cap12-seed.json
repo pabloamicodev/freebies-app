@@ -1,6 +1,6 @@
 {
   "shop": "hpn-test-store.myshopify.com",
-  "seededAt": "2026-11-10T17:59:42.189Z",
+  "seededAt": "2026-11-10T18:05:14.281Z",
   "code": "CAP12E2E",
   "percent": {
     "cA": 20,
@@ -40,10 +40,10 @@
     }
   },
   "offers": {
-    "nc-gift": "c046cc72-d0b6-410b-9d3e-9162114e5e09",
-    "nc-filler": "1cfd8c52-085c-4bc3-a86a-43d25089ff94",
-    "c-a": "d2b47ec9-6c34-4eac-ae6f-34dcae4d1fc1",
-    "c-b": "1728a4f9-57b7-4665-9ad0-06727103fa3c"
+    "nc-gift": "fb3a3461-4a63-4fec-bf1b-0e01afa9c5be",
+    "nc-filler": "d59d43bd-122c-417e-a7a3-c0ab32cc8e8d",
+    "c-a": "9ada5f2f-b913-41a7-8798-50746ee3ae99",
+    "c-b": "816e000f-fe91-46a2-b38f-28c554abf8c2"
   },
   "nodes": [
     {
@@ -68,7 +68,7 @@
     },
     {
       "slot": 2,
-      "node": "gid://shopify/DiscountAutomaticNode/1544680210515",
+      "node": "gid://shopify/DiscountAutomaticNode/1544681226323",
       "combinesWith": "product=false order=false shipping=false",
       "units": [
         "[CAP12 E2E] NC gift",
