@@ -9,6 +9,24 @@
 use serde::de::{DeserializeSeed, Deserializer, Visitor};
 use std::fmt;
 
+/// Compact config ids are the bare numeric tail of the GID; rebuild the GID the cart lines carry.
+/// A full GID (old config) passes through, so both forms are accepted.
+pub fn gid(id: &mut String, kind: &str) {
+    if !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) {
+        *id = format!("gid://shopify/{kind}/{id}");
+    }
+}
+
+pub fn gids(ids: &mut [String], kind: &str) {
+    ids.iter_mut().for_each(|id| gid(id, kind));
+}
+
+pub fn gid_opt(id: &mut Option<String>, kind: &str) {
+    if let Some(id) = id {
+        gid(id, kind);
+    }
+}
+
 pub struct KeySeed(pub &'static [&'static str]);
 
 impl<'de> DeserializeSeed<'de> for KeySeed {

@@ -1320,7 +1320,47 @@ function omitDefaults(
   );
 }
 
-export function compactCompiledOffer(offer: CompiledOffer): Record<string, unknown> {
+/**
+ * FIX-cap-10: numeric ids without the `gid://shopify/ProductVariant|Product/` prefix (about -29 B per
+ * list entry). The Functions rebuild the GID at deserialization and accept both forms, so this is only
+ * emitted once the Functions that understand it are deployed: set FUNCTION_COMPACT_IDS=1 AFTER
+ * `shopify app deploy` (Functions first, server second). Off by default.
+ */
+const GID_TAIL = /^gid:\/\/shopify\/(?:ProductVariant|Product)\/(\d+)$/;
+const compactIdsEnabled = () => process.env["FUNCTION_COMPACT_IDS"] === "1";
+const compactId = (id: string) => GID_TAIL.exec(id)?.[1] ?? id;
+const compactIds = (ids: readonly string[]) => ids.map(compactId);
+
+function withCompactIds<T extends object>(value: T, keys: readonly string[]): T {
+  const out = { ...value } as Record<string, unknown>;
+  for (const key of keys) {
+    const entry = out[key];
+    if (Array.isArray(entry)) out[key] = compactIds(entry as string[]);
+    else if (typeof entry === "string") out[key] = compactId(entry);
+  }
+  return out as T;
+}
+
+const OFFER_ID_KEYS = [
+  "requiredProductIds",
+  "requiredVariantIds",
+  "anyRequiredProductIds",
+  "anyRequiredVariantIds",
+  "excludedProductIds",
+];
+const REWARD_ID_KEYS = ["targetProductIds", "targetVariantIds", "requiredAnchorVariantIds"];
+
+function withCompactOfferIds(offer: CompiledOffer): CompiledOffer {
+  return {
+    ...withCompactIds(offer, OFFER_ID_KEYS),
+    requirements: offer.requirements.map((r) => withCompactIds(r, ["productId", "variantId"])),
+    giftRewards: offer.giftRewards.map((r) => withCompactIds(r, REWARD_ID_KEYS)),
+    productRewards: offer.productRewards.map((r) => withCompactIds(r, REWARD_ID_KEYS)),
+  };
+}
+
+export function compactCompiledOffer(source: CompiledOffer): Record<string, unknown> {
+  const offer = compactIdsEnabled() ? withCompactOfferIds(source) : source;
   return omitDefaults(
     {
       ...offer,
@@ -1360,7 +1400,7 @@ export function serializeFunctionConfig(
         shippingOffers: config.shippingOffers.map((offer) =>
           omitDefaults(
             {
-              ...offer,
+              ...(compactIdsEnabled() ? withCompactIds(offer, ["requiredAnchorVariantIds"]) : offer),
               pageUrlConditions: offer.pageUrlConditions?.map((condition) =>
                 omitDefaults(condition, PAGE_URL_CONDITION_DEFAULTS),
               ),

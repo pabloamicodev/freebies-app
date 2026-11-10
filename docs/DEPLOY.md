@@ -30,6 +30,7 @@ Env vars (Shopify client id/secret, `DATABASE_URL`, `CRON_SECRET`, …) are per 
 - `pnpm exec react-router build` in `apps/shopify-admin`. Vitest runs under Node, so it won't catch Node-only imports (`node:*`) that end up in a client bundle. Only the build does.
 - `pnpm test`, `pnpm typecheck`.
 - Function wasm must be ≤ 249000 B. The extension build commands enforce it. Input queries must be ≤ complexity 30, and Shopify validates that only at release.
+- Compact ids (FIX-cap-10): the Functions accept bare numeric ids and full GIDs in every id list. The server emits the compact form only when `FUNCTION_COMPACT_IDS=1`. Deploy order: `shopify app deploy` (Functions) first, then set the env var and republish. Never set it before the Functions are live; to roll back, unset it and republish.
 
 ## CI gates (`.github/workflows/ci.yml`)
 
