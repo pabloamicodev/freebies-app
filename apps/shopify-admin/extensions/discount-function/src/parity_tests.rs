@@ -543,6 +543,64 @@ mod budget {
         assert!(!discounted.contains_key("offer-1"), "collection offer must not match product-page lines");
     }
 
+    /// 2026-11-10 dev-store proof: offers padded with 140 inert product ids made the whole node apply nothing.
+    /// The Function itself is not the cause: three %-offers (the seed's nc-filler, c-a, c-b shape) holding
+    /// 140/300/600 target ids, compact and full GIDs, over a 30-line cart, discount exactly the padding-free
+    /// result, and the cost per run grows linearly with the ids (one parse + one HashSet per reward).
+    #[test]
+    fn large_target_product_id_lists_stay_inside_the_instruction_budget() {
+        let input = |padding: usize, compact: bool, packed: bool| {
+            let id = |n: usize| if compact { n.to_string() } else { format!("gid://shopify/Product/{n}") };
+            let pad: Vec<String> = (0..padding).map(|n| id(900_000 + n)).collect();
+            let offer = |key: &str, priority: i32, real: Option<usize>, percent: f64| {
+                let mut ids: Vec<String> = real.map(id).into_iter().collect();
+                ids.extend(pad.iter().cloned());
+                let ids = if packed { json!(ids.join(",")) } else { json!(ids) };
+                json!({
+                    "id": key, "title": key, "version": 1, "offerType": "discount", "priority": priority,
+                    "cartQuantityThreshold": 1,
+                    "productRewards": [{ "targetProductIds": ids, "discountType": "percentage", "discountValue": percent }],
+                })
+            };
+            let mut offers = vec![offer("c-a", 20, Some(1), 20.0), offer("c-b", 21, Some(2), 10.0)];
+            if padding > 0 {
+                offers.push(offer("nc-filler", 11, None, 5.0));
+            }
+            let lines: Vec<Value> = (0..30)
+                .map(|index| {
+                    json!({
+                        "id": format!("l{index}"),
+                        "variantId": format!("gid://shopify/ProductVariant/{index}"),
+                        "productId": format!("gid://shopify/Product/{index}"),
+                        "quantity": 1, "unitPrice": "24.95", "lineType": Value::Null, "metadata": Value::Null,
+                    })
+                })
+                .collect();
+            let fixture = json!({
+                "config": { "offers": offers, "version": "budget", "compiledAt": "t" },
+                "cart": { "currency": "USD", "presentmentCurrencyRate": 1, "country": "US", "customerTags": [], "enteredCodes": [], "lines": lines },
+            });
+            function_input(&fixture).to_string()
+        };
+        let (base_allocations, base_ms) = measure_input(&input(0, true, false));
+        let expected = outcomes(&run_function_with_input(run, &input(0, true, false)).expect("should not error"));
+        assert_eq!(expected.get("c-a").and_then(|lines| lines.get("l1")), Some(&1));
+        assert_eq!(expected.get("c-b").and_then(|lines| lines.get("l2")), Some(&1));
+        for padding in [140, 300, 600] {
+            for (compact, packed) in [(true, false), (false, false), (true, true), (false, true)] {
+                let input = input(padding, compact, packed);
+                let result = run_function_with_input(run, &input).expect("should not error");
+                assert_eq!(outcomes(&result), expected, "{padding} ids, compact {compact}, packed {packed}");
+                let (allocations, ms) = measure_input(&input);
+                println!(
+                    "budget[{padding} ids x3 offers, compact {compact}, packed {packed}, 30 lines]: {allocations} allocations/run, {ms:.3} ms/run (no padding: {base_allocations}, {base_ms:.3} ms)"
+                );
+                // Parsing allocates each id once (plus the GID rebuild when compact); nothing scales with ids x lines.
+                assert!(allocations < base_allocations + 4 * 3 * padding as u64, "{padding} ids: {allocations} allocations per run");
+            }
+        }
+    }
+
     // Measured ~6.6k (7.0k before the cache); the rest is the 400 candidates themselves.
     const PAGE_CONDITIONED_LIMIT: u64 = 8_000;
     const ALLOCATION_LIMIT: u64 = 13_000;

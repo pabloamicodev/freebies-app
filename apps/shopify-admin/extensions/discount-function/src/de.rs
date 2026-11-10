@@ -3,7 +3,9 @@
 //! structs that cost ~25 KB of wasm. The config is always a JSON object written by the publisher,
 //! so only the map path is generated. Unknown keys are ignored; the last duplicate wins.
 //!
-//! Field syntax: `"jsonKey" => name: Type [= default],`. No default means the field is required
+//! Field syntax: `"jsonKey" => name: Type [packed] [= default],`. `[packed]` (Vec<String> only) also accepts one
+//! comma-joined string: the publisher packs lists over 100 entries because Shopify rejects input-query variables
+//! with a list longer than that. No default means the field is required
 //! (an offer missing it is skipped by `lenient_offers`, like the derive did).
 
 use serde::de::{DeserializeSeed, Deserializer, Visitor};
@@ -27,6 +29,32 @@ pub fn gid_opt(id: &mut Option<String>, kind: &str) {
     }
 }
 
+pub struct PackedList;
+
+impl<'de> DeserializeSeed<'de> for PackedList {
+    type Value = Vec<String>;
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Vec<String>, D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for PackedList {
+    type Value = Vec<String>;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("list")
+    }
+    fn visit_str<E>(self, packed: &str) -> Result<Vec<String>, E> {
+        Ok(if packed.is_empty() { Vec::new() } else { packed.split(',').map(String::from).collect() })
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<String>, A::Error> {
+        let mut ids = Vec::new();
+        while let Some(id) = seq.next_element()? {
+            ids.push(id);
+        }
+        Ok(ids)
+    }
+}
+
 pub struct KeySeed(pub &'static [&'static str]);
 
 impl<'de> DeserializeSeed<'de> for KeySeed {
@@ -47,6 +75,12 @@ impl<'de> Visitor<'de> for KeySeed {
 }
 
 macro_rules! de_struct {
+    (@next $map:ident) => {
+        $map.next_value()?
+    };
+    (@next $map:ident $packed:ident) => {
+        $map.next_value_seed($crate::de::PackedList)?
+    };
     (@missing $key:literal) => {
         return Err(<A::Error as serde::de::Error>::missing_field($key))
     };
@@ -56,7 +90,7 @@ macro_rules! de_struct {
     (
         $(#[$sm:meta])*
         pub struct $name:ident {
-            $( $(#[$fm:meta])* $key:literal => $field:ident : $ty:ty $(= $def:expr)?, )*
+            $( $(#[$fm:meta])* $key:literal => $field:ident : $ty:ty $([$packed:ident])? $(= $def:expr)?, )*
         }
     ) => {
         $(#[$sm])*
@@ -81,7 +115,7 @@ macro_rules! de_struct {
                             $(
                                 $(#[$fm])*
                                 if index == F::$field as usize {
-                                    $field = Some(map.next_value()?);
+                                    $field = Some(de_struct!(@next map $($packed)?));
                                     continue;
                                 }
                             )*
