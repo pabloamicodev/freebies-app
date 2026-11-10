@@ -1,3 +1,5 @@
+import { ShopifyLimitsBanner } from "../components/ShopifyLimits.js";
+import { loadLimitsMeter } from "../lib/capacity-meter.server.js";
 import { Link, useLoaderData, useNavigate, useSearchParams, useFetcher, redirect } from "react-router";
 import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import {
@@ -61,6 +63,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     timer.done({ shopFound: false });
     return {
       offers: [],
+      limits: null,
       total: 0,
       page: 1,
       pageSize: PAGE_SIZE,
@@ -139,8 +142,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     hasSearch: search.length > 0,
   });
 
+  // The live automatic-discount count can take a Shopify round trip; the list never waits more than 2s for it.
+  const limits = await Promise.race([loadLimitsMeter(db, shopId), new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000))]);
+
   return {
     offers: serializedOffers,
+    limits,
     total,
     page,
     pageSize: PAGE_SIZE,
@@ -790,6 +797,7 @@ export default function OffersPage() {
     sortBy,
     sortDir,
     search: loaderSearch,
+    limits,
   } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -994,6 +1002,8 @@ export default function OffersPage() {
           </button>
         </div>
       </div>
+
+      <ShopifyLimitsBanner meter={limits} />
 
       {/* ── Action error banner ─────────────────────────────── */}
       {actionError && (
