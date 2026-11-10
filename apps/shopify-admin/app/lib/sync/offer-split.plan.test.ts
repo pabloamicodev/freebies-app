@@ -161,6 +161,15 @@ describe("planShards with split parts", () => {
     expect(plan.blocked).toMatchObject({ code: "OFFER_TOO_LARGE", unitKeys: ["tiered"], reason: "bytes", splitRefusal: "AGGREGATING_REWARD" });
   });
 
+  it("carries the split refusal on the blocked error the publisher records for the modal", async () => {
+    const { ShardPlanBlockedError } = await import("./cart-shards.server.js");
+    const tiers = [{ minimumQuantity: 2, discountType: "percentage" as const, discountValue: 10 }];
+    const tiered = offer("tiered", { productRewards: [reward({ targetProductIds: range(900, P), quantityTiers: tiers })] });
+    const { units } = buildPlanUnitSet(entries([tiered]), [], []);
+    const blocked = planShards(units, new Map(), limits(11), POLICY).blocked!;
+    expect(new ShardPlanBlockedError(blocked).capacity).toMatchObject({ code: "OFFER_TOO_LARGE", splitRefusal: "AGGREGATING_REWARD" });
+  });
+
   it("runs out of slots with AUTOMATIC_DISCOUNT_LIMIT when the parts need more than the budget", () => {
     const { units } = buildPlanUnitSet(entries([heavy]), [], []);
     const plan = planShards(units, new Map(), limits(2), POLICY);
