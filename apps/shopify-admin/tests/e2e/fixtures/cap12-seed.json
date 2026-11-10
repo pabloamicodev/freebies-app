@@ -1,6 +1,6 @@
 {
   "shop": "hpn-test-store.myshopify.com",
-  "seededAt": "2026-11-10T16:43:22.959Z",
+  "seededAt": "2026-11-10T17:13:22.011Z",
   "code": "CAP12E2E",
   "percent": {
     "cA": 20,
@@ -40,10 +40,9 @@
     }
   },
   "offers": {
-    "nc-gift": "6d7953b6-5af2-4349-b5a9-ca1ffddb91f0",
-    "nc-filler": "340890c3-b4cb-4164-9433-b15aa664ba0a",
-    "c-a": "e3cd6325-bcb9-4302-984e-03dfe5422e86",
-    "c-b": "713e90da-408e-4a6b-b9e4-7c251276a6c2"
+    "nc-gift": "15477e3c-d3a9-43bc-8980-de9fc24201c7",
+    "c-a": "30495eea-c7f1-4b1f-802c-32a7b5ac1c1b",
+    "c-b": "68c156e5-944f-4a06-bd9c-38348c63e44e"
   },
   "nodes": [
     {
@@ -51,7 +50,9 @@
       "node": "gid://shopify/DiscountAutomaticNode/1535403556947",
       "combinesWith": "product=true order=true shipping=true",
       "units": [
-        "[CAP12 E2E] C 10% product B"
+        "[CAP12 E2E] C 20% product A",
+        "[CAP12 E2E] C 10% product B",
+        "E2E Volume Discount"
       ]
     },
     {
@@ -60,26 +61,16 @@
       "combinesWith": "product=true order=true shipping=true",
       "units": [
         "E2E Gift Offer",
-        "[CAP12 E2E] C 20% product A",
         "E2E Classic Bundle",
         "[Ambrosia E2E] cart-subtotal-free-gift-mtrcmr6l"
       ]
     },
     {
       "slot": 2,
-      "node": "gid://shopify/DiscountAutomaticNode/1544669495379",
-      "combinesWith": "product=true order=true shipping=true",
-      "units": [
-        "E2E Volume Discount"
-      ]
-    },
-    {
-      "slot": 3,
-      "node": "gid://shopify/DiscountAutomaticNode/1544670117971",
+      "node": "gid://shopify/DiscountAutomaticNode/1544673820755",
       "combinesWith": "product=false order=false shipping=false",
       "units": [
-        "[CAP12 E2E] NC gift",
-        "[CAP12 E2E] NC filler (inert, heavy)"
+        "[CAP12 E2E] NC gift"
       ]
     }
   ]

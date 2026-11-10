@@ -241,7 +241,7 @@ async function main(): Promise<void> {
             target: { variantIds: [gift.variantId] }, quantity: 1, isAutoAdd: true, isCustomerSelectable: true,
           }],
         },
-        pctOffer("nc-filler", `${PREFIX}NC filler (inert, heavy)`, 11, padIds, 5, NC),
+        ...(padIds.length > 0 ? [pctOffer("nc-filler", `${PREFIX}NC filler (inert, heavy)`, 11, padIds, 5, NC)] : []),
         pctOffer("c-a", `${PREFIX}C 20% product A`, 20, [cA.productId, ...padIds], 20, C),
         pctOffer("c-b", `${PREFIX}C 10% product B`, 21, [cB.productId, ...padIds], 10, C),
       ];
@@ -315,7 +315,7 @@ async function main(): Promise<void> {
       await publish();
       const rows = await report("after seed publish");
       const policies = new Set(rows.map((r) => r.live));
-      if (rows.length < 3 || policies.size < 2) {
+      if (padding > 0 && (rows.length < 3 || policies.size < 2)) {
         throw new Error(`Split not forced: ${rows.length} node(s), ${policies.size} distinct combinesWith. Raise --padding.`);
       }
       writeFileSync(
@@ -332,7 +332,16 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (command === "verify-k") {
+    if (command === "compact") {
+      const mode = args[1];
+      if (mode !== "on" && mode !== "off") throw new Error("usage: compact on|off");
+      await setFunctionCompactIdsEnabled(db, shop.id, mode === "on");
+      await publish();
+      await report(`compact ids ${mode}`);
+      return;
+    }
+
+    if (command === "verify-k" || command === "nc") {
       const ncIds = await db
         .select({ id: offers.id })
         .from(offers)
@@ -344,6 +353,14 @@ async function main(): Promise<void> {
           .where(and(eq(offerCombinationPolicies.shopId, shop.id), inArray(offerCombinationPolicies.offerId, ncIds.map((o) => o.id))));
         await db.update(offers).set({ compiledConfig: null, updatedAt: new Date() }).where(and(eq(offers.shopId, shop.id), inArray(offers.id, ncIds.map((o) => o.id))));
       };
+      if (command === "nc") {
+        const mode = args[1];
+        if (mode !== "loosen" && mode !== "tighten") throw new Error("usage: nc loosen|tighten");
+        await setNc(mode === "loosen");
+        await publish();
+        await report(`nc ${mode}`);
+        return;
+      }
       const assertAll = (rows: Awaited<ReturnType<typeof report>>, label: string) => {
         const bad = rows.filter((r) => !r.match);
         out(`(k) ${label}: ${rows.length - bad.length}/${rows.length} nodes match the manifest -> ${bad.length === 0 ? "PASS" : "FAIL"}`);
