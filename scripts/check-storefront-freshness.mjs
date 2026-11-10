@@ -11,7 +11,7 @@ const root = process.cwd();
 execSync("pnpm --filter @promo/storefront-runtime build", { stdio: "inherit", cwd: root });
 const normalize = (buffer) => buffer.toString("utf8").replace(/\r\n/g, "\n");
 let stale = false;
-for (const name of ["promo-engine.js", "promo-engine-gift-prompt.js", "promo-engine-blocks.js", "promo-engine-gift-picker.js"]) {
+for (const name of ["promo-engine.js", "promo-engine-gift-prompt.js", "promo-engine-gift-notice.js", "promo-engine-blocks.js", "promo-engine-gift-picker.js"]) {
   const built = normalize(readFileSync(join(root, "packages/storefront-runtime/dist", name)));
   const committed = normalize(readFileSync(join(root, "apps/shopify-admin/extensions/theme-extension/assets", name)));
   if (built !== committed) {

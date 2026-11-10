@@ -236,4 +236,38 @@ describe("gift funding in the storefront runtime", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  describe("customer notice", () => {
+    const notice = () => {
+      const fn = vi.fn();
+      (window as unknown as { __peGiftNotice: typeof fn }).__peGiftNotice = fn;
+      return fn;
+    };
+
+    it("tells the shopper once per removal, with the default copy, and not again while the cart is unchanged", async () => {
+      const s = shop({ shopifyFundsGift: false, rewards: 2 });
+      const fn = notice();
+      await s.sync();
+      for (let i = 0; i < 3; i++) await s.sync();
+      expect(s.counts.change).toBe(2);
+      expect(fn).toHaveBeenCalledTimes(1);
+      expect(fn).toHaveBeenCalledWith("Your free gift was removed because a bigger discount was applied.", "Close");
+    });
+
+    it("uses the merchant-translated copy from the theme locale files", async () => {
+      const s = shop({ shopifyFundsGift: false });
+      const fn = notice();
+      (window as unknown as { __promoEngineConfig: { i18n: Record<string, string> } }).__promoEngineConfig = { ...CONFIG, i18n: { giftRemoved: "Se quito tu regalo", close: "Cerrar" } } as never;
+      await s.sync();
+      expect(fn).toHaveBeenCalledWith("Se quito tu regalo", "Cerrar");
+    });
+
+    it("says nothing when no gift was removed", async () => {
+      const s = shop({ shopifyFundsGift: true });
+      const fn = notice();
+      await s.sync();
+      await s.sync();
+      expect(fn).not.toHaveBeenCalled();
+    });
+  });
 });

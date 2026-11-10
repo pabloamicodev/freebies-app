@@ -1,0 +1,10 @@
+"use strict";(()=>{var c=`
+.pe-gift-notice { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 2147483000; display: flex; align-items: center; gap: 8px;
+  max-width: min(480px, calc(100vw - 32px)); padding: 10px 12px 10px 14px; border-radius: 8px; background: #111; color: #fff; font: 14px/1.4 system-ui, sans-serif;
+  box-shadow: 0 4px 16px rgba(0,0,0,.3); transition: opacity .2s; }
+/* Closed: still in the accessibility tree (so the text change is announced) but visually clipped. */
+.pe-gift-notice:not([data-open]) { clip-path: inset(50%); width: 1px; height: 1px; padding: 0; overflow: hidden; opacity: 0; pointer-events: none; }
+.pe-gift-notice button { flex: none; min-width: 24px; min-height: 24px; border: 0; background: none; color: inherit; font: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
+.pe-gift-notice button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .pe-gift-notice { transition: none; } }
+`;var e,n,t,i;function d(){clearTimeout(i),e==null||e.removeAttribute("data-open"),t&&(t.hidden=!0),n&&(n.textContent="")}function s(){clearTimeout(i),i=setTimeout(d,8e3)}function p(a){let o=document.createElement("style");o.textContent=c,document.head.appendChild(o),e=document.createElement("div"),e.className="pe-gift-notice",e.setAttribute("role","status"),n=document.createElement("span"),t=document.createElement("button"),t.type="button",t.setAttribute("aria-label",a),t.textContent="\xD7",t.addEventListener("click",d),t.hidden=!0,e.append(n,t),e.addEventListener("mouseenter",()=>clearTimeout(i)),e.addEventListener("focusin",()=>clearTimeout(i)),e.addEventListener("mouseleave",s),e.addEventListener("focusout",s),document.addEventListener("keydown",r=>{r.key==="Escape"&&(e!=null&&e.hasAttribute("data-open"))&&d()}),document.body.appendChild(e)}window.__peGiftNotice=(a,o)=>{(!e||!n||!t)&&p(o),d(),setTimeout(()=>{n.textContent=a,t.hidden=!1,e.setAttribute("data-open",""),s()},50)};})();
