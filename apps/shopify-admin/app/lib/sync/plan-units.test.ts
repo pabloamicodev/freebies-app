@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CompiledOffer } from "./compile-config.js";
-import { buildPlanUnits, cartAttributeKeysOf } from "./plan-units.js";
-import { unitBytes } from "./shard-planner.js";
+import { buildPlanUnitSet, buildPlanUnits, cartAttributeKeysOf, slotOffers } from "./plan-units.js";
+import { envelopeBytes, SLOT_LIMITS, unitBytes } from "./shard-planner.js";
 
 function offer(overrides: Partial<CompiledOffer> = {}): CompiledOffer {
   return {
@@ -43,6 +43,13 @@ describe("buildPlanUnits", () => {
     const [unit] = buildPlanUnits([{ offerId: "a", offer: compiled }], [], []);
     expect(unit!.key).toBe("a");
     expect(unit!.bytes).toBe(unitBytes(compiled));
+  });
+
+  it("measures with compact ids when the shop flag is on", () => {
+    const compiled = offer({ id: "a", requiredVariantIds: ["gid://shopify/ProductVariant/123456789"] });
+    const [on] = buildPlanUnits([{ offerId: "a", offer: compiled }], [], [], { compactIds: true });
+    expect(on!.bytes).toBe(unitBytes(compiled, true));
+    expect(on!.bytes).toBeLessThan(unitBytes(compiled));
   });
 
   it("takes sorted cart attribute keys only from enabled cart_attribute conditions of that offer", () => {
@@ -139,5 +146,37 @@ describe("buildPlanUnits", () => {
     );
     expect(quiz!.multiLineFixed).toBe(true);
     expect(plain!.multiLineFixed).toBe(false);
+  });
+});
+
+describe("buildPlanUnitSet with compact ids", () => {
+  const variants = (n: number) => Array.from({ length: n }, (_, i) => `gid://shopify/ProductVariant/${40000000000000 + i}`);
+  const heavy = (n: number) =>
+    offer({ productRewards: [productReward({ targetProductIds: [], targetVariantIds: variants(n), discountType: "percentage", discountValue: 10, subscriptionMode: "any", requiredAnchorVariantIds: [], requiredAnchorMinQuantity: 1, requiresAnchorSubscription: false, priceTiers: [], quantityTiers: [], selectionMode: "all", countRule: "all", discountPercentageOnGifts: 100 })] });
+  const room = SLOT_LIMITS.slotBytes - envelopeBytes([], []) + 1;
+
+  it("does not split an offer that only fits after compaction", () => {
+    const big = heavy(300);
+    expect(unitBytes(big)).toBeGreaterThan(room);
+    expect(unitBytes(big, true)).toBeLessThanOrEqual(room);
+    const off = buildPlanUnitSet([{ offerId: "o", offer: big }], [], []);
+    expect(off.splits.has("o")).toBe(true);
+    const on = buildPlanUnitSet([{ offerId: "o", offer: big }], [], [], { compactIds: true });
+    expect(on.splits.size).toBe(0);
+    expect(on.units[0]!.splittable).toBeUndefined();
+    expect(on.units[0]!.bytes).toBe(unitBytes(big, true));
+  });
+
+  it("splits one that is still too big with compact-byte budgets", () => {
+    const big = heavy(900);
+    expect(unitBytes(big, true)).toBeGreaterThan(room);
+    const { units, splits } = buildPlanUnitSet([{ offerId: "o", offer: big }], [], [], { compactIds: true });
+    const parts = units[0]!.splittable!;
+    expect(parts.length).toBeGreaterThan(1);
+    for (const part of parts) expect(part.bytes).toBeLessThanOrEqual(room);
+    const uncompacted = buildPlanUnitSet([{ offerId: "o", offer: big }], [], []).units[0]!.splittable!;
+    expect(parts.length).toBeLessThan(uncompacted.length);
+    const merged = slotOffers([big], parts.map((part) => part.key), splits);
+    expect(merged[0]!.productRewards[0]!.targetVariantIds).toHaveLength(900);
   });
 });

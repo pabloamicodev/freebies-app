@@ -1324,7 +1324,46 @@ function omitDefaults(
   );
 }
 
-export function compactCompiledOffer(offer: CompiledOffer): Record<string, unknown> {
+/**
+ * FIX-cap-10: numeric ids without the `gid://shopify/ProductVariant|Product/` prefix (about -29 B per
+ * list entry). The Functions rebuild the GID at deserialization and accept both forms, so this is only
+ * emitted per shop (`function_compact_ids.enabled`) once the Functions that understand it are
+ * deployed: Functions first, server second. Callers pass `compactIds`; off by default.
+ */
+const GID_TAIL = /^gid:\/\/shopify\/(?:ProductVariant|Product)\/(\d+)$/;
+export const compactId = (id: string) => GID_TAIL.exec(id)?.[1] ?? id;
+const compactIds = (ids: readonly string[]) => ids.map(compactId);
+
+function withCompactIds<T extends object>(value: T, keys: readonly string[]): T {
+  const out = { ...value } as Record<string, unknown>;
+  for (const key of keys) {
+    const entry = out[key];
+    if (Array.isArray(entry)) out[key] = compactIds(entry as string[]);
+    else if (typeof entry === "string") out[key] = compactId(entry);
+  }
+  return out as T;
+}
+
+const OFFER_ID_KEYS = [
+  "requiredProductIds",
+  "requiredVariantIds",
+  "anyRequiredProductIds",
+  "anyRequiredVariantIds",
+  "excludedProductIds",
+];
+const REWARD_ID_KEYS = ["targetProductIds", "targetVariantIds", "requiredAnchorVariantIds"];
+
+function withCompactOfferIds(offer: CompiledOffer): CompiledOffer {
+  return {
+    ...withCompactIds(offer, OFFER_ID_KEYS),
+    requirements: offer.requirements.map((r) => withCompactIds(r, ["productId", "variantId"])),
+    giftRewards: offer.giftRewards.map((r) => withCompactIds(r, REWARD_ID_KEYS)),
+    productRewards: offer.productRewards.map((r) => withCompactIds(r, REWARD_ID_KEYS)),
+  };
+}
+
+export function compactCompiledOffer(source: CompiledOffer, compactIds = false): Record<string, unknown> {
+  const offer = compactIds ? withCompactOfferIds(source) : source;
   return omitDefaults(
     {
       ...offer,
@@ -1345,7 +1384,7 @@ export function compactCompiledOffer(offer: CompiledOffer): Record<string, unkno
 /** The metafield value: Function metafield input is capped at 10,000 bytes. */
 export function serializeFunctionConfig(
   config: CompiledFunctionConfig,
-  options: { omitCartAttributeSlots?: boolean; omitQueryVariables?: boolean } = {},
+  options: { omitCartAttributeSlots?: boolean; omitQueryVariables?: boolean; compactIds?: boolean } = {},
 ): string {
   // The code Function's query has no c1-c3 slots (they cost complexity); only declared variables go in.
   const withoutSlots = options.omitCartAttributeSlots === true;
@@ -1360,11 +1399,11 @@ export function serializeFunctionConfig(
         ...queryVariables,
         ...config,
         ...(withoutSlots ? { c1: undefined, c2: undefined, c3: undefined } : {}),
-        offers: config.offers.map(compactCompiledOffer),
+        offers: config.offers.map((offer) => compactCompiledOffer(offer, options.compactIds)),
         shippingOffers: config.shippingOffers.map((offer) =>
           omitDefaults(
             {
-              ...offer,
+              ...(options.compactIds ? withCompactIds(offer, ["requiredAnchorVariantIds"]) : offer),
               pageUrlConditions: offer.pageUrlConditions?.map((condition) =>
                 omitDefaults(condition, PAGE_URL_CONDITION_DEFAULTS),
               ),

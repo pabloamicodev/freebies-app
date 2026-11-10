@@ -1,4 +1,4 @@
-import { compactCompiledOffer, type CompiledOffer, type CompiledProductReward } from "./compile-config.js";
+import { compactCompiledOffer, compactId, type CompiledOffer, type CompiledProductReward } from "./compile-config.js";
 
 /**
  * Automatic split of an offer that is bigger than one Function node (architect-capacity.md §2).
@@ -36,6 +36,8 @@ export type SplitRefusal =
 export interface SplitOptions {
   /** Variant gid to its product gid. Needed only where a per-product cap applies to a variant list. */
   productOfVariant?: (variantId: string) => string | undefined;
+  /** Measure with the numeric-id form (the shop has the compact-ids flag on), like `unitBytes`. */
+  compactIds?: boolean;
 }
 
 export interface SplitList {
@@ -68,8 +70,8 @@ interface Spec extends SplitList {
 }
 
 const utf8 = (text: string) => new TextEncoder().encode(text).byteLength;
-const idBytes = (id: string) => utf8(JSON.stringify(id)) + 1;
-const offerBytes = (offer: CompiledOffer) => utf8(JSON.stringify(compactCompiledOffer(offer))) + 1;
+const idBytes = (id: string, compact = false) => utf8(JSON.stringify(compact ? compactId(id) : id)) + 1;
+const offerBytes = (offer: CompiledOffer, compact = false) => utf8(JSON.stringify(compactCompiledOffer(offer, compact))) + 1;
 
 function getAt(root: unknown, path: string): unknown {
   return path.split(".").reduce<unknown>((node, key) => (node === undefined || node === null ? undefined : (node as Record<string, unknown>)[key]), root);
@@ -87,8 +89,8 @@ const listAt = (offer: CompiledOffer, path: string): string[] => {
   return Array.isArray(value) ? (value as string[]) : [];
 };
 
-const sizeOf = (offer: CompiledOffer, paths: readonly string[]) =>
-  paths.reduce((total, path) => total + listAt(offer, path).reduce((sum, id) => sum + idBytes(id), 0), 0);
+const sizeOf = (offer: CompiledOffer, paths: readonly string[], compact = false) =>
+  paths.reduce((total, path) => total + listAt(offer, path).reduce((sum, id) => sum + idBytes(id, compact), 0), 0);
 
 function perLineReward(reward: CompiledProductReward): boolean {
   return (
@@ -145,7 +147,7 @@ function buildSpecs(offer: CompiledOffer, options: SplitOptions): Spec[] {
   const specs: Spec[] = [];
   const productOf = options.productOfVariant;
   const push = (spec: Omit<Spec, "size" | "derived" | "groups"> & Partial<Pick<Spec, "derived" | "groups" | "size">>) => {
-    const size = spec.size ?? sizeOf(offer, spec.paths);
+    const size = spec.size ?? sizeOf(offer, spec.paths, options.compactIds);
     if (size === 0) return;
     specs.push({ derived: [], groups: null, ...spec, size });
   };
@@ -339,9 +341,9 @@ function build(offer: CompiledOffer, spec: Spec, chunk: Group[], index: number):
   return { index, offer: part };
 }
 
-function chunkGroups(groups: Group[], budget: number, weigh?: (group: Group) => number): Group[][] | null {
+function chunkGroups(groups: Group[], budget: number, weigh?: (group: Group) => number, compact = false): Group[][] | null {
   if (budget <= 0) return null;
-  const weight = weigh ?? ((group: Group) => Object.values(group).reduce((total, ids) => total + ids.reduce((sum, id) => sum + idBytes(id), 0), 0));
+  const weight = weigh ?? ((group: Group) => Object.values(group).reduce((total, ids) => total + ids.reduce((sum, id) => sum + idBytes(id, compact), 0), 0));
   const weights = groups.map(weight);
   const total = weights.reduce((sum, value) => sum + value, 0);
   if (weights.some((value) => value > budget)) return null;
@@ -385,12 +387,13 @@ export function splitOffer(offer: CompiledOffer, maxBytes: number, options: Spli
     const weigh = spec.rewardArray
       ? (group: Group) => utf8(JSON.stringify(offer.giftRewards[Number(group[spec.rewardArray!]![0])])) + 1
       : undefined;
-    let budget = maxBytes - offerBytes(emptied);
+    const compact = options.compactIds === true;
+    let budget = maxBytes - offerBytes(emptied, compact);
     for (let attempt = 0; attempt < 6; attempt++) {
-      const chunks = chunkGroups(spec.groups!, budget, weigh);
+      const chunks = chunkGroups(spec.groups!, budget, weigh, compact);
       if (!chunks) break;
       const parts = chunks.map((chunk, index) => build(offer, spec, chunk, index));
-      const worst = Math.max(...parts.map((part) => offerBytes(part.offer)));
+      const worst = Math.max(...parts.map((part) => offerBytes(part.offer, compact)));
       if (worst <= maxBytes) {
         return {
           ok: true,
@@ -407,7 +410,7 @@ export function splitOffer(offer: CompiledOffer, maxBytes: number, options: Spli
   const core = structuredClone(offer);
   for (const spec of specs.filter((entry) => entry.splittable)) for (const path of spec.paths) setAt(core, path, []);
   const heaviest = specs.filter((spec) => !spec.splittable).sort((a, b) => b.size - a.size || (a.id < b.id ? -1 : 1))[0];
-  return { ok: false, reason: heaviest?.reason && offerBytes(core) > maxBytes ? heaviest.reason : "STILL_TOO_LARGE" };
+  return { ok: false, reason: heaviest?.reason && offerBytes(core, options.compactIds === true) > maxBytes ? heaviest.reason : "STILL_TOO_LARGE" };
 }
 
 /** The offer carrying the union of the given parts' slices, in the base offer's order (all parts give back the base offer). */

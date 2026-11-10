@@ -30,6 +30,7 @@ Env vars (Shopify client id/secret, `DATABASE_URL`, `CRON_SECRET`, …) are per 
 - `pnpm exec react-router build` in `apps/shopify-admin`. Vitest runs under Node, so it won't catch Node-only imports (`node:*`) that end up in a client bundle. Only the build does.
 - `pnpm test`, `pnpm typecheck`.
 - Function wasm must be ≤ 249000 B. The extension build commands enforce it. Input queries must be ≤ complexity 30, and Shopify validates that only at release.
+- Compact ids (FIX-cap-10): the Functions accept bare numeric ids and full GIDs in every id list. The server emits the compact form per shop, only when `app_settings` `function_compact_ids.enabled` = "true" (default off; env `FUNCTION_COMPACT_IDS=off` forces it off everywhere). Publish, preflight and the shard planner read the same flag, so their byte estimates agree. Deploy order: `shopify app deploy` (Functions) first, then `pnpm tsx scripts/set-function-compact-ids.ts <shop> on` (canary hpn-test-store first) and republish. Republish the shop right after flipping the flag (it is read outside the publish lock, so a publish already running may use the old value). Rollback: `off` and republish. Code-discount pool configs keep full GIDs (still accepted).
 
 ## CI gates (`.github/workflows/ci.yml`)
 
