@@ -53,3 +53,39 @@ describe("gift removed notice", () => {
     expect(css).toMatch(/prefers-reduced-motion: reduce\) \{ \.pe-gift-notice \{ transition: none/);
   });
 });
+
+describe("gift removed notice focus", () => {
+  const open = () => {
+    vi.useFakeTimers();
+    window.__peGiftNotice!("Gift removed", "Close");
+    vi.advanceTimersByTime(60);
+  };
+
+  it("hands focus back to where it was when the notice closes with focus inside", () => {
+    document.body.insertAdjacentHTML("beforeend", '<button id="checkout">Checkout</button>');
+    const checkout = document.getElementById("checkout") as HTMLButtonElement;
+    checkout.focus();
+    open();
+    const close = box().querySelector("button")!;
+    close.focus();
+    box().dispatchEvent(new FocusEvent("focusin", { relatedTarget: checkout, bubbles: true }));
+    close.click();
+    expect(document.activeElement).toBe(checkout);
+  });
+
+  it("re-arms on focusout only when focus leaves the notice", () => {
+    open();
+    const close = box().querySelector("button")!;
+    box().dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    box().dispatchEvent(new FocusEvent("focusout", { relatedTarget: close, bubbles: true }));
+    vi.advanceTimersByTime(20_000);
+    expect(box().hasAttribute("data-open")).toBe(true);
+    box().dispatchEvent(new FocusEvent("focusout", { relatedTarget: document.body, bubbles: true }));
+    vi.advanceTimersByTime(8_100);
+    expect(box().hasAttribute("data-open")).toBe(false);
+  });
+
+  it("sits at the top so it never covers checkout buttons", () => {
+    expect(document.head.querySelector("style")!.textContent).toMatch(/\.pe-gift-notice \{[^}]*top: 16px/);
+  });
+});

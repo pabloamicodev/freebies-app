@@ -454,7 +454,7 @@ Republishes through the real publish flow and prints each shop's `discount_shard
 
 ### Customer notice
 
-When the runtime removes such a gift it shows a small non-blocking toast (`role="status"`, auto-dismiss 8 s, paused on hover/focus, closes with its button or Escape, no motion under `prefers-reduced-motion`). Copy is the theme locale key `widgets.giftRemoved` (default "Your free gift was removed because a bigger discount was applied."); merchants translate it in the theme editor like the other widget strings. The drawing code is the lazy asset `promo-engine-gift-notice.js`, requested on the first removal. The offer's Combination page shows a matching note to merchants when a gift offer does not combine with product discounts. The theme extension (with the new embed and runtime asset) must be deployed first.
+When the runtime removes such a gift it shows a small non-blocking toast (`role="status"`, top-centre, auto-dismiss 8 s, paused on hover/focus, closes with its button or Escape, no motion under `prefers-reduced-motion`). Copy is the theme locale key `widgets.giftRemoved` (default "Your free gift was removed because it no longer applies to this cart."); merchants translate it in the theme editor like the other widget strings. The drawing code is the lazy asset `promo-engine-gift-notice.js`, requested on the first removal. The offer's Combination page shows a matching note to merchants when a gift offer does not combine with product discounts. The theme extension (with the new embed and runtime asset) must be deployed first.
 
 ### Rollout order
 

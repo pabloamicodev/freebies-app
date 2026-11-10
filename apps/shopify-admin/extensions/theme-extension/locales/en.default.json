@@ -6,7 +6,7 @@
     "giftPrompt": "You unlocked a free gift. Choose it",
     "giftReminder": "Don't forget your free gift",
     "giftReminderContinue": "Continue to checkout without it",
-    "giftRemoved": "Your free gift was removed because a bigger discount was applied.",
+    "giftRemoved": "Your free gift was removed because it no longer applies to this cart.",
     "giftsUpdating": "Updating gifts",
     "progress": "Progress: {{ percent }}%",
     "todayOffers": "Today's offers",

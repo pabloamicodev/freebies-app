@@ -251,7 +251,7 @@ describe("gift funding in the storefront runtime", () => {
       for (let i = 0; i < 3; i++) await s.sync();
       expect(s.counts.change).toBe(2);
       expect(fn).toHaveBeenCalledTimes(1);
-      expect(fn).toHaveBeenCalledWith("Your free gift was removed because a bigger discount was applied.", "Close");
+      expect(fn).toHaveBeenCalledWith("Your free gift was removed because it no longer applies to this cart.", "Close");
     });
 
     it("uses the merchant-translated copy from the theme locale files", async () => {

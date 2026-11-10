@@ -28,6 +28,7 @@ async function main(): Promise<void> {
   const { sql } = await import("drizzle-orm");
   const { publishShopConfig } = await import("../apps/shopify-admin/app/lib/offer-publish-flow.server.js");
   const { preflightCapacity } = await import("../apps/shopify-admin/app/lib/capacity-preflight.server.js");
+  const { runPerShop } = await import("../apps/shopify-admin/app/lib/run-per-shop.js");
   const db = getDb();
 
   const rows = await db.select({ id: shops.id, domain: shops.shopDomain }).from(shops);
@@ -39,7 +40,7 @@ async function main(): Promise<void> {
   }
   const targets = all ? rows : rows.filter((r) => domains.includes(r.domain));
 
-  for (const shop of targets) {
+  const one = async (shop: { id: string; domain: string }): Promise<boolean> => {
     if (plan) {
       const result = await preflightCapacity(db, shop.id, []);
       console.info(
@@ -48,7 +49,7 @@ async function main(): Promise<void> {
             ? `plan ok | slots=${result.plan.slots}/${result.plan.maxSlots} bytes=${result.plan.bytesPerSlot.join(",")} delivery=${result.plan.deliveryBytes}`
             : `BLOCKED ${result.code}: ${result.message}`),
       );
-      continue;
+      return result.ok;
     }
     const error = await publishShopConfig(shop.id, shop.domain);
     const res = (await db.execute(
@@ -56,6 +57,13 @@ async function main(): Promise<void> {
     )) as unknown as { rows?: Array<{ slot: number; config_bytes: number; units: number }> } & Array<{ slot: number; config_bytes: number; units: number }>;
     const shards = (res.rows ?? res).map((r) => `slot${r.slot}=${r.config_bytes}B/${r.units}u`).join(" ");
     console.info(`${shop.domain}: ${error ?? "ok"} | ${shards || "(no shards)"}`);
+    return error === null;
+  };
+
+  const failed = await runPerShop(targets, one);
+  if (failed > 0) {
+    console.error(`${failed} of ${targets.length} shop(s) failed`);
+    process.exit(1);
   }
 }
 
