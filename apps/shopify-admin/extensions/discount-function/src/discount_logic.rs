@@ -9,7 +9,8 @@ use schema::cart_lines_discounts_generate_run::input::cart::Lines;
 use schema::cart_lines_discounts_generate_run::Input;
 use shopify_function::Result;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use crate::de::{HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 const LINE_TYPE_GIFT: &str = "gift";
@@ -17,10 +18,10 @@ const LINE_TYPE_UPSELL: &str = "upsell";
 
 thread_local! {
     // Each line's packed metadata is parsed once per run (it used to be re-parsed on every lookup).
-    static LINE_METADATA: RefCell<HashMap<String, Option<Rc<LineMetadata>>>> = RefCell::new(HashMap::new());
+    static LINE_METADATA: RefCell<HashMap<String, Option<Rc<LineMetadata>>>> = RefCell::new(HashMap::default());
     // Page-match result per condition-set fingerprint, then line id, so offers sharing the same page
     // conditions match each line once per run instead of once per offer.
-    static PAGE_MATCH: RefCell<HashMap<u64, HashMap<String, bool>>> = RefCell::new(HashMap::new());
+    static PAGE_MATCH: RefCell<HashMap<u64, HashMap<String, bool>>> = RefCell::new(HashMap::default());
     static ZERO_DECIMAL_CURRENCY: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -63,7 +64,7 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
     config.localize(input.presentment_currency_rate().as_f64(), &currency);
 
     let mut offers = config.offers.clone();
-    offers.sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
+    crate::de::sort_by(&mut offers, |a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
 
     #[cfg(feature = "code_gate")]
     let (entered, entered_hashes) = entered_codes(&input);
@@ -75,7 +76,7 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
     // Only offers with a strictly lower priority (higher number) are blocked; equal-priority offers still apply.
     let mut stop_after_priority: Option<i32> = None;
     // Anchor units already used up by non-stacking gift offers, per cart line.
-    let mut consumed: HashMap<String, i64> = HashMap::new();
+    let mut consumed: HashMap<String, i64> = HashMap::default();
 
     for offer in &offers {
         let blocked = stop_after_priority.is_some_and(|stop_at| offer.priority > stop_at);
@@ -324,7 +325,7 @@ fn evaluate_product_reward(
     if eligible.is_empty() {
         return vec![];
     }
-    eligible.sort_by(|a, b| a.id().cmp(b.id()));
+    crate::de::sort_by(&mut eligible, |a, b| a.id().cmp(b.id()));
 
     let total_quantity: i64 = if reward.count_rule == "unique" {
         eligible
@@ -370,7 +371,7 @@ fn evaluate_product_reward(
     let most_expensive_first = reward.selection_mode == "most_expensive"
         || reward.discount_type == "most_expensive_item_discount";
     if cheapest_first || most_expensive_first {
-        eligible.sort_by(|a, b| {
+        crate::de::sort_by(&mut eligible, |a, b| {
             let ordering = line_price(a)
                 .partial_cmp(&line_price(b))
                 .unwrap_or(std::cmp::Ordering::Equal);
@@ -402,8 +403,8 @@ fn evaluate_product_reward(
         remaining = remaining.min(max.saturating_mul(pack));
     }
     let mut candidates = Vec::new();
-    let mut applied_by_product: HashMap<String, i64> = HashMap::new();
-    let mut applied_by_variant: HashMap<String, i64> = HashMap::new();
+    let mut applied_by_product: HashMap<String, i64> = HashMap::default();
+    let mut applied_by_variant: HashMap<String, i64> = HashMap::default();
     for line in eligible {
         if remaining <= 0 {
             break;
@@ -694,7 +695,7 @@ fn evaluate_quiz_bundle_reward(
         }
         bundles += 1;
         // Free gifts follow the same set rule: at most `maxQuantity` (default 1) units per gift product.
-        let mut gift_units_by_product: HashMap<String, i64> = HashMap::new();
+        let mut gift_units_by_product: HashMap<String, i64> = HashMap::default();
         for line in group.gifts {
             let product_id = variant_and_product_id(line).unwrap_or_default().1;
             let quantity = take_units(
@@ -924,8 +925,8 @@ fn evaluate_gift_offer(
     if !offer.gift_rewards.is_empty() {
         // The reward's limit is how many times its gift SET is granted: each gift product gets at
         // most `limit` discounted units, however high the buyer raises a gift line's quantity.
-        let mut applied_by_product: HashMap<String, i64> = HashMap::new();
-        let mut applied_by_reward: HashMap<String, i64> = HashMap::new();
+        let mut applied_by_product: HashMap<String, i64> = HashMap::default();
+        let mut applied_by_reward: HashMap<String, i64> = HashMap::default();
         let mut candidates = Vec::new();
         let tier_cut = gift_tier_cut(offer, input);
 

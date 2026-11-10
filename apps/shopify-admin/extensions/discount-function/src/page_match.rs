@@ -7,7 +7,7 @@
 //! modes read the `_promo_template`, `_promo_sections` and `_promo_exp` stamps.
 
 use serde::Deserialize;
-use std::collections::HashMap;
+use crate::de::HashMap;
 
 #[derive(Debug, Deserialize, Clone)]
 #[cfg_attr(test, derive(PartialEq))]
