@@ -11,6 +11,8 @@ import { getDb } from "@promo/db";
 import { shops, offers, productCache, variantCache, analyticsEvents, cartMutationLogs } from "@promo/db";
 import { eq, and, count, gte } from "drizzle-orm";
 import type { LoaderFunctionArgs } from "react-router";
+import { ShopifyLimitsCard } from "../components/ShopifyLimits.js";
+import { loadLimitsMeter } from "../lib/capacity-meter.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -25,7 +27,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     .limit(1);
 
   const shop = shopRows[0];
-  if (!shop) return { shop: null, diagnostics: null };
+  if (!shop) return { shop: null, diagnostics: null, limits: null };
 
   const since1h = new Date(Date.now() - 60 * 60 * 1000);
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -52,6 +54,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ),
   ]);
 
+  const limits = await loadLimitsMeter(db, shop.id);
   const totalMutations = recentMutations[0]?.count ?? 0;
   const errorCount = errorMutations[0]?.count ?? 0;
   const errorRate = totalMutations > 0 ? ((errorCount / totalMutations) * 100).toFixed(1) : "0";
@@ -71,6 +74,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       errorMutationsLast24h: errorCount,
       errorRate,
     },
+    limits,
   };
 };
 
@@ -233,7 +237,7 @@ function HealthCard({ check }: { check: HealthCheck }) {
 // ── Main component ───────────────────────────────────────────
 
 export default function DiagnosticsPage() {
-  const { shop, diagnostics } = useLoaderData<typeof loader>();
+  const { shop, diagnostics, limits } = useLoaderData<typeof loader>();
   const [running, setRunning] = useState(false);
 
   if (!shop || !diagnostics) {
@@ -407,6 +411,8 @@ export default function DiagnosticsPage() {
           </div>
         </div>
       </div>
+
+      <ShopifyLimitsCard meter={limits} />
 
       {/* Metrics table */}
       <div className="b-card" style={{ marginTop: 16 }}>

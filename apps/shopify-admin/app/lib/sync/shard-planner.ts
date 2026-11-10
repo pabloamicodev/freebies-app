@@ -24,7 +24,8 @@ export interface PlannerLimits {
   maxTags: number;
 }
 
-export const SLOT_LIMITS = { slotBytes: 9500, targetFill: 0.85, maxKeys: 3, maxTags: 100 } as const;
+export { SLOT_LIMITS } from "./slot-limits.js";
+import { SLOT_LIMITS } from "./slot-limits.js";
 
 export interface CombinationPolicy {
   productDiscounts: boolean;

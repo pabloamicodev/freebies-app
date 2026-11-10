@@ -42,6 +42,8 @@ import { OfferConditionsBuilder } from "../components/OfferConditionsBuilder.js"
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
 import { validateRewardPayload } from "@promo/shared-types";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -103,7 +105,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 // ─── Action ──────────────────────────────────────────────────────────────────
 
-export const action = async ({ request }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   const { shopId, db, session, timezone, currencyCode: shopCurrency } = context;
   if (!shopId) return { error: "Shop not found" };
@@ -483,7 +485,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (publishError) return { error: publishError };
 
   return redirect(`/app/offers/${newOffer.id}`);
-};
+});
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -2145,6 +2147,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
         }}
       />
 
+      <CapacityLimitModal data={actionData?.capacity} />
       {(showToast || actionData?.error) && (
         <Toast
           message={actionData?.error ?? toastMsg}

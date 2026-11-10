@@ -34,6 +34,8 @@ import { preflightCapacity } from "../lib/capacity-preflight.server.js";
 import { retryOriginalCode } from "../lib/code-retry.server.js";
 import { CODE_CHARSETS, isCodeRedeemable, type CodeCharset } from "../lib/discount-code-generation.js";
 import "../styles/bogos.css";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
@@ -143,7 +145,7 @@ function parseSettings(formData: FormData, timeZone: string): { error: string } 
   };
 }
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db, timezone: shopTimezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
@@ -247,7 +249,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const publishError = await republishIfActive(db, shopId, session.shop, offerId, wasActive);
   if (publishError) return { error: publishError };
   return { success: wasActive ? message : `${message} They go live when the offer is published.`, ...(warning ? { warning } : {}) };
-};
+});
 
 function CopyLinkButton({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
@@ -331,6 +333,7 @@ export default function OfferCodesPage() {
 
   return (
     <div className="b-page">
+      <CapacityLimitModal data={actionData?.capacity} />
       <PageHeader
         title="Discount codes"
         subtitle={data.offer.internalName}

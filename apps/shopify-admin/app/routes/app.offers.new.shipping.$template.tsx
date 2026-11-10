@@ -21,6 +21,8 @@ import { isZeroDecimalCurrency, toStoredAmount } from "../lib/money.js";
 import { statusForSubmit } from "../lib/offer-scheduling.server.js";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -86,7 +88,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return { timezone, currencyCode, nowLocal: nowInZone(timezone) };
 };
 
-export const action = async ({ request }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   if (!context.shopId) return { error: "Shop not found." };
   const { db, shopId, session, timezone, currencyCode: shopCurrency } = context;
@@ -244,7 +246,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const publishError = await finalizeCreatedOffer(db, shopId, session.shop, offer.id, status);
   if (publishError) return { error: publishError };
   return redirect(`/app/offers/${offer.id}`);
-};
+});
 
 export default function NewShippingOfferPage() {
   const { nowLocal, currencyCode: shopCurrencyCode } = useLoaderData<typeof loader>();
@@ -656,6 +658,7 @@ export default function NewShippingOfferPage() {
           </div>
         </div>
       )}
+      <CapacityLimitModal data={actionData?.capacity} />
       {actionData?.error && actionData.error !== dismissedError && (
         <Toast
           type="error"

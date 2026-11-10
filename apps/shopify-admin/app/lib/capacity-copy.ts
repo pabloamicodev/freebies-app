@@ -1,4 +1,4 @@
-import { SLOT_LIMITS } from "./sync/shard-planner.js";
+import { SLOT_LIMITS } from "./sync/slot-limits.js";
 
 export const SHOPIFY_AUTOMATIC_LIMIT = 25;
 
