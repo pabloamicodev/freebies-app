@@ -6,7 +6,7 @@ import { planShards, SLOT_LIMITS } from "./shard-planner.js";
 const P = (n: number) => `gid://shopify/Product/${70000000000 + n}`;
 const V = (n: number) => `gid://shopify/ProductVariant/${40000000000 + n}`;
 const range = (count: number, make: (n: number) => string) => Array.from({ length: count }, (_, n) => make(n));
-const POLICY = { productDiscounts: true, orderDiscounts: true };
+const POLICY = "uniform" as const;
 const limits = (maxSlots: number) => ({ ...SLOT_LIMITS, maxSlots });
 
 function offer(id: string, overrides: Partial<CompiledOffer> = {}): CompiledOffer {

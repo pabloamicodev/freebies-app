@@ -62,6 +62,11 @@ export function buildPlanUnitSet(
       bytes: unitBytes(offer),
       cartAttributeKeys,
       customerTags,
+      domain: {
+        productDiscounts: offer.combinesWithProductDiscounts,
+        orderDiscounts: offer.combinesWithOrderDiscounts,
+        shippingDiscounts: offer.combinesWithShippingDiscounts,
+      },
       priority: offer.priority,
       hasOrderRewards: offer.orderRewards.length > 0,
       stopLowerPriority: policies.find((policy) => policy.offerId === offerId)?.stopLowerPriority ?? offer.stopLowerPriority,

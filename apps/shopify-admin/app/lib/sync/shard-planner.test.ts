@@ -5,13 +5,16 @@ import {
   envelopeBytes,
   planShards,
   unitBytes,
+  andPolicies,
+  OPEN_POLICY,
+  type CombinationPolicy,
   type PlanUnit,
   type PlannerLimits,
   type ShardPlan,
 } from "./shard-planner.js";
 
 const limits = (maxSlots = 11, extra: Partial<PlannerLimits> = {}): PlannerLimits => ({ ...SLOT_LIMITS, maxSlots, ...extra });
-const POLICY = { productDiscounts: true, orderDiscounts: true };
+const POLICY = "uniform" as const;
 const NONE = new Map<string, number>();
 
 const unit = (key: string, bytes = 1900, extra: Partial<PlanUnit> = {}): PlanUnit => ({
@@ -372,29 +375,29 @@ describe("budget and blocks", () => {
 });
 
 describe("single-shard mode", () => {
-  const nonCombining = { productDiscounts: false, orderDiscounts: true };
+  const nonCombining = { productDiscounts: false, orderDiscounts: true, shippingDiscounts: true };
 
   it("C4 fails: everything goes to slot 0 and moves back from other slots", () => {
-    const plan = planShards([unit("a", 1000), unit("b", 1000)], new Map([["b", 2]]), limits(), nonCombining);
+    const plan = planShards([unit("a", 1000, { domain: nonCombining }), unit("b", 1000)], new Map([["b", 2]]), limits());
     expect(plan.slots).toHaveLength(1);
     expect(plan.moves).toEqual([{ unitKey: "b", from: 2, to: 0 }]);
   });
 
   it("C4 fails and slot 0 overflows: SLOT_FULL names the units that do not fit", () => {
-    const plan = planShards(named(6, 2000), NONE, limits(), nonCombining);
+    const plan = planShards(named(6, 2000, { domain: nonCombining }), NONE, limits());
     expect(plan.slots).toHaveLength(1);
     expect(plan.blocked).toMatchObject({ code: "SLOT_FULL", unitKeys: ["u004", "u005"] });
   });
 
   it("order offers need orderDiscounts when other slots exist", () => {
-    const units = [unit("order", 1000, { hasOrderRewards: true }), ...named(8)];
-    const plan = planShards(units, NONE, limits(), { productDiscounts: true, orderDiscounts: false });
+    const units = [unit("order", 1000, { hasOrderRewards: true, domain: { ...nonCombining, productDiscounts: true, orderDiscounts: false } }), ...named(8)];
+    const plan = planShards(units, NONE, limits());
     expect(plan.slots).toHaveLength(1);
     expect(plan.blocked?.code).toBe("SLOT_FULL");
   });
 
   it("orderDiscounts=false is fine when no unit has order rewards", () => {
-    const plan = planShards(named(8), NONE, limits(), { productDiscounts: true, orderDiscounts: false });
+    const plan = planShards(named(8, 1900, { domain: { productDiscounts: true, orderDiscounts: false, shippingDiscounts: true } }), NONE, limits());
     expect(plan.blocked).toBeUndefined();
     expect(plan.slots.length).toBeGreaterThan(1);
   });
@@ -466,5 +469,127 @@ describe("scale", () => {
     }
     const again = planShards(shuffled(units, 9), assignment(plan), limits(40), POLICY);
     expect(again.moves).toEqual([]);
+  });
+});
+
+describe("combination domains", () => {
+  const NC: CombinationPolicy = { productDiscounts: false, orderDiscounts: true, shippingDiscounts: true };
+  const NO_ORDER: CombinationPolicy = { productDiscounts: true, orderDiscounts: false, shippingDiscounts: true };
+  const plan = (units: PlanUnit[], previous = NONE, maxSlots = 11) => planShards(units, previous, limits(maxSlots), "domains");
+  const ncUnits = (count: number, bytes = 1900) => named(count, bytes, { domain: NC }).map((u) => ({ ...u, key: `nc${u.key}` }));
+  const cUnits = (count: number, bytes = 1900) => named(count, bytes).map((u) => ({ ...u, key: `c${u.key}` }));
+  const domainOfKey = (units: PlanUnit[], key: string) => units.find((u) => u.key === key)!.domain ?? OPEN_POLICY;
+
+  it("fast path: everything fits one node, so mixed groups stay together with the AND policy (today's single node)", () => {
+    const units = [...ncUnits(1, 1000), ...cUnits(2, 1000), unit("o", 500, { domain: NO_ORDER })];
+    const result = plan(units);
+    expect(result.slots).toHaveLength(1);
+    expect(result.slots[0]!.policy).toEqual({ productDiscounts: false, orderDiscounts: false, shippingDiscounts: true });
+    expect(result.moves).toEqual([]);
+  });
+
+  it("uniform mode is untouched by domains: a non-combining offer still forces one node", () => {
+    const result = planShards([...ncUnits(1), ...cUnits(8)], NONE, limits(), "uniform");
+    expect(result.slots).toHaveLength(1);
+    expect(result.blocked?.code).toBe("SLOT_FULL");
+  });
+
+  it("splits instead of blocking: non-combining offers keep slot 0, combining ones move out", () => {
+    const units = [...ncUnits(2), ...cUnits(10)];
+    const result = plan(units);
+    expect(result.blocked).toBeUndefined();
+    expect(result.slots.length).toBeGreaterThan(1);
+    expect(slotOf(result, "ncu000")).toBe(0);
+    expect(slotOf(result, "ncu001")).toBe(0);
+    expect(result.slots[0]!.policy.productDiscounts).toBe(false);
+    for (const slot of result.slots.slice(1)) expect(slot.policy).toEqual(OPEN_POLICY);
+  });
+
+  it("every node is homogeneous by combination group over shuffled inputs", () => {
+    const base = [
+      ...ncUnits(5, 1500),
+      ...cUnits(20, 1500),
+      ...named(6, 1500, { domain: NO_ORDER }).map((u) => ({ ...u, key: `no${u.key}` })),
+    ];
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const units = shuffled(base, seed);
+      const result = plan(units);
+      expect(result.blocked).toBeUndefined();
+      expect(placedKeys(result)).toEqual(units.map((u) => u.key).sort());
+      for (const slot of result.slots) {
+        for (const key of slot.unitKeys) expect(domainOfKey(units, key)).toEqual(slot.policy);
+      }
+    }
+  });
+
+  it("non-combining offers share as few nodes as possible", () => {
+    const result = plan([...ncUnits(7), ...cUnits(7)]);
+    const ncSlots = new Set(result.slots.filter((slot) => !slot.policy.productDiscounts).map((slot) => slot.index));
+    const ncBytes = 7 * 1900;
+    expect(ncSlots.size).toBe(Math.ceil(ncBytes / Math.floor(SLOT_LIMITS.slotBytes * SLOT_LIMITS.targetFill)));
+  });
+
+  it("a pinned group with a non-combining offer owns slot 0 and combining units go to shards", () => {
+    const units = [
+      unit("order", 1000, { hasOrderRewards: true, domain: NC }),
+      ...cUnits(8),
+    ];
+    const result = plan(units);
+    expect(result.blocked).toBeUndefined();
+    expect(slotOf(result, "order")).toBe(0);
+    expect(result.slots[0]!.policy.productDiscounts).toBe(false);
+    expect(result.slots[0]!.unitKeys).toEqual(["order"]);
+  });
+
+  it("a group tied by multi-line fixed candidates takes the AND of its members", () => {
+    const units = [
+      unit("quiz", 1000, { multiLineFixed: true, targetProductIds: ["p-x"] }),
+      unit("nc", 1000, { domain: NC, targetProductIds: ["p-x"] }),
+      ...cUnits(10),
+    ];
+    const result = plan(units);
+    expect(slotOf(result, "quiz")).toBe(slotOf(result, "nc"));
+    expect(result.slots.find((slot) => slot.index === slotOf(result, "quiz"))!.policy.productDiscounts).toBe(false);
+  });
+
+  it("a split node is sticky: editing one offer moves at most that unit", () => {
+    const units = [...ncUnits(2), ...cUnits(14)];
+    const first = plan(units);
+    const edited = units.map((u) => (u.key === "cu005" ? { ...u, bytes: u.bytes + 300 } : u));
+    const again = plan(shuffled(edited, 3), assignment(first));
+    expect(again.moves.length).toBeLessThanOrEqual(1);
+  });
+
+  it("a domain flip moves only the flipped offer", () => {
+    const units = [...ncUnits(2), ...cUnits(14)];
+    const first = plan(units);
+    const flipped = units.map((u) => (u.key === "cu003" ? { ...u, domain: NC } : u));
+    const again = plan(flipped, assignment(first));
+    expect(again.moves.map((m) => m.unitKey)).toEqual(["cu003"]);
+    expect(again.slots.find((slot) => slot.index === slotOf(again, "cu003"))!.policy.productDiscounts).toBe(false);
+  });
+
+  it("removing offers never merges two groups into one node", () => {
+    const units = [...ncUnits(6), ...cUnits(12)];
+    const first = plan(units);
+    const fewer = units.filter((u, i) => i % 3 !== 0);
+    const again = plan(fewer, assignment(first));
+    for (const slot of again.slots) {
+      expect(new Set(slot.unitKeys.map((key) => JSON.stringify(domainOfKey(fewer, key)))).size).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("node count stays within the byte optimum plus one per extra group", () => {
+    const units = [...ncUnits(9), ...cUnits(25), ...named(7, 1900, { domain: NO_ORDER }).map((u) => ({ ...u, key: `no${u.key}` }))];
+    const result = plan(units);
+    const soft = Math.floor(SLOT_LIMITS.slotBytes * SLOT_LIMITS.targetFill);
+    const total = result.slots.reduce((sum, slot) => sum + slot.bytes, 0);
+    expect(result.slots.length).toBeLessThanOrEqual(Math.ceil(total / soft) + 3);
+  });
+
+  it("maxSlots 1 stays single in domains mode, with the AND policy", () => {
+    const result = plan([...ncUnits(1, 1000), ...cUnits(2, 1000)], NONE, 1);
+    expect(result.slots).toHaveLength(1);
+    expect(result.slots[0]!.policy).toEqual(andPolicies([NC, OPEN_POLICY]));
   });
 });

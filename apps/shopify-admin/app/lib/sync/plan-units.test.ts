@@ -45,6 +45,19 @@ describe("buildPlanUnits", () => {
     expect(unit!.bytes).toBe(unitBytes(compiled));
   });
 
+  it("carries the offer's own combination flags as the unit's group", () => {
+    const [open, closed] = buildPlanUnits(
+      [
+        { offerId: "open", offer: offer({ id: "open" }) },
+        { offerId: "closed", offer: offer({ id: "closed", combinesWithProductDiscounts: false, combinesWithShippingDiscounts: false }) },
+      ],
+      [],
+      [],
+    );
+    expect(open!.domain).toEqual({ productDiscounts: true, orderDiscounts: true, shippingDiscounts: true });
+    expect(closed!.domain).toEqual({ productDiscounts: false, orderDiscounts: true, shippingDiscounts: false });
+  });
+
   it("takes sorted cart attribute keys only from enabled cart_attribute conditions of that offer", () => {
     const conditions = [
       condition("a", "cart_attribute", { key: " zeta " }),
