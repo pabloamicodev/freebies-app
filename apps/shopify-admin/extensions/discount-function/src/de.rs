@@ -117,6 +117,28 @@ fn merge_sort(order: &mut [u32], less: &mut dyn FnMut(u32, u32) -> std::cmp::Ord
     }
 }
 
+/// `str::cmp` that compares 8 bytes per step: wasm `memcmp` goes byte by byte, and sorted ids share a long prefix.
+pub fn cmp_str(a: &str, b: &str) -> std::cmp::Ordering {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let common = a.len().min(b.len());
+    let mut at = 0;
+    while at + 8 <= common {
+        let left = u64::from_be_bytes(a[at..at + 8].try_into().unwrap());
+        let right = u64::from_be_bytes(b[at..at + 8].try_into().unwrap());
+        if left != right {
+            return left.cmp(&right);
+        }
+        at += 8;
+    }
+    while at < common {
+        if a[at] != b[at] {
+            return a[at].cmp(&b[at]);
+        }
+        at += 1;
+    }
+    a.len().cmp(&b.len())
+}
+
 pub type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<Fnv>>;
 pub type HashSet<T> = std::collections::HashSet<T, BuildHasherDefault<Fnv>>;
 
@@ -265,6 +287,21 @@ macro_rules! de_struct {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cmp_str_orders_exactly_like_str_cmp() {
+        let prefix = "gid://shopify/CartLine/";
+        let mut samples: Vec<String> = vec![String::new(), "a".into(), "ab".into(), "b".into(), "\u{e9}".into(), "\u{e9}a".into()];
+        for tail in ["", "1", "10", "100", "2", "19", "abcdefgh", "abcdefgi", "abcdefg", "abcdefghi", "abcdefghj", "zz?cart=abcdefghij", "zz?cart=abcdefghik"] {
+            samples.push(format!("{prefix}{tail}"));
+            samples.push(tail.to_string());
+        }
+        for left in &samples {
+            for right in &samples {
+                assert_eq!(cmp_str(left, right), left.as_str().cmp(right.as_str()), "{left:?} vs {right:?}");
+            }
+        }
+    }
 
     #[test]
     fn hash_collections_are_never_iterated() {
