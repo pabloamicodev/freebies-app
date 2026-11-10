@@ -1,5 +1,5 @@
 use crate::config::{
-    is_zero_decimal, minor_units, to_cents, CompiledConfig, CompiledGiftReward, CompiledOffer,
+    is_zero_decimal, minor_units, to_cents, to_cents_in, CompiledConfig, CompiledGiftReward, CompiledOffer,
     CompiledOrderReward, CompiledProductReward,
 };
 use crate::page_match::{metadata_matches, LineMetadata};
@@ -116,8 +116,9 @@ struct VolumeDiscountGroup {
 }
 
 pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> {
+    // Never dropped: the wasm instance ends right after this run, so freeing the compiled config only burns instructions.
     let mut config = match parse_config(&input) {
-        Some(c) => c,
+        Some(c) => std::mem::ManuallyDrop::new(c),
         None => return Ok(schema::CartLinesDiscountsGenerateRunResult { operations: vec![] }),
     };
     // The node's classes travel in the config (`dc`); absent means product + order.
@@ -141,7 +142,7 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
     ZERO_DECIMAL_CURRENCY.with(|flag| flag.set(is_zero_decimal(&currency)));
     config.localize(input.presentment_currency_rate().as_f64(), &currency);
 
-    let mut offers = config.offers.clone();
+    let mut offers: Vec<&CompiledOffer> = config.offers.iter().collect();
     crate::de::sort_by(&mut offers, |a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
 
     #[cfg(feature = "code_gate")]
@@ -1236,18 +1237,11 @@ fn qualifying_lines<'a>(offer: &CompiledOffer, input: &'a Input) -> Vec<&'a Line
 }
 
 fn cart_value_cents(lines: &[&Lines], input: &Input) -> i64 {
-    let active_currency = input
-        .cart()
-        .cost()
-        .subtotal_amount()
-        .currency_code()
-        .to_string();
+    let active_currency = input.cart().cost().subtotal_amount().currency_code();
+    let zero_decimal = is_zero_decimal(active_currency);
     let raw_cart_value_cents: i64 = lines
         .iter()
-        .map(|line| {
-            let amount = subtotal_of(line);
-            to_cents(amount, &active_currency)
-        })
+        .map(|line| to_cents_in(subtotal_of(line), zero_decimal))
         .sum();
     // Discount Functions execute concurrently, so the input does not
     // contain discounts emitted by the store's separate volume-discount

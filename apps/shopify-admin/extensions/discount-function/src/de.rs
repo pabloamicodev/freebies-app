@@ -116,7 +116,12 @@ pub type HashSet<T> = std::collections::HashSet<T, BuildHasherDefault<Fnv>>;
 /// A full GID (old config) passes through, so both forms are accepted.
 pub fn gid(id: &mut String, kind: &str) {
     if !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) {
-        *id = format!("gid://shopify/{kind}/{id}");
+        let mut full = String::with_capacity(14 + kind.len() + 1 + id.len());
+        full.push_str("gid://shopify/");
+        full.push_str(kind);
+        full.push('/');
+        full.push_str(id);
+        *id = full;
     }
 }
 

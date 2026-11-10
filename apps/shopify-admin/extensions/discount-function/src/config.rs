@@ -409,7 +409,11 @@ pub fn minor_units(currency_code: &str) -> f64 {
 }
 
 pub fn to_cents(amount: f64, currency_code: &str) -> i64 {
-    if is_zero_decimal(currency_code) {
+    to_cents_in(amount, is_zero_decimal(currency_code))
+}
+
+pub fn to_cents_in(amount: f64, zero_decimal: bool) -> i64 {
+    if zero_decimal {
         amount.round() as i64
     } else {
         (amount * 100.0).round() as i64
