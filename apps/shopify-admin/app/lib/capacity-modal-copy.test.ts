@@ -126,3 +126,18 @@ describe("limits meter", () => {
     expect(limitsBanner({ level: "critical", storeActive: 25, limit: 25 })?.title).toBe("Shopify's automatic discount limit is reached");
   });
 });
+
+describe("list limit copy", () => {
+  it("says which list is too long and how to fix it", () => {
+    const copy = describeCapacityModal({
+      code: "OFFER_TOO_LARGE",
+      offers: [{ id: "o1", name: "Big tiers" }],
+      numbers: { listKind: 1, listCount: 130, listLimit: 100 },
+    });
+    expect(copy.body).toBe(
+      `Shopify limit: a Promo Engine discount can't receive a list with more than 100 entries. "Big tiers" has 130 price tiers. Reduce it to 100 or split the offer into two.`,
+    );
+    expect(copy.title).toBe("This offer has a list that is too long");
+    expect(copy.actions).toEqual([{ kind: "offer", label: "Open Big tiers", to: "/app/offers/o1" }]);
+  });
+});

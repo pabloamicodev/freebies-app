@@ -28,6 +28,7 @@ import {
 } from "../publish-manifest.server.js";
 import { isFunctionCompactIdsEnabled } from "../function-compact-ids-flag.server.js";
 import { isFunctionShardsEnabled, isShardDomainsEnabled } from "../function-shards-flag.server.js";
+import { assertVariableListsWithinLimit } from "./variable-list-guard.js";
 import { SLOT_LIMITS, andPolicies, planShards, policyKey, type CombinationPolicy } from "./shard-planner.js";
 import { baseOfferId, buildPlanUnitSet, slotOffers } from "./plan-units.js";
 import { loadSplitOptions } from "./variant-products.server.js";
@@ -552,6 +553,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       ...slotValues.map((slotValue) => ["cart", slotValue] as const),
       ["delivery", deliveryValue] as const,
     ]) {
+      assertVariableListsWithinLimit(value);
       const sizeBytes = utf8Length(value);
       if (sizeBytes > MAX_METAFIELD_BYTES) {
         throw new Error(
@@ -1748,6 +1750,7 @@ async function pushMetafields(
   accessToken: string,
   entries: Array<{ ownerId: string; value: string }>,
 ): Promise<void> {
+  for (const { value } of entries) assertVariableListsWithinLimit(value);
   const data = await shopifyGraphQL<{ metafieldsSet: { userErrors: Array<{ message: string }> } }>({
     shopDomain,
     accessToken,

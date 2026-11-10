@@ -1,3 +1,4 @@
+import { UNPACKABLE_LISTS } from "./sync/compile-config.js";
 import { SLOT_LIMITS } from "./sync/slot-limits.js";
 
 export const SHOPIFY_AUTOMATIC_LIMIT = 25;
@@ -67,7 +68,7 @@ export function slot0GroupTooLargeMessage(count: number, names: readonly string[
   return names.length > 0 ? `${base} Offers involved: ${quoted(names)}.` : base;
 }
 
-export type TooLargeReason = "bytes" | "keys" | "tags";
+export type TooLargeReason = "bytes" | "keys" | "tags" | "offers" | "lists";
 
 export function offerTooLargeMessage(
   names: readonly string[],
@@ -82,13 +83,19 @@ export function offerTooLargeMessage(
         ? `${numbers["slotBytes"]}B size limit (${numbers["bytes"]}B)`
         : reason === "keys"
           ? `${numbers["maxKeys"]} cart attribute limit (${numbers["keys"]} used)`
-          : `${numbers["maxTags"]} customer tag limit (${numbers["tags"]} used)`
+          : reason === "offers"
+            ? `${numbers["maxOffers"]} offer limit (${numbers["offers"]} used)`
+            : `${numbers["maxTags"]} customer tag limit (${numbers["tags"]} used)`
     }. Pause or simplify some of them.`;
   }
   if (reason === "keys") {
     const keys = numbers["keys"] ?? 0;
     const max = numbers["maxKeys"] ?? SLOT_LIMITS.maxKeys;
     return `${who} checks ${keys} cart attributes. Shopify lets a discount read at most ${max}. Remove ${keys - max} cart attribute conditions.`;
+  }
+  if (reason === "lists") {
+    const label = UNPACKABLE_LISTS[numbers["listKind"] ?? -1]?.[1] ?? "entries";
+    return `Shopify limit: a Promo Engine discount can't receive a list with more than ${numbers["listLimit"] ?? 100} entries. ${who || "This discount"} has ${numbers["listCount"]} ${label}. Reduce it to ${numbers["listLimit"] ?? 100} or split the offer into two.`;
   }
   if (reason === "tags") {
     return `${who} references ${numbers["tags"]} customer tags. Shopify allows up to ${numbers["maxTags"] ?? SLOT_LIMITS.maxTags} per discount.`;

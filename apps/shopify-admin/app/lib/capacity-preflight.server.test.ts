@@ -356,3 +356,28 @@ describe("combination policy forcing a single shard (combination groups off)", (
     expect(wide.ok && wide.plan.singleShardReason).toBeUndefined();
   });
 });
+
+describe("Shopify's 100-element list limit", () => {
+  it("refuses an offer with more than 100 gift rewards with the Shopify-limit copy, in either sharding mode", async () => {
+    const shopId = await seedShop(db, "list-limit.myshopify.com");
+    const offerId = await giftOffer(shopId, 1, { internalName: "Gift wall", priority: 1 });
+    await db.insert(offerRewards).values(
+      Array.from({ length: 100 }, (_, i) => ({
+        shopId, offerId, rewardType: "product_gift" as const, discountType: "free" as const, value: {},
+        target: { variantIds: [`gid://shopify/ProductVariant/${9000 + i}`] }, quantity: 1, sortOrder: i + 1,
+      })),
+    );
+    for (const options of [{ shardsEnabled: false }, withBudget(11)]) {
+      const result = await preflightCapacity(db, shopId, [], options);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.code).toBe("OFFER_TOO_LARGE");
+      expect(result.reason).toBe("lists");
+      expect(result.offerNames).toEqual(["Gift wall"]);
+      expect(result.numbers).toMatchObject({ listCount: 101, listLimit: 100 });
+      expect(result.message).toBe(
+        `Shopify limit: a Promo Engine discount can't receive a list with more than 100 entries. "Gift wall" has 101 gift rewards. Reduce it to 100 or split the offer into two.`,
+      );
+    }
+  });
+});

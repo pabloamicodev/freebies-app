@@ -13,7 +13,7 @@ import { serializeFunctionConfig } from "./sync/compile-config.js";
 import { compileCartOffers, legacyGatedOfferIds } from "./sync/cart-offers.server.js";
 import { isLimitsEnforced } from "./limits-enforced.server.js";
 import { buildAttributeQueryVariables, MAX_CUSTOM_CART_ATTRIBUTE_KEYS } from "./sync/attribute-query-variables.js";
-import { planShards, SLOT_LIMITS, type CombinationPolicy, type PlanBlockCode } from "./sync/shard-planner.js";
+import { planShards, SLOT_LIMITS, type CombinationPolicy, type PlanBlockCode, type PlanBlockReason } from "./sync/shard-planner.js";
 import { baseOfferId, buildPlanUnitSet, cartAttributeKeysOf } from "./sync/plan-units.js";
 import type { SplitRefusal } from "./sync/offer-split.js";
 import { loadSplitOptions } from "./sync/variant-products.server.js";
@@ -201,7 +201,7 @@ export type CapacityPreflight =
       offerIds: string[];
       offerNames: string[];
       numbers: Record<string, number>;
-      reason?: "bytes" | "keys" | "tags" | "combination";
+      reason?: PlanBlockReason | "combination";
       /** OFFER_TOO_LARGE with sharding on: why the offer cannot be split across slots (offer-split.ts reason code). */
       splitRefusal?: SplitRefusal;
       message: string;
@@ -308,7 +308,7 @@ export async function preflightCapacity(
     ids: string[],
     numbers: Record<string, number>,
     message: (offerNames: string[]) => string,
-    reason?: "bytes" | "keys" | "tags" | "combination",
+    reason?: PlanBlockReason | "combination",
     splitRefusal?: SplitRefusal,
   ): CapacityPreflight => {
     const unique = [...new Set(ids)];
