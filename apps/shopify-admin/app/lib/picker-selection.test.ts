@@ -11,6 +11,12 @@ describe("toggleProductSelection", () => {
     expect(off.whole.size).toBe(0);
   });
 
+  it("keeps a product with a blocked variant as variants, not whole", () => {
+    const on = toggleProductSelection(new Set(), new Set(), "gid://shopify/Product/1", ["gid://shopify/ProductVariant/10"], "variants", true, false);
+    expect([...on.selected]).toEqual(["gid://shopify/ProductVariant/10"]);
+    expect(on.whole.size).toBe(0);
+  });
+
   it("toggles the product gid itself in products mode without marking whole products", () => {
     const on = toggleProductSelection(new Set(), new Set(), "gid://shopify/Product/1", [], "products", true);
     expect([...on.selected]).toEqual(["gid://shopify/Product/1"]);

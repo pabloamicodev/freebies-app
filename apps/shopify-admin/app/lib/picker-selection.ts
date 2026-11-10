@@ -6,6 +6,8 @@ export function toggleProductSelection(
   variantGids: readonly string[],
   mode: "variants" | "products",
   allowMultiple: boolean,
+  /** False when the product has variants the picker cannot select; those products never count as whole. */
+  coversAll = true,
 ): { selected: Set<string>; whole: Set<string> } {
   const next = new Set(selected);
   const marked = new Set(whole);
@@ -22,7 +24,7 @@ export function toggleProductSelection(
     if (allSelected) next.delete(v);
     else next.add(v);
   }
-  if (allSelected) marked.delete(productGid);
+  if (allSelected || !coversAll) marked.delete(productGid);
   else marked.add(productGid);
   return { selected: next, whole: marked };
 }

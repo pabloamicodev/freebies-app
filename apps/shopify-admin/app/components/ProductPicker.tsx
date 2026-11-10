@@ -227,8 +227,8 @@ function ProductPickerContent({
     });
   }, [allowMultiple, setSelected, setWhole, products]);
 
-  const toggleProduct = useCallback((productGid: string, allVariantGids: string[]) => {
-    const result = toggleProductSelection(selected, whole, productGid, allVariantGids, mode, allowMultiple);
+  const toggleProduct = useCallback((productGid: string, allVariantGids: string[], coversAll: boolean) => {
+    const result = toggleProductSelection(selected, whole, productGid, allVariantGids, mode, allowMultiple, coversAll);
     if (mode !== "products") setWhole(result.whole);
     setSelected(result.selected);
   }, [mode, allowMultiple, selected, whole, setSelected, setWhole]);
@@ -352,7 +352,7 @@ function ProductPickerContent({
                   return;
                 }
                 setPickerField("notice", null);
-                toggleProduct(product.id, variantGids);
+                toggleProduct(product.id, variantGids, variantGids.length === (product.variants?.length ?? 0));
               };
 
               const rowOnClick = () => {

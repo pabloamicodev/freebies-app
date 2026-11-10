@@ -10,10 +10,19 @@ const variantsOf = (product: number, count = 12) => Array.from({ length: count }
 const owners = (products: number[], count = 12) =>
   new Map(products.flatMap((product) => variantsOf(product, count).map((variant) => [variant, P(product)] as const)));
 
+const allOf = (products: number[], count = 12) => new Map(products.map((product) => [P(product), new Set(variantsOf(product, count))] as const));
+
 describe("selectionFromPick", () => {
+  it("never claims a product whose cached variants are not all picked (blocked variant) or unknown", () => {
+    const picked = variantsOf(1, 11);
+    const all = new Map([[P(1), new Set(variantsOf(1, 12))]]);
+    expect(selectionFromPick(picked, [P(1)], owners([1], 11), all)).toEqual({ productIds: [], variantIds: picked });
+    expect(selectionFromPick(picked, [P(1)], owners([1], 11))).toEqual({ productIds: [], variantIds: picked });
+  });
+
   it("turns products ticked as a whole back into product ids and marks a pure product selection", () => {
     const picked = [...variantsOf(1), ...variantsOf(2)];
-    expect(selectionFromPick(picked, [P(1), P(2)], owners([1, 2]))).toEqual({
+    expect(selectionFromPick(picked, [P(1), P(2)], owners([1, 2]), allOf([1, 2]))).toEqual({
       productIds: [P(1), P(2)],
       variantIds: [],
       selectionLevel: "product",
@@ -22,7 +31,7 @@ describe("selectionFromPick", () => {
 
   it("keeps variants picked one by one as variants and leaves the marker off", () => {
     const picked = [...variantsOf(1), V(2, 3)];
-    const result = selectionFromPick(picked, [P(1)], owners([1, 2]));
+    const result = selectionFromPick(picked, [P(1)], owners([1, 2]), allOf([1, 2]));
     expect(result).toEqual({ productIds: [P(1)], variantIds: [V(2, 3)] });
   });
 
@@ -120,5 +129,14 @@ describe("parseJsonStringArray on the whole-product field", () => {
     expect(parseJsonStringArray(form, "discountWholeProducts").error).toBe("discountWholeProducts contains invalid JSON.");
     form.set("discountWholeProducts", "[1]");
     expect(parseJsonStringArray(form, "discountWholeProducts").error).toBeTruthy();
+  });
+});
+
+describe("resolveSelection with a blocked variant", () => {
+  it("keeps the product as variants when the cache holds a variant that was not picked", async () => {
+    const cached = [...owners([1])].map(([variantGid, productGid]) => ({ variantGid, productGid }));
+    const db = { select: () => ({ from: () => ({ where: async () => cached }) }) };
+    const picked = variantsOf(1, 11);
+    expect(await resolveSelection(db as never, "shop", picked, [P(1)])).toEqual({ productIds: [], variantIds: picked });
   });
 });
