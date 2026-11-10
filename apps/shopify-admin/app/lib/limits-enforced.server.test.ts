@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { auditLogs, offerConditions, offerCombinationPolicies, offerCustomerUsages, offers, type Db } from "@promo/db";
 import type * as PromoDb from "@promo/db";
@@ -38,8 +38,10 @@ let db: Db;
 let close: () => Promise<void>;
 let shopId: string;
 
-beforeAll(async () => {
+beforeEach(() => {
   vi.stubEnv("LIMITS_TOGGLE_SHOPS", "Limits-Flag.myshopify.com, other.myshopify.com");
+});
+beforeAll(async () => {
   ({ db, close } = await createTestDb());
   ctx.db = db;
   shopId = await seedShop(db, "limits-flag.myshopify.com");

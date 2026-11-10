@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { combinationDomainsConfirm, combinationGroupsMessage } from "./capacity-copy.js";
-import { CAPACITY_MODAL_CODES, combinationOptOutWarning, combinationWizardNote, describeCapacityModal, isCapacityModalCode, productDiscountsField, type CapacityModalData } from "./capacity-modal-copy.js";
+import { CAPACITY_MODAL_CODES, combinationOptOutWarning, combinationWizardNote, describeCapacityModal, isCapacityModalCode, productDiscountsField, tooLargeReason, type CapacityModalData } from "./capacity-modal-copy.js";
 import { limitsBanner, limitsLevel } from "./capacity-meter.js";
 
 const offers = [{ id: "o1", name: "Spring gift" }, { id: "o2", name: "VIP shipping" }];
@@ -34,6 +34,13 @@ describe("describeCapacityModal", () => {
     const tags = describeCapacityModal(data({ code: "OFFER_TOO_LARGE", offers: [offers[0]!], numbers: { tags: 150, maxTags: 100 } }));
     expect(tags.title).toBe("This offer references too many customer tags");
     expect(tags.limit).toContain("100 customer tags");
+  });
+
+  it("OFFER_TOO_LARGE names the measure that is over its limit when the planner reports every measure", () => {
+    const planner = { slotBytes: 9500, maxKeys: 8, maxTags: 100, maxOffers: 100, offers: 1, bytes: 12000, keys: 0, tags: 0 };
+    expect(describeCapacityModal(data({ code: "OFFER_TOO_LARGE", offers: [offers[0]!], numbers: planner })).title).toBe("This offer has too many items for one Shopify discount");
+    expect(describeCapacityModal(data({ code: "OFFER_TOO_LARGE", offers: [offers[0]!], numbers: { ...planner, tags: 101 } })).title).toBe("This offer references too many customer tags");
+    expect(tooLargeReason({ ...planner, keys: 9 })).toBe("keys");
   });
 
   it("OFFER_TOO_LARGE says why the offer could not be split, and keeps the plain copy for an unknown reason", () => {

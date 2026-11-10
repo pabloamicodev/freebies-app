@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { offerConditions, offerRewards, type Db } from "@promo/db";
+import { eq } from "drizzle-orm";
+import { capacityIncidents, offerConditions, offerRewards, type Db } from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
 let db: Db;
@@ -41,6 +42,9 @@ describe("withCapacityModal", () => {
       offers: [{ id: offerId, name: "Huge gift list" }],
       discountsUrl: "https://limit-modal.myshopify.com/admin/discounts",
     });
+    const [incident] = await db.select().from(capacityIncidents).where(eq(capacityIncidents.shopId, shopId));
+    expect(incident).toMatchObject({ code: "SLOT_FULL", source: "admin", attended: true });
+    expect(result.capacity?.incidentId).toBe(incident?.id);
   });
 
   it("leaves ordinary errors and successful results untouched", async () => {

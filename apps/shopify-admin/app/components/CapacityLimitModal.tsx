@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { Link } from "react-router";
 import { describeCapacityModal, type CapacityModalData } from "../lib/capacity-modal-copy.js";
 import { AccessibleModal } from "./AccessibleModal.js";
+import { IncidentWorkaroundsPanel } from "./CapacityWorkaroundList.js";
 
 interface CapacityLimitModalProps {
   /** `capacity` from the action result; a new object opens the modal again. */
@@ -58,6 +59,7 @@ export function CapacityLimitModal({ data }: CapacityLimitModalProps) {
           </h3>
           <p style={{ fontSize: 14, color: "var(--text-sub)", margin: 0, lineHeight: 1.6 }}>{copy.fix}</p>
         </section>
+        {data.incidentId && <IncidentWorkaroundsPanel incidentId={data.incidentId} />}
       </div>
       <div className="b-modal-footer">
         {copy.actions.map((action) =>

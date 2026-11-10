@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import { offerConditions, offerRewards, offers, type Db } from "@promo/db";
+import { capacityIncidents, offerConditions, offerRewards, offers, type Db } from "@promo/db";
 import { republishIfActive, validateActivation } from "./offer-publish-flow.server.js";
 import { lifecycleToolError } from "./mcp/write-runner.server.js";
+import { runWithCapacitySource } from "./capacity-source.server.js";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
 let db: Db;
@@ -67,5 +68,31 @@ describe("validateActivation capacity", () => {
     expect(await republishIfActive(db, shopId, "s.myshopify.com", id, true, publish, earlier)).toBeNull();
     expect(publish).toHaveBeenCalledTimes(1);
     expect(await db.select({ status: offers.status }).from(offers).where(eq(offers.id, id))).toEqual([{ status: "draft" }]);
+  });
+
+  it("persists a preflight block as an incident with the caller's source", async () => {
+    await db.delete(capacityIncidents);
+    const huge = await giftOffer(400, "huge-incident");
+    await runWithCapacitySource("mcp", true, () => validateActivation(db, shopId, [huge]));
+    const found = await db.select().from(capacityIncidents).where(eq(capacityIncidents.shopId, shopId));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ code: "SLOT_FULL", source: "mcp", attended: true, status: "open" });
+    expect(found[0]?.offerIds).toEqual([huge]);
+    const [row] = await db.select({ status: offers.status, updatedAt: offers.updatedAt }).from(offers).where(eq(offers.id, huge));
+    expect(found[0]?.held).toEqual([{ id: huge, status: row!.status, updatedAt: row!.updatedAt.toISOString() }]);
+  });
+
+  it("records only the offer being activated as held, and re-stamps it after republishIfActive pauses it", async () => {
+    await db.delete(capacityIncidents);
+    const bystander = await seedOffer(db, shopId, { internalName: "bystander", status: "paused" });
+    const huge = await giftOffer(400, "huge-held");
+    await db.update(offers).set({ status: "active" }).where(eq(offers.id, huge));
+    const message = await republishIfActive(db, shopId, "s.myshopify.com", huge, true, vi.fn(async () => null));
+    expect(message).toContain("was paused");
+    const [incident] = await db.select().from(capacityIncidents).where(eq(capacityIncidents.shopId, shopId));
+    expect(incident?.held.map((entry) => entry.id)).toEqual([huge]);
+    expect(incident?.held.map((entry) => entry.id)).not.toContain(bystander);
+    const [row] = await db.select({ status: offers.status, updatedAt: offers.updatedAt }).from(offers).where(eq(offers.id, huge));
+    expect(incident?.held[0]).toEqual({ id: huge, status: "paused", updatedAt: row!.updatedAt.toISOString() });
   });
 });
