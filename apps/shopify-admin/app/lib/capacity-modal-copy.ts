@@ -40,6 +40,8 @@ export interface CapacityModalData {
   splitRefusal?: string;
   /** Shopify admin page listing the store's automatic discounts. */
   discountsUrl?: string;
+  /** The persisted capacity incident, so the modal can offer its guided workarounds. */
+  incidentId?: string;
 }
 
 export type CapacityModalAction =

@@ -1,8 +1,9 @@
-import { capacityIncidents, offers, type CapacityIncident, type Db } from "@promo/db";
+import { capacityActions, capacityIncidents, offers, type CapacityIncident, type Db } from "@promo/db";
 import * as Sentry from "@sentry/node";
 import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { isCapacityModalCode, tooLargeReason, type CapacityModalCode } from "./capacity-modal-copy.js";
 import type { CapturedCapacity } from "./capacity-capture.server.js";
+import type { RecentAction } from "./capacity-workarounds.js";
 import { currentCapacityCaller, type CapacityCaller } from "./capacity-source.server.js";
 
 const SHOP_WIDE_CODES: readonly string[] = ["AUTOMATIC_DISCOUNT_LIMIT", "SLOT_FULL", "COMBINATION_SINGLE_SHARD"] satisfies CapacityModalCode[];
@@ -164,4 +165,17 @@ export async function dismissIncident(db: Db, shopId: string, incidentId: string
     .where(and(eq(capacityIncidents.shopId, shopId), eq(capacityIncidents.id, incidentId), eq(capacityIncidents.status, "open")))
     .returning({ id: capacityIncidents.id });
   return rows.length > 0;
+}
+
+export async function recentActions(db: Db, shopId: string, limit = 10): Promise<RecentAction[]> {
+  const rows = await db.select().from(capacityActions).where(eq(capacityActions.shopId, shopId)).orderBy(desc(capacityActions.createdAt)).limit(limit);
+  return rows.map((row) => ({
+    id: row.id,
+    incidentId: row.incidentId,
+    kind: row.kind,
+    status: row.status,
+    appliedAt: row.appliedAt?.toISOString() ?? null,
+    undoUntil: row.undoUntil?.toISOString() ?? null,
+    error: row.error,
+  }));
 }

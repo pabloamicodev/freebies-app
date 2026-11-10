@@ -2,8 +2,9 @@ import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
 import { withCapacityModal } from "../lib/capacity-capture.server.js";
 import type { CapacityModalData } from "../lib/capacity-modal-copy.js";
 import { ShopifyLimitsBanner } from "../components/ShopifyLimits.js";
+import { CapacityIncidentsBanner } from "../components/CapacityIncidentsDialog.js";
 import { loadLimitsMeter } from "../lib/capacity-meter.server.js";
-import { Await, Link, useLoaderData, useNavigate, useSearchParams, useFetcher, redirect } from "react-router";
+import { Await, Link, useLoaderData, useNavigate, useRouteLoaderData, useSearchParams, useFetcher, redirect } from "react-router";
 import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import {
   analyticsEvents,
@@ -803,6 +804,7 @@ export default function OffersPage() {
     limits,
   } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
+  const layout = useRouteLoaderData<{ capacityIncidents?: { open: number } }>("routes/app");
   const [searchParams, setSearchParams] = useSearchParams();
   const [bannerVisible, setBannerVisible] = useState(true);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -1014,6 +1016,7 @@ export default function OffersPage() {
       <Suspense fallback={null}>
         <Await resolve={limits}>{(meter) => <ShopifyLimitsBanner meter={meter} />}</Await>
       </Suspense>
+      <CapacityIncidentsBanner open={layout?.capacityIncidents?.open ?? 0} />
 
       {/* ── Action error banner ─────────────────────────────── */}
       {actionError && (

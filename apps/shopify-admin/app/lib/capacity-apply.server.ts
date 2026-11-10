@@ -85,7 +85,7 @@ const isUniqueViolation = (error: unknown) => {
   return code === "23505" || /duplicate key|unique constraint/i.test(error instanceof Error ? error.message : "");
 };
 
-async function defaultOps(db: Db): Promise<DiscountOps> {
+export async function discountOps(db: Db): Promise<DiscountOps> {
   const token = async (shop: ShopRef) => {
     const [row] = await db.select({ token: shops.accessTokenEncrypted }).from(shops).where(eq(shops.id, shop.id)).limit(1);
     if (!row) throw new Error("Shop not found.");
@@ -203,7 +203,7 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
 
   const ops = (() => {
     let cached: Promise<DiscountOps> | undefined;
-    return () => (cached ??= deps.discounts ? Promise.resolve(deps.discounts) : defaultOps(db));
+    return () => (cached ??= deps.discounts ? Promise.resolve(deps.discounts) : discountOps(db));
   })();
   const selected = [...new Set(input.selected ?? [])];
 
@@ -349,7 +349,7 @@ export async function undoWorkaround(db: Db, shop: ShopRef, actionId: string, pe
   const [incident] = await db.select().from(capacityIncidents).where(and(eq(capacityIncidents.shopId, shop.id), eq(capacityIncidents.id, action.incidentId)));
   const ops = (() => {
     let cached: Promise<DiscountOps> | undefined;
-    return () => (cached ??= deps.discounts ? Promise.resolve(deps.discounts) : defaultOps(db));
+    return () => (cached ??= deps.discounts ? Promise.resolve(deps.discounts) : discountOps(db));
   })();
   const backToApplied = (message: string, code: WorkaroundResult["code"] = "undo_refused") =>
     setAction(db, shop.id, actionId, { status: code === "undo_failed" ? "undo_failed" : "applied", ...(code === "undo_failed" ? { error: message } : {}) }).then((): WorkaroundResult => ({ ok: false, code, message, actionId }));

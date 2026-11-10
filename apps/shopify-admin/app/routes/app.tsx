@@ -6,6 +6,10 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { NavMenu } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
+import { getDb, shops } from "@promo/db";
+import { eq } from "drizzle-orm";
+import { CapacityIncidentsDialog } from "../components/CapacityIncidentsDialog.js";
+import { countOpenIncidents } from "../lib/capacity-incidents.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
 import { shopifyHeaders } from "../lib/shopify-headers.js";
 import type { LoaderFunctionArgs, HeadersFunction } from "react-router";
@@ -28,15 +32,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await timer.time("authenticate_admin", () => authenticate.admin(request));
   timer.done({ shopDomain: session.shop });
 
+  // One indexed count; a failure here must never take the whole app layout down.
+  const capacityIncidents = await (async () => {
+    const db = getDb();
+    const [shop] = await db.select({ id: shops.id }).from(shops).where(eq(shops.myshopifyDomain, session.shop)).limit(1);
+    return shop ? countOpenIncidents(db, shop.id) : { open: 0, unsnoozed: 0 };
+  })().catch(() => ({ open: 0, unsnoozed: 0 }));
+
   return {
     shopDomain: session.shop,
+    capacityIncidents,
     apiKey: process.env["SHOPIFY_API_KEY"] ?? "",
     graphqlConsoleEnabled: process.env["ENABLE_GRAPHQL_CONSOLE"] === "true",
   };
 };
 
 export default function AppLayout() {
-  const { apiKey, graphqlConsoleEnabled } = useLoaderData<typeof loader>();
+  const { apiKey, graphqlConsoleEnabled, capacityIncidents } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const location = useLocation();
   const fetchers = useFetchers();
@@ -135,6 +147,7 @@ export default function AppLayout() {
           <a href="/app/logs">Error Logs</a>
         </NavMenu>
         <Outlet />
+        <CapacityIncidentsDialog unsnoozed={capacityIncidents.unsnoozed} />
       </PolarisAppProvider>
     </AppProvider>
   );

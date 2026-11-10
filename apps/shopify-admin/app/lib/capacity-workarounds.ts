@@ -82,3 +82,13 @@ export interface WorkaroundResult {
   /** Offers the workaround left draft or paused: the merchant activates them. */
   offersToActivate?: Array<{ id: string; name: string }>;
 }
+
+export interface RecentAction {
+  id: string;
+  incidentId: string;
+  kind: string;
+  status: string;
+  appliedAt: string | null;
+  undoUntil: string | null;
+  error: string | null;
+}
