@@ -5,7 +5,6 @@ import {
   offerConditions,
   offerRewards,
   offerCombinationPolicies,
-  variantCache,
   discountCodes,
   discountCodeBatches,
   type DiscountCode,
@@ -33,6 +32,7 @@ import { SLOT_LIMITS, planShards } from "./shard-planner.js";
 import { baseOfferId, buildPlanUnitSet, slotOffers } from "./plan-units.js";
 import { loadSplitOptions } from "./variant-products.server.js";
 import { combinationBlockers } from "./combination-blockers.js";
+import { compileCartOffers, legacyGatedOfferIds, resolveLegacyGiftVariants } from "./cart-offers.server.js";
 import {
   ShardPlanBlockedError,
   readShardState,
@@ -84,7 +84,7 @@ import { codeHash } from "../code-hash.js";
 import { resolveCodeCollisions } from "../code-preflight.server.js";
 import type { CodeCharset } from "../discount-code-generation.js";
 import { isCodeBackendBEnabled } from "../code-backend.server.js";
-import { offerCompileError, setOfferPublishErrors, type OfferPublishErrors } from "../offer-publish-errors.server.js";
+import { setOfferPublishErrors, type OfferPublishErrors } from "../offer-publish-errors.server.js";
 import { buildCartValidationConfig, syncCartValidation } from "../cart-validation.server.js";
 import { computeOfferVersion } from "../offer-version.server.js";
 import {
@@ -257,11 +257,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
               ),
             ),
           );
-  const heldBackIds = new Set(
-    legacyGateRows
-      .filter((row) => row.conditionType === "discount_code" && row.isEnabled)
-      .map((row) => row.offerId),
-  );
+  const heldBackIds = legacyGatedOfferIds(legacyGateRows);
   for (const offerId of heldBackIds) {
     console.error(
       `[offer-publisher] Holding back offer ${offerId}: it has a legacy discount_code condition.`,
@@ -469,35 +465,16 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
         )
       : conditionRows;
 
-    const compiledByOffer = regularOffers
-      .sort((a, b) => a.priority - b.priority)
-      .map((offer) => {
-        const conditions = functionConditionRows.filter((c) => c.offerId === offer.id);
-        const versionConditions = conditionRows.filter((c) => c.offerId === offer.id);
-        const rewards = rewardRows.filter((r) => r.offerId === offer.id);
-        const policy = policyRows.find((p) => p.offerId === offer.id) ?? null;
-        try {
-          return {
-            offer: compileOfferConfig(
-              offer,
-              conditions,
-              rewards,
-              policy,
-              computeOfferVersion(offer, versionConditions, rewards, policy),
-              { shopCurrencyCode, limitsEnforced },
-            ),
-            shippingOffers: compileShippingOfferConfigs(offer, conditions, rewards, { shopCurrencyCode, limitsEnforced, policy }),
-          };
-        } catch (error) {
-          throw offerCompileError(offer, error);
-        }
-      });
-
-    const compiledOffers = await resolveLegacyGiftVariants(
-      shopId,
-      compiledByOffer.map((entry) => entry.offer),
-    );
-    const shippingOffers = compiledByOffer.flatMap((entry) => entry.shippingOffers);
+    const compiledByOffer = await compileCartOffers(db, shopId, regularOffers, {
+      conditions: functionConditionRows,
+      versionConditions: conditionRows,
+      rewards: rewardRows,
+      policies: policyRows,
+      shopCurrencyCode,
+      limitsEnforced,
+    });
+    const compiledOffers = compiledByOffer.map((entry) => entry.offer);
+    const shippingOffers = compiledByOffer.flatMap((entry) => entry.shipping);
     const shardsEnabled = await isFunctionShardsEnabled(db, shopId);
     const compactIds = await isFunctionCompactIdsEnabled(db, shopId);
     const storedShardIds = await readCartShardNodeIds(shopId);
@@ -1062,7 +1039,7 @@ async function compileCodeOffers(
       computeOfferVersion(offer, conditionRows, rewardRows, policy),
       { codePromo: true, shopCurrencyCode, limitsEnforced },
     );
-    const [resolvedOffer] = await resolveLegacyGiftVariants(shopId, [compiledOffer]);
+    const [resolvedOffer] = await resolveLegacyGiftVariants(db, shopId, [compiledOffer]);
     const finalCompiledOffer = resolvedOffer ?? compiledOffer;
 
     results.push({
@@ -1278,7 +1255,7 @@ async function compileBackendBOffers(
       computeOfferVersion(offer, conditionRows, rewardRows, policy),
       { codePromo: true, codeHashes: [...new Set(codes.map(codeHash))].sort(), shopCurrencyCode, limitsEnforced },
     );
-    const [resolved] = await resolveLegacyGiftVariants(shopId, [compiled]);
+    const [resolved] = await resolveLegacyGiftVariants(db, shopId, [compiled]);
     const hashes = [...new Set(codes.map(codeHash))].sort();
     results.push({
       offer,
@@ -1656,79 +1633,6 @@ export async function neutralizeCodeDiscountNode(
     stored.nodes[discountId] = { kind: "code", hash: configHash(emptyValue), active: false };
     await writePublishManifest(shopId, stored);
   }
-}
-
-/**
- * Older offers could store only a product GID. Resolve those targets to the
- * current eligible variants before publishing so checkout never has to trust
- * a broad product-level allowance.
- */
-async function resolveLegacyGiftVariants(
-  shopId: string,
-  compiledOffers: CompiledFunctionConfig["offers"],
-): Promise<CompiledFunctionConfig["offers"]> {
-  const unresolvedProductIds = [
-    ...new Set(
-      compiledOffers.flatMap((offer) =>
-        offer.giftRewards
-          .filter((reward) => reward.targetVariantIds.length === 0)
-          .flatMap((reward) => reward.targetProductIds),
-      ),
-    ),
-  ];
-  if (unresolvedProductIds.length === 0) return compiledOffers;
-
-  const variants = await getDb()
-    .select({
-      productGid: variantCache.productGid,
-      variantGid: variantCache.variantGid,
-      availableForSale: variantCache.availableForSale,
-      requiresSellingPlan: variantCache.requiresSellingPlan,
-    })
-    .from(variantCache)
-    .where(
-      and(eq(variantCache.shopId, shopId), inArray(variantCache.productGid, unresolvedProductIds)),
-    );
-  const eligibleByProduct = new Map<string, string[]>();
-  for (const variant of variants) {
-    // Sold-out variants stay in the gift (storefront shows them sold out until restocked);
-    // only subscription-only variants can't be granted.
-    if (variant.requiresSellingPlan) continue;
-    const ids = eligibleByProduct.get(variant.productGid) ?? [];
-    ids.push(variant.variantGid);
-    eligibleByProduct.set(variant.productGid, ids);
-  }
-
-  return compiledOffers.flatMap((offer) => {
-    const giftRewards = offer.giftRewards.flatMap((reward) => {
-      if (reward.targetVariantIds.length > 0) return [reward];
-      const targetVariantIds = [
-        ...new Set(
-          reward.targetProductIds.flatMap((productId) => eligibleByProduct.get(productId) ?? []),
-        ),
-      ].sort();
-      if (targetVariantIds.length === 0) {
-        // Don't fail the whole shop's publish over one stale reward — skip it
-        // and keep publishing every other offer/reward that's still valid.
-        console.error(
-          `[offer-publisher] Skipping gift reward ${reward.id} in offer ${offer.id}: no eligible one-time-purchase variants.`,
-        );
-        Sentry.captureMessage("Gift reward skipped: no eligible variants", {
-          level: "warning",
-          tags: { offerId: offer.id, rewardId: reward.id },
-        });
-        return [];
-      }
-      return [{ ...reward, targetVariantIds }];
-    });
-    return [
-      {
-        ...offer,
-        giftRewards,
-        giftVariantIds: [...new Set(giftRewards.flatMap((reward) => reward.targetVariantIds))],
-      },
-    ];
-  });
 }
 
 const utf8Length = (text: string) => new TextEncoder().encode(text).byteLength;
