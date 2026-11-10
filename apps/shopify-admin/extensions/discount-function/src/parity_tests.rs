@@ -566,6 +566,7 @@ mod split_parity {
     fn split_offers_discount_the_same_lines_and_units_as_the_whole_offer() {
         let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
         assert_eq!(fixture["parts"]["anchor"], 3, "the anchor offer is split three ways");
+        assert!(fixture["parts"]["set"].as_i64().unwrap() >= 2, "the gift reward set is split across parts");
         let scenarios = fixture["scenarios"].as_array().unwrap();
         assert!(scenarios.len() >= 6);
         for scenario in scenarios {
@@ -576,7 +577,7 @@ mod split_parity {
             assert_eq!(parts, whole, "{name}: parts differ from the whole offer");
             let expects_discount = scenario["discounts"].as_bool().unwrap();
             assert_eq!(!whole.is_empty(), expects_discount, "{name}: the whole offer {whole:?}");
-            if scenario["family"] == "gift" {
+            if scenario["family"] != "anchor" {
                 for lines in whole.values() {
                     for (line, units) in lines {
                         assert_eq!(*units, 2, "{name}: {line} keeps the limit of 2 units per gift product");

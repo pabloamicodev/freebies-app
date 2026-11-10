@@ -160,6 +160,7 @@ describe("limits", () => {
       const offerId = await productOffer(shopId, 900, { internalName: "catalog-sale" });
       const off = await preflightCapacity(db, shopId, [], { shardsEnabled: false });
       expect(off).toMatchObject({ ok: false, code: "SLOT_FULL", offerIds: [offerId] });
+      expect(off).not.toHaveProperty("splitRefusal");
       const oneSlot = await preflightCapacity(db, shopId, [], withBudget(1));
       expect(oneSlot).toMatchObject({ ok: false, code: "AUTOMATIC_DISCOUNT_LIMIT", offerIds: [offerId] });
     });
@@ -175,7 +176,7 @@ describe("limits", () => {
       const shopId = await seedShop(db, "unsplittable.myshopify.com");
       const offerId = await productOffer(shopId, 900, { internalName: "capped-sale" }, { maxUnitsTotal: 3 });
       const result = await preflightCapacity(db, shopId, [], withBudget(11));
-      expect(result).toMatchObject({ ok: false, code: "OFFER_TOO_LARGE", offerIds: [offerId], offerNames: ["capped-sale"], reason: "bytes" });
+      expect(result).toMatchObject({ ok: false, code: "OFFER_TOO_LARGE", offerIds: [offerId], offerNames: ["capped-sale"], reason: "bytes", splitRefusal: "AGGREGATING_REWARD" });
     });
   });
 

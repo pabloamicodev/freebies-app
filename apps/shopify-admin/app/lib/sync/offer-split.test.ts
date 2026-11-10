@@ -237,11 +237,71 @@ describe("splitOffer: gift targets", () => {
     expect(holder[0]!.offer.giftRewards[0]!.targetProductIds).toContain(P(1));
   });
 
-  it("refuses a picker, a customer-selectable reward and an offer-level gift quantity", () => {
+  it("does not refuse for the offer-level maxGiftQuantity: the Function never reads it, and every compiled gift offer carries it", () => {
+    expect(split(gifts({}, { maxGiftQuantity: 2 })).parts.length).toBeGreaterThan(1);
+  });
+
+  it("refuses a picker and a customer-selectable reward", () => {
     expect(refusal(gifts({ selectable: true }))).toBe("GIFT_PICKER");
     expect(refusal(gifts({ selectionCount: 1 }))).toBe("GIFT_PICKER");
     expect(refusal(gifts({ targetVariantIds: [V(1), V(2)] }))).toBe("GIFT_PICKER");
-    expect(refusal(gifts({}, { maxGiftQuantity: 2 }))).toBe("MAX_GIFT_QUANTITY");
+  });
+});
+
+describe("splitOffer: a set of gift rewards", () => {
+  // "Add all gifts": one reward per gift product, each product with a few variants (a picker per reward).
+  const set = (count: number, extra: Partial<CompiledOffer> = {}, patch: (index: number) => Partial<CompiledGiftReward> = () => ({})) =>
+    offer({
+      offerType: "gift",
+      maxGiftQuantity: count,
+      giftProductIds: range(count, (n) => P(2000 + n)),
+      giftVariantIds: range(count * 2, (n) => V(2000 + n)),
+      giftRewards: Array.from({ length: count }, (_, n) => n).map((n) =>
+        giftReward({
+          id: `reward-${n}`,
+          targetProductIds: [P(2000 + n)],
+          targetVariantIds: [V(2000 + 2 * n), V(2001 + 2 * n)],
+          selectable: true,
+          ...patch(n),
+        }),
+      ),
+      ...extra,
+    });
+  const owners = (variant: string) => P(2000 + Math.floor((Number(variant.slice(-4)) - 2000) / 2));
+
+  it("splits the reward array into whole rewards, mirrors the offer-level lists and merges back", () => {
+    const compiled = set(60);
+    expect(unitBytes(compiled)).toBeGreaterThan(MAX);
+    const result = split(compiled, { productOfVariant: owners });
+    expect(result.listId).toBe("giftRewards");
+    const ids = result.parts.flatMap((part) => part.offer.giftRewards.map((reward) => reward.id));
+    expect(ids.sort()).toEqual(range(60, (n) => `reward-${n}`).sort());
+    for (const part of result.parts) {
+      const rewards = part.offer.giftRewards;
+      expect(part.offer.giftProductIds).toEqual(rewards.flatMap((reward) => reward.targetProductIds));
+      expect(part.offer.giftVariantIds).toEqual(rewards.flatMap((reward) => reward.targetVariantIds));
+      expect(unitBytes(part.offer)).toBeLessThanOrEqual(MAX);
+    }
+    expect(mergeOfferParts(compiled, [...result.parts].reverse(), result.paths, result.rewardArray)).toEqual(compiled);
+  });
+
+  it("needs the product map for variant targets, and refuses without it", () => {
+    expect(refusal(set(60))).toBe("VARIANT_PRODUCT_UNKNOWN");
+  });
+
+  it("refuses rewards that share a gift product or variant (the first matching reward wins on a line)", () => {
+    expect(refusal(set(60, {}, (n) => (n === 1 ? { targetProductIds: [P(2000)] } : {})), { productOfVariant: owners })).toBe("GIFT_REWARDS_OVERLAP");
+    expect(refusal(set(60, {}, (n) => (n === 1 ? { targetVariantIds: [V(2000), V(2003)] } : {})), { productOfVariant: owners })).toBe("GIFT_REWARDS_OVERLAP");
+  });
+
+  it("refuses a cap that spans rewards: selectionCount, or highest-tier mode with tiers", () => {
+    expect(refusal(set(60, {}, () => ({ selectionCount: 1 })), { productOfVariant: owners })).toBe("GIFT_PICKER");
+    expect(refusal(set(60, { tm: "h" }, () => ({ mcs: 5000 })), { productOfVariant: owners })).toBe("GIFT_TIER_HIGHEST");
+  });
+
+  it("allows cumulative tiers: each reward is unlocked on its own threshold", () => {
+    expect(split(set(60), { productOfVariant: owners }).parts.length).toBeGreaterThan(1);
+    expect(split(set(60, {}, (n) => ({ mcs: 1000 * (n + 1) })), { productOfVariant: owners }).parts.length).toBeGreaterThan(1);
   });
 });
 

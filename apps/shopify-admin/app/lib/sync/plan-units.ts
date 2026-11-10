@@ -33,6 +33,7 @@ function targetProductIdsOf(offer: CompiledOffer): string[] | null {
 /** Where a split offer's parts came from: enough to merge the parts that share a slot back into one offer. */
 export interface OfferSplit {
   paths: string[];
+  rewardArray?: "giftRewards";
   parts: SplitPart[];
 }
 
@@ -80,7 +81,7 @@ export function buildPlanUnitSet(
         if (result.reason !== "STILL_TOO_LARGE") break;
         continue;
       }
-      splits.set(offerId, { paths: result.paths, parts: result.parts });
+      splits.set(offerId, { paths: result.paths, ...(result.rewardArray ? { rewardArray: result.rewardArray } : {}), parts: result.parts });
       return {
         ...unit,
         splittable: result.parts.map((part) => ({
@@ -116,6 +117,6 @@ export function slotOffers(offers: readonly CompiledOffer[], unitKeys: readonly 
     const split = splits.get(offer.id);
     if (!split) return [];
     const parts = split.parts.filter((part) => keys.has(`${offer.id}#${part.index}`));
-    return parts.length > 0 ? [mergeOfferParts(offer, parts, split.paths)] : [];
+    return parts.length > 0 ? [mergeOfferParts(offer, parts, split.paths, split.rewardArray)] : [];
   });
 }

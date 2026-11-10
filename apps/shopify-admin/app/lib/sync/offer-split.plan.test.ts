@@ -167,3 +167,37 @@ describe("planShards with split parts", () => {
     expect(plan.blocked?.code).toBe("AUTOMATIC_DISCOUNT_LIMIT");
   });
 });
+
+describe("planShards with a set of gift rewards", () => {
+  const gift = (n: number) => ({
+    id: `reward-${n}`,
+    targetProductIds: [P(2000 + n)],
+    targetVariantIds: [V(2000 + n)],
+    discountType: "free",
+    discountValue: 100,
+    maxQuantity: 1,
+  });
+  const set = offer("set", { offerType: "gift", giftRewards: Array.from({ length: 80 }, (_, n) => n).map(gift), giftProductIds: range(80, (n) => P(2000 + n)), giftVariantIds: range(80, (n) => V(2000 + n)) });
+  const productOfVariant = (id: string) => P(Number(id.slice(-4)));
+
+  it("places the rewards across slots, each reward in exactly one published offer", () => {
+    const { units, splits } = buildPlanUnitSet(entries([set]), [], [], { productOfVariant });
+    expect(units[0]!.splittable!.length).toBeGreaterThanOrEqual(2);
+    const plan = planShards(units, new Map(), limits(11), POLICY);
+    expect(plan.blocked).toBeUndefined();
+    const rewardIds: string[] = [];
+    for (const slot of plan.slots) {
+      const published = slotOffers([set], slot.unitKeys, splits);
+      expect(byteLength(slotValue(published))).toBeLessThanOrEqual(SLOT_LIMITS.slotBytes);
+      for (const entry of published) rewardIds.push(...entry.giftRewards.map((reward) => reward.id));
+    }
+    expect(rewardIds.sort()).toEqual(range(80, (n) => `reward-${n}`).sort());
+  });
+
+  it("blocks with the refusal when the rewards share a gift product", () => {
+    const shared = offer("shared", { ...set, giftRewards: [...set.giftRewards, { ...gift(0), id: "reward-dup" }] });
+    const { units } = buildPlanUnitSet(entries([shared]), [], [], { productOfVariant });
+    expect(units[0]!.splitRefusal).toBe("GIFT_REWARDS_OVERLAP");
+    expect(planShards(units, new Map(), limits(11), POLICY).blocked).toMatchObject({ code: "OFFER_TOO_LARGE", splitRefusal: "GIFT_REWARDS_OVERLAP" });
+  });
+});

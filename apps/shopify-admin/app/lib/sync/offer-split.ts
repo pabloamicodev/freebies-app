@@ -19,7 +19,8 @@ export type SplitRefusal =
   | "NOT_LANDING_ANCHOR"
   | "ANCHOR_MIN_QUANTITY"
   | "GIFT_PICKER"
-  | "MAX_GIFT_QUANTITY"
+  | "GIFT_REWARDS_OVERLAP"
+  | "GIFT_TIER_HIGHEST"
   | "GIFT_ANCHOR_OVERLAP"
   | "VARIANT_PRODUCT_UNKNOWN"
   | "REQUIRED_TAGS_ALL_OF"
@@ -52,7 +53,7 @@ export interface SplitPart {
 }
 
 export type SplitResult =
-  | { ok: true; listId: string; paths: string[]; parts: SplitPart[] }
+  | { ok: true; listId: string; paths: string[]; rewardArray?: "giftRewards"; parts: SplitPart[] }
   | { ok: false; reason: SplitRefusal };
 
 type Group = Record<string, string[]>;
@@ -61,6 +62,8 @@ interface Spec extends SplitList {
   /** Offer-level lists mirrored from a sliced list: kept for ids outside it, filtered for ids inside it. */
   derived: Array<{ path: string; from: string; others: string[] }>;
   groups: Group[] | null;
+  /** The list is the offer's gift reward array: groups hold reward indexes, and the parts keep whole rewards. */
+  rewardArray?: "giftRewards";
 }
 
 const utf8 = (text: string) => new TextEncoder().encode(text).byteLength;
@@ -140,8 +143,8 @@ function gate(offer: CompiledOffer): SplitRefusal | null {
 function buildSpecs(offer: CompiledOffer, options: SplitOptions): Spec[] {
   const specs: Spec[] = [];
   const productOf = options.productOfVariant;
-  const push = (spec: Omit<Spec, "size" | "derived" | "groups"> & Partial<Pick<Spec, "derived" | "groups">>) => {
-    const size = sizeOf(offer, spec.paths);
+  const push = (spec: Omit<Spec, "size" | "derived" | "groups"> & Partial<Pick<Spec, "derived" | "groups" | "size">>) => {
+    const size = spec.size ?? sizeOf(offer, spec.paths);
     if (size === 0) return;
     specs.push({ derived: [], groups: null, ...spec, size });
   };
@@ -180,7 +183,6 @@ function buildSpecs(offer: CompiledOffer, options: SplitOptions): Spec[] {
     let reason: SplitRefusal | undefined;
     let groups: Group[] | null = null;
     if (reward.selectable || reward.selectionCount !== undefined || reward.targetVariantIds.length > 1) reason = "GIFT_PICKER";
-    else if (offer.maxGiftQuantity !== undefined) reason = "MAX_GIFT_QUANTITY";
     else {
       groups = productGroups(offer, targets[0]!, targets[1]!, productOf);
       if (!groups) reason = "VARIANT_PRODUCT_UNKNOWN";
@@ -199,6 +201,37 @@ function buildSpecs(offer: CompiledOffer, options: SplitOptions): Spec[] {
       ],
     });
   });
+
+  if (offer.giftRewards.length > 1) {
+    const rewards = offer.giftRewards;
+    const ids = rewards.map((reward) => reward.id);
+    const distinct = (lists: string[][]) => new Set(lists.flat()).size === lists.flat().length;
+    const productSets = rewards.map((reward) => {
+      const owners = reward.targetVariantIds.map((id) => productOf?.(id));
+      return owners.some((owner) => owner === undefined) ? null : [...new Set([...reward.targetProductIds, ...(owners as string[])])];
+    });
+    let reason: SplitRefusal | undefined;
+    if (rewards.some((reward) => reward.selectionCount !== undefined)) reason = "GIFT_PICKER";
+    else if (offer.tm === "h" && rewards.some((reward) => reward.mcs !== undefined)) reason = "GIFT_TIER_HIGHEST";
+    else if (new Set(ids).size !== ids.length || !distinct(rewards.map((reward) => reward.targetVariantIds))) reason = "GIFT_REWARDS_OVERLAP";
+    else if (rewards.some((reward) => reward.targetVariantIds.length === 0 && reward.targetProductIds.length === 0)) reason = "GIFT_REWARDS_OVERLAP";
+    else if (productSets.some((set) => set === null)) reason = "VARIANT_PRODUCT_UNKNOWN";
+    else if (!distinct(productSets as string[][])) reason = "GIFT_REWARDS_OVERLAP";
+    const weights = rewards.map((reward) => utf8(JSON.stringify(reward)) + 1);
+    push({
+      id: "giftRewards",
+      paths: [],
+      size: weights.reduce((total, value) => total + value, 0),
+      splittable: !reason,
+      ...(reason ? { reason } : {}),
+      rewardArray: "giftRewards",
+      groups: rewards.map((_, index) => ({ giftRewards: [String(index)] })),
+      derived: [
+        { path: "giftVariantIds", from: "giftRewards", others: [] },
+        { path: "giftProductIds", from: "giftRewards", others: [] },
+      ],
+    });
+  }
 
   const anyPaths = ["anyRequiredVariantIds", "anyRequiredProductIds"];
   let anyReason: SplitRefusal | undefined;
@@ -274,6 +307,17 @@ export function splittableLists(offer: CompiledOffer, options: SplitOptions = {}
 function build(offer: CompiledOffer, spec: Spec, chunk: Group[], index: number): SplitPart {
   const part = structuredClone(offer);
   for (const path of spec.paths) setAt(part, path, chunk.flatMap((group) => group[path] ?? []));
+  if (spec.rewardArray) {
+    const kept = chunk.flatMap((group) => group[spec.rewardArray!]!.map((position) => offer.giftRewards[Number(position)]!));
+    part.giftRewards = structuredClone(kept);
+    const ids = (rewards: readonly CompiledOffer["giftRewards"][number][], key: "targetVariantIds" | "targetProductIds") => new Set(rewards.flatMap((reward) => reward[key]));
+    for (const [path, key] of [["giftVariantIds", "targetVariantIds"], ["giftProductIds", "targetProductIds"]] as const) {
+      const all = ids(offer.giftRewards, key);
+      const mine = ids(kept, key);
+      setAt(part, path, listAt(offer, path).filter((id) => !all.has(id) || mine.has(id)));
+    }
+    return { index, offer: part };
+  }
   for (const derived of spec.derived) {
     if (derived.path === derived.from) {
       setAt(part, derived.path, [...listAt(part, derived.path), ...derived.others]);
@@ -291,9 +335,9 @@ function build(offer: CompiledOffer, spec: Spec, chunk: Group[], index: number):
   return { index, offer: part };
 }
 
-function chunkGroups(groups: Group[], budget: number): Group[][] | null {
+function chunkGroups(groups: Group[], budget: number, weigh?: (group: Group) => number): Group[][] | null {
   if (budget <= 0) return null;
-  const weight = (group: Group) => Object.values(group).reduce((total, ids) => total + ids.reduce((sum, id) => sum + idBytes(id), 0), 0);
+  const weight = weigh ?? ((group: Group) => Object.values(group).reduce((total, ids) => total + ids.reduce((sum, id) => sum + idBytes(id), 0), 0));
   const weights = groups.map(weight);
   const total = weights.reduce((sum, value) => sum + value, 0);
   if (weights.some((value) => value > budget)) return null;
@@ -333,14 +377,24 @@ export function splitOffer(offer: CompiledOffer, maxBytes: number, options: Spli
     const emptied = structuredClone(offer);
     for (const path of spec.paths) setAt(emptied, path, []);
     for (const derived of spec.derived.filter((entry) => entry.path !== entry.from)) setAt(emptied, derived.path, []);
+    if (spec.rewardArray) emptied.giftRewards = [];
+    const weigh = spec.rewardArray
+      ? (group: Group) => utf8(JSON.stringify(offer.giftRewards[Number(group[spec.rewardArray!]![0])])) + 1
+      : undefined;
     let budget = maxBytes - offerBytes(emptied);
     for (let attempt = 0; attempt < 6; attempt++) {
-      const chunks = chunkGroups(spec.groups!, budget);
+      const chunks = chunkGroups(spec.groups!, budget, weigh);
       if (!chunks) break;
       const parts = chunks.map((chunk, index) => build(offer, spec, chunk, index));
       const worst = Math.max(...parts.map((part) => offerBytes(part.offer)));
       if (worst <= maxBytes) {
-        return { ok: true, listId: spec.id, paths: [...spec.paths, ...spec.derived.map((entry) => entry.path)], parts };
+        return {
+          ok: true,
+          listId: spec.id,
+          paths: [...spec.paths, ...spec.derived.map((entry) => entry.path)],
+          ...(spec.rewardArray ? { rewardArray: spec.rewardArray } : {}),
+          parts,
+        };
       }
       budget -= worst - maxBytes + 1;
     }
@@ -353,8 +407,12 @@ export function splitOffer(offer: CompiledOffer, maxBytes: number, options: Spli
 }
 
 /** The offer carrying the union of the given parts' slices, in the base offer's order (all parts give back the base offer). */
-export function mergeOfferParts(base: CompiledOffer, parts: readonly SplitPart[], paths: readonly string[]): CompiledOffer {
+export function mergeOfferParts(base: CompiledOffer, parts: readonly SplitPart[], paths: readonly string[], rewardArray?: "giftRewards"): CompiledOffer {
   const merged = structuredClone(base);
+  if (rewardArray) {
+    const present = new Set(parts.flatMap((part) => part.offer.giftRewards.map((reward) => reward.id)));
+    merged.giftRewards = base.giftRewards.filter((reward) => present.has(reward.id));
+  }
   for (const path of paths) {
     const union = new Set(parts.flatMap((part) => listAt(part.offer, path)));
     setAt(merged, path, listAt(base, path).filter((id) => union.has(id)));
