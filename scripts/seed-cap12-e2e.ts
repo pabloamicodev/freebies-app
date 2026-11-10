@@ -199,7 +199,7 @@ async function main(): Promise<void> {
       const cB = pick("cB", 18, 70);
       const codeProduct = pick("codeProduct", 30, 200);
       const padIds = data.products.nodes
-        .filter((p) => !used.has(p.id))
+        .filter((p) => !used.has(p.id) && !DENY_HANDLES.has(p.handle))
         .map((p) => p.id)
         .sort()
         .slice(0, padding);
