@@ -1,10 +1,10 @@
 /**
- * Turns the per-shop Function shards flag on or off (FIX-cap-04 rollout).
+ * Turns the per-shop Function compact-ids flag on or off (FIX-cap-10 rollout).
  *
  *   pnpm tsx scripts/set-function-compact-ids.ts <shop-domain> status|on|off
  *
  * Needs DATABASE_URL (.env / .env.local). The flag is read at publish time, so
- * republish the shop afterwards (MCP promos_republish_shop or any offer save).
+ * republish the shop right after flipping it (MCP promos_republish_shop or any offer save).
  */
 import process from "node:process";
 import { resolve } from "node:path";
@@ -24,7 +24,9 @@ if (!shopDomain || !["status", "on", "off"].includes(action)) {
 async function main(): Promise<void> {
   const { getDb, shops, appSettings } = await import("@promo/db");
   const db = getDb();
-  const KEY = "function_compact_ids.enabled";
+  const { FUNCTION_COMPACT_IDS_SETTING: KEY, setFunctionCompactIdsEnabled } = await import(
+    "../apps/shopify-admin/app/lib/function-compact-ids-flag.server.js"
+  );
 
   const [shop] = await db
     .select({ id: shops.id, domain: shops.shopDomain })
@@ -36,11 +38,7 @@ async function main(): Promise<void> {
   }
 
   if (action !== "status") {
-    const value = action === "on" ? "true" : "false";
-    await db
-      .insert(appSettings)
-      .values({ shopId: shop.id, key: KEY, value })
-      .onConflictDoUpdate({ target: [appSettings.shopId, appSettings.key], set: { value, updatedAt: new Date() } });
+    await setFunctionCompactIdsEnabled(db, shop.id, action === "on");
   }
 
   const [row] = await db
