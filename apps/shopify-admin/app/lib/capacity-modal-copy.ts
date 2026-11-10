@@ -35,6 +35,8 @@ export interface CapacityModalData {
   code: CapacityModalCode;
   offers: CapacityModalOffer[];
   numbers: Record<string, number>;
+  /** OFFER_TOO_LARGE: why Promo Engine could not split the offer across several Shopify discounts. */
+  splitRefusal?: string;
   /** Shopify admin page listing the store's automatic discounts. */
   discountsUrl?: string;
 }
@@ -61,6 +63,28 @@ function tooLargeReason(numbers: Record<string, number>): TooLargeReason {
   if (numbers["tags"] !== undefined && numbers["maxTags"] !== undefined) return "tags";
   return "bytes";
 }
+
+const SPLIT_REFUSAL_COPY: Record<string, string> = {
+  AGGREGATING_REWARD: "Promo Engine can't split it across several Shopify discounts because its discount counts quantities, tiers or prices across all the selected items.",
+  CART_WIDE_CAP: "Promo Engine can't split it across several Shopify discounts because it caps the discounted units for the whole cart.",
+  REQUIRED_TAGS_ALL_OF: "Promo Engine can't split it across several Shopify discounts because customers must have all of the required tags.",
+  EXCLUDED_TAGS: "Promo Engine can't split it across several Shopify discounts because it excludes customers by tag.",
+  ALL_OF_CONDITION: "Promo Engine can't split it across several Shopify discounts because it requires every selected item to be in the cart.",
+  REQUIRED_IDS: "Promo Engine can't split it across several Shopify discounts because of the products it requires in the cart.",
+  EXCLUDED_PRODUCTS: "Promo Engine can't split it across several Shopify discounts because of its excluded products.",
+  GIFT_PICKER: "Promo Engine can't split it across several Shopify discounts because customers choose their gift from the list.",
+  GIFT_REWARDS_OVERLAP: "Promo Engine can't split it across several Shopify discounts because its gifts share products.",
+  GIFT_TIER_HIGHEST: "Promo Engine can't split it across several Shopify discounts because only the highest gift tier applies.",
+  GIFT_ANCHOR_OVERLAP: "Promo Engine can't split it across several Shopify discounts because a gift is also one of the products that unlock it.",
+  LANDING_SELF_ANCHOR: "Promo Engine can't split it across several Shopify discounts because any tagged product unlocks it. Choose the products that unlock it to allow that.",
+  ANCHOR_MIN_QUANTITY: "Promo Engine can't split it across several Shopify discounts because it needs more than one unlocking item.",
+  STOP_LOWER_PRIORITY: "Promo Engine can't split it across several Shopify discounts because it stops lower-priority offers.",
+  ORDER_REWARDS: "Promo Engine can't split it across several Shopify discounts because it discounts the whole order.",
+  QUIZ_BUNDLE: "Promo Engine can't split a quiz bundle across several Shopify discounts.",
+  ANCHOR_CONSUMPTION: "Promo Engine can't split it across several Shopify discounts because its unlocking items can't unlock other gifts.",
+  VARIANT_PRODUCT_UNKNOWN: "Promo Engine can't split it yet because some selected variants are not synced. Sync your products and try again.",
+  STILL_TOO_LARGE: "Even split across several Shopify discounts, a part of it would still be too large.",
+};
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -114,7 +138,7 @@ export function describeCapacityModal(data: CapacityModalData): CapacityModalCop
       return {
         title: group ? "These offers are too large for one Shopify discount" : "This offer has too many items for one Shopify discount",
         limit: `One Shopify discount holds up to ${slotBytes.toLocaleString("en-US")} bytes of offer configuration (roughly 200 variants).`,
-        body,
+        body: data.splitRefusal && SPLIT_REFUSAL_COPY[data.splitRefusal] ? `${body} ${SPLIT_REFUSAL_COPY[data.splitRefusal]}` : body,
         fix: "Select fewer products or variants, select whole products instead of variants, or simplify the offer's tiers. Save it as a draft to keep your work.",
         actions: [],
       };

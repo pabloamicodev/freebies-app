@@ -129,6 +129,57 @@ describe("limits", () => {
     if (!result.ok) expect(result.message).toContain('"huge-offer" is too large for one Shopify discount');
   });
 
+  describe("an offer bigger than one node", () => {
+    async function productOffer(shopId: string, products: number, overrides: Parameters<typeof seedOffer>[2] = {}, target: Record<string, unknown> = {}) {
+      const offerId = await seedOffer(db, shopId, overrides);
+      await db.insert(offerRewards).values({
+        shopId, offerId, rewardType: "product_discount", discountType: "percentage", value: { amount: 15, currencyCode: "USD" },
+        target: {
+          scopeMode: "sitewide",
+          productIds: Array.from({ length: products }, () => `gid://shopify/Product/${++variantSeq + 80000000000}`),
+          ...target,
+        },
+        sortOrder: 0,
+      });
+      return offerId;
+    }
+
+    it("is ok across several slots when it is splittable and sharding is on", async () => {
+      const shopId = await seedShop(db, "splittable.myshopify.com");
+      await productOffer(shopId, 900, { internalName: "catalog-sale" });
+      const result = await preflightCapacity(db, shopId, [], withBudget(11));
+      expect(result.ok ? null : JSON.stringify(result)).toBeNull();
+      if (!result.ok) return;
+      expect(result.plan.slots).toBeGreaterThanOrEqual(3);
+      expect(Math.max(...result.plan.bytesPerSlot)).toBeLessThanOrEqual(9500);
+      expect(result.plan.offersPerSlot).toEqual(result.plan.bytesPerSlot.map(() => 1));
+    });
+
+    it("keeps today's cap with the flag off, and names the budget when it leaves one slot", async () => {
+      const shopId = await seedShop(db, "splittable-off.myshopify.com");
+      const offerId = await productOffer(shopId, 900, { internalName: "catalog-sale" });
+      const off = await preflightCapacity(db, shopId, [], { shardsEnabled: false });
+      expect(off).toMatchObject({ ok: false, code: "SLOT_FULL", offerIds: [offerId] });
+      expect(off).not.toHaveProperty("splitRefusal");
+      const oneSlot = await preflightCapacity(db, shopId, [], withBudget(1));
+      expect(oneSlot).toMatchObject({ ok: false, code: "AUTOMATIC_DISCOUNT_LIMIT", offerIds: [offerId] });
+    });
+
+    it("needs more slots than the budget allows: AUTOMATIC_DISCOUNT_LIMIT, not OFFER_TOO_LARGE", async () => {
+      const shopId = await seedShop(db, "splittable-budget.myshopify.com");
+      await productOffer(shopId, 900, { internalName: "catalog-sale" });
+      const result = await preflightCapacity(db, shopId, [], withBudget(2));
+      expect(result).toMatchObject({ ok: false, code: "AUTOMATIC_DISCOUNT_LIMIT" });
+    });
+
+    it("still blocks an offer that cannot be split with OFFER_TOO_LARGE", async () => {
+      const shopId = await seedShop(db, "unsplittable.myshopify.com");
+      const offerId = await productOffer(shopId, 900, { internalName: "capped-sale" }, { maxUnitsTotal: 3 });
+      const result = await preflightCapacity(db, shopId, [], withBudget(11));
+      expect(result).toMatchObject({ ok: false, code: "OFFER_TOO_LARGE", offerIds: [offerId], offerNames: ["capped-sale"], reason: "bytes", splitRefusal: "AGGREGATING_REWARD" });
+    });
+  });
+
   it("keeps the 100-tag limit only when sharding is on", async () => {
     const shopId = await seedShop(db, "tags.myshopify.com");
     const offerId = await giftOffer(shopId, 2, { internalName: "taggy" });

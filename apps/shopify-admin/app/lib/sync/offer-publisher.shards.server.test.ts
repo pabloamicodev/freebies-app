@@ -591,4 +591,87 @@ describe("sharded cart publish", () => {
       expect(shopify.metafieldsSets.at(-1)).toHaveLength(4);
     });
   });
+
+  describe("an offer bigger than one node", () => {
+    const WHOLE = 900;
+    const wholeProducts = Array.from({ length: WHOLE }, (_, n) => `gid://shopify/Product/${20000000000000 + n}`);
+
+    async function seedHeavy(rewardTarget: Record<string, unknown> = { scopeMode: "sitewide", productIds: wholeProducts }) {
+      const offerId = await seedOffer(db, shopId, {
+        type: "discount",
+        codeRedemption: "automatic",
+        priority: 50,
+        internalName: "Heavy catalog sale",
+        publicTitle: "Catalog sale",
+      });
+      await db.insert(offerRewards).values({
+        shopId,
+        offerId,
+        rewardType: "product_discount",
+        discountType: "percentage",
+        value: { amount: 15, currencyCode: "USD" },
+        target: rewardTarget,
+      });
+      const [small] = await seedCatalog(shopId, 1, 0, 0);
+      return { offerId, small: small! };
+    }
+
+    it("publishes the parts across slots under the same id and title, and a second publish moves nothing", async () => {
+      const { offerId, small } = await seedHeavy();
+      await setFunctionShardsEnabled(db, shopId, true);
+
+      await publishOffersForShop(shopId, DOMAIN);
+
+      const rows = await shardRows();
+      expect(rows.length).toBeGreaterThanOrEqual(2);
+      const covered: string[] = [];
+      for (const row of rows) {
+        const raw = shopify.metafields.get(slotOwner(row))!.get("promo_engine")!;
+        expect(bytes(raw)).toBeLessThanOrEqual(SLOT_LIMITS.slotBytes);
+        const published = shopify.value(slotOwner(row)).offers.filter((entry) => entry.id === offerId) as Array<{
+          id: string;
+          title?: string;
+          productRewards: Array<{ targetProductIds: string[] }>;
+        }>;
+        expect(published.length).toBeLessThanOrEqual(1);
+        for (const entry of published) {
+          expect(entry.title).toBe("Catalog sale");
+          covered.push(...entry.productRewards[0]!.targetProductIds);
+        }
+      }
+      expect([...covered].sort()).toEqual([...wholeProducts].sort());
+      const keys = rows.flatMap((row) => row.unitKeys);
+      expect(keys.filter((key) => key.startsWith(`${offerId}#`)).length).toBeGreaterThanOrEqual(2);
+      expect(keys).toContain(small);
+      expect(keys).not.toContain(offerId);
+
+      const before = await assignment();
+      await publishOffersForShop(shopId, DOMAIN);
+      expect(await assignment()).toEqual(before);
+    });
+
+    it("keeps today's cap with the flag off: the same offer is refused as too large", async () => {
+      await seedHeavy();
+
+      const error = await publishOffersForShop(shopId, DOMAIN).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ShardPlanBlockedError);
+      expect(shopify.metafieldsSets).toHaveLength(0);
+    });
+
+    it("blocks an offer the Function cannot split without changing what it does", async () => {
+      await seedHeavy({
+        scopeMode: "sitewide",
+        productIds: wholeProducts,
+        maxUnitsTotal: 3,
+      });
+      await setFunctionShardsEnabled(db, shopId, true);
+
+      const error = await publishOffersForShop(shopId, DOMAIN).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ShardPlanBlockedError);
+      expect((error as InstanceType<typeof ShardPlanBlockedError>).blocked).toMatchObject({ code: "OFFER_TOO_LARGE", splitRefusal: "AGGREGATING_REWARD" });
+      expect(shopify.metafieldsSets).toHaveLength(0);
+    });
+  });
 });

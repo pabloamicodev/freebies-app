@@ -57,6 +57,20 @@ const usageRows = (forShop = shopId) => db.select().from(offerCustomerUsages).wh
 const syncRow = async () =>
   (await db.select().from(offerUsageSync).where(and(eq(offerUsageSync.shopId, shopId), eq(offerUsageSync.customerGid, CUSTOMER_GID))))[0];
 
+describe("an offer split across two discount nodes", () => {
+  // Parts of one offer keep its id and title, so each node's candidate shows up as its own discount application with the same title.
+  it("counts the order once for the offer, and a redelivery adds nothing", async () => {
+    const split = await seedOffer(db, shopId, { publicTitle: "Catalog sale" });
+    const twoNodes = order({ discount_applications: [auto("Catalog sale"), auto("Catalog sale")] });
+    expect(await usage.recordOfferUsages(db, shopId, twoNodes)).toMatchObject({ inserted: 1 });
+    expect(await usage.recordOfferUsages(db, shopId, twoNodes)).toMatchObject({ inserted: 0 });
+    const rows = await usageRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ offerId: split, source: "title" });
+    expect(vi.mocked(Sentry.captureMessage)).not.toHaveBeenCalled();
+  });
+});
+
 describe("recordOfferUsages attribution", () => {
   it("matches an automatic application to the offer by exact public title, keyed by customer GID", async () => {
     const a = await seedOffer(db, shopId, { publicTitle: "Free Mug" });

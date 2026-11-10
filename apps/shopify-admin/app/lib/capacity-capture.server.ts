@@ -8,6 +8,8 @@ export interface CapturedCapacity {
   code: string;
   offerIds: string[];
   numbers: Record<string, number>;
+  /** OFFER_TOO_LARGE with sharding on: why the offer cannot be split across Shopify discounts. */
+  splitRefusal?: string;
 }
 
 const store = new AsyncLocalStorage<{ captured?: CapturedCapacity }>();
@@ -34,6 +36,7 @@ export async function buildCapacityModalData(db: Db, captured: CapturedCapacity)
     code: captured.code,
     offers: captured.offerIds.map((id) => ({ id, name: nameById.get(id) ?? id })),
     numbers: captured.numbers,
+    ...(captured.splitRefusal ? { splitRefusal: captured.splitRefusal } : {}),
     ...(shop ? { discountsUrl: `https://${shop.domain}/admin/discounts` } : {}),
   };
 }

@@ -17,7 +17,9 @@ import {
 } from "./sync/compile-config.js";
 import { buildAttributeQueryVariables, MAX_CUSTOM_CART_ATTRIBUTE_KEYS } from "./sync/attribute-query-variables.js";
 import { planShards, SLOT_LIMITS, type PlanBlockCode } from "./sync/shard-planner.js";
-import { baseOfferId, buildPlanUnits, cartAttributeKeysOf } from "./sync/plan-units.js";
+import { baseOfferId, buildPlanUnitSet, cartAttributeKeysOf } from "./sync/plan-units.js";
+import type { SplitRefusal } from "./sync/offer-split.js";
+import { loadSplitOptions } from "./sync/variant-products.server.js";
 import { combinationBlockers, type CombinationBlocker } from "./sync/combination-blockers.js";
 import { isCheckoutCodeGated } from "./code-redemption.js";
 import { MAX_METAFIELD_BYTES } from "./sync/offer-publisher.server.js";
@@ -198,6 +200,8 @@ export type CapacityPreflight =
       offerNames: string[];
       numbers: Record<string, number>;
       reason?: "bytes" | "keys" | "tags" | "combination";
+      /** OFFER_TOO_LARGE with sharding on: why the offer cannot be split across slots (offer-split.ts reason code). */
+      splitRefusal?: SplitRefusal;
       message: string;
     };
 
@@ -299,10 +303,20 @@ export async function preflightCapacity(
     numbers: Record<string, number>,
     message: (offerNames: string[]) => string,
     reason?: "bytes" | "keys" | "tags" | "combination",
+    splitRefusal?: SplitRefusal,
   ): CapacityPreflight => {
     const unique = [...new Set(ids)];
     const offerNames = nameList(unique);
-    return { ok: false, code, offerIds: unique, offerNames, numbers, message: message(offerNames), ...(reason ? { reason } : {}) };
+    return {
+      ok: false,
+      code,
+      offerIds: unique,
+      offerNames,
+      numbers,
+      message: message(offerNames),
+      ...(reason ? { reason } : {}),
+      ...(splitRefusal ? { splitRefusal } : {}),
+    };
   };
 
   const conditions = shared.compiled.flatMap((entry) => entry.conditions);
@@ -324,7 +338,8 @@ export async function preflightCapacity(
     }
   }
 
-  const units = buildPlanUnits(shared.compiled, conditions, shared.policies);
+  const splitOptions = enabled ? await loadSplitOptions(db, shopId, shared.compiled.map((entry) => entry.offer)) : {};
+  const { units } = buildPlanUnitSet(shared.compiled, conditions, shared.policies, splitOptions);
   const previous = await readPreviousAssignment(db, shopId);
   const policy = compileDiscountCombinationPolicy(shared.compiled.map((entry) => entry.offer));
   const plan = planShards(units, previous, { ...SLOT_LIMITS, maxSlots, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, policy);
@@ -383,6 +398,7 @@ export async function preflightCapacity(
           numbers,
           (n) => offerTooLargeMessage(n, blocked.reason ?? "bytes", numbers, blocked.code === "GROUP_TOO_LARGE"),
           blocked.reason,
+          enabled && blocked.code === "OFFER_TOO_LARGE" ? blocked.splitRefusal : undefined,
         );
     }
   }

@@ -547,3 +547,50 @@ mod budget {
     const PAGE_CONDITIONED_LIMIT: u64 = 8_000;
     const ALLOCATION_LIMIT: u64 = 13_000;
 }
+
+/// An offer too big for one node is published as parts (a slice of one list each, same offer id). The parts must
+/// discount exactly what the whole offer does, here with the 10 kB metafield limit lifted. The fixture is written by
+/// `app/lib/sync/offer-split.parity.test.ts` from the real splitter.
+#[cfg(not(feature = "code_gate"))]
+mod split_parity {
+    use super::*;
+
+    const FIXTURE: &str = include_str!("fixtures/split-parity.json");
+
+    fn discounted(config: &Value, cart: &Value) -> BTreeMap<String, BTreeMap<String, i64>> {
+        let input = function_input(&json!({ "config": config, "cart": cart })).to_string();
+        outcomes(&run_function_with_input(run, &input).expect("the function runs"))
+    }
+
+    #[test]
+    fn split_offers_discount_the_same_lines_and_units_as_the_whole_offer() {
+        let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+        assert_eq!(fixture["parts"]["anchor"], 3, "the anchor offer is split three ways");
+        assert!(fixture["parts"]["set"].as_i64().unwrap() >= 2, "the gift reward set is split across parts");
+        let scenarios = fixture["scenarios"].as_array().unwrap();
+        assert!(scenarios.len() >= 6);
+        for scenario in scenarios {
+            let name = scenario["name"].as_str().unwrap();
+            let family = &fixture["families"][scenario["family"].as_str().unwrap()];
+            let whole = discounted(&family["unsplit"], &scenario["cart"]);
+            if scenario["family"] == "selfAnchor" {
+                // The splitter refuses this shape: slicing the targets would make each part's targets the other's anchor.
+                assert!(whole.is_empty(), "{name}: the whole offer discounts nothing, got {whole:?}");
+                let naive = discounted(&family["naive"], &scenario["cart"]);
+                assert!(!naive.is_empty(), "{name}: a naive one-target-per-part split would free both targets");
+                continue;
+            }
+            let parts = discounted(&family["split"], &scenario["cart"]);
+            assert_eq!(parts, whole, "{name}: parts differ from the whole offer");
+            let expects_discount = scenario["discounts"].as_bool().unwrap();
+            assert_eq!(!whole.is_empty(), expects_discount, "{name}: the whole offer {whole:?}");
+            if scenario["family"] != "anchor" {
+                for lines in whole.values() {
+                    for (line, units) in lines {
+                        assert_eq!(*units, 2, "{name}: {line} keeps the limit of 2 units per gift product");
+                    }
+                }
+            }
+        }
+    }
+}

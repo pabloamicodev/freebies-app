@@ -604,6 +604,8 @@ export const RewardTargetSchema = z.object({
   fallbackVariantIds: z.array(z.string()).optional(),
   productId: z.string().optional(),
   productIds: z.array(z.string()).optional(),
+  /** "product": the merchant saved whole products, so the Function matches product ids and not their variants. */
+  selectionLevel: z.literal("product").optional(),
   lineQuantityEquals: z.number().int().positive().optional(),
   maxUnitsTotal: z.number().int().positive().optional(),
   maxUnitsPerProduct: z.number().int().positive().optional(),
@@ -694,6 +696,8 @@ const ProductTargetIdsSchema = z.object({
   variantIds: z.array(z.string()).optional(),
   productId: z.string().optional(),
   productIds: z.array(z.string()).optional(),
+  /** "product": the merchant saved whole products, so the Function matches product ids and not their variants. */
+  selectionLevel: z.literal("product").optional(),
   lineQuantityEquals: z.number().int().positive().optional(),
   maxUnitsTotal: z.number().int().positive().optional(),
   maxUnitsPerProduct: z.number().int().positive().optional(),
