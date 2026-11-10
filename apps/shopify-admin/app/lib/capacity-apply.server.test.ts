@@ -1,13 +1,14 @@
+import type * as RedisModule from "./redis.server.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { appSettings, auditLogs, capacityActions, capacityIncidents, offerCombinationPolicies, offerConditions, offerRewards, offers, variantCache, type CapacityIncident, type Db } from "@promo/db";
 import { applyWorkaround, undoWorkaround, type ApplyDeps, type DiscountOps } from "./capacity-apply.server.js";
 import { preflightCapacity, type CapacityOptions } from "./capacity-preflight.server.js";
-import { recordCapacityIncident } from "./capacity-incidents.server.js";
+import { recordCapacityIncident, snapshotHeldOffers } from "./capacity-incidents.server.js";
 import { proposeForIncident } from "./capacity-workarounds.server.js";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
-vi.mock("./redis.server.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("./redis.server.js")>()), redisDelete: vi.fn(async () => undefined) }));
+vi.mock("./redis.server.js", async (importOriginal) => ({ ...(await importOriginal<typeof RedisModule>()), redisDelete: vi.fn(async () => undefined) }));
 
 let db: Db;
 let close: () => Promise<void>;
@@ -57,7 +58,7 @@ async function giftOffer(shopId: string, name: string, count: number, overrides:
 async function incidentFrom(shopId: string, offerIds: string[], opts: CapacityOptions = cap()): Promise<CapacityIncident> {
   const result = await preflightCapacity(db, shopId, offerIds, opts);
   if (result.ok) throw new Error("expected a capacity block");
-  await recordCapacityIncident(db, { shopId, code: result.code, offerIds: result.offerIds, numbers: result.numbers, ...(result.splitRefusal ? { splitRefusal: result.splitRefusal } : {}) }, { source: "cron", attended: false });
+  await recordCapacityIncident(db, { shopId, code: result.code, offerIds: result.offerIds, numbers: result.numbers, ...(result.splitRefusal ? { splitRefusal: result.splitRefusal } : {}), held: await snapshotHeldOffers(db, shopId, offerIds) }, { source: "cron", attended: false });
   const rows = await db.select().from(capacityIncidents).where(and(eq(capacityIncidents.shopId, shopId), eq(capacityIncidents.status, "open")));
   return rows.find((row) => row.code === result.code)!;
 }

@@ -78,5 +78,21 @@ describe("validateActivation capacity", () => {
     expect(found).toHaveLength(1);
     expect(found[0]).toMatchObject({ code: "SLOT_FULL", source: "mcp", attended: true, status: "open" });
     expect(found[0]?.offerIds).toEqual([huge]);
+    const [row] = await db.select({ status: offers.status, updatedAt: offers.updatedAt }).from(offers).where(eq(offers.id, huge));
+    expect(found[0]?.held).toEqual([{ id: huge, status: row!.status, updatedAt: row!.updatedAt.toISOString() }]);
+  });
+
+  it("records only the offer being activated as held, and re-stamps it after republishIfActive pauses it", async () => {
+    await db.delete(capacityIncidents);
+    const bystander = await seedOffer(db, shopId, { internalName: "bystander", status: "paused" });
+    const huge = await giftOffer(400, "huge-held");
+    await db.update(offers).set({ status: "active" }).where(eq(offers.id, huge));
+    const message = await republishIfActive(db, shopId, "s.myshopify.com", huge, true, vi.fn(async () => null));
+    expect(message).toContain("was paused");
+    const [incident] = await db.select().from(capacityIncidents).where(eq(capacityIncidents.shopId, shopId));
+    expect(incident?.held.map((entry) => entry.id)).toEqual([huge]);
+    expect(incident?.held.map((entry) => entry.id)).not.toContain(bystander);
+    const [row] = await db.select({ status: offers.status, updatedAt: offers.updatedAt }).from(offers).where(eq(offers.id, huge));
+    expect(incident?.held[0]).toEqual({ id: huge, status: "paused", updatedAt: row!.updatedAt.toISOString() });
   });
 });

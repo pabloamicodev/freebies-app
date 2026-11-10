@@ -29,7 +29,7 @@ import { OfferPublishError, addOfferPublishErrors } from "./offer-publish-errors
 import { markPublishPending } from "./publish-pending.server.js";
 import { preflightCapacity, type CapacityFailure, type CapacityPreflight } from "./capacity-preflight.server.js";
 import { recordCapacityBlock, type CapturedCapacity } from "./capacity-capture.server.js";
-import { recordCapacityIncident } from "./capacity-incidents.server.js";
+import { recordCapacityIncident, restampHeldOffer, snapshotHeldOffers } from "./capacity-incidents.server.js";
 import { insertAuditLog } from "./audit-log.server.js";
 import { limitedTitleError } from "./offer-usage.server.js";
 import { isLimitsEnforced } from "./limits-enforced.server.js";
@@ -419,10 +419,13 @@ async function noteCapacityBlock(
   db: Db,
   shopId: string,
   block: Pick<CapturedCapacity, "code" | "offerIds" | "numbers" | "splitRefusal">,
+  /** The offers whose save, activation or start triggered this check: the only ones a fix may switch on later. */
+  activating: readonly string[],
 ): Promise<void> {
   const captured: CapturedCapacity = { shopId, code: block.code, offerIds: block.offerIds, numbers: block.numbers, ...(block.splitRefusal ? { splitRefusal: block.splitRefusal } : {}) };
   recordCapacityBlock(captured);
-  await recordCapacityIncident(db, captured);
+  const held = await snapshotHeldOffers(db, shopId, activating).catch(() => []);
+  await recordCapacityIncident(db, { ...captured, held });
 }
 
 /** `validateActivation` that also returns the capacity result, so a following `republishIfActive` can reuse it. */
@@ -434,7 +437,7 @@ export async function validateActivationWithPreflight(
   const validation = await validateOffersPublishable(db, shopId, offerIds);
   if (!validation.ok) return { validation };
   const capacity = await preflightCapacity(db, shopId, offerIds);
-  if (!capacity.ok) await noteCapacityBlock(db, shopId, capacity);
+  if (!capacity.ok) await noteCapacityBlock(db, shopId, capacity, offerIds);
   return { validation: capacityValidation(capacity), preflight: capacity };
 }
 
@@ -576,7 +579,7 @@ export async function republishIfActive(
   const validation = await validateOffersPublishable(db, shopId, [offerId]);
   const capacity = validation.ok ? (earlierPreflight ?? (await preflightCapacity(db, shopId, [offerId]))) : null;
   const preflight = capacity && !capacity.ok ? capacity : null;
-  if (preflight) await noteCapacityBlock(db, shopId, preflight);
+  if (preflight) await noteCapacityBlock(db, shopId, preflight, [offerId]);
   let reason = "validation_error";
   let failure: PublishFailure | null;
   if (!validation.ok) {
@@ -598,6 +601,7 @@ export async function republishIfActive(
 
   const publishError = failure.message;
   const { rollbackError } = await pauseOffer(db, shopId, shopDomain, offerId, reason, publishError, publish);
+  await restampHeldOffer(db, shopId, offerId);
   return rollbackError
     ? `${publishError} The offer was paused, but re-publishing the Shopify configuration also failed: ${rollbackError}`
     : `${publishError} The offer was paused so the change can't go live; fix it and activate it again.`;

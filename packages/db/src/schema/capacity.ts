@@ -6,6 +6,13 @@ export type CapacityIncidentStatus = "open" | "resolved" | "dismissed";
 export type CapacityIncidentResolution = "published" | "workaround" | "moot";
 export type CapacityActionStatus = "pending" | "applied" | "rolled_back" | "undone" | "undo_failed";
 
+/** An offer a blocked publish was switching on or keeping live, as it stood when the block happened. */
+export interface HeldOffer {
+  id: string;
+  status: string;
+  updatedAt: string;
+}
+
 /** A Shopify capacity limit that blocked a publish; persisted so unattended blocks stay visible. */
 export const capacityIncidents = pgTable(
   "capacity_incidents",
@@ -18,6 +25,8 @@ export const capacityIncidents = pgTable(
     reason: text("reason"),
     dedupeKey: text("dedupe_key").notNull(),
     offerIds: text("offer_ids").array().notNull().default(sql`'{}'::text[]`),
+    /** Offers the blocked publish was activating; only these (unchanged since) are auto-activated by a fix. */
+    held: jsonb("held").notNull().$type<HeldOffer[]>().default(sql`'[]'::jsonb`),
     numbers: jsonb("numbers").notNull().$type<Record<string, number>>().default(sql`'{}'::jsonb`),
     source: text("source").notNull().$type<"admin" | "mcp" | "cron" | "background" | "webhook" | "auth">(),
     attended: boolean("attended").notNull().default(false),

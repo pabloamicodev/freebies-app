@@ -197,20 +197,39 @@ async function revertAll(db: Db, shop: ShopRef, ops: () => Promise<DiscountOps>,
   return errors;
 }
 
+interface HeldCheck {
+  /** Recorded at the block, still in the state recorded, and not already ended: safe to switch on. */
+  activate: Array<{ id: string; endsAt: Date | null; startsAt: Date | null; status: "draft" | "paused" }>;
+  /** Recorded at the block but draft or paused for a different reason now: changed after the block. */
+  changed: Array<{ id: string; name: string; status: string }>;
+}
+
 /**
- * Offers the incident recorded as blocked that the block left draft or paused. Offers this very action paused
- * (`pause_offers`, the split original) are excluded, and so is anything already archived or expired.
+ * Only offers the blocked publish was switching on (`incident.held`) are candidates, and only while their status and
+ * updatedAt are what they were when the block was recorded. Must run before the fix edits those same offers.
  */
-async function activationEdits(tx: Db, incident: CapacityIncident, planned: readonly Edit[], skip: readonly string[], now: Date): Promise<Edit[]> {
-  if (incident.offerIds.length === 0) return [];
-  const pausedByUs = new Set([...skip, ...planned.filter((edit) => edit.table === "offer" && edit.after.status === "paused").map((edit) => (edit as { id: string }).id)]);
+async function checkHeldOffers(tx: Db, incident: CapacityIncident): Promise<HeldCheck> {
+  const result: HeldCheck = { activate: [], changed: [] };
+  if (incident.held.length === 0) return result;
   const rows = await tx
-    .select({ id: offers.id, status: offers.status, startsAt: offers.startsAt, endsAt: offers.endsAt })
+    .select({ id: offers.id, name: offers.internalName, status: offers.status, updatedAt: offers.updatedAt, startsAt: offers.startsAt, endsAt: offers.endsAt })
     .from(offers)
-    .where(and(eq(offers.shopId, incident.shopId), inArray(offers.id, incident.offerIds)));
-  const edits: Edit[] = [];
+    .where(and(eq(offers.shopId, incident.shopId), inArray(offers.id, incident.held.map((entry) => entry.id))));
   for (const row of rows) {
-    if ((row.status !== "draft" && row.status !== "paused") || pausedByUs.has(row.id)) continue;
+    if (row.status !== "draft" && row.status !== "paused") continue;
+    const entry = incident.held.find((held) => held.id === row.id);
+    if (entry && entry.status === row.status && entry.updatedAt === row.updatedAt.toISOString()) result.activate.push({ id: row.id, startsAt: row.startsAt, endsAt: row.endsAt, status: row.status });
+    else result.changed.push({ id: row.id, name: row.name, status: row.status });
+  }
+  return result;
+}
+
+/** Offers this very action paused (`pause_offers`, the split original) and the split parts are never switched on. */
+function activationEdits(check: HeldCheck, planned: readonly Edit[], skip: readonly string[], now: Date): Edit[] {
+  const pausedByUs = new Set([...skip, ...planned.filter((edit) => edit.table === "offer" && edit.after.status === "paused").map((edit) => (edit as { id: string }).id)]);
+  const edits: Edit[] = [];
+  for (const row of check.activate) {
+    if (pausedByUs.has(row.id)) continue;
     const next = activationStatus(row.startsAt, row.endsAt, now);
     if (next === "expired") continue;
     edits.push({ table: "offer", id: row.id, before: { status: row.status }, after: { status: next } });
@@ -307,6 +326,7 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
 
   await reclaimStalePending(db, shop, deps);
 
+  let held: HeldCheck = { activate: [], changed: [] };
   let action: CapacityAction | undefined;
   try {
     [action] = await db
@@ -334,6 +354,7 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
         .where(and(eq(capacityIncidents.shopId, shop.id), eq(capacityIncidents.id, incident.id)))
         .for("update");
       if (!locked || locked.status === "resolved") throw refuse("not_found", workaroundCopy.notFound);
+      held = await checkHeldOffers(tx, incident);
       const built = await buildPlan(tx, incident, proposal, selected);
       if (!built.alreadyApplied) await applyEdits(tx, shop.id, built.edits);
       if (built.checkFit) {
@@ -341,7 +362,7 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
         if (stillBlocked(result, incident)) throw refuse("still_blocked", workaroundCopy.stillDoesntFit(result.message));
       }
       // Offers the block left draft or paused go live with the fix, inside the same tx, so a failed publish reverts them too.
-      const activation = input.kind === "sync_products" ? [] : await activationEdits(tx, incident, built.edits, built.createdOfferIds ?? [], deps.now?.() ?? new Date());
+      const activation: Edit[] = input.kind === "sync_products" ? [] : activationEdits(held, built.edits, built.createdOfferIds ?? [], deps.now?.() ?? new Date());
       await applyEdits(tx, shop.id, activation);
       snapshot.edits = [...built.edits, ...activation];
       snapshot.createdOfferIds = built.createdOfferIds ?? [];
@@ -388,12 +409,20 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
     await audit(db, shop.id, input.performedBy, "capacity_workaround_applied", touched.length > 0 ? touched : incident.offerIds, { kind: input.kind, incidentId: incident.id, actionId });
     const activatedIds = snapshot.edits.filter((edit) => edit.table === "offer" && edit.after.status !== "paused" && edit.before.status !== "archived").map((edit) => (edit as { id: string }).id);
     const activated = activatedIds.length === 0 ? [] : await db.select({ id: offers.id, name: offers.internalName }).from(offers).where(and(eq(offers.shopId, shop.id), inArray(offers.id, activatedIds)));
+    const keptOff = held.changed;
     return {
       ok: true,
       code: "applied",
-      message: [workaroundCopy.appliedMessage(proposal.title), activated.length > 0 ? workaroundCopy.activatedMessage(activated.map((row) => row.name)) : ""].filter(Boolean).join(" "),
+      message: [
+        workaroundCopy.appliedMessage(proposal.title),
+        activated.length > 0 ? workaroundCopy.activatedMessage(activated.map((row) => row.name)) : "",
+        keptOff.length > 0 ? workaroundCopy.keptOffMessage(keptOff) : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
       actionId,
       ...(activated.length > 0 ? { activatedOffers: activated } : {}),
+      ...(keptOff.length > 0 ? { keptOffOffers: keptOff } : {}),
     };
   } catch (error) {
     if (error instanceof Refusal) return fail(error.result);
@@ -436,7 +465,7 @@ export async function followUpSyncWorkaround(db: Db, shopId: string, deps: Apply
     if (stillBlocked(result, incident)) continue;
     const activation = await db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as Db;
-      const edits = await activationEdits(tx, incident, [], [], now);
+      const edits = activationEdits(await checkHeldOffers(tx, incident), [], [], now);
       await applyEdits(tx, shopId, edits);
       return edits;
     });

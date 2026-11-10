@@ -81,6 +81,8 @@ export interface WorkaroundResult {
   actionId?: string;
   /** Offers the block had left draft or paused that Apply switched on with the fix. */
   activatedOffers?: Array<{ id: string; name: string }>;
+  /** Offers the block was holding that stay as they are because they changed after the block. */
+  keptOffOffers?: Array<{ id: string; name: string; status: string }>;
 }
 
 export interface RecentAction {

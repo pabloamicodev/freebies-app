@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { capacityActions, capacityIncidents, offerConditions, offerRewards, offers, variantCache, type CapacityIncident, type Db } from "@promo/db";
 import { applyWorkaround, followUpSyncWorkaround, reclaimAllStalePending, reclaimStalePending, STALE_PENDING_MS, undoWorkaround, type ApplyDeps } from "./capacity-apply.server.js";
 import { preflightCapacity, type CapacityOptions } from "./capacity-preflight.server.js";
-import { recordCapacityIncident } from "./capacity-incidents.server.js";
+import { recordCapacityIncident, restampHeldOffer, snapshotHeldOffers } from "./capacity-incidents.server.js";
 import { proposeForIncident } from "./capacity-workarounds.server.js";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
@@ -26,7 +26,7 @@ const deps = (extra: Partial<ApplyDeps> = {}): ApplyDeps => ({ capacity: cap(), 
 let seq = 0;
 const gid = (kind: string) => `gid://shopify/${kind}/${++seq + 70_000_000_000}`;
 
-async function wholeProductsFixture(domain: string, status: "paused" | "draft" | "active" = "paused") {
+async function wholeProductsFixture(domain: string, status: "paused" | "draft" | "active" = "paused", held = true) {
   const shopId = await seedShop(db, domain);
   const variants: string[] = [];
   for (let p = 0; p < 3; p++) {
@@ -41,7 +41,7 @@ async function wholeProductsFixture(domain: string, status: "paused" | "draft" |
   await db.insert(offerRewards).values({ shopId, offerId, rewardType: "product_discount", discountType: "percentage", value: { amount: 15, currencyCode: "USD" }, target: { scopeMode: "sitewide", variantIds: variants, maxUnitsTotal: 5 }, sortOrder: 0 });
   const result = await preflightCapacity(db, shopId, [offerId], cap());
   if (result.ok) throw new Error("expected a capacity block");
-  await recordCapacityIncident(db, { shopId, code: result.code, offerIds: result.offerIds, numbers: result.numbers, ...(result.splitRefusal ? { splitRefusal: result.splitRefusal } : {}) }, { source: "cron", attended: false });
+  await recordCapacityIncident(db, { shopId, code: result.code, offerIds: result.offerIds, numbers: result.numbers, ...(result.splitRefusal ? { splitRefusal: result.splitRefusal } : {}), held: held ? await snapshotHeldOffers(db, shopId, [offerId]) : [] }, { source: "cron", attended: false });
   const [incident] = await db.select().from(capacityIncidents).where(and(eq(capacityIncidents.shopId, shopId), eq(capacityIncidents.status, "open")));
   const p = (await proposeForIncident(db, incident!, { capacity: cap(), env: {} })).proposals.find((x) => x.kind === "use_whole_products")!;
   const input = { incidentId: incident!.id, kind: "use_whole_products" as const, confirm: false, expectedVersions: p.offerVersions, performedBy: "tester" };
@@ -141,6 +141,37 @@ describe("Apply switches on the offers the block left draft or paused", () => {
     expect(await statusOf(other)).toBe("paused");
   });
 
+  it("does not switch the offer on when the merchant changed it after the block, and says why", async () => {
+    const f = await wholeProductsFixture("activate-changed.myshopify.com", "draft");
+    await db.update(offers).set({ status: "paused", updatedAt: new Date(Date.now() + 5_000) }).where(eq(offers.id, f.offerId));
+    const p = (await proposeForIncident(db, f.incident, { capacity: cap(), env: {} })).proposals.find((x) => x.kind === "use_whole_products")!;
+    const result = await applyWorkaround(db, f.shop, { ...f.input, expectedVersions: p.offerVersions }, deps());
+    expect(result.ok).toBe(true);
+    expect(result.activatedOffers).toBeUndefined();
+    expect(result.keptOffOffers).toEqual([{ id: f.offerId, name: "sale", status: "paused" }]);
+    expect(result.message).toContain("sale stays paused because it was changed after the block.");
+    expect(await statusOf(f.offerId)).toBe("paused");
+  });
+
+  it("does not switch on a paused offer that is in the incident but was not the one being activated", async () => {
+    const f = await wholeProductsFixture("activate-unrecorded.myshopify.com", "paused", false);
+    const result = await applyWorkaround(db, f.shop, f.input, deps());
+    expect(result.ok).toBe(true);
+    expect(result.activatedOffers).toBeUndefined();
+    expect(result.keptOffOffers).toBeUndefined();
+    expect(await statusOf(f.offerId)).toBe("paused");
+  });
+
+  it("a system pause after the block is re-stamped, so it still counts as unchanged", async () => {
+    const f = await wholeProductsFixture("activate-restamp.myshopify.com", "active");
+    await db.update(offers).set({ status: "paused", updatedAt: new Date(Date.now() + 5_000) }).where(eq(offers.id, f.offerId));
+    await restampHeldOffer(db, f.shopId, f.offerId);
+    const p = (await proposeForIncident(db, f.incident, { capacity: cap(), env: {} })).proposals.find((x) => x.kind === "use_whole_products")!;
+    const result = await applyWorkaround(db, f.shop, { ...f.input, expectedVersions: p.offerVersions }, deps());
+    expect(result.activatedOffers).toEqual([{ id: f.offerId, name: "sale" }]);
+    expect(await statusOf(f.offerId)).toBe("active");
+  });
+
   it("a future start becomes scheduled, an offer that already ended stays as it was", async () => {
     const future = await wholeProductsFixture("activate-future.myshopify.com", "paused");
     await db.update(offers).set({ startsAt: new Date(Date.now() + 86_400_000) }).where(eq(offers.id, future.offerId));
@@ -185,11 +216,18 @@ describe("Sync products follow-up", () => {
     }
     const result = await preflightCapacity(db, shopId, [offerId], cap());
     if (result.ok === oversize) throw new Error("fixture does not match the expected capacity outcome");
-    await recordCapacityIncident(db, { shopId, code: result.ok ? "OFFER_TOO_LARGE" : result.code, offerIds: [offerId], numbers: result.ok ? { entries: 1 } : result.numbers }, { source: "admin", attended: true });
+    await recordCapacityIncident(db, { shopId, code: result.ok ? "OFFER_TOO_LARGE" : result.code, offerIds: [offerId], numbers: result.ok ? { entries: 1 } : result.numbers, held: await snapshotHeldOffers(db, shopId, [offerId]) }, { source: "admin", attended: true });
     const [incident] = await db.select().from(capacityIncidents).where(eq(capacityIncidents.shopId, shopId));
     await db.insert(capacityActions).values({ shopId, incidentId: incident!.id, kind: "sync_products", status: "applied", performedBy: "tester", appliedAt: new Date() });
     return { shopId, offerId, incident: incident! };
   }
+
+  it("does not switch on a recorded offer the merchant paused after the block", async () => {
+    const f = await syncFixture("sync-changed.myshopify.com", false);
+    await db.update(offers).set({ status: "paused", updatedAt: new Date(Date.now() + 5_000) }).where(eq(offers.id, f.offerId));
+    expect(await followUpSyncWorkaround(db, f.shopId, deps())).toBe("resolved");
+    expect(await statusOf(f.offerId)).toBe("paused");
+  });
 
   it("republishes, switches on the held-back offer and auto-resolves the incident once it fits", async () => {
     const f = await syncFixture("sync-fits.myshopify.com", false);

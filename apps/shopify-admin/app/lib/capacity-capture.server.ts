@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { capacityIncidents, getDb, offers, shops, type Db } from "@promo/db";
+import { capacityIncidents, getDb, offers, shops, type Db, type HeldOffer } from "@promo/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { isCapacityModalCode, type CapacityModalData } from "./capacity-modal-copy.js";
 import { incidentDedupeKey } from "./capacity-incidents.server.js";
@@ -12,6 +12,8 @@ export interface CapturedCapacity {
   numbers: Record<string, number>;
   /** OFFER_TOO_LARGE with sharding on: why the offer cannot be split across Shopify discounts. */
   splitRefusal?: string;
+  /** Offers the blocked publish was switching on, as they stood at the block (persisted on the incident only). */
+  held?: HeldOffer[];
 }
 
 const store = new AsyncLocalStorage<{ captured?: CapturedCapacity }>();

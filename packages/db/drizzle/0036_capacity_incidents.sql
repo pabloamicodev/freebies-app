@@ -21,6 +21,7 @@ CREATE TABLE "capacity_incidents" (
 	"reason" text,
 	"dedupe_key" text NOT NULL,
 	"offer_ids" text[] DEFAULT '{}'::text[] NOT NULL,
+	"held" jsonb DEFAULT '[]'::jsonb NOT NULL,
 	"numbers" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"source" text NOT NULL,
 	"attended" boolean DEFAULT false NOT NULL,

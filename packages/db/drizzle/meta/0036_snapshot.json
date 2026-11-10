@@ -1,5 +1,5 @@
 {
-  "id": "0e00e2df-972a-44e3-b997-f4c45b6ac514",
+  "id": "c9c132b2-1e86-4dbe-a816-de8db068e1fd",
   "prevId": "35f3e5da-a66e-4253-94f6-f56116bdc244",
   "version": "7",
   "dialect": "postgresql",
@@ -5143,6 +5143,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'{}'::text[]"
+        },
+        "held": {
+          "name": "held",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
         },
         "numbers": {
           "name": "numbers",

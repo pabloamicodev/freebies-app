@@ -1,4 +1,4 @@
-import { capacityActions, capacityIncidents, offers, type CapacityIncident, type Db } from "@promo/db";
+import { capacityActions, capacityIncidents, offers, type CapacityIncident, type Db, type HeldOffer } from "@promo/db";
 import * as Sentry from "@sentry/node";
 import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { isCapacityModalCode, tooLargeReason, type CapacityModalCode } from "./capacity-modal-copy.js";
@@ -20,6 +20,28 @@ export function incidentDedupeKey(block: Pick<CapturedCapacity, "code" | "offerI
   return `${block.code}:${[...block.offerIds].sort().join(",")}`;
 }
 
+/** The offers a publish is about to switch on (or keep live), with the status and version they have right now. */
+export async function snapshotHeldOffers(db: Db, shopId: string, offerIds: readonly string[]): Promise<HeldOffer[]> {
+  if (offerIds.length === 0) return [];
+  const rows = await db.select({ id: offers.id, status: offers.status, updatedAt: offers.updatedAt }).from(offers).where(and(eq(offers.shopId, shopId), inArray(offers.id, [...offerIds])));
+  return rows.map((row) => ({ id: row.id, status: row.status, updatedAt: row.updatedAt.toISOString() }));
+}
+
+/** After the system itself changed an offer a block is holding (paused it), re-stamp it so that change is not mistaken for a merchant edit. */
+export async function restampHeldOffer(db: Db, shopId: string, offerId: string): Promise<void> {
+  try {
+    const live = await db.select({ id: capacityIncidents.id, held: capacityIncidents.held }).from(capacityIncidents).where(and(eq(capacityIncidents.shopId, shopId), inArray(capacityIncidents.status, ["open", "dismissed"])));
+    for (const incident of live) {
+      if (!incident.held.some((entry) => entry.id === offerId)) continue;
+      const [fresh] = await snapshotHeldOffers(db, shopId, [offerId]);
+      if (!fresh) continue;
+      await db.update(capacityIncidents).set({ held: incident.held.map((entry) => (entry.id === offerId ? fresh : entry)) }).where(eq(capacityIncidents.id, incident.id));
+    }
+  } catch (error) {
+    Sentry.captureException(error, { tags: { shopId, context: "capacity-held-restamp" } });
+  }
+}
+
 /**
  * Persists a capacity block so unattended ones stay visible. Never throws into the publish path.
  * One live row per (shop, dedupe key): repeats bump `occurrences`; a dismissed row stays dismissed.
@@ -38,6 +60,7 @@ export async function recordCapacityIncident(db: Db, block: CapturedCapacity, ca
         dedupeKey,
         offerIds,
         numbers: block.numbers,
+        held: block.held ?? [],
         source: caller.source,
         attended: caller.attended,
       })
@@ -49,6 +72,7 @@ export async function recordCapacityIncident(db: Db, block: CapturedCapacity, ca
           lastSeenAt: sql`now()`,
           numbers: block.numbers,
           offerIds,
+          ...(block.held && block.held.length > 0 ? { held: block.held } : {}),
           source: caller.source,
           attended: caller.attended,
         },

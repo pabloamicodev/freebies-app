@@ -84,6 +84,8 @@ export const workaroundCopy = {
   appliedMessage: (title: string) => `${title}: done.`,
   undoneMessage: "Undone.",
   activatedMessage: (names: readonly string[]) => `${plural(names.length, "offer")} switched on: ${list(names)}.`,
+  keptOffMessage: (items: ReadonlyArray<{ name: string; status: string }>) =>
+    `${items.map((item) => `${item.name} stays ${item.status}`).join("; ")} because it was changed after the block.`,
   timedOut: "The fix timed out and was reverted.",
   killSwitch: "Automatic fixes are switched off for now. Follow the steps below.",
 } as const;
