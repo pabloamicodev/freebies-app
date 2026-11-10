@@ -6,6 +6,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { appSettings, discountShards, offerCombinationPolicies, offerConditions, offerRewards, offers, shops, type Db } from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "../test-support/pglite-db.js";
 import { setFunctionShardsEnabled, setShardDomainsEnabled } from "../function-shards-flag.server.js";
+import { unpackList } from "./compile-config.js";
 import { SLOT_LIMITS } from "./shard-planner.js";
 
 let currentDb: Db | null = null;
@@ -735,6 +736,12 @@ describe.each(["off", "on"])("sharded cart publish (combination groups default %
       expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: false });
       expect(shopify.timeline.filter((entry) => entry.startsWith(`policy:${CART_NODE}:open`))).toEqual([]);
 
+      // The manifest records what the node actually carries, so drift sees no mismatch and a repair never loosens it.
+      const { readPublishManifest } = await import("../publish-manifest.server.js");
+      expect((await readPublishManifest(shopId, db))!.nodes[CART_NODE]!.combinesWith).toMatchObject({ productDiscounts: false });
+      const drift = { graphQL: shopify.call as never, publish: publishOffersForShop, settleMs: 0, globallyPaused: false };
+      expect((await repairShopDrift(db, drift, { shopId, dryRun: true })).findings.map((f) => f.issue)).not.toContain("combination_mismatch");
+
       shopify.failLiveRead = false;
       await publishOffersForShop(shopId, DOMAIN);
       expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: true });
@@ -912,12 +919,12 @@ describe.each(["off", "on"])("sharded cart publish (combination groups default %
         const published = shopify.value(slotOwner(row)).offers.filter((entry) => entry.id === offerId) as Array<{
           id: string;
           title?: string;
-          productRewards: Array<{ targetProductIds: string[] }>;
+          productRewards: Array<{ targetProductIds: string[] | string }>;
         }>;
         expect(published.length).toBeLessThanOrEqual(1);
         for (const entry of published) {
           expect(entry.title).toBe("Catalog sale");
-          covered.push(...entry.productRewards[0]!.targetProductIds);
+          covered.push(...unpackList(entry.productRewards[0]!.targetProductIds));
         }
       }
       expect([...covered].sort()).toEqual([...wholeProducts].sort());

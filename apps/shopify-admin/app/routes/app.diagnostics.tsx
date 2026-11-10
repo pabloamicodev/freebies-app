@@ -432,6 +432,13 @@ export default function DiagnosticsPage() {
           </div>
         </div>
       )}
+      {domainsFetcher.data && "note" in domainsFetcher.data && domainsFetcher.data.note && (
+        <div className="b-banner b-banner-green" role="status" style={{ marginTop: 16 }}>
+          <div className="b-banner-body">
+            <div className="b-banner-title">{domainsFetcher.data.note}</div>
+          </div>
+        </div>
+      )}
       <ShopifyLimitsCard
         meter={limits}
         domainsBusy={domainsFetcher.state !== "idle"}

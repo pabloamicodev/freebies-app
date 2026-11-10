@@ -1,4 +1,4 @@
-import { compactCompiledOffer, serializeFunctionConfig, type CompiledOffer } from "./compile-config.js";
+import { compactCompiledOffer, SHOPIFY_VARIABLE_LIST_LIMIT, serializeFunctionConfig, type CompiledOffer } from "./compile-config.js";
 import type { SplitRefusal } from "./offer-split.js";
 
 export interface PlanUnit {
@@ -19,6 +19,8 @@ export interface PlanUnit {
   splittable?: PlanUnit[];
   /** Why an oversize unit could not be split (offer-split.ts), so a blocked plan can say so. */
   splitRefusal?: SplitRefusal;
+  /** A list of the offer that cannot be packed or split is over Shopify's 100-element variable limit. */
+  listOverflow?: { listKind: number; listCount: number };
 }
 
 export interface PlannerLimits {
@@ -27,6 +29,7 @@ export interface PlannerLimits {
   maxSlots: number;
   maxKeys: number;
   maxTags: number;
+  maxOffers: number;
 }
 
 export { SLOT_LIMITS } from "./slot-limits.js";
@@ -66,7 +69,7 @@ export type PlanBlockCode =
   | "AUTOMATIC_DISCOUNT_LIMIT"
   | "SLOT_FULL";
 
-export type PlanBlockReason = "bytes" | "keys" | "tags";
+export type PlanBlockReason = "bytes" | "keys" | "tags" | "offers" | "lists";
 
 export interface PlanBlocked {
   code: PlanBlockCode;
@@ -154,6 +157,7 @@ interface Group {
 }
 
 interface Measure {
+  offers: number;
   bytes: number;
   keys: string[];
   tags: string[];
@@ -173,7 +177,7 @@ function measure(groups: readonly Group[]): Measure {
   const keyList = [...keys].sort(compareText);
   const tagList = [...tags].sort(compareText);
   const bytes = envelopeBytes(keyList, tagList) + sum - (count > 0 ? 1 : 0);
-  return { bytes, keys: keyList, tags: tagList };
+  return { offers: count, bytes, keys: keyList, tags: tagList };
 }
 
 const makeGroup = (units: PlanUnit[], pinned: boolean): Group => {
@@ -314,6 +318,7 @@ export function planShards(
     if (m.bytes > cap) return { reason: "bytes", m };
     if (m.keys.length > limits.maxKeys) return { reason: "keys", m };
     if (m.tags.length > limits.maxTags) return { reason: "tags", m };
+    if (m.offers > limits.maxOffers) return { reason: "offers", m };
     return null;
   };
   const fits: Fits = (groups, cap) => overLimit(groups, cap) === null;
@@ -322,6 +327,8 @@ export function planShards(
     slotBytes: hard,
     maxKeys: limits.maxKeys,
     maxTags: limits.maxTags,
+    maxOffers: limits.maxOffers,
+    offers: m.offers,
     bytes: m.bytes,
     keys: m.keys.length,
     tags: m.tags.length,
@@ -336,23 +343,26 @@ export function planShards(
   const units: PlanUnit[] = [];
   const tooLarge: string[] = [];
   for (const unit of [...inputUnits].sort(compareUnits)) {
-    if (fitsAlone(unit)) units.push(unit);
+    if (unit.listOverflow) tooLarge.push(unit.key);
+    else if (fitsAlone(unit)) units.push(unit);
     else if (!single && !unit.hasOrderRewards && unit.splittable?.length && unit.splittable.every(fitsAlone)) {
       units.push(...unit.splittable);
     } else tooLarge.push(unit.key);
   }
   if (tooLarge.length > 0) {
     const offender = inputUnits.find((unit) => unit.key === tooLarge[0])!;
-    const first = overLimit([makeGroup([offender], false)], hard)!;
+    const first = overLimit([makeGroup([offender], false)], hard);
     return {
       slots: [],
       moves: [],
       blocked: {
         code: "OFFER_TOO_LARGE",
         unitKeys: tooLarge,
-        reason: first.reason,
+        reason: offender.listOverflow ? "lists" : first!.reason,
         ...(offender.splitRefusal ? { splitRefusal: offender.splitRefusal } : {}),
-        numbers: tooLargeNumbers(first.m),
+        numbers: offender.listOverflow
+          ? { ...offender.listOverflow, listLimit: SHOPIFY_VARIABLE_LIST_LIMIT }
+          : tooLargeNumbers(first!.m),
       },
     };
   }

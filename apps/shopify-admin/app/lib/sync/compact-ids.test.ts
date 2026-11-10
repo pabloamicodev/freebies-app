@@ -74,6 +74,7 @@ function expandIds(value: unknown, key = ""): unknown {
   if (value && typeof value === "object")
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, expandIds(v, k)]));
   const kind = ID_KEYS[key];
+  if (kind && typeof value === "string" && value.includes(",")) return value.split(",").map((id) => expandIds(id, key)).join(",");
   return kind && typeof value === "string" && /^\d+$/.test(value) ? `gid://shopify/${kind}/${value}` : value;
 }
 

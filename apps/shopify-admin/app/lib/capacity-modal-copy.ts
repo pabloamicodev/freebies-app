@@ -61,6 +61,8 @@ export interface CapacityModalCopy {
 const MAX_OFFER_ACTIONS = 3;
 
 function tooLargeReason(numbers: Record<string, number>): TooLargeReason {
+  if (numbers["listKind"] !== undefined) return "lists";
+  if (numbers["offers"] !== undefined && numbers["maxOffers"] !== undefined && numbers["offers"] > numbers["maxOffers"]) return "offers";
   if (numbers["keys"] !== undefined && numbers["maxKeys"] !== undefined) return "keys";
   if (numbers["tags"] !== undefined && numbers["maxTags"] !== undefined) return "tags";
   return "bytes";
@@ -125,6 +127,24 @@ export function describeCapacityModal(data: CapacityModalData): CapacityModalCop
           limit: `Shopify lets one discount read at most ${numbers["maxKeys"] ?? SLOT_LIMITS.maxKeys} cart attributes.`,
           body,
           fix: "Remove cart attribute conditions from the offer, then try again.",
+          actions: [],
+        };
+      }
+      if (reason === "lists") {
+        return {
+          title: "This offer has a list that is too long",
+          limit: `Shopify doesn't let a discount receive a list with more than ${numbers["listLimit"] ?? 100} entries.`,
+          body,
+          fix: "Shorten the list to 100 entries or split the offer into two, then try again.",
+          actions: data.offers.slice(0, MAX_OFFER_ACTIONS).map((offer) => ({ kind: "offer", label: `Open ${offer.name}`, to: `/app/offers/${offer.id}` })),
+        };
+      }
+      if (reason === "offers") {
+        return {
+          title: "Too many offers must share one Shopify discount",
+          limit: `Shopify doesn't let a discount receive a list with more than ${numbers["maxOffers"] ?? SLOT_LIMITS.maxOffers} entries, and each offer is one entry.`,
+          body,
+          fix: "Pause or simplify some of these offers, then try again.",
           actions: [],
         };
       }

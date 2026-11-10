@@ -2,6 +2,7 @@ import type * as ShopifyFetch from "../shopify-fetch.server.js";
 import type * as PublishPending from "../publish-pending.server.js";
 import { ShopifyOutcomeUnknownError } from "../shopify-fetch.server.js";
 import { configHash } from "../publish-manifest.server.js";
+import { ShardPlanBlockedError } from "./cart-shards.server.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Sentry from "@sentry/node";
 import type * as DrizzleOrm from "drizzle-orm";
@@ -698,6 +699,67 @@ describe("publishOffersForShop — code-gated offers", () => {
     );
     expect(codePush).toBeDefined();
     expect(parsedConfig(codePush!.value).offers.map((o) => o.id)).toEqual(["code-2"]);
+  });
+
+  describe("variable list limit on code offers", () => {
+    const tagsCondition = (offerId: string, count: number) => ({
+      id: `tags-${offerId}`,
+      shopId: SHOP_ID,
+      offerId,
+      scope: "main",
+      conditionType: "customer_tags",
+      operator: "eq",
+      value: { includeTags: Array.from({ length: count }, (_, i) => `tag-${i}`), excludeTags: [] },
+      sortOrder: 0,
+      isEnabled: true,
+    });
+
+    it("refuses an oversize code offer before any node is created or any Shopify mutation is sent", async () => {
+      state.mutations = [];
+      state.offers = [
+        makeOffer({ id: "fine", requiredDiscountCode: "FINE10", codeDiscountId: "gid://shopify/DiscountCodeNode/fine" }),
+        makeOffer({ id: "huge", requiredDiscountCode: "HUGE10", codeDiscountId: null }),
+      ];
+      state.knownDiscountIds.add("gid://shopify/DiscountCodeNode/fine");
+      state.nextCodeDiscountId = "gid://shopify/DiscountCodeNode/huge";
+      state.conditionRows = [tagsCondition("huge", 101)];
+
+      const error = await publishOffersForShop(SHOP_ID, SHOP_DOMAIN).then(
+        () => null,
+        (caught: unknown) => caught,
+      );
+
+      expect(error).toBeInstanceOf(ShardPlanBlockedError);
+      const blocked = (error as InstanceType<typeof ShardPlanBlockedError>).capacity;
+      expect(blocked).toMatchObject({ code: "OFFER_TOO_LARGE", offerIds: ["huge"], numbers: { listKind: 12, listCount: 101 } });
+      expect(state.mutations.map((m) => m.name)).toEqual([]);
+      expect(state.createdCodeNodes).toEqual([]);
+      expect(state.updatedCodeNodes).toEqual([]);
+      expect(state.metafieldPushes).toEqual([]);
+      expect(state.offers.find((o) => o.id === "huge")?.codeDiscountId).toBeNull();
+    });
+
+    it("publishes a code offer with exactly 100 tags", async () => {
+      state.offers = [makeOffer({ id: "ok", requiredDiscountCode: "OK10", codeDiscountId: "gid://shopify/DiscountCodeNode/ok" })];
+      state.knownDiscountIds.add("gid://shopify/DiscountCodeNode/ok");
+      state.conditionRows = [tagsCondition("ok", 100)];
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+      expect(state.metafieldPushes.some((p) => p.ownerIds.includes("gid://shopify/DiscountCodeNode/ok"))).toBe(true);
+    });
+
+    it("does not apply the limit to a delivery code node, whose Function has no input variables", async () => {
+      state.offers = [makeOffer({ id: "ship", requiredDiscountCode: "SHIP10", codeDiscountId: "gid://shopify/DiscountCodeNode/ship" })];
+      state.knownDiscountIds.add("gid://shopify/DiscountCodeNode/ship");
+      state.nodeFunctionIds = { "gid://shopify/DiscountCodeNode/ship": "gid://shopify/ShopifyFunction/delivery" };
+      state.rewardRows = [shippingRewardFor("ship")];
+      state.conditionRows = [tagsCondition("ship", 101)];
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+      expect(state.metafieldPushes.some((p) => p.ownerIds.includes("gid://shopify/DiscountCodeNode/ship"))).toBe(true);
+    });
   });
 
   it("empties a code offer's node once it's no longer active, without touching the discount itself", async () => {
@@ -1814,9 +1876,9 @@ describe("publishOffersForShop — mixed code offers (product/order AND shipping
   it("refreshes the specific-link params on every publish (drift repair republishes), and a missing scope neither fails the publish nor pages", async () => {
     reset();
     await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
-    expect(state.shopMetafieldPushes).toHaveLength(2);
+    expect(state.shopMetafieldPushes).toHaveLength(3);
     await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
-    expect(state.shopMetafieldPushes).toHaveLength(4);
+    expect(state.shopMetafieldPushes).toHaveLength(6);
 
     state.appInstallationError = "Access denied for currentAppInstallation field. Required access: write_app_data";
     vi.mocked(Sentry.captureException).mockClear();
@@ -2159,7 +2221,22 @@ describe("publishOffersForShop — lock timeouts, retries, manifest and shop met
         type: "json",
         value: JSON.stringify({ s: [], t: [] }),
       },
+      {
+        ownerId: "gid://shopify/AppInstallation/1",
+        namespace: "promo_engine",
+        key: "remove_unfunded_gifts",
+        type: "boolean",
+        value: "false",
+      },
     ]);
+  });
+
+  it("writes the remove-unfunded-gifts flag from the per-shop setting (default false), in the same mutation", async () => {
+    reset();
+    state.settings = [{ shopId: SHOP_ID, key: "storefront.remove_unfunded_gifts", value: "true" }];
+    await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+    expect(state.shopMetafieldPushes.find((m) => m.key === "remove_unfunded_gifts")).toMatchObject({ type: "boolean", value: "true" });
+    expect(state.shopMetafieldPushes).toHaveLength(3);
   });
 
   it("writes the template, section and experiment stamp targets of live offers in the same mutation", async () => {
@@ -2175,7 +2252,7 @@ describe("publishOffersForShop — lock timeouts, retries, manifest and shop met
     await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
     const targets = state.shopMetafieldPushes.find((m) => m.key === "stamp_targets")!;
     expect(JSON.parse(targets.value)).toEqual({ s: ["page.landing-nektar/hero_abc"], t: ["page.landing-nektar"], e: ["abcd1234"] });
-    expect(state.shopMetafieldPushes.map((m) => m.key)).toEqual(["specific_link_params", "stamp_targets"]);
+    expect(state.shopMetafieldPushes.map((m) => m.key)).toEqual(["specific_link_params", "stamp_targets", "remove_unfunded_gifts"]);
   });
 
   it("a failure to write the shop metafield never fails the publish", async () => {

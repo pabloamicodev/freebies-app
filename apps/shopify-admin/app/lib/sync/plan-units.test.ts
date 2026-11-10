@@ -193,3 +193,25 @@ describe("buildPlanUnitSet with compact ids", () => {
     expect(merged[0]!.productRewards[0]!.targetVariantIds).toHaveLength(900);
   });
 });
+
+describe("list limit", () => {
+  it("marks an offer whose unpackable list is over 100 and leaves 100 alone", () => {
+    const requirement = { productId: "p", trackMode: "product", minQuantity: 1 } as never;
+    const [over, ok] = buildPlanUnits(
+      [
+        { offerId: "over", offer: offer({ id: "over", requirements: Array.from({ length: 101 }, () => requirement) }) },
+        { offerId: "ok", offer: offer({ id: "ok", requirements: Array.from({ length: 100 }, () => requirement) }) },
+      ],
+      [],
+      [],
+    );
+    expect(over!.listOverflow).toEqual({ listKind: 0, listCount: 101 });
+    expect(ok!.listOverflow).toBeUndefined();
+  });
+
+  it("finds the tier lists nested in rewards", () => {
+    const tiers = Array.from({ length: 101 }, (_, i) => ({ quantity: i + 1, targetPricePerUnit: 1 }));
+    const [unit] = buildPlanUnits([{ offerId: "t", offer: offer({ id: "t", productRewards: [productReward({ priceTiers: tiers })] }) }], [], []);
+    expect(unit!.listOverflow).toMatchObject({ listCount: 101 });
+  });
+});

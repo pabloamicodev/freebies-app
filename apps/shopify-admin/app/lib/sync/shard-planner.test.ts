@@ -593,3 +593,43 @@ describe("combination domains", () => {
     expect(result.slots[0]!.policy).toEqual(andPolicies([NC, OPEN_POLICY]));
   });
 });
+
+describe("Shopify's 100-element list limit", () => {
+  it("opens a second node when 101 offers would share one", () => {
+    const plan = planShards(named(101, 50), NONE, limits(), POLICY);
+    expect(plan.blocked).toBeUndefined();
+    expect(plan.slots).toHaveLength(2);
+    for (const slot of plan.slots) expect(slot.unitKeys.length).toBeLessThanOrEqual(100);
+    expect(placedKeys(plan)).toHaveLength(101);
+  });
+
+  it("refuses 101 offers on a single node instead of writing an offers array over the limit", () => {
+    const plan = planShards(named(101, 50), NONE, limits(1), POLICY);
+    expect(plan.blocked?.code).toBe("SLOT_FULL");
+    expect(plan.slots.flatMap((slot) => slot.unitKeys).length).toBeLessThanOrEqual(100);
+  });
+
+  it("opens a second node when two offers would bring a node to 101 distinct customer tags", () => {
+    const tags = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => `tag-${from + i}`);
+    const plan = planShards([unit("a", 500, { customerTags: tags(0, 60) }), unit("b", 500, { customerTags: tags(60, 101) })], NONE, limits(), POLICY);
+    expect(plan.blocked).toBeUndefined();
+    expect(plan.slots).toHaveLength(2);
+    for (const slot of plan.slots) expect(slot.tags.length).toBeLessThanOrEqual(100);
+  });
+
+  it("blocks one offer that alone references 101 customer tags", () => {
+    const plan = planShards([unit("a", 500, { customerTags: Array.from({ length: 101 }, (_, i) => `t${i}`) })], NONE, limits(), POLICY);
+    expect(plan.blocked).toMatchObject({ code: "OFFER_TOO_LARGE", reason: "tags" });
+  });
+
+  it("blocks an offer holding a list that cannot be split or packed", () => {
+    const plan = planShards([unit("a", 500, { listOverflow: { listKind: 0, listCount: 150 } }), unit("b")], NONE, limits(), POLICY);
+    expect(plan.blocked).toMatchObject({
+      code: "OFFER_TOO_LARGE",
+      unitKeys: ["a"],
+      reason: "lists",
+      numbers: { listKind: 0, listCount: 150, listLimit: 100 },
+    });
+    expect(plan.slots).toEqual([]);
+  });
+});
