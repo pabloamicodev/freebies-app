@@ -1,0 +1,86 @@
+{
+  "shop": "hpn-test-store.myshopify.com",
+  "seededAt": "2026-11-10T16:43:22.959Z",
+  "code": "CAP12E2E",
+  "percent": {
+    "cA": 20,
+    "cB": 10,
+    "code": 50
+  },
+  "products": {
+    "gift": {
+      "productId": "gid://shopify/Product/15455619907667",
+      "handle": "tru-protein-sampler-kit-4-samples",
+      "variantId": "gid://shopify/ProductVariant/68037463474259",
+      "price": 14.99
+    },
+    "ncAnchor": {
+      "productId": "gid://shopify/Product/8002899607635",
+      "handle": "30-days-to-better-energy-ebook",
+      "variantId": "gid://shopify/ProductVariant/45726993055827",
+      "price": 20
+    },
+    "cA": {
+      "productId": "gid://shopify/Product/8002897018963",
+      "handle": "selling-plans-ski-wax",
+      "variantId": "gid://shopify/ProductVariant/45726985584723",
+      "price": 24.95
+    },
+    "cB": {
+      "productId": "gid://shopify/Product/8002898395219",
+      "handle": "6-foundations-to-mens-health-ebook-copy",
+      "variantId": "gid://shopify/ProductVariant/45726990303315",
+      "price": 20
+    },
+    "codeProduct": {
+      "productId": "gid://shopify/Product/15455622430803",
+      "handle": "greens-complete",
+      "variantId": "gid://shopify/ProductVariant/68037472059475",
+      "price": 49.99
+    }
+  },
+  "offers": {
+    "nc-gift": "6d7953b6-5af2-4349-b5a9-ca1ffddb91f0",
+    "nc-filler": "340890c3-b4cb-4164-9433-b15aa664ba0a",
+    "c-a": "e3cd6325-bcb9-4302-984e-03dfe5422e86",
+    "c-b": "713e90da-408e-4a6b-b9e4-7c251276a6c2"
+  },
+  "nodes": [
+    {
+      "slot": 0,
+      "node": "gid://shopify/DiscountAutomaticNode/1535403556947",
+      "combinesWith": "product=true order=true shipping=true",
+      "units": [
+        "[CAP12 E2E] C 10% product B"
+      ]
+    },
+    {
+      "slot": 1,
+      "node": "gid://shopify/DiscountAutomaticNode/1544417017939",
+      "combinesWith": "product=true order=true shipping=true",
+      "units": [
+        "E2E Gift Offer",
+        "[CAP12 E2E] C 20% product A",
+        "E2E Classic Bundle",
+        "[Ambrosia E2E] cart-subtotal-free-gift-mtrcmr6l"
+      ]
+    },
+    {
+      "slot": 2,
+      "node": "gid://shopify/DiscountAutomaticNode/1544669495379",
+      "combinesWith": "product=true order=true shipping=true",
+      "units": [
+        "E2E Volume Discount"
+      ]
+    },
+    {
+      "slot": 3,
+      "node": "gid://shopify/DiscountAutomaticNode/1544670117971",
+      "combinesWith": "product=false order=false shipping=false",
+      "units": [
+        "[CAP12 E2E] NC gift",
+        "[CAP12 E2E] NC filler (inert, heavy)"
+      ]
+    }
+  ]
+}
