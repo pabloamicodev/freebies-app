@@ -141,7 +141,7 @@ fn apply_offers(
     );
 
     let mut offers = config.shipping_offers.clone();
-    offers.sort_by(|left, right| {
+    crate::de::sort_by(&mut offers, |left, right| {
         let left_scope_rank = if left.scope_mode == "sitewide" { 1 } else { 0 };
         let right_scope_rank = if right.scope_mode == "sitewide" { 1 } else { 0 };
         (left_scope_rank, left.priority, &left.id).cmp(&(
@@ -340,9 +340,9 @@ fn landing_anchor_quantity(offer: &CompiledShippingOffer, lines: &[Lines]) -> i6
 }
 
 fn has_complete_quiz_bundle(lines: &[Lines]) -> bool {
-    use std::collections::HashMap;
+    use crate::de::HashMap;
 
-    let mut groups: HashMap<String, (i64, Option<i64>)> = HashMap::new();
+    let mut groups: HashMap<String, (i64, Option<i64>)> = HashMap::default();
     for line in lines {
         let Some(bundle_id) = line
             .quiz_bundle_id_attribute()
@@ -486,7 +486,7 @@ fn parse_config(input: &Input) -> Option<CompiledConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shopify_function::run_function_with_input;
+    use crate::de::run_function_with_input;
 
     fn shipping_config(offers_json: &str) -> String {
         format!(r#"{{"offers":[],"shippingOffers":{offers_json}}}"#)

@@ -18,6 +18,8 @@ const source = await readFile(absolutePath);
 
 binaryen.setOptimizeLevel(4);
 binaryen.setShrinkLevel(2);
+// Inline functions with a single caller up to a larger size, then dedupe/pack/reorder and optimize again: ~2.5 KB on the discount Functions.
+binaryen.setOneCallerInlineMaxSize(200);
 const module = binaryen.readBinary(source);
 try {
   module.setFeatures(
@@ -28,6 +30,15 @@ try {
       | binaryen.Features.SignExt
       | binaryen.Features.BulkMemoryOpt,
   );
+  module.optimize();
+  module.runPasses([
+    "memory-packing",
+    "duplicate-function-elimination",
+    "merge-similar-functions",
+    "reorder-functions",
+    "reorder-locals",
+    "vacuum",
+  ]);
   module.optimize();
   if (!module.validate()) throw new Error("Binaryen produced an invalid WebAssembly module");
   await writeFile(temporaryPath, module.emitBinary());

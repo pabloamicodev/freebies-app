@@ -1,7 +1,7 @@
 pub use crate::page_match::CompiledPageUrlCondition;
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
-use std::collections::HashMap;
+use crate::de::HashMap;
 
 /// Compiled config — parsed from the `promo_engine.function_config` metafield.
 /// This is our own JSON shape (written by the offer-publisher worker), unrelated
