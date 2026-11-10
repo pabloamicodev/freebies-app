@@ -24,8 +24,7 @@ import {
 } from "./capacity-transforms.server.js";
 import { liveIncidentOfferIds, proposeForIncident, stillBlocked, workaroundsEnabled } from "./capacity-workarounds.server.js";
 import { listAutomaticDiscountCandidates, setAutomaticDiscountActive, type AutomaticDiscountCandidate } from "./discount-node.server.js";
-import { tryPublishShop, type ShopPublishFn } from "./offer-publish-flow.server.js";
-import { isPublishPending } from "./publish-pending.server.js";
+import { tryPublishShop, tryPublishShopOutcome, type ShopPublishFn } from "./offer-publish-flow.server.js";
 import { queueProductSync } from "./sync/product-sync.server.js";
 import { decryptToken } from "./token-crypto.server.js";
 
@@ -50,7 +49,7 @@ export interface ApplyDeps {
   capacity?: CapacityOptions;
   env?: NodeJS.ProcessEnv;
   syncProducts?: (shopId: string) => Promise<unknown>;
-  /** True when the last publish was parked behind another one (lock busy) instead of reaching Shopify. */
+  /** Test stand-in for the publish outcome: true when that publish was parked behind another one (lock busy). */
   isPending?: (shopId: string) => Promise<boolean>;
   now?: () => Date;
 }
@@ -77,6 +76,8 @@ type Snapshot = {
   undoStartedAt?: string;
   /** The publish was parked behind another one: the next successful publish resolves the incident. */
   publishPending?: boolean;
+  /** Written the moment the publish succeeded: from then on nothing may revert the fix, only mark it applied. */
+  publishedAt?: string;
 };
 
 const emptySnapshot = (): Snapshot => ({ edits: [], createdOfferIds: [], offerUpdatedAfter: {}, deactivated: [] });
@@ -256,6 +257,17 @@ export async function reclaimStalePending(db: Db, shop: ShopRef, deps: ApplyDeps
     const snapshot = { ...emptySnapshot(), ...(action.snapshot as Partial<Snapshot>) };
     if (now.getTime() - startedAtOf(action.createdAt, snapshot) < STALE_PENDING_MS) continue;
     const isUndo = snapshot.undoStartedAt !== undefined;
+    if (!isUndo && snapshot.publishedAt) {
+      // The publish succeeded and only the bookkeeping was lost: the fix is live, so it is recorded, never reverted.
+      const publishedAt = new Date(snapshot.publishedAt);
+      const done = await db
+        .update(capacityActions)
+        .set({ status: "applied", appliedAt: publishedAt, undoUntil: new Date(publishedAt.getTime() + UNDO_WINDOW_MS) })
+        .where(and(eq(capacityActions.shopId, shop.id), eq(capacityActions.id, action.id), eq(capacityActions.status, "pending")))
+        .returning({ id: capacityActions.id });
+      reclaimed += done.length;
+      continue;
+    }
     const claimed = await db
       .update(capacityActions)
       .set({ status: isUndo ? "undo_failed" : "rolled_back", error: workaroundCopy.timedOut })
@@ -385,8 +397,9 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
     }
 
     // From here on the tx is committed: anything that fails before a successful publish must undo it all.
-    const publish = deps.publish ?? tryPublishShop;
+    const publish: ShopPublishFn = deps.publish ?? (async (id, domain) => (await tryPublishShopOutcome(id, domain)).failure);
     let publishAttempted = false;
+    let parkedByThisPublish = false;
     const rollBack = async (message: string): Promise<WorkaroundResult> => {
       const undoErrors = await revertAll(db, shop, ops, snapshot);
       // A capacity block is raised before anything is written; any other failure may have touched the live config.
@@ -402,13 +415,18 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
       }
       if (snapshot.deactivated.length > 0 || snapshot.edits.some((edit) => edit.table === "setting")) await invalidateAutomaticBudgetCache(shop.id);
       publishAttempted = true;
-      failure = await publish(shop.id, shop.domain);
+      if (deps.publish) failure = await deps.publish(shop.id, shop.domain);
+      else {
+        const outcome = await tryPublishShopOutcome(shop.id, shop.domain);
+        failure = outcome.failure;
+        parkedByThisPublish = outcome.parked;
+      }
     } catch (error) {
-      return rollBack(error instanceof Error ? error.message : String(error));
+      return await rollBack(error instanceof Error ? error.message : String(error));
     }
     if (failure) {
       publishAttempted = !failure.capacity;
-      return rollBack(failure.message);
+      return await rollBack(failure.message);
     }
 
     // Published: the fix is live. Nothing below may undo it or mark it failed; bookkeeping is best-effort.
@@ -421,7 +439,12 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
         return fallback;
       }
     };
-    const parked = await safely("pending-check", () => (deps.isPending ?? (deps.publish ? async () => false : isPublishPending))(shop.id), false);
+    snapshot.publishedAt = now.toISOString();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const marked = await safely("mark-published", async () => (await db.update(capacityActions).set({ snapshot: sql`${capacityActions.snapshot} || ${JSON.stringify({ publishedAt: snapshot.publishedAt })}::jsonb` }).where(and(eq(capacityActions.shopId, shop.id), eq(capacityActions.id, actionId))), true), false);
+      if (marked) break;
+    }
+    const parked = parkedByThisPublish || (deps.isPending ? await safely("pending-check", () => deps.isPending!(shop.id), false) : false);
     if (parked) snapshot.publishPending = true;
     for (let attempt = 0; attempt < 3; attempt++) {
       const saved = await safely(
@@ -459,9 +482,10 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
   } catch (error) {
     if (error instanceof Refusal) return fail(error.result);
     if (committed) {
-      // The revert itself failed: leave the action pending so the stale reclaim retries it. Never claim nothing changed.
+      // The revert itself failed. Close the action now (a later automatic revert could not know what ran) and say so.
       Sentry.captureException(error, { tags: { shopId: shop.id, context: "capacity-apply-post-commit" } });
-      return { ok: false, code: "undo_failed", message: workaroundCopy.revertPending, actionId };
+      await setAction(db, shop.id, actionId, { status: "undo_failed", error: `${workaroundCopy.revertFailed} ${error instanceof Error ? error.message : String(error)}`, snapshot }).catch(() => undefined);
+      return { ok: false, code: "undo_failed", message: workaroundCopy.revertFailed, actionId };
     }
     await fail({ ok: false, code: "rolled_back", message: error instanceof Error ? error.message : String(error) }).catch(() => undefined);
     throw error;

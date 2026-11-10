@@ -253,7 +253,8 @@ describe("combination", () => {
     const blocker = await giftOffer(shopId, "blocker", Array.from({ length: 60 }, variantGid), { priority: 1 });
     await db.insert(offerCombinationPolicies).values({ shopId, offerId: blocker, combinesWithProductDiscounts: false });
     for (let i = 0; i < 7; i++) await giftOffer(shopId, `c-${i}`, Array.from({ length: 60 }, variantGid), { priority: 10 + i });
-    const incident = await incidentFrom(shopId, [], cap());
+    // Domains explicitly off for the block itself, so a leaked FUNCTION_SHARD_DOMAINS env can't hide it.
+    const incident = await incidentFrom(shopId, [], { ...cap(), domainsEnabled: false });
     expect(incident.code).toBe("COMBINATION_SINGLE_SHARD");
     const result = await proposeForIncident(db, incident, { capacity: cap(), env: {} });
     expect(result.proposals.map((p) => p.kind)).toEqual(["allow_combine"]);

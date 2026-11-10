@@ -317,3 +317,62 @@ describe("undo guards", () => {
     expect((await db.select().from(capacityActions).where(eq(capacityActions.id, applied.actionId!)))[0]).toMatchObject({ status: "applied", error: "Shopify exploded" });
   });
 });
+
+/** A db whose capacity_actions "applied" writes fail, or whose transactions fail once armed: simulates the platform dying mid-bookkeeping. */
+function flaky(real: Db, opts: { failApplied?: boolean; armed?: () => boolean }): Db {
+  return new Proxy(real, {
+    get(target, prop) {
+      if (prop === "update" && opts.failApplied) {
+        return (table: unknown) => {
+          const builder = (target as unknown as { update: (t: unknown) => { set: (v: Record<string, unknown>) => unknown } }).update(table);
+          return { set: (values: Record<string, unknown>) => { if (values["status"] === "applied") throw new Error("db gone"); return builder.set(values); } };
+        };
+      }
+      if (prop === "transaction" && opts.armed) {
+        return (...args: unknown[]) => {
+          if (opts.armed!()) throw new Error("revert tx failed");
+          return (target.transaction as (...a: unknown[]) => unknown)(...args);
+        };
+      }
+      const value = Reflect.get(target, prop, target) as unknown;
+      return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+}
+
+describe("N1: a published fix is never reverted by the reclaim", () => {
+  it("when marking applied fails every time, the published marker makes the reclaim record it as applied and leave the fix live", async () => {
+    const f = await wholeProductsFixture("n1-published.myshopify.com", "draft");
+    const result = await applyWorkaround(flaky(db, { failApplied: true }), f.shop, f.input, deps());
+    expect(result).toMatchObject({ ok: true, code: "applied" });
+    const [stuck] = await actionsOf(f.incident.id);
+    expect(stuck).toMatchObject({ status: "pending", snapshot: expect.objectContaining({ publishedAt: expect.any(String) }) });
+    const publish = vi.fn(async () => null);
+    const later = { now: () => new Date(Date.now() + STALE_PENDING_MS + 60_000), publish };
+    expect(await reclaimStalePending(db, f.shop, deps(later))).toBe(1);
+    const [after] = await actionsOf(f.incident.id);
+    expect(after).toMatchObject({ status: "applied" });
+    expect(after!.undoUntil).not.toBeNull();
+    expect(publish).not.toHaveBeenCalled();
+    expect(await statusOf(f.offerId)).toBe("active");
+    const [row] = await db.select().from(offerRewards).where(eq(offerRewards.offerId, f.offerId));
+    expect(row!.target).toMatchObject({ selectionLevel: "product" });
+  });
+});
+
+describe("N2: a failed revert closes the action at once", () => {
+  it("marks it undo_failed with the error and tells the merchant to check their offers, with no promise of a retry", async () => {
+    const f = await wholeProductsFixture("n2-revert-fails.myshopify.com", "draft");
+    let armed = false;
+    const publish = vi.fn(async () => {
+      armed = true;
+      return { message: "Shopify exploded", scope: "shop" as const };
+    });
+    const result = await applyWorkaround(flaky(db, { armed: () => armed }), f.shop, f.input, deps({ publish }));
+    expect(result).toMatchObject({ ok: false, code: "undo_failed" });
+    expect(result.message).toContain("Check your offers");
+    expect(result.message).not.toMatch(/retry/i);
+    const [action] = await actionsOf(f.incident.id);
+    expect(action).toMatchObject({ status: "undo_failed", error: expect.stringContaining("revert tx failed") });
+  });
+});

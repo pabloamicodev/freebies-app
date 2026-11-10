@@ -454,22 +454,30 @@ function capacityValidation(capacity: CapacityPreflight): PublishValidationResul
 }
 
 export async function tryPublishShop(shopId: string, shopDomain: string): Promise<PublishFailure | null> {
+  return (await tryPublishShopOutcome(shopId, shopDomain)).failure;
+}
+
+/** `tryPublishShop` plus whether this very publish was parked behind another one (lock busy), judged from its own result. */
+export async function tryPublishShopOutcome(shopId: string, shopDomain: string): Promise<{ failure: PublishFailure | null; parked: boolean }> {
   try {
     // "pending" means another publish held the shop's lock: the shop is flagged and retried in the
     // background (and by the cron). That is not an error and must never pause or draft an offer.
-    await publishOffersForShop(shopId, shopDomain);
+    const outcome = await publishOffersForShop(shopId, shopDomain);
     await invalidateOfferDefinitions(shopId);
-    return null;
+    return { failure: null, parked: outcome === "pending" };
   } catch (err) {
     const offerScoped = err instanceof OfferPublishError;
     const scope: PublishScope = offerScoped ? "offer" : "shop";
     Sentry.captureException(err, { tags: { shopId, scope, context: "publish-shop-config" } });
     if (err instanceof ShardPlanBlockedError) recordCapacityBlock({ shopId, ...err.capacity });
     return {
-      message: err instanceof Error ? err.message : "Failed to publish offer configuration to Shopify.",
-      scope,
-      offerId: offerScoped ? err.offerId : undefined,
-      ...(err instanceof ShardPlanBlockedError ? { capacity: err.capacity } : {}),
+      parked: false,
+      failure: {
+        message: err instanceof Error ? err.message : "Failed to publish offer configuration to Shopify.",
+        scope,
+        offerId: offerScoped ? err.offerId : undefined,
+        ...(err instanceof ShardPlanBlockedError ? { capacity: err.capacity } : {}),
+      },
     };
   }
 }

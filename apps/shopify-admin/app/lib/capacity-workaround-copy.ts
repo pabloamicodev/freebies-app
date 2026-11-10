@@ -73,7 +73,7 @@ export const workaroundCopy = {
   undoExpired: "The 24 hour undo window has passed.",
   appliedMessage: (title: string) => `${title}: done.`,
   appliedPendingMessage: (title: string) => `${title}: done. Another update is publishing right now, so it will go live shortly.`,
-  revertPending: "Something failed while applying the fix. We are reverting it and will retry automatically; check your offers in a few minutes.",
+  revertFailed: "Something failed while applying the fix and it could not be fully reverted. Check your offers.",
   undoneMessage: "Undone.",
   activatedMessage: (names: readonly string[]) => `${plural(names.length, "offer")} switched on: ${list(names)}.`,
   keptOffMessage: (items: ReadonlyArray<{ name: string; status: string }>) =>

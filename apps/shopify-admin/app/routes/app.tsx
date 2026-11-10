@@ -151,7 +151,8 @@ export default function AppLayout() {
           <a href="/app/logs">Error Logs</a>
         </NavMenu>
         <Outlet />
-        <CapacityIncidentsDialog unsnoozed={capacityIncidents.unsnoozed} />
+        {/* A loader that did not deliver the count (failure, stub) means no dialog, never a broken shell. */}
+        <CapacityIncidentsDialog unsnoozed={capacityIncidents?.unsnoozed ?? 0} />
       </PolarisAppProvider>
     </AppProvider>
   );
