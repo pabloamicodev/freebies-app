@@ -223,7 +223,7 @@ async function main(): Promise<void> {
       if (toPause.length > 0) {
         await db.update(offers).set({ status: "paused", updatedAt: new Date() }).where(and(eq(offers.shopId, shop.id), inArray(offers.id, toPause.map((r) => r.id))));
       }
-      await setFunctionCompactIdsEnabled(db, shop.id, false);
+      if (!args.includes("--keep-compact")) await setFunctionCompactIdsEnabled(db, shop.id, false);
 
       // 3. The offers.
       const NC = { orderDiscounts: false, productDiscounts: false, shippingDiscounts: false };
@@ -320,7 +320,7 @@ async function main(): Promise<void> {
       await publish();
       const rows = await report("after seed publish");
       const policies = new Set(rows.map((r) => r.live));
-      if (padding > 0 && (rows.length < 3 || policies.size < 2)) {
+      if (!args.includes("--keep-compact") && padding > 0 && (rows.length < 3 || policies.size < 2)) {
         throw new Error(`Split not forced: ${rows.length} node(s), ${policies.size} distinct combinesWith. Raise --padding.`);
       }
       writeFileSync(
