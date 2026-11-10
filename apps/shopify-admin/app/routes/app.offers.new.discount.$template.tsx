@@ -37,8 +37,8 @@ import { OfferConditionsBuilder } from "../components/OfferConditionsBuilder.js"
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
 import { toStoredAmount } from "../lib/money.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
-import { combinationOptOutWarning, productDiscountsField } from "../lib/capacity-modal-copy.js";
-import { isFunctionShardsEnabled } from "../lib/function-shards-flag.server.js";
+import { combinationWizardNote, productDiscountsField } from "../lib/capacity-modal-copy.js";
+import { isFunctionShardsEnabled, isShardDomainsEnabled } from "../lib/function-shards-flag.server.js";
 import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
 import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
@@ -59,7 +59,8 @@ class CodeRejectedError extends Error {}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { timezone, db, shopId } = await getShopContext(request);
-  return { timezone, nowLocal: nowInZone(timezone), shardsEnabled: await isFunctionShardsEnabled(db, shopId) };
+  const shardsEnabled = await isFunctionShardsEnabled(db, shopId);
+  return { timezone, nowLocal: nowInZone(timezone), shardsEnabled, domainsEnabled: shardsEnabled && (await isShardDomainsEnabled(db, shopId)) };
 };
 
 // ─── Action ──────────────────────────────────────────────────────────────────
@@ -479,7 +480,7 @@ function createCartTier(values: Omit<CartTier, "id">): CartTier {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function NewDiscountOfferPage() {
-  const { nowLocal, shardsEnabled } = useLoaderData<typeof loader>();
+  const { nowLocal, shardsEnabled, domainsEnabled } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const { state } = useNavigation();
@@ -2168,7 +2169,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                 )}
                 {shardsEnabled && !combinesProductDiscounts && (
                   <p className="b-help" role="note" style={{ margin: 0 }}>
-                    {combinationOptOutWarning}
+                    {combinationWizardNote(domainsEnabled)}
                   </p>
                 )}
                 <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>

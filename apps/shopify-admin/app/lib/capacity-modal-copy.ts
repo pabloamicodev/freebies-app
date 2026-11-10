@@ -3,6 +3,7 @@ import {
   automaticDiscountCountUnknownMessage,
   combinationSingleShardMessage,
   combinationSingleShardTitle,
+  combinationGroupsWizardNote,
   offerTooLargeMessage,
   sharedConfigTooLargeMessage,
   slot0GroupTooLargeMessage,
@@ -164,10 +165,13 @@ export function describeCapacityModal(data: CapacityModalData): CapacityModalCop
         title: combinationSingleShardTitle,
         limit: `Offers that don't combine with product discounts must share one Shopify discount, which holds up to ${slotBytes.toLocaleString("en-US")} bytes.`,
         body: combinationSingleShardMessage(names),
-        fix: "Allow those offers to combine with product discounts, or pause some offers.",
-        actions: data.offers
-          .slice(0, MAX_OFFER_ACTIONS)
-          .map((offer) => ({ kind: "offer", label: `Open ${offer.name}`, to: `/app/offers/${offer.id}/combination` })),
+        fix: "Let those offers run in their own Shopify discount, allow them to combine with product discounts, or pause some offers.",
+        actions: [
+          { kind: "offer", label: "Let them run separately…", to: "/app/diagnostics?combination=allow" },
+          ...data.offers
+            .slice(0, MAX_OFFER_ACTIONS)
+            .map((offer): CapacityModalAction => ({ kind: "offer", label: `Open ${offer.name}`, to: `/app/offers/${offer.id}/combination` })),
+        ],
       };
   }
 }
@@ -180,6 +184,10 @@ export const combinationOptOutWarning = `This offer will force all offers into o
  * discounts, so it is shown for every template and starts checked; unsharded shops keep today's behaviour
  * (shown for cart-discount offers only, so other templates save as not combining).
  */
+/** Note under the unchecked "Product discounts" box: which behavior applies depends on the combination-groups setting. */
+export const combinationWizardNote = (domainsEnabled: boolean): string =>
+  domainsEnabled ? combinationGroupsWizardNote : combinationOptOutWarning;
+
 export function productDiscountsField(templateId: string, shardsEnabled: boolean): { visible: boolean; checked: boolean } {
   const visible = shardsEnabled || templateId === "cart";
   return { visible, checked: visible };

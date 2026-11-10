@@ -4,17 +4,39 @@
  * Accessible from admin navigation (Debug / Diagnostics).
  */
 
-import { useLoaderData } from "react-router";
+import { useFetcher, useLoaderData, useSearchParams } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { shops, offers, productCache, variantCache, analyticsEvents, cartMutationLogs } from "@promo/db";
 import { eq, and, count, gte } from "drizzle-orm";
-import type { LoaderFunctionArgs } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { isShardDomainsEnabled, setShardDomainsEnabled } from "../lib/function-shards-flag.server.js";
+import { publishShopConfig } from "../lib/offer-publish-flow.server.js";
 import { ShopifyLimitsCard } from "../components/ShopifyLimits.js";
 import { loadLimitsMeter } from "../lib/capacity-meter.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
+/** Turns the combination-groups setting on or off and republishes; a failed publish puts the setting back. */
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { session } = await authenticate.admin(request);
+  const db = getDb();
+  const [shop] = await db.select({ id: shops.id }).from(shops).where(eq(shops.myshopifyDomain, session.shop)).limit(1);
+  if (!shop) return { error: "Shop not found." };
+  const formData = await request.formData();
+  if (formData.get("intent") !== "set_combination_domains") return { error: "Unknown action." };
+  const enabled = formData.get("enabled") === "true";
+  const previous = await isShardDomainsEnabled(db, shop.id);
+  if (enabled === previous) return { success: true };
+  await setShardDomainsEnabled(db, shop.id, enabled);
+  const publishError = await publishShopConfig(shop.id, session.shop);
+  if (publishError) {
+    await setShardDomainsEnabled(db, shop.id, previous);
+    return { error: `Republishing to Shopify failed, so the setting was reverted: ${publishError}` };
+  }
+  return { success: true };
+};
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -239,6 +261,8 @@ function HealthCard({ check }: { check: HealthCheck }) {
 export default function DiagnosticsPage() {
   const { shop, diagnostics, limits } = useLoaderData<typeof loader>();
   const [running, setRunning] = useState(false);
+  const domainsFetcher = useFetcher<typeof action>();
+  const [searchParams] = useSearchParams();
 
   if (!shop || !diagnostics) {
     return (
@@ -412,7 +436,19 @@ export default function DiagnosticsPage() {
         </div>
       </div>
 
-      <ShopifyLimitsCard meter={limits} />
+      {domainsFetcher.data && "error" in domainsFetcher.data && domainsFetcher.data.error && (
+        <div className="b-banner b-banner-red" role="alert" style={{ marginTop: 16 }}>
+          <div className="b-banner-body">
+            <div className="b-banner-title">{domainsFetcher.data.error}</div>
+          </div>
+        </div>
+      )}
+      <ShopifyLimitsCard
+        meter={limits}
+        domainsBusy={domainsFetcher.state !== "idle"}
+        initialConfirmOpen={searchParams.get("combination") === "allow"}
+        onSetDomains={(enabled) => domainsFetcher.submit({ intent: "set_combination_domains", enabled: String(enabled) }, { method: "post" })}
+      />
 
       {/* Metrics table */}
       <div className="b-card" style={{ marginTop: 16 }}>

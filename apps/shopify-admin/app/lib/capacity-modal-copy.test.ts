@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { CAPACITY_MODAL_CODES, combinationOptOutWarning, describeCapacityModal, isCapacityModalCode, productDiscountsField, type CapacityModalData } from "./capacity-modal-copy.js";
+import { combinationDomainsConfirm, combinationGroupsMessage } from "./capacity-copy.js";
+import { CAPACITY_MODAL_CODES, combinationOptOutWarning, combinationWizardNote, describeCapacityModal, isCapacityModalCode, productDiscountsField, type CapacityModalData } from "./capacity-modal-copy.js";
 import { limitsBanner, limitsLevel } from "./capacity-meter.js";
 
 const offers = [{ id: "o1", name: "Spring gift" }, { id: "o2", name: "VIP shipping" }];
@@ -63,7 +64,8 @@ describe("describeCapacityModal", () => {
     const copy = describeCapacityModal(data({ code: "COMBINATION_SINGLE_SHARD", numbers: { slotBytes: 9500, offersBlocking: 2 } }));
     expect(copy.title).toBe("Discount combinations limit how many offers can run");
     expect(copy.fix).toContain("combine with product discounts");
-    expect(copy.actions[1]).toEqual({ kind: "offer", label: "Open VIP shipping", to: "/app/offers/o2/combination" });
+    expect(copy.actions[0]).toEqual({ kind: "offer", label: "Let them run separately…", to: "/app/diagnostics?combination=allow" });
+    expect(copy.actions[2]).toEqual({ kind: "offer", label: "Open VIP shipping", to: "/app/offers/o2/combination" });
   });
 
   it("every modal code renders copy for all four parts", () => {
@@ -72,6 +74,28 @@ describe("describeCapacityModal", () => {
       expect([copy.title, copy.limit, copy.body, copy.fix].every((part) => part.length > 10)).toBe(true);
     }
     expect(isCapacityModalCode("COMPILE_ERROR")).toBe(false);
+  });
+});
+
+describe("combination groups copy (FIX-cap-12)", () => {
+  it("W1: the wizard note follows the setting", () => {
+    expect(combinationWizardNote(true)).toContain("run in their own Shopify discount once your store has many offers");
+    expect(combinationWizardNote(true)).toContain("whichever is better");
+    expect(combinationWizardNote(false)).toBe(combinationOptOutWarning);
+  });
+
+  it("W2: names how many offers run in how many discounts and what changes for the others", () => {
+    expect(combinationGroupsMessage(2, 1, 30)).toBe(
+      "2 offers that don't combine run in 1 Shopify discount. They no longer stack with your other 30 offers, and those offers now combine with Shopify and other apps' product discounts when both allow it.",
+    );
+    expect(combinationGroupsMessage(1, 2, 1)).toContain("1 offer that doesn't combine runs in 2 Shopify discounts");
+    expect(combinationGroupsMessage(1, 2, 1)).toContain("your other offer,");
+  });
+
+  it("W3: the confirmation names both choices", () => {
+    expect(combinationDomainsConfirm.title).toBe("Let offers that don't combine run separately?");
+    expect([combinationDomainsConfirm.allow, combinationDomainsConfirm.keep]).toEqual(["Allow", "Keep one discount"]);
+    expect(combinationDomainsConfirm.body).toContain("better of the two instead of both");
   });
 });
 
