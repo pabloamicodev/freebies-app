@@ -12,7 +12,7 @@ import { createRequire } from "node:module";
 const { transform } = createRequire(join(process.cwd(), "packages/storefront-runtime/package.json"))("esbuild");
 
 const problems = [];
-for (const name of ["promo-engine.js", "promo-engine-gift-prompt.js", "promo-engine-blocks.js", "promo-engine-gift-picker.js"]) {
+for (const name of ["promo-engine.js", "promo-engine-gift-prompt.js", "promo-engine-gift-notice.js", "promo-engine-blocks.js", "promo-engine-gift-picker.js"]) {
 const code = readFileSync(join(process.cwd(), "apps/shopify-admin/extensions/theme-extension/assets", name), "utf8");
 
 const opts = { minify: false, loader: "js", legalComments: "none" };

@@ -22,6 +22,8 @@ import { giftRewardKey, loadDeclinedGiftRewards, saveDeclinedGiftRewards } from 
 import { cartFingerprint, giftKeyOfItem, loadUnfundedSuppressions, saveUnfundedSuppressions, unfundedGiftKeys } from "./unfunded-gifts.js";
 import { initGiftSlider, isSoldOutCartError } from "./widgets/gift-slider.js";
 import type { initFbtWidget } from "./widgets/fbt.js";
+import { t } from "./i18n.js";
+import { showGiftNotice } from "./widgets/gift-prompt-loader.js";
 import { lazyInitFbtWidget, lazyInitBundleBuilder } from "./widgets/blocks-loader.js";
 import { sharePreact } from "./preact-share.js";
 import type { initBundleBuilder } from "./widgets/bundle-builder.js";
@@ -646,6 +648,7 @@ export class PromoEngineRuntime {
         });
       }
       if (removed.size === 0) return cart;
+      showGiftNotice(t("giftRemoved"), t("close"));
       const next = signal.aborted ? fresh : await AjaxCartAdapter.getCart();
       const fingerprint = this.fundingFingerprint(next);
       for (const key of removed) {

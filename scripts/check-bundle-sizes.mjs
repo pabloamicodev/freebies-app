@@ -17,6 +17,8 @@ const BUDGETS = {
   "promo-engine.js": 30,
   // Requested by promo-engine.js only once an evaluation returns a gift picker (cart drawer button, cart page button, checkout reminder).
   "promo-engine-gift-prompt.js": 3,
+  // Requested by promo-engine.js the first time a gift Shopify left at full price is removed from the cart.
+  "promo-engine-gift-notice.js": 2,
   // Requested by promo-engine.js when an FBT or bundle-builder block mounts; preact is shared from the main bundle.
   "promo-engine-blocks.js": 6,
   // Requested only when a gift modal offers more than one product (product cards + variant chooser); preact is shared from the main bundle.
