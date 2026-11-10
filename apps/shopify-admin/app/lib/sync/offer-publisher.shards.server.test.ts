@@ -6,6 +6,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { appSettings, discountShards, offerCombinationPolicies, offerConditions, offerRewards, offers, shops, type Db } from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "../test-support/pglite-db.js";
 import { setFunctionShardsEnabled, setShardDomainsEnabled } from "../function-shards-flag.server.js";
+import { unpackList } from "./compile-config.js";
 import { SLOT_LIMITS } from "./shard-planner.js";
 
 let currentDb: Db | null = null;
@@ -918,12 +919,12 @@ describe.each(["off", "on"])("sharded cart publish (combination groups default %
         const published = shopify.value(slotOwner(row)).offers.filter((entry) => entry.id === offerId) as Array<{
           id: string;
           title?: string;
-          productRewards: Array<{ targetProductIds: string[] }>;
+          productRewards: Array<{ targetProductIds: string[] | string }>;
         }>;
         expect(published.length).toBeLessThanOrEqual(1);
         for (const entry of published) {
           expect(entry.title).toBe("Catalog sale");
-          covered.push(...entry.productRewards[0]!.targetProductIds);
+          covered.push(...unpackList(entry.productRewards[0]!.targetProductIds));
         }
       }
       expect([...covered].sort()).toEqual([...wholeProducts].sort());

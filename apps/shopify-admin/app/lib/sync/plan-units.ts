@@ -1,5 +1,5 @@
 import type { offerCombinationPolicies, offerConditions } from "@promo/db";
-import type { CompiledOffer } from "./compile-config.js";
+import { findOversizeList, type CompiledOffer } from "./compile-config.js";
 import { mergeOfferParts, splitOffer, type SplitOptions, type SplitPart, type SplitRefusal } from "./offer-split.js";
 import { envelopeBytes, SLOT_LIMITS, unitBytes, type PlanUnit } from "./shard-planner.js";
 
@@ -57,6 +57,7 @@ export function buildPlanUnitSet(
   const units = compiled.map(({ offerId, offer }): PlanUnit => {
     const cartAttributeKeys = cartAttributeKeysOf(conditions.filter((condition) => condition.offerId === offerId));
     const customerTags = [...new Set([...(offer.requiredCustomerTags ?? []), ...(offer.excludedCustomerTags ?? [])])].sort();
+    const listOverflow = findOversizeList(offer);
     const unit: PlanUnit = {
       key: offerId,
       bytes: unitBytes(offer, options.compactIds),
@@ -72,6 +73,7 @@ export function buildPlanUnitSet(
       stopLowerPriority: policies.find((policy) => policy.offerId === offerId)?.stopLowerPriority ?? offer.stopLowerPriority,
       targetProductIds: targetProductIdsOf(offer),
       multiLineFixed: offer.productRewards.some((reward) => reward.scopeMode === "quiz_bundle"),
+      ...(listOverflow ? { listOverflow } : {}),
     };
     const envelope = envelopeBytes(cartAttributeKeys, customerTags);
     if (unit.bytes + envelope - 1 <= SLOT_LIMITS.slotBytes) return unit;

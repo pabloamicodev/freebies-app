@@ -13,19 +13,20 @@ import { serializeFunctionConfig } from "./sync/compile-config.js";
 import { compileCartOffers, legacyGatedOfferIds } from "./sync/cart-offers.server.js";
 import { isLimitsEnforced } from "./limits-enforced.server.js";
 import { buildAttributeQueryVariables, MAX_CUSTOM_CART_ATTRIBUTE_KEYS } from "./sync/attribute-query-variables.js";
-import { planShards, SLOT_LIMITS, type CombinationPolicy, type PlanBlockCode } from "./sync/shard-planner.js";
+import { planShards, SLOT_LIMITS, type CombinationPolicy, type PlanBlockCode, type PlanBlockReason } from "./sync/shard-planner.js";
 import { baseOfferId, buildPlanUnitSet, cartAttributeKeysOf } from "./sync/plan-units.js";
 import type { SplitRefusal } from "./sync/offer-split.js";
 import { loadSplitOptions } from "./sync/variant-products.server.js";
+import { assertCodeOfferListsWithinLimit } from "./sync/variable-list-guard.js";
 import { combinationBlockers, type CombinationBlocker } from "./sync/combination-blockers.js";
 import { isCheckoutCodeGated } from "./code-redemption.js";
-import { MAX_METAFIELD_BYTES } from "./sync/offer-publisher.server.js";
+import { MAX_METAFIELD_BYTES, codeNodeKind } from "./sync/offer-publisher.server.js";
 import { buildCartValidationConfig, MAX_VALIDATION_CONFIG_BYTES } from "./cart-validation.server.js";
 import { OfferPublishError } from "./offer-publish-errors.server.js";
 import { isFunctionCompactIdsEnabled } from "./function-compact-ids-flag.server.js";
 import { isFunctionShardsEnabled, isShardDomainsEnabled } from "./function-shards-flag.server.js";
 import { summarizeCombinationGroups, type CombinationGroupsSummary } from "./sync/combination-groups.js";
-import { countShardNodes, readPreviousAssignment } from "./sync/cart-shards.server.js";
+import { ShardPlanBlockedError, countShardNodes, readPreviousAssignment } from "./sync/cart-shards.server.js";
 import {
   automaticNodeBudget,
   CART_SHARD_POOL_SETTING,
@@ -99,7 +100,19 @@ export async function compileSharedOffers(
     name: source.internalName,
   }));
   const compactIds = await isFunctionCompactIdsEnabled(db, shopId);
+  // Code offers never join the shared config, but the publisher refuses one whose lists are over the limit.
+  const codeGated = rows.filter((offer) => !sharedIds.has(offer.id) && offer.status === "active");
+  const codeOffers = codeGated.length === 0
+    ? []
+    : await compileCartOffers(db, shopId, codeGated, { conditions, rewards, policies, shopCurrencyCode, limitsEnforced, caller: "capacity-preflight" }).catch(() => []);
   return {
+    codeCompiled: codeOffers.map(({ source, offer }) => ({
+      offerId: source.id,
+      offer,
+      conditions: conditions.filter((c) => c.offerId === source.id),
+      name: source.internalName,
+      kind: codeNodeKind(rewards.filter((r) => r.offerId === source.id)),
+    })),
     compiled,
     policies: sharedPolicies,
     compactIds,
@@ -201,7 +214,7 @@ export type CapacityPreflight =
       offerIds: string[];
       offerNames: string[];
       numbers: Record<string, number>;
-      reason?: "bytes" | "keys" | "tags" | "combination";
+      reason?: PlanBlockReason | "combination";
       /** OFFER_TOO_LARGE with sharding on: why the offer cannot be split across slots (offer-split.ts reason code). */
       splitRefusal?: SplitRefusal;
       message: string;
@@ -301,6 +314,23 @@ export async function preflightCapacity(
     return { ok: true, plan: { slots: 1, bytesPerSlot: [0], deliveryBytes: 0, maxSlots: 1, budget: null } };
   }
 
+  for (const entry of shared.codeCompiled) {
+    try {
+      assertCodeOfferListsWithinLimit(entry.offer, entry.conditions, entry.kind);
+    } catch (error) {
+      if (!(error instanceof ShardPlanBlockedError)) throw error;
+      return {
+        ok: false,
+        code: error.capacity.code,
+        offerIds: error.capacity.offerIds,
+        offerNames: [entry.name],
+        numbers: error.capacity.numbers,
+        reason: "lists",
+        message: error.message,
+      };
+    }
+  }
+
   const names = new Map(shared.compiled.map((entry) => [entry.offerId, entry.name]));
   const nameList = (ids: string[]) => ids.map((id) => names.get(id) ?? id);
   const fail = (
@@ -308,7 +338,7 @@ export async function preflightCapacity(
     ids: string[],
     numbers: Record<string, number>,
     message: (offerNames: string[]) => string,
-    reason?: "bytes" | "keys" | "tags" | "combination",
+    reason?: PlanBlockReason | "combination",
     splitRefusal?: SplitRefusal,
   ): CapacityPreflight => {
     const unique = [...new Set(ids)];

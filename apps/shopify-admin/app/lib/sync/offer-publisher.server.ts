@@ -28,6 +28,7 @@ import {
 } from "../publish-manifest.server.js";
 import { isFunctionCompactIdsEnabled } from "../function-compact-ids-flag.server.js";
 import { isFunctionShardsEnabled, isShardDomainsEnabled } from "../function-shards-flag.server.js";
+import { assertCodeOfferListsWithinLimit, assertVariableListsWithinLimit, buildCodeOfferConfig } from "./variable-list-guard.js";
 import { isRemoveUnfundedGiftsEnabled } from "../remove-unfunded-gifts-flag.server.js";
 import { SLOT_LIMITS, andPolicies, planShards, policyKey, type CombinationPolicy } from "./shard-planner.js";
 import { baseOfferId, buildPlanUnitSet, slotOffers } from "./plan-units.js";
@@ -553,6 +554,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       ...slotValues.map((slotValue) => ["cart", slotValue] as const),
       ["delivery", deliveryValue] as const,
     ]) {
+      assertVariableListsWithinLimit(value);
       const sizeBytes = utf8Length(value);
       if (sizeBytes > MAX_METAFIELD_BYTES) {
         throw new Error(
@@ -831,7 +833,7 @@ const codeNodeTitle = (offer: Offer) => `[Promo Engine] ${offer.internalName || 
  * offer is bound to whichever its rewards need (publish validation rejects
  * offers that mix the two).
  */
-function codeNodeKind(rewardRows: OfferReward[]): CodeNodeKind {
+export function codeNodeKind(rewardRows: OfferReward[]): CodeNodeKind {
   // Shipping-only: the code node itself runs the delivery Function, so Shopify accepts
   // the code exactly when the shipping discount applies. A mixed offer keeps its
   // product/order part on a cart-lines code node and gates shipping in the shared
@@ -1065,27 +1067,6 @@ async function compileCodeOffers(
     if (liveCodes.length === 0) continue;
 
     const nodeOptions = buildNodeOptions(redeemableCodes, rewardRows, compileOfferLimits(policy, conditionRows, rewardRows, limitsEnforced).mpu);
-    if (!discountId) {
-      const [primary] = liveCodes;
-      if (!primary) continue;
-      const primaryRow = redeemableCodes.find((row) => row.code === primary);
-      if (primaryRow) await markCodesSyncPending(shopId, [primaryRow]);
-      discountId = await createOrFindCodeDiscount(
-        shopDomain,
-        accessToken,
-        await functionFor(kind),
-        primary,
-        codeNodeTitle(offer),
-        kind === "delivery" ? DELIVERY_DISCOUNT_CLASSES : CART_DISCOUNT_CLASSES,
-        nodeOptions,
-      );
-      await db
-        .update(offers)
-        .set({ codeDiscountId: discountId, updatedAt: new Date() })
-        .where(and(eq(offers.shopId, shopId), eq(offers.id, offer.id)));
-      if (primaryRow) await markCodesSynced(shopId, [primaryRow]);
-    }
-
     const hasMarketConditions = conditionRows.some(
       (condition) =>
         condition.isEnabled &&
@@ -1109,6 +1090,30 @@ async function compileCodeOffers(
     );
     const [resolvedOffer] = await resolveLegacyGiftVariants(db, shopId, [compiledOffer], "offer-publisher");
     const finalCompiledOffer = resolvedOffer ?? compiledOffer;
+
+    // Refuse an oversize code offer here, before its node is created or anything is written to Shopify.
+    assertCodeOfferListsWithinLimit(finalCompiledOffer, conditionRows, kind);
+
+    if (!discountId) {
+      const [primary] = liveCodes;
+      if (!primary) continue;
+      const primaryRow = redeemableCodes.find((row) => row.code === primary);
+      if (primaryRow) await markCodesSyncPending(shopId, [primaryRow]);
+      discountId = await createOrFindCodeDiscount(
+        shopDomain,
+        accessToken,
+        await functionFor(kind),
+        primary,
+        codeNodeTitle(offer),
+        kind === "delivery" ? DELIVERY_DISCOUNT_CLASSES : CART_DISCOUNT_CLASSES,
+        nodeOptions,
+      );
+      await db
+        .update(offers)
+        .set({ codeDiscountId: discountId, updatedAt: new Date() })
+        .where(and(eq(offers.shopId, shopId), eq(offers.id, offer.id)));
+      if (primaryRow) await markCodesSynced(shopId, [primaryRow]);
+    }
 
     results.push({
       offer,
@@ -1155,25 +1160,11 @@ async function pushCodeOfferConfigs(
 
   for (const entry of compiledCodeOffers) {
     const { offer, kind, discountId, compiledOffer, conditionRows } = entry;
-    const customerTags = [
-      ...new Set([
-        ...(compiledOffer.requiredCustomerTags ?? []),
-        ...(compiledOffer.excludedCustomerTags ?? []),
-      ]),
-    ].sort();
-
     // customerTags/query-variables must be set here exactly as the shared
     // config sets them, or a customer-tag or cart-attribute condition on this
     // offer silently never matches: the Function reads those off this same
     // config, not the shared one. A delivery node only carries shippingOffers.
-    const singleOfferConfig: CompiledFunctionConfig = {
-      offers: kind === "delivery" ? [] : [compiledOffer],
-      shippingOffers: entry.shippingOffers,
-      version: "1",
-      compiledAt: new Date().toISOString(),
-      ...(customerTags.length > 0 ? { customerTags } : {}),
-      ...buildAttributeQueryVariables(conditionRows),
-    };
+    const singleOfferConfig = buildCodeOfferConfig(compiledOffer, conditionRows, entry.shippingOffers, kind, new Date().toISOString());
     const value = serializeFunctionConfig(singleOfferConfig);
     const sizeBytes = new TextEncoder().encode(value).byteLength;
     if (sizeBytes > MAX_METAFIELD_BYTES) {
@@ -1190,7 +1181,7 @@ async function pushCodeOfferConfigs(
       kind === "delivery" ? DELIVERY_DISCOUNT_CLASSES : CART_DISCOUNT_CLASSES,
       entry.nodeOptions,
     );
-    await pushMetafields(shopDomain, accessToken, [{ ownerId: discountId, value }]);
+    await pushMetafields(shopDomain, accessToken, [{ ownerId: discountId, value }], { variableLists: kind !== "delivery" });
     manifest.record(discountId, kind === "delivery" ? "code-delivery" : "code", value, {
       purchaseTypes: entry.nodeOptions.purchaseTypes,
     });
@@ -1568,7 +1559,7 @@ async function pushCodedShippingPool(
       });
       assertConfigFits(value);
       await syncDiscountCombinationPolicy(shopDomain, accessToken, nodeId, combination, DELIVERY_DISCOUNT_CLASSES);
-      await pushMetafields(shopDomain, accessToken, [{ ownerId: nodeId, value }]);
+      await pushMetafields(shopDomain, accessToken, [{ ownerId: nodeId, value }], { variableLists: false });
       manifest.record(nodeId, "pool", value);
     } catch (error) {
       fail(offerIdsOf(group), error);
@@ -1756,7 +1747,10 @@ async function pushMetafields(
   shopDomain: string,
   accessToken: string,
   entries: Array<{ ownerId: string; value: string }>,
+  // Delivery Functions have no input variables, so their configs are not bound by the list limit.
+  opts: { variableLists?: boolean } = {},
 ): Promise<void> {
+  if (opts.variableLists !== false) for (const { value } of entries) assertVariableListsWithinLimit(value);
   const data = await shopifyGraphQL<{ metafieldsSet: { userErrors: Array<{ message: string }> } }>({
     shopDomain,
     accessToken,
