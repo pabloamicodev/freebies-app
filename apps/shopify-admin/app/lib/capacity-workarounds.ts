@@ -8,9 +8,7 @@ export const WORKAROUND_KINDS = [
   "sync_products",
   "pause_offers",
   "deactivate_discounts",
-  "enable_combination_groups",
   "allow_combine",
-  "enable_shards",
 ] as const;
 
 export type WorkaroundKind = (typeof WORKAROUND_KINDS)[number];

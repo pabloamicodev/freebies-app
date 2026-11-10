@@ -2,6 +2,7 @@ import type * as RedisModule from "./redis.server.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { capacityActions, capacityIncidents, offerConditions, offerRewards, offers, variantCache, type CapacityIncident, type Db } from "@promo/db";
+import { resolveCapacityIncidents } from "./capacity-incidents.server.js";
 import { applyWorkaround, followUpSyncWorkaround, reclaimAllStalePending, reclaimStalePending, STALE_PENDING_MS, undoWorkaround, type ApplyDeps } from "./capacity-apply.server.js";
 import { preflightCapacity, type CapacityOptions } from "./capacity-preflight.server.js";
 import { recordCapacityIncident, restampHeldOffer, snapshotHeldOffers } from "./capacity-incidents.server.js";
@@ -255,5 +256,64 @@ describe("Sync products follow-up", () => {
     expect(await followUpSyncWorkaround(db, f.shopId, deps({ publish }))).toBe("failed");
     expect(await statusOf(f.offerId)).toBe("draft");
     expect((await db.select().from(capacityIncidents).where(eq(capacityIncidents.id, f.incident.id)))[0]?.status).toBe("open");
+  });
+});
+
+describe("failures around the commit", () => {
+  it("a throw before the publish reverts the committed edits and the held activation, and says it rolled back", async () => {
+    const f = await wholeProductsFixture("f1-throw.myshopify.com", "draft");
+    const before = (await db.select().from(offerRewards).where(eq(offerRewards.offerId, f.offerId)))[0]!.target;
+    const publish = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValue(null);
+    const result = await applyWorkaround(db, f.shop, f.input, deps({ publish }));
+    expect(result).toMatchObject({ ok: false, code: "rolled_back", message: "boom" });
+    expect(await statusOf(f.offerId)).toBe("draft");
+    expect(JSON.stringify((await db.select().from(offerRewards).where(eq(offerRewards.offerId, f.offerId)))[0]!.target)).toBe(JSON.stringify(before));
+    expect((await actionsOf(f.incident.id))[0]?.status).toBe("rolled_back");
+  });
+
+  it("bookkeeping that fails after a successful publish never turns the live fix into a failure", async () => {
+    const f = await wholeProductsFixture("f1-post.myshopify.com", "draft");
+    const result = await applyWorkaround(db, f.shop, f.input, deps({ isPending: async () => { throw new Error("db hiccup"); } }));
+    expect(result).toMatchObject({ ok: true, code: "applied" });
+    expect((await actionsOf(f.incident.id))[0]?.status).toBe("applied");
+    expect(await statusOf(f.offerId)).toBe("active");
+  });
+});
+
+describe("a publish parked behind another one", () => {
+  it("does not resolve the incident or say it is live; the next successful publish resolves it", async () => {
+    const f = await wholeProductsFixture("f7-parked.myshopify.com", "draft");
+    const result = await applyWorkaround(db, f.shop, f.input, deps({ isPending: async () => true }));
+    expect(result).toMatchObject({ ok: true, code: "applied" });
+    expect(result.message).toContain("go live shortly");
+    expect((await db.select().from(capacityIncidents).where(eq(capacityIncidents.id, f.incident.id)))[0]?.status).toBe("open");
+    expect(await resolveCapacityIncidents(db, f.shopId)).toBeGreaterThanOrEqual(1);
+    expect((await db.select().from(capacityIncidents).where(eq(capacityIncidents.id, f.incident.id)))[0]).toMatchObject({ status: "resolved", resolution: "workaround" });
+    expect((await actionsOf(f.incident.id))[0]?.snapshot).not.toHaveProperty("publishPending");
+  });
+});
+
+describe("undo guards", () => {
+  it("never reverts an auto-activated offer the merchant edited after Apply", async () => {
+    const f = await wholeProductsFixture("f2-guard.myshopify.com", "draft");
+    const applied = await applyWorkaround(db, f.shop, f.input, deps());
+    expect(await statusOf(f.offerId)).toBe("active");
+    await db.update(offers).set({ internalName: "renamed", updatedAt: new Date(Date.now() + 10_000) }).where(eq(offers.id, f.offerId));
+    expect(await undoWorkaround(db, f.shop, applied.actionId!, "tester", deps())).toMatchObject({ ok: false, code: "undo_refused" });
+    expect(await statusOf(f.offerId)).toBe("active");
+  });
+
+  it("a failed Undo publish restores the fix fully, including offers the undo had paused, and stays undoable", async () => {
+    const f = await wholeProductsFixture("f3-rollforward.myshopify.com", "active");
+    const p = (await proposeForIncident(db, f.incident, { capacity: cap(), env: {} })).proposals.find((x) => x.kind === "use_whole_products")!;
+    const applied = await applyWorkaround(db, f.shop, { ...f.input, expectedVersions: p.offerVersions }, deps());
+    expect(applied.ok).toBe(true);
+    const target = (await db.select().from(offerRewards).where(eq(offerRewards.offerId, f.offerId)))[0]!.target;
+    const publish = vi.fn(async () => ({ message: "Shopify exploded", scope: "shop" as const }));
+    const undone = await undoWorkaround(db, f.shop, applied.actionId!, "tester", deps({ publish }));
+    expect(undone).toMatchObject({ ok: false, code: "undo_failed" });
+    expect(await statusOf(f.offerId)).toBe("active");
+    expect(JSON.stringify((await db.select().from(offerRewards).where(eq(offerRewards.offerId, f.offerId)))[0]!.target)).toBe(JSON.stringify(target));
+    expect((await db.select().from(capacityActions).where(eq(capacityActions.id, applied.actionId!)))[0]).toMatchObject({ status: "applied", error: "Shopify exploded" });
   });
 });

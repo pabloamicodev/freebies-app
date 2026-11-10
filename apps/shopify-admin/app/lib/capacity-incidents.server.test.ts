@@ -64,6 +64,15 @@ describe("recordCapacityIncident", () => {
     expect(found[0]).toMatchObject({ code: "OFFER_TOO_LARGE", reason: "bytes", source: "cron", attended: false, status: "open" });
   });
 
+  it("merges held offers by id on a repeat block, the latest entry per offer winning", async () => {
+    const entry = (id: string, status: string, updatedAt: string) => ({ id, status, updatedAt });
+    await recordCapacityIncident(db, { shopId, code: "SLOT_FULL", offerIds: ["a"], numbers: {}, held: [entry("a", "draft", "2026-01-01T00:00:00.000Z")] }, unattended);
+    await recordCapacityIncident(db, { shopId, code: "SLOT_FULL", offerIds: ["a", "b"], numbers: {}, held: [entry("b", "paused", "2026-01-02T00:00:00.000Z"), entry("a", "paused", "2026-01-03T00:00:00.000Z")] }, unattended);
+    await recordCapacityIncident(db, { shopId, code: "SLOT_FULL", offerIds: ["a", "b"], numbers: {} }, unattended);
+    const [row] = await rows();
+    expect([...row!.held].sort((x, y) => x.id.localeCompare(y.id))).toEqual([entry("a", "paused", "2026-01-03T00:00:00.000Z"), entry("b", "paused", "2026-01-02T00:00:00.000Z")]);
+  });
+
   it("keeps the latest numbers and offer ids on a repeat", async () => {
     await recordCapacityIncident(db, { shopId, code: "SLOT_FULL", offerIds: ["a"], numbers: { neededBytes: 1 } }, unattended);
     await recordCapacityIncident(db, { shopId, code: "SLOT_FULL", offerIds: ["a", "b"], numbers: { neededBytes: 2 } }, unattended);

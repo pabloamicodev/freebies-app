@@ -78,7 +78,9 @@ export async function applyEdits(tx: Db, shopId: string, edits: readonly Edit[],
         break;
       case "offer": {
         const { status } = values as { status: OfferStatus };
-        await tx.update(offers).set({ status, archivedAt: status === "archived" ? new Date() : null, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, edit.id)));
+        // archivedAt only moves when the edit itself archives or un-archives; any other status change leaves it alone.
+        const archivedAt = status === "archived" ? new Date() : edit.before.status === "archived" || edit.after.status === "archived" ? null : undefined;
+        await tx.update(offers).set({ status, ...(archivedAt === undefined ? {} : { archivedAt }), updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, edit.id)));
         touched.add(edit.id);
         break;
       }
@@ -251,6 +253,18 @@ export function planAllowCombine(rows: Iterable<OfferRows>): Edit[] {
 
 // ---------------------------------------------------------------------------------------------------- split
 
+/**
+ * The parts take the original's activation outcome, never blindly "active": a live or scheduled original gives live or
+ * scheduled parts; a draft or paused one gives parts in that state unless the block was holding it (`activate`).
+ */
+export function splitPartStatus(offer: Offer, activate: boolean, now: Date): OfferStatus {
+  if (offer.status === "active" || offer.status === "scheduled") return offer.status;
+  if (offer.status !== "draft" && offer.status !== "paused") return "paused";
+  if (!activate) return offer.status;
+  if (offer.endsAt && offer.endsAt <= now) return offer.status;
+  return offer.startsAt && offer.startsAt > now ? "scheduled" : "active";
+}
+
 export interface SplitOutcome {
   partIds: string[];
   /** Parts archived to active, then the original active to paused (when it was live): replaying or reverting them is the whole Undo. */
@@ -261,7 +275,7 @@ export interface SplitOutcome {
  * Inside the caller's transaction: copies the offer k times with disjoint slices, switches the parts on and pauses
  * the original. A copy keeps the original's priority and combination policy; codes and usage counters are not copied.
  */
-export async function runSplit(tx: Db, shopId: string, rows: OfferRows, rewardId: string, k: number): Promise<SplitOutcome | null> {
+export async function runSplit(tx: Db, shopId: string, rows: OfferRows, rewardId: string, k: number, partStatus: OfferStatus): Promise<SplitOutcome | null> {
   const reward = rows.rewards.find((row) => row.id === rewardId);
   if (!reward) return null;
   const slices = sliceTarget(reward.target, k);
@@ -276,11 +290,11 @@ export async function runSplit(tx: Db, shopId: string, rows: OfferRows, rewardId
     if (!id) return null;
     const [copied] = await tx.select({ id: offerRewards.id }).from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, id)));
     await tx.update(offerRewards).set({ target: slice }).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, id), eq(offerRewards.id, copied!.id)));
-    await tx.update(offers).set({ status: "active", updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, id)));
+    await tx.update(offers).set({ status: partStatus, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, id)));
     partIds.push(id);
   }
   const originalEdits = pauseEdits([rows]);
   await applyEdits(tx, shopId, originalEdits);
-  const partEdits = partIds.map((id): Edit => ({ table: "offer", id, before: { status: "archived" }, after: { status: "active" } }));
+  const partEdits = partIds.map((id): Edit => ({ table: "offer", id, before: { status: "archived" }, after: { status: partStatus } }));
   return { partIds, edits: [...partEdits, ...originalEdits] };
 }

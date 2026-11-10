@@ -89,7 +89,7 @@ export async function action({ request }: ActionFunctionArgs): Promise<Workaroun
       return await run(input);
     } catch (error) {
       Sentry.captureException(error, { tags: { shopId, context: "capacity-incidents-action", intent: input.intent } });
-      return { ok: false, code: "rolled_back", message: "Something went wrong. Your offers were not changed. Try again in a minute." };
+      return { ok: false, code: "rolled_back", message: "Something went wrong. Check your offers, then try again in a minute." };
     }
   });
 

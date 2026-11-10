@@ -18,6 +18,7 @@ import {
   planWholeProducts,
   productVariantIds,
   runSplit,
+  splitPartStatus,
   settingEdit,
   type Edit,
   type OfferRows,
@@ -159,7 +160,7 @@ async function splitOffer(scope: Scope, rows: OfferRows): Promise<WorkaroundProp
     const { fits } = await fitsAfter(
       scope.db,
       scope.incident,
-      async (tx) => (await runSplit(tx, scope.incident.shopId, rows, eligible.reward.id, k))?.partIds ?? [],
+      async (tx) => (await runSplit(tx, scope.incident.shopId, rows, eligible.reward.id, k, splitPartStatus(rows.offer, true, new Date())))?.partIds ?? [],
       scope.ctx.capacity,
     );
     if (fits) {
@@ -280,19 +281,18 @@ async function automaticProposals(scope: Scope): Promise<{ proposals: Workaround
 async function combination(scope: Scope): Promise<{ proposals: WorkaroundProposal[]; guidance: string | null }> {
   const { incident, db } = scope;
   const proposals: WorkaroundProposal[] = [];
+  // Combination groups are an owner-controlled setting: when they would fix this, the merchant is pointed to support.
+  let guidance: string | null = null;
   if ((scope.ctx.env ?? process.env)["FUNCTION_SHARD_DOMAINS"] !== "off") {
     const edit = await settingEdit(db, incident.shopId, SHARD_DOMAINS_SETTING, "true");
-    if ((await fitsAfter(db, incident, mutation(incident.shopId, [edit]), scope.ctx.capacity)).fits) {
-      const copy = workaroundCopy.enableCombinationGroups;
-      proposals.push({ kind: "enable_combination_groups", title: copy.title, summary: copy.summary, customerChange: copy.customerChange, semanticChange: true, offerVersions: {}, params: {} });
-    }
+    if ((await fitsAfter(db, incident, mutation(incident.shopId, [edit]), scope.ctx.capacity)).fits) guidance = workaroundCopy.contactSupport;
   }
   const edits = planAllowCombine(scope.rows.values());
   if (edits.length > 0 && (await fitsAfter(db, incident, mutation(incident.shopId, edits), scope.ctx.capacity)).fits) {
     const copy = workaroundCopy.allowCombine;
     proposals.push({ kind: "allow_combine", title: copy.title, summary: copy.summary, customerChange: copy.customerChange, semanticChange: true, offerVersions: versions(scope.rows.values()), params: { offerIds: [...scope.rows.keys()] } });
   }
-  return { proposals, guidance: null };
+  return { proposals, guidance };
 }
 
 async function slotFull(scope: Scope): Promise<{ proposals: WorkaroundProposal[]; guidance: string | null }> {
@@ -300,12 +300,10 @@ async function slotFull(scope: Scope): Promise<{ proposals: WorkaroundProposal[]
   const [flag] = await db.select({ value: appSettings.value }).from(appSettings).where(and(eq(appSettings.shopId, incident.shopId), eq(appSettings.key, FUNCTION_SHARDS_SETTING)));
   if (flag?.value === "false") {
     const edit = await settingEdit(db, incident.shopId, FUNCTION_SHARDS_SETTING, "true");
-    if ((await fitsAfter(db, incident, mutation(incident.shopId, [edit]), scope.ctx.capacity)).fits) {
-      const copy = workaroundCopy.enableShards;
-      return { proposals: [{ kind: "enable_shards", title: copy.title, summary: copy.summary, customerChange: copy.customerChange, semanticChange: false, offerVersions: {}, params: {} }], guidance: null };
-    }
+    // Sharding was switched off on purpose by the owner: only support turns it back on.
+    const fits = (await fitsAfter(db, incident, mutation(incident.shopId, [edit]), scope.ctx.capacity)).fits;
     const pause = await pauseProposal(scope, "all");
-    return { proposals: pause ? [pause] : [], guidance: null };
+    return { proposals: pause ? [pause] : [], guidance: fits ? workaroundCopy.contactSupport : null };
   }
   return automaticProposals(scope);
 }

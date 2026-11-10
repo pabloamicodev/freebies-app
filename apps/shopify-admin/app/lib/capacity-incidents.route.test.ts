@@ -1,3 +1,4 @@
+import type * as RedisModule from "./redis.server.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { capacityIncidents, type Db } from "@promo/db";
@@ -12,7 +13,7 @@ vi.mock("./shop-context.server.js", () => ({
 }));
 vi.mock("../shopify.server.js", () => ({ authenticate: { admin: async () => ({ session: { shop: ctx.shopDomain } }) } }));
 vi.mock("@promo/db", async (importOriginal) => ({ ...(await importOriginal<typeof PromoDb>()), getDb: () => ctx.db }));
-vi.mock("./redis.server.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("./redis.server.js")>()), redisDelete: vi.fn(async () => undefined) }));
+vi.mock("./redis.server.js", async (importOriginal) => ({ ...(await importOriginal<typeof RedisModule>()), redisDelete: vi.fn(async () => undefined) }));
 
 const route = await import("../routes/app.capacity-incidents.js");
 

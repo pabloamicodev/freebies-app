@@ -73,7 +73,7 @@ describe("use_whole_products", () => {
     expect(incident).toMatchObject({ code: "OFFER_TOO_LARGE", reason: "AGGREGATING_REWARD" });
     const result = await proposeForIncident(db, incident, { capacity: cap(), env: {} });
     expect(result.proposals.map((p) => p.kind)).toEqual(["use_whole_products"]);
-    expect(result.proposals[0]).toMatchObject({ semanticChange: false, customerChange: expect.stringContaining("Nothing changes today") });
+    expect(result.proposals[0]).toMatchObject({ semanticChange: false, customerChange: expect.stringContaining("Variants you add to these products later will also be included") });
     expect(result.proposals[0]?.offerVersions[offerId]).toEqual(expect.anything());
     expect(result.guidance).toBeNull();
   });
@@ -174,6 +174,8 @@ describe("split_offer", () => {
       [{ id: "r", rewardType: "product_discount", discountType: "percentage", value, target: { productIds: ["a", "b", "c"], ...target }, quantity }] as never;
     expect(splitEligibility({ ...base, rewards: reward(tiers([5, 10])) }).ok).toBe(true);
     expect(splitEligibility({ ...base, rewards: reward(tiers([10, 5])) }).ok).toBe(false);
+    const fixed = { amount: 0, tiers: [5, 10].map((discountValue, i) => ({ minimumQuantity: i + 2, discountType: "fixed_amount", discountValue })) };
+    expect(splitEligibility({ ...base, rewards: reward(fixed) }).ok).toBe(false);
     expect(splitEligibility({ ...base, rewards: reward({ amount: 10 }) }).ok).toBe(false);
     expect(splitEligibility({ ...base, rewards: reward(tiers([5, 10]), { maxUnitsTotal: 2 }) }).ok).toBe(false);
     expect(splitEligibility({ ...base, rewards: reward(tiers([5, 10]), { selectionMode: "cheapest" }) }).ok).toBe(false);
@@ -246,7 +248,7 @@ describe("automatic discount limit", () => {
 });
 
 describe("combination", () => {
-  it("offers combination groups and allow-combine, both flagged, only when they make the offers fit", async () => {
+  it("offers allow-combine (flagged), and points to support instead of flipping combination groups", async () => {
     const shopId = await seedShop(db, "combo.myshopify.com");
     const blocker = await giftOffer(shopId, "blocker", Array.from({ length: 60 }, variantGid), { priority: 1 });
     await db.insert(offerCombinationPolicies).values({ shopId, offerId: blocker, combinesWithProductDiscounts: false });
@@ -254,23 +256,25 @@ describe("combination", () => {
     const incident = await incidentFrom(shopId, [], cap());
     expect(incident.code).toBe("COMBINATION_SINGLE_SHARD");
     const result = await proposeForIncident(db, incident, { capacity: cap(), env: {} });
-    expect(result.proposals.map((p) => p.kind).sort()).toEqual(["allow_combine", "enable_combination_groups"]);
+    expect(result.proposals.map((p) => p.kind)).toEqual(["allow_combine"]);
     expect(result.proposals.every((p) => p.semanticChange)).toBe(true);
+    expect(result.guidance).toContain("Contact support");
     const env = await proposeForIncident(db, incident, { capacity: cap(), env: { FUNCTION_SHARD_DOMAINS: "off" } });
     expect(env.proposals.map((p) => p.kind)).toEqual(["allow_combine"]);
+    expect(env.guidance).toBeNull();
   });
 });
 
-describe("enable_shards", () => {
-  it("is offered, with no customer change, when the shop's flag is explicitly off and turning it on fits", async () => {
+describe("shards flag explicitly off", () => {
+  it("is never offered to the merchant; support guidance is shown and the flag is untouched", async () => {
     const shopId = await seedShop(db, "shards-off.myshopify.com");
     const offerId = await productOffer(shopId, "catalog-sale", { productIds: Array.from({ length: 900 }, (_, i) => `gid://shopify/Product/${40_000_000_000 + i}`) });
     await db.insert(appSettings).values({ shopId, key: "function_shards.enabled", value: "false" });
     const incident = await incidentFrom(shopId, [offerId], capNoFlag());
     expect(incident.code).toBe("SLOT_FULL");
     const result = await proposeForIncident(db, incident, { capacity: capNoFlag(), env: {} });
-    expect(result.proposals.map((p) => p.kind)).toEqual(["enable_shards"]);
-    expect(result.proposals[0]).toMatchObject({ semanticChange: false, customerChange: "Nothing changes for customers." });
+    expect(result.proposals.map((p) => p.kind)).not.toContain("enable_shards");
+    expect(result.guidance).toContain("Contact support");
     expect((await db.select().from(appSettings).where(eq(appSettings.shopId, shopId)))[0]?.value).toBe("false");
   });
 });

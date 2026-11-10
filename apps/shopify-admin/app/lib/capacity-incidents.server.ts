@@ -51,6 +51,19 @@ export async function recordCapacityIncident(db: Db, block: CapturedCapacity, ca
   try {
     const dedupeKey = incidentDedupeKey(block);
     const offerIds = [...new Set(block.offerIds)];
+    let held = block.held ?? [];
+    if (held.length > 0) {
+      // A repeat block keeps what earlier occurrences held; per offer the latest entry wins.
+      const [existing] = await db
+        .select({ held: capacityIncidents.held })
+        .from(capacityIncidents)
+        .where(and(eq(capacityIncidents.shopId, block.shopId), eq(capacityIncidents.dedupeKey, dedupeKey), inArray(capacityIncidents.status, ["open", "dismissed"])));
+      if (existing) {
+        const merged = new Map(existing.held.map((entry) => [entry.id, entry]));
+        for (const entry of held) merged.set(entry.id, entry);
+        held = [...merged.values()];
+      }
+    }
     const [row] = await db
       .insert(capacityIncidents)
       .values({
@@ -60,7 +73,7 @@ export async function recordCapacityIncident(db: Db, block: CapturedCapacity, ca
         dedupeKey,
         offerIds,
         numbers: block.numbers,
-        held: block.held ?? [],
+        held,
         source: caller.source,
         attended: caller.attended,
       })
@@ -72,7 +85,7 @@ export async function recordCapacityIncident(db: Db, block: CapturedCapacity, ca
           lastSeenAt: sql`now()`,
           numbers: block.numbers,
           offerIds,
-          ...(block.held && block.held.length > 0 ? { held: block.held } : {}),
+          ...(held.length > 0 ? { held } : {}),
           source: caller.source,
           attended: caller.attended,
         },
@@ -108,11 +121,29 @@ export async function recordCapacityIncident(db: Db, block: CapturedCapacity, ca
  */
 export async function resolveCapacityIncidents(db: Db, shopId: string): Promise<number> {
   try {
+    // A fix whose publish was parked behind another publish is live now that one has succeeded.
+    const awaiting = await db
+      .select({ id: capacityActions.id, incidentId: capacityActions.incidentId })
+      .from(capacityActions)
+      .where(and(eq(capacityActions.shopId, shopId), eq(capacityActions.status, "applied"), sql`${capacityActions.snapshot} ? 'publishPending'`));
+    let resolvedAwaiting = 0;
+    if (awaiting.length > 0) {
+      const done = await db
+        .update(capacityIncidents)
+        .set({ status: "resolved", resolution: "workaround", resolvedAt: sql`now()` })
+        .where(and(eq(capacityIncidents.shopId, shopId), inArray(capacityIncidents.id, awaiting.map((row) => row.incidentId)), inArray(capacityIncidents.status, ["open", "dismissed"])))
+        .returning({ id: capacityIncidents.id });
+      resolvedAwaiting = done.length;
+      await db
+        .update(capacityActions)
+        .set({ snapshot: sql`${capacityActions.snapshot} - 'publishPending'` })
+        .where(and(eq(capacityActions.shopId, shopId), inArray(capacityActions.id, awaiting.map((row) => row.id))));
+    }
     const live = await db
       .select()
       .from(capacityIncidents)
       .where(and(eq(capacityIncidents.shopId, shopId), inArray(capacityIncidents.status, ["open", "dismissed"])));
-    if (live.length === 0) return 0;
+    if (live.length === 0) return resolvedAwaiting;
     const ids = [...new Set(live.flatMap((incident) => incident.offerIds))];
     const rows =
       ids.length === 0
@@ -134,7 +165,7 @@ export async function resolveCapacityIncidents(db: Db, shopId: string): Promise<
             .set({ status: "resolved", resolution, resolvedAt: sql`now()` })
             .where(and(eq(capacityIncidents.shopId, shopId), inArray(capacityIncidents.id, incidentIds)));
     await Promise.all([resolve(published, "published"), resolve(moot, "moot")]);
-    return published.length + moot.length;
+    return resolvedAwaiting + published.length + moot.length;
   } catch (error) {
     Sentry.captureException(error, { tags: { shopId, context: "resolve-capacity-incidents" } });
     return 0;

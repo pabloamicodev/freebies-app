@@ -8,6 +8,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import { getDb, shops } from "@promo/db";
 import { eq } from "drizzle-orm";
+import * as Sentry from "@sentry/node";
 import { CapacityIncidentsDialog } from "../components/CapacityIncidentsDialog.js";
 import { countOpenIncidents } from "../lib/capacity-incidents.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
@@ -32,12 +33,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await timer.time("authenticate_admin", () => authenticate.admin(request));
   timer.done({ shopDomain: session.shop });
 
-  // One indexed count; a failure here must never take the whole app layout down.
+  // A shop lookup and an indexed count; a failure here must never take the whole app layout down.
   const capacityIncidents = await (async () => {
     const db = getDb();
     const [shop] = await db.select({ id: shops.id }).from(shops).where(eq(shops.myshopifyDomain, session.shop)).limit(1);
     return shop ? countOpenIncidents(db, shop.id) : { open: 0, unsnoozed: 0 };
-  })().catch(() => ({ open: 0, unsnoozed: 0 }));
+  })().catch((error: unknown) => {
+    Sentry.captureException(error, { tags: { shop: session.shop, context: "capacity-incident-count" } });
+    return { open: 0, unsnoozed: 0 };
+  });
 
   return {
     shopDomain: session.shop,

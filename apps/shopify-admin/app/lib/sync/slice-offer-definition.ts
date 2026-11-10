@@ -29,7 +29,8 @@ function tiersTighten(reward: OfferReward): boolean {
   if (quantityTiers.length > 0) {
     const sorted = [...quantityTiers].sort((a, b) => Number(a["minimumQuantity"]) - Number(b["minimumQuantity"]));
     const type = sorted[0]?.["discountType"];
-    if (type !== "percentage" && type !== "fixed_amount") return false;
+    // fixed_amount tiers are not proven per-unit in the Function: each part could grant its own fixed amount.
+    if (type !== "percentage") return false;
     return sorted.every(
       (tier, index) =>
         tier["discountType"] === type &&

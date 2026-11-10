@@ -246,6 +246,34 @@ describe("applyWorkaround: semantic changes", () => {
     expect((await db.select().from(capacityIncidents).where(eq(capacityIncidents.id, incident.id)))[0]?.status).toBe("open");
   });
 
+  it("split of an offer the merchant changed after the block leaves the parts as the original was, never live", async () => {
+    const shopId = await seedShop(db, "split-kept-off.myshopify.com");
+    const products = await seedVariants(shopId, 3, 150);
+    const offerId = await productOffer(shopId, "tiered-draft", { variantIds: products.flatMap((p) => p.variants) }, { amount: 0, tiers: [{ minimumQuantity: 2, discountType: "percentage", discountValue: 5 }, { minimumQuantity: 3, discountType: "percentage", discountValue: 10 }] }, { status: "draft" });
+    const incident = await incidentFrom(shopId, [offerId]);
+    await db.update(offers).set({ status: "paused", updatedAt: new Date(Date.now() + 10_000) }).where(eq(offers.id, offerId));
+    const p = await proposal(incident, "split_offer");
+    const applied = await applyWorkaround(db, shopRef(shopId, "split-kept-off.myshopify.com"), { incidentId: incident.id, kind: "split_offer", confirm: true, expectedVersions: p.offerVersions, performedBy: "t" }, deps());
+    expect(applied.ok).toBe(true);
+    const all = await db.select().from(offers).where(eq(offers.shopId, shopId));
+    expect(all).toHaveLength(1 + (p.params["parts"] as number));
+    expect(all.every((o) => o.status === "paused")).toBe(true);
+    expect(applied.keptOffOffers).toEqual([{ id: offerId, name: "tiered-draft", status: "paused" }]);
+  });
+
+  it("split of a held draft makes live parts and leaves the original alone, not switched on too", async () => {
+    const shopId = await seedShop(db, "split-held.myshopify.com");
+    const products = await seedVariants(shopId, 3, 150);
+    const offerId = await productOffer(shopId, "tiered-held", { variantIds: products.flatMap((p) => p.variants) }, { amount: 0, tiers: [{ minimumQuantity: 2, discountType: "percentage", discountValue: 5 }, { minimumQuantity: 3, discountType: "percentage", discountValue: 10 }] }, { status: "draft" });
+    const incident = await incidentFrom(shopId, [offerId]);
+    const p = await proposal(incident, "split_offer");
+    const applied = await applyWorkaround(db, shopRef(shopId, "split-held.myshopify.com"), { incidentId: incident.id, kind: "split_offer", confirm: true, expectedVersions: p.offerVersions, performedBy: "t" }, deps());
+    expect(applied.ok).toBe(true);
+    const all = await db.select().from(offers).where(eq(offers.shopId, shopId));
+    expect(all.find((o) => o.id === offerId)?.status).toBe("draft");
+    expect(all.filter((o) => o.id !== offerId).every((o) => o.status === "active")).toBe(true);
+  });
+
   it("reduce_gift_options trims the picker and undo puts the full list back", async () => {
     const shopId = await seedShop(db, "gifts.myshopify.com");
     const offerId = await giftOffer(shopId, "picker", 400, { status: "paused" });
@@ -302,19 +330,18 @@ describe("applyWorkaround: shop-level fixes", () => {
     expect(await applyWorkaround(db, shopRef(f.shopId, f.domain), { ...base, selected: [f.tiny], confirm: false }, deps())).toMatchObject({ ok: false, code: "refused" });
   });
 
-  it("enable_shards flips the flag with no confirmation and undo refuses to bring the block back", async () => {
+  it("never offers to flip the shards flag: that is owner-controlled, so the merchant is told to contact support", async () => {
     const shopId = await seedShop(db, "shards.myshopify.com");
     const offerId = await productOffer(shopId, "catalog-sale", { productIds: Array.from({ length: 900 }, () => gid("Product")) }, { amount: 15, currencyCode: "USD" }, { status: "active" });
     await db.insert(appSettings).values({ shopId, key: "function_shards.enabled", value: "false" });
     const noFlag: CapacityOptions = { loadBudget: async () => budget(11) };
     const incident = await incidentFrom(shopId, [offerId], noFlag);
-    const p = await proposal(incident, "enable_shards", noFlag);
-    const applied = await applyWorkaround(db, shopRef(shopId, "shards.myshopify.com"), { incidentId: incident.id, kind: "enable_shards", confirm: false, expectedVersions: p.offerVersions, performedBy: "t" }, deps({ capacity: noFlag }));
-    expect(applied.ok).toBe(true);
-    const [flag] = await db.select().from(appSettings).where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, "function_shards.enabled")));
-    expect(flag?.value).toBe("true");
-    expect(await undoWorkaround(db, shopRef(shopId, "shards.myshopify.com"), applied.actionId!, "t", deps({ capacity: noFlag }))).toMatchObject({ ok: false, code: "undo_refused" });
-    expect((await db.select().from(appSettings).where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, "function_shards.enabled"))))[0]?.value).toBe("true");
+    const result = await proposeForIncident(db, incident, { capacity: noFlag, env: {} });
+    expect(result.proposals.map((p) => p.kind)).not.toContain("enable_shards");
+    expect(result.guidance).toContain("Contact support");
+    const applied = await applyWorkaround(db, shopRef(shopId, "shards.myshopify.com"), { incidentId: incident.id, kind: "enable_shards" as never, confirm: true, expectedVersions: {}, performedBy: "t" }, deps({ capacity: noFlag }));
+    expect(applied).toMatchObject({ ok: false, code: "stale" });
+    expect((await db.select().from(appSettings).where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, "function_shards.enabled"))))[0]?.value).toBe("false");
   });
 });
 

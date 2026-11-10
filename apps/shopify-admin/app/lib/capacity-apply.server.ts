@@ -19,12 +19,13 @@ import {
   productVariantIds,
   runSplit,
   settingEdit,
+  splitPartStatus,
   type Edit,
 } from "./capacity-transforms.server.js";
 import { liveIncidentOfferIds, proposeForIncident, stillBlocked, workaroundsEnabled } from "./capacity-workarounds.server.js";
 import { listAutomaticDiscountCandidates, setAutomaticDiscountActive, type AutomaticDiscountCandidate } from "./discount-node.server.js";
-import { FUNCTION_SHARDS_SETTING, SHARD_DOMAINS_SETTING } from "./function-shards-flag.server.js";
 import { tryPublishShop, type ShopPublishFn } from "./offer-publish-flow.server.js";
+import { isPublishPending } from "./publish-pending.server.js";
 import { queueProductSync } from "./sync/product-sync.server.js";
 import { decryptToken } from "./token-crypto.server.js";
 
@@ -49,6 +50,8 @@ export interface ApplyDeps {
   capacity?: CapacityOptions;
   env?: NodeJS.ProcessEnv;
   syncProducts?: (shopId: string) => Promise<unknown>;
+  /** True when the last publish was parked behind another one (lock busy) instead of reaching Shopify. */
+  isPending?: (shopId: string) => Promise<boolean>;
   now?: () => Date;
 }
 
@@ -72,6 +75,8 @@ type Snapshot = {
   deactivated: string[];
   /** Set when an Undo claims the action, so a killed Undo is told apart from a killed Apply. */
   undoStartedAt?: string;
+  /** The publish was parked behind another one: the next successful publish resolves the incident. */
+  publishPending?: boolean;
 };
 
 const emptySnapshot = (): Snapshot => ({ edits: [], createdOfferIds: [], offerUpdatedAfter: {}, deactivated: [] });
@@ -110,9 +115,11 @@ interface Plan {
   checkFit: boolean;
   deactivate?: string[];
   createdOfferIds?: string[];
+  /** Offers the fix itself handles (the split original): never auto-activated. */
+  keepOff?: string[];
 }
 
-async function buildPlan(tx: Db, incident: CapacityIncident, proposal: WorkaroundProposal, selected: string[]): Promise<Plan> {
+async function buildPlan(tx: Db, incident: CapacityIncident, proposal: WorkaroundProposal, selected: string[], held: HeldCheck, now: Date): Promise<Plan> {
   const { shopId } = incident;
   const offerId = String(proposal.params["offerId"] ?? "");
   switch (proposal.kind) {
@@ -139,9 +146,10 @@ async function buildPlan(tx: Db, incident: CapacityIncident, proposal: Workaroun
     }
     case "split_offer": {
       const rows = (await loadOfferRows(tx, shopId, [offerId])).get(offerId);
-      const outcome = rows ? await runSplit(tx, shopId, rows, String(proposal.params["rewardId"]), Number(proposal.params["parts"])) : null;
+      const partStatus = rows ? splitPartStatus(rows.offer, held.activate.some((entry) => entry.id === offerId), now) : "paused";
+      const outcome = rows ? await runSplit(tx, shopId, rows, String(proposal.params["rewardId"]), Number(proposal.params["parts"]), partStatus) : null;
       if (!outcome) throw refuse("stale", workaroundCopy.stale);
-      return { edits: outcome.edits, alreadyApplied: true, include: outcome.partIds, checkFit: true, createdOfferIds: outcome.partIds };
+      return { edits: outcome.edits, alreadyApplied: true, include: outcome.partIds, checkFit: true, createdOfferIds: outcome.partIds, keepOff: [offerId] };
     }
     case "pause_offers": {
       const rows = await loadOfferRows(tx, shopId, selected);
@@ -150,10 +158,6 @@ async function buildPlan(tx: Db, incident: CapacityIncident, proposal: Workaroun
       const paused = new Set(selected);
       return { edits, include: (await liveIncidentOfferIds(tx, incident)).filter((id) => !paused.has(id)), checkFit: true };
     }
-    case "enable_combination_groups":
-      return { edits: [await settingEdit(tx, shopId, SHARD_DOMAINS_SETTING, "true")], checkFit: true };
-    case "enable_shards":
-      return { edits: [await settingEdit(tx, shopId, FUNCTION_SHARDS_SETTING, "true")], checkFit: true };
     case "allow_combine": {
       const ids = (proposal.params["offerIds"] as string[]) ?? [];
       const edits = planAllowCombine((await loadOfferRows(tx, shopId, ids)).values());
@@ -327,6 +331,7 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
   await reclaimStalePending(db, shop, deps);
 
   let held: HeldCheck = { activate: [], changed: [] };
+  let committed = false;
   let action: CapacityAction | undefined;
   try {
     [action] = await db
@@ -355,21 +360,22 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
         .for("update");
       if (!locked || locked.status === "resolved") throw refuse("not_found", workaroundCopy.notFound);
       held = await checkHeldOffers(tx, incident);
-      const built = await buildPlan(tx, incident, proposal, selected);
+      const built = await buildPlan(tx, incident, proposal, selected, held, deps.now?.() ?? new Date());
       if (!built.alreadyApplied) await applyEdits(tx, shop.id, built.edits);
       if (built.checkFit) {
         const result = await preflightCapacity(tx, shop.id, built.include ?? (await liveIncidentOfferIds(tx, incident)), deps.capacity);
         if (stillBlocked(result, incident)) throw refuse("still_blocked", workaroundCopy.stillDoesntFit(result.message));
       }
       // Offers the block left draft or paused go live with the fix, inside the same tx, so a failed publish reverts them too.
-      const activation: Edit[] = input.kind === "sync_products" ? [] : activationEdits(held, built.edits, built.createdOfferIds ?? [], deps.now?.() ?? new Date());
+      const activation: Edit[] = input.kind === "sync_products" ? [] : activationEdits(held, built.edits, [...(built.createdOfferIds ?? []), ...(built.keepOff ?? [])], deps.now?.() ?? new Date());
       await applyEdits(tx, shop.id, activation);
       snapshot.edits = [...built.edits, ...activation];
       snapshot.createdOfferIds = built.createdOfferIds ?? [];
-      snapshot.offerUpdatedAfter = await updatedAtOf(tx, shop.id, touchedOffers(built.edits));
+      snapshot.offerUpdatedAfter = await updatedAtOf(tx, shop.id, touchedOffers(snapshot.edits));
       await tx.update(capacityActions).set({ snapshot }).where(and(eq(capacityActions.shopId, shop.id), eq(capacityActions.id, actionId)));
       return built;
     });
+    committed = true;
 
     if (input.kind === "sync_products") {
       await (deps.syncProducts ?? queueProductSync)(shop.id);
@@ -378,43 +384,69 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
       return { ok: true, code: "applied", message: `${workaroundCopy.syncProducts.title}: started. Publish again once it finishes.`, actionId };
     }
 
+    // From here on the tx is committed: anything that fails before a successful publish must undo it all.
+    const publish = deps.publish ?? tryPublishShop;
+    let publishAttempted = false;
+    const rollBack = async (message: string): Promise<WorkaroundResult> => {
+      const undoErrors = await revertAll(db, shop, ops, snapshot);
+      // A capacity block is raised before anything is written; any other failure may have touched the live config.
+      if (publishAttempted) await publish(shop.id, shop.domain).catch((error) => Sentry.captureException(error, { tags: { shopId: shop.id, context: "capacity-apply-republish" } }));
+      return fail({ ok: false, code: "rolled_back", message: `${message}${undoErrors.length ? ` Reactivating failed: ${undoErrors.join("; ")}` : ""}` });
+    };
+    let failure: Awaited<ReturnType<ShopPublishFn>>;
     try {
       for (const id of plan.deactivate ?? []) {
         await (await ops()).setActive(shop, id, false);
         snapshot.deactivated.push(id);
         await setAction(db, shop.id, actionId, { snapshot });
       }
+      if (snapshot.deactivated.length > 0 || snapshot.edits.some((edit) => edit.table === "setting")) await invalidateAutomaticBudgetCache(shop.id);
+      publishAttempted = true;
+      failure = await publish(shop.id, shop.domain);
     } catch (error) {
-      const undoErrors = await revertAll(db, shop, ops, snapshot);
-      return fail({ ok: false, code: "rolled_back", message: `${error instanceof Error ? error.message : String(error)}${undoErrors.length ? ` Reactivating failed: ${undoErrors.join("; ")}` : ""}` });
+      return rollBack(error instanceof Error ? error.message : String(error));
     }
-    if (snapshot.deactivated.length > 0 || snapshot.edits.some((edit) => edit.table === "setting")) await invalidateAutomaticBudgetCache(shop.id);
-
-    const publish = deps.publish ?? tryPublishShop;
-    const failure = await publish(shop.id, shop.domain);
     if (failure) {
-      const undoErrors = await revertAll(db, shop, ops, snapshot);
-      // A capacity block is raised before anything is written; any other failure may have touched the live config.
-      if (!failure.capacity) await publish(shop.id, shop.domain).catch((error) => Sentry.captureException(error, { tags: { shopId: shop.id, context: "capacity-apply-republish" } }));
-      return fail({ ok: false, code: "rolled_back", message: `${failure.message}${undoErrors.length ? ` Reactivating failed: ${undoErrors.join("; ")}` : ""}` });
+      publishAttempted = !failure.capacity;
+      return rollBack(failure.message);
     }
 
+    // Published: the fix is live. Nothing below may undo it or mark it failed; bookkeeping is best-effort.
     const now = (deps.now ?? (() => new Date()))();
-    await setAction(db, shop.id, actionId, { status: "applied", appliedAt: now, undoUntil: new Date(now.getTime() + UNDO_WINDOW_MS), snapshot });
-    await db
-      .update(capacityIncidents)
-      .set({ status: "resolved", resolution: "workaround", resolvedAt: now })
-      .where(and(eq(capacityIncidents.shopId, shop.id), eq(capacityIncidents.id, incident.id)));
+    const safely = async <T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
+      try {
+        return await fn();
+      } catch (error) {
+        Sentry.captureException(error, { tags: { shopId: shop.id, context: `capacity-apply-${label}` } });
+        return fallback;
+      }
+    };
+    const parked = await safely("pending-check", () => (deps.isPending ?? (deps.publish ? async () => false : isPublishPending))(shop.id), false);
+    if (parked) snapshot.publishPending = true;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const saved = await safely(
+        "mark-applied",
+        async () => {
+          await setAction(db, shop.id, actionId, { status: "applied", appliedAt: now, undoUntil: new Date(now.getTime() + UNDO_WINDOW_MS), snapshot });
+          return true;
+        },
+        false,
+      );
+      if (saved) break;
+    }
+    if (!parked) {
+      await safely("resolve", () => db.update(capacityIncidents).set({ status: "resolved", resolution: "workaround", resolvedAt: now }).where(and(eq(capacityIncidents.shopId, shop.id), eq(capacityIncidents.id, incident.id))), undefined);
+    }
     const touched = touchedOffers(snapshot.edits);
-    await audit(db, shop.id, input.performedBy, "capacity_workaround_applied", touched.length > 0 ? touched : incident.offerIds, { kind: input.kind, incidentId: incident.id, actionId });
+    await safely("audit", () => audit(db, shop.id, input.performedBy, "capacity_workaround_applied", touched.length > 0 ? touched : incident.offerIds, { kind: input.kind, incidentId: incident.id, actionId }), undefined);
     const activatedIds = snapshot.edits.filter((edit) => edit.table === "offer" && edit.after.status !== "paused" && edit.before.status !== "archived").map((edit) => (edit as { id: string }).id);
-    const activated = activatedIds.length === 0 ? [] : await db.select({ id: offers.id, name: offers.internalName }).from(offers).where(and(eq(offers.shopId, shop.id), inArray(offers.id, activatedIds)));
+    const activated = activatedIds.length === 0 ? [] : await safely("activated-names", () => db.select({ id: offers.id, name: offers.internalName }).from(offers).where(and(eq(offers.shopId, shop.id), inArray(offers.id, activatedIds))), []);
     const keptOff = held.changed;
     return {
       ok: true,
       code: "applied",
       message: [
-        workaroundCopy.appliedMessage(proposal.title),
+        parked ? workaroundCopy.appliedPendingMessage(proposal.title) : workaroundCopy.appliedMessage(proposal.title),
         activated.length > 0 ? workaroundCopy.activatedMessage(activated.map((row) => row.name)) : "",
         keptOff.length > 0 ? workaroundCopy.keptOffMessage(keptOff) : "",
       ]
@@ -426,6 +458,11 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
     };
   } catch (error) {
     if (error instanceof Refusal) return fail(error.result);
+    if (committed) {
+      // The revert itself failed: leave the action pending so the stale reclaim retries it. Never claim nothing changed.
+      Sentry.captureException(error, { tags: { shopId: shop.id, context: "capacity-apply-post-commit" } });
+      return { ok: false, code: "undo_failed", message: workaroundCopy.revertPending, actionId };
+    }
     await fail({ ok: false, code: "rolled_back", message: error instanceof Error ? error.message : String(error) }).catch(() => undefined);
     throw error;
   }
@@ -538,6 +575,7 @@ export async function undoWorkaround(db: Db, shop: ShopRef, actionId: string, pe
 
   const definition = DEFINITION_KINDS.has(action.kind as WorkaroundKind);
   const pausedOnUndo: string[] = [];
+  let undoPauseEdits: Edit[] = [];
   let reopen = false;
   try {
     await db.transaction(async (rawTx) => {
@@ -553,6 +591,7 @@ export async function undoWorkaround(db: Db, shop: ShopRef, actionId: string, pe
       const rows = await loadOfferRows(tx, shop.id, include);
       const edits = pauseEdits(rows.values());
       await applyEdits(tx, shop.id, edits);
+      undoPauseEdits = edits;
       pausedOnUndo.push(...edits.map((edit) => (edit as { id: string }).id));
       const live = [...rows.values()].filter((row) => row.offer.status === "active" && !pausedOnUndo.includes(row.offer.id)).map((row) => row.offer.id);
       const recheck = await preflightCapacity(tx, shop.id, live, deps.capacity);
@@ -569,11 +608,17 @@ export async function undoWorkaround(db: Db, shop: ShopRef, actionId: string, pe
   const failure = await (deps.publish ?? tryPublishShop)(shop.id, shop.domain);
   if (failure) {
     // Roll forward: put the fix back so the shop keeps the configuration that last published.
-    await db.transaction(async (tx) => void (await applyEdits(tx as unknown as Db, shop.id, snapshot.edits, "apply")));
+    await db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as Db;
+      await applyEdits(tx, shop.id, undoPauseEdits, "revert");
+      await applyEdits(tx, shop.id, snapshot.edits, "apply");
+    });
     for (const id of reactivated) await (await ops()).setActive(shop, id, false).catch(() => undefined);
     await invalidateAutomaticBudgetCache(shop.id);
     await (deps.publish ?? tryPublishShop)(shop.id, shop.domain).catch((publishError) => Sentry.captureException(publishError, { tags: { shopId: shop.id, context: "capacity-undo-republish" } }));
-    return backToApplied(failure.message, "undo_failed");
+    // The fix is fully back, so the action stays applied and can be undone again.
+    await setAction(db, shop.id, actionId, { status: "applied", error: failure.message });
+    return { ok: false, code: "undo_failed", message: failure.message, actionId };
   }
 
   await setAction(db, shop.id, actionId, { status: "undone", undoneAt: now, snapshot: { ...snapshot, pausedOnUndo } as unknown as Record<string, unknown> });

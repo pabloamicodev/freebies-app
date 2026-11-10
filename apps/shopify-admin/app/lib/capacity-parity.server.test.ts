@@ -1,6 +1,7 @@
+import type * as RedisModule from "./redis.server.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import { appSettings, capacityIncidents, offerRewards, variantCache, type Db } from "@promo/db";
+import { capacityIncidents, offerRewards, variantCache, type Db } from "@promo/db";
 import { applyWorkaround } from "./capacity-apply.server.js";
 import { preflightCapacity, compileSharedOffers, type CapacityOptions } from "./capacity-preflight.server.js";
 import { recordCapacityIncident } from "./capacity-incidents.server.js";
@@ -8,7 +9,7 @@ import { proposeForIncident } from "./capacity-workarounds.server.js";
 import { sliceTarget } from "./sync/slice-offer-definition.js";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
 
-vi.mock("./redis.server.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("./redis.server.js")>()), redisDelete: vi.fn(async () => undefined) }));
+vi.mock("./redis.server.js", async (importOriginal) => ({ ...(await importOriginal<typeof RedisModule>()), redisDelete: vi.fn(async () => undefined) }));
 
 let db: Db;
 let close: () => Promise<void>;
@@ -60,22 +61,6 @@ describe("use_whole_products compiles to the same config except the targets", ()
     expect(after[0]!.targetProductIds).toHaveLength(3);
     const strip = (rewards: typeof before) => rewards.map(({ targetVariantIds: _v, targetProductIds: _p, ...rest }) => rest);
     expect(JSON.stringify(strip(after))).toBe(JSON.stringify(strip(before)));
-  });
-});
-
-describe("enable_shards compiles to the same config", () => {
-  it("changes where offers run, not what they say", async () => {
-    const shopId = await seedShop(db, "parity-shards.myshopify.com");
-    const offerId = await seedOffer(db, shopId, { internalName: "catalog-sale", type: "discount", status: "active" });
-    await db.insert(offerRewards).values({ shopId, offerId, rewardType: "product_discount", discountType: "percentage", value: { amount: 15, currencyCode: "USD" }, target: { scopeMode: "sitewide", productIds: Array.from({ length: 900 }, () => gid("Product")) }, sortOrder: 0 });
-    await db.insert(appSettings).values({ shopId, key: "function_shards.enabled", value: "false" });
-    const noFlag: CapacityOptions = { loadBudget: async () => ({ storeActive: 5, ours: 2, others: 3, maxCartSlots: 11 }) };
-    const before = (await compileSharedOffers(db, shopId, "USD", [], false))!.config();
-    const incident = await incidentFor(shopId, [offerId], noFlag);
-    const p = (await proposeForIncident(db, incident, { capacity: noFlag, env: {} })).proposals.find((x) => x.kind === "enable_shards")!;
-    const applied = await applyWorkaround(db, { id: shopId, domain: "parity-shards.myshopify.com" }, { incidentId: incident.id, kind: "enable_shards", confirm: false, expectedVersions: p.offerVersions, performedBy: "t" }, { capacity: noFlag, env: {}, publish });
-    expect(applied.ok).toBe(true);
-    expect((await compileSharedOffers(db, shopId, "USD", [], false))!.config()).toBe(before);
   });
 });
 

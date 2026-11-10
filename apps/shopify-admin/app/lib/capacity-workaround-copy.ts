@@ -1,4 +1,3 @@
-import { combinationDomainsConfirm } from "./capacity-copy.js";
 
 /** English copy for capacity incidents and guided workarounds. Client-safe: no server imports. */
 
@@ -57,22 +56,13 @@ export const workaroundCopy = {
     optionsLabel: "Automatic discounts to deactivate",
     note: "Includes discounts from other apps. Nothing is selected for you. Undo reactivates them.",
   },
-  enableCombinationGroups: {
-    title: "Let offers run in separate Shopify discounts",
-    summary: "Turns on combination groups so offers that don't combine can run in separate Shopify discounts.",
-    customerChange: combinationDomainsConfirm.body,
-  },
   allowCombine: {
     title: "Let these offers combine with product discounts",
     summary: "Allows the blocking offers to combine with other product discounts.",
     customerChange:
       "These offers will stack with other product discounts, including other Promo Engine offers and discount codes.",
   },
-  enableShards: {
-    title: "Spread offers over several Shopify discounts",
-    summary: "Turns sharding back on for this store so offers can use more than one Shopify discount.",
-    customerChange: noChangeForCustomers,
-  },
+  contactSupport: "Contact support: we can turn on a setting for your store that spreads offers over more Shopify discounts. It is not something you can change yourself.",
   stillDoesntFit: (message: string) => `Still doesn't fit: ${message}`,
   stale: "The offer changed; review the proposal again.",
   busy: "Another fix is already running for this incident.",
@@ -82,6 +72,8 @@ export const workaroundCopy = {
   undoChangedSince: "Changed since; undo by hand.",
   undoExpired: "The 24 hour undo window has passed.",
   appliedMessage: (title: string) => `${title}: done.`,
+  appliedPendingMessage: (title: string) => `${title}: done. Another update is publishing right now, so it will go live shortly.`,
+  revertPending: "Something failed while applying the fix. We are reverting it and will retry automatically; check your offers in a few minutes.",
   undoneMessage: "Undone.",
   activatedMessage: (names: readonly string[]) => `${plural(names.length, "offer")} switched on: ${list(names)}.`,
   keptOffMessage: (items: ReadonlyArray<{ name: string; status: string }>) =>
