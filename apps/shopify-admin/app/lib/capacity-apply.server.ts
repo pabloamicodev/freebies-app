@@ -1,6 +1,7 @@
 import { capacityActions, capacityIncidents, offers, shops, type CapacityAction, type CapacityIncident, type Db } from "@promo/db";
 import * as Sentry from "@sentry/node";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gt, inArray, sql } from "drizzle-orm";
+import { activationStatus } from "./offer-scheduling.server.js";
 import { insertAuditLog } from "./audit-log.server.js";
 import { invalidateAutomaticBudgetCache, preflightCapacity, type CapacityOptions } from "./capacity-preflight.server.js";
 import { workaroundCopy } from "./capacity-workaround-copy.js";
@@ -28,6 +29,8 @@ import { queueProductSync } from "./sync/product-sync.server.js";
 import { decryptToken } from "./token-crypto.server.js";
 
 export const UNDO_WINDOW_MS = 24 * 3_600_000;
+/** An Apply or Undo that has been pending this long was killed mid-flight (the function limit is far shorter). */
+export const STALE_PENDING_MS = 10 * 60_000;
 const MAX_EXTRA_DEACTIVATIONS = 2;
 
 export interface ShopRef {
@@ -67,6 +70,8 @@ type Snapshot = {
   offerUpdatedAfter: Record<string, string>;
   /** Shopify discounts Apply deactivated, in order; Undo and rollback reactivate them. */
   deactivated: string[];
+  /** Set when an Undo claims the action, so a killed Undo is told apart from a killed Apply. */
+  undoStartedAt?: string;
 };
 
 const emptySnapshot = (): Snapshot => ({ edits: [], createdOfferIds: [], offerUpdatedAfter: {}, deactivated: [] });
@@ -192,6 +197,83 @@ async function revertAll(db: Db, shop: ShopRef, ops: () => Promise<DiscountOps>,
   return errors;
 }
 
+/**
+ * Offers the incident recorded as blocked that the block left draft or paused. Offers this very action paused
+ * (`pause_offers`, the split original) are excluded, and so is anything already archived or expired.
+ */
+async function activationEdits(tx: Db, incident: CapacityIncident, planned: readonly Edit[], skip: readonly string[], now: Date): Promise<Edit[]> {
+  if (incident.offerIds.length === 0) return [];
+  const pausedByUs = new Set([...skip, ...planned.filter((edit) => edit.table === "offer" && edit.after.status === "paused").map((edit) => (edit as { id: string }).id)]);
+  const rows = await tx
+    .select({ id: offers.id, status: offers.status, startsAt: offers.startsAt, endsAt: offers.endsAt })
+    .from(offers)
+    .where(and(eq(offers.shopId, incident.shopId), inArray(offers.id, incident.offerIds)));
+  const edits: Edit[] = [];
+  for (const row of rows) {
+    if ((row.status !== "draft" && row.status !== "paused") || pausedByUs.has(row.id)) continue;
+    const next = activationStatus(row.startsAt, row.endsAt, now);
+    if (next === "expired") continue;
+    edits.push({ table: "offer", id: row.id, before: { status: row.status }, after: { status: next } });
+  }
+  return edits;
+}
+
+const startedAtOf = (createdAt: Date, snapshot: Partial<Snapshot>) => Math.max(createdAt.getTime(), snapshot.undoStartedAt ? Date.parse(snapshot.undoStartedAt) : 0);
+
+/**
+ * A pending action older than STALE_PENDING_MS belongs to a function that died mid-flight. It is marked failed and, for
+ * an Apply, its committed edits are reverted once (the claim is atomic). An Undo has nothing safe to re-run: it is
+ * marked undo_failed for a human. Returns how many were reclaimed.
+ */
+export async function reclaimStalePending(db: Db, shop: ShopRef, deps: ApplyDeps = {}): Promise<number> {
+  const now = (deps.now ?? (() => new Date()))();
+  const pending = await db.select().from(capacityActions).where(and(eq(capacityActions.shopId, shop.id), eq(capacityActions.status, "pending")));
+  let reclaimed = 0;
+  for (const action of pending) {
+    const snapshot = { ...emptySnapshot(), ...(action.snapshot as Partial<Snapshot>) };
+    if (now.getTime() - startedAtOf(action.createdAt, snapshot) < STALE_PENDING_MS) continue;
+    const isUndo = snapshot.undoStartedAt !== undefined;
+    const claimed = await db
+      .update(capacityActions)
+      .set({ status: isUndo ? "undo_failed" : "rolled_back", error: workaroundCopy.timedOut })
+      .where(and(eq(capacityActions.shopId, shop.id), eq(capacityActions.id, action.id), eq(capacityActions.status, "pending")))
+      .returning({ id: capacityActions.id });
+    if (claimed.length === 0) continue;
+    reclaimed += 1;
+    Sentry.captureMessage("Stale capacity action reclaimed", { level: "warning", tags: { shopId: shop.id, kind: action.kind, context: isUndo ? "capacity-undo-timeout" : "capacity-apply-timeout" } });
+    if (isUndo) continue;
+    const ops = () => (deps.discounts ? Promise.resolve(deps.discounts) : discountOps(db));
+    const current = await updatedAtOf(db, shop.id, Object.keys(snapshot.offerUpdatedAfter));
+    if (Object.entries(snapshot.offerUpdatedAfter).some(([id, iso]) => current[id] !== iso)) {
+      await setAction(db, shop.id, action.id, { error: `${workaroundCopy.timedOut} ${workaroundCopy.undoChangedSince}` });
+      continue;
+    }
+    const errors = await revertAll(db, shop, ops, snapshot);
+    if (errors.length > 0) await setAction(db, shop.id, action.id, { error: `${workaroundCopy.timedOut} Reactivating failed: ${errors.join("; ")}` });
+    if (snapshot.edits.length > 0 || snapshot.deactivated.length > 0) {
+      await (deps.publish ?? tryPublishShop)(shop.id, shop.domain).catch((error) => Sentry.captureException(error, { tags: { shopId: shop.id, context: "capacity-reclaim-republish" } }));
+    }
+  }
+  return reclaimed;
+}
+
+/** Cron entry: reclaims stale pending actions across every shop. */
+export async function reclaimAllStalePending(db: Db, deps: ApplyDeps = {}): Promise<number> {
+  const now = (deps.now ?? (() => new Date()))();
+  const rows = await db
+    .select({ id: shops.id, domain: shops.shopDomain, createdAt: capacityActions.createdAt, snapshot: capacityActions.snapshot })
+    .from(capacityActions)
+    .innerJoin(shops, eq(shops.id, capacityActions.shopId))
+    .where(eq(capacityActions.status, "pending"));
+  const stale = new Map<string, ShopRef>();
+  for (const row of rows) {
+    if (now.getTime() - startedAtOf(row.createdAt, row.snapshot as Partial<Snapshot>) >= STALE_PENDING_MS) stale.set(row.id, { id: row.id, domain: row.domain });
+  }
+  let total = 0;
+  for (const shop of stale.values()) total += await reclaimStalePending(db, shop, deps);
+  return total;
+}
+
 export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, deps: ApplyDeps = {}): Promise<WorkaroundResult> {
   const env = deps.env ?? process.env;
   if (!workaroundsEnabled(env)) return { ok: false, code: "refused", message: workaroundCopy.killSwitch };
@@ -222,6 +304,8 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
     if (selected.length < needed) return { ok: false, code: "refused", message: `Select at least ${needed}.` };
     if (selected.length > needed + MAX_EXTRA_DEACTIVATIONS || selected.some((id) => !candidates.has(id))) return { ok: false, code: "refused", message: workaroundCopy.stale };
   }
+
+  await reclaimStalePending(db, shop, deps);
 
   let action: CapacityAction | undefined;
   try {
@@ -256,7 +340,10 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
         const result = await preflightCapacity(tx, shop.id, built.include ?? (await liveIncidentOfferIds(tx, incident)), deps.capacity);
         if (stillBlocked(result, incident)) throw refuse("still_blocked", workaroundCopy.stillDoesntFit(result.message));
       }
-      snapshot.edits = built.edits;
+      // Offers the block left draft or paused go live with the fix, inside the same tx, so a failed publish reverts them too.
+      const activation = input.kind === "sync_products" ? [] : await activationEdits(tx, incident, built.edits, built.createdOfferIds ?? [], deps.now?.() ?? new Date());
+      await applyEdits(tx, shop.id, activation);
+      snapshot.edits = [...built.edits, ...activation];
       snapshot.createdOfferIds = built.createdOfferIds ?? [];
       snapshot.offerUpdatedAfter = await updatedAtOf(tx, shop.id, touchedOffers(built.edits));
       await tx.update(capacityActions).set({ snapshot }).where(and(eq(capacityActions.shopId, shop.id), eq(capacityActions.id, actionId)));
@@ -299,21 +386,75 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
       .where(and(eq(capacityIncidents.shopId, shop.id), eq(capacityIncidents.id, incident.id)));
     const touched = touchedOffers(snapshot.edits);
     await audit(db, shop.id, input.performedBy, "capacity_workaround_applied", touched.length > 0 ? touched : incident.offerIds, { kind: input.kind, incidentId: incident.id, actionId });
-    const pending = (await db.select({ id: offers.id, name: offers.internalName, status: offers.status }).from(offers).where(and(eq(offers.shopId, shop.id), inArray(offers.id, incident.offerIds)))).filter((row) => row.status === "draft" || row.status === "paused");
-    const pausedByUs = new Set(snapshot.edits.filter((edit) => edit.table === "offer" && edit.after.status === "paused").map((edit) => (edit as { id: string }).id));
-    const toActivate = pending.filter((row) => !pausedByUs.has(row.id)).map((row) => ({ id: row.id, name: row.name }));
+    const activatedIds = snapshot.edits.filter((edit) => edit.table === "offer" && edit.after.status !== "paused" && edit.before.status !== "archived").map((edit) => (edit as { id: string }).id);
+    const activated = activatedIds.length === 0 ? [] : await db.select({ id: offers.id, name: offers.internalName }).from(offers).where(and(eq(offers.shopId, shop.id), inArray(offers.id, activatedIds)));
     return {
       ok: true,
       code: "applied",
-      message: [workaroundCopy.appliedMessage(proposal.title), toActivate.length > 0 ? workaroundCopy.activateHint(toActivate.map((row) => row.name)) : ""].filter(Boolean).join(" "),
+      message: [workaroundCopy.appliedMessage(proposal.title), activated.length > 0 ? workaroundCopy.activatedMessage(activated.map((row) => row.name)) : ""].filter(Boolean).join(" "),
       actionId,
-      ...(toActivate.length > 0 ? { offersToActivate: toActivate } : {}),
+      ...(activated.length > 0 ? { activatedOffers: activated } : {}),
     };
   } catch (error) {
     if (error instanceof Refusal) return fail(error.result);
     await fail({ ok: false, code: "rolled_back", message: error instanceof Error ? error.message : String(error) }).catch(() => undefined);
     throw error;
   }
+}
+
+/**
+ * Runs when a shop's catalog sync finishes. A "Sync products" workaround only queued that sync, so this is the other
+ * half: re-evaluate the incident with the fresh catalog and, if it now fits, switch on what the block held back and
+ * republish. Idempotent (the claim marks the action), and any failure rolls its own edits back and leaves the incident open.
+ */
+export async function followUpSyncWorkaround(db: Db, shopId: string, deps: ApplyDeps = {}): Promise<"resolved" | "still_blocked" | "failed" | "none"> {
+  const now = (deps.now ?? (() => new Date()))();
+  const claimed = await db
+    .update(capacityActions)
+    .set({ snapshot: sql`${capacityActions.snapshot} || '{"followedUp":true}'::jsonb` })
+    .where(
+      and(
+        eq(capacityActions.shopId, shopId),
+        eq(capacityActions.kind, "sync_products"),
+        eq(capacityActions.status, "applied"),
+        gt(capacityActions.appliedAt, new Date(now.getTime() - UNDO_WINDOW_MS)),
+        sql`not (${capacityActions.snapshot} ? 'followedUp')`,
+      ),
+    )
+    .returning({ incidentId: capacityActions.incidentId, performedBy: capacityActions.performedBy });
+  if (claimed.length === 0) return "none";
+  const [shop] = await db.select({ id: shops.id, domain: shops.shopDomain }).from(shops).where(eq(shops.id, shopId)).limit(1);
+  if (!shop) return "none";
+  let outcome: "resolved" | "still_blocked" | "failed" = "still_blocked";
+  for (const { incidentId, performedBy } of claimed) {
+    const [incident] = await db
+      .select()
+      .from(capacityIncidents)
+      .where(and(eq(capacityIncidents.shopId, shopId), eq(capacityIncidents.id, incidentId), inArray(capacityIncidents.status, ["open", "dismissed"])));
+    if (!incident) continue;
+    const result = await preflightCapacity(db, shopId, await liveIncidentOfferIds(db, incident), deps.capacity);
+    if (stillBlocked(result, incident)) continue;
+    const activation = await db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as Db;
+      const edits = await activationEdits(tx, incident, [], [], now);
+      await applyEdits(tx, shopId, edits);
+      return edits;
+    });
+    const failure = await (deps.publish ?? tryPublishShop)(shopId, shop.domain);
+    if (failure) {
+      await db.transaction(async (tx) => void (await applyEdits(tx as unknown as Db, shopId, activation, "revert")));
+      if (!failure.capacity) await (deps.publish ?? tryPublishShop)(shopId, shop.domain).catch((error) => Sentry.captureException(error, { tags: { shopId, context: "capacity-sync-followup-republish" } }));
+      outcome = "failed";
+      continue;
+    }
+    await db
+      .update(capacityIncidents)
+      .set({ status: "resolved", resolution: "published", resolvedAt: now })
+      .where(and(eq(capacityIncidents.shopId, shopId), eq(capacityIncidents.id, incident.id), inArray(capacityIncidents.status, ["open", "dismissed"])));
+    await audit(db, shopId, performedBy, "capacity_sync_followup", touchedOffers(activation).length > 0 ? touchedOffers(activation) : incident.offerIds, { incidentId: incident.id });
+    outcome = "resolved";
+  }
+  return outcome;
 }
 
 const DEFINITION_KINDS = new Set<WorkaroundKind>(["use_whole_products", "require_any", "reduce_gift_options", "split_offer"]);
@@ -336,7 +477,7 @@ export async function undoWorkaround(db: Db, shop: ShopRef, actionId: string, pe
 
   const claim = async () => {
     try {
-      return await db.update(capacityActions).set({ status: "pending" }).where(and(eq(capacityActions.shopId, shop.id), eq(capacityActions.id, actionId), eq(capacityActions.status, "applied"))).returning({ id: capacityActions.id });
+      return await db.update(capacityActions).set({ status: "pending", snapshot: { ...snapshot, undoStartedAt: now.toISOString() } as unknown as Record<string, unknown> }).where(and(eq(capacityActions.shopId, shop.id), eq(capacityActions.id, actionId), eq(capacityActions.status, "applied"))).returning({ id: capacityActions.id });
     } catch (error) {
       if (isUniqueViolation(error)) return null;
       throw error;

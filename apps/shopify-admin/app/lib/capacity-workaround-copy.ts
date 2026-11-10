@@ -83,8 +83,8 @@ export const workaroundCopy = {
   undoExpired: "The 24 hour undo window has passed.",
   appliedMessage: (title: string) => `${title}: done.`,
   undoneMessage: "Undone.",
-  activateHint: (names: readonly string[]) =>
-    `${plural(names.length, "offer")} still ${names.length === 1 ? "needs" : "need"} to be switched on: ${list(names)}.`,
+  activatedMessage: (names: readonly string[]) => `${plural(names.length, "offer")} switched on: ${list(names)}.`,
+  timedOut: "The fix timed out and was reverted.",
   killSwitch: "Automatic fixes are switched off for now. Follow the steps below.",
 } as const;
 

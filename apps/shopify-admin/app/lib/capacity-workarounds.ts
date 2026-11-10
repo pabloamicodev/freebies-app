@@ -79,8 +79,8 @@ export interface WorkaroundResult {
   code: WorkaroundResultCode;
   message: string;
   actionId?: string;
-  /** Offers the workaround left draft or paused: the merchant activates them. */
-  offersToActivate?: Array<{ id: string; name: string }>;
+  /** Offers the block had left draft or paused that Apply switched on with the fix. */
+  activatedOffers?: Array<{ id: string; name: string }>;
 }
 
 export interface RecentAction {

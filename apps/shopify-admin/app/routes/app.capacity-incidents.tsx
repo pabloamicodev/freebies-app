@@ -10,6 +10,9 @@ import { getShopContext } from "../lib/shop-context.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
+// Apply runs a DB tx, Shopify calls and a full shop publish; must be a literal (the Vercel preset parses it statically).
+export const config = { maxDuration: 300 };
+
 const MAX_INCIDENTS = 10;
 
 export interface CapacityIncidentsData {

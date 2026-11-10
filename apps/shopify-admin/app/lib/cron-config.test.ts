@@ -95,4 +95,12 @@ describe("cron route config", () => {
     const source = readFileSync(resolve(__dirname, `../routes/api.cron.${name}.ts`), "utf8");
     expect(source).toContain(`export const config = { maxDuration: ${job.maxDuration} };`);
   });
+
+  it("the capacity Apply route, which runs a publish, exports a literal maxDuration shorter than the stale-pending window", () => {
+    const source = readFileSync(resolve(__dirname, "../routes/app.capacity-incidents.tsx"), "utf8");
+    const match = /export const config = \{ maxDuration: (\d+) \};/.exec(source);
+    expect(match).not.toBeNull();
+    expect(Number(match![1])).toBeGreaterThanOrEqual(60);
+    expect(Number(match![1]) * 1000).toBeLessThan(10 * 60_000);
+  });
 });

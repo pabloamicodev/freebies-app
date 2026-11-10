@@ -89,7 +89,8 @@ describe("applyWorkaround: use_whole_products", () => {
     const f = await wholeProductsFixture("apply-ok.myshopify.com");
     const result = await applyWorkaround(db, shopRef(f.shopId, f.domain), f.input, deps());
     expect(result).toMatchObject({ ok: true, code: "applied", actionId: expect.anything() });
-    expect(result.offersToActivate).toEqual([{ id: f.offerId, name: "sale" }]);
+    expect(result.activatedOffers).toEqual([{ id: f.offerId, name: "sale" }]);
+    expect((await rowsOf(f.offerId)).offer?.status).toBe("active");
     const { rewards } = await rowsOf(f.offerId);
     expect(rewards[0]?.target).toMatchObject({ selectionLevel: "product", productIds: expect.anything() });
     expect(rewards[0]?.target).not.toHaveProperty("variantIds");
