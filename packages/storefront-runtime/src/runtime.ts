@@ -10,7 +10,7 @@
  * 5. Broadcast evaluation results to all widgets.
  */
 
-import { AjaxCartAdapter, appliedDiscountCodes, type CartData, type CartItem } from "./cart-adapter.js";
+import { AjaxCartAdapter, appliedDiscountCodes, type CartData } from "./cart-adapter.js";
 import { captureUi, isEditingWithin, restoreUi } from "./dom-preserve.js";
 import { canPromise, contextKey, currentStampContext, encodeContext } from "./eligibility-context.js";
 import { rememberSpecificLinkParams } from "./metadata-bridge.js";
@@ -19,6 +19,7 @@ import { debounce, AbortableRequest } from "./debounce.js";
 import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
 import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
 import { giftRewardKey, loadDeclinedGiftRewards, saveDeclinedGiftRewards } from "./declined-gifts.js";
+import { cartFingerprint, giftKeyOfItem, loadUnfundedSuppressions, saveUnfundedSuppressions, unfundedGiftKeys } from "./unfunded-gifts.js";
 import { initGiftSlider, isSoldOutCartError } from "./widgets/gift-slider.js";
 import type { initFbtWidget } from "./widgets/fbt.js";
 import { lazyInitFbtWidget, lazyInitBundleBuilder } from "./widgets/blocks-loader.js";
@@ -42,14 +43,6 @@ const PROMO_WIDGET_SELECTOR = [
   '[id^="pe-fbt-"]',
 ].join(",");
 
-/** Gift line properties → `offerId:rewardId`, or null for a non-gift line. */
-function giftKeyOfItem(item: CartItem): string | null {
-  const props = item.properties ?? {};
-  if (props["_promo_engine_line_type"] !== "gift") return null;
-  const offerId = props["_promo_engine_offer_id"];
-  const rewardId = props["_promo_engine_reward_id"];
-  return offerId && rewardId ? giftRewardKey(offerId, rewardId) : null;
-}
 
 const GIFT_ADD_GRACE_MS = 10_000;
 const DEFAULT_EVAL_DEBOUNCE_MS = 300;
@@ -143,6 +136,8 @@ export class PromoEngineRuntime {
   /** When this runtime last issued the add for a gift; a stale snapshot right after it proves nothing. */
   private giftAddedAt: Map<string, number> = new Map();
   private declinedGiftRewards: Set<string> = loadDeclinedGiftRewards();
+  private unfundedSuppressed: Record<string, string> = loadUnfundedSuppressions();
+  private recheckTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(config: RuntimeConfig) {
     this.config = config;
@@ -340,8 +335,7 @@ export class PromoEngineRuntime {
 
   /** Evaluate and apply gifts now; resolves when done or after GIFT_HOLD_MS, whichever comes first, and never rejects. */
   private settleGifts(): Promise<void> {
-    this.debouncedEvaluate.cancel();
-    let timer: ReturnType<typeof setTimeout>;
+    this.debouncedEvaluate.cancel();    let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<void>((resolve) => {
       timer = setTimeout(() => {
         console.warn(`[PromoEngine] Gifts not ready after ${GIFT_HOLD_MS} ms — releasing the add-to-cart`);
@@ -520,6 +514,13 @@ export class PromoEngineRuntime {
     if (signal.aborted) return null;
 
     this.detectDeclinedGifts(cart);
+    cart = await this.removeUnfundedGifts(cart, signal);
+    if (signal.aborted) return null;
+    const fingerprint = cartFingerprint(cart);
+    for (const key of Object.keys(this.unfundedSuppressed)) {
+      if (this.unfundedSuppressed[key] !== fingerprint) delete this.unfundedSuppressed[key];
+    }
+    saveUnfundedSuppressions(this.unfundedSuppressed);
 
     const prospective = currentStampContext();
     const cartHash = `${this.buildCartHash(cart)}|${contextKey(prospective)}`;
@@ -547,7 +548,7 @@ export class PromoEngineRuntime {
           requestedUrl: window.location.href,
           prospective,
           sessionId: this.sessionId,
-          declinedGiftRewards: [...this.declinedGiftRewards],
+          declinedGiftRewards: [...new Set([...this.declinedGiftRewards, ...Object.keys(this.unfundedSuppressed)])],
         }),
         signal,
       );
@@ -584,6 +585,11 @@ export class PromoEngineRuntime {
       if ([...outcome.added].some((key) => this.giftAddedAt.has(key))) this.debouncedEvaluate.call();
       for (const key of outcome.added) this.giftAddedAt.set(key, Date.now());
       for (const key of outcome.removed) this.seenGiftKeys.delete(key);
+      if (outcome.added.size > 0) {
+        // Shopify may pick a set without the gift discount right after the add: re-check once instead of waiting for a cart change.
+        clearTimeout(this.recheckTimer);
+        this.recheckTimer = setTimeout(() => this.debouncedEvaluate.call(), 1_500);
+      }
       emit(PromoEvents.GiftsReady);
       if (actions.length > 0 || this.widgetChangedCart) {
         this.widgetChangedCart = false;
@@ -599,6 +605,42 @@ export class PromoEngineRuntime {
       this.log("Evaluation error", e);
       emit(PromoEvents.CartMutationError, { error: (e as Error).message });
       return null;
+    }
+  }
+
+  /** Remove auto-added gifts Shopify left at full price (confirmed on a fresh read) and suppress their re-add while the cart is unchanged. Never a customer decline. */
+  private async removeUnfundedGifts(cart: CartData, signal: AbortSignal): Promise<CartData> {
+    const first = unfundedGiftKeys(cart);
+    if (first.size === 0) return cart;
+    try {
+      const fresh = await fetchFreshCart();
+      if (signal.aborted) return cart;
+      const keys = [...unfundedGiftKeys(fresh)].filter((key) => first.has(key));
+      if (keys.length === 0) return cart;
+      for (const item of fresh.items) {
+        const key = giftKeyOfItem(item);
+        if (!key || !keys.includes(key)) continue;
+        await AjaxCartAdapter.removeLine({ key: item.key });
+        emit(PromoEvents.GiftRemoved, { lineKey: item.key, reason: "gift_not_discounted" });
+        publishAnalytics("promo_engine:gift_removed", {
+          line_key: item.key,
+          reason: "gift_not_discounted",
+          session_id: this.sessionId,
+        });
+      }
+      const next = await AjaxCartAdapter.getCart();
+      for (const key of keys) {
+        this.seenGiftKeys.delete(key);
+        this.giftAddedAt.delete(key);
+        this.knownGiftKeys?.delete(key);
+        this.unfundedSuppressed[key] = cartFingerprint(next);
+      }
+      saveUnfundedSuppressions(this.unfundedSuppressed);
+      this.widgetChangedCart = true;
+      return next;
+    } catch (e) {
+      this.log("Unfunded gift removal failed", e);
+      return cart;
     }
   }
 

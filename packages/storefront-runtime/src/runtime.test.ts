@@ -502,7 +502,7 @@ describe("gift hold on theme add-to-cart", () => {
     await vi.advanceTimersByTimeAsync(0);
     t.release();
     await added;
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(1_000); // the single funding re-check fires at 1.5 s (see gift-funding.e2e.test.ts)
     expect(t.giftAdds()).toBe(1);
     expect(t.h.count(/evaluate/)).toBe(2);
   });
