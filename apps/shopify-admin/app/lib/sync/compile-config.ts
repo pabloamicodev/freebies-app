@@ -1353,6 +1353,82 @@ const OFFER_ID_KEYS = [
 ];
 const REWARD_ID_KEYS = ["targetProductIds", "targetVariantIds", "requiredAnchorVariantIds"];
 
+/**
+ * The metafield doubles as the Function's input-query variables, and Shopify documents: "Input query variables
+ * will return errors for any GraphQL list variable with a value that exceeds 100 elements." One JSON array over
+ * 100 anywhere in it makes input resolution fail, so the node runs nothing.
+ */
+export const SHOPIFY_VARIABLE_LIST_LIMIT = 100;
+
+/**
+ * Plain string lists the Functions also accept as one comma-joined string (discount-function/src/config.rs `[packed]`).
+ * giftVariantIds/giftProductIds are not read by the Functions, but they are still in the metafield, so they pack too.
+ */
+export const PACKED_OFFER_KEYS = [
+  ...OFFER_ID_KEYS,
+  "giftVariantIds",
+  "giftProductIds",
+  "requiredCustomerTags",
+  "excludedCustomerTags",
+  "includeCountryCodes",
+  "excludeCountryCodes",
+  "codeHashes",
+];
+export const PACKED_REWARD_KEYS = REWARD_ID_KEYS;
+
+/** Inverse of the serializer's packing: a live list is a JSON array or, over 100 entries, one comma-joined string. */
+export function unpackList(value: unknown): string[] {
+  if (Array.isArray(value)) return value as string[];
+  return typeof value === "string" && value !== "" ? value.split(",") : [];
+}
+
+/** Lists that cannot be packed (arrays of objects). `listKind` in capacity numbers indexes this table. */
+export const UNPACKABLE_LISTS = [
+  ["requirements", "requirements"],
+  ["priceTiers", "price tiers"],
+  ["quantityTiers", "quantity tiers"],
+  ["subtotalTiers", "subtotal tiers"],
+  ["pageUrlConditions", "page URL conditions"],
+  ["patterns", "page URL patterns"],
+  ["giftRewards", "gift rewards"],
+  ["productRewards", "product rewards"],
+  ["orderRewards", "order rewards"],
+  ["lineAttributeConditions", "line attribute conditions"],
+  ["cartAttributeConditions", "cart attribute conditions"],
+  ["offers", "offers"],
+  ["customerTags", "customer tags"],
+] as const;
+
+export const listKindOf = (key: string) => UNPACKABLE_LISTS.findIndex(([name]) => name === key);
+
+/** First list in the offer that cannot be packed and is over the limit, as an index into UNPACKABLE_LISTS. */
+export function findOversizeList(offer: CompiledOffer): { listKind: number; listCount: number } | null {
+  const over = (list: readonly unknown[] | undefined, key: string) =>
+    list && list.length > SHOPIFY_VARIABLE_LIST_LIMIT ? { listKind: listKindOf(key), listCount: list.length } : null;
+  return (
+    over(offer.requirements, "requirements") ??
+    over(offer.giftRewards, "giftRewards") ??
+    over(offer.productRewards, "productRewards") ??
+    over(offer.orderRewards, "orderRewards") ??
+    over(offer.pageUrlConditions, "pageUrlConditions") ??
+    over(offer.lineAttributeConditions, "lineAttributeConditions") ??
+    over(offer.cartAttributeConditions, "cartAttributeConditions") ??
+    offer.pageUrlConditions?.map((c) => over(c.patterns, "patterns")).find(Boolean) ??
+    offer.productRewards.flatMap((r) => [over(r.priceTiers, "priceTiers"), over(r.quantityTiers, "quantityTiers")]).find(Boolean) ??
+    offer.orderRewards.map((r) => over(r.subtotalTiers, "subtotalTiers")).find(Boolean) ??
+    null
+  );
+}
+
+function packLongLists<T extends object>(value: T, keys: readonly string[]): T {
+  const out = { ...value } as Record<string, unknown>;
+  for (const key of keys) {
+    const entry = out[key];
+    if (Array.isArray(entry) && entry.length > SHOPIFY_VARIABLE_LIST_LIMIT) out[key] = entry.join(",");
+  }
+  return out as T;
+}
+
 function withCompactOfferIds(offer: CompiledOffer): CompiledOffer {
   return {
     ...withCompactIds(offer, OFFER_ID_KEYS),
@@ -1364,12 +1440,14 @@ function withCompactOfferIds(offer: CompiledOffer): CompiledOffer {
 
 export function compactCompiledOffer(source: CompiledOffer, compactIds = false): Record<string, unknown> {
   const offer = compactIds ? withCompactOfferIds(source) : source;
-  return omitDefaults(
+  const compact = omitDefaults(
     {
       ...offer,
-      giftRewards: offer.giftRewards.map((reward) => omitDefaults(reward, GIFT_REWARD_DEFAULTS)),
+      giftRewards: offer.giftRewards.map((reward) =>
+        packLongLists(omitDefaults(reward, GIFT_REWARD_DEFAULTS), PACKED_REWARD_KEYS),
+      ),
       productRewards: offer.productRewards.map((reward) =>
-        omitDefaults(reward, PRODUCT_REWARD_DEFAULTS),
+        packLongLists(omitDefaults(reward, PRODUCT_REWARD_DEFAULTS), PACKED_REWARD_KEYS),
       ),
       orderRewards: offer.orderRewards.map((reward) => omitDefaults(reward, ORDER_REWARD_DEFAULTS)),
       pageUrlConditions: offer.pageUrlConditions?.map((condition) =>
@@ -1379,6 +1457,7 @@ export function compactCompiledOffer(source: CompiledOffer, compactIds = false):
     OFFER_DEFAULTS,
     OFFER_UNREAD_KEYS,
   );
+  return packLongLists(compact, PACKED_OFFER_KEYS);
 }
 
 /** The metafield value: Function metafield input is capped at 10,000 bytes. */
