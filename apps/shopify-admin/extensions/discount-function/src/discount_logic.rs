@@ -650,6 +650,7 @@ fn evaluate_quiz_bundle_reward(
         .collect();
     let restrict_to_targets = !target_product_ids.is_empty() || !target_variant_ids.is_empty();
 
+    // Output order depends on this BTreeMap being ordered. Do not turn it into a HashMap (see de::tests::hash_collections_are_never_iterated).
     let mut groups: BTreeMap<String, QuizGroup<'_>> = BTreeMap::new();
     for line in input.cart().lines() {
         let Some(bundle_id) = quiz_bundle_id(line) else {
@@ -1623,6 +1624,7 @@ fn line_reward_id(line: &Lines) -> Option<String> {
 }
 
 fn projected_volume_discount_cents(lines: &[&Lines], currency_code: &str) -> i64 {
+    // Ordered on purpose: keep BTreeMap (a HashMap here would make the result order-dependent).
     let mut groups: BTreeMap<String, VolumeDiscountGroup> = BTreeMap::new();
     for line in lines {
         if bundle_item(line).as_deref() == Some("true") || nektar_glp1(line).is_some() {

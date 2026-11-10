@@ -13,16 +13,22 @@ use std::fmt;
 use std::hash::{BuildHasherDefault, Hasher};
 
 /// FNV-1a instead of the default SipHash: smaller wasm and fewer instructions. The keys are ids from the cart and the
-/// config, not attacker-chosen at scale, and nothing iterates these maps in an order-dependent way.
-#[derive(Default)]
+/// config, not attacker-chosen at scale. Hash iteration order must never reach an output: it is enforced by the
+/// `hash_collections_are_never_iterated` test below; ordered output goes through BTreeMap or a sorted Vec.
 pub struct Fnv(u64);
+
+impl Default for Fnv {
+    fn default() -> Self {
+        Fnv(0xcbf29ce484222325)
+    }
+}
 
 impl Hasher for Fnv {
     fn finish(&self) -> u64 {
         self.0
     }
     fn write(&mut self, bytes: &[u8]) {
-        let mut hash = if self.0 == 0 { 0xcbf29ce484222325 } else { self.0 };
+        let mut hash = self.0;
         for byte in bytes {
             hash = (hash ^ *byte as u64).wrapping_mul(0x100000001b3);
         }
@@ -215,9 +221,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hash_collections_are_never_iterated() {
+        let sources = [
+            ("discount_logic.rs", include_str!("discount_logic.rs")),
+            ("delivery_discount_logic.rs", include_str!("delivery_discount_logic.rs")),
+            ("config.rs", include_str!("config.rs")),
+            ("page_match.rs", include_str!("page_match.rs")),
+            ("usage.rs", include_str!("usage.rs")),
+        ];
+        let iterating = [".iter(", ".iter_mut(", ".values(", ".values_mut(", ".keys(", ".into_iter(", ".drain(", ".into_values(", ".into_keys("];
+        for (file, source) in sources {
+            let code = source.split("
+#[cfg(test)]").next().unwrap();
+            let mut names: Vec<&str> = Vec::new();
+            for line in code.lines() {
+                for marker in ["HashMap<", "HashSet<", "Usage"] {
+                    let Some(position) = line.find(marker) else { continue };
+                    let Some(head) = line[..position].trim_end().strip_suffix(':') else { continue };
+                    let head = head.trim_end();
+                    let start = head.rfind(|c: char| !(c.is_alphanumeric() || c == '_')).map_or(0, |i| i + 1);
+                    if start < head.len() {
+                        names.push(&head[start..]);
+                    }
+                }
+            }
+            assert!(file != "discount_logic.rs" || names.len() > 10, "name detection found {names:?}");
+            let standalone = |needle: &str| {
+                code.match_indices(needle).any(|(at, _)| {
+                    !code[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_' || c == '.')
+                })
+            };
+            for name in names {
+                for op in iterating {
+                    assert!(!standalone(&format!("{name}{op}")), "{file}: `{name}{op}` iterates a hash collection");
+                }
+                assert!(!code.contains(&format!("in &{name} ")) && !code.contains(&format!("in {name} ")) && !code.contains(&format!("in &mut {name} ")), "{file}: `for .. in {name}` iterates a hash collection");
+            }
+        }
+    }
+
+    #[test]
     fn sort_by_matches_the_stable_std_sort() {
         let mut seed = 0x2545F4914F6CDD1Du64;
-        for len in [0usize, 1, 2, 3, 7, 8, 9, 31, 64, 65, 200] {
+        for len in [0usize, 1, 2, 3, 5, 6, 7, 9, 10, 11, 31, 33, 63, 65, 100, 127, 129, 200, 257] {
             let data: Vec<(u32, usize)> = (0..len)
                 .map(|index| {
                     seed ^= seed << 13;
@@ -231,6 +277,16 @@ mod tests {
             let mut actual = data;
             sort_by(&mut actual, |a, b| a.0.cmp(&b.0));
             assert_eq!(actual, expected, "len {len}");
+
+            let mut expected = actual.clone();
+            expected.sort_by(|a, b| b.0.cmp(&a.0));
+            sort_by(&mut actual, |a, b| b.0.cmp(&a.0));
+            assert_eq!(actual, expected, "reversed comparator, len {len}");
+
+            let mut expected = actual.clone();
+            expected.sort_by(|a, b| (a.0 % 2).cmp(&(b.0 % 2)).then(b.1.cmp(&a.1)));
+            sort_by(&mut actual, |a, b| (a.0 % 2).cmp(&(b.0 % 2)).then(b.1.cmp(&a.1)));
+            assert_eq!(actual, expected, "compound comparator, len {len}");
         }
     }
 
