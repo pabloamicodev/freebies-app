@@ -8,7 +8,7 @@ use schema::cart_lines_discounts_generate_run::input::cart::lines::Merchandise;
 use schema::cart_lines_discounts_generate_run::input::cart::Lines;
 use schema::cart_lines_discounts_generate_run::Input;
 use shopify_function::Result;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use crate::de::{HashMap, HashSet};
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -16,15 +16,85 @@ use std::rc::Rc;
 const LINE_TYPE_GIFT: &str = "gift";
 const LINE_TYPE_UPSELL: &str = "upsell";
 
-/// Per-line values every offer re-reads, computed on first use and kept for the run (indexed by the line's position in the cart).
-struct LineFacts {
+/// Metadata-derived values of one line.
+struct PackedFacts {
     metadata: Option<Rc<LineMetadata>>,
     line_type: Option<String>,
     gift: bool,
 }
 
+/// Per-line values every offer re-reads. Each is computed on first use (reading a line field is costly) and kept
+/// for the run; facts are indexed by the line's position in the cart.
+#[derive(Default)]
+struct LineFacts {
+    packed: OnceCell<PackedFacts>,
+    quantity: OnceCell<i32>,
+    subtotal: OnceCell<f64>,
+    ids: OnceCell<Option<(String, String)>>,
+    // Valid volume-discount tiers; None for bundle components and Nektar GLP-1 lines, which the projection skips.
+    volume_tiers: OnceCell<Option<Vec<VolumeDiscountTier>>>,
+}
+
+impl LineFacts {
+    fn packed(&self, line: &Lines) -> &PackedFacts {
+        self.packed.get_or_init(|| compute_packed_facts(line))
+    }
+
+    fn quantity(&self, line: &Lines) -> i32 {
+        *self.quantity.get_or_init(|| *line.quantity())
+    }
+
+    fn subtotal(&self, line: &Lines) -> f64 {
+        *self.subtotal.get_or_init(|| line.cost().subtotal_amount().amount().as_f64())
+    }
+
+    fn ids(&self, line: &Lines) -> Option<(&str, &str)> {
+        self.ids
+            .get_or_init(|| match line.merchandise() {
+                Merchandise::ProductVariant(variant) => {
+                    Some((variant.id().clone(), variant.product().id().clone()))
+                }
+                Merchandise::Other => None,
+            })
+            .as_ref()
+            .map(|(variant, product)| (variant.as_str(), product.as_str()))
+    }
+
+    fn volume_tiers(&self, line: &Lines) -> Option<&[VolumeDiscountTier]> {
+        self.volume_tiers.get_or_init(|| {
+            let packed = self.packed(line).metadata.as_deref();
+            let packed = |key: &str| packed.and_then(|map| map.get(key));
+            let bundle_item = line
+                .volume_discount_bundle_item()
+                .and_then(|attribute| attribute.value())
+                .or_else(|| packed("_bundle_item"));
+            let nektar_glp1 = line
+                .volume_discount_nektar_glp_1()
+                .and_then(|attribute| attribute.value())
+                .or_else(|| packed("_nektar_glp1"));
+            let outside_tiers = bundle_item.map(String::as_str) == Some("true") || nektar_glp1.is_some();
+            match line.merchandise() {
+                Merchandise::ProductVariant(variant) if !outside_tiers => variant
+                    .product()
+                    .volume_discount_tiers()
+                    .and_then(|metafield| serde_json::from_str::<Vec<VolumeDiscountTier>>(metafield.value()).ok())
+                    .map(|tiers| {
+                        tiers
+                            .into_iter()
+                            .filter(|tier| tier.qty > 0 && tier.percent.is_finite() && tier.percent >= 0.0)
+                            .collect::<Vec<_>>()
+                    })
+                    .filter(|tiers| !tiers.is_empty()),
+                _ => None,
+            }
+        })
+        .as_deref()
+    }
+}
+
 thread_local! {
-    static LINE_FACTS: RefCell<Vec<Option<LineFacts>>> = const { RefCell::new(Vec::new()) };
+    // Leaked once per run (the wasm instance ends right after) so borrowed ids can outlive the lookup.
+    static LINE_FACTS: Cell<&'static [LineFacts]> = const { Cell::new(&[]) };
     // Address and length of this run's cart-lines slice: `line_slot` maps a `&Lines` to its position by pointer offset.
     static LINES_SPAN: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
     // Page-match result per condition-set fingerprint, then line slot, so offers sharing the same page
@@ -315,7 +385,7 @@ fn evaluate_product_reward(
         .filter(|line| {
             reward
                 .line_quantity_equals
-                .map(|quantity| i64::from(*line.quantity()) == quantity)
+                .map(|quantity| i64::from(quantity_of(line)) == quantity)
                 .unwrap_or(true)
         })
         .filter(|line| match reward.subscription_mode.as_str() {
@@ -344,7 +414,7 @@ fn evaluate_product_reward(
     } else {
         eligible
             .iter()
-            .map(|line| i64::from(*line.quantity()))
+            .map(|line| i64::from(quantity_of(line)))
             .sum()
     };
     let quantity_tier = reward
@@ -417,7 +487,7 @@ fn evaluate_product_reward(
         if remaining <= 0 {
             break;
         }
-        let mut quantity = i64::from(*line.quantity()).min(remaining);
+        let mut quantity = i64::from(quantity_of(line)).min(remaining);
         if let Some(per_line) = reward.max_units_per_line {
             quantity = quantity.min(per_line);
         }
@@ -503,7 +573,7 @@ fn is_free_landing_gift(reward: &CompiledProductReward) -> bool {
 
 fn landing_anchor_qualifies(reward: &CompiledProductReward, input: &Input) -> bool {
     landing_anchor_lines(reward, input).is_some_and(|lines| {
-        lines.iter().map(|line| i64::from(*line.quantity())).sum::<i64>()
+        lines.iter().map(|line| i64::from(quantity_of(line))).sum::<i64>()
             >= reward.required_anchor_min_quantity
     })
 }
@@ -582,7 +652,7 @@ fn gift_anchors(offer: &CompiledOffer, input: &Input) -> Option<Anchors> {
     Some(Anchors {
         lines: landing_anchor_lines(reward, input)?
             .into_iter()
-            .map(|line| (line.id().clone(), i64::from(*line.quantity())))
+            .map(|line| (line.id().clone(), i64::from(quantity_of(line))))
             .collect(),
         needed: reward.required_anchor_min_quantity,
     })
@@ -601,7 +671,7 @@ fn product_gift_anchors(offer: &CompiledOffer, input: &Input) -> Option<Anchors>
         .cart()
         .lines()
         .iter()
-        .filter(|line| *line.quantity() > 0 && !is_gift_line(line))
+        .filter(|line| quantity_of(line) > 0 && !is_gift_line(line))
         .filter(|line| match offer.subscription_mode.as_deref() {
             Some("subscription_only") => line.selling_plan_allocation().is_some(),
             Some("one_time_only") => line.selling_plan_allocation().is_none(),
@@ -624,7 +694,7 @@ fn product_gift_anchors(offer: &CompiledOffer, input: &Input) -> Option<Anchors>
                     || product_lists.iter().any(|ids| ids.iter().any(|id| id == product_id))
                     || variant_lists.iter().any(|ids| ids.iter().any(|id| id == variant_id)))
         })
-        .map(|line| (line.id().clone(), i64::from(*line.quantity())))
+        .map(|line| (line.id().clone(), i64::from(quantity_of(line))))
         .collect();
     Some(Anchors {
         lines,
@@ -711,7 +781,7 @@ fn evaluate_quiz_bundle_reward(
                 &mut gift_units_by_product,
                 product_id.to_string(),
                 cap_per_cart(offer, reward.max_quantity.unwrap_or(1)),
-                i64::from(*line.quantity()),
+                i64::from(quantity_of(line)),
             );
             if quantity <= 0 {
                 continue;
@@ -741,7 +811,7 @@ fn evaluate_quiz_bundle_reward(
         let current_total: f64 = group
             .paid
             .iter()
-            .map(|line| line.cost().subtotal_amount().amount().as_f64())
+            .map(|line| subtotal_of(line))
             .sum();
         let mut discount_needed = (current_total - target_price).min(current_total);
         // The client-set target can only ever shave a configured share off the paid lines.
@@ -799,7 +869,7 @@ fn evaluate_order_offer(
                 .iter()
                 .map(|line| {
                     to_cents(
-                        line.cost().subtotal_amount().amount().as_f64(),
+                        subtotal_of(line),
                         &active_currency,
                     )
                 })
@@ -807,7 +877,7 @@ fn evaluate_order_offer(
             let qualifying_quantity: i64 = eligible_lines
                 .iter()
                 .filter(|line| !is_zero_cost(line))
-                .map(|line| i64::from(*line.quantity()))
+                .map(|line| i64::from(quantity_of(line)))
                 .sum();
             make_order_candidate(
                 reward,
@@ -943,7 +1013,7 @@ fn evaluate_gift_offer(
         // what is left, so a variant only ever counts as a gift of an offer that qualifies.
         for tagged_pass in [true, false] {
             for line in input.cart().lines().iter() {
-                let mut line_quantity = i64::from(*line.quantity());
+                let mut line_quantity = i64::from(quantity_of(line));
                 let tagged = line_type(line).as_deref() == Some(LINE_TYPE_GIFT)
                     && line_offer_id(line).as_deref() == Some(offer.id.as_str());
                 if line_quantity <= 0
@@ -1099,7 +1169,7 @@ fn evaluate_discount_offer(
             match most_expensive {
                 Some(line) => vec![make_candidate(
                     line.id().clone(),
-                    cap_per_cart(offer, i64::from(*line.quantity())),
+                    cap_per_cart(offer, i64::from(quantity_of(line))),
                     &offer.discount_type,
                     offer.discount_value,
                     "Most expensive item discount",
@@ -1114,7 +1184,7 @@ fn evaluate_discount_offer(
                 if left <= 0 {
                     break;
                 }
-                let quantity = i64::from(*line.quantity()).min(left);
+                let quantity = i64::from(quantity_of(line)).min(left);
                 left -= quantity;
                 candidates.push(make_candidate(
                     line.id().clone(),
@@ -1156,7 +1226,7 @@ fn qualifying_lines<'a>(offer: &CompiledOffer, input: &'a Input) -> Vec<&'a Line
         .cart()
         .lines()
         .iter()
-        .filter(|line| *line.quantity() > 0 && !is_gift_line(line))
+        .filter(|line| quantity_of(line) > 0 && !is_gift_line(line))
         .filter(|line| {
             variant_and_product_id(line)
                 .map(|(_, product_id)| !excluded_products.contains(product_id))
@@ -1175,7 +1245,7 @@ fn cart_value_cents(lines: &[&Lines], input: &Input) -> i64 {
     let raw_cart_value_cents: i64 = lines
         .iter()
         .map(|line| {
-            let amount = line.cost().subtotal_amount().amount().as_f64();
+            let amount = subtotal_of(line);
             to_cents(amount, &active_currency)
         })
         .sum();
@@ -1232,7 +1302,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
                 line_attribute_value(line, &condition.key, config).as_deref()
                     == condition.value.as_deref()
             })
-            .map(|line| i64::from(*line.quantity()))
+            .map(|line| i64::from(quantity_of(line)))
             .sum();
         let passes = if condition.match_mode == "not_equals" {
             matching_quantity == 0
@@ -1272,7 +1342,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         let cart_qty: i64 = non_gift_lines
             .iter()
             .filter(|line| !is_zero_cost(line))
-            .map(|line| *line.quantity() as i64)
+            .map(|line| quantity_of(line) as i64)
             .sum();
         if cart_qty < threshold_qty {
             return false;
@@ -1393,7 +1463,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
                         requirement.product_id.as_deref() == Some(product_id)
                     }
                 })
-                .map(|(line, _)| i64::from(*line.quantity()))
+                .map(|(line, _)| i64::from(quantity_of(line)))
                 .sum();
             if matching_quantity < requirement.min_quantity {
                 return false;
@@ -1569,7 +1639,7 @@ fn make_multi_line_fixed_candidate(
             .map(|line| {
                 schema::ProductDiscountCandidateTarget::CartLine(schema::CartLineTarget {
                     id: line.id().clone(),
-                    quantity: Some(*line.quantity()),
+                    quantity: Some(quantity_of(line)),
                 })
             })
             .collect(),
@@ -1597,7 +1667,7 @@ fn round_to_cents(value: f64) -> f64 {
 /// exclusion, quiz-bundle restriction) — one shared body instead of a
 /// duplicated closure per call site matters for the wasm size budget.
 fn line_price(line: &Lines) -> f64 {
-    line.cost().subtotal_amount().amount().as_f64() / f64::from((*line.quantity()).max(1))
+    subtotal_of(line) / f64::from(quantity_of(line).max(1))
 }
 
 fn is_one_of(line: &Lines, product_ids: &HashSet<&str>, variant_ids: &HashSet<&str>) -> bool {
@@ -1609,6 +1679,9 @@ fn is_one_of(line: &Lines, product_ids: &HashSet<&str>, variant_ids: &HashSet<&s
 }
 
 fn variant_and_product_id(line: &Lines) -> Option<(&str, &str)> {
+    if let Some(slot) = line_slot(line) {
+        return LINE_FACTS.with(Cell::get)[slot].ids(line);
+    }
     match line.merchandise() {
         Merchandise::ProductVariant(variant) => {
             Some((variant.id().as_str(), variant.product().id().as_str()))
@@ -1618,17 +1691,17 @@ fn variant_and_product_id(line: &Lines) -> Option<(&str, &str)> {
 }
 
 fn line_type(line: &Lines) -> Option<String> {
-    with_facts(line, |facts| facts.line_type.clone())
+    with_facts(line, |facts| facts.packed(line).line_type.clone())
 }
 
 // A $0 line (another app's free gift) is not a paid unit: it must not raise a quantity tier,
 // consume a unit cap or be picked as the cheapest item.
 fn is_zero_cost(line: &Lines) -> bool {
-    line.cost().subtotal_amount().amount().as_f64() <= 0.0
+    subtotal_of(line) <= 0.0
 }
 
 fn is_gift_line(line: &Lines) -> bool {
-    with_facts(line, |facts| facts.gift)
+    with_facts(line, |facts| facts.packed(line).gift)
 }
 
 fn line_offer_id(line: &Lines) -> Option<String> {
@@ -1643,42 +1716,25 @@ fn projected_volume_discount_cents(lines: &[&Lines], currency_code: &str) -> i64
     // Ordered on purpose: keep BTreeMap (a HashMap here would make the result order-dependent).
     let mut groups: BTreeMap<String, VolumeDiscountGroup> = BTreeMap::new();
     for line in lines {
-        if bundle_item(line).as_deref() == Some("true") || nektar_glp1(line).is_some() {
-            continue;
-        }
-        let Merchandise::ProductVariant(variant) = line.merchandise() else {
-            continue;
-        };
-        let Some(metafield) = variant.product().volume_discount_tiers() else {
-            continue;
-        };
-        let Ok(tiers) = serde_json::from_str::<Vec<VolumeDiscountTier>>(metafield.value()) else {
-            continue;
-        };
-        let tiers: Vec<_> = tiers
-            .into_iter()
-            .filter(|tier| tier.qty > 0 && tier.percent.is_finite() && tier.percent >= 0.0)
-            .collect();
-        if tiers.is_empty() {
-            continue;
-        }
-        let subtotal_cents = to_cents(
-            line.cost().subtotal_amount().amount().as_f64(),
-            currency_code,
-        );
-        if subtotal_cents <= 0 {
-            continue;
-        }
-        let group = groups
-            .entry(variant.product().id().to_string())
-            .or_insert_with(|| VolumeDiscountGroup {
-                quantity: 0,
-                subtotal_cents: 0,
-                tiers: vec![],
-            });
-        group.quantity += i64::from(*line.quantity());
-        group.subtotal_cents += subtotal_cents;
-        group.tiers.extend(tiers);
+        with_facts(line, |facts| {
+            let (Some((_, product_id)), Some(tiers)) = (facts.ids(line), facts.volume_tiers(line)) else {
+                return;
+            };
+            let subtotal_cents = to_cents(facts.subtotal(line), currency_code);
+            if subtotal_cents <= 0 {
+                return;
+            }
+            let group = groups
+                .entry(product_id.to_string())
+                .or_insert_with(|| VolumeDiscountGroup {
+                    quantity: 0,
+                    subtotal_cents: 0,
+                    tiers: vec![],
+                });
+            group.quantity += i64::from(facts.quantity(line));
+            group.subtotal_cents += subtotal_cents;
+            group.tiers.extend(tiers.iter().cloned());
+        });
     }
 
     groups
@@ -1712,24 +1768,6 @@ fn landing_source(line: &Lines) -> Option<String> {
         line.landing_source().and_then(|attribute| attribute.value()),
         line,
         "__landing_source",
-    )
-}
-
-fn bundle_item(line: &Lines) -> Option<String> {
-    attr_or_metadata(
-        line.volume_discount_bundle_item()
-            .and_then(|attribute| attribute.value()),
-        line,
-        "_bundle_item",
-    )
-}
-
-fn nektar_glp1(line: &Lines) -> Option<String> {
-    attr_or_metadata(
-        line.volume_discount_nektar_glp_1()
-            .and_then(|attribute| attribute.value()),
-        line,
-        "_nektar_glp1",
     )
 }
 
@@ -1822,14 +1860,14 @@ fn quiz_free_gift(line: &Lines) -> Option<String> {
 }
 
 fn metadata_value(line: &Lines, key: &str) -> Option<String> {
-    with_facts(line, |facts| facts.metadata.as_deref()?.get(key).cloned())
+    with_facts(line, |facts| facts.packed(line).metadata.as_deref()?.get(key).cloned())
 }
 
 fn metadata_map(line: &Lines) -> Option<Rc<LineMetadata>> {
-    with_facts(line, |facts| facts.metadata.clone())
+    with_facts(line, |facts| facts.packed(line).metadata.clone())
 }
 
-fn compute_line_facts(line: &Lines) -> LineFacts {
+fn compute_packed_facts(line: &Lines) -> PackedFacts {
     let metadata = line
         .promo_metadata()
         .as_ref()
@@ -1846,7 +1884,7 @@ fn compute_line_facts(line: &Lines) -> LineFacts {
     let gift = line_type.as_deref() == Some(LINE_TYPE_GIFT)
         || packed("__cart_gift_tier").is_some()
         || packed("_quiz_free_gift").map(String::as_str) == Some("true");
-    LineFacts { metadata, line_type, gift }
+    PackedFacts { metadata, line_type, gift }
 }
 
 /// Position of `line` in this run's cart lines, or None for a `Lines` that is not from it.
@@ -1859,12 +1897,17 @@ fn line_slot(line: &Lines) -> Option<usize> {
 
 fn with_facts<R>(line: &Lines, read: impl FnOnce(&LineFacts) -> R) -> R {
     match line_slot(line) {
-        Some(slot) => LINE_FACTS.with(|facts| {
-            let mut facts = facts.borrow_mut();
-            read(facts[slot].get_or_insert_with(|| compute_line_facts(line)))
-        }),
-        None => read(&compute_line_facts(line)),
+        Some(slot) => read(&LINE_FACTS.with(Cell::get)[slot]),
+        None => read(&LineFacts::default()),
     }
+}
+
+fn quantity_of(line: &Lines) -> i32 {
+    with_facts(line, |facts| facts.quantity(line))
+}
+
+fn subtotal_of(line: &Lines) -> f64 {
+    with_facts(line, |facts| facts.subtotal(line))
 }
 
 /// Sizes the per-line facts for one run and forgets the lines' address when the run ends.
@@ -1873,7 +1916,8 @@ struct LineFactsGuard;
 impl LineFactsGuard {
     fn new(input: &Input) -> Self {
         let lines = input.cart().lines();
-        LINE_FACTS.with(|facts| *facts.borrow_mut() = lines.iter().map(|_| None).collect());
+        let facts: Vec<LineFacts> = lines.iter().map(|_| LineFacts::default()).collect();
+        LINE_FACTS.with(|slot| slot.set(Box::leak(facts.into_boxed_slice())));
         LINES_SPAN.with(|span| span.set((lines.as_ptr() as usize, lines.len())));
         LineFactsGuard
     }
@@ -1882,6 +1926,7 @@ impl LineFactsGuard {
 impl Drop for LineFactsGuard {
     fn drop(&mut self) {
         LINES_SPAN.with(|span| span.set((0, 0)));
+        LINE_FACTS.with(|slot| slot.set(&[]));
     }
 }
 
@@ -2514,7 +2559,8 @@ mod tests {
                     assert_eq!(slots, vec![Some(0), Some(1)]);
                     let gifts: Vec<_> = lines.iter().map(is_gift_line).collect();
                     assert_eq!(gifts, vec![false, true]);
-                    assert!(compute_line_facts(&lines[1]).gift);
+                    assert!(compute_packed_facts(&lines[1]).gift);
+                    assert_eq!(LineFacts::default().quantity(&lines[1]), 1);
                     assert_eq!(line_type(&lines[1]).as_deref(), Some(LINE_TYPE_GIFT));
                 }
                 assert_eq!(line_slot(&input.cart().lines()[0]), None);
