@@ -2,7 +2,7 @@ use crate::config::{
     is_zero_decimal, minor_units, to_cents, to_cents_in, CompiledConfig, CompiledGiftReward, CompiledOffer,
     CompiledOrderReward, CompiledProductReward,
 };
-use crate::page_match::{metadata_matches, LineMetadata};
+use crate::page_match::{metadata_matches, LineMetadata, PAGE_STAMP_KEYS};
 use crate::schema;
 use schema::cart_lines_discounts_generate_run::input::cart::lines::Merchandise;
 use schema::cart_lines_discounts_generate_run::input::cart::Lines;
@@ -1947,10 +1947,8 @@ fn metadata_map(line: &Lines) -> Option<Rc<LineMetadata>> {
     with_facts(line, |facts| facts.packed(line).metadata.clone())
 }
 
-/// The metadata entries `metadata_matches` reads. Lines with equal stamps always match the same page conditions.
-type PageStamps = [Option<String>; 5];
-const PAGE_STAMP_KEYS: [&str; 5] =
-    ["_promo_page_url", "_promo_landing_url", "_promo_template", "_promo_sections", "_promo_exp"];
+/// The values of `PAGE_STAMP_KEYS`: lines with equal stamps always match the same page conditions.
+type PageStamps = [Option<String>; PAGE_STAMP_KEYS.len()];
 
 /// Parses a line's packed metadata and classifies its page stamps; lines carrying the same raw metadata (the
 /// common case: every line added from one page) share one parse.
