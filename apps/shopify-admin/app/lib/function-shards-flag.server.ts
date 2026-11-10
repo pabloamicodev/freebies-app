@@ -25,7 +25,10 @@ export async function isShardDomainsEnabled(db: Db, shopId: string): Promise<boo
     .select({ value: appSettings.value })
     .from(appSettings)
     .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, SHARD_DOMAINS_SETTING)));
-  if (!row) return process.env["FUNCTION_SHARD_DOMAINS_DEFAULT"] !== "off";
+  // FUNCTION_SHARD_DOMAINS_DEFAULT exists so test suites can start from single-node behavior; it is ignored outside
+  // tests, so production can only switch the feature off with FUNCTION_SHARD_DOMAINS=off.
+  const testDefault = process.env["NODE_ENV"] === "test" || process.env["VITEST"] ? process.env["FUNCTION_SHARD_DOMAINS_DEFAULT"] : undefined;
+  if (!row) return testDefault !== "off";
   return row.value !== "false";
 }
 

@@ -69,6 +69,9 @@ class FakeShopify {
   policies = new Map<string, { orderDiscounts: boolean; productDiscounts: boolean; shippingDiscounts: boolean }>();
   others = 3;
   crashAfterMetafieldsSet = false;
+  /** The next metafieldsSet fails before anything is stored. */
+  failMetafieldsSet = false;
+  failLiveRead = false;
   private seq = 100;
 
   reset() {
@@ -86,6 +89,8 @@ class FakeShopify {
     this.policies = new Map();
     this.others = 3;
     this.crashAfterMetafieldsSet = false;
+    this.failMetafieldsSet = false;
+    this.failLiveRead = false;
   }
 
   value(ownerId: string, namespace = "promo_engine"): Record<string, unknown> & { offers: Array<{ id: string }> } {
@@ -146,6 +151,15 @@ class FakeShopify {
       this.created.push(id);
       return { discountAutomaticAppCreate: { automaticAppDiscount: { discountId: id }, userErrors: [] } };
     }
+    if (query.includes("PromoEngineLiveCombination")) {
+      if (this.failLiveRead) throw new Error("live combination read failed");
+      const open = { orderDiscounts: true, productDiscounts: true, shippingDiscounts: true };
+      return {
+        nodes: (variables!["ids"] as string[]).map((id) =>
+          this.nodes.has(id) ? { id, automaticDiscount: { combinesWith: this.policies.get(id) ?? open } } : null,
+        ),
+      };
+    }
     if (query.includes("UpdatePromoEngineDiscountCombination")) {
       this.policyUpdates.push(variables!["id"] as string);
       const combinesWith = (variables!["discount"] as { combinesWith: { orderDiscounts: boolean; productDiscounts: boolean; shippingDiscounts: boolean } }).combinesWith;
@@ -156,6 +170,10 @@ class FakeShopify {
     if (query.includes("mutation MetafieldsSet")) {
       const batch = variables!["metafields"] as MetafieldInput[];
       for (const m of batch) if (!this.nodes.has(m.ownerId)) throw new Error(`metafieldsSet on missing node ${m.ownerId}`);
+      if (this.failMetafieldsSet) {
+        this.failMetafieldsSet = false;
+        throw new Error("metafieldsSet failed");
+      }
       this.metafieldsSets.push(batch);
       this.timeline.push("swap");
       for (const m of batch) this.setMetafield(m.ownerId, m.namespace, m.value);
@@ -327,10 +345,12 @@ const metafieldSetCalls = () => shopify.mutations.filter((name) => name === "Met
 
 const COUNT = 100;
 
-describe("sharded cart publish", () => {
+// The whole suite runs with combination groups off (today's behavior) and on (the production default).
+describe.each(["off", "on"])("sharded cart publish (combination groups default %s)", (domainsDefault) => {
   let ids: string[];
 
   beforeEach(async () => {
+    vi.stubEnv("FUNCTION_SHARD_DOMAINS_DEFAULT", domainsDefault);
     shopId = await freshShop();
   });
 
@@ -643,6 +663,85 @@ describe("sharded cart publish", () => {
 
       await publishOffersForShop(shopId, DOMAIN);
       expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: true });
+    });
+
+    it("a stale manifest cannot loosen a node before its swap: crash after the swap, offer flipped back, next swap fails", async () => {
+      await setShardDomainsEnabled(db, shopId, true);
+      await publishOffersForShop(shopId, DOMAIN);
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: true });
+
+      // Every offer of slot 0 stops combining: they stay together in slot 0, whose manifest entry still says open.
+      const nc = shopify.value(CART_NODE).offers.map((offer) => offer.id);
+      await nonCombining(nc);
+      shopify.crashAfterMetafieldsSet = true;
+      await expect(publishOffersForShop(shopId, DOMAIN)).rejects.toThrow("process died after metafieldsSet");
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: false });
+      expect(shopify.value(CART_NODE).offers.map((offer) => offer.id)).toEqual(nc);
+
+      await nonCombining(nc, true);
+      shopify.failMetafieldsSet = true;
+      await expect(publishOffersForShop(shopId, DOMAIN)).rejects.toThrow("metafieldsSet failed");
+
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: false });
+      expect(shopify.timeline.filter((entry) => entry === `policy:${CART_NODE}:open`)).toHaveLength(1);
+    });
+
+    it("persists the tightened policy to the manifest before the swap", async () => {
+      await setShardDomainsEnabled(db, shopId, true);
+      await publishOffersForShop(shopId, DOMAIN);
+      await nonCombining(shopify.value(CART_NODE).offers.map((offer) => offer.id));
+      shopify.failMetafieldsSet = true;
+      await expect(publishOffersForShop(shopId, DOMAIN)).rejects.toThrow("metafieldsSet failed");
+      const { readPublishManifest } = await import("../publish-manifest.server.js");
+      expect((await readPublishManifest(shopId, db))!.nodes[CART_NODE]!.combinesWith).toMatchObject({ productDiscounts: false });
+    });
+
+    it("tightens to the live policy even when the manifest says open", async () => {
+      await setShardDomainsEnabled(db, shopId, true);
+      await publishOffersForShop(shopId, DOMAIN);
+      shopify.policies.set(CART_NODE, { orderDiscounts: true, productDiscounts: false, shippingDiscounts: true });
+      shopify.timeline = [];
+      await publishOffersForShop(shopId, DOMAIN);
+      const swap = shopify.timeline.indexOf("swap");
+      expect(shopify.timeline.slice(0, swap)).toContain(`policy:${CART_NODE}:closed`);
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: true });
+    });
+
+    it("a failed live read fails closed: the node tightens to manifest and new, and nothing is loosened", async () => {
+      await setShardDomainsEnabled(db, shopId, true);
+      const nc = [ids[3]!];
+      await nonCombining(nc);
+      await publishOffersForShop(shopId, DOMAIN);
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: false });
+
+      await nonCombining(nc, true);
+      shopify.failLiveRead = true;
+      shopify.timeline = [];
+      await publishOffersForShop(shopId, DOMAIN);
+
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: false });
+      expect(shopify.timeline.filter((entry) => entry.startsWith(`policy:${CART_NODE}:open`))).toEqual([]);
+
+      shopify.failLiveRead = false;
+      await publishOffersForShop(shopId, DOMAIN);
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: true });
+    });
+
+    it("drift repair of a node a merchant loosened tightens it again before the swap", async () => {
+      await setShardDomainsEnabled(db, shopId, true);
+      await nonCombining([ids[3]!]);
+      await publishOffersForShop(shopId, DOMAIN);
+      shopify.policies.set(CART_NODE, { orderDiscounts: true, productDiscounts: true, shippingDiscounts: true });
+      const drift = { graphQL: shopify.call as never, publish: publishOffersForShop, settleMs: 0, globallyPaused: false };
+
+      const dry = await repairShopDrift(db, drift, { shopId, dryRun: true });
+      expect(dry.findings.map((finding) => finding.issue)).toContain("combination_mismatch");
+      shopify.timeline = [];
+      await repairShopDrift(db, drift, { shopId, dryRun: false });
+
+      const swap = shopify.timeline.indexOf("swap");
+      expect(shopify.timeline.slice(0, swap)).toContain(`policy:${CART_NODE}:closed`);
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: false });
     });
 
     it("with the setting off a non-combining offer still blocks growth, writing nothing", async () => {

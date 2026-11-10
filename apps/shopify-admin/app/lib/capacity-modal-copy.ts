@@ -44,7 +44,8 @@ export interface CapacityModalData {
 
 export type CapacityModalAction =
   | { kind: "external"; label: string; href: string }
-  | { kind: "offer"; label: string; to: string };
+  | { kind: "offer"; label: string; to: string }
+  | { kind: "settings"; label: string; to: string };
 
 export interface CapacityModalCopy {
   title: string;
@@ -167,7 +168,7 @@ export function describeCapacityModal(data: CapacityModalData): CapacityModalCop
         body: combinationSingleShardMessage(names),
         fix: "Let those offers run in their own Shopify discount, allow them to combine with product discounts, or pause some offers.",
         actions: [
-          { kind: "offer", label: "Let them run separately…", to: "/app/diagnostics?combination=allow" },
+          { kind: "settings", label: "Let them run separately…", to: "/app/diagnostics?combination=allow" },
           ...data.offers
             .slice(0, MAX_OFFER_ACTIONS)
             .map((offer): CapacityModalAction => ({ kind: "offer", label: `Open ${offer.name}`, to: `/app/offers/${offer.id}/combination` })),

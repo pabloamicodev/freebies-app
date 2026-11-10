@@ -456,7 +456,7 @@ describe("discount_capacity", () => {
     }
     const only = await visibleShops(db, operator([domain]));
     const budget = { storeActive: 9, ours: 3, others: 6, maxCartSlots: 11 };
-    const result = await discountCapacity(db, only, {}, undefined, { capacity: { shardsEnabled: true, loadBudget: async () => budget } });
+    const result = await discountCapacity(db, only, {}, undefined, { capacity: { shardsEnabled: true, domainsEnabled: false, loadBudget: async () => budget } });
     const row = result.data.shops[0]!;
     expect(row).toMatchObject({ plannedSlots: 1, maxCartSlots: 11, singleShardReason: "combination" });
     expect(row.combinationBlockers.map((b) => b.name)).toEqual(names);

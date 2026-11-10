@@ -133,6 +133,49 @@ export async function ensureDiscountNodes(
   return { cartLinesDiscountId, deliveryDiscountId };
 }
 
+/**
+ * combinesWith each automatic node holds in Shopify right now. Missing nodes are omitted; a node that reports no
+ * combinesWith throws, so callers can fail closed instead of guessing.
+ */
+export async function readLiveCombinations(
+  shopDomain: string,
+  accessToken: string,
+  ids: readonly string[],
+): Promise<Map<string, DiscountCombinationPolicyInput>> {
+  const live = new Map<string, DiscountCombinationPolicyInput>();
+  if (ids.length === 0) return live;
+  const data = await shopifyGraphQL<{
+    nodes: Array<{ id?: string; automaticDiscount?: { combinesWith?: Partial<DiscountCombinationPolicyInput> | null } | null } | null>;
+  }>({
+    shopDomain,
+    accessToken,
+    retryable: true,
+    query: `query PromoEngineLiveCombination($ids: [ID!]!) {
+      nodes(ids: $ids) {
+        ... on DiscountAutomaticNode {
+          id
+          automaticDiscount { ... on DiscountAutomaticApp { combinesWith { orderDiscounts productDiscounts shippingDiscounts } } }
+        }
+      }
+    }`,
+    variables: { ids: [...ids] },
+  });
+  for (const node of data.nodes) {
+    if (!node?.id) continue;
+    const combinesWith = node.automaticDiscount?.combinesWith;
+    if (
+      !combinesWith ||
+      typeof combinesWith.orderDiscounts !== "boolean" ||
+      typeof combinesWith.productDiscounts !== "boolean" ||
+      typeof combinesWith.shippingDiscounts !== "boolean"
+    ) {
+      throw new Error(`Shopify returned no combinesWith for ${node.id}`);
+    }
+    live.set(node.id, combinesWith as DiscountCombinationPolicyInput);
+  }
+  return live;
+}
+
 export async function syncDiscountCombinationPolicy(
   shopDomain: string,
   accessToken: string,

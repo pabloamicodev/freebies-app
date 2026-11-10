@@ -64,7 +64,7 @@ describe("describeCapacityModal", () => {
     const copy = describeCapacityModal(data({ code: "COMBINATION_SINGLE_SHARD", numbers: { slotBytes: 9500, offersBlocking: 2 } }));
     expect(copy.title).toBe("Discount combinations limit how many offers can run");
     expect(copy.fix).toContain("combine with product discounts");
-    expect(copy.actions[0]).toEqual({ kind: "offer", label: "Let them run separately…", to: "/app/diagnostics?combination=allow" });
+    expect(copy.actions[0]).toEqual({ kind: "settings", label: "Let them run separately…", to: "/app/diagnostics?combination=allow" });
     expect(copy.actions[2]).toEqual({ kind: "offer", label: "Open VIP shipping", to: "/app/offers/o2/combination" });
   });
 

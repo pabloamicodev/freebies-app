@@ -73,6 +73,7 @@ import {
   findDeliveryDiscountFunction,
   getCodeDiscountFunctionId,
   removeRedeemCodes,
+  readLiveCombinations,
   syncDiscountCombinationPolicy,
   updateCodeDiscountCombination,
   type CodeDiscountNodeOptions,
@@ -594,11 +595,42 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     // Domains mode gives each node its own group's policy and applies it strict-first: a node is tightened to
     // AND(last published, new) before the config swap and loosened to the new policy only after the swap
     // succeeded, so a failure in between leaves a node more restrictive, never more permissive, than either state.
+    // The manifest is only written when a publish finishes, so a publish that died after tightening would leave it
+    // stale. Two guards: the tightened policy is persisted to the manifest right after each tighten step, and the
+    // live policy is read from Shopify and folded into the AND. If that read fails the publish fails closed: it
+    // tightens to AND(manifest, new) and never loosens anything.
     const lastPublished = domainsMode ? await readPublishManifest(shopId, db) : null;
+    let liveCombinations = new Map<string, CombinationPolicy>();
+    let liveReadFailed = false;
+    if (domainsMode) {
+      try {
+        liveCombinations = await readLiveCombinations(shopDomain, accessToken, [discountNodes.cartLinesDiscountId, ...storedShardIds]);
+      } catch (error) {
+        liveReadFailed = true;
+        Sentry.captureException(error, { extra: { shopId, step: "live-combination-read" } });
+      }
+    }
     const wantedPolicy = (index: number): CombinationPolicy => (domainsMode ? slots[index]!.policy : combination);
     const tightened = (nodeId: string, wanted: CombinationPolicy): CombinationPolicy => {
-      const last = lastPublished?.nodes[nodeId]?.combinesWith;
-      return domainsMode && last ? andPolicies([last, wanted]) : wanted;
+      if (!domainsMode) return wanted;
+      const known = [liveCombinations.get(nodeId), lastPublished?.nodes[nodeId]?.combinesWith].filter(
+        (policy): policy is CombinationPolicy => policy !== undefined,
+      );
+      return andPolicies([...known, wanted]);
+    };
+    const persistTightened = async (nodes: PolicyNode[]) => {
+      if (!domainsMode || nodes.length === 0) return;
+      const stored = await readPublishManifest(shopId, db);
+      if (!stored) return;
+      let changed = false;
+      for (const { discountId, policy } of nodes) {
+        const entry = stored.nodes[discountId];
+        if (entry && (!entry.combinesWith || policyKey(entry.combinesWith) !== policyKey(policy))) {
+          entry.combinesWith = policy;
+          changed = true;
+        }
+      }
+      if (changed) await writePublishManifest(shopId, stored);
     };
     type PolicyNode = {
       discountId: string;
@@ -615,13 +647,15 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const cartNode = (discountId: string, discountClasses: PolicyNode["discountClasses"], index: number): PolicyNode => {
       const wanted = wantedPolicy(index);
       const now = tightened(discountId, wanted);
-      if (policyKey(now) !== policyKey(wanted)) loosenAfterSwap.push({ discountId, discountClasses, policy: wanted });
+      if (policyKey(now) !== policyKey(wanted) && !liveReadFailed) loosenAfterSwap.push({ discountId, discountClasses, policy: wanted });
       return { discountId, discountClasses, policy: now };
     };
+    const slot0Node = cartNode(discountNodes.cartLinesDiscountId, CART_DISCOUNT_CLASSES, 0);
     await syncCombination([
-      cartNode(discountNodes.cartLinesDiscountId, CART_DISCOUNT_CLASSES, 0),
+      slot0Node,
       { discountId: discountNodes.deliveryDiscountId, discountClasses: DELIVERY_DISCOUNT_CLASSES, policy: combination },
     ]);
+    await persistTightened([slot0Node]);
     // Shard nodes come after the guardrails; a new one carries an inert config, so it grants nothing until the
     // metafieldsSet below. The drain floor counts only nodes still in Shopify: a merchant-deleted shard is not recreated to be drained.
     const wantedShards = slots.length - 1;
@@ -632,7 +666,9 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
         : liveShardIds;
     const activeShardIds = shardIds.slice(0, wantedShards);
     const drainIds = shardIds.slice(wantedShards);
-    await syncCombination(activeShardIds.map((discountId, index) => cartNode(discountId, CART_SHARD_CLASSES, index + 1)));
+    const shardNodes = activeShardIds.map((discountId, index) => cartNode(discountId, CART_SHARD_CLASSES, index + 1));
+    await syncCombination(shardNodes);
+    await persistTightened(shardNodes);
     const slotNodeId = (index: number) =>
       index === 0 ? discountNodes.cartLinesDiscountId : activeShardIds[index - 1]!;
     if (!shardMode) await pushSharedConfigs(cartValue, deliveryValue, [], combination);
