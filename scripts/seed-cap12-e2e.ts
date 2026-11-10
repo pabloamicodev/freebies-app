@@ -203,7 +203,8 @@ async function main(): Promise<void> {
         .map((p) => p.id)
         .sort()
         .slice(0, padding);
-      if (padIds.length < padding) out(`warning: only ${padIds.length} padding products available`);
+      // The catalog is smaller than a 600-id probe needs: top up with ids that match no product (inert by construction).
+      for (let n = 0; padIds.length < padding; n++) padIds.push(`gid://shopify/Product/9900000000${String(n).padStart(3, "0")}`);
 
       // 2. Snapshot, then quiet the store.
       const activeRows = await db
