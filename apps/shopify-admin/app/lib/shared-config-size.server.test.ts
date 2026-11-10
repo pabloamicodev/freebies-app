@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { discountCodes, offerConditions, offerRewards, type Db } from "@promo/db";
 import { estimateSharedConfigBytes, preflightSharedConfig, sharedConfigBreakdown, shippingConfigTooLargeMessage } from "./shared-config-size.server.js";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
+import { compileSharedOffers } from "./capacity-preflight.server.js";
 
 let db: Db;
 let close: () => Promise<void>;
@@ -43,12 +44,14 @@ describe("estimateSharedConfigBytes", () => {
 
   it("does not count shipping offers: they ship on the delivery node", async () => {
     const offerId = await giftOffer();
-    const before = await estimateSharedConfigBytes(db, shopId, "USD", []);
     await db.insert(offerRewards).values({
       shopId, offerId, rewardType: "shipping_discount", discountType: "free", value: { amount: 100 },
       target: { deliveryGroupTypes: ["ONE_TIME_PURCHASE"] }, quantity: null, sortOrder: 1,
     });
-    expect(await estimateSharedConfigBytes(db, shopId, "USD", [])).toBe(before);
+    // Bytes alone can't tell: the offer's version hash changes with the new reward.
+    const shared = (await compileSharedOffers(db, shopId, "USD", [], false))!;
+    expect(JSON.parse(shared.config()).shippingOffers ?? []).toEqual([]);
+    expect(JSON.parse(shared.deliveryConfig()).shippingOffers).toHaveLength(1);
   });
 
   it("ignores an automatic offer's code rows: it is always in the shared config", async () => {

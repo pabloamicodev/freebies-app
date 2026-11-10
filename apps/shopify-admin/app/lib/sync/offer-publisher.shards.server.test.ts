@@ -41,7 +41,6 @@ const { ShardPlanBlockedError } = await import("./cart-shards.server.js");
 const { configHash } = await import("../publish-manifest.server.js");
 const { repairShopDrift } = await import("../discount-reconciliation.server.js");
 const { tryPublishShop } = await import("../offer-publish-flow.server.js");
-const { preflightCapacity } = await import("../capacity-preflight.server.js");
 
 const CART_FN = { id: "gid://shopify/ShopifyFunction/cart", apiType: "discount", handle: "promo-engine-discount", title: "Promo Engine Discount" };
 const DELIVERY_FN = { id: "gid://shopify/ShopifyFunction/delivery", apiType: "discount", handle: "promo-engine-delivery-discount", title: "Promo Engine Delivery Discount" };
@@ -686,6 +685,20 @@ describe.each(["off", "on"])("sharded cart publish (combination groups default %
       expect(shopify.timeline.filter((entry) => entry === `policy:${CART_NODE}:open`)).toHaveLength(1);
     });
 
+    it("the manifest guard alone holds: live reads failing, a swap crash, the offer flipped back, a failing swap", async () => {
+      await setShardDomainsEnabled(db, shopId, true);
+      await publishOffersForShop(shopId, DOMAIN);
+      const nc = shopify.value(CART_NODE).offers.map((offer) => offer.id);
+      await nonCombining(nc);
+      shopify.failLiveRead = true;
+      shopify.crashAfterMetafieldsSet = true;
+      await expect(publishOffersForShop(shopId, DOMAIN)).rejects.toThrow("process died after metafieldsSet");
+      await nonCombining(nc, true);
+      shopify.failMetafieldsSet = true;
+      await expect(publishOffersForShop(shopId, DOMAIN)).rejects.toThrow("metafieldsSet failed");
+      expect(shopify.policies.get(CART_NODE)).toMatchObject({ productDiscounts: false });
+    });
+
     it("persists the tightened policy to the manifest before the swap", async () => {
       await setShardDomainsEnabled(db, shopId, true);
       await publishOffersForShop(shopId, DOMAIN);
@@ -942,4 +955,113 @@ describe.each(["off", "on"])("sharded cart publish (combination groups default %
       expect(shopify.metafieldsSets).toHaveLength(0);
     });
   });
+});
+
+const { preflightCapacity } = await import("../capacity-preflight.server.js");
+const { automaticNodeBudget } = await import("../discount-node.server.js");
+const { setFunctionCompactIdsEnabled } = await import("../function-compact-ids-flag.server.js");
+const { setLimitsEnforced } = await import("../limits-enforced.server.js");
+
+describe("preflight plans the same cart slots the publish writes", () => {
+
+  const heavyProducts = Array.from({ length: 900 }, (_, n) => `gid://shopify/Product/${30000000000000 + n}`);
+
+  async function seedSplitOffer() {
+    const offerId = await seedOffer(db, shopId, { type: "discount", codeRedemption: "automatic", priority: 50, internalName: "Heavy", publicTitle: "Heavy" });
+    await db.insert(offerRewards).values({
+      shopId,
+      offerId,
+      rewardType: "product_discount",
+      discountType: "percentage",
+      value: { amount: 15, currencyCode: "USD" },
+      target: { scopeMode: "sitewide", productIds: heavyProducts },
+    });
+    return offerId;
+  }
+
+  async function seedLegacyGated() {
+    const offerId = await seedOffer(db, shopId, { type: "discount", codeRedemption: "automatic", priority: 60, internalName: "Legacy", publicTitle: "Legacy" });
+    await db.insert(offerRewards).values({
+      shopId,
+      offerId,
+      rewardType: "product_discount",
+      discountType: "percentage",
+      value: { amount: 5, currencyCode: "USD" },
+      target: { scopeMode: "sitewide", productIds: heavyProducts.slice(0, 300) },
+    });
+    await db.insert(offerConditions).values({ shopId, offerId, scope: "main", conditionType: "discount_code", operator: "eq", value: { code: "OLD" } });
+  }
+
+  async function expectParity() {
+    const preflight = await preflightCapacity(db, shopId, [], { loadBudget: (_db, id) => automaticNodeBudget(id, DOMAIN, "token") });
+    if (!preflight.ok) throw new Error(`preflight blocked: ${preflight.code} ${preflight.message}`);
+    const planned = preflight.plan;
+    await publishOffersForShop(shopId, DOMAIN);
+    const rows = (await shardRows()).filter((row) => row.unitKeys.length > 0);
+    expect(planned.slots).toBe(rows.length);
+    expect(planned.bytesPerSlot).toEqual(rows.map((row) => row.configBytes!));
+    if (planned.policyPerSlot) expect(planned.policyPerSlot).toEqual(rows.map((row) => shopify.policies.get(slotOwner(row))));
+    return rows;
+  }
+
+  describe("combination groups on, mixed non-combining offers", () => {
+    beforeEach(async () => {
+      shopId = await freshShop();
+      await setFunctionShardsEnabled(db, shopId, true);
+      await setShardDomainsEnabled(db, shopId, true);
+    });
+
+    it("preflight plans the persisted nodes: count, bytes and per-node combinesWith", async () => {
+      const ids = await seedCatalog(shopId, COUNT, 10, 10);
+      const flags = [
+        { combinesWithProductDiscounts: false },
+        { combinesWithOrderDiscounts: false },
+        { combinesWithShippingDiscounts: false },
+      ];
+      await db.delete(offerCombinationPolicies).where(inArray(offerCombinationPolicies.offerId, ids.slice(30, 60)));
+      await db
+        .insert(offerCombinationPolicies)
+        .values(ids.slice(30, 60).map((offerId, i) => ({ shopId, offerId, ...flags[i % 3]! })));
+      const rows = await expectParity();
+      expect(rows.length).toBeGreaterThanOrEqual(3);
+      const policies = new Set(rows.map((row) => JSON.stringify(shopify.policies.get(slotOwner(row)))));
+      expect(policies.size).toBeGreaterThanOrEqual(2);
+      await expectParity();
+    });
+  });
+
+  for (const compactIds of [false, true]) {
+    describe(`compact ids ${compactIds ? "on" : "off"}`, () => {
+      beforeEach(async () => {
+        shopId = await freshShop();
+        await setFunctionShardsEnabled(db, shopId, true);
+        await setFunctionCompactIdsEnabled(db, shopId, compactIds);
+      });
+
+      it("100 offers", async () => {
+        await seedCatalog(shopId, COUNT, 10, 10);
+        await expectParity();
+        await expectParity();
+      });
+
+      it("100 offers with per-cart limits enforced", async () => {
+        const ids = await seedCatalog(shopId, COUNT, 10, 10);
+        await db
+          .insert(offerCombinationPolicies)
+          .values(ids.map((offerId) => ({ shopId, offerId, maxApplicationsPerCart: 2, maxApplicationsPerCustomer: 3 })))
+          .onConflictDoUpdate({ target: offerCombinationPolicies.offerId, set: { maxApplicationsPerCart: 2, maxApplicationsPerCustomer: 3 } });
+        await setLimitsEnforced(db, shopId, true);
+        await expectParity();
+      });
+
+      it("100 offers plus a split offer and a held-back legacy offer", async () => {
+        await seedCatalog(shopId, COUNT, 10, 10);
+        const heavy = await seedSplitOffer();
+        await seedLegacyGated();
+        const rows = await expectParity();
+        expect(rows.flatMap((row) => row.unitKeys).filter((key) => key.startsWith(`${heavy}#`)).length).toBeGreaterThanOrEqual(2);
+        await expectParity();
+      });
+    });
+  }
 });

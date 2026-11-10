@@ -40,11 +40,13 @@ function fakeDb(rows: {
     select: () => ({
       from: (table: unknown) => ({
         where: () => {
-          if (table === offers) return Promise.resolve(rows.offerRows ?? []);
-          if (table === offerConditions) return Promise.resolve(rows.conditionRows ?? []);
-          if (table === offerRewards) return Promise.resolve(rows.rewardRows ?? []);
-          if (table === discountCodes) return Promise.resolve(rows.codeRows ?? []);
-          return Promise.resolve([]);
+          const result =
+            table === offers ? rows.offerRows
+            : table === offerConditions ? rows.conditionRows
+            : table === offerRewards ? rows.rewardRows
+            : table === discountCodes ? rows.codeRows
+            : undefined;
+          return Object.assign(Promise.resolve(result ?? []), { limit: () => Promise.resolve(result ?? []) });
         },
       }),
     }),

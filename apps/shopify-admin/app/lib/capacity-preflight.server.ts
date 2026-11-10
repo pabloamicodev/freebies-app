@@ -9,13 +9,11 @@ import {
   shops,
   type Db,
 } from "@promo/db";
-import {
-  compileOfferConfig,
-  compileShippingOfferConfigs,
-  serializeFunctionConfig,
-} from "./sync/compile-config.js";
+import { serializeFunctionConfig } from "./sync/compile-config.js";
+import { compileCartOffers, legacyGatedOfferIds } from "./sync/cart-offers.server.js";
+import { isLimitsEnforced } from "./limits-enforced.server.js";
 import { buildAttributeQueryVariables, MAX_CUSTOM_CART_ATTRIBUTE_KEYS } from "./sync/attribute-query-variables.js";
-import { planShards, SLOT_LIMITS, type PlanBlockCode } from "./sync/shard-planner.js";
+import { planShards, SLOT_LIMITS, type CombinationPolicy, type PlanBlockCode } from "./sync/shard-planner.js";
 import { baseOfferId, buildPlanUnitSet, cartAttributeKeysOf } from "./sync/plan-units.js";
 import type { SplitRefusal } from "./sync/offer-split.js";
 import { loadSplitOptions } from "./sync/variant-products.server.js";
@@ -23,7 +21,7 @@ import { combinationBlockers, type CombinationBlocker } from "./sync/combination
 import { isCheckoutCodeGated } from "./code-redemption.js";
 import { MAX_METAFIELD_BYTES } from "./sync/offer-publisher.server.js";
 import { buildCartValidationConfig, MAX_VALIDATION_CONFIG_BYTES } from "./cart-validation.server.js";
-import { OfferPublishError, offerCompileError } from "./offer-publish-errors.server.js";
+import { OfferPublishError } from "./offer-publish-errors.server.js";
 import { isFunctionCompactIdsEnabled } from "./function-compact-ids-flag.server.js";
 import { isFunctionShardsEnabled, isShardDomainsEnabled } from "./function-shards-flag.server.js";
 import { summarizeCombinationGroups, type CombinationGroupsSummary } from "./sync/combination-groups.js";
@@ -54,7 +52,8 @@ const encodedBytes = (text: string) => new TextEncoder().encode(text).byteLength
 /**
  * Compiles the shared automatic config as the publisher would build it if `includeOfferIds` ran
  * through it alongside every active non-code offer (`forceInclude`: even a code-gated one, for an
- * offer about to switch to automatic). Approximation: skips market-to-country resolution.
+ * offer about to switch to automatic). Same compile as the publisher (`compileCartOffers`);
+ * approximation: skips market-to-country resolution, which needs Shopify.
  */
 export async function compileSharedOffers(
   db: Db,
@@ -76,37 +75,33 @@ export async function compileSharedOffers(
     );
   if (rows.length === 0) return null;
   const ids = rows.map((offer) => offer.id);
-  const [codeRows, conditions, rewards, policies] = await Promise.all([
+  const [codeRows, conditions, rewards, policies, limitsEnforced] = await Promise.all([
     db.select({ offerId: discountCodes.offerId }).from(discountCodes).where(and(eq(discountCodes.shopId, shopId), inArray(discountCodes.offerId, ids))),
     db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), inArray(offerConditions.offerId, ids))),
     db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, ids))),
     db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), inArray(offerCombinationPolicies.offerId, ids))),
+    isLimitsEnforced(db, shopId),
   ]);
   const withCodes = new Set(codeRows.map((row) => row.offerId));
   const extra = new Set(forceInclude ? includeOfferIds : []);
-  const shared = rows
-    .filter((offer) => extra.has(offer.id) || !isCheckoutCodeGated(offer, withCodes.has(offer.id)))
-    .sort((a, b) => a.priority - b.priority);
-  const compiled = shared.map((offer) => {
-    const offerConditionsRows = conditions.filter((c) => c.offerId === offer.id);
-    const offerRewardsRows = rewards.filter((r) => r.offerId === offer.id);
-    const policy = policies.find((p) => p.offerId === offer.id) ?? null;
-    try {
-      return {
-        offerId: offer.id,
-        offer: compileOfferConfig(offer, offerConditionsRows, offerRewardsRows, policy, 1, { shopCurrencyCode }),
-        shipping: compileShippingOfferConfigs(offer, offerConditionsRows, offerRewardsRows, { shopCurrencyCode }),
-        conditions: offerConditionsRows,
-        name: offer.internalName,
-      };
-    } catch (error) {
-      throw offerCompileError(offer, error);
-    }
-  });
+  const heldBack = legacyGatedOfferIds(conditions);
+  const shared = rows.filter(
+    (offer) => !heldBack.has(offer.id) && (extra.has(offer.id) || !isCheckoutCodeGated(offer, withCodes.has(offer.id))),
+  );
+  const sharedIds = new Set(shared.map((offer) => offer.id));
+  const sharedPolicies = policies.filter((policy) => sharedIds.has(policy.offerId));
+  const entries = await compileCartOffers(db, shopId, shared, { conditions, rewards, policies: sharedPolicies, shopCurrencyCode, limitsEnforced, caller: "capacity-preflight" });
+  const compiled = entries.map(({ source, offer, shipping }) => ({
+    offerId: source.id,
+    offer,
+    shipping,
+    conditions: conditions.filter((c) => c.offerId === source.id),
+    name: source.internalName,
+  }));
   const compactIds = await isFunctionCompactIdsEnabled(db, shopId);
   return {
     compiled,
-    policies,
+    policies: sharedPolicies,
     compactIds,
     config: (extraFields: Record<string, string> = {}) =>
       serializeFunctionConfig({
@@ -196,6 +191,8 @@ export type CapacityPreflight =
         combinationBlockers?: CombinationBlocker[];
         /** Set when combination domains split the offers over several nodes. */
         combinationGroups?: CombinationGroupsSummary;
+        /** Domains mode: the combinesWith each planned node will carry, in slot order. */
+        policyPerSlot?: CombinationPolicy[];
       };
     }
   | {
@@ -452,7 +449,7 @@ export async function preflightCapacity(
           : maxSlots <= 1
             ? { singleShardReason: "budget" as const }
             : {}),
-      ...(domains ? summaryOf(summarizeCombinationGroups(units, plan)) : {}),
+      ...(domains ? { ...summaryOf(summarizeCombinationGroups(units, plan)), policyPerSlot: plan.slots.map((slot) => slot.policy) } : {}),
     },
   };
 }
