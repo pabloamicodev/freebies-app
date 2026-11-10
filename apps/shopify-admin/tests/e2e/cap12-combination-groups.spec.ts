@@ -120,7 +120,6 @@ const near = (actual: number, expected: number) => Math.abs(actual - expected) <
 
 test.describe("FIX-cap-12 combination groups on hpn-test-store", () => {
   test.skip(!seed, "No cap12 seed marker: run scripts/seed-cap12-e2e.ts seed first.");
-  test.describe.configure({ mode: "serial" });
 
   test.beforeAll(() => {
     const policies = new Set(seed!.nodes.map((node) => node.combinesWith));
@@ -129,6 +128,24 @@ test.describe("FIX-cap-12 combination groups on hpn-test-store", () => {
   });
 
   test.beforeEach(async ({ page }) => openWithEmptyCart(page));
+
+  test("(d0) control: a single combining offer applies on its own", async ({ page }) => {
+    const { cA } = seed!.products;
+    await addLines(page, [{ id: variantNumber(cA.variantId), quantity: 1 }]);
+    const cart = await settledCart(page, false);
+    await record("d0", cart, `A -${seed!.percent.cA}% alone`);
+    const a = lineOf(cart, cA)!;
+    expect(near(discountOf(a), Math.round(a.original_line_price * seed!.percent.cA / 100)), "line A discount").toBe(true);
+  });
+
+  test("(d1) control: the other combining offer applies on its own", async ({ page }) => {
+    const { cB } = seed!.products;
+    await addLines(page, [{ id: variantNumber(cB.variantId), quantity: 1 }]);
+    const cart = await settledCart(page, false);
+    await record("d1", cart, `B -${seed!.percent.cB}% alone`);
+    const b = lineOf(cart, cB)!;
+    expect(near(discountOf(b), Math.round(b.original_line_price * seed!.percent.cB / 100)), "line B discount").toBe(true);
+  });
 
   test("(j) two combining offers in different nodes, different lines: both apply", async ({ page }) => {
     const { cA, cB } = seed!.products;
