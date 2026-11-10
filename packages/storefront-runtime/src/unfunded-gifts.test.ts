@@ -52,6 +52,14 @@ describe("cartFingerprint", () => {
   });
 });
 
+describe("cartFingerprint context", () => {
+  it("changes with the login/market context so a login lifts a suppression", () => {
+    const items = [paid("1", 1, 1)];
+    expect(cartFingerprint(cart(items), "42,,")).not.toBe(cartFingerprint(cart(items), ",,"));
+    expect(cartFingerprint(cart(items), "42,,")).toBe(cartFingerprint(cart(items), "42,,"));
+  });
+});
+
 describe("suppression storage", () => {
   it("round-trips and caps the entries", () => {
     const m = new Map<string, string>();

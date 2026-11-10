@@ -25,10 +25,10 @@ export function unfundedGiftKeys(cart: CartData): Set<string> {
   return new Set([...unfunded].flatMap(([key, full]) => (full ? [key] : [])));
 }
 
-/** Paid lines + applied codes + currency; no prices, so removing our own gift leaves it unchanged. */
-export function cartFingerprint(cart: CartData): string {
+/** Paid lines + applied codes + currency + `context` (login, market); no prices, so removing our own gift leaves it unchanged. */
+export function cartFingerprint(cart: CartData, context = ""): string {
   const lines = cart.items.filter((i) => !giftKeyOfItem(i)).map((i) => `${i.variant_id}x${i.quantity}`);
-  return [lines.sort().join(), appliedDiscountCodes(cart).sort().join(), cart.currency].join("|");
+  return [lines.sort().join(), appliedDiscountCodes(cart).sort().join(), cart.currency, context].join("|");
 }
 
 export function loadUnfundedSuppressions(): Record<string, string> {

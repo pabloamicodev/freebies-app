@@ -98,6 +98,10 @@ interface RuntimeConfig {
   stampTargets?: { s?: string[]; t?: string[]; e?: string[] } | null;
   /** Widget string overrides from the theme extension's locale files. */
   i18n?: Record<string, string>;
+  /** Per-shop kill switch (app metafield promo_engine.remove_unfunded_gifts): only `true` removes gifts Shopify left at full price. */
+  removeUnfundedGifts?: boolean | null;
+  /** Logged-in customer id from Liquid; a login changes what a customer-gated gift can do, so it lifts a removal suppression. */
+  customerId?: string | number | null;
 }
 
 const EVAL_TIMEOUT_MS = 7_000;
@@ -514,13 +518,16 @@ export class PromoEngineRuntime {
     if (signal.aborted) return null;
 
     this.detectDeclinedGifts(cart);
-    cart = await this.removeUnfundedGifts(cart, signal);
-    if (signal.aborted) return null;
-    const fingerprint = cartFingerprint(cart);
-    for (const key of Object.keys(this.unfundedSuppressed)) {
-      if (this.unfundedSuppressed[key] !== fingerprint) delete this.unfundedSuppressed[key];
+    const removeUnfunded = this.config.removeUnfundedGifts === true;
+    if (removeUnfunded) {
+      cart = await this.removeUnfundedGifts(cart, signal);
+      if (signal.aborted) return null;
+      const fingerprint = this.fundingFingerprint(cart);
+      for (const key of Object.keys(this.unfundedSuppressed)) {
+        if (this.unfundedSuppressed[key] !== fingerprint) delete this.unfundedSuppressed[key];
+      }
+      saveUnfundedSuppressions(this.unfundedSuppressed);
     }
-    saveUnfundedSuppressions(this.unfundedSuppressed);
 
     const prospective = currentStampContext();
     const cartHash = `${this.buildCartHash(cart)}|${contextKey(prospective)}`;
@@ -548,7 +555,9 @@ export class PromoEngineRuntime {
           requestedUrl: window.location.href,
           prospective,
           sessionId: this.sessionId,
-          declinedGiftRewards: [...new Set([...this.declinedGiftRewards, ...Object.keys(this.unfundedSuppressed)])],
+          declinedGiftRewards: removeUnfunded
+            ? [...new Set([...this.declinedGiftRewards, ...Object.keys(this.unfundedSuppressed)])]
+            : [...this.declinedGiftRewards],
         }),
         signal,
       );
@@ -585,7 +594,7 @@ export class PromoEngineRuntime {
       if ([...outcome.added].some((key) => this.giftAddedAt.has(key))) this.debouncedEvaluate.call();
       for (const key of outcome.added) this.giftAddedAt.set(key, Date.now());
       for (const key of outcome.removed) this.seenGiftKeys.delete(key);
-      if (outcome.added.size > 0) {
+      if (removeUnfunded && outcome.added.size > 0) {
         // Shopify may pick a set without the gift discount right after the add: re-check once instead of waiting for a cart change.
         clearTimeout(this.recheckTimer);
         this.recheckTimer = setTimeout(() => this.debouncedEvaluate.call(), 1_500);
@@ -608,6 +617,11 @@ export class PromoEngineRuntime {
     }
   }
 
+  private fundingFingerprint(cart: CartData): string {
+    const { marketId, countryCode, customerId } = this.config;
+    return cartFingerprint(cart, [customerId ?? "", marketId ?? "", countryCode ?? ""].join(","));
+  }
+
   /** Remove auto-added gifts Shopify left at full price (confirmed on a fresh read) and suppress their re-add while the cart is unchanged. Never a customer decline. */
   private async removeUnfundedGifts(cart: CartData, signal: AbortSignal): Promise<CartData> {
     const first = unfundedGiftKeys(cart);
@@ -617,10 +631,13 @@ export class PromoEngineRuntime {
       if (signal.aborted) return cart;
       const keys = [...unfundedGiftKeys(fresh)].filter((key) => first.has(key));
       if (keys.length === 0) return cart;
+      const removed = new Set<string>();
       for (const item of fresh.items) {
+        if (signal.aborted) break;
         const key = giftKeyOfItem(item);
         if (!key || !keys.includes(key)) continue;
         await AjaxCartAdapter.removeLine({ key: item.key });
+        removed.add(key);
         emit(PromoEvents.GiftRemoved, { lineKey: item.key, reason: "gift_not_discounted" });
         publishAnalytics("promo_engine:gift_removed", {
           line_key: item.key,
@@ -628,16 +645,18 @@ export class PromoEngineRuntime {
           session_id: this.sessionId,
         });
       }
-      const next = await AjaxCartAdapter.getCart();
-      for (const key of keys) {
+      if (removed.size === 0) return cart;
+      const next = signal.aborted ? fresh : await AjaxCartAdapter.getCart();
+      const fingerprint = this.fundingFingerprint(next);
+      for (const key of removed) {
         this.seenGiftKeys.delete(key);
         this.giftAddedAt.delete(key);
         this.knownGiftKeys?.delete(key);
-        this.unfundedSuppressed[key] = cartFingerprint(next);
+        this.unfundedSuppressed[key] = fingerprint;
       }
       saveUnfundedSuppressions(this.unfundedSuppressed);
       this.widgetChangedCart = true;
-      return next;
+      return signal.aborted ? cart : next;
     } catch (e) {
       this.log("Unfunded gift removal failed", e);
       return cart;
