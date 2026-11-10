@@ -3,6 +3,8 @@
  * Controls stacking, combination with other discounts, max applications.
  */
 
+import { useState } from "react";
+import { GIFT_NOT_COMBINING_NOTE, showGiftRemovalNote } from "../lib/gift-combination-note.js";
 import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData, useActionData, useNavigation, Form, Link } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
@@ -151,6 +153,7 @@ export default function OfferCombinationPage() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
+  const [combinesWithProducts, setCombinesWithProducts] = useState(policy?.combinesWithProductDiscounts ?? false);
   if (!offer) return <NotFound message="Not found." />;
 
   const restrictionEntries = (Object.keys(RESTRICTION_LABELS) as Array<keyof typeof RESTRICTION_LABELS>)
@@ -243,10 +246,12 @@ export default function OfferCombinationPage() {
                       type="checkbox"
                       name="product_discounts"
                       defaultChecked={policy?.combinesWithProductDiscounts ?? false}
+                      onChange={(e) => setCombinesWithProducts(e.target.checked)}
                     />
                     <div>
                       <div className="b-checkbox-label">Combines with product discounts</div>
                       <div className="b-checkbox-help">Allow this offer to stack with product-level discounts.</div>
+                      {showGiftRemovalNote(offer.type, combinesWithProducts) && <div className="b-checkbox-help" role="note">{GIFT_NOT_COMBINING_NOTE}</div>}
                     </div>
                   </label>
 
