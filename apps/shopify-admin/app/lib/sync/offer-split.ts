@@ -38,6 +38,8 @@ export interface SplitOptions {
   productOfVariant?: (variantId: string) => string | undefined;
   /** Measure with the numeric-id form (the shop has the compact-ids flag on), like `unitBytes`. */
   compactIds?: boolean;
+  /** Attach each unit's estimated instructions (the shop has the instruction budget on). */
+  instructions?: boolean;
 }
 
 export interface SplitList {

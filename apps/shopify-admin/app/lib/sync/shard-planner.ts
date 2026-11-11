@@ -21,6 +21,8 @@ export interface PlanUnit {
   splitRefusal?: SplitRefusal;
   /** A list of the offer that cannot be packed or split is over Shopify's 100-element variable limit. */
   listOverflow?: { listKind: number; listCount: number };
+  /** Estimated wasm instructions the offer adds to a node's run (instruction-estimate.ts); omitted = not counted. */
+  instructions?: number;
 }
 
 export interface PlannerLimits {
@@ -30,6 +32,12 @@ export interface PlannerLimits {
   maxKeys: number;
   maxTags: number;
   maxOffers: number;
+  /**
+   * Soft cap on the summed `instructions` of the units of one node. A node holding a single bundle (one unit, or units
+   * the planner must colocate) may exceed it. When the cap would need more nodes than `maxSlots` allows, the plan falls
+   * back to the byte-only packing and carries a warning instead of blocking.
+   */
+  maxInstructions?: number;
 }
 
 export { SLOT_LIMITS } from "./slot-limits.js";
@@ -89,6 +97,17 @@ export interface PlannedSlot {
   tags: string[];
   /** combinesWith the node must carry: the AND of its members (the node's own group in `domains` mode). */
   policy: CombinationPolicy;
+  /** Sum of the members' estimated instructions; only present when the plan was made with `maxInstructions`. */
+  instructions?: number;
+}
+
+export type PlanWarningCode = "INSTRUCTION_BUDGET_UNREACHABLE" | "INSTRUCTION_BUDGET_EXCEEDED";
+
+export interface PlanWarning {
+  code: PlanWarningCode;
+  /** Slots (or, for UNREACHABLE, the units' nodes needed vs allowed) the warning is about. */
+  slots: number[];
+  numbers: Record<string, number>;
 }
 
 export interface PlanMove {
@@ -101,6 +120,7 @@ export interface ShardPlan {
   slots: PlannedSlot[];
   moves: PlanMove[];
   blocked?: PlanBlocked;
+  warnings?: PlanWarning[];
 }
 
 const utf8Bytes = (text: string) => new TextEncoder().encode(text).byteLength;
@@ -154,6 +174,7 @@ interface Group {
   dkey: string;
   minPriority: number;
   minKey: string;
+  instr: number;
 }
 
 interface Measure {
@@ -193,6 +214,7 @@ const makeGroup = (units: PlanUnit[], pinned: boolean): Group => {
     dkey: policyKey(domain),
     minPriority: sorted[0]?.priority ?? 0,
     minKey: sorted[0]?.key ?? "",
+    instr: sorted.reduce((total, unit) => total + (unit.instructions ?? 0), 0),
   };
 };
 
@@ -305,13 +327,19 @@ function compactOne(bins: Map<number, Group[]>, cap: number, fits: Fits, binDoma
  * Single-shard mode packs greedily in priority order, so on overflow it may skip a higher-priority
  * unit while still packing smaller lower-priority ones; `blocked.unitKeys` names the skipped units.
  */
-export function planShards(
+function planCore(
   inputUnits: readonly PlanUnit[],
   previous: ReadonlyMap<string, number>,
   limits: PlannerLimits,
-  mode: PlanMode = "uniform",
+  mode: PlanMode,
 ): ShardPlan {
   const hard = limits.slotBytes;
+  let instructionCap = limits.maxInstructions ?? Infinity;
+  const overInstructions = (groups: readonly Group[]) =>
+    instructionCap !== Infinity && groups.length > 1 && groups.reduce((total, group) => total + group.instr, 0) > instructionCap;
+  // How much of a node a group takes: bytes, or instructions when that is the scarcer resource.
+  const weight = (group: Group) => (instructionCap === Infinity ? group.sum : Math.max(group.sum / hard, group.instr / instructionCap));
+  const bySize = (a: Group, b: Group) => weight(b) - weight(a) || compareText(a.minKey, b.minKey);
   const soft = Math.floor(hard * limits.targetFill);
   const overLimit = (groups: readonly Group[], cap: number): { reason: PlanBlockReason; m: Measure } | null => {
     const m = measure(groups);
@@ -321,7 +349,7 @@ export function planShards(
     if (m.offers > limits.maxOffers) return { reason: "offers", m };
     return null;
   };
-  const fits: Fits = (groups, cap) => overLimit(groups, cap) === null;
+  const fits: Fits = (groups, cap) => overLimit(groups, cap) === null && !overInstructions(groups);
   const fitsAlone = (unit: PlanUnit) => fits([makeGroup([unit], false)], hard);
   const tooLargeNumbers = (m: Measure, extra: Record<string, number> = {}): Record<string, number> => ({
     slotBytes: hard,
@@ -339,6 +367,8 @@ export function planShards(
   const shared = andPolicies(inputUnits.map((unit) => unit.domain ?? OPEN_POLICY));
   const single =
     limits.maxSlots <= 1 || (mode === "uniform" && (!shared.productDiscounts || (hasOrders && !shared.orderDiscounts)));
+  // Everything shares one node anyway: the instruction cap cannot spread it, so it only warns (see planShards).
+  if (single) instructionCap = Infinity;
 
   const units: PlanUnit[] = [];
   const tooLarge: string[] = [];
@@ -471,7 +501,11 @@ export function planShards(
   }
   for (const [, binGroups] of [...bins.entries()].sort(([a], [b]) => a - b)) {
     while (!fits(binGroups, hard)) {
-      const victim = binGroups.filter((group) => !group.pinned).sort(compareBySize)[0];
+      // A node over its instruction budget (not its bytes) gives up the unit that costs the most instructions: the fewest moves.
+      const byInstructions = overLimit(binGroups, hard) === null && overInstructions(binGroups);
+      const victim = binGroups
+        .filter((group) => !group.pinned)
+        .sort(byInstructions ? (a, b) => b.instr - a.instr || compareText(a.minKey, b.minKey) : compareBySize)[0];
       if (!victim) break;
       binGroups.splice(binGroups.indexOf(victim), 1);
       pending.push(victim);
@@ -500,7 +534,7 @@ export function planShards(
     }
     return false;
   };
-  for (const group of pending.sort(compareBySize)) {
+  for (const group of pending.sort(bySize)) {
     if (place(group, soft)) continue;
     if (bins.size >= limits.maxSlots && place(group, hard)) continue;
     const index = lowestFree();
@@ -524,4 +558,42 @@ export function planShards(
     }, policies());
   }
   return assemble(bins, previous, undefined, policies());
+}
+
+const instructionsByKey = (units: readonly PlanUnit[]) =>
+  new Map(units.flatMap((unit) => [[unit.key, unit.instructions ?? 0] as const, ...(unit.splittable ?? []).map((part) => [part.key, part.instructions ?? 0] as const)]));
+
+/**
+ * `planCore` plus the soft instruction dimension. Without `limits.maxInstructions` this is the byte planner, untouched.
+ * With it the planner tries to keep every node's summed instruction estimate under the cap (more nodes, never more than
+ * `maxSlots`); if that cannot be done it returns the byte-only plan with an INSTRUCTION_BUDGET_UNREACHABLE warning, so the
+ * dimension never turns a publishable shop into a blocked one. Nodes still over the cap (a single bundle bigger than the
+ * budget) are reported as INSTRUCTION_BUDGET_EXCEEDED.
+ */
+export function planShards(
+  inputUnits: readonly PlanUnit[],
+  previous: ReadonlyMap<string, number>,
+  limits: PlannerLimits,
+  mode: PlanMode = "uniform",
+): ShardPlan {
+  const cap = limits.maxInstructions;
+  if (cap === undefined) return planCore(inputUnits, previous, limits, mode);
+  const costs = instructionsByKey(inputUnits);
+  const annotate = (plan: ShardPlan, warnings: PlanWarning[]): ShardPlan => {
+    if (plan.blocked) return plan;
+    const slots = plan.slots.map((slot) => ({ ...slot, instructions: slot.unitKeys.reduce((total, key) => total + (costs.get(key) ?? 0), 0) }));
+    const over = slots.filter((slot) => slot.instructions > cap);
+    const all = [
+      ...warnings,
+      ...(over.length > 0
+        ? [{ code: "INSTRUCTION_BUDGET_EXCEEDED" as const, slots: over.map((slot) => slot.index), numbers: { budget: cap, worst: Math.max(...over.map((slot) => slot.instructions)) } }]
+        : []),
+    ];
+    return { ...plan, slots, ...(all.length > 0 ? { warnings: all } : {}) };
+  };
+  const bounded = planCore(inputUnits, previous, limits, mode);
+  if (!bounded.blocked) return annotate(bounded, []);
+  const bytesOnly = planCore(inputUnits, previous, { ...limits, maxInstructions: undefined }, mode);
+  if (bytesOnly.blocked) return bytesOnly;
+  return annotate(bytesOnly, [{ code: "INSTRUCTION_BUDGET_UNREACHABLE", slots: [], numbers: { budget: cap, allowedSlots: limits.maxSlots, ...bounded.blocked.numbers } }]);
 }

@@ -13,7 +13,7 @@ import { serializeFunctionConfig } from "./sync/compile-config.js";
 import { compileCartOffers, legacyGatedOfferIds } from "./sync/cart-offers.server.js";
 import { isLimitsEnforced } from "./limits-enforced.server.js";
 import { buildAttributeQueryVariables, MAX_CUSTOM_CART_ATTRIBUTE_KEYS } from "./sync/attribute-query-variables.js";
-import { planShards, SLOT_LIMITS, type CombinationPolicy, type PlanBlockCode, type PlanBlockReason } from "./sync/shard-planner.js";
+import { planShards, SLOT_LIMITS, type CombinationPolicy, type PlanWarning, type PlanBlockCode, type PlanBlockReason } from "./sync/shard-planner.js";
 import { baseOfferId, buildPlanUnitSet, cartAttributeKeysOf } from "./sync/plan-units.js";
 import type { SplitRefusal } from "./sync/offer-split.js";
 import { loadSplitOptions } from "./sync/variant-products.server.js";
@@ -24,7 +24,8 @@ import { MAX_METAFIELD_BYTES, codeNodeKind } from "./sync/offer-publisher.server
 import { buildCartValidationConfig, MAX_VALIDATION_CONFIG_BYTES } from "./cart-validation.server.js";
 import { OfferPublishError } from "./offer-publish-errors.server.js";
 import { isFunctionCompactIdsEnabled } from "./function-compact-ids-flag.server.js";
-import { isFunctionShardsEnabled, isShardDomainsEnabled } from "./function-shards-flag.server.js";
+import { isFunctionShardsEnabled, isShardDomainsEnabled, isShardInstructionBudgetEnabled } from "./function-shards-flag.server.js";
+import { NODE_UNIT_INSTRUCTION_BUDGET } from "./sync/instruction-estimate.js";
 import { summarizeCombinationGroups, type CombinationGroupsSummary } from "./sync/combination-groups.js";
 import { ShardPlanBlockedError, countShardNodes, readPreviousAssignment } from "./sync/cart-shards.server.js";
 import {
@@ -206,6 +207,10 @@ export type CapacityPreflight =
         combinationGroups?: CombinationGroupsSummary;
         /** Domains mode: the combinesWith each planned node will carry, in slot order. */
         policyPerSlot?: CombinationPolicy[];
+        /** Instruction budget on: each planned node's estimated instructions (offers only, without the node floor), in slot order. */
+        instructionsPerSlot?: number[];
+        /** Instruction budget on: warnings the planner raised (never a block). */
+        warnings?: PlanWarning[];
       };
     }
   | {
@@ -227,6 +232,8 @@ export interface CapacityOptions {
   shardsEnabled?: boolean;
   /** Overrides the combination-domains setting (tests, diagnostics). */
   domainsEnabled?: boolean;
+  /** Overrides the instruction-budget setting (tests, diagnostics). */
+  instructionBudgetEnabled?: boolean;
   /** Count the offers in `offerIds` even when code-gated (an offer about to switch to automatic). */
   forceInclude?: boolean;
   /** Overrides how the live automatic-discount budget is read (default: Redis-cached `automaticNodeBudget`). */
@@ -384,18 +391,20 @@ export async function preflightCapacity(
   }
 
   const splitOptions = enabled ? await loadSplitOptions(db, shopId, shared.compiled.map((entry) => entry.offer)) : {};
-  const planOptions = { ...splitOptions, compactIds: shared.compactIds };
+  const instructionBudget = enabled && (opts.instructionBudgetEnabled ?? (await isShardInstructionBudgetEnabled(db, shopId)));
+  const planOptions = { ...splitOptions, compactIds: shared.compactIds, instructions: instructionBudget };
+  const instructionLimits = instructionBudget ? { maxInstructions: NODE_UNIT_INSTRUCTION_BUDGET } : {};
   const { units } = buildPlanUnitSet(shared.compiled, conditions, shared.policies, planOptions);
   const previous = await readPreviousAssignment(db, shopId);
   const domains = enabled && (opts.domainsEnabled ?? (await isShardDomainsEnabled(db, shopId)));
   const mode = domains ? "domains" : "uniform";
-  const plan = planShards(units, previous, { ...SLOT_LIMITS, maxSlots, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, mode);
+  const plan = planShards(units, previous, { ...SLOT_LIMITS, maxSlots, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity, ...instructionLimits }, mode);
   const blockers = combinationBlockers(shared.compiled, units.some((unit) => unit.hasOrderRewards));
   const combinationForcesSingle = enabled && !domains && maxSlots > 1 && blockers.length > 0;
   let blocked = plan.blocked;
   if (blocked && enabled && maxSlots < MAX_CART_SLOTS && blocked.code !== "AUTOMATIC_DISCOUNT_LIMIT") {
     // The budget, not the offers, may be what is short: replan with every slot to learn how many are needed.
-    const wide = planShards(units, previous, { ...SLOT_LIMITS, maxSlots: MAX_CART_SLOTS, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, mode);
+    const wide = planShards(units, previous, { ...SLOT_LIMITS, maxSlots: MAX_CART_SLOTS, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity, ...instructionLimits }, mode);
     if (!wide.blocked) {
       blocked = {
         code: "AUTOMATIC_DISCOUNT_LIMIT",
@@ -489,6 +498,9 @@ export async function preflightCapacity(
             ? { singleShardReason: "budget" as const }
             : {}),
       ...(domains ? { ...summaryOf(summarizeCombinationGroups(units, plan)), policyPerSlot: plan.slots.map((slot) => slot.policy) } : {}),
+      ...(instructionBudget
+        ? { instructionsPerSlot: plan.slots.map((slot) => slot.instructions ?? 0), ...(plan.warnings ? { warnings: plan.warnings } : {}) }
+        : {}),
     },
   };
 }

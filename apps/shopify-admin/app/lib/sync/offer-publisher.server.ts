@@ -28,7 +28,8 @@ import {
   type ManifestNodeKind,
 } from "../publish-manifest.server.js";
 import { isFunctionCompactIdsEnabled } from "../function-compact-ids-flag.server.js";
-import { isFunctionShardsEnabled, isShardDomainsEnabled } from "../function-shards-flag.server.js";
+import { isFunctionShardsEnabled, isShardDomainsEnabled, isShardInstructionBudgetEnabled } from "../function-shards-flag.server.js";
+import { NODE_UNIT_INSTRUCTION_BUDGET } from "./instruction-estimate.js";
 import { assertCodeOfferListsWithinLimit, assertVariableListsWithinLimit, buildCodeOfferConfig } from "./variable-list-guard.js";
 import { isRemoveUnfundedGiftsEnabled } from "../remove-unfunded-gifts-flag.server.js";
 import { SLOT_LIMITS, andPolicies, planShards, policyKey, type CombinationPolicy } from "./shard-planner.js";
@@ -508,6 +509,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const storedShardIds = await readCartShardNodeIds(shopId);
     const shardMode = shardsEnabled || storedShardIds.length > 0;
     const domainsMode = shardsEnabled && (await isShardDomainsEnabled(db, shopId));
+    const instructionBudget = shardsEnabled && (await isShardInstructionBudgetEnabled(db, shopId));
     if (!shardsEnabled) {
       const allTags = new Set(
         compiledOffers.flatMap((offer) => [...(offer.requiredCustomerTags ?? []), ...(offer.excludedCustomerTags ?? [])]),
@@ -529,14 +531,17 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       compiledOffers.map((offer) => ({ offerId: offer.id, offer })),
       conditionRows,
       policyRows,
-      shardsEnabled ? { ...(await loadSplitOptions(db, shopId, compiledOffers)), compactIds } : { compactIds },
+      shardsEnabled ? { ...(await loadSplitOptions(db, shopId, compiledOffers)), compactIds, instructions: instructionBudget } : { compactIds },
     );
     const plan = planShards(
       planUnits,
       persisted?.previous ?? new Map(),
-      { ...SLOT_LIMITS, maxSlots: budget?.maxCartSlots ?? 1 },
+      { ...SLOT_LIMITS, maxSlots: budget?.maxCartSlots ?? 1, ...(instructionBudget ? { maxInstructions: NODE_UNIT_INSTRUCTION_BUDGET } : {}) },
       domainsMode ? "domains" : "uniform",
     );
+    for (const warning of plan.warnings ?? []) {
+      console.warn(`[offer-publisher] shop ${shopId}: ${warning.code}`, JSON.stringify({ slots: warning.slots, ...warning.numbers }));
+    }
     if (plan.blocked) {
       const names = new Map(regularOffers.map((offer) => [offer.id, offer.internalName]));
       throw new ShardPlanBlockedError(plan.blocked, {
