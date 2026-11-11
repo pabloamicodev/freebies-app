@@ -38,6 +38,8 @@ export interface SplitOptions {
   productOfVariant?: (variantId: string) => string | undefined;
   /** Measure with the numeric-id form (the shop has the compact-ids flag on), like `unitBytes`. */
   compactIds?: boolean;
+  /** The shop has the merge-candidates flag on: every node's envelope carries `"mergeCandidates":true`. */
+  mergeCandidates?: boolean;
 }
 
 export interface SplitList {

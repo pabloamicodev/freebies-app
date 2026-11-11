@@ -28,10 +28,12 @@ import {
   type ManifestNodeKind,
 } from "../publish-manifest.server.js";
 import { isFunctionCompactIdsEnabled } from "../function-compact-ids-flag.server.js";
+import { isFunctionMergeCandidatesEnabled } from "../function-merge-candidates-flag.server.js";
 import { isFunctionShardsEnabled, isShardDomainsEnabled } from "../function-shards-flag.server.js";
 import { assertCodeOfferListsWithinLimit, assertVariableListsWithinLimit, buildCodeOfferConfig } from "./variable-list-guard.js";
 import { isRemoveUnfundedGiftsEnabled } from "../remove-unfunded-gifts-flag.server.js";
-import { SLOT_LIMITS, andPolicies, planShards, policyKey, type CombinationPolicy } from "./shard-planner.js";
+import { andPolicies, planShards, policyKey, type CombinationPolicy } from "./shard-planner.js";
+import { slotLimitsFor } from "./slot-limits.js";
 import { baseOfferId, buildPlanUnitSet, slotOffers } from "./plan-units.js";
 import { loadSplitOptions } from "./variant-products.server.js";
 import { combinationBlockers } from "./combination-blockers.js";
@@ -505,6 +507,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const shippingOffers = compiledByOffer.flatMap((entry) => entry.shipping);
     const shardsEnabled = await isFunctionShardsEnabled(db, shopId);
     const compactIds = await isFunctionCompactIdsEnabled(db, shopId);
+    const mergeCandidates = await isFunctionMergeCandidatesEnabled(db, shopId);
     const storedShardIds = await readCartShardNodeIds(shopId);
     const shardMode = shardsEnabled || storedShardIds.length > 0;
     const domainsMode = shardsEnabled && (await isShardDomainsEnabled(db, shopId));
@@ -529,12 +532,12 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       compiledOffers.map((offer) => ({ offerId: offer.id, offer })),
       conditionRows,
       policyRows,
-      shardsEnabled ? { ...(await loadSplitOptions(db, shopId, compiledOffers)), compactIds } : { compactIds },
+      shardsEnabled ? { ...(await loadSplitOptions(db, shopId, compiledOffers)), compactIds, mergeCandidates } : { compactIds, mergeCandidates },
     );
     const plan = planShards(
       planUnits,
       persisted?.previous ?? new Map(),
-      { ...SLOT_LIMITS, maxSlots: budget?.maxCartSlots ?? 1 },
+      { ...slotLimitsFor(mergeCandidates), maxSlots: budget?.maxCartSlots ?? 1 },
       domainsMode ? "domains" : "uniform",
     );
     if (plan.blocked) {
@@ -566,7 +569,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
         ...(slot.tags.length > 0 ? { customerTags: slot.tags } : {}),
         ...buildAttributeQueryVariables(conditionRows.filter((row) => members.has(row.offerId))),
       };
-      return serializeFunctionConfig(cartConfig, { compactIds });
+      return serializeFunctionConfig(cartConfig, { compactIds, mergeCandidates });
     });
     const deliveryConfig: CompiledFunctionConfig = { offers: [], shippingOffers, version: "1", compiledAt };
     const deliveryValue = serializeFunctionConfig(deliveryConfig, { omitQueryVariables: true, compactIds });
@@ -1177,6 +1180,7 @@ async function pushCodeOfferConfigs(
   manifest: ManifestCollector,
 ): Promise<void> {
   const db = getDb();
+  const mergeCandidates = await isFunctionMergeCandidatesEnabled(db, shopId);
 
   for (const entry of compiledCodeOffers) {
     const { offer, kind, discountId, compiledOffer, conditionRows } = entry;
@@ -1185,7 +1189,7 @@ async function pushCodeOfferConfigs(
     // offer silently never matches: the Function reads those off this same
     // config, not the shared one. A delivery node only carries shippingOffers.
     const singleOfferConfig = buildCodeOfferConfig(compiledOffer, conditionRows, entry.shippingOffers, kind, new Date().toISOString());
-    const value = serializeFunctionConfig(singleOfferConfig);
+    const value = serializeFunctionConfig(singleOfferConfig, { mergeCandidates });
     const sizeBytes = new TextEncoder().encode(value).byteLength;
     if (sizeBytes > MAX_METAFIELD_BYTES) {
       throw new Error(
@@ -1387,7 +1391,8 @@ async function pushBackendBConfig(
     compiledAt: new Date().toISOString(),
     ...(customerTags.length > 0 ? { customerTags } : {}),
   };
-  const value = serializeFunctionConfig(config, { omitCartAttributeSlots: true });
+  const mergeCandidates = await isFunctionMergeCandidatesEnabled(getDb(), shopId);
+  const value = serializeFunctionConfig(config, { omitCartAttributeSlots: true, mergeCandidates });
   const sizeBytes = new TextEncoder().encode(value).byteLength;
   if (sizeBytes > MAX_METAFIELD_BYTES) {
     throw new Error(

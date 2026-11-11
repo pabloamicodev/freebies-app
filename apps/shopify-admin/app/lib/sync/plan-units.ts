@@ -1,7 +1,8 @@
 import type { offerCombinationPolicies, offerConditions } from "@promo/db";
 import { findOversizeList, type CompiledOffer } from "./compile-config.js";
 import { mergeOfferParts, splitOffer, type SplitOptions, type SplitPart, type SplitRefusal } from "./offer-split.js";
-import { envelopeBytes, SLOT_LIMITS, unitBytes, type PlanUnit } from "./shard-planner.js";
+import { envelopeBytes, unitBytes, type PlanUnit } from "./shard-planner.js";
+import { MERGE_FLAG_BYTES, slotLimitsFor } from "./slot-limits.js";
 
 type ConditionRow = Pick<typeof offerConditions.$inferSelect, "offerId" | "conditionType" | "value" | "isEnabled">;
 type PolicyRow = Pick<typeof offerCombinationPolicies.$inferSelect, "offerId" | "stopLowerPriority">;
@@ -54,6 +55,7 @@ export function buildPlanUnitSet(
   options: SplitOptions = {},
 ): PlanUnitSet {
   const splits = new Map<string, OfferSplit>();
+  const limits = slotLimitsFor(options.mergeCandidates === true);
   const units = compiled.map(({ offerId, offer }): PlanUnit => {
     const cartAttributeKeys = cartAttributeKeysOf(conditions.filter((condition) => condition.offerId === offerId));
     const customerTags = [...new Set([...(offer.requiredCustomerTags ?? []), ...(offer.excludedCustomerTags ?? [])])].sort();
@@ -75,11 +77,11 @@ export function buildPlanUnitSet(
       multiLineFixed: offer.productRewards.some((reward) => reward.scopeMode === "quiz_bundle"),
       ...(listOverflow ? { listOverflow } : {}),
     };
-    const envelope = envelopeBytes(cartAttributeKeys, customerTags);
-    if (unit.bytes + envelope - 1 <= SLOT_LIMITS.slotBytes) return unit;
+    const envelope = envelopeBytes(cartAttributeKeys, customerTags) + (options.mergeCandidates ? MERGE_FLAG_BYTES : 0);
+    if (unit.bytes + envelope - 1 <= limits.slotBytes) return unit;
 
     // Parts leave room to share a slot (target fill) when they can; otherwise they may fill one.
-    const budgets = [Math.floor(SLOT_LIMITS.slotBytes * SLOT_LIMITS.targetFill), SLOT_LIMITS.slotBytes].map((cap) => cap - envelope + 1);
+    const budgets = [Math.floor(limits.slotBytes * limits.targetFill), limits.slotBytes].map((cap) => cap - envelope + 1);
     let refusal: SplitRefusal | undefined;
     for (const budget of budgets) {
       const result = splitOffer(offer, budget, options);

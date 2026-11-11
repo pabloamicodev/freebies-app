@@ -213,6 +213,8 @@ export interface CompiledFunctionConfig {
   c2?: string;
   c3?: string;
   customerTags?: string[];
+  /** The Functions fold adjacent identical percentage candidates into one (per-shop flag, see function-merge-candidates-flag). */
+  mergeCandidates?: true;
 }
 
 export interface CompiledShippingTier {
@@ -1450,7 +1452,7 @@ export function compactCompiledOffer(source: CompiledOffer, compactIds = false):
 /** The metafield value: Function metafield input is capped at 10,000 bytes. */
 export function serializeFunctionConfig(
   config: CompiledFunctionConfig,
-  options: { omitCartAttributeSlots?: boolean; omitQueryVariables?: boolean; compactIds?: boolean } = {},
+  options: { omitCartAttributeSlots?: boolean; omitQueryVariables?: boolean; compactIds?: boolean; mergeCandidates?: boolean } = {},
 ): string {
   // The code Function's query has no c1-c3 slots (they cost complexity); only declared variables go in.
   const withoutSlots = options.omitCartAttributeSlots === true;
@@ -1464,6 +1466,7 @@ export function serializeFunctionConfig(
       {
         ...queryVariables,
         ...config,
+        ...(options.mergeCandidates ? { mergeCandidates: true } : {}),
         ...(withoutSlots ? { c1: undefined, c2: undefined, c3: undefined } : {}),
         offers: config.offers.map((offer) => compactCompiledOffer(offer, options.compactIds)),
         shippingOffers: config.shippingOffers.map((offer) =>

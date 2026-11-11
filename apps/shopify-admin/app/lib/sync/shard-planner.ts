@@ -30,6 +30,8 @@ export interface PlannerLimits {
   maxKeys: number;
   maxTags: number;
   maxOffers: number;
+  /** Bytes every node's config carries beyond the plain envelope (the merge-candidates flag); counted in each slot's size. */
+  envelopeExtraBytes?: number;
 }
 
 export { SLOT_LIMITS } from "./slot-limits.js";
@@ -163,7 +165,7 @@ interface Measure {
   tags: string[];
 }
 
-function measure(groups: readonly Group[]): Measure {
+function measure(groups: readonly Group[], envelopeExtra = 0): Measure {
   const keys = new Set<string>();
   const tags = new Set<string>();
   let sum = 0;
@@ -176,7 +178,7 @@ function measure(groups: readonly Group[]): Measure {
   }
   const keyList = [...keys].sort(compareText);
   const tagList = [...tags].sort(compareText);
-  const bytes = envelopeBytes(keyList, tagList) + sum - (count > 0 ? 1 : 0);
+  const bytes = envelopeBytes(keyList, tagList) + envelopeExtra + sum - (count > 0 ? 1 : 0);
   return { offers: count, bytes, keys: keyList, tags: tagList };
 }
 
@@ -248,12 +250,13 @@ function assemble(
   previous: ReadonlyMap<string, number>,
   blocked?: PlanBlocked,
   binDomain: ReadonlyMap<number, CombinationPolicy> = new Map(),
+  envelopeExtra = 0,
 ): ShardPlan {
   if (!bins.has(0)) bins.set(0, []);
   const slots: PlannedSlot[] = [...bins.entries()]
     .sort(([a], [b]) => a - b)
     .map(([index, groups]) => {
-      const { bytes, keys, tags } = measure(groups);
+      const { bytes, keys, tags } = measure(groups, envelopeExtra);
       const members = groups.flatMap((group) => group.units);
       return {
         policy: members.length > 0 ? andPolicies(members.map((unit) => unit.domain ?? OPEN_POLICY)) : (binDomain.get(index) ?? OPEN_POLICY),
@@ -277,10 +280,10 @@ function assemble(
 
 type Fits = (groups: readonly Group[], cap: number) => boolean;
 
-function compactOne(bins: Map<number, Group[]>, cap: number, fits: Fits, binDomain: Map<number, string>): void {
+function compactOne(bins: Map<number, Group[]>, cap: number, fits: Fits, binDomain: Map<number, string>, envelopeExtra: number): void {
   const victim = [...bins.entries()]
     .filter(([index]) => index !== 0)
-    .map(([index, binGroups]) => ({ index, binGroups, bytes: measure(binGroups).bytes }))
+    .map(([index, binGroups]) => ({ index, binGroups, bytes: measure(binGroups, envelopeExtra).bytes }))
     .sort((a, b) => a.bytes - b.bytes || b.index - a.index)[0];
   if (!victim) return;
   const trial = new Map<number, Group[]>(
@@ -312,9 +315,10 @@ export function planShards(
   mode: PlanMode = "uniform",
 ): ShardPlan {
   const hard = limits.slotBytes;
+  const extra = limits.envelopeExtraBytes ?? 0;
   const soft = Math.floor(hard * limits.targetFill);
   const overLimit = (groups: readonly Group[], cap: number): { reason: PlanBlockReason; m: Measure } | null => {
-    const m = measure(groups);
+    const m = measure(groups, extra);
     if (m.bytes > cap) return { reason: "bytes", m };
     if (m.keys.length > limits.maxKeys) return { reason: "keys", m };
     if (m.tags.length > limits.maxTags) return { reason: "tags", m };
@@ -383,14 +387,16 @@ export function planShards(
         ? {
             code: "SLOT_FULL",
             unitKeys: overflow,
-            numbers: { slotBytes: hard, neededBytes: measure(everyone).bytes, overflowUnits: overflow.length },
+            numbers: { slotBytes: hard, neededBytes: measure(everyone, extra).bytes, overflowUnits: overflow.length },
           }
         : undefined,
+      undefined,
+      extra,
     );
   }
 
   const spread = units.some((unit) => (previous.get(unit.key) ?? 0) > 0);
-  if (!spread && fits(everyone, hard)) return assemble(new Map([[0, everyone]]), previous);
+  if (!spread && fits(everyone, hard)) return assemble(new Map([[0, everyone]]), previous, undefined, undefined, extra);
 
   const groups = buildGroups(units);
   if (mode === "uniform") for (const group of groups) group.dkey = "*";
@@ -403,7 +409,7 @@ export function planShards(
       blocked: {
         code: "SLOT0_GROUP_TOO_LARGE",
         unitKeys: (named.length > 0 ? named : pinned.units).map((unit) => unit.key),
-        numbers: { slotBytes: hard, groupBytes: measure([pinned]).bytes, groupUnits: pinned.units.length },
+        numbers: { slotBytes: hard, groupBytes: measure([pinned], extra).bytes, groupUnits: pinned.units.length },
       },
     };
   }
@@ -509,9 +515,9 @@ export function planShards(
   }
 
   const policies = () => new Map([...binDomain].map(([index, key]) => [index, domainOf.get(key) ?? OPEN_POLICY]));
-  const totalBytes = [...bins.values()].reduce((total, binGroups) => total + measure(binGroups).bytes, 0);
+  const totalBytes = [...bins.values()].reduce((total, binGroups) => total + measure(binGroups, extra).bytes, 0);
   const domainCount = Math.max(1, new Set([...binDomain.values()]).size);
-  if (bins.size > Math.ceil(totalBytes / soft) + domainCount) compactOne(bins, soft, fits, binDomain);
+  if (bins.size > Math.ceil(totalBytes / soft) + domainCount) compactOne(bins, soft, fits, binDomain, extra);
 
   if (bins.size > limits.maxSlots) {
     const overflow = [...bins.entries()].filter(([index]) => index >= limits.maxSlots);
@@ -521,7 +527,7 @@ export function planShards(
         .flatMap(([, binGroups]) => binGroups.flatMap((group) => group.units.map((unit) => unit.key)))
         .sort(compareText),
       numbers: { needed: bins.size, allowed: limits.maxSlots },
-    }, policies());
+    }, policies(), extra);
   }
-  return assemble(bins, previous, undefined, policies());
+  return assemble(bins, previous, undefined, policies(), extra);
 }

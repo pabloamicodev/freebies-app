@@ -967,6 +967,7 @@ describe.each(["off", "on"])("sharded cart publish (combination groups default %
 const { preflightCapacity } = await import("../capacity-preflight.server.js");
 const { automaticNodeBudget } = await import("../discount-node.server.js");
 const { setFunctionCompactIdsEnabled } = await import("../function-compact-ids-flag.server.js");
+const { setFunctionMergeCandidatesEnabled } = await import("../function-merge-candidates-flag.server.js");
 const { setLimitsEnforced } = await import("../limits-enforced.server.js");
 
 describe("preflight plans the same cart slots the publish writes", () => {
@@ -1034,6 +1035,38 @@ describe("preflight plans the same cart slots the publish writes", () => {
       const policies = new Set(rows.map((row) => JSON.stringify(shopify.policies.get(slotOwner(row)))));
       expect(policies.size).toBeGreaterThanOrEqual(2);
       await expectParity();
+    });
+  });
+
+  describe("merge candidates flag", () => {
+    const published = (rows: Array<{ discountNodeId: string | null; slot: number }>) =>
+      rows.map((row) => JSON.parse(shopify.metafields.get(slotOwner(row))!.get("promo_engine")!) as { mergeCandidates?: boolean });
+
+    for (const on of [false, true]) {
+      it(`flag ${on ? "on" : "off"}: preflight and publisher agree on slots and bytes, nodes carry the field only when on`, async () => {
+        shopId = await freshShop();
+        await setFunctionShardsEnabled(db, shopId, true);
+        await setFunctionMergeCandidatesEnabled(db, shopId, on);
+        await seedCatalog(shopId, COUNT, 10, 10);
+        const rows = await expectParity();
+        expect(published(rows).every((config) => (on ? config.mergeCandidates === true : !("mergeCandidates" in config)))).toBe(true);
+        await expectParity();
+      });
+    }
+
+    it("is off by default and the env kill switch beats a shop that turned it on", async () => {
+      shopId = await freshShop();
+      await setFunctionShardsEnabled(db, shopId, true);
+      await seedCatalog(shopId, 10, 10, 10);
+      expect(published(await expectParity()).some((config) => "mergeCandidates" in config)).toBe(false);
+
+      await setFunctionMergeCandidatesEnabled(db, shopId, true);
+      vi.stubEnv("FUNCTION_MERGE_CANDIDATES", "off");
+      try {
+        expect(published(await expectParity()).some((config) => "mergeCandidates" in config)).toBe(false);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
   });
 

@@ -13,6 +13,7 @@ import { serializeFunctionConfig } from "./sync/compile-config.js";
 import { compileCartOffers, legacyGatedOfferIds } from "./sync/cart-offers.server.js";
 import { isLimitsEnforced } from "./limits-enforced.server.js";
 import { buildAttributeQueryVariables, MAX_CUSTOM_CART_ATTRIBUTE_KEYS } from "./sync/attribute-query-variables.js";
+import { slotLimitsFor } from "./sync/slot-limits.js";
 import { planShards, SLOT_LIMITS, type CombinationPolicy, type PlanBlockCode, type PlanBlockReason } from "./sync/shard-planner.js";
 import { baseOfferId, buildPlanUnitSet, cartAttributeKeysOf } from "./sync/plan-units.js";
 import type { SplitRefusal } from "./sync/offer-split.js";
@@ -24,6 +25,7 @@ import { MAX_METAFIELD_BYTES, codeNodeKind } from "./sync/offer-publisher.server
 import { buildCartValidationConfig, MAX_VALIDATION_CONFIG_BYTES } from "./cart-validation.server.js";
 import { OfferPublishError } from "./offer-publish-errors.server.js";
 import { isFunctionCompactIdsEnabled } from "./function-compact-ids-flag.server.js";
+import { isFunctionMergeCandidatesEnabled } from "./function-merge-candidates-flag.server.js";
 import { isFunctionShardsEnabled, isShardDomainsEnabled } from "./function-shards-flag.server.js";
 import { summarizeCombinationGroups, type CombinationGroupsSummary } from "./sync/combination-groups.js";
 import { ShardPlanBlockedError, countShardNodes, readPreviousAssignment } from "./sync/cart-shards.server.js";
@@ -100,6 +102,7 @@ export async function compileSharedOffers(
     name: source.internalName,
   }));
   const compactIds = await isFunctionCompactIdsEnabled(db, shopId);
+  const mergeCandidates = await isFunctionMergeCandidatesEnabled(db, shopId);
   // Code offers never join the shared config, but the publisher refuses one whose lists are over the limit.
   const codeGated = rows.filter((offer) => !sharedIds.has(offer.id) && offer.status === "active");
   const codeOffers = codeGated.length === 0
@@ -116,6 +119,7 @@ export async function compileSharedOffers(
     compiled,
     policies: sharedPolicies,
     compactIds,
+    mergeCandidates,
     config: (extraFields: Record<string, string> = {}) =>
       serializeFunctionConfig({
         offers: compiled.map((entry) => entry.offer),
@@ -123,7 +127,7 @@ export async function compileSharedOffers(
         version: "1",
         compiledAt: "2026-01-01T00:00:00.000Z",
         ...extraFields,
-      }, { compactIds }),
+      }, { compactIds, mergeCandidates }),
     deliveryConfig: () =>
       serializeFunctionConfig(
         {
@@ -384,18 +388,19 @@ export async function preflightCapacity(
   }
 
   const splitOptions = enabled ? await loadSplitOptions(db, shopId, shared.compiled.map((entry) => entry.offer)) : {};
-  const planOptions = { ...splitOptions, compactIds: shared.compactIds };
+  const planOptions = { ...splitOptions, compactIds: shared.compactIds, mergeCandidates: shared.mergeCandidates };
   const { units } = buildPlanUnitSet(shared.compiled, conditions, shared.policies, planOptions);
   const previous = await readPreviousAssignment(db, shopId);
   const domains = enabled && (opts.domainsEnabled ?? (await isShardDomainsEnabled(db, shopId)));
   const mode = domains ? "domains" : "uniform";
-  const plan = planShards(units, previous, { ...SLOT_LIMITS, maxSlots, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, mode);
+  const limits = slotLimitsFor(shared.mergeCandidates);
+  const plan = planShards(units, previous, { ...limits, maxSlots, maxTags: enabled ? limits.maxTags : Infinity }, mode);
   const blockers = combinationBlockers(shared.compiled, units.some((unit) => unit.hasOrderRewards));
   const combinationForcesSingle = enabled && !domains && maxSlots > 1 && blockers.length > 0;
   let blocked = plan.blocked;
   if (blocked && enabled && maxSlots < MAX_CART_SLOTS && blocked.code !== "AUTOMATIC_DISCOUNT_LIMIT") {
     // The budget, not the offers, may be what is short: replan with every slot to learn how many are needed.
-    const wide = planShards(units, previous, { ...SLOT_LIMITS, maxSlots: MAX_CART_SLOTS, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, mode);
+    const wide = planShards(units, previous, { ...limits, maxSlots: MAX_CART_SLOTS, maxTags: enabled ? limits.maxTags : Infinity }, mode);
     if (!wide.blocked) {
       blocked = {
         code: "AUTOMATIC_DISCOUNT_LIMIT",
