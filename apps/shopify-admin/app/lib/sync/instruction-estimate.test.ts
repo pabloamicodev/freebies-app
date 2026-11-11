@@ -4,6 +4,12 @@ import { describe, expect, it } from "vitest";
 import {
   CALIBRATED,
   estimateNodeInstructions,
+  factInstructions,
+  FACT_QTY,
+  FACT_VALUE,
+  NODE_EMPTY_INSTRUCTIONS,
+  offerFacts,
+  ownKey,
   estimateUnitInstructions,
   INSTRUCTION_LINES,
   NODE_INSTRUCTION_BUDGET,
@@ -48,7 +54,7 @@ describe("instruction estimate", () => {
   });
 
   it("is a pure function of the offer and never negative", () => {
-    for (const shape of Object.keys(CALIBRATED.shapes)) expect(Number.isFinite(CALIBRATED.shapes[shape as keyof typeof CALIBRATED.shapes].a)).toBe(true);
+    for (const own of Object.values(CALIBRATED.shapes)) expect(Number.isFinite(own)).toBe(true);
     for (const name of Object.keys(measured.nodes)) {
       for (const offer of specOffers(name)) {
         const cost = estimateUnitInstructions(offer as never);
@@ -58,7 +64,37 @@ describe("instruction estimate", () => {
     }
   });
 
-  it("a node with no offers costs the floor", () => {
-    expect(estimateNodeInstructions([])).toBe(NODE_INSTRUCTION_FLOOR);
+  it("a node with no offers costs only the empty run; the first offer adds the shared reads once", () => {
+    expect(estimateNodeInstructions([])).toBe(NODE_EMPTY_INSTRUCTIONS);
+    expect(NODE_INSTRUCTION_FLOOR).toBe(NODE_EMPTY_INSTRUCTIONS + CALIBRATED.base);
+    const gift = { offerType: "gift", giftRewards: [{}] } as never;
+    expect(estimateNodeInstructions([gift, gift])).toBe(NODE_INSTRUCTION_FLOOR + 2 * estimateUnitInstructions(gift));
+  });
+
+  it("charges each shared fact once per node, however many offers need it", () => {
+    const quantity = { offerType: "gift", giftRewards: [{}], cartQuantityThreshold: 2 } as never;
+    const value = { offerType: "gift", giftRewards: [{}], cartValueThresholdCents: 5000 } as never;
+    expect(offerFacts(quantity)).toBe(FACT_QTY);
+    expect(offerFacts(value)).toBe(FACT_VALUE);
+    const own = (offer: never) => estimateUnitInstructions(offer);
+    expect(estimateNodeInstructions([quantity, quantity, quantity])).toBe(NODE_INSTRUCTION_FLOOR + factInstructions(FACT_QTY) + 3 * own(quantity));
+    expect(estimateNodeInstructions([quantity, value])).toBe(
+      NODE_INSTRUCTION_FLOOR + factInstructions(FACT_QTY | FACT_VALUE) + own(quantity) + own(value),
+    );
+  });
+
+  it("an offer capped below the cart's unit count never fires on a 200-line cart and costs only its checks", () => {
+    const idle = { offerType: "discount", orderRewards: [{}], cartQuantityThreshold: 1, cartQuantityMax: 1 } as never;
+    const live = { offerType: "discount", orderRewards: [{}], cartQuantityThreshold: 4 } as never;
+    expect(ownKey(idle)).toBe("idle");
+    expect(ownKey(live)).toBe("order");
+    expect(estimateUnitInstructions(idle)).toBeLessThan(estimateUnitInstructions(live));
+  });
+
+  it("estimates every live node within 1.3x of its measurement", () => {
+    for (const [name, node] of Object.entries(measured.nodes)) {
+      if (node.offers === 0) continue;
+      expect(estimateNodeInstructions(specOffers(name) as never[]) / node.measured, name).toBeLessThanOrEqual(1.3);
+    }
   });
 });

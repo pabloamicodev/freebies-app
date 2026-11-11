@@ -2,26 +2,31 @@
  * Regenerates the CALIBRATED block of apps/shopify-admin/app/lib/sync/instruction-estimate.ts from measurements of the
  * built discount Function (CLI-processed module, so function-runner can run it) and documents the fit error.
  *
- * What it measures, per offer shape (see `offerShape`): the offer alone in a node, on carts of 25/50/100/200 lines,
- * minus the empty-config run at the same size. Samples are the offers of the anonymized live specs on the carts
- * check-function-instructions.mjs generates, the offers of the synthetic stress fixture (its cart cut to the same sizes)
- * and one hand-built order offer. Per shape it fits cost(L) = a + b * L through the per-size maximum and lifts `a` until
- * the line is at or above every sample, so the estimate never undershoots a measurement. Finally it checks every live
- * spec node (all its offers together) against the model and writes the measured nodes next to the module, where the
- * vitest suite compares them with the estimate.
+ * Model, at 200 lines with every line relevant:
+ *   node = floor(L) + [node has an offer] * (BASE + QTY * [some offer has a quantity floor/cap] + VALUE * [some offer has a
+ *          cart value floor/cap]) + sum(own(shape(offer)))
+ * The first offer of a node reads every line's facts once and later offers reuse them, so those costs are paid once per
+ * node, not once per offer. BASE, QTY and VALUE are the cheapest measurements of reader-only offers (offers that read the
+ * lines and then fail) over the live carts: a smaller fact cost can only push cost into `own`, so the model never undershoots.
+ * own(shape) is what an offer costs beyond the facts it needs: its stand-alone cost minus the facts it uses, per shape the
+ * maximum over the live samples (stress-fixture offers only fill shapes no live offer has; they are reported, not enforced).
+ * floor(L) is the empty-config run, fitted over 25/50/100/200-line carts and lifted above every sample.
+ *
+ * It then checks every live spec node (all its offers together, worst of plain/promo at 200 lines) against the model:
+ * the estimate must be at least the measurement (fails otherwise) and should be at most 1.3x (reported, fails with --strict).
  *
  * Usage:
  *   node scripts/check-function-instructions.mjs --dump-inputs <dir>      (builds the carts; needs the built modules)
  *   FUNCTION_RUNNER=<function-runner> node scripts/calibrate-instruction-estimate.mjs --inputs <dir> \
- *     [--wasm <CLI-built discount module>] [--write]
- * Without --write it only prints the table.
+ *     [--wasm <CLI-built discount module>] [--write] [--strict]
+ * Without --write it only prints the tables.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { INSTRUCTION_LINES, offerShape } from "../apps/shopify-admin/app/lib/sync/instruction-estimate.ts";
+import { INSTRUCTION_LINES, offerFacts, offerShape, ownKey } from "../apps/shopify-admin/app/lib/sync/instruction-estimate.ts";
 
 const { values: options } = parseArgs({
   options: {
@@ -29,6 +34,7 @@ const { values: options } = parseArgs({
     inputs: { type: "string" },
     wasm: { type: "string" },
     write: { type: "boolean", default: false },
+    strict: { type: "boolean", default: false },
   },
 });
 const root = resolve(import.meta.dirname, "..");
@@ -37,15 +43,18 @@ const wasm =
   options.wasm ??
   join(root, "apps/shopify-admin/extensions/discount-function/target/wasm32-wasip1/release/promo-engine-discount-function.wasm");
 if (!runner || !existsSync(runner) || !options.inputs || !existsSync(wasm)) {
-  console.error("Usage: FUNCTION_RUNNER=<path> node scripts/calibrate-instruction-estimate.mjs --inputs <dump dir> [--wasm <module>] [--write]");
+  console.error("Usage: FUNCTION_RUNNER=<path> node scripts/calibrate-instruction-estimate.mjs --inputs <dump dir> [--wasm <module>] [--write] [--strict]");
   process.exit(2);
 }
+const MAX_RATIO = 1.3;
 const inputsDir = join(resolve(options.inputs), "promo-engine-discount-function");
 const specsDir = join(root, "apps/shopify-admin/extensions/discount-function/src/fixtures/instructions");
 const stressPath = join(root, "apps/shopify-admin/extensions/discount-function/src/fixtures/stress-120-offers-100-lines.input.json");
 const modulePath = join(root, "apps/shopify-admin/app/lib/sync/instruction-estimate.ts");
 const measuredPath = join(root, "apps/shopify-admin/app/lib/sync/instruction-estimate.measured.json");
 const SIZES = [25, 50, 100, 200];
+const SHAPES = ["discount", "tiers", "gift", "landing", "order", "quiz"];
+const KEYS = [...SHAPES.flatMap((shape) => [shape, `${shape}+value`]), "idle"];
 const scratch = mkdtempSync(join(tmpdir(), "instruction-estimate-"));
 let counter = 0;
 
@@ -59,9 +68,7 @@ const withOffers = (input, offers) => {
   const config = JSON.parse(input.discount.metafield.value);
   return { ...input, discount: { ...input.discount, metafield: { value: JSON.stringify({ ...config, offers }) } } };
 };
-const configOf = (input) => JSON.parse(input.discount.metafield.value);
 
-// carts: [{ label, size, input }]
 const carts = [];
 const specs = readdirSync(specsDir).filter((name) => name.endsWith(".json")).map((name) => name.replace(".json", ""));
 for (const spec of specs) {
@@ -76,15 +83,60 @@ const stress = JSON.parse(readFileSync(stressPath, "utf8"));
 for (const size of SIZES) {
   carts.push({ label: "stress", spec: "stress", size, input: { ...stress, cart: { ...stress.cart, lines: stress.cart.lines.slice(0, size) } } });
 }
+const liveCarts200 = carts.filter((cart) => cart.size === INSTRUCTION_LINES && cart.spec !== "stress" && cart.spec !== "hpn-slot0");
 
-// sample offers: { shape, label, offer, on: predicate(cart) }
+const floors = new Map();
+const floorOf = (cart) => {
+  const key = `${cart.label}-${cart.size}`;
+  if (!floors.has(key)) floors.set(key, run(withOffers(cart.input, [])));
+  return floors.get(key);
+};
+
+function fit(pairs) {
+  const n = pairs.length;
+  const mx = pairs.reduce((s, [x]) => s + x, 0) / n;
+  const my = pairs.reduce((s, [, y]) => s + y, 0) / n;
+  const sxx = pairs.reduce((s, [x]) => s + (x - mx) ** 2, 0);
+  const b = sxx === 0 ? 0 : pairs.reduce((s, [x, y]) => s + (x - mx) * (y - my), 0) / sxx;
+  return { a: my - b * mx, b };
+}
+const floorPairs = carts.map((cart) => [cart.size, floorOf(cart)]);
+const floorFit = fit(floorPairs);
+const floorLine = {
+  a: Math.ceil(floorFit.a + Math.max(0, ...floorPairs.map(([x, y]) => y - (floorFit.a + floorFit.b * x)))),
+  b: Math.ceil(floorFit.b),
+};
+const floor200 = Math.ceil(floorLine.a + floorLine.b * INSTRUCTION_LINES);
+
+// Fact costs: reader-only offers (they read the lines, then fail), cheapest over the live carts (VALUE is the dearest: the cart-value read grows with the cart's products, and a node whose offers share it pays it once).
+const tru = JSON.parse(readFileSync(join(specsDir, "tru-slot0.json"), "utf8")).config.offers[0];
+const reader = (extra) => ({
+  ...tru,
+  id: "00000000-0000-4000-8000-0000000000b0",
+  productRewards: [],
+  giftRewards: [],
+  offerType: "discount",
+  pageUrlConditions: undefined,
+  cartQuantityThreshold: undefined,
+  cartValueThresholdCents: undefined,
+  ...extra,
+});
+const readerCost = (extra) => liveCarts200.map((cart) => run(withOffers(cart.input, [reader(extra)])) - floorOf(cart));
+const none = readerCost({});
+const base = Math.min(...none);
+const qty = Math.min(...readerCost({ cartQuantityThreshold: 1_000_000_000 }).map((cost, i) => cost - none[i]));
+const value = Math.max(...readerCost({ cartValueThresholdCents: 1_000_000_000_000 }).map((cost, i) => cost - none[i]));
+const factsOf = (offer) => base + (offerFacts(offer) & 1 ? qty : 0) + (offerFacts(offer) & 2 ? value : 0);
+
+// Samples: own cost beyond the facts, per shape.
 const samples = [];
 for (const spec of specs) {
   const config = JSON.parse(readFileSync(join(specsDir, `${spec}.json`), "utf8")).config;
-  config.offers.forEach((offer, index) => samples.push({ label: `${spec}#${index}`, source: "live", offer, on: (cart) => cart.spec === spec }));
+  config.offers.forEach((offer, index) => samples.push({ label: `${spec}#${index}`, source: "live", offer, node: config.offers, on: (cart) => cart.spec === spec }));
 }
-configOf(stress).offers.forEach((offer, index) => samples.push({ label: `stress#${index}`, source: "stress", offer, on: (cart) => cart.spec === "stress" }));
-const tru = JSON.parse(readFileSync(join(specsDir, "tru-slot0.json"), "utf8")).config.offers[0];
+JSON.parse(stress.discount.metafield.value).offers.forEach((offer, index) =>
+  samples.push({ label: `stress#${index}`, source: "stress", offer, on: (cart) => cart.spec === "stress" }),
+);
 const orderOffer = {
   ...tru,
   id: "00000000-0000-4000-8000-0000000000aa",
@@ -105,132 +157,105 @@ const orderOffer = {
 };
 samples.push({ label: "synthetic-order", source: "live", offer: orderOffer, on: (cart) => cart.spec === "tru-slot0" });
 
-const floors = new Map();
-const floorOf = (cart) => {
-  const key = `${cart.label}-${cart.size}`;
-  if (!floors.has(key)) floors.set(key, run(withOffers(cart.input, [])));
-  return floors.get(key);
-};
-
-const raw = []; // every (shape, size, cost) for the lift
+const factsUnion = (offers) =>
+  offers.length === 0 ? 0 : base + (offers.some((o) => offerFacts(o) & 1) ? qty : 0) + (offers.some((o) => offerFacts(o) & 2) ? value : 0);
+const own = []; // { shape, source, label, cost }
 for (const sample of samples) {
-  const shape = offerShape(sample.offer);
-  for (const cart of carts.filter(sample.on)) {
-    const cost = run(withOffers(cart.input, [sample.offer])) - floorOf(cart);
-    raw.push({ shape, size: cart.size, cost, label: sample.label, source: sample.source });
+  const shape = ownKey(sample.offer);
+  for (const cart of carts.filter((c) => sample.on(c) && c.size === INSTRUCTION_LINES)) {
+    const alone = run(withOffers(cart.input, [sample.offer])) - floorOf(cart);
+    let cost = Math.max(0, alone - factsOf(sample.offer));
+    if (sample.source === "live" && sample.node) {
+      // Its marginal in a full live node: what removing it saves beyond the shared facts only it needed. Offers that
+      // stop early cost less alone than the facts, yet still add this much next to the others.
+      const others = sample.node.filter((offer) => offer !== sample.offer);
+      const saved = run(withOffers(cart.input, sample.node)) - run(withOffers(cart.input, others));
+      cost = Math.max(cost, saved - (factsUnion(sample.node) - factsUnion(others)));
+    }
+    own.push({ shape, source: sample.source, label: sample.label, cost });
   }
 }
-
-function fit(pairs) {
-  const n = pairs.length;
-  if (n === 0) return { a: 0, b: 0 };
-  const mx = pairs.reduce((s, [x]) => s + x, 0) / n;
-  const my = pairs.reduce((s, [, y]) => s + y, 0) / n;
-  const sxx = pairs.reduce((s, [x]) => s + (x - mx) ** 2, 0);
-  const b = sxx === 0 ? 0 : pairs.reduce((s, [x, y]) => s + (x - mx) * (y - my), 0) / sxx;
-  return { a: my - b * mx, b };
-}
-const lift = (line, samplePairs) => {
-  const gap = Math.max(0, ...samplePairs.map(([x, y]) => y - (line.a + line.b * x)));
-  return { a: Math.ceil(line.a + gap), b: Math.ceil(line.b) };
-};
-
-// floor: the empty-config run on every cart
-const floorPairs = carts.map((cart) => [cart.size, floorOf(cart)]);
-const floorLine = lift(fit(floorPairs), floorPairs);
-// What a node's offers share: the first offer that looks at the lines reads every line's facts once and later offers
-// reuse them. Measured with offers that read the lines and then fail (quantity floor, value floor, page that never
-// matches), on every 200-line live cart; the smallest of those with a 10% margin keeps `node - shared` a safe bound.
-const readers = [
-  { cartQuantityThreshold: 1_000_000_000 },
-  { cartValueThresholdCents: 1_000_000_000_000 },
-  { pageUrlConditions: [{ patterns: ["/never-matches-anything"], matchMode: "starts_with" }] },
-].map((extra, index) => ({ ...tru, id: `00000000-0000-4000-8000-0000000000b${index}`, productRewards: [], giftRewards: [], offerType: "discount", pageUrlConditions: undefined, cartQuantityThreshold: undefined, cartValueThresholdCents: undefined, ...extra }));
-const readerCosts = readers.flatMap((offer) =>
-  carts.filter((cart) => cart.size === INSTRUCTION_LINES && cart.spec !== "stress" && cart.spec !== "hpn-slot0").map((cart) => run(withOffers(cart.input, [offer])) - floorOf(cart)),
-);
-const shared = Math.floor(Math.min(...readerCosts) * 0.9);
-
-// Live offers (on the live carts the gate builds) set the constants; the synthetic stress offers only fill shapes no live
-// offer has, and are otherwise reported against the model below.
 const shapes = {};
-const lines = [];
 const origin = {};
-for (const shape of ["discount", "tiers", "gift", "landing", "order", "quiz"]) {
-  const all = raw.filter((entry) => entry.shape === shape);
+const rows = [];
+// Per offer the worse of its carts, per class the maximum over its live offers (stress-fixture offers only fill classes no live
+// offer has): the class constant is an upper envelope, so no live node can be estimated below its measurement.
+const maxOf = (entries) => {
+  const byLabel = new Map();
+  for (const entry of entries) byLabel.set(entry.label, Math.max(byLabel.get(entry.label) ?? 0, entry.cost));
+  return Math.ceil(Math.max(...byLabel.values()));
+};
+for (const key of KEYS) {
+  const all = own.filter((entry) => entry.shape === key);
   const live = all.filter((entry) => entry.source === "live");
   const used = live.length > 0 ? live : all;
-  if (used.length === 0) {
-    shapes[shape] = null;
-    continue;
-  }
-  origin[shape] = live.length > 0 ? "live" : "stress";
-  const bySize = new Map();
-  for (const entry of used) bySize.set(entry.size, Math.max(bySize.get(entry.size) ?? 0, entry.cost));
-  const pairs = used.map((entry) => [entry.size, entry.cost]);
-  const line = lift(fit([...bySize.entries()]), pairs);
-  shapes[shape] = line;
-  const errors = pairs.filter(([, y]) => y > 0).map(([x, y]) => (line.a + line.b * x - y) / y);
-  lines.push(
-    `| ${shape} | ${origin[shape]} | ${pairs.length} | ${line.a} | ${line.b} | ${Math.round(line.a + line.b * INSTRUCTION_LINES)} | +${(100 * Math.min(...errors)).toFixed(1)}% .. +${(100 * Math.max(...errors)).toFixed(1)}% |`,
-  );
+  if (used.length === 0) continue;
+  origin[key] = live.length > 0 ? "live" : "stress";
+  shapes[key] = maxOf(used);
+  rows.push(`| ${key} | ${origin[key]} | ${used.length} | ${Math.ceil(Math.min(...used.map((entry) => entry.cost)))} | ${shapes[key]} |`);
 }
-const present = Object.values(shapes).filter(Boolean);
-const worst = present.reduce((a, b) => (a.a + a.b * 200 >= b.a + b.b * 200 ? a : b));
-for (const shape of Object.keys(shapes)) shapes[shape] ??= { ...worst };
+// A class with no sample (for example a quiz offer with a value floor) costs at least what the same shape costs elsewhere.
+for (const key of KEYS) {
+  if (key in shapes) continue;
+  const sameShape = KEYS.filter((other) => other.split("+")[0] === key.split("+")[0] && other in shapes).map((other) => shapes[other]);
+  shapes[key] = sameShape.length > 0 ? Math.max(...sameShape) : Math.max(...Object.values(shapes));
+}
 
-console.info(`floor(L) = ${floorLine.a} + ${floorLine.b} * L  (200 lines: ${Math.ceil(floorLine.a + floorLine.b * 200)}), shared = ${shared}`);
-console.info("| shape | from | samples | a | b | cost at 200 | fit vs measured (min .. max over-estimate, zero-cost samples skipped) |\n|---|---|---:|---:|---:|---:|---|");
-for (const line of lines) console.info(line);
+const measuredByNode = {};
+for (const spec of specs) {
+  measuredByNode[spec] = Math.max(...carts.filter((cart) => cart.spec === spec && cart.size === INSTRUCTION_LINES).map((cart) => run(cart.input)));
+}
+console.info(`floor(L) = ${floorLine.a} + ${floorLine.b} * L  (200 lines: ${floor200}); BASE = ${base}, QTY = ${qty}, VALUE = ${value}`);
+console.info("\n| class | from | samples | own min | own (max, used) |\n|---|---|---:|---:|---:|");
+for (const row of rows) console.info(row);
 
-// live spec nodes: all offers together, worst of plain/promo at 200 lines, against the model
-const at = (line) => Math.ceil(line.a + line.b * INSTRUCTION_LINES);
-const nodeFloor = at(floorLine) + shared;
+// Live nodes against the model.
+const modelNode = (offers) =>
+  floor200 +
+  (offers.length > 0 ? base : 0) +
+  (offers.some((offer) => offerFacts(offer) & 1) ? qty : 0) +
+  (offers.some((offer) => offerFacts(offer) & 2) ? value : 0) +
+  offers.reduce((sum, offer) => sum + shapes[ownKey(offer)], 0);
 const measured = {};
-console.info("\n| live node | offers | measured (200 lines) | estimated | estimate / measured |\n|---|---:|---:|---:|---:|");
 let undershoot = false;
+let tooLoose = false;
+console.info("\n| live node | offers | measured (200 lines) | estimated | estimate / measured |\n|---|---:|---:|---:|---:|");
 for (const spec of specs) {
   const config = JSON.parse(readFileSync(join(specsDir, `${spec}.json`), "utf8")).config;
-  const worstCart = carts.filter((cart) => cart.spec === spec && cart.size === INSTRUCTION_LINES);
-  const total = Math.max(...worstCart.map((cart) => run(cart.input)));
-  const estimate = nodeFloor + config.offers.reduce((sum, offer) => sum + Math.max(0, at(shapes[offerShape(offer)]) - shared), 0);
+  const total = measuredByNode[spec];
+  const estimate = modelNode(config.offers);
   measured[spec] = { offers: config.offers.length, measured: total };
   if (estimate < total) undershoot = true;
+  if (estimate / total > MAX_RATIO) tooLoose = true;
   console.info(`| ${spec} | ${config.offers.length} | ${total} | ${estimate} | ${(estimate / total).toFixed(2)} |`);
 }
-const stressRows = raw.filter((entry) => entry.source === "stress" && entry.size === INSTRUCTION_LINES);
-const under = stressRows.filter((entry) => Math.max(0, at(shapes[entry.shape]) - shared) + shared < entry.cost).sort((a, b) => b.cost - a.cost);
-console.info(`\nSynthetic stress offers at 200 lines (reported, not enforced): ${under.length} of ${stressRows.length} cost more stand-alone than their shape's estimate${under.length ? ` (worst ${under[0].label}: ${under[0].cost})` : ""}.`);
+const stressRows = own.filter((entry) => entry.source === "stress");
+const under = stressRows.filter((entry) => entry.cost > shapes[entry.shape]).sort((a, b) => b.cost - a.cost);
+console.info(`\nSynthetic stress offers (reported, not enforced): ${under.length} of ${stressRows.length} cost more beyond their facts than their class's own estimate${under.length ? ` (worst ${under[0].label}: ${under[0].cost} vs ${shapes[under[0].shape]})` : ""}.`);
 rmSync(scratch, { recursive: true, force: true });
 if (undershoot) {
   console.error("[calibrate] FAIL: the model undershoots a live node");
   process.exit(1);
 }
+if (tooLoose) {
+  console.error(`[calibrate] ${options.strict ? "FAIL" : "warning"}: a live node is estimated above ${MAX_RATIO}x its measurement`);
+  if (options.strict) process.exit(1);
+}
 if (options.write) {
   const block = `// BEGIN calibrated
 export const CALIBRATED = {
   floor: { a: ${floorLine.a}, b: ${floorLine.b} } as Line,
-  shared: ${shared},
+  base: ${base},
+  qty: ${qty},
+  value: ${value},
   shapes: {
-${Object.entries(shapes).map(([shape, line]) => `    ${shape}: { a: ${line.a}, b: ${line.b} },`).join("\n")}
-  } as Record<OfferShape, Line>,
+${KEYS.map((key) => `  "${key}": ${shapes[key]},`).join("\n")}
+  } as Record<string, number>,
 };
 // END calibrated`;
   const source = readFileSync(modulePath, "utf8");
   const eol = source.includes("\r\n") ? "\r\n" : "\n";
-  const next = source.replace(/\/\/ BEGIN calibrated[\s\S]*?\/\/ END calibrated/, block.replace(/\n/g, eol));
-  writeFileSync(modulePath, next);
-  writeFileSync(measuredPath, `${JSON.stringify({ lines: INSTRUCTION_LINES, wasm: "discount, worst of plain/promo carts", nodes: measured }, null, 2)}\n`);
+  writeFileSync(modulePath, source.replace(/\/\/ BEGIN calibrated[\s\S]*?\/\/ END calibrated/, block.replace(/\n/g, eol)));
+  writeFileSync(measuredPath, `${JSON.stringify({ lines: INSTRUCTION_LINES, wasm: "discount, worst of plain/promo carts", nodes: measured }, null, 2).replace(/\n/g, eol)}${eol}`);
   console.info(`[calibrate] wrote ${modulePath} and ${measuredPath}`);
-}
-if (process.env.CALIBRATE_DEBUG) {
-  mkdirSync(scratch, { recursive: true });
-  const rows = samples.map((s) => {
-    const cart = carts.filter(s.on).filter((c) => c.size === 200);
-    const cost = Math.max(...cart.map((c) => run(withOffers(c.input, [s.offer])) - floorOf(c)));
-    const rw = (s.offer.productRewards ?? [])[0] ?? {};
-    return { label: s.label, shape: offerShape(s.offer), cost, scope: rw.scopeMode, targets: (rw.targetProductIds?.length ?? 0) + (rw.targetVariantIds?.length ?? 0), page: s.offer.pageUrlConditions?.length ?? 0, thr: !!(s.offer.cartValueThresholdCents || s.offer.cartQuantityThreshold), req: s.offer.requirements?.length ?? 0, req2: (s.offer.requiredProductIds?.length ?? 0) + (s.offer.requiredVariantIds?.length ?? 0), tiers: rw.quantityTiers?.length ?? 0, gifts: s.offer.giftRewards?.length ?? 0, sel: rw.selectionMode, disc: rw.discountType };
-  });
-  rows.sort((a, b) => b.cost - a.cost);
-  for (const r of rows.filter((_, i) => i % 6 === 0 || i < 12)) console.log(JSON.stringify(r));
 }

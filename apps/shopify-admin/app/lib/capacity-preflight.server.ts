@@ -25,7 +25,7 @@ import { buildCartValidationConfig, MAX_VALIDATION_CONFIG_BYTES } from "./cart-v
 import { OfferPublishError } from "./offer-publish-errors.server.js";
 import { isFunctionCompactIdsEnabled } from "./function-compact-ids-flag.server.js";
 import { isFunctionShardsEnabled, isShardDomainsEnabled, isShardInstructionBudgetEnabled } from "./function-shards-flag.server.js";
-import { NODE_UNIT_INSTRUCTION_BUDGET } from "./sync/instruction-estimate.js";
+import { INSTRUCTION_PLANNER_LIMITS } from "./sync/instruction-estimate.js";
 import { summarizeCombinationGroups, type CombinationGroupsSummary } from "./sync/combination-groups.js";
 import { ShardPlanBlockedError, countShardNodes, readPreviousAssignment } from "./sync/cart-shards.server.js";
 import {
@@ -393,7 +393,7 @@ export async function preflightCapacity(
   const splitOptions = enabled ? await loadSplitOptions(db, shopId, shared.compiled.map((entry) => entry.offer)) : {};
   const instructionBudget = enabled && (opts.instructionBudgetEnabled ?? (await isShardInstructionBudgetEnabled(db, shopId)));
   const planOptions = { ...splitOptions, compactIds: shared.compactIds, instructions: instructionBudget };
-  const instructionLimits = instructionBudget ? { maxInstructions: NODE_UNIT_INSTRUCTION_BUDGET } : {};
+  const instructionLimits = instructionBudget ? INSTRUCTION_PLANNER_LIMITS : {};
   const { units } = buildPlanUnitSet(shared.compiled, conditions, shared.policies, planOptions);
   const previous = await readPreviousAssignment(db, shopId);
   const domains = enabled && (opts.domainsEnabled ?? (await isShardDomainsEnabled(db, shopId)));

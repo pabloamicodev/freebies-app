@@ -29,7 +29,7 @@ import {
 } from "../publish-manifest.server.js";
 import { isFunctionCompactIdsEnabled } from "../function-compact-ids-flag.server.js";
 import { isFunctionShardsEnabled, isShardDomainsEnabled, isShardInstructionBudgetEnabled } from "../function-shards-flag.server.js";
-import { NODE_UNIT_INSTRUCTION_BUDGET } from "./instruction-estimate.js";
+import { INSTRUCTION_PLANNER_LIMITS } from "./instruction-estimate.js";
 import { assertCodeOfferListsWithinLimit, assertVariableListsWithinLimit, buildCodeOfferConfig } from "./variable-list-guard.js";
 import { isRemoveUnfundedGiftsEnabled } from "../remove-unfunded-gifts-flag.server.js";
 import { SLOT_LIMITS, andPolicies, planShards, policyKey, type CombinationPolicy } from "./shard-planner.js";
@@ -536,7 +536,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const plan = planShards(
       planUnits,
       persisted?.previous ?? new Map(),
-      { ...SLOT_LIMITS, maxSlots: budget?.maxCartSlots ?? 1, ...(instructionBudget ? { maxInstructions: NODE_UNIT_INSTRUCTION_BUDGET } : {}) },
+      { ...SLOT_LIMITS, maxSlots: budget?.maxCartSlots ?? 1, ...(instructionBudget ? INSTRUCTION_PLANNER_LIMITS : {}) },
       domainsMode ? "domains" : "uniform",
     );
     for (const warning of plan.warnings ?? []) {

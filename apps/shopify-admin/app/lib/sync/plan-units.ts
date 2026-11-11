@@ -1,7 +1,7 @@
 import type { offerCombinationPolicies, offerConditions } from "@promo/db";
 import { findOversizeList, type CompiledOffer } from "./compile-config.js";
 import { mergeOfferParts, splitOffer, type SplitOptions, type SplitPart, type SplitRefusal } from "./offer-split.js";
-import { estimateUnitInstructions } from "./instruction-estimate.js";
+import { estimateUnitInstructions, offerFacts } from "./instruction-estimate.js";
 import { envelopeBytes, SLOT_LIMITS, unitBytes, type PlanUnit } from "./shard-planner.js";
 
 type ConditionRow = Pick<typeof offerConditions.$inferSelect, "offerId" | "conditionType" | "value" | "isEnabled">;
@@ -62,7 +62,7 @@ export function buildPlanUnitSet(
     const unit: PlanUnit = {
       key: offerId,
       bytes: unitBytes(offer, options.compactIds),
-      ...(options.instructions ? { instructions: estimateUnitInstructions(offer) } : {}),
+      ...(options.instructions ? { instructions: estimateUnitInstructions(offer), instructionFacts: offerFacts(offer) } : {}),
       cartAttributeKeys,
       customerTags,
       domain: {
@@ -97,7 +97,7 @@ export function buildPlanUnitSet(
           ...unit,
           key: `${offerId}#${part.index}`,
           bytes: unitBytes(part.offer, options.compactIds),
-          ...(options.instructions ? { instructions: estimateUnitInstructions(part.offer) } : {}),
+          ...(options.instructions ? { instructions: estimateUnitInstructions(part.offer), instructionFacts: offerFacts(part.offer) } : {}),
           targetProductIds: targetProductIdsOf(part.offer),
         })),
       };

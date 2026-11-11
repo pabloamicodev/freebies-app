@@ -6,11 +6,11 @@ import type { CompiledOffer } from "./compile-config.js";
  * which measures the built discount Function with Shopify's function-runner and rewrites the CALIBRATED block below.
  *
  * Model (worst case: every line of the cart is relevant to every offer):
- *   node   = NODE_INSTRUCTION_FLOOR + sum(estimateUnitInstructions(offer))
- *   floor  = the empty-config run at 200 lines (the provider scanning `cart.lines`) plus SHARED, the one-time cost of
- *            reading every line's facts, which the first line-reading offer pays and later offers reuse
- *   offer  = (a + b * 200) of its shape minus SHARED, i.e. its stand-alone cost less what it shares with the node
- * Every constant is an upper envelope of the measured samples, so the estimate never undershoots a measured node.
+ *   node = floor + [node has an offer] * (base + qty * [an offer has a quantity floor/cap] + value * [an offer has a cart
+ *          value floor/cap]) + sum(own(shape(offer)))
+ * The first offer of a node reads every line's facts and later offers reuse them, so base, qty and value are paid once per
+ * node. They are the cheapest measured reader costs, so a smaller fact cost can only move cost into `own`: the estimate
+ * never undershoots a measured live node (a vitest asserts it).
  */
 export const INSTRUCTION_LINES = 200;
 /** Shopify's limit is 11M; the planner aims lower so a 25% jump in the hot path still fits. */
@@ -26,26 +26,45 @@ interface Line {
 // BEGIN calibrated
 export const CALIBRATED = {
   floor: { a: 128733, b: 10484 } as Line,
-  shared: 1941382,
+  base: 2155904,
+  qty: 441020,
+  value: 1973287,
   shapes: {
-    discount: { a: 1363202, b: 36126 },
-    tiers: { a: 178285, b: 28181 },
-    gift: { a: 202622, b: 22471 },
-    landing: { a: 127020, b: 10514 },
-    order: { a: 160789, b: 15186 },
-    quiz: { a: 113730, b: 15315 },
-  } as Record<OfferShape, Line>,
+  "discount": 6432300,
+  "discount+value": 1822908,
+  "tiers": 3176211,
+  "tiers+value": 3176211,
+  "gift": 374857,
+  "gift+value": 583868,
+  "landing": 159575,
+  "landing+value": 159575,
+  "order": 783219,
+  "order+value": 783219,
+  "quiz": 995903,
+  "quiz+value": 995903,
+  "idle": 174006,
+  } as Record<string, number>,
 };
 // END calibrated
 
+/** Bit flags of the shared line facts an offer needs beyond the base reads. */
+export const FACT_QTY = 1;
+export const FACT_VALUE = 2;
+
 const at = (line: Line) => Math.ceil(line.a + line.b * INSTRUCTION_LINES);
 
-/** Instructions of a node with no offers on a 200-line cart, plus the shared line reads. */
-export const NODE_INSTRUCTION_FLOOR = at(CALIBRATED.floor) + CALIBRATED.shared;
-/** What the offers of one node may add up to. */
+/** Instructions of a node with no offers on a 200-line cart. */
+export const NODE_EMPTY_INSTRUCTIONS = at(CALIBRATED.floor);
+/** What any node holding an offer pays before its offers' own costs. */
+export const NODE_INSTRUCTION_FLOOR = NODE_EMPTY_INSTRUCTIONS + CALIBRATED.base;
+/** What the offers of one node may add up to (their own costs plus the facts they share). */
 export const NODE_UNIT_INSTRUCTION_BUDGET = NODE_INSTRUCTION_BUDGET - NODE_INSTRUCTION_FLOOR;
+/** Cost of each shared fact, paid once per node by the first offer that needs it. */
+export const NODE_FACT_COSTS = { qty: CALIBRATED.qty, value: CALIBRATED.value };
 
-type Shapeable = Partial<Pick<CompiledOffer, "offerType" | "giftRewards" | "orderRewards">> & {
+type Shapeable = Partial<
+  Pick<CompiledOffer, "offerType" | "giftRewards" | "orderRewards" | "cartQuantityThreshold" | "cartQuantityMax" | "cartValueThresholdCents" | "cartValueMaxCents">
+> & {
   productRewards?: Array<{ scopeMode?: string; quantityTiers?: unknown[]; priceTiers?: unknown[] }>;
 };
 
@@ -60,11 +79,35 @@ export function offerShape(offer: Shapeable): OfferShape {
   return "discount";
 }
 
-/** What the offer adds to a node's run on a 200-line cart, beyond the node floor. */
-export function estimateUnitInstructions(offer: Shapeable): number {
-  return Math.max(0, at(CALIBRATED.shapes[offerShape(offer)]) - CALIBRATED.shared);
+/** Which shared facts (quantities, cart value) the offer makes the node read. */
+export function offerFacts(offer: Shapeable): number {
+  return (
+    (offer.cartQuantityThreshold !== undefined || offer.cartQuantityMax !== undefined ? FACT_QTY : 0) |
+    (offer.cartValueThresholdCents !== undefined || offer.cartValueMaxCents !== undefined ? FACT_VALUE : 0)
+  );
 }
 
+/** The cost class of an offer: its shape, split by whether it makes the node read the cart value (that read grows with the cart's products). */
+export function ownKey(offer: Shapeable): string {
+  // A cart of 200 lines holds at least 200 units, so an offer capped below that never fires on it: it only pays for its checks.
+  if (offer.cartQuantityMax !== undefined && offer.cartQuantityMax < INSTRUCTION_LINES) return "idle";
+  return `${offerShape(offer)}${offerFacts(offer) & FACT_VALUE ? "+value" : ""}`;
+}
+
+/** What the offer costs beyond the facts it shares with the node's other offers, on a 200-line cart. */
+export function estimateUnitInstructions(offer: Shapeable): number {
+  return CALIBRATED.shapes[ownKey(offer)] ?? 0;
+}
+
+/** The planner limits that carry the model: the per-node budget for offers (own costs plus shared facts) and the fact costs. */
+export const INSTRUCTION_PLANNER_LIMITS = { maxInstructions: NODE_UNIT_INSTRUCTION_BUDGET, instructionFacts: NODE_FACT_COSTS } as const;
+
+/** Cost of the union of shared facts `flags` (see FACT_*), paid once per node. */
+export const factInstructions = (flags: number) =>
+  (flags & FACT_QTY ? NODE_FACT_COSTS.qty : 0) + (flags & FACT_VALUE ? NODE_FACT_COSTS.value : 0);
+
 export function estimateNodeInstructions(offers: readonly Shapeable[]): number {
-  return NODE_INSTRUCTION_FLOOR + offers.reduce((total, offer) => total + estimateUnitInstructions(offer), 0);
+  if (offers.length === 0) return NODE_EMPTY_INSTRUCTIONS;
+  const flags = offers.reduce((all, offer) => all | offerFacts(offer), 0);
+  return NODE_INSTRUCTION_FLOOR + factInstructions(flags) + offers.reduce((total, offer) => total + estimateUnitInstructions(offer), 0);
 }

@@ -21,8 +21,10 @@ export interface PlanUnit {
   splitRefusal?: SplitRefusal;
   /** A list of the offer that cannot be packed or split is over Shopify's 100-element variable limit. */
   listOverflow?: { listKind: number; listCount: number };
-  /** Estimated wasm instructions the offer adds to a node's run (instruction-estimate.ts); omitted = not counted. */
+  /** Estimated wasm instructions the offer adds to a node's run beyond the facts it shares (instruction-estimate.ts); omitted = not counted. */
   instructions?: number;
+  /** Shared line facts the offer makes its node read (FACT_* flags): their cost is paid once per node, not once per offer. */
+  instructionFacts?: number;
 }
 
 export interface PlannerLimits {
@@ -38,6 +40,8 @@ export interface PlannerLimits {
    * back to the byte-only packing and carries a warning instead of blocking.
    */
   maxInstructions?: number;
+  /** Cost of each shared fact (`FACT_QTY` = 1, `FACT_VALUE` = 2) a node's units need, counted once per node against `maxInstructions`. */
+  instructionFacts?: { qty: number; value: number };
 }
 
 export { SLOT_LIMITS } from "./slot-limits.js";
@@ -175,6 +179,7 @@ interface Group {
   minPriority: number;
   minKey: string;
   instr: number;
+  facts: number;
 }
 
 interface Measure {
@@ -215,6 +220,7 @@ const makeGroup = (units: PlanUnit[], pinned: boolean): Group => {
     minPriority: sorted[0]?.priority ?? 0,
     minKey: sorted[0]?.key ?? "",
     instr: sorted.reduce((total, unit) => total + (unit.instructions ?? 0), 0),
+    facts: sorted.reduce((all, unit) => all | (unit.instructionFacts ?? 0), 0),
   };
 };
 
@@ -335,10 +341,12 @@ function planCore(
 ): ShardPlan {
   const hard = limits.slotBytes;
   let instructionCap = limits.maxInstructions ?? Infinity;
-  const overInstructions = (groups: readonly Group[]) =>
-    instructionCap !== Infinity && groups.length > 1 && groups.reduce((total, group) => total + group.instr, 0) > instructionCap;
+  const factCost = (facts: number) => (facts & 1 ? (limits.instructionFacts?.qty ?? 0) : 0) + (facts & 2 ? (limits.instructionFacts?.value ?? 0) : 0);
+  const instructionsOf = (groups: readonly Group[]) =>
+    groups.reduce((total, group) => total + group.instr, 0) + factCost(groups.reduce((all, group) => all | group.facts, 0));
+  const overInstructions = (groups: readonly Group[]) => instructionCap !== Infinity && groups.length > 1 && instructionsOf(groups) > instructionCap;
   // How much of a node a group takes: bytes, or instructions when that is the scarcer resource.
-  const weight = (group: Group) => (instructionCap === Infinity ? group.sum : Math.max(group.sum / hard, group.instr / instructionCap));
+  const weight = (group: Group) => (instructionCap === Infinity ? group.sum : Math.max(group.sum / hard, (group.instr + factCost(group.facts)) / instructionCap));
   const bySize = (a: Group, b: Group) => weight(b) - weight(a) || compareText(a.minKey, b.minKey);
   const soft = Math.floor(hard * limits.targetFill);
   const overLimit = (groups: readonly Group[], cap: number): { reason: PlanBlockReason; m: Measure } | null => {
@@ -560,8 +568,9 @@ function planCore(
   return assemble(bins, previous, undefined, policies());
 }
 
+const costOf = (unit: PlanUnit) => ({ own: unit.instructions ?? 0, facts: unit.instructionFacts ?? 0 });
 const instructionsByKey = (units: readonly PlanUnit[]) =>
-  new Map(units.flatMap((unit) => [[unit.key, unit.instructions ?? 0] as const, ...(unit.splittable ?? []).map((part) => [part.key, part.instructions ?? 0] as const)]));
+  new Map(units.flatMap((unit) => [[unit.key, costOf(unit)] as const, ...(unit.splittable ?? []).map((part) => [part.key, costOf(part)] as const)]));
 
 /**
  * `planCore` plus the soft instruction dimension. Without `limits.maxInstructions` this is the byte planner, untouched.
@@ -581,7 +590,11 @@ export function planShards(
   const costs = instructionsByKey(inputUnits);
   const annotate = (plan: ShardPlan, warnings: PlanWarning[]): ShardPlan => {
     if (plan.blocked) return plan;
-    const slots = plan.slots.map((slot) => ({ ...slot, instructions: slot.unitKeys.reduce((total, key) => total + (costs.get(key) ?? 0), 0) }));
+    const factCost = (facts: number) => (facts & 1 ? (limits.instructionFacts?.qty ?? 0) : 0) + (facts & 2 ? (limits.instructionFacts?.value ?? 0) : 0);
+    const slots = plan.slots.map((slot) => {
+      const members = slot.unitKeys.map((key) => costs.get(key) ?? { own: 0, facts: 0 });
+      return { ...slot, instructions: members.reduce((total, member) => total + member.own, 0) + factCost(members.reduce((all, member) => all | member.facts, 0)) };
+    });
     const over = slots.filter((slot) => slot.instructions > cap);
     const all = [
       ...warnings,
