@@ -1,0 +1,26 @@
+{
+  "lines": 200,
+  "wasm": "discount, worst of plain/promo carts",
+  "nodes": {
+    "ambrosia-slot0": {
+      "offers": 8,
+      "measured": 8408833
+    },
+    "hpn-slot0": {
+      "offers": 0,
+      "measured": 2096285
+    },
+    "onesol-slot0": {
+      "offers": 8,
+      "measured": 6553671
+    },
+    "onesol-slot1": {
+      "offers": 3,
+      "measured": 4732045
+    },
+    "tru-slot0": {
+      "offers": 3,
+      "measured": 9317303
+    }
+  }
+}

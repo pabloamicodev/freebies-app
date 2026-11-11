@@ -967,6 +967,7 @@ describe.each(["off", "on"])("sharded cart publish (combination groups default %
 const { preflightCapacity } = await import("../capacity-preflight.server.js");
 const { automaticNodeBudget } = await import("../discount-node.server.js");
 const { setFunctionCompactIdsEnabled } = await import("../function-compact-ids-flag.server.js");
+const { setShardInstructionBudgetEnabled } = await import("../function-shards-flag.server.js");
 const { setLimitsEnforced } = await import("../limits-enforced.server.js");
 
 describe("preflight plans the same cart slots the publish writes", () => {
@@ -1034,6 +1035,69 @@ describe("preflight plans the same cart slots the publish writes", () => {
       const policies = new Set(rows.map((row) => JSON.stringify(shopify.policies.get(slotOwner(row)))));
       expect(policies.size).toBeGreaterThanOrEqual(2);
       await expectParity();
+    });
+  });
+
+  describe("instruction budget", () => {
+    beforeEach(async () => {
+      shopId = await freshShop();
+      await setFunctionShardsEnabled(db, shopId, true);
+      await setShardDomainsEnabled(db, shopId, true);
+    });
+
+    const planFor = async (on: boolean) => {
+      await setShardInstructionBudgetEnabled(db, shopId, on);
+      const preflight = await preflightCapacity(db, shopId, [], { loadBudget: (_db, id) => automaticNodeBudget(id, DOMAIN, "token") });
+      if (!preflight.ok) throw new Error(`preflight blocked: ${preflight.code} ${preflight.message}`);
+      return preflight.plan;
+    };
+
+    for (const on of [false, true]) {
+      it(`flag ${on ? "on" : "off"}: preflight and publisher produce the same plan`, async () => {
+        await seedCatalog(shopId, 6, 0, 0);
+        const planned = await planFor(on);
+        expect(planned.instructionsPerSlot !== undefined).toBe(on);
+        await publishOffersForShop(shopId, DOMAIN);
+        const rows = (await shardRows()).filter((row) => row.unitKeys.length > 0);
+        expect(planned.slots).toBe(rows.length);
+        expect(planned.bytesPerSlot).toEqual(rows.map((row) => row.configBytes!));
+        expect(planned.offersPerSlot).toEqual(rows.map((row) => new Set(row.unitKeys.map((key) => key.split("#")[0])).size));
+      });
+    }
+
+    it("spreads a heavy shop over more nodes than the byte plan, and a second publish keeps the nodes", async () => {
+      await seedCatalog(shopId, 6, 0, 0);
+      const off = await planFor(false);
+      const on = await planFor(true);
+      console.log("DBG", JSON.stringify({ on, off }));
+      expect(on.slots).toBeGreaterThan(off.slots);
+      await publishOffersForShop(shopId, DOMAIN);
+      const first = (await shardRows()).filter((row) => row.unitKeys.length > 0);
+      expect(first).toHaveLength(on.slots);
+      const before = new Map(first.flatMap((row) => row.unitKeys.map((key) => [key, row.slot] as const)));
+      await publishOffersForShop(shopId, DOMAIN);
+      const after = new Map((await shardRows()).filter((row) => row.unitKeys.length > 0).flatMap((row) => row.unitKeys.map((key) => [key, row.slot] as const)));
+      expect(after).toEqual(before);
+    });
+
+    it("never blocks: when the budget would need more nodes than allowed it falls back to the byte plan and warns", async () => {
+      await seedCatalog(shopId, 60, 0, 0);
+      const on = await planFor(true);
+      const off = await planFor(false);
+      expect(on.slots).toBe(off.slots);
+      expect(on.warnings?.map((warning) => warning.code)).toContain("INSTRUCTION_BUDGET_UNREACHABLE");
+      await expect(publishOffersForShop(shopId, DOMAIN)).resolves.toBeDefined();
+    });
+
+    it("the env kill switch turns it off for a shop that has it on", async () => {
+      await seedCatalog(shopId, 6, 0, 0);
+      vi.stubEnv("FUNCTION_SHARD_INSTRUCTIONS", "off");
+      try {
+        const plan = await planFor(true);
+        expect(plan.instructionsPerSlot).toBeUndefined();
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
   });
 
