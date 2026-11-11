@@ -96,6 +96,7 @@ export type DriftIssue =
   | "inactive_node"
   | "code_count_mismatch"
   | "purchase_type_mismatch"
+  | "combination_mismatch"
   | "validation_mismatch"
   | "validation_missing"
   | "missing_manifest";
@@ -125,6 +126,7 @@ interface PurchaseTypeState {
   status?: string;
   appliesOnSubscription?: boolean | null;
   appliesOnOneTimePurchase?: boolean | null;
+  combinesWith?: { orderDiscounts?: boolean; productDiscounts?: boolean; shippingDiscounts?: boolean } | null;
 }
 
 interface DriftNode {
@@ -148,6 +150,7 @@ interface DriftFacts {
       status?: string;
       appliesOnSubscription?: boolean | null;
       appliesOnOneTimePurchase?: boolean | null;
+      combinesWith?: PurchaseTypeState["combinesWith"];
       copies: Array<{ namespace: string; hash: string | null; bytes: number | null }>;
     }
   >;
@@ -196,7 +199,7 @@ async function checkShopDrift(
           ... on DiscountAutomaticNode {
             id
             ${metafieldSelections}
-            automaticDiscount { ... on DiscountAutomaticApp { status appliesOnSubscription appliesOnOneTimePurchase } }
+            automaticDiscount { ... on DiscountAutomaticApp { status appliesOnSubscription appliesOnOneTimePurchase combinesWith { orderDiscounts productDiscounts shippingDiscounts } } }
           }
           ... on DiscountCodeNode {
             id
@@ -231,6 +234,7 @@ async function checkShopDrift(
         status: node.automaticDiscount?.status ?? node.codeDiscount?.status,
         appliesOnSubscription: (node.automaticDiscount ?? node.codeDiscount)?.appliesOnSubscription,
         appliesOnOneTimePurchase: (node.automaticDiscount ?? node.codeDiscount)?.appliesOnOneTimePurchase,
+        combinesWith: node.automaticDiscount?.combinesWith,
         copies,
       };
     }
@@ -257,6 +261,21 @@ async function checkShopDrift(
     ].filter((message): message is string => message !== null);
     if (wrongFlags.length > 0) {
       findings.push({ ...base, issue: "purchase_type_mismatch", nodeId: id, detail: wrongFlags.join("; ") });
+    }
+    const wantedCombination = expected.combinesWith;
+    const liveCombination = node.automaticDiscount?.combinesWith;
+    if (wantedCombination && liveCombination) {
+      const wrongCombination = (["productDiscounts", "orderDiscounts", "shippingDiscounts"] as const).filter(
+        (flag) => liveCombination[flag] != null && liveCombination[flag] !== wantedCombination[flag],
+      );
+      if (wrongCombination.length > 0) {
+        findings.push({
+          ...base,
+          issue: "combination_mismatch",
+          nodeId: id,
+          detail: wrongCombination.map((flag) => `${flag} is ${liveCombination[flag]}, expected ${wantedCombination[flag]}`).join("; "),
+        });
+      }
     }
     const status = node.automaticDiscount?.status ?? node.codeDiscount?.status;
     if (expected.active && status && status !== "ACTIVE") {
@@ -570,6 +589,18 @@ function describeDrift(findings: DriftFinding[], facts: DriftFacts, manifest: Pu
         bytesBefore: null,
         bytesAfter: null,
         action: republish,
+      });
+    } else if (issue === "combination_mismatch") {
+      items.push({
+        issue,
+        target: "discount_node",
+        nodeId,
+        detail,
+        current: { combinesWith: node?.combinesWith ?? null },
+        expected: { combinesWith: expected?.combinesWith ?? null },
+        bytesBefore: null,
+        bytesAfter: null,
+        action: `${republish} (the publish tightens the node first, then sets the new policy)`,
       });
     } else if (issue === "code_count_mismatch") {
       const counts = nodeId ? facts.codeCounts[nodeId] : undefined;

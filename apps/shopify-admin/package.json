@@ -40,6 +40,7 @@
     "zod": "^4.6.6"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.10.2",
     "@playwright/test": "^1.61.0",
     "@sentry/vite-plugin": "^5.4.0",
     "@shopify/cli": "4.8.2",

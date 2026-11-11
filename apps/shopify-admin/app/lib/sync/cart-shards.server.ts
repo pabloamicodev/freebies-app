@@ -9,6 +9,7 @@ import {
   slot0GroupTooLargeMessage,
 } from "../capacity-copy.js";
 import { baseOfferId } from "./plan-units.js";
+import type { SplitRefusal } from "./offer-split.js";
 import type { PlanBlocked, PlanBlockCode } from "./shard-planner.js";
 
 export interface ShardPlanBlockedContext {
@@ -23,7 +24,7 @@ export interface ShardPlanBlockedContext {
 
 /** The planner refused the plan: nothing was written and the live Shopify state is untouched. */
 export class ShardPlanBlockedError extends Error {
-  readonly capacity: { code: PlanBlockCode | "COMBINATION_SINGLE_SHARD"; offerIds: string[]; numbers: Record<string, number>; reason?: "combination" };
+  readonly capacity: { code: PlanBlockCode | "COMBINATION_SINGLE_SHARD"; offerIds: string[]; numbers: Record<string, number>; reason?: "combination"; splitRefusal?: SplitRefusal };
 
   constructor(
     readonly blocked: PlanBlocked,
@@ -50,7 +51,12 @@ export class ShardPlanBlockedError extends Error {
     const { code, numbers } = shardPlanBlockedCapacity(blocked, context);
     super(shardPlanBlockedMessage(code, numbers, blocked, names, context.storeActive ?? null));
     this.name = "ShardPlanBlockedError";
-    this.capacity = { code, offerIds, numbers };
+    this.capacity = {
+      code,
+      offerIds,
+      numbers,
+      ...(code === "OFFER_TOO_LARGE" && blocked.splitRefusal ? { splitRefusal: blocked.splitRefusal } : {}),
+    };
   }
 }
 

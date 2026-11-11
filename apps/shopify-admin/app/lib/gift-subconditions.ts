@@ -4,6 +4,7 @@ import {
   type ConditionOperator,
   type ConditionType,
 } from "@promo/shared-types";
+import { toStoredAmount } from "./money.js";
 
 export interface NormalizedOfferSubcondition {
   conditionType: ConditionType;
@@ -55,7 +56,8 @@ function stampMatchFlags(value: Record<string, unknown>): Record<string, unknown
   };
 }
 
-export function normalizeOfferSubconditions(input: Record<string, unknown>): NormalizeResult {
+/** `currencyCode` is the shop currency: customer-spend amounts are stored in its own minor unit. */
+export function normalizeOfferSubconditions(input: Record<string, unknown>, currencyCode?: string): NormalizeResult {
   const conditions: NormalizedOfferSubcondition[] = [];
 
   for (const [id, raw] of Object.entries(input)) {
@@ -105,7 +107,7 @@ export function normalizeOfferSubconditions(input: Record<string, unknown>): Nor
             operator,
             ...(metric === "total_orders"
               ? { value: Math.floor(threshold) }
-              : { valueCents: Math.round(threshold * 100) }),
+              : { valueCents: toStoredAmount(threshold, currencyCode) }),
           },
         });
         break;

@@ -2,14 +2,14 @@
 //! `{"v":1,"u":{"<offerId>":<count>}}`. A missing key counts as 0 uses; an unreadable value
 //! or unknown version reads as empty (fail open, like a guest).
 
-use std::collections::HashMap;
+use crate::de::HashMap;
 
 pub type Usage = HashMap<String, i64>;
 
 de_struct! {
     pub struct Payload {
         "v" => version: i64 = 0,
-        "u" => uses: Usage = Usage::new(),
+        "u" => uses: Usage = Usage::default(),
     }
 }
 

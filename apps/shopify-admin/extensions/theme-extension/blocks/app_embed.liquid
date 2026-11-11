@@ -7,6 +7,7 @@
   Settings: debug_mode and cart_debounce_ms.
   specificLinkParams: app-installation metafield promo_engine.specific_link_params (JSON list of query-param
   names used by specific-link conditions); the runtime falls back to ["freegifts_code"] when it is absent.
+  removeUnfundedGifts: app-installation metafield promo_engine.remove_unfunded_gifts (boolean, per-shop flag, default off).
   i18n: widget strings from locales/*.json (merchant-translatable).
 {% endcomment %}
 
@@ -37,6 +38,8 @@
     specificLinkParams: {{ app.metafields.promo_engine.specific_link_params.value | json }},
     template: {{ pe_template | json }},
     stampTargets: {{ app.metafields.promo_engine.stamp_targets.value | json }},
+    removeUnfundedGifts: {{ app.metafields.promo_engine.remove_unfunded_gifts.value | json }},
+    customerId: {{ customer.id | json }},
     i18n: {
       close: {{ 'widgets.close' | t | json }},
       giftOffer: {{ 'widgets.giftOffer' | t | json }},
@@ -44,6 +47,7 @@
       giftPrompt: {{ 'widgets.giftPrompt' | t | json }},
       giftReminder: {{ 'widgets.giftReminder' | t | json }},
       giftReminderContinue: {{ 'widgets.giftReminderContinue' | t | json }},
+      giftRemoved: {{ 'widgets.giftRemoved' | t | json }},
       giftsUpdating: {{ 'widgets.giftsUpdating' | t | json }},
       progress: {{ 'widgets.progress' | t: percent: '__percent__' | json }},
       todayOffers: {{ 'widgets.todayOffers' | t | json }},

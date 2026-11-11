@@ -11,6 +11,7 @@ import { useCallback, useEffect } from "react";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { Toast } from "../components/Toast.js";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { resolveSelection } from "../lib/whole-product-selection.server.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "../lib/unique-offer-name.server.js";
 import { statusForSubmit } from "../lib/offer-scheduling.server.js";
 import {
@@ -34,7 +35,12 @@ import { ProductPicker } from "../components/ProductPicker.js";
 import { SelectedProductsList } from "../components/SelectedProductsList.js";
 import { OfferConditionsBuilder } from "../components/OfferConditionsBuilder.js";
 import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
+import { toStoredAmount } from "../lib/money.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
+import { combinationWizardNote, productDiscountsField } from "../lib/capacity-modal-copy.js";
+import { isFunctionShardsEnabled, isShardDomainsEnabled } from "../lib/function-shards-flag.server.js";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -52,15 +58,16 @@ class CodeRejectedError extends Error {}
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { timezone } = await getShopContext(request);
-  return { timezone, nowLocal: nowInZone(timezone) };
+  const { timezone, db, shopId } = await getShopContext(request);
+  const shardsEnabled = await isFunctionShardsEnabled(db, shopId);
+  return { timezone, nowLocal: nowInZone(timezone), shardsEnabled, domainsEnabled: shardsEnabled && (await isShardDomainsEnabled(db, shopId)) };
 };
 
 // ─── Action ──────────────────────────────────────────────────────────────────
 
-export const action = async ({ request }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
-  const { shopId, db, session, timezone } = context;
+  const { shopId, db, session, timezone, currencyCode: shopCurrency } = context;
   if (!shopId) return { error: "Shop not found" };
 
   const intent = formData.get("intent") as string;
@@ -95,6 +102,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const discountProductsResult = parseJsonStringArray(formData, "discountProducts");
   if (discountProductsResult.error) return { error: discountProductsResult.error };
   const discountProducts = discountProductsResult.data!;
+  const wholeProductsResult = parseJsonStringArray(formData, "discountWholeProducts");
+  if (wholeProductsResult.error) return { error: wholeProductsResult.error };
+  const discountSelection = await resolveSelection(db, shopId, discountProducts, wholeProductsResult.data!);
   if (intent === "publish" && applyTo === "selected_products" && discountProducts.length === 0) {
     return { error: "Select at least one product before publishing." };
   }
@@ -194,7 +204,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const subconditionsResult = parseJsonRecord(formData, "subconditions");
   if (subconditionsResult.error) return { error: subconditionsResult.error };
-  const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!);
+  const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!, shopCurrency);
   if (!normalizedSubconditions.success) return { error: normalizedSubconditions.error };
   const normalizedSubconditionRows = normalizedSubconditions.data;
 
@@ -222,10 +232,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const conditionValue: Record<string, unknown> =
     conditionType === "cart_value"
       ? {
-          thresholdCents: Math.round(
-            (Number.isFinite(firstCartMinimum) ? firstCartMinimum : 0) * 100,
-          ),
-          currencyCode: "USD",
+          thresholdCents: toStoredAmount(Number.isFinite(firstCartMinimum) ? firstCartMinimum : 0, shopCurrency),
+          currencyCode: shopCurrency,
           includeGiftValues: false,
         }
       : {
@@ -268,10 +276,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           ...(tier.maximum === undefined ? {} : { maximumQuantity: Math.trunc(tier.maximum) }),
         }
       : {
-          minimumSubtotalCents: Math.round(tier.threshold * 100),
+          minimumSubtotalCents: toStoredAmount(tier.threshold, shopCurrency),
           ...(tier.maximum === undefined
             ? {}
-            : { maximumSubtotalCents: Math.round(tier.maximum * 100) }),
+            : { maximumSubtotalCents: toStoredAmount(tier.maximum, shopCurrency) }),
         }),
     discountType: cartDiscountType,
     discountValue: tier.discountValue,
@@ -347,10 +355,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                   scope: applyTo === "any_product" ? "all_products" : "cart",
                   ...(applyTo === "selected_products"
                     ? {
-                        productIds: discountProducts.filter((id) => id.includes("/Product/")),
-                        variantIds: discountProducts.filter((id) =>
-                          id.includes("/ProductVariant/"),
-                        ),
+                        productIds: discountSelection.productIds,
+                        variantIds: discountSelection.variantIds,
+                        ...(discountSelection.selectionLevel ? { selectionLevel: discountSelection.selectionLevel } : {}),
                       }
                     : {}),
                   selectionMode:
@@ -401,7 +408,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (publishError) return { error: publishError };
 
   return redirect(`/app/offers/${newOffer.id}`);
-};
+});
 
 // ─── Pre-filled defaults per template ────────────────────────────────────────
 
@@ -474,7 +481,7 @@ function createCartTier(values: Omit<CartTier, "id">): CartTier {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function NewDiscountOfferPage() {
-  const { nowLocal } = useLoaderData<typeof loader>();
+  const { nowLocal, shardsEnabled, domainsEnabled } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const { state } = useNavigation();
@@ -504,6 +511,7 @@ export default function NewDiscountOfferPage() {
     applyTo: templateId === "volume" ? "selected_products" : "any_product",
     productPickerOpen: false,
     selectedProducts: [] as string[],
+    wholeProducts: [] as string[],
     displayType: "quantity_options",
     countRule: "all",
     tiers: [
@@ -569,6 +577,7 @@ export default function NewDiscountOfferPage() {
     applyTo,
     productPickerOpen,
     selectedProducts,
+    wholeProducts,
     displayType,
     countRule,
     tiers,
@@ -597,6 +606,7 @@ export default function NewDiscountOfferPage() {
   const setApplyTo = createFieldSetter(setFormField, "applyTo");
   const setProductPickerOpen = createFieldSetter(setFormField, "productPickerOpen");
   const setSelectedProducts = createFieldSetter(setFormField, "selectedProducts");
+  const setWholeProducts = createFieldSetter(setFormField, "wholeProducts");
   const setDisplayType = createFieldSetter(setFormField, "displayType");
   const setCountRule = createFieldSetter(setFormField, "countRule");
   const setTiers = createFieldSetter(setFormField, "tiers");
@@ -795,6 +805,7 @@ export default function NewDiscountOfferPage() {
         {/* Hidden fields */}
         <input type="hidden" name="discountTemplate" value={templateId} />
         <input type="hidden" name="discountProducts" value={JSON.stringify(selectedProducts)} />
+        <input type="hidden" name="discountWholeProducts" value={JSON.stringify(wholeProducts)} />
 
         {/* Tier arrays — volume */}
         {templateId === "volume" &&
@@ -1278,9 +1289,10 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                       </div>
                       <SelectedProductsList
                         gids={selectedProducts}
-                        onRemove={(gid) =>
-                          setSelectedProducts(selectedProducts.filter((id) => id !== gid))
-                        }
+                        onRemove={(gid) => {
+                          setSelectedProducts(selectedProducts.filter((id) => id !== gid));
+                          setWholeProducts([]);
+                        }}
                       />
                     </div>
                   )}
@@ -1327,9 +1339,10 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                       </div>
                       <SelectedProductsList
                         gids={selectedProducts}
-                        onRemove={(gid) =>
-                          setSelectedProducts(selectedProducts.filter((id) => id !== gid))
-                        }
+                        onRemove={(gid) => {
+                          setSelectedProducts(selectedProducts.filter((id) => id !== gid));
+                          setWholeProducts([]);
+                        }}
                       />
                     </div>
                   )}
@@ -1394,9 +1407,10 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                       </div>
                       <SelectedProductsList
                         gids={selectedProducts}
-                        onRemove={(gid) =>
-                          setSelectedProducts(selectedProducts.filter((id) => id !== gid))
-                        }
+                        onRemove={(gid) => {
+                          setSelectedProducts(selectedProducts.filter((id) => id !== gid));
+                          setWholeProducts([]);
+                        }}
                       />
                     </div>
                   )}
@@ -2142,7 +2156,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                 className="b-card-body"
                 style={{ display: "flex", flexDirection: "column", gap: 8 }}
               >
-                {templateId === "cart" && (
+                {productDiscountsField(templateId, shardsEnabled).visible && (
                   <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                     <input
                       type="checkbox"
@@ -2153,6 +2167,11 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                     />
                     <span style={{ fontSize: 13, color: "var(--text)" }}>Product discounts</span>
                   </label>
+                )}
+                {shardsEnabled && !combinesProductDiscounts && (
+                  <p className="b-help" role="note" style={{ margin: 0 }}>
+                    {combinationWizardNote(domainsEnabled)}
+                  </p>
                 )}
                 <label className="b-checkbox-row" style={{ cursor: "pointer", gap: 8 }}>
                   <input
@@ -2255,9 +2274,14 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
         title="Select products"
         allowMultiple
         selectedIds={selectedProducts}
-        onSelect={(gids) => setSelectedProducts(gids)}
+        selectedWholeProducts={wholeProducts}
+        onSelect={(gids, wholeSelected) => {
+          setSelectedProducts(gids);
+          setWholeProducts(wholeSelected);
+        }}
       />
 
+      <CapacityLimitModal data={actionData?.capacity} />
       {(showToast || actionData?.error) && (
         <Toast
           message={actionData?.error ?? toastMsg}

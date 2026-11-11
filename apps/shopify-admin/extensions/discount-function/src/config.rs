@@ -1,7 +1,7 @@
 pub use crate::page_match::CompiledPageUrlCondition;
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
-use std::collections::HashMap;
+use crate::de::HashMap;
 
 /// Compiled config — parsed from the `promo_engine.function_config` metafield.
 /// This is our own JSON shape (written by the offer-publisher worker), unrelated
@@ -31,11 +31,35 @@ pub struct CompiledConfig {
 
 /// Offers are parsed one at a time: a malformed offer is skipped and the others still apply.
 fn lenient_offers<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<CompiledOffer>, D::Error> {
-    let raw = Vec::<Box<RawValue>>::deserialize(deserializer)?;
+    let raw = Vec::<&'de RawValue>::deserialize(deserializer)?;
     Ok(raw
         .iter()
         .filter_map(|offer| serde_json::from_str(offer.get()).ok())
+        .map(normalize_offer_ids)
         .collect())
+}
+
+fn normalize_offer_ids(mut offer: CompiledOffer) -> CompiledOffer {
+    use crate::de::{gid_opt, gids};
+    gids(&mut offer.required_product_ids, "Product");
+    gids(&mut offer.any_required_product_ids, "Product");
+    gids(&mut offer.excluded_product_ids, "Product");
+    gids(&mut offer.required_variant_ids, "ProductVariant");
+    gids(&mut offer.any_required_variant_ids, "ProductVariant");
+    for requirement in &mut offer.requirements {
+        gid_opt(&mut requirement.product_id, "Product");
+        gid_opt(&mut requirement.variant_id, "ProductVariant");
+    }
+    for reward in &mut offer.gift_rewards {
+        gids(&mut reward.target_product_ids, "Product");
+        gids(&mut reward.target_variant_ids, "ProductVariant");
+    }
+    for reward in &mut offer.product_rewards {
+        gids(&mut reward.target_product_ids, "Product");
+        gids(&mut reward.target_variant_ids, "ProductVariant");
+        gids(&mut reward.required_anchor_variant_ids, "ProductVariant");
+    }
+    offer
 }
 
 fn default_shipping_scope() -> String {
@@ -68,11 +92,11 @@ de_struct! {
         "canStackWithGiftOffers" => can_stack_with_gift_offers: bool = true,
         // offer.tierMode: "h" keeps only the highest gift tier reached; absent is cumulative.
         "tm" => tier_mode: Option<String> = None,
-        "requiredProductIds" => required_product_ids: Vec<String> = Vec::new(),
-        "requiredVariantIds" => required_variant_ids: Vec<String> = Vec::new(),
-        "anyRequiredProductIds" => any_required_product_ids: Vec<String> = Vec::new(),
-        "anyRequiredVariantIds" => any_required_variant_ids: Vec<String> = Vec::new(),
-        "excludedProductIds" => excluded_product_ids: Vec<String> = Vec::new(),
+        "requiredProductIds" => required_product_ids: Vec<String> [packed] = Vec::new(),
+        "requiredVariantIds" => required_variant_ids: Vec<String> [packed] = Vec::new(),
+        "anyRequiredProductIds" => any_required_product_ids: Vec<String> [packed] = Vec::new(),
+        "anyRequiredVariantIds" => any_required_variant_ids: Vec<String> [packed] = Vec::new(),
+        "excludedProductIds" => excluded_product_ids: Vec<String> [packed] = Vec::new(),
         "cartValueThresholdCents" => cart_value_threshold_cents: Option<i64> = None,
         "cartValueMaxCents" => cart_value_max_cents: Option<i64> = None,
         "cartQuantityThreshold" => cart_quantity_threshold: Option<i64> = None,
@@ -82,11 +106,11 @@ de_struct! {
         "customerOrderCountMax" => customer_order_count_max: Option<i64> = None,
         "customerAmountSpentMinCents" => customer_amount_spent_min_cents: Option<i64> = None,
         "customerAmountSpentMaxCents" => customer_amount_spent_max_cents: Option<i64> = None,
-        "requiredCustomerTags" => required_customer_tags: Vec<String> = Vec::new(),
-        "excludedCustomerTags" => excluded_customer_tags: Vec<String> = Vec::new(),
+        "requiredCustomerTags" => required_customer_tags: Vec<String> [packed] = Vec::new(),
+        "excludedCustomerTags" => excluded_customer_tags: Vec<String> [packed] = Vec::new(),
         "treatGuestAsNoTags" => treat_guest_as_no_tags: bool = default_treat_guest_as_no_tags(),
-        "includeCountryCodes" => include_country_codes: Vec<String> = Vec::new(),
-        "excludeCountryCodes" => exclude_country_codes: Vec<String> = Vec::new(),
+        "includeCountryCodes" => include_country_codes: Vec<String> [packed] = Vec::new(),
+        "excludeCountryCodes" => exclude_country_codes: Vec<String> [packed] = Vec::new(),
         "discountType" => discount_type: String = default_discount_type(),
         "discountValue" => discount_value: f64 = default_discount_value(),
         "currencyCode" => currency_code: String = default_currency_code(),
@@ -109,7 +133,7 @@ de_struct! {
         "rejectUnmatchedLines" => reject_unmatched_lines: bool = false,
         // Truncated FNV-1a-64 hashes of this offer's discount codes (code-discount Function only).
         #[cfg(feature = "code_gate")]
-        "codeHashes" => code_hashes: Vec<String> = Vec::new(),
+        "codeHashes" => code_hashes: Vec<String> [packed] = Vec::new(),
     }
 }
 
@@ -204,8 +228,8 @@ de_struct! {
     #[cfg_attr(test, derive(PartialEq))]
     pub struct CompiledGiftReward {
         "id" => id: String,
-        "targetProductIds" => target_product_ids: Vec<String> = Vec::new(),
-        "targetVariantIds" => target_variant_ids: Vec<String> = Vec::new(),
+        "targetProductIds" => target_product_ids: Vec<String> [packed] = Vec::new(),
+        "targetVariantIds" => target_variant_ids: Vec<String> [packed] = Vec::new(),
         "discountType" => discount_type: String,
         "discountValue" => discount_value: f64,
         "maxQuantity" => max_quantity: i64,
@@ -234,8 +258,8 @@ de_struct! {
     #[derive(Debug, Clone)]
     #[cfg_attr(test, derive(PartialEq))]
     pub struct CompiledProductReward {
-        "targetProductIds" => target_product_ids: Vec<String> = Vec::new(),
-        "targetVariantIds" => target_variant_ids: Vec<String> = Vec::new(),
+        "targetProductIds" => target_product_ids: Vec<String> [packed] = Vec::new(),
+        "targetVariantIds" => target_variant_ids: Vec<String> [packed] = Vec::new(),
         "discountType" => discount_type: String,
         "discountValue" => discount_value: f64,
         "maxQuantity" => max_quantity: Option<i64> = None,
@@ -248,7 +272,7 @@ de_struct! {
         "scopeMode" => scope_mode: String = default_shipping_scope(),
         "requiredOfferId" => required_offer_id: Option<String> = None,
         "requiredLineAttributeValue" => required_line_attribute_value: Option<String> = None,
-        "requiredAnchorVariantIds" => required_anchor_variant_ids: Vec<String> = Vec::new(),
+        "requiredAnchorVariantIds" => required_anchor_variant_ids: Vec<String> [packed] = Vec::new(),
         "requiredAnchorMinQuantity" => required_anchor_min_quantity: i64 = default_anchor_quantity(),
         "requiresAnchorSubscription" => requires_anchor_subscription: bool = false,
         "priceTiers" => price_tiers: Vec<ProductPriceTier> = Vec::new(),
@@ -385,7 +409,11 @@ pub fn minor_units(currency_code: &str) -> f64 {
 }
 
 pub fn to_cents(amount: f64, currency_code: &str) -> i64 {
-    if is_zero_decimal(currency_code) {
+    to_cents_in(amount, is_zero_decimal(currency_code))
+}
+
+pub fn to_cents_in(amount: f64, zero_decimal: bool) -> i64 {
+    if zero_decimal {
         amount.round() as i64
     } else {
         (amount * 100.0).round() as i64
@@ -424,6 +452,74 @@ mod tests {
         assert_eq!((offer.discount_type.as_str(), offer.discount_value), ("free", 100.0));
         assert!(offer.treat_guest_as_no_tags && offer.title.is_none() && offer.required_product_ids.is_empty());
         assert_eq!(offer.gift_rewards[0].selection_count, None);
+    }
+
+    fn id_forms(variant: &str, product: &str) -> String {
+        format!(
+            r#"[{{"id":"a","version":1,"offerType":"gift","priority":1,
+            "requiredProductIds":[{product}],"requiredVariantIds":[{variant}],"anyRequiredProductIds":[{product}],
+            "anyRequiredVariantIds":[{variant}],"excludedProductIds":[{product}],
+            "requirements":[{{"productId":{product},"variantId":{variant},"trackMode":"any","minQuantity":1}}],
+            "giftRewards":[{{"id":"g","targetProductIds":[{product}],"targetVariantIds":[{variant}],"discountType":"free","discountValue":100,"maxQuantity":1}}],
+            "productRewards":[{{"targetProductIds":[{product}],"targetVariantIds":[{variant}],"requiredAnchorVariantIds":[{variant}],"discountType":"percentage","discountValue":10}}]}}]"#
+        )
+    }
+
+    #[test]
+    fn compact_numeric_ids_normalize_to_the_gid_form() {
+        let old = parse(&id_forms(
+            r#""gid://shopify/ProductVariant/42""#,
+            r#""gid://shopify/Product/7""#,
+        ));
+        assert_eq!(parse(&id_forms(r#""42""#, r#""7""#)), old);
+        assert_eq!(old.offers[0].required_variant_ids, ["gid://shopify/ProductVariant/42"]);
+    }
+
+    #[test]
+    fn mixed_id_forms_in_one_list_all_normalize() {
+        let config = parse(
+            r#"[{"id":"a","version":1,"offerType":"gift","priority":1,
+            "requiredVariantIds":["1","gid://shopify/ProductVariant/2","gid://shopify/ProductVariant/3"],
+            "excludedProductIds":["gid://shopify/Product/4","5"]}]"#,
+        );
+        let offer = &config.offers[0];
+        assert_eq!(
+            offer.required_variant_ids,
+            ["gid://shopify/ProductVariant/1", "gid://shopify/ProductVariant/2", "gid://shopify/ProductVariant/3"]
+        );
+        assert_eq!(offer.excluded_product_ids, ["gid://shopify/Product/4", "gid://shopify/Product/5"]);
+    }
+
+    #[test]
+    fn packed_string_lists_parse_like_the_array_form() {
+        let array = |v: &str, p: &str| id_forms_with(v, p, |ids| format!("[{}]", ids.iter().map(|id| format!("{id:?}")).collect::<Vec<_>>().join(",")));
+        let packed = |v: &str, p: &str| id_forms_with(v, p, |ids| format!("{:?}", ids.join(",")));
+        for (variant, product) in [("42,43", "7,8"), ("gid://shopify/ProductVariant/42,gid://shopify/ProductVariant/43", "gid://shopify/Product/7,gid://shopify/Product/8")] {
+            let from_array = parse(&format!("[{}]", array(variant, product)));
+            assert_eq!(parse(&format!("[{}]", packed(variant, product))), from_array);
+            assert_eq!(from_array.offers[0].required_variant_ids, ["gid://shopify/ProductVariant/42", "gid://shopify/ProductVariant/43"]);
+        }
+    }
+
+    fn id_forms_with(variant: &str, product: &str, list: impl Fn(&[&str]) -> String) -> String {
+        let (variant, product) = (list(&variant.split(',').collect::<Vec<_>>()), list(&product.split(',').collect::<Vec<_>>()));
+        format!(
+            r#"{{"id":"a","version":1,"offerType":"gift","priority":1,
+            "requiredProductIds":{product},"requiredVariantIds":{variant},"anyRequiredProductIds":{product},
+            "anyRequiredVariantIds":{variant},"excludedProductIds":{product},
+            "requiredCustomerTags":{product},"excludedCustomerTags":{variant},
+            "includeCountryCodes":{product},"excludeCountryCodes":{variant},
+            "giftRewards":[{{"id":"g","targetProductIds":{product},"targetVariantIds":{variant},"discountType":"free","discountValue":100,"maxQuantity":1}}],
+            "productRewards":[{{"targetProductIds":{product},"targetVariantIds":{variant},"requiredAnchorVariantIds":{variant},"discountType":"percentage","discountValue":10}}]}}"#
+        )
+    }
+
+    #[test]
+    fn empty_packed_string_is_an_empty_list_and_scalars_are_rejected() {
+        let config = parse(r#"[{"id":"a","version":1,"offerType":"gift","priority":1,"requiredProductIds":"","excludedCustomerTags":"vip,wholesale"}]"#);
+        assert!(config.offers[0].required_product_ids.is_empty());
+        assert_eq!(config.offers[0].excluded_customer_tags, ["vip", "wholesale"]);
+        assert!(parse(r#"[{"id":"a","version":1,"offerType":"gift","priority":1,"requiredProductIds":5}]"#).offers.is_empty());
     }
 
     #[test]

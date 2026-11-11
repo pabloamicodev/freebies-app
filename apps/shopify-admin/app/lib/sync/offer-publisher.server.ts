@@ -5,7 +5,6 @@ import {
   offerConditions,
   offerRewards,
   offerCombinationPolicies,
-  variantCache,
   discountCodes,
   discountCodeBatches,
   type DiscountCode,
@@ -19,6 +18,7 @@ import { normalizeSubscriptionMode } from "../purchase-type.js";
 import { eq, and, inArray, isNotNull, sql } from "drizzle-orm";
 import * as Sentry from "@sentry/node";
 import { decryptToken } from "../token-crypto.server.js";
+import { recordCapacityIncident, resolveCapacityIncidents } from "../capacity-incidents.server.js";
 import { ShopifyOutcomeUnknownError, shopifyGraphQL } from "../shopify-fetch.server.js";
 import {
   ManifestCollector,
@@ -27,10 +27,16 @@ import {
   writePublishManifest,
   type ManifestNodeKind,
 } from "../publish-manifest.server.js";
-import { isFunctionShardsEnabled } from "../function-shards-flag.server.js";
-import { SLOT_LIMITS, planShards } from "./shard-planner.js";
-import { buildPlanUnits } from "./plan-units.js";
+import { isFunctionCompactIdsEnabled } from "../function-compact-ids-flag.server.js";
+import { isFunctionShardsEnabled, isShardDomainsEnabled, isShardInstructionBudgetEnabled } from "../function-shards-flag.server.js";
+import { INSTRUCTION_PLANNER_LIMITS } from "./instruction-estimate.js";
+import { assertCodeOfferListsWithinLimit, assertVariableListsWithinLimit, buildCodeOfferConfig } from "./variable-list-guard.js";
+import { isRemoveUnfundedGiftsEnabled } from "../remove-unfunded-gifts-flag.server.js";
+import { SLOT_LIMITS, andPolicies, planShards, policyKey, type CombinationPolicy } from "./shard-planner.js";
+import { baseOfferId, buildPlanUnitSet, slotOffers } from "./plan-units.js";
+import { loadSplitOptions } from "./variant-products.server.js";
 import { combinationBlockers } from "./combination-blockers.js";
+import { compileCartOffers, legacyGatedOfferIds, resolveLegacyGiftVariants } from "./cart-offers.server.js";
 import {
   ShardPlanBlockedError,
   readShardState,
@@ -43,6 +49,7 @@ import {
   scheduleBackgroundPublishRetry,
 } from "../publish-pending.server.js";
 import {
+  AutomaticDiscountLimitError,
   CART_DISCOUNT_CLASSES,
   CART_SHARD_CLASSES,
   DELIVERY_DISCOUNT_CLASSES,
@@ -71,6 +78,7 @@ import {
   findDeliveryDiscountFunction,
   getCodeDiscountFunctionId,
   removeRedeemCodes,
+  readLiveCombinations,
   syncDiscountCombinationPolicy,
   updateCodeDiscountCombination,
   type CodeDiscountNodeOptions,
@@ -82,7 +90,7 @@ import { codeHash } from "../code-hash.js";
 import { resolveCodeCollisions } from "../code-preflight.server.js";
 import type { CodeCharset } from "../discount-code-generation.js";
 import { isCodeBackendBEnabled } from "../code-backend.server.js";
-import { offerCompileError, setOfferPublishErrors, type OfferPublishErrors } from "../offer-publish-errors.server.js";
+import { setOfferPublishErrors, type OfferPublishErrors } from "../offer-publish-errors.server.js";
 import { buildCartValidationConfig, syncCartValidation } from "../cart-validation.server.js";
 import { computeOfferVersion } from "../offer-version.server.js";
 import {
@@ -123,6 +131,8 @@ interface SharedConfigEntry {
   value: string;
   /** Manifest kind to record for the owner; null for nodes that are being drained. */
   kind: ManifestNodeKind | null;
+  /** combinesWith the node carries (or will carry once the publish finishes), recorded in the manifest. */
+  combinesWith?: CombinationPolicy;
 }
 
 export type PublishOutcome = "published" | "pending";
@@ -158,7 +168,10 @@ export async function publishOffersForShop(
     // A request that timed out may or may not have been applied, and the publish is idempotent
     // (every create looks before it resends), so it is retried rather than failing the offer.
     const unknownOutcome = error instanceof ShopifyOutcomeUnknownError;
-    if (!isLockTimeoutError(error) && !unknownOutcome) throw error;
+    if (!isLockTimeoutError(error) && !unknownOutcome) {
+      await persistCapacityBlock(shopId, error);
+      throw error;
+    }
     if (unknownOutcome) {
       Sentry.captureMessage("Publish parked: a Shopify request timed out with an unknown outcome", {
         level: "warning",
@@ -176,7 +189,22 @@ export async function publishOffersForShop(
   }
   await clearPublishPending(shopId, startedAt);
   await invalidateOfferDefinitions(shopId);
+  await resolveCapacityIncidents(getDb(), shopId);
   return "published";
+}
+
+/** Chokepoint for every unattended and attended publish: a Shopify capacity block becomes a persisted incident. */
+async function persistCapacityBlock(shopId: string, error: unknown): Promise<void> {
+  if (error instanceof ShardPlanBlockedError) {
+    await recordCapacityIncident(getDb(), { shopId, ...error.capacity });
+  } else if (error instanceof AutomaticDiscountLimitError) {
+    await recordCapacityIncident(getDb(), {
+      shopId,
+      code: "AUTOMATIC_DISCOUNT_LIMIT",
+      offerIds: [],
+      numbers: { needed: error.wanted, storeActive: error.active },
+    });
+  }
 }
 
 async function publishOffersForShopLocked(shopId: string, shopDomain: string): Promise<void> {
@@ -216,11 +244,13 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       throw new Error(`Shared config touches ${entries.length} nodes, more than the ${MAX_OWNERS_PER_CALL} one metafieldsSet takes.`);
     }
     await pushMetafields(shopDomain, accessToken, entries);
-    for (const entry of entries) if (entry.kind) manifest.record(entry.ownerId, entry.kind, entry.value);
+    for (const entry of entries) {
+      if (entry.kind) manifest.record(entry.ownerId, entry.kind, entry.value, entry.combinesWith ? { combinesWith: entry.combinesWith } : {});
+    }
   };
-  const pushSharedConfigs = (cartValue: string, deliveryValue: string, drainIds: string[] = []) =>
+  const pushSharedConfigs = (cartValue: string, deliveryValue: string, drainIds: string[] = [], cartCombinesWith?: CombinationPolicy) =>
     pushSharedEntries([
-      { ownerId: discountNodes.cartLinesDiscountId, value: cartValue, kind: "cart" },
+      { ownerId: discountNodes.cartLinesDiscountId, value: cartValue, kind: "cart", ...(cartCombinesWith ? { combinesWith: cartCombinesWith } : {}) },
       ...drainIds.map((ownerId) => ({ ownerId, value: EMPTY_CART_SHARD_CONFIG, kind: null })),
       { ownerId: discountNodes.deliveryDiscountId, value: deliveryValue, kind: "delivery" as const },
     ]);
@@ -255,11 +285,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
               ),
             ),
           );
-  const heldBackIds = new Set(
-    legacyGateRows
-      .filter((row) => row.conditionType === "discount_code" && row.isEnabled)
-      .map((row) => row.offerId),
-  );
+  const heldBackIds = legacyGatedOfferIds(legacyGateRows);
   for (const offerId of heldBackIds) {
     console.error(
       `[offer-publisher] Holding back offer ${offerId}: it has a legacy discount_code condition.`,
@@ -389,7 +415,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     assertConfigFits(emptyCartValue);
     assertConfigFits(emptyDeliveryValue);
     const strayShardIds = await liveCartShardIds(shopDomain, accessToken, await readCartShardNodeIds(shopId));
-    await pushSharedConfigs(emptyCartValue, emptyDeliveryValue, strayShardIds);
+    await pushSharedConfigs(emptyCartValue, emptyDeliveryValue, strayShardIds, compileDiscountCombinationPolicy([]));
     if (strayShardIds.length > 0) {
       await saveShardState(db, shopId, [
         {
@@ -405,7 +431,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     await pushStorefrontMetafields(shopDomain, accessToken, [
       ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
       ...compiledBackendB.flatMap((entry) => entry.conditionRows),
-    ]);
+    ], await isRemoveUnfundedGiftsEnabled(db, shopId));
     await pushPool();
     const emptyValidation = buildCartValidationConfig(codeOfferConfigs);
     await syncCartValidation(shopDomain, accessToken, emptyValidation);
@@ -467,38 +493,23 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
         )
       : conditionRows;
 
-    const compiledByOffer = regularOffers
-      .sort((a, b) => a.priority - b.priority)
-      .map((offer) => {
-        const conditions = functionConditionRows.filter((c) => c.offerId === offer.id);
-        const versionConditions = conditionRows.filter((c) => c.offerId === offer.id);
-        const rewards = rewardRows.filter((r) => r.offerId === offer.id);
-        const policy = policyRows.find((p) => p.offerId === offer.id) ?? null;
-        try {
-          return {
-            offer: compileOfferConfig(
-              offer,
-              conditions,
-              rewards,
-              policy,
-              computeOfferVersion(offer, versionConditions, rewards, policy),
-              { shopCurrencyCode, limitsEnforced },
-            ),
-            shippingOffers: compileShippingOfferConfigs(offer, conditions, rewards, { shopCurrencyCode, limitsEnforced, policy }),
-          };
-        } catch (error) {
-          throw offerCompileError(offer, error);
-        }
-      });
-
-    const compiledOffers = await resolveLegacyGiftVariants(
-      shopId,
-      compiledByOffer.map((entry) => entry.offer),
-    );
-    const shippingOffers = compiledByOffer.flatMap((entry) => entry.shippingOffers);
+    const compiledByOffer = await compileCartOffers(db, shopId, regularOffers, {
+      conditions: functionConditionRows,
+      versionConditions: conditionRows,
+      rewards: rewardRows,
+      policies: policyRows,
+      shopCurrencyCode,
+      limitsEnforced,
+      caller: "offer-publisher",
+    });
+    const compiledOffers = compiledByOffer.map((entry) => entry.offer);
+    const shippingOffers = compiledByOffer.flatMap((entry) => entry.shipping);
     const shardsEnabled = await isFunctionShardsEnabled(db, shopId);
+    const compactIds = await isFunctionCompactIdsEnabled(db, shopId);
     const storedShardIds = await readCartShardNodeIds(shopId);
     const shardMode = shardsEnabled || storedShardIds.length > 0;
+    const domainsMode = shardsEnabled && (await isShardDomainsEnabled(db, shopId));
+    const instructionBudget = shardsEnabled && (await isShardInstructionBudgetEnabled(db, shopId));
     if (!shardsEnabled) {
       const allTags = new Set(
         compiledOffers.flatMap((offer) => [...(offer.requiredCustomerTags ?? []), ...(offer.excludedCustomerTags ?? [])]),
@@ -516,17 +527,21 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const budget = shardsEnabled ? await automaticNodeBudget(shopId, shopDomain, accessToken) : null;
     const persisted = shardMode ? await readShardState(db, shopId) : null;
     const combination = compileDiscountCombinationPolicy(compiledOffers);
-    const planUnits = buildPlanUnits(
+    const { units: planUnits, splits } = buildPlanUnitSet(
       compiledOffers.map((offer) => ({ offerId: offer.id, offer })),
       conditionRows,
       policyRows,
+      shardsEnabled ? { ...(await loadSplitOptions(db, shopId, compiledOffers)), compactIds, instructions: instructionBudget } : { compactIds },
     );
     const plan = planShards(
       planUnits,
       persisted?.previous ?? new Map(),
-      { ...SLOT_LIMITS, maxSlots: budget?.maxCartSlots ?? 1 },
-      { productDiscounts: combination.productDiscounts, orderDiscounts: combination.orderDiscounts },
+      { ...SLOT_LIMITS, maxSlots: budget?.maxCartSlots ?? 1, ...(instructionBudget ? INSTRUCTION_PLANNER_LIMITS : {}) },
+      domainsMode ? "domains" : "uniform",
     );
+    for (const warning of plan.warnings ?? []) {
+      console.warn(`[offer-publisher] shop ${shopId}: ${warning.code}`, JSON.stringify({ slots: warning.slots, ...warning.numbers }));
+    }
     if (plan.blocked) {
       const names = new Map(regularOffers.map((offer) => [offer.id, offer.internalName]));
       throw new ShardPlanBlockedError(plan.blocked, {
@@ -534,7 +549,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
         shardsEnabled,
         names,
         combinationBlockers:
-          shardsEnabled && (budget?.maxCartSlots ?? 1) > 1
+          shardsEnabled && !domainsMode && (budget?.maxCartSlots ?? 1) > 1
             ? combinationBlockers(
                 compiledOffers.map((offer) => ({ offerId: offer.id, name: names.get(offer.id) ?? offer.id, offer })),
                 planUnits.some((unit) => unit.hasOrderRewards),
@@ -547,23 +562,24 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
 
     const compiledAt = new Date().toISOString();
     const slotValues = slots.map((slot) => {
-      const members = new Set(slot.unitKeys);
+      const members = new Set(slot.unitKeys.map(baseOfferId));
       const cartConfig: CompiledFunctionConfig = {
-        offers: compiledOffers.filter((offer) => members.has(offer.id)),
+        offers: slotOffers(compiledOffers, slot.unitKeys, splits),
         shippingOffers: [],
         version: "1",
         compiledAt,
         ...(slot.tags.length > 0 ? { customerTags: slot.tags } : {}),
         ...buildAttributeQueryVariables(conditionRows.filter((row) => members.has(row.offerId))),
       };
-      return serializeFunctionConfig(cartConfig);
+      return serializeFunctionConfig(cartConfig, { compactIds });
     });
     const deliveryConfig: CompiledFunctionConfig = { offers: [], shippingOffers, version: "1", compiledAt };
-    const deliveryValue = serializeFunctionConfig(deliveryConfig, { omitQueryVariables: true });
+    const deliveryValue = serializeFunctionConfig(deliveryConfig, { omitQueryVariables: true, compactIds });
     for (const [label, value] of [
       ...slotValues.map((slotValue) => ["cart", slotValue] as const),
       ["delivery", deliveryValue] as const,
     ]) {
+      assertVariableListsWithinLimit(value);
       const sizeBytes = utf8Length(value);
       if (sizeBytes > MAX_METAFIELD_BYTES) {
         throw new Error(
@@ -582,15 +598,70 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const validationConfig = buildCartValidationConfig([...compiledOffers, ...codeOfferConfigs]);
     await syncCartValidation(shopDomain, accessToken, validationConfig);
     manifest.validationHash = configHash(JSON.stringify(validationConfig));
-    const syncCombination = (
-      nodes: Array<{ discountId: string; discountClasses: Parameters<typeof syncDiscountCombinationPolicy>[4] }>,
-    ) =>
+    // Domains mode gives each node its own group's policy and applies it strict-first: a node is tightened to
+    // AND(last published, new) before the config swap and loosened to the new policy only after the swap
+    // succeeded, so a failure in between leaves a node more restrictive, never more permissive, than either state.
+    // The manifest is only written when a publish finishes, so a publish that died after tightening would leave it
+    // stale. Two guards: the tightened policy is persisted to the manifest right after each tighten step, and the
+    // live policy is read from Shopify and folded into the AND. If that read fails the publish fails closed: it
+    // tightens to AND(manifest, new) and never loosens anything.
+    const lastPublished = domainsMode ? await readPublishManifest(shopId, db) : null;
+    let liveCombinations = new Map<string, CombinationPolicy>();
+    let liveReadFailed = false;
+    if (domainsMode) {
+      try {
+        liveCombinations = await readLiveCombinations(shopDomain, accessToken, [discountNodes.cartLinesDiscountId, ...storedShardIds]);
+      } catch (error) {
+        liveReadFailed = true;
+        Sentry.captureException(error, { extra: { shopId, step: "live-combination-read" } });
+      }
+    }
+    const wantedPolicy = (index: number): CombinationPolicy => (domainsMode ? slots[index]!.policy : combination);
+    const tightened = (nodeId: string, wanted: CombinationPolicy): CombinationPolicy => {
+      if (!domainsMode) return wanted;
+      const known = [liveCombinations.get(nodeId), lastPublished?.nodes[nodeId]?.combinesWith].filter(
+        (policy): policy is CombinationPolicy => policy !== undefined,
+      );
+      return andPolicies([...known, wanted]);
+    };
+    const persistTightened = async (nodes: PolicyNode[]) => {
+      if (!domainsMode || nodes.length === 0) return;
+      const stored = await readPublishManifest(shopId, db);
+      if (!stored) return;
+      let changed = false;
+      for (const { discountId, policy } of nodes) {
+        const entry = stored.nodes[discountId];
+        if (entry && (!entry.combinesWith || policyKey(entry.combinesWith) !== policyKey(policy))) {
+          entry.combinesWith = policy;
+          changed = true;
+        }
+      }
+      if (changed) await writePublishManifest(shopId, stored);
+    };
+    type PolicyNode = {
+      discountId: string;
+      discountClasses: Parameters<typeof syncDiscountCombinationPolicy>[4];
+      policy: CombinationPolicy;
+    };
+    const syncCombination = (nodes: PolicyNode[]) =>
       Promise.all(
-        nodes.map(({ discountId, discountClasses }) =>
-          syncDiscountCombinationPolicy(shopDomain, accessToken, discountId, combination, discountClasses),
+        nodes.map(({ discountId, discountClasses, policy }) =>
+          syncDiscountCombinationPolicy(shopDomain, accessToken, discountId, policy, discountClasses),
         ),
       );
-    await syncCombination(discountNodesWithClasses);
+    const loosenAfterSwap: PolicyNode[] = [];
+    const cartNode = (discountId: string, discountClasses: PolicyNode["discountClasses"], index: number): PolicyNode => {
+      const wanted = wantedPolicy(index);
+      const now = tightened(discountId, wanted);
+      if (policyKey(now) !== policyKey(wanted) && !liveReadFailed) loosenAfterSwap.push({ discountId, discountClasses, policy: wanted });
+      return { discountId, discountClasses, policy: now };
+    };
+    const slot0Node = cartNode(discountNodes.cartLinesDiscountId, CART_DISCOUNT_CLASSES, 0);
+    await syncCombination([
+      slot0Node,
+      { discountId: discountNodes.deliveryDiscountId, discountClasses: DELIVERY_DISCOUNT_CLASSES, policy: combination },
+    ]);
+    await persistTightened([slot0Node]);
     // Shard nodes come after the guardrails; a new one carries an inert config, so it grants nothing until the
     // metafieldsSet below. The drain floor counts only nodes still in Shopify: a merchant-deleted shard is not recreated to be drained.
     const wantedShards = slots.length - 1;
@@ -601,16 +672,20 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
         : liveShardIds;
     const activeShardIds = shardIds.slice(0, wantedShards);
     const drainIds = shardIds.slice(wantedShards);
-    await syncCombination(activeShardIds.map((discountId) => ({ discountId, discountClasses: CART_SHARD_CLASSES })));
+    const shardNodes = activeShardIds.map((discountId, index) => cartNode(discountId, CART_SHARD_CLASSES, index + 1));
+    await syncCombination(shardNodes);
+    await persistTightened(shardNodes);
     const slotNodeId = (index: number) =>
       index === 0 ? discountNodes.cartLinesDiscountId : activeShardIds[index - 1]!;
-    if (!shardMode) await pushSharedConfigs(cartValue, deliveryValue);
+    if (!shardMode) await pushSharedConfigs(cartValue, deliveryValue, [], combination);
     else {
       await pushSharedEntries([
         ...slots.map((slot, index) => ({
           ownerId: slotNodeId(index),
           value: slotValues[index]!,
           kind: index === 0 ? ("cart" as const) : ("cart-shard" as const),
+          // After a failed live read nothing was loosened, so the manifest records what the node actually carries.
+          combinesWith: liveReadFailed ? (index === 0 ? slot0Node : shardNodes[index - 1]!).policy : wantedPolicy(index),
         })),
         ...drainIds.map((ownerId) => ({ ownerId, value: EMPTY_CART_SHARD_CONFIG, kind: null })),
         { ownerId: discountNodes.deliveryDiscountId, value: deliveryValue, kind: "delivery" as const },
@@ -626,13 +701,14 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
           configHash: configHash(slotValues[index]!),
         })),
       );
+      await syncCombination(loosenAfterSwap);
       await deleteDrainedShards(shopId, shopDomain, accessToken, shardIds, drainIds);
     }
     await pushStorefrontMetafields(shopDomain, accessToken, [
       ...conditionRows,
       ...compiledCodeOffers.flatMap((entry) => entry.conditionRows),
       ...compiledBackendB.flatMap((entry) => entry.conditionRows),
-    ]);
+    ], await isRemoveUnfundedGiftsEnabled(db, shopId));
     await pushPool();
 
     for (const compiledOffer of compiledOffers) {
@@ -782,7 +858,7 @@ const codeNodeTitle = (offer: Offer) => `[Promo Engine] ${offer.internalName || 
  * offer is bound to whichever its rewards need (publish validation rejects
  * offers that mix the two).
  */
-function codeNodeKind(rewardRows: OfferReward[]): CodeNodeKind {
+export function codeNodeKind(rewardRows: OfferReward[]): CodeNodeKind {
   // Shipping-only: the code node itself runs the delivery Function, so Shopify accepts
   // the code exactly when the shipping discount applies. A mixed offer keeps its
   // product/order part on a cart-lines code node and gates shipping in the shared
@@ -1016,27 +1092,6 @@ async function compileCodeOffers(
     if (liveCodes.length === 0) continue;
 
     const nodeOptions = buildNodeOptions(redeemableCodes, rewardRows, compileOfferLimits(policy, conditionRows, rewardRows, limitsEnforced).mpu);
-    if (!discountId) {
-      const [primary] = liveCodes;
-      if (!primary) continue;
-      const primaryRow = redeemableCodes.find((row) => row.code === primary);
-      if (primaryRow) await markCodesSyncPending(shopId, [primaryRow]);
-      discountId = await createOrFindCodeDiscount(
-        shopDomain,
-        accessToken,
-        await functionFor(kind),
-        primary,
-        codeNodeTitle(offer),
-        kind === "delivery" ? DELIVERY_DISCOUNT_CLASSES : CART_DISCOUNT_CLASSES,
-        nodeOptions,
-      );
-      await db
-        .update(offers)
-        .set({ codeDiscountId: discountId, updatedAt: new Date() })
-        .where(and(eq(offers.shopId, shopId), eq(offers.id, offer.id)));
-      if (primaryRow) await markCodesSynced(shopId, [primaryRow]);
-    }
-
     const hasMarketConditions = conditionRows.some(
       (condition) =>
         condition.isEnabled &&
@@ -1058,8 +1113,32 @@ async function compileCodeOffers(
       computeOfferVersion(offer, conditionRows, rewardRows, policy),
       { codePromo: true, shopCurrencyCode, limitsEnforced },
     );
-    const [resolvedOffer] = await resolveLegacyGiftVariants(shopId, [compiledOffer]);
+    const [resolvedOffer] = await resolveLegacyGiftVariants(db, shopId, [compiledOffer], "offer-publisher");
     const finalCompiledOffer = resolvedOffer ?? compiledOffer;
+
+    // Refuse an oversize code offer here, before its node is created or anything is written to Shopify.
+    assertCodeOfferListsWithinLimit(finalCompiledOffer, conditionRows, kind);
+
+    if (!discountId) {
+      const [primary] = liveCodes;
+      if (!primary) continue;
+      const primaryRow = redeemableCodes.find((row) => row.code === primary);
+      if (primaryRow) await markCodesSyncPending(shopId, [primaryRow]);
+      discountId = await createOrFindCodeDiscount(
+        shopDomain,
+        accessToken,
+        await functionFor(kind),
+        primary,
+        codeNodeTitle(offer),
+        kind === "delivery" ? DELIVERY_DISCOUNT_CLASSES : CART_DISCOUNT_CLASSES,
+        nodeOptions,
+      );
+      await db
+        .update(offers)
+        .set({ codeDiscountId: discountId, updatedAt: new Date() })
+        .where(and(eq(offers.shopId, shopId), eq(offers.id, offer.id)));
+      if (primaryRow) await markCodesSynced(shopId, [primaryRow]);
+    }
 
     results.push({
       offer,
@@ -1106,25 +1185,11 @@ async function pushCodeOfferConfigs(
 
   for (const entry of compiledCodeOffers) {
     const { offer, kind, discountId, compiledOffer, conditionRows } = entry;
-    const customerTags = [
-      ...new Set([
-        ...(compiledOffer.requiredCustomerTags ?? []),
-        ...(compiledOffer.excludedCustomerTags ?? []),
-      ]),
-    ].sort();
-
     // customerTags/query-variables must be set here exactly as the shared
     // config sets them, or a customer-tag or cart-attribute condition on this
     // offer silently never matches: the Function reads those off this same
     // config, not the shared one. A delivery node only carries shippingOffers.
-    const singleOfferConfig: CompiledFunctionConfig = {
-      offers: kind === "delivery" ? [] : [compiledOffer],
-      shippingOffers: entry.shippingOffers,
-      version: "1",
-      compiledAt: new Date().toISOString(),
-      ...(customerTags.length > 0 ? { customerTags } : {}),
-      ...buildAttributeQueryVariables(conditionRows),
-    };
+    const singleOfferConfig = buildCodeOfferConfig(compiledOffer, conditionRows, entry.shippingOffers, kind, new Date().toISOString());
     const value = serializeFunctionConfig(singleOfferConfig);
     const sizeBytes = new TextEncoder().encode(value).byteLength;
     if (sizeBytes > MAX_METAFIELD_BYTES) {
@@ -1141,7 +1206,7 @@ async function pushCodeOfferConfigs(
       kind === "delivery" ? DELIVERY_DISCOUNT_CLASSES : CART_DISCOUNT_CLASSES,
       entry.nodeOptions,
     );
-    await pushMetafields(shopDomain, accessToken, [{ ownerId: discountId, value }]);
+    await pushMetafields(shopDomain, accessToken, [{ ownerId: discountId, value }], { variableLists: kind !== "delivery" });
     manifest.record(discountId, kind === "delivery" ? "code-delivery" : "code", value, {
       purchaseTypes: entry.nodeOptions.purchaseTypes,
     });
@@ -1274,7 +1339,7 @@ async function compileBackendBOffers(
       computeOfferVersion(offer, conditionRows, rewardRows, policy),
       { codePromo: true, codeHashes: [...new Set(codes.map(codeHash))].sort(), shopCurrencyCode, limitsEnforced },
     );
-    const [resolved] = await resolveLegacyGiftVariants(shopId, [compiled]);
+    const [resolved] = await resolveLegacyGiftVariants(db, shopId, [compiled], "offer-publisher");
     const hashes = [...new Set(codes.map(codeHash))].sort();
     results.push({
       offer,
@@ -1519,7 +1584,7 @@ async function pushCodedShippingPool(
       });
       assertConfigFits(value);
       await syncDiscountCombinationPolicy(shopDomain, accessToken, nodeId, combination, DELIVERY_DISCOUNT_CLASSES);
-      await pushMetafields(shopDomain, accessToken, [{ ownerId: nodeId, value }]);
+      await pushMetafields(shopDomain, accessToken, [{ ownerId: nodeId, value }], { variableLists: false });
       manifest.record(nodeId, "pool", value);
     } catch (error) {
       fail(offerIdsOf(group), error);
@@ -1558,6 +1623,7 @@ async function pushStorefrontMetafields(
   shopDomain: string,
   accessToken: string,
   conditionRows: OfferCondition[],
+  removeUnfundedGifts: boolean,
 ): Promise<void> {
   try {
     // Theme Liquid's `app.metafields` only exposes app-data metafields owned by the app
@@ -1592,6 +1658,13 @@ async function pushStorefrontMetafields(
             key: "stamp_targets",
             type: "json",
             value: JSON.stringify(collectStampTargets(conditionRows)),
+          },
+          {
+            ownerId: installation.currentAppInstallation.id,
+            namespace: "promo_engine",
+            key: "remove_unfunded_gifts",
+            type: "boolean",
+            value: String(removeUnfundedGifts),
           },
         ],
       },
@@ -1654,79 +1727,6 @@ export async function neutralizeCodeDiscountNode(
   }
 }
 
-/**
- * Older offers could store only a product GID. Resolve those targets to the
- * current eligible variants before publishing so checkout never has to trust
- * a broad product-level allowance.
- */
-async function resolveLegacyGiftVariants(
-  shopId: string,
-  compiledOffers: CompiledFunctionConfig["offers"],
-): Promise<CompiledFunctionConfig["offers"]> {
-  const unresolvedProductIds = [
-    ...new Set(
-      compiledOffers.flatMap((offer) =>
-        offer.giftRewards
-          .filter((reward) => reward.targetVariantIds.length === 0)
-          .flatMap((reward) => reward.targetProductIds),
-      ),
-    ),
-  ];
-  if (unresolvedProductIds.length === 0) return compiledOffers;
-
-  const variants = await getDb()
-    .select({
-      productGid: variantCache.productGid,
-      variantGid: variantCache.variantGid,
-      availableForSale: variantCache.availableForSale,
-      requiresSellingPlan: variantCache.requiresSellingPlan,
-    })
-    .from(variantCache)
-    .where(
-      and(eq(variantCache.shopId, shopId), inArray(variantCache.productGid, unresolvedProductIds)),
-    );
-  const eligibleByProduct = new Map<string, string[]>();
-  for (const variant of variants) {
-    // Sold-out variants stay in the gift (storefront shows them sold out until restocked);
-    // only subscription-only variants can't be granted.
-    if (variant.requiresSellingPlan) continue;
-    const ids = eligibleByProduct.get(variant.productGid) ?? [];
-    ids.push(variant.variantGid);
-    eligibleByProduct.set(variant.productGid, ids);
-  }
-
-  return compiledOffers.flatMap((offer) => {
-    const giftRewards = offer.giftRewards.flatMap((reward) => {
-      if (reward.targetVariantIds.length > 0) return [reward];
-      const targetVariantIds = [
-        ...new Set(
-          reward.targetProductIds.flatMap((productId) => eligibleByProduct.get(productId) ?? []),
-        ),
-      ].sort();
-      if (targetVariantIds.length === 0) {
-        // Don't fail the whole shop's publish over one stale reward — skip it
-        // and keep publishing every other offer/reward that's still valid.
-        console.error(
-          `[offer-publisher] Skipping gift reward ${reward.id} in offer ${offer.id}: no eligible one-time-purchase variants.`,
-        );
-        Sentry.captureMessage("Gift reward skipped: no eligible variants", {
-          level: "warning",
-          tags: { offerId: offer.id, rewardId: reward.id },
-        });
-        return [];
-      }
-      return [{ ...reward, targetVariantIds }];
-    });
-    return [
-      {
-        ...offer,
-        giftRewards,
-        giftVariantIds: [...new Set(giftRewards.flatMap((reward) => reward.targetVariantIds))],
-      },
-    ];
-  });
-}
-
 const utf8Length = (text: string) => new TextEncoder().encode(text).byteLength;
 
 /** Recorded shard node ids that still exist in Shopify, in slot order. No Shopify call when none are recorded. */
@@ -1772,7 +1772,10 @@ async function pushMetafields(
   shopDomain: string,
   accessToken: string,
   entries: Array<{ ownerId: string; value: string }>,
+  // Delivery Functions have no input variables, so their configs are not bound by the list limit.
+  opts: { variableLists?: boolean } = {},
 ): Promise<void> {
+  if (opts.variableLists !== false) for (const { value } of entries) assertVariableListsWithinLimit(value);
   const data = await shopifyGraphQL<{ metafieldsSet: { userErrors: Array<{ message: string }> } }>({
     shopDomain,
     accessToken,

@@ -6,6 +6,7 @@ import { getSignedShopCached } from "../lib/proxy-shop.server.js";
 import { checkRateLimit, envLimit, jitteredRetryAfter } from "../lib/rate-limit.server.js";
 import { sanitizeAnalyticsProperties } from "../lib/analytics-properties.server.js";
 import { apiError, apiJson, handleApiError, readJsonBody } from "../lib/api-response.server.js";
+import { countUnfundedGiftRemovals, recordUnfundedGiftRemovals } from "../lib/unfunded-gift-alert.server.js";
 
 // Storefront endpoints get their own Vercel function (a distinct route config
 // splits the server bundle) so a cold start doesn't load the whole admin app.
@@ -39,7 +40,7 @@ export async function action({ request }: ActionFunctionArgs) {
     return apiError(request, { status: 405, code: "METHOD_NOT_ALLOWED", message: "Method not allowed.", headers: { Allow: "POST" } });
   }
   try {
-    const { id: shopId, loggedInCustomerId } = await getSignedShopCached(request);
+    const { id: shopId, shopDomain, loggedInCustomerId } = await getSignedShopCached(request);
     // Never keyed by IP (it is Shopify's behind the app proxy): shop-wide ceiling first,
     // per-session budget once the body is parsed.
     const rateLimit = await checkRateLimit(`analytics:${shopId}`, {
@@ -148,6 +149,8 @@ export async function action({ request }: ActionFunctionArgs) {
     });
 
     await db.insert(analyticsEvents).values(rowsToInsert);
+    const unfunded = countUnfundedGiftRemovals(events, eventNames);
+    if (unfunded > 0) await recordUnfundedGiftRemovals(shopId, shopDomain, unfunded);
     return apiJson(request, { ok: true, accepted: rowsToInsert.length }, { status: 202 });
   } catch (err) {
     return handleApiError(request, err, "apps.promo-engine.analytics");

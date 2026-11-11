@@ -76,6 +76,7 @@ async function main(): Promise<void> {
     {
       appSettings,
       closeDb,
+      discountShards,
       getDb,
       offerCombinationPolicies,
       offerConditions,
@@ -88,6 +89,7 @@ async function main(): Promise<void> {
     { shopifyGraphQL },
     { decryptToken },
     { compactCompiledOffer },
+    { normalizeCompiledOffer },
   ] = await Promise.all([
     import("drizzle-orm"),
     import("@promo/db"),
@@ -95,6 +97,7 @@ async function main(): Promise<void> {
     import("../apps/shopify-admin/app/lib/shopify-fetch.server.js"),
     import("../apps/shopify-admin/app/lib/token-crypto.server.js"),
     import("../apps/shopify-admin/app/lib/sync/compile-config.js"),
+    import("../apps/shopify-admin/app/lib/sync/compiled-offer-compare.js"),
   ]);
 
   const db = getDb();
@@ -289,6 +292,16 @@ async function main(): Promise<void> {
         );
     }
 
+    const shardNodeIds = (
+      await db
+        .select({ nodeId: discountShards.discountNodeId })
+        .from(discountShards)
+        .where(and(eq(discountShards.shopId, shop.id), eq(discountShards.kind, "cart")))
+        .orderBy(asc(discountShards.slot))
+    )
+      .map((row) => row.nodeId)
+      .filter((id): id is string => !!id && id !== shop.discountId);
+
     const remote = await admin<{
       nodes: Array<null | {
         id: string;
@@ -314,9 +327,9 @@ async function main(): Promise<void> {
         }
       }
     `,
-      { ids: [shop.discountId, shop.deliveryDiscountId] },
+      { ids: [shop.discountId, shop.deliveryDiscountId, ...shardNodeIds] },
     );
-    assert.equal(remote.nodes.length, 2);
+    assert.equal(remote.nodes.length, 2 + shardNodeIds.length);
     const configs = remote.nodes.map((node) => {
       assert.ok(
         node?.automaticDiscount,
@@ -331,8 +344,15 @@ async function main(): Promise<void> {
       return JSON.parse(node.metafield.value) as CompiledConfig;
     });
     // Since FIX-cap-01 the cart node holds `offers` and the delivery node holds `shippingOffers`.
-    const published = configs[0]!;
+    // Sharded shops spread cart offers over extra nodes ("Promo Engine 2"…); verify them as one config.
+    const published = {
+      ...configs[0]!,
+      offers: [configs[0]!, ...configs.slice(2)].flatMap((config) => config.offers ?? []),
+    };
     const delivery = configs[1]!;
+    for (const shard of configs.slice(2)) {
+      assert.equal(shard.compiledAt, configs[0]!.compiledAt, "Cart shard nodes were not published together.");
+    }
     assert.deepEqual(delivery.offers ?? [], [], "The delivery node must carry no cart offers.");
     assert.equal(delivery.compiledAt, published.compiledAt, "Cart and delivery nodes were not published together.");
     assert.equal(published.version, "1");
@@ -352,9 +372,12 @@ async function main(): Promise<void> {
     for (const row of activeRows) {
       const compiled = published.offers.find((offer) => offer.id === row.id);
       assert.ok(compiled, `${row.internalName} is absent from Shopify's published config.`);
+      // Semantic comparison: compact numeric ids and comma-packed lists (>100) equal their GID/array source.
       assertJsonEqual(
-        compiled,
-        compactCompiledOffer(row.compiledConfig as Parameters<typeof compactCompiledOffer>[0]),
+        normalizeCompiledOffer(compiled),
+        normalizeCompiledOffer(
+          compactCompiledOffer(row.compiledConfig as Parameters<typeof compactCompiledOffer>[0]),
+        ),
         `${row.internalName} published compiled config`,
       );
     }
@@ -464,6 +487,7 @@ const invokedUrl = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).hre
 if (import.meta.url === invokedUrl) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
+    if (error instanceof Error && error.cause) console.error("Cause:", error.cause);
     process.exitCode = 1;
   });
 }

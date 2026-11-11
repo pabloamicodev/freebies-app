@@ -5,7 +5,7 @@
 use crate::discount_logic::run;
 use crate::schema::{CartLinesDiscountsGenerateRunResult, CartOperation, ProductDiscountCandidateTarget};
 use serde_json::{json, Value};
-use shopify_function::run_function_with_input;
+use crate::de::run_function_with_input;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -200,6 +200,70 @@ fn golden_parity_fixtures_match_the_function() {
     }
     println!("parity: {ran} fixture(s) checked");
     assert!(failures.is_empty(), "parity mismatches:\n{}", failures.join("\n"));
+}
+
+/// ~120 offers over a ~100-line cart (every plain parity fixture merged, then padded) with long packed id lists:
+/// the heaviest realistic input. Committed as `fixtures/stress-120-offers-100-lines.input.json` so the wasm
+/// comparison (`scripts/compare-function-outputs.mjs`) always has it; regenerate with UPDATE_STRESS_FIXTURE=1.
+#[cfg(not(feature = "code_gate"))]
+#[test]
+fn stress_input_matches_the_committed_fixture_and_runs() {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(fixture_dir())
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .collect();
+    paths.sort();
+    let (mut offers, mut lines, mut template) = (Vec::<Value>::new(), Vec::<Value>::new(), None);
+    for (index, path) in paths.iter().enumerate() {
+        let fixture: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        if !string_set(&fixture["cart"]["enteredCodes"]).is_empty() {
+            continue;
+        }
+        for offer in fixture["config"]["offers"].as_array().into_iter().flatten() {
+            let mut offer = offer.clone();
+            offer["id"] = json!(format!("f{index}-{}", offer["id"].as_str().unwrap_or("offer")));
+            offers.push(offer);
+        }
+        for line in fixture["cart"]["lines"].as_array().into_iter().flatten() {
+            let mut line = line.clone();
+            line["id"] = json!(format!("f{index}-{}", line["id"].as_str().unwrap_or("line")));
+            lines.push(line);
+        }
+        template.get_or_insert(fixture);
+    }
+    let mut template = template.expect("plain parity fixtures");
+    let (base_offers, base_lines) = (offers.clone(), lines.clone());
+    let mut copy = 0;
+    while offers.len() < 120 {
+        let mut offer = base_offers[copy % base_offers.len()].clone();
+        offer["id"] = json!(format!("{}-dup{copy}", offer["id"].as_str().unwrap()));
+        offers.push(offer);
+        copy += 1;
+    }
+    while lines.len() < 100 {
+        let mut line = base_lines[copy % base_lines.len()].clone();
+        line["id"] = json!(format!("{}-dup{copy}", line["id"].as_str().unwrap()));
+        lines.push(line);
+        copy += 1;
+    }
+    for (position, offer) in offers.iter_mut().enumerate().filter(|(position, _)| position % 5 == 0) {
+        let packed: Vec<String> = (1..=400).map(|id| (9_000_000 + position * 1000 + id).to_string()).collect();
+        offer["excludedProductIds"] = json!(packed.join(","));
+    }
+    template["config"]["offers"] = json!(offers);
+    template["cart"]["lines"] = json!(lines);
+    template["cart"]["enteredCodes"] = json!([]);
+    let input = function_input(&template);
+
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/stress-120-offers-100-lines.input.json");
+    if std::env::var_os("UPDATE_STRESS_FIXTURE").is_some() {
+        std::fs::write(&path, format!("{input}
+")).unwrap();
+    }
+    let committed: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(committed, input, "stress fixture is stale: run with UPDATE_STRESS_FIXTURE=1");
+    run_function_with_input(run, &input.to_string()).expect("stress input runs");
 }
 
 #[cfg(not(feature = "code_gate"))]
@@ -543,7 +607,369 @@ mod budget {
         assert!(!discounted.contains_key("offer-1"), "collection offer must not match product-page lines");
     }
 
+    /// 2026-11-10 dev-store proof: offers padded with 140 inert product ids made the whole node apply nothing.
+    /// The Function itself is not the cause: three %-offers (the seed's nc-filler, c-a, c-b shape) holding
+    /// 140/300/600 target ids, compact and full GIDs, over a 30-line cart, discount exactly the padding-free
+    /// result, and the cost per run grows linearly with the ids (one parse + one HashSet per reward).
+    #[test]
+    fn large_target_product_id_lists_stay_inside_the_instruction_budget() {
+        let input = |padding: usize, compact: bool, packed: bool| {
+            let id = |n: usize| if compact { n.to_string() } else { format!("gid://shopify/Product/{n}") };
+            let pad: Vec<String> = (0..padding).map(|n| id(900_000 + n)).collect();
+            let offer = |key: &str, priority: i32, real: Option<usize>, percent: f64| {
+                let mut ids: Vec<String> = real.map(id).into_iter().collect();
+                ids.extend(pad.iter().cloned());
+                let ids = if packed { json!(ids.join(",")) } else { json!(ids) };
+                json!({
+                    "id": key, "title": key, "version": 1, "offerType": "discount", "priority": priority,
+                    "cartQuantityThreshold": 1,
+                    "productRewards": [{ "targetProductIds": ids, "discountType": "percentage", "discountValue": percent }],
+                })
+            };
+            let mut offers = vec![offer("c-a", 20, Some(1), 20.0), offer("c-b", 21, Some(2), 10.0)];
+            if padding > 0 {
+                offers.push(offer("nc-filler", 11, None, 5.0));
+            }
+            let lines: Vec<Value> = (0..30)
+                .map(|index| {
+                    json!({
+                        "id": format!("l{index}"),
+                        "variantId": format!("gid://shopify/ProductVariant/{index}"),
+                        "productId": format!("gid://shopify/Product/{index}"),
+                        "quantity": 1, "unitPrice": "24.95", "lineType": Value::Null, "metadata": Value::Null,
+                    })
+                })
+                .collect();
+            let fixture = json!({
+                "config": { "offers": offers, "version": "budget", "compiledAt": "t" },
+                "cart": { "currency": "USD", "presentmentCurrencyRate": 1, "country": "US", "customerTags": [], "enteredCodes": [], "lines": lines },
+            });
+            function_input(&fixture).to_string()
+        };
+        let (base_allocations, base_ms) = measure_input(&input(0, true, false));
+        let expected = outcomes(&run_function_with_input(run, &input(0, true, false)).expect("should not error"));
+        assert_eq!(expected.get("c-a").and_then(|lines| lines.get("l1")), Some(&1));
+        assert_eq!(expected.get("c-b").and_then(|lines| lines.get("l2")), Some(&1));
+        for padding in [140, 300, 600] {
+            for (compact, packed) in [(true, false), (false, false), (true, true), (false, true)] {
+                let input = input(padding, compact, packed);
+                let result = run_function_with_input(run, &input).expect("should not error");
+                assert_eq!(outcomes(&result), expected, "{padding} ids, compact {compact}, packed {packed}");
+                let (allocations, ms) = measure_input(&input);
+                println!(
+                    "budget[{padding} ids x3 offers, compact {compact}, packed {packed}, 30 lines]: {allocations} allocations/run, {ms:.3} ms/run (no padding: {base_allocations}, {base_ms:.3} ms)"
+                );
+                // Parsing allocates each id once (plus the GID rebuild when compact); nothing scales with ids x lines.
+                assert!(allocations < base_allocations + 4 * 3 * padding as u64, "{padding} ids: {allocations} allocations per run");
+            }
+        }
+    }
+
     // Measured ~6.6k (7.0k before the cache); the rest is the 400 candidates themselves.
     const PAGE_CONDITIONED_LIMIT: u64 = 8_000;
     const ALLOCATION_LIMIT: u64 = 13_000;
+}
+
+/// An offer too big for one node is published as parts (a slice of one list each, same offer id). The parts must
+/// discount exactly what the whole offer does, here with the 10 kB metafield limit lifted. The fixture is written by
+/// `app/lib/sync/offer-split.parity.test.ts` from the real splitter.
+#[cfg(not(feature = "code_gate"))]
+mod split_parity {
+    use super::*;
+
+    const FIXTURE: &str = include_str!("fixtures/split-parity.json");
+
+    fn discounted(config: &Value, cart: &Value) -> BTreeMap<String, BTreeMap<String, i64>> {
+        let input = function_input(&json!({ "config": config, "cart": cart })).to_string();
+        outcomes(&run_function_with_input(run, &input).expect("the function runs"))
+    }
+
+    #[test]
+    fn split_offers_discount_the_same_lines_and_units_as_the_whole_offer() {
+        let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+        assert_eq!(fixture["parts"]["anchor"], 3, "the anchor offer is split three ways");
+        assert!(fixture["parts"]["set"].as_i64().unwrap() >= 2, "the gift reward set is split across parts");
+        let scenarios = fixture["scenarios"].as_array().unwrap();
+        assert!(scenarios.len() >= 6);
+        for scenario in scenarios {
+            let name = scenario["name"].as_str().unwrap();
+            let family = &fixture["families"][scenario["family"].as_str().unwrap()];
+            let whole = discounted(&family["unsplit"], &scenario["cart"]);
+            if scenario["family"] == "selfAnchor" {
+                // The splitter refuses this shape: slicing the targets would make each part's targets the other's anchor.
+                assert!(whole.is_empty(), "{name}: the whole offer discounts nothing, got {whole:?}");
+                let naive = discounted(&family["naive"], &scenario["cart"]);
+                assert!(!naive.is_empty(), "{name}: a naive one-target-per-part split would free both targets");
+                continue;
+            }
+            let parts = discounted(&family["split"], &scenario["cart"]);
+            assert_eq!(parts, whole, "{name}: parts differ from the whole offer");
+            let expects_discount = scenario["discounts"].as_bool().unwrap();
+            assert_eq!(!whole.is_empty(), expects_discount, "{name}: the whole offer {whole:?}");
+            if scenario["family"] != "anchor" {
+                for lines in whole.values() {
+                    for (line, units) in lines {
+                        assert_eq!(*units, 2, "{name}: {line} keeps the limit of 2 units per gift product");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// FIX-cap-12: what Shopify does with several nodes of ours. Each node runs the Function on its own offers;
+/// nodes whose combination settings allow each other apply together, otherwise Shopify applies the best set
+/// for the customer cart-wide. The planner puts offers that do not combine in their own node, so against the
+/// one-node result the only carts that may differ are those where such a node and another node both emit.
+#[cfg(not(feature = "code_gate"))]
+mod combination_groups {
+    use super::*;
+
+    struct Node {
+        combines_with_product_discounts: bool,
+        offers: Vec<Value>,
+    }
+
+    fn product(id: u32) -> String {
+        format!("gid://shopify/Product/{id}")
+    }
+
+    fn offer(id: &str, product_id: u32, percent: f64) -> Value {
+        json!({
+            "id": id, "version": 1, "offerType": "discount", "title": id, "priority": 10,
+            "productRewards": [{
+                "id": format!("{id}-reward"), "targetProductIds": [product(product_id)],
+                "discountType": "percentage", "discountValue": percent, "scopeMode": "sitewide"
+            }]
+        })
+    }
+
+    fn cart(lines: &[(u32, i64)]) -> Value {
+        let lines: Vec<Value> = lines
+            .iter()
+            .map(|(product_id, quantity)| {
+                json!({
+                    "id": format!("gid://shopify/CartLine/{product_id}"),
+                    "variantId": format!("gid://shopify/ProductVariant/{}", product_id * 10),
+                    "productId": product(*product_id), "quantity": quantity, "unitPrice": "20.00",
+                    "lineType": null, "metadata": {}
+                })
+            })
+            .collect();
+        json!({ "currency": "USD", "presentmentCurrencyRate": 1, "country": "US", "customerTags": [], "enteredCodes": [], "lines": lines })
+    }
+
+    fn config(offers: &[Value]) -> Value {
+        json!({ "c1": "_promo_engine_unused", "c2": "_promo_engine_unused", "c3": "_promo_engine_unused", "customerTags": [], "offers": offers })
+    }
+
+    type Outcome = BTreeMap<String, BTreeMap<String, i64>>;
+
+    fn run_node(offers: &[Value], cart: &Value) -> Outcome {
+        let input = function_input(&json!({ "config": config(offers), "cart": cart })).to_string();
+        outcomes(&run_function_with_input(run, &input).expect("the function runs"))
+    }
+
+    fn all_offers(nodes: &[Node]) -> Vec<Value> {
+        nodes.iter().flat_map(|node| node.offers.clone()).collect()
+    }
+
+    /// Money saved: units x unit price x the offer percentage.
+    fn saving(outcome: &Outcome, offers: &[Value]) -> f64 {
+        outcome
+            .iter()
+            .map(|(offer_id, lines)| {
+                let percent = offers
+                    .iter()
+                    .find(|offer| offer["id"] == *offer_id)
+                    .map(|offer| offer["productRewards"][0]["discountValue"].as_f64().unwrap())
+                    .unwrap_or(0.0);
+                lines.values().map(|units| *units as f64 * 20.0 * percent / 100.0).sum::<f64>()
+            })
+            .sum()
+    }
+
+    fn one_node(nodes: &[Node], cart: &Value) -> Outcome {
+        run_node(&all_offers(nodes), cart)
+    }
+
+    /// Shopify resolution: the best set of emitting nodes that all allow each other (a pair combines when both allow product discounts).
+    fn resolved(nodes: &[Node], cart: &Value) -> Outcome {
+        let all = all_offers(nodes);
+        let emitted: Vec<(usize, Outcome)> = nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (index, run_node(&node.offers, cart)))
+            .filter(|(_, outcome)| !outcome.is_empty())
+            .collect();
+        let mut best: Option<(f64, Outcome)> = None;
+        for mask in 1u32..(1 << emitted.len()) {
+            let chosen: Vec<&(usize, Outcome)> =
+                emitted.iter().enumerate().filter(|(bit, _)| mask & (1 << bit) != 0).map(|(_, entry)| entry).collect();
+            let compatible = chosen.len() == 1 || chosen.iter().all(|(index, _)| nodes[*index].combines_with_product_discounts);
+            if !compatible {
+                continue;
+            }
+            let merged: Outcome = chosen.iter().flat_map(|(_, outcome)| outcome.clone()).collect();
+            let value = saving(&merged, &all);
+            if best.as_ref().map_or(true, |(top, _)| value > *top) {
+                best = Some((value, merged));
+            }
+        }
+        best.map(|(_, outcome)| outcome).unwrap_or_default()
+    }
+
+    /// What the planner produces for a shop with an offer that does not combine: it keeps slot 0, the rest get their own nodes.
+    fn planned() -> Vec<Node> {
+        vec![
+            Node { combines_with_product_discounts: false, offers: vec![offer("nc-gift", 3, 100.0)] },
+            Node { combines_with_product_discounts: true, offers: vec![offer("sale-a", 1, 10.0), offer("sale-b", 2, 20.0)] },
+            Node { combines_with_product_discounts: true, offers: vec![offer("sale-c", 4, 30.0)] },
+        ]
+    }
+
+    #[test]
+    fn carts_where_no_offer_that_does_not_combine_qualifies_match_the_one_node_result() {
+        let nodes = planned();
+        for lines in [vec![(1, 1)], vec![(1, 2), (2, 1)], vec![(1, 1), (2, 1), (4, 3)], vec![(9, 1)]] {
+            let cart = cart(&lines);
+            assert_eq!(resolved(&nodes, &cart), one_node(&nodes, &cart), "cart {lines:?}");
+        }
+    }
+
+    #[test]
+    fn two_combining_nodes_stack_on_different_lines_like_one_node() {
+        let nodes = planned();
+        let cart = cart(&[(1, 1), (4, 2)]);
+        let both = resolved(&nodes, &cart);
+        assert_eq!(both.keys().cloned().collect::<Vec<_>>(), vec!["sale-a".to_string(), "sale-c".to_string()]);
+        assert_eq!(both, one_node(&nodes, &cart));
+    }
+
+    #[test]
+    fn a_cart_that_only_the_non_combining_node_discounts_matches_the_one_node_result() {
+        let nodes = planned();
+        let cart = cart(&[(3, 1), (9, 2)]);
+        assert_eq!(resolved(&nodes, &cart), one_node(&nodes, &cart));
+        assert!(resolved(&nodes, &cart).contains_key("nc-gift"));
+    }
+
+    #[test]
+    fn a_cart_where_a_non_combining_node_and_another_node_both_emit_gets_the_better_set_only() {
+        let nodes = planned();
+        let all = all_offers(&nodes);
+        // The free gift (20 saved) beats one unit of the 10 % sale (2 saved): Shopify applies only the gift node.
+        let gift_wins = cart(&[(3, 1), (1, 1)]);
+        let best = resolved(&nodes, &gift_wins);
+        assert_eq!(best.keys().cloned().collect::<Vec<_>>(), vec!["nc-gift".to_string()]);
+        assert_ne!(best, one_node(&nodes, &gift_wins), "today both stack: the documented difference (E1)");
+        assert!(saving(&best, &all) < saving(&one_node(&nodes, &gift_wins), &all));
+
+        // Five units of each combinable sale (10 + 20 saved) beat one free unit (20 saved): the sales apply together, the gift does not.
+        let sales_win = cart(&[(3, 1), (1, 5), (2, 5)]);
+        let best = resolved(&nodes, &sales_win);
+        assert_eq!(best.keys().cloned().collect::<Vec<_>>(), vec!["sale-a".to_string(), "sale-b".to_string()]);
+        assert_ne!(best, one_node(&nodes, &sales_win));
+    }
+
+    #[test]
+    fn the_resolved_set_never_saves_more_than_the_one_node_result() {
+        let nodes = planned();
+        let all = all_offers(&nodes);
+        for lines in [vec![(3, 1), (1, 1)], vec![(3, 2), (4, 1), (2, 2)], vec![(1, 1), (2, 1)], vec![(3, 1)]] {
+            let cart = cart(&lines);
+            assert!(saving(&resolved(&nodes, &cart), &all) <= saving(&one_node(&nodes, &cart), &all) + 1e-9, "cart {lines:?}");
+        }
+    }
+
+    #[test]
+    fn when_every_node_combines_sharding_changes_nothing() {
+        let mut nodes = planned();
+        nodes[0].combines_with_product_discounts = true;
+        for lines in [vec![(3, 1), (1, 1)], vec![(3, 2), (4, 1), (2, 2)], vec![(1, 1), (2, 1)]] {
+            let cart = cart(&lines);
+            assert_eq!(resolved(&nodes, &cart), one_node(&nodes, &cart), "cart {lines:?}");
+        }
+    }
+}
+
+/// Capacity workaround `use_whole_products`: a product reward that lists every variant of its products is rewritten
+/// in place to list the products. The Function must discount the same lines and units for every cart built from
+/// today's catalog (a variant added to the product later is covered on purpose, so no cart here has one).
+#[cfg(not(feature = "code_gate"))]
+mod whole_product_targets {
+    use super::*;
+
+    const PRODUCTS: [(u32, [u32; 3]); 2] = [(1, [11, 12, 13]), (2, [21, 22, 23])];
+
+    fn product(id: u32) -> String {
+        format!("gid://shopify/Product/{id}")
+    }
+
+    fn variant(id: u32) -> String {
+        format!("gid://shopify/ProductVariant/{id}")
+    }
+
+    fn offer(listed_by_variant: bool, shape: &Value) -> Value {
+        let mut reward = shape.clone();
+        reward["id"] = json!("reward");
+        reward["scopeMode"] = json!("sitewide");
+        if listed_by_variant {
+            reward["targetVariantIds"] = json!(PRODUCTS.iter().flat_map(|(_, variants)| variants.iter().map(|id| variant(*id))).collect::<Vec<_>>());
+        } else {
+            reward["targetProductIds"] = json!(PRODUCTS.iter().map(|(id, _)| product(*id)).collect::<Vec<_>>());
+        }
+        json!({ "offers": [{ "id": "whole", "version": 1, "offerType": "discount", "title": "whole", "priority": 10, "productRewards": [reward] }] })
+    }
+
+    fn cart(lines: &[(u32, u32, i64)]) -> Value {
+        let lines: Vec<Value> = lines
+            .iter()
+            .map(|(product_id, variant_id, quantity)| {
+                json!({
+                    "id": format!("gid://shopify/CartLine/{variant_id}"), "variantId": variant(*variant_id),
+                    "productId": product(*product_id), "quantity": quantity, "unitPrice": "20.00",
+                    "lineType": null, "metadata": {}
+                })
+            })
+            .collect();
+        json!({ "currency": "USD", "presentmentCurrencyRate": 1, "country": "US", "customerTags": [], "enteredCodes": [], "lines": lines })
+    }
+
+    fn discounted(config: &Value, cart: &Value) -> BTreeMap<String, BTreeMap<String, i64>> {
+        let config = json!({ "c1": "_promo_engine_unused", "c2": "_promo_engine_unused", "c3": "_promo_engine_unused", "customerTags": [], "offers": config["offers"] });
+        let input = function_input(&json!({ "config": config, "cart": cart })).to_string();
+        outcomes(&run_function_with_input(run, &input).expect("the function runs"))
+    }
+
+    #[test]
+    fn product_level_targets_discount_the_same_lines_and_units_as_the_variant_list() {
+        let shapes = [
+            json!({ "discountType": "percentage", "discountValue": 10 }),
+            json!({ "discountType": "percentage", "discountValue": 15, "maxUnitsTotal": 3 }),
+            json!({ "discountType": "percentage", "discountValue": 0, "quantityTiers": [
+                { "minimumQuantity": 2, "discountType": "percentage", "discountValue": 5 },
+                { "minimumQuantity": 4, "discountType": "percentage", "discountValue": 12 }
+            ] }),
+        ];
+        let carts = [
+            vec![(1, 11, 1)],
+            vec![(1, 11, 2), (1, 12, 1)],
+            vec![(1, 11, 1), (2, 21, 1), (2, 23, 3)],
+            vec![(9, 91, 2)],
+            vec![(9, 91, 1), (2, 22, 5)],
+            vec![(1, 13, 4), (9, 91, 1)],
+        ];
+        let mut discounting = 0;
+        for shape in &shapes {
+            for lines in &carts {
+                let cart = cart(lines);
+                let by_variant = discounted(&offer(true, shape), &cart);
+                let by_product = discounted(&offer(false, shape), &cart);
+                assert_eq!(by_product, by_variant, "shape {shape} cart {lines:?}");
+                discounting += usize::from(!by_variant.is_empty());
+            }
+        }
+        assert!(discounting >= 10, "the carts must actually discount something, got {discounting}");
+    }
 }

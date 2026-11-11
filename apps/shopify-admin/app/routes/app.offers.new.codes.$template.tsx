@@ -40,6 +40,8 @@ import { ProductPicker } from "../components/ProductPicker.js";
 import { SelectedProductsList } from "../components/SelectedProductsList.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { Toast } from "../components/Toast.js";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -89,7 +91,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return { nowLocal: nowInZone(timezone), currencyCode };
 };
 
-export const action = async ({ request }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   const { db, shopId, session, timezone, currencyCode, admin } = context;
 
@@ -119,7 +121,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // The offer and its codes exist either way; resubmitting would only hit "code already used".
   if (publishError) return { error: `${publishError} It was saved as a draft.`, offerId };
   return redirect(parsed.data.redemption === "automatic" ? `/app/offers/${offerId}` : `/app/offers/${offerId}/codes`);
-};
+});
 
 // ─── Client ──────────────────────────────────────────────────────────────────
 
@@ -423,6 +425,7 @@ export default function NewCodesOfferPage() {
         accent={ACCENT}
       />
 
+      <CapacityLimitModal data={actionData?.capacity} />
       {actionData?.error && (
         <div className="b-banner b-banner-red b-mb-4" role="alert">
           <div className="b-banner-body">

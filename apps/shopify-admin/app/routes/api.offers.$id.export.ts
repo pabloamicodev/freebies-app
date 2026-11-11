@@ -21,7 +21,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const offerId = params["id"] === undefined ? undefined : parseUuidParam(params);
 
   const shopRows = await db
-    .select({ id: shops.id })
+    .select({ id: shops.id, currencyCode: shops.currencyCode })
     .from(shops)
     .where(eq(shops.myshopifyDomain, session.shop))
     .limit(1);
@@ -34,6 +34,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     });
   }
   const shopId = shopRows[0].id;
+  const shopCurrency = shopRows[0].currencyCode ?? "USD";
 
   const offerRows: Offer[] = offerId
     ? await db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
@@ -76,7 +77,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     "condition_type", "condition_value_threshold_cents",
     "reward_type", "discount_type", "reward_value",
     "gift_variant_gids", "gift_quantity", "is_auto_add", "track_mode",
-    "gift_tier_mode", "gift_min_cart_subtotal_cents",
+    "gift_tier_mode", "gift_min_cart_subtotal_cents", "gift_fallback_variant_gids", "shop_currency_code",
     "created_at", "updated_at",
   ];
 
@@ -116,6 +117,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         reward?.trackMode ?? "",
         reward?.minCartSubtotalCents != null ? (offer.tierMode ?? "cumulative") : "",
         reward?.minCartSubtotalCents ?? "",
+        ((rewardTarget["fallbackVariantIds"] as string[] | undefined) ?? []).join("|"),
+        shopCurrency,
         offer.createdAt.toISOString(),
         offer.updatedAt.toISOString(),
       ]));

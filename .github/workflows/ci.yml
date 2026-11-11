@@ -68,6 +68,14 @@ jobs:
         run: node scripts/check-wasm-sizes.mjs
       - name: Instruction budget
         run: bash scripts/check-instruction-budget.sh
+      - name: Install function-runner v9.2.3
+        run: |
+          curl -fsSL -o function-runner.gz https://github.com/Shopify/function-runner/releases/download/v9.2.3/function-runner-x86_64-linux-v9.2.3.gz
+          echo "23535ee1d331fa5e090d34fc6a5eacb419bf9fb2b5b254547f40a78a93305471  function-runner.gz" | sha256sum -c -
+          gunzip function-runner.gz
+          chmod +x function-runner
+      - name: Instruction ceiling (live-config carts up to 200 lines, <= 11M)
+        run: node scripts/check-function-instructions.mjs --runner ./function-runner
 
   # ── Storefront Bundle Size ───────────────────────────────────────────────────
   bundle-size:

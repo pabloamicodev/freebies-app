@@ -1293,6 +1293,25 @@ describe("currency comes from the shop, never an implicit USD", () => {
     expect(unknown).not.toHaveProperty("currencyCode");
   });
 
+  it("offers: the shop currency sizes a fixed amount, not the reward's own tag", () => {
+    const compile = (tag: string, shopCurrencyCode: string | undefined, discountType = "fixed_amount") =>
+      compileOfferConfig(
+        offer() as never,
+        [] as never,
+        [{ id: REWARD_ID, rewardType: "order_discount", discountType, value: { amount: 500, currencyCode: tag }, target: {}, quantity: null, sortOrder: 0 }] as never,
+        { stopLowerPriority: false } as never,
+        1,
+        { shopCurrencyCode },
+      );
+    expect(compile("USD", "JPY").orderRewards).toMatchObject([{ discountValue: 500 }]);
+    expect(compile("JPY", "USD").orderRewards).toMatchObject([{ discountValue: 5 }]);
+    // Unchanged: matching tag, other tag on a two-decimal shop, no shop known, percentages.
+    expect(compile("USD", "USD").orderRewards).toMatchObject([{ discountValue: 5 }]);
+    expect(compile("EUR", "USD").orderRewards).toMatchObject([{ discountValue: 5 }]);
+    expect(compile("JPY", undefined).orderRewards).toMatchObject([{ discountValue: 500 }]);
+    expect(compile("JPY", "JPY", "percentage").orderRewards).toMatchObject([{ discountValue: 500 }]);
+  });
+
   it("offers: a fixed amount without a reward currency is read in the shop's currency (no /100 for JPY)", () => {
     const compile = (shopCurrencyCode?: string) =>
       compileOfferConfig(
@@ -1341,6 +1360,72 @@ describe("compileOfferConfig — product-level requirements", () => {
     ]);
     expect(result.requiredProductIds).toEqual(["gid://shopify/Product/1", "gid://shopify/Product/2"]);
     expect(result.requiredVariantIds).toEqual([]);
+  });
+});
+
+describe("product reward targets: whole products versus variants", () => {
+  const PRODUCTS = ["gid://shopify/Product/1", "gid://shopify/Product/2"];
+  const VARIANTS = ["gid://shopify/ProductVariant/11", "gid://shopify/ProductVariant/21", "gid://shopify/ProductVariant/22"];
+  const compileTarget = (target: Record<string, unknown>) =>
+    compileOfferConfig(
+      offer(),
+      [],
+      [
+        {
+          id: REWARD_ID,
+          rewardType: "product_discount",
+          discountType: "percentage",
+          value: { amount: 10, currencyCode: "USD" },
+          target: { scopeMode: "sitewide", ...target },
+          sortOrder: 0,
+        } as CompileArgs[2][number],
+      ],
+      null,
+      1,
+    ).productRewards[0]!;
+
+  it("ships product ids alone when the merchant saved whole products, dropping the variants the picker expanded", () => {
+    const reward = compileTarget({ selectionLevel: "product", productIds: PRODUCTS, variantIds: VARIANTS });
+    expect(reward.targetProductIds).toEqual(PRODUCTS);
+    expect(reward.targetVariantIds).toEqual([]);
+    expect(JSON.stringify(compactCompiledOffer(compileOfferConfig(offer(), [], [{ id: REWARD_ID, rewardType: "product_discount", discountType: "percentage", value: { amount: 10, currencyCode: "USD" }, target: { scopeMode: "sitewide", selectionLevel: "product", productIds: PRODUCTS, variantIds: VARIANTS }, sortOrder: 0 } as CompileArgs[2][number]], null, 1)))).not.toContain("ProductVariant");
+  });
+
+  it("keeps the variants of a row saved before the marker existed, even when its products are known", () => {
+    const reward = compileTarget({ productIds: PRODUCTS, variantIds: VARIANTS });
+    expect(reward.targetProductIds).toEqual(PRODUCTS);
+    expect(reward.targetVariantIds).toEqual(VARIANTS);
+  });
+
+  it("keeps a hand-picked variant list as variants", () => {
+    const reward = compileTarget({ variantIds: VARIANTS });
+    expect(reward.targetVariantIds).toEqual(VARIANTS);
+    expect(reward.targetProductIds).toEqual([]);
+  });
+
+  it("never drops variants when the marker has no product ids to stand on", () => {
+    expect(compileTarget({ selectionLevel: "product", variantIds: VARIANTS }).targetVariantIds).toEqual(VARIANTS);
+  });
+
+  it("accepts the marker in the reward payload the wizards save", () => {
+    expect(
+      validateRewardPayload("product_discount", "percentage", { amount: 10, currencyCode: "USD" }, {
+        scopeMode: "sitewide",
+        scope: "cart",
+        subscriptionMode: "any",
+        selectionLevel: "product",
+        productIds: PRODUCTS,
+      }).success,
+    ).toBe(true);
+    expect(
+      validateRewardPayload("product_discount", "percentage", { amount: 10, currencyCode: "USD" }, {
+        scopeMode: "sitewide",
+        scope: "cart",
+        subscriptionMode: "any",
+        selectionLevel: "variant",
+        productIds: PRODUCTS,
+      }).success,
+    ).toBe(false);
   });
 });
 

@@ -133,6 +133,49 @@ export async function ensureDiscountNodes(
   return { cartLinesDiscountId, deliveryDiscountId };
 }
 
+/**
+ * combinesWith each automatic node holds in Shopify right now. Missing nodes are omitted; a node that reports no
+ * combinesWith throws, so callers can fail closed instead of guessing.
+ */
+export async function readLiveCombinations(
+  shopDomain: string,
+  accessToken: string,
+  ids: readonly string[],
+): Promise<Map<string, DiscountCombinationPolicyInput>> {
+  const live = new Map<string, DiscountCombinationPolicyInput>();
+  if (ids.length === 0) return live;
+  const data = await shopifyGraphQL<{
+    nodes: Array<{ id?: string; automaticDiscount?: { combinesWith?: Partial<DiscountCombinationPolicyInput> | null } | null } | null>;
+  }>({
+    shopDomain,
+    accessToken,
+    retryable: true,
+    query: `query PromoEngineLiveCombination($ids: [ID!]!) {
+      nodes(ids: $ids) {
+        ... on DiscountAutomaticNode {
+          id
+          automaticDiscount { ... on DiscountAutomaticApp { combinesWith { orderDiscounts productDiscounts shippingDiscounts } } }
+        }
+      }
+    }`,
+    variables: { ids: [...ids] },
+  });
+  for (const node of data.nodes) {
+    if (!node?.id) continue;
+    const combinesWith = node.automaticDiscount?.combinesWith;
+    if (
+      !combinesWith ||
+      typeof combinesWith.orderDiscounts !== "boolean" ||
+      typeof combinesWith.productDiscounts !== "boolean" ||
+      typeof combinesWith.shippingDiscounts !== "boolean"
+    ) {
+      throw new Error(`Shopify returned no combinesWith for ${node.id}`);
+    }
+    live.set(node.id, combinesWith as DiscountCombinationPolicyInput);
+  }
+  return live;
+}
+
 export async function syncDiscountCombinationPolicy(
   shopDomain: string,
   accessToken: string,
@@ -1345,6 +1388,85 @@ export async function countActiveAutomaticDiscounts(
     if (error instanceof ShopifyOutcomeUnknownError) throw error;
     return null;
   }
+}
+
+export interface AutomaticDiscountCandidate {
+  id: string;
+  title: string;
+  /** Shopify discount type, e.g. DiscountAutomaticBasic or DiscountAutomaticApp. */
+  type: string;
+  /** Title of the app that owns an app discount, when Shopify says. */
+  appTitle: string | null;
+  /** Native Shopify discount (no owning app): the only kind Promo Engine can both deactivate and reactivate. */
+  native: boolean;
+}
+
+const NATIVE_AUTOMATIC_TYPES: ReadonlySet<string> = new Set(["DiscountAutomaticBasic", "DiscountAutomaticBxgy", "DiscountAutomaticFreeShipping"]);
+
+/** Active automatic discounts of the store that Promo Engine does not own, native or from another app. Only native ones may be deactivated. */
+export async function listAutomaticDiscountCandidates(
+  shopId: string,
+  shopDomain: string,
+  accessToken: string,
+): Promise<AutomaticDiscountCandidate[]> {
+  const [shop] = await getDb()
+    .select({ discountId: shops.discountId, deliveryDiscountId: shops.deliveryDiscountId })
+    .from(shops)
+    .where(eq(shops.id, shopId))
+    .limit(1);
+  const [codeId, pool, shards] = await Promise.all([readCodeNodeId(shopId), readCodedShippingNodeIds(shopId), readCartShardNodeIds(shopId)]);
+  const ours = new Set([shop?.discountId, shop?.deliveryDiscountId, codeId, ...pool, ...shards].filter((id): id is string => Boolean(id)));
+  const data = await shopifyGraphQL<{
+    discountNodes: {
+      nodes: Array<{
+        id: string;
+        discount: { __typename: string; title?: string | null; appDiscountType?: { app?: { title?: string | null } | null } | null } | null;
+      }>;
+    };
+  }>({
+    shopDomain,
+    accessToken,
+    query: `query PromoEngineDeactivationCandidates($query: String) {
+      discountNodes(first: 50, query: $query) {
+        nodes {
+          id
+          discount {
+            __typename
+            ... on DiscountAutomaticBasic { title }
+            ... on DiscountAutomaticBxgy { title }
+            ... on DiscountAutomaticFreeShipping { title }
+            ... on DiscountAutomaticApp { title appDiscountType { app { title } } }
+          }
+        }
+      }
+    }`,
+    variables: { query: "method:automatic AND status:active" },
+  });
+  return data.discountNodes.nodes
+    .filter((node) => node.discount?.__typename.startsWith("DiscountAutomatic") && !ours.has(node.id))
+    .map((node) => ({
+      id: node.id,
+      title: node.discount?.title ?? node.id,
+      type: node.discount!.__typename,
+      appTitle: node.discount?.appDiscountType?.app?.title ?? null,
+      native: NATIVE_AUTOMATIC_TYPES.has(node.discount!.__typename),
+    }));
+}
+
+/** Deactivates or reactivates an automatic discount (any app's); a userError throws so the caller can roll back. */
+export async function setAutomaticDiscountActive(shopDomain: string, accessToken: string, id: string, active: boolean): Promise<void> {
+  const field = active ? "discountAutomaticActivate" : "discountAutomaticDeactivate";
+  const data = await shopifyGraphQL<Record<string, { userErrors?: Array<{ message: string }> } | null>>({
+    shopDomain,
+    accessToken,
+    retryable: true,
+    query: `mutation PromoEngineSetAutomatic($id: ID!) {
+      ${field}(id: $id) { userErrors { field message } }
+    }`,
+    variables: { id },
+  });
+  const errors = data[field]?.userErrors ?? [];
+  if (errors.length > 0) throw new Error(`Shopify could not ${active ? "reactivate" : "deactivate"} the discount: ${errors.map((error) => error.message).join("; ")}`);
 }
 
 /** Most automatic delivery nodes a shop may dedicate to code-gated shipping (Shopify caps automatic discounts at 25 per shop). */

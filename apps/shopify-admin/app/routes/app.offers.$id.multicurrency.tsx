@@ -14,14 +14,17 @@ import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { offerConditions } from "@promo/db";
 import { eq, and } from "drizzle-orm";
+import { fromStoredAmount, isZeroDecimalCurrency, overrideUnit, toStoredAmount } from "../lib/money.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 type ActionResult = { success: true } | { error: string };
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { admin, shopId, db } = await getShopContext(request);
+  const { admin, shopId, db, currencyCode: shopCurrency } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const offer = await loadOwnedOffer(db, shopId, offerId);
 
@@ -65,11 +68,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     baseThresholdCents: (existingValue["thresholdCents"] as number) ?? 0,
     baseMaxCents: (existingValue["maxCents"] as number | undefined) ?? null,
     baseCurrency: (existingValue["currencyCode"] as string) ?? "USD",
+    shopCurrency,
   };
 };
 
-export const action = async ({ request, params }: ActionFunctionArgs): Promise<ActionResult> => {
-  const { session, shopId, db } = await getShopContext(request);
+export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs): Promise<ActionResult> => {
+  const { session, shopId, db, currencyCode: shopCurrency } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const offer = await loadOwnedOffer(db, shopId, offerId);
@@ -84,7 +88,7 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<A
   for (let i = 0; i < currencies.length; i++) {
     const currency = currencies[i]?.toUpperCase();
     const raw = parseFloat(thresholds[i] ?? "0");
-    const cents = Number.isFinite(raw) && raw > 0 ? Math.round(raw * 100) : 0;
+    const cents = Number.isFinite(raw) && raw > 0 ? toStoredAmount(raw, overrideUnit(shopCurrency, currency ?? "")) : 0;
     if (currency && cents > 0) {
       overrides[currency] = cents;
     }
@@ -94,7 +98,7 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<A
   for (let i = 0; i < currencies.length; i++) {
     const currency = currencies[i]?.toUpperCase();
     const raw = parseFloat(maxThresholds[i] ?? "0");
-    const cents = Number.isFinite(raw) && raw > 0 ? Math.round(raw * 100) : 0;
+    const cents = Number.isFinite(raw) && raw > 0 ? toStoredAmount(raw, overrideUnit(shopCurrency, currency ?? "")) : 0;
     if (currency && cents > 0) {
       const minimum = overrides[currency];
       if (minimum !== undefined && cents < minimum) {
@@ -109,7 +113,7 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<A
   for (let i = 0; i < currencies.length; i++) {
     const currency = currencies[i]?.toUpperCase();
     const raw = parseFloat(fixedAmounts[i] ?? "0");
-    const fixed = Number.isFinite(raw) && raw > 0 ? Math.round(raw * 100) : 0;
+    const fixed = Number.isFinite(raw) && raw > 0 ? toStoredAmount(raw, overrideUnit(shopCurrency, currency ?? "")) : 0;
     if (currency && fixed > 0) {
       fixedOverrides[currency] = fixed;
     }
@@ -140,23 +144,25 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<A
   }
 
   return updateResult;
-};
+});
 
 export default function MultiCurrencyPage() {
-  const { offer, markets, currencyOverrides, maxCurrencyOverrides, baseThresholdCents, baseMaxCents, baseCurrency } = useLoaderData<typeof loader>();
+  const { offer, markets, currencyOverrides, maxCurrencyOverrides, baseThresholdCents, baseMaxCents, baseCurrency, shopCurrency } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
 
   if (!offer) return <NotFound message="Offer not found." />;
 
-  const baseThreshold = baseThresholdCents / 100;
+  const baseThreshold = fromStoredAmount(baseThresholdCents, shopCurrency);
+  const decimals = isZeroDecimalCurrency(shopCurrency) ? 0 : 2;
   const actionError = actionData && "error" in actionData && typeof actionData.error === "string"
     ? actionData.error
     : null;
 
   return (
     <div className="b-page">
+      <CapacityLimitModal data={actionData?.capacity} />
       {/* Header */}
       <PageHeader title="Multi-Currency" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
 
@@ -189,7 +195,7 @@ export default function MultiCurrencyPage() {
         </div>
         <div className="b-banner-body">
           <p className="b-banner-text">
-            Set per-currency thresholds to match local purchasing power. Leave a field empty to use the configured base amount ({baseCurrency} {baseThreshold.toFixed(2)}).
+            Set per-currency thresholds to match local purchasing power. Leave a field empty to use the configured base amount ({baseCurrency} {baseThreshold.toFixed(decimals)}).
           </p>
         </div>
       </div>
@@ -224,10 +230,10 @@ export default function MultiCurrencyPage() {
                       ) : (
                         markets.map((market) => {
                           const existingThreshold = currencyOverrides[market.currencyCode]
-                            ? (currencyOverrides[market.currencyCode]! / 100).toFixed(2)
+                            ? fromStoredAmount(currencyOverrides[market.currencyCode]!, overrideUnit(shopCurrency, market.currencyCode)).toFixed(isZeroDecimalCurrency(overrideUnit(shopCurrency, market.currencyCode)) ? 0 : 2)
                             : "";
                           const existingMaximum = maxCurrencyOverrides[market.currencyCode]
-                            ? (maxCurrencyOverrides[market.currencyCode]! / 100).toFixed(2)
+                            ? fromStoredAmount(maxCurrencyOverrides[market.currencyCode]!, overrideUnit(shopCurrency, market.currencyCode)).toFixed(isZeroDecimalCurrency(overrideUnit(shopCurrency, market.currencyCode)) ? 0 : 2)
                             : "";
                           return (
                             <tr key={market.id}>
@@ -255,9 +261,9 @@ export default function MultiCurrencyPage() {
                                     type="number"
                                     name="threshold_cents[]"
                                     defaultValue={existingThreshold}
-                                    placeholder={`Base (${baseCurrency} ${baseThreshold.toFixed(2)})`}
+                                    placeholder={`Base (${baseCurrency} ${baseThreshold.toFixed(decimals)})`}
                                     min="0"
-                                    step="0.01"
+                                    step={isZeroDecimalCurrency(overrideUnit(shopCurrency, market.currencyCode)) ? "1" : "0.01"}
                                     autoComplete="off"
                                     style={{ maxWidth: 200 }}
                                   />
@@ -276,9 +282,9 @@ export default function MultiCurrencyPage() {
                                       type="number"
                                       name="max_threshold_cents[]"
                                       defaultValue={existingMaximum}
-                                      placeholder={`${baseCurrency} ${(baseMaxCents / 100).toFixed(2)}`}
+                                      placeholder={`${baseCurrency} ${fromStoredAmount(baseMaxCents, shopCurrency).toFixed(decimals)}`}
                                       min="0"
-                                      step="0.01"
+                                      step={isZeroDecimalCurrency(overrideUnit(shopCurrency, market.currencyCode)) ? "1" : "0.01"}
                                       autoComplete="off"
                                       style={{ maxWidth: 200 }}
                                     />
@@ -302,7 +308,7 @@ export default function MultiCurrencyPage() {
                                     defaultValue=""
                                     placeholder="Optional"
                                     min="0"
-                                    step="0.01"
+                                    step={isZeroDecimalCurrency(overrideUnit(shopCurrency, market.currencyCode)) ? "1" : "0.01"}
                                     autoComplete="off"
                                     style={{ maxWidth: 200 }}
                                   />
@@ -354,7 +360,7 @@ export default function MultiCurrencyPage() {
                   <p className="b-label">Fallback behaviour</p>
                   <p className="b-text-sm b-text-sub">
                     Any currency without an override uses the base threshold of{" "}
-                    <strong>{baseCurrency} {baseThreshold.toFixed(2)}</strong>. Configure explicit values for markets whose checkout currency differs.
+                    <strong>{baseCurrency} {baseThreshold.toFixed(decimals)}</strong>. Configure explicit values for markets whose checkout currency differs.
                   </p>
                 </div>
                 <hr className="b-divider" style={{ margin: "4px 0" }} />

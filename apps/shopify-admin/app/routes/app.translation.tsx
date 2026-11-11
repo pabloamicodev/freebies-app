@@ -3,7 +3,8 @@
  * Allows merchants to customize widget strings per locale.
  */
 
-import { useLoaderData, Form } from "react-router";
+import { useLoaderData, useActionData, Form } from "react-router";
+import { placeholderError } from "../lib/translation-placeholders.js";
 import { useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { appSettings } from "@promo/db";
@@ -15,22 +16,27 @@ import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
-const TRANSLATION_KEYS: Array<{ key: keyof WidgetTranslations; label: string; hint?: string }> = [
-  { key: "progress.before_goal", label: "Progress bar — before goal", hint: "Use {{remaining_amount}} for the amount, {{remaining_quantity}} for quantity." },
+const TRANSLATION_KEYS: Array<{ key: keyof WidgetTranslations; label: string; hint?: string; vars?: readonly string[] }> = [
+  { key: "progress.before_goal", label: "Progress bar — before goal", hint: "Use {{remaining_amount}} for the amount, {{remaining_quantity}} for quantity.", vars: ["remaining_amount", "remaining_quantity", "current_amount", "target_amount"] },
   { key: "progress.after_goal", label: "Progress bar — after goal" },
+  { key: "progress.gift_tier_before_goal", label: "Gift tiers bar — before next tier", hint: "Use {{remaining_amount}} for the amount left to the next gift tier.", vars: ["remaining_amount"] },
+  { key: "progress.gift_tier_after_goal", label: "Gift tiers bar — all gifts unlocked" },
   { key: "gift_slider.title", label: "Gift slider title" },
   { key: "gift_slider.confirm_button", label: "Gift slider confirm button" },
   { key: "gift_slider.out_of_stock", label: "Gift out of stock label" },
   { key: "gift_slider.free_label", label: "Free price label" },
   { key: "gift_slider.choose_variant", label: "Gift picker — choose a variant prompt" },
-  { key: "gift_slider.limit_reached", label: "Gift picker — limit reached notice", hint: "Use {{max}} for the number of gifts." },
+  { key: "gift_slider.limit_reached", label: "Gift picker — limit reached notice", hint: "Use {{max}} for the number of gifts.", vars: ["max"] },
   { key: "today_offer.title", label: "Today Offer widget title" },
   { key: "today_offer.button", label: "Today Offer button text" },
   { key: "volume_discount.title", label: "Volume discount title" },
   { key: "fbt.title", label: "FBT widget title" },
-  { key: "fbt.add_button", label: "FBT add button", hint: "Use {{count}} for number of items." },
+  { key: "fbt.add_button", label: "FBT add button", hint: "Use {{count}} for number of items.", vars: ["count"] },
   { key: "upsell.no_thanks", label: "Upsell dismiss text" },
 ];
+
+/** Widget strings are one line of storefront text. */
+const MAX_STRING_LENGTH = 300;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
@@ -59,10 +65,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const locale = formData.get("locale") as string;
 
+  if (!(SUPPORTED_LOCALES as readonly string[]).includes(locale)) return { error: "Choose a supported language." };
+
   const strings: Partial<WidgetTranslations> = { locale };
-  for (const { key } of TRANSLATION_KEYS) {
-    const val = formData.get(key) as string | null;
-    if (val?.trim()) (strings as Partial<Record<keyof WidgetTranslations, string>>)[key] = val.trim();
+  for (const { key, label, vars } of TRANSLATION_KEYS) {
+    // The form names each field `<locale>.<key>`.
+    const val = (formData.get(`${locale}.${key}`) ?? formData.get(key)) as string | null;
+    if (!val?.trim()) continue;
+    if (val.trim().length > MAX_STRING_LENGTH) return { error: `${label}: keep it under ${MAX_STRING_LENGTH} characters.` };
+    const problem = placeholderError(label, val.trim(), vars ?? []);
+    if (problem) return { error: problem };
+    (strings as Partial<Record<keyof WidgetTranslations, string>>)[key] = val.trim();
   }
 
   // Load existing translations
@@ -92,6 +105,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 export default function TranslationPage() {
   const { translations } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
   const [locale, setLocale] = useState("en");
 
   return (
@@ -126,7 +140,12 @@ export default function TranslationPage() {
       </div>
 
       {/* Translation form */}
-      <Form id="translation-form" method="POST">
+      {actionData && "error" in actionData && actionData.error && (
+        <div className="b-banner b-banner-red" role="alert" style={{ marginBottom: 16 }}>
+          <div className="b-banner-body">{actionData.error}</div>
+        </div>
+      )}
+      <Form key={locale} id="translation-form" method="POST">
         <input type="hidden" name="locale" value={locale} />
 
         <div className="b-card">

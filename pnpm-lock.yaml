@@ -126,6 +126,9 @@ importers:
         specifier: ^4.6.6
         version: 4.6.7
     devDependencies:
+      '@axe-core/playwright':
+        specifier: 4.10.2
+        version: 4.10.2(playwright-core@1.61.0)
       '@playwright/test':
         specifier: ^1.61.0
         version: 1.61.0
@@ -330,6 +333,11 @@ packages:
   '@ast-grep/napi@0.43.0':
     resolution: {integrity: sha512-dPugC04xwgk3gJl17jJvTjVjx1IXtWI9EcEQ0szlh0jg1UfvGDdZJo9/S9Pk7gzGBNd2bW8hIL3dG6K4T8PEJA==}
     engines: {node: '>= 10'}
+
+  '@axe-core/playwright@4.10.2':
+    resolution: {integrity: sha512-6/b5BJjG6hDaRNtgzLIfKr5DfwyiLHO4+ByTLB0cJgWSM8Ll7KqtdblIS6bEkwSF642/Ex91vNqIl3GLXGlceg==}
+    peerDependencies:
+      playwright-core: '>= 1.0.0'
 
   '@babel/code-frame@7.29.7':
     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
@@ -1719,6 +1727,10 @@ packages:
 
   ast-v8-to-istanbul@0.3.12:
     resolution: {integrity: sha512-BRRC8VRZY2R4Z4lFIL35MwNXmwVqBityvOIwETtsCSwvjl0IdgFsy9NhdaA6j74nUdtJJlIypeRhpDam19Wq3g==}
+
+  axe-core@4.10.3:
+    resolution: {integrity: sha512-Xm7bpRXnDSX2YE2YFfBk2FnF0ep6tmG7xPh8iHee8MIcrgq762Nkce856dYtJYLkuIoYZvGfTs/PbZhideTcEg==}
+    engines: {node: '>=4'}
 
   babel-dead-code-elimination@1.0.12:
     resolution: {integrity: sha512-GERT7L2TiYcYDtYk1IpD+ASAYXjKbLTDPhBtYj7X1NuRMDTMtAx9kyBenub1Ev41lo91OHCKdmP+egTDmfQ7Ig==}
@@ -3545,6 +3557,11 @@ snapshots:
       '@ast-grep/napi-win32-ia32-msvc': 0.43.0
       '@ast-grep/napi-win32-x64-msvc': 0.43.0
 
+  '@axe-core/playwright@4.10.2(playwright-core@1.61.0)':
+    dependencies:
+      axe-core: 4.10.3
+      playwright-core: 1.61.0
+
   '@babel/code-frame@7.29.7':
     dependencies:
       '@babel/helper-validator-identifier': 7.29.7
@@ -4810,6 +4827,8 @@ snapshots:
       '@jridgewell/trace-mapping': 0.3.31
       estree-walker: 3.0.3
       js-tokens: 10.0.0
+
+  axe-core@4.10.3: {}
 
   babel-dead-code-elimination@1.0.12:
     dependencies:

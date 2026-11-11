@@ -9,29 +9,32 @@ import {
   shops,
   type Db,
 } from "@promo/db";
-import {
-  compileDiscountCombinationPolicy,
-  compileOfferConfig,
-  compileShippingOfferConfigs,
-  serializeFunctionConfig,
-} from "./sync/compile-config.js";
+import { serializeFunctionConfig } from "./sync/compile-config.js";
+import { compileCartOffers, legacyGatedOfferIds } from "./sync/cart-offers.server.js";
+import { isLimitsEnforced } from "./limits-enforced.server.js";
 import { buildAttributeQueryVariables, MAX_CUSTOM_CART_ATTRIBUTE_KEYS } from "./sync/attribute-query-variables.js";
-import { planShards, SLOT_LIMITS, type PlanBlockCode } from "./sync/shard-planner.js";
-import { baseOfferId, buildPlanUnits, cartAttributeKeysOf } from "./sync/plan-units.js";
+import { planShards, SLOT_LIMITS, type CombinationPolicy, type PlanWarning, type PlanBlockCode, type PlanBlockReason } from "./sync/shard-planner.js";
+import { baseOfferId, buildPlanUnitSet, cartAttributeKeysOf } from "./sync/plan-units.js";
+import type { SplitRefusal } from "./sync/offer-split.js";
+import { loadSplitOptions } from "./sync/variant-products.server.js";
+import { assertCodeOfferListsWithinLimit } from "./sync/variable-list-guard.js";
 import { combinationBlockers, type CombinationBlocker } from "./sync/combination-blockers.js";
 import { isCheckoutCodeGated } from "./code-redemption.js";
-import { MAX_METAFIELD_BYTES } from "./sync/offer-publisher.server.js";
+import { MAX_METAFIELD_BYTES, codeNodeKind } from "./sync/offer-publisher.server.js";
 import { buildCartValidationConfig, MAX_VALIDATION_CONFIG_BYTES } from "./cart-validation.server.js";
-import { OfferPublishError, offerCompileError } from "./offer-publish-errors.server.js";
-import { isFunctionShardsEnabled } from "./function-shards-flag.server.js";
-import { countShardNodes, readPreviousAssignment } from "./sync/cart-shards.server.js";
+import { OfferPublishError } from "./offer-publish-errors.server.js";
+import { isFunctionCompactIdsEnabled } from "./function-compact-ids-flag.server.js";
+import { isFunctionShardsEnabled, isShardDomainsEnabled, isShardInstructionBudgetEnabled } from "./function-shards-flag.server.js";
+import { INSTRUCTION_PLANNER_LIMITS } from "./sync/instruction-estimate.js";
+import { summarizeCombinationGroups, type CombinationGroupsSummary } from "./sync/combination-groups.js";
+import { ShardPlanBlockedError, countShardNodes, readPreviousAssignment } from "./sync/cart-shards.server.js";
 import {
   automaticNodeBudget,
   CART_SHARD_POOL_SETTING,
   MAX_CART_SLOTS,
   type AutomaticNodeBudget,
 } from "./discount-node.server.js";
-import { redisGetString, redisSetString } from "./redis.server.js";
+import { redisDelete, redisGetString, redisSetString } from "./redis.server.js";
 import { decryptToken } from "./token-crypto.server.js";
 import {
   automaticDiscountCountUnknownMessage,
@@ -51,7 +54,8 @@ const encodedBytes = (text: string) => new TextEncoder().encode(text).byteLength
 /**
  * Compiles the shared automatic config as the publisher would build it if `includeOfferIds` ran
  * through it alongside every active non-code offer (`forceInclude`: even a code-gated one, for an
- * offer about to switch to automatic). Approximation: skips market-to-country resolution.
+ * offer about to switch to automatic). Same compile as the publisher (`compileCartOffers`);
+ * approximation: skips market-to-country resolution, which needs Shopify.
  */
 export async function compileSharedOffers(
   db: Db,
@@ -73,36 +77,46 @@ export async function compileSharedOffers(
     );
   if (rows.length === 0) return null;
   const ids = rows.map((offer) => offer.id);
-  const [codeRows, conditions, rewards, policies] = await Promise.all([
+  const [codeRows, conditions, rewards, policies, limitsEnforced] = await Promise.all([
     db.select({ offerId: discountCodes.offerId }).from(discountCodes).where(and(eq(discountCodes.shopId, shopId), inArray(discountCodes.offerId, ids))),
     db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), inArray(offerConditions.offerId, ids))),
     db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, ids))),
     db.select().from(offerCombinationPolicies).where(and(eq(offerCombinationPolicies.shopId, shopId), inArray(offerCombinationPolicies.offerId, ids))),
+    isLimitsEnforced(db, shopId),
   ]);
   const withCodes = new Set(codeRows.map((row) => row.offerId));
   const extra = new Set(forceInclude ? includeOfferIds : []);
-  const shared = rows
-    .filter((offer) => extra.has(offer.id) || !isCheckoutCodeGated(offer, withCodes.has(offer.id)))
-    .sort((a, b) => a.priority - b.priority);
-  const compiled = shared.map((offer) => {
-    const offerConditionsRows = conditions.filter((c) => c.offerId === offer.id);
-    const offerRewardsRows = rewards.filter((r) => r.offerId === offer.id);
-    const policy = policies.find((p) => p.offerId === offer.id) ?? null;
-    try {
-      return {
-        offerId: offer.id,
-        offer: compileOfferConfig(offer, offerConditionsRows, offerRewardsRows, policy, 1, { shopCurrencyCode }),
-        shipping: compileShippingOfferConfigs(offer, offerConditionsRows, offerRewardsRows, { shopCurrencyCode }),
-        conditions: offerConditionsRows,
-        name: offer.internalName,
-      };
-    } catch (error) {
-      throw offerCompileError(offer, error);
-    }
-  });
+  const heldBack = legacyGatedOfferIds(conditions);
+  const shared = rows.filter(
+    (offer) => !heldBack.has(offer.id) && (extra.has(offer.id) || !isCheckoutCodeGated(offer, withCodes.has(offer.id))),
+  );
+  const sharedIds = new Set(shared.map((offer) => offer.id));
+  const sharedPolicies = policies.filter((policy) => sharedIds.has(policy.offerId));
+  const entries = await compileCartOffers(db, shopId, shared, { conditions, rewards, policies: sharedPolicies, shopCurrencyCode, limitsEnforced, caller: "capacity-preflight" });
+  const compiled = entries.map(({ source, offer, shipping }) => ({
+    offerId: source.id,
+    offer,
+    shipping,
+    conditions: conditions.filter((c) => c.offerId === source.id),
+    name: source.internalName,
+  }));
+  const compactIds = await isFunctionCompactIdsEnabled(db, shopId);
+  // Code offers never join the shared config, but the publisher refuses one whose lists are over the limit.
+  const codeGated = rows.filter((offer) => !sharedIds.has(offer.id) && offer.status === "active");
+  const codeOffers = codeGated.length === 0
+    ? []
+    : await compileCartOffers(db, shopId, codeGated, { conditions, rewards, policies, shopCurrencyCode, limitsEnforced, caller: "capacity-preflight" }).catch(() => []);
   return {
+    codeCompiled: codeOffers.map(({ source, offer }) => ({
+      offerId: source.id,
+      offer,
+      conditions: conditions.filter((c) => c.offerId === source.id),
+      name: source.internalName,
+      kind: codeNodeKind(rewards.filter((r) => r.offerId === source.id)),
+    })),
     compiled,
-    policies,
+    policies: sharedPolicies,
+    compactIds,
     config: (extraFields: Record<string, string> = {}) =>
       serializeFunctionConfig({
         offers: compiled.map((entry) => entry.offer),
@@ -110,7 +124,7 @@ export async function compileSharedOffers(
         version: "1",
         compiledAt: "2026-01-01T00:00:00.000Z",
         ...extraFields,
-      }),
+      }, { compactIds }),
     deliveryConfig: () =>
       serializeFunctionConfig(
         {
@@ -119,7 +133,7 @@ export async function compileSharedOffers(
           version: "1",
           compiledAt: "2026-01-01T00:00:00.000Z",
         },
-        { omitQueryVariables: true },
+        { omitQueryVariables: true, compactIds },
       ),
   };
 }
@@ -189,6 +203,14 @@ export type CapacityPreflight =
         budget: CapacityBudget | null;
         singleShardReason?: "flag_off" | "combination" | "budget";
         combinationBlockers?: CombinationBlocker[];
+        /** Set when combination domains split the offers over several nodes. */
+        combinationGroups?: CombinationGroupsSummary;
+        /** Domains mode: the combinesWith each planned node will carry, in slot order. */
+        policyPerSlot?: CombinationPolicy[];
+        /** Instruction budget on: each planned node's estimated instructions (offers only, without the node floor), in slot order. */
+        instructionsPerSlot?: number[];
+        /** Instruction budget on: warnings the planner raised (never a block). */
+        warnings?: PlanWarning[];
       };
     }
   | {
@@ -197,7 +219,9 @@ export type CapacityPreflight =
       offerIds: string[];
       offerNames: string[];
       numbers: Record<string, number>;
-      reason?: "bytes" | "keys" | "tags" | "combination";
+      reason?: PlanBlockReason | "combination";
+      /** OFFER_TOO_LARGE with sharding on: why the offer cannot be split across slots (offer-split.ts reason code). */
+      splitRefusal?: SplitRefusal;
       message: string;
     };
 
@@ -206,6 +230,10 @@ export type CapacityFailure = Extract<CapacityPreflight, { ok: false }>;
 export interface CapacityOptions {
   /** Overrides the per-shop flag (tests, diagnostics). */
   shardsEnabled?: boolean;
+  /** Overrides the combination-domains setting (tests, diagnostics). */
+  domainsEnabled?: boolean;
+  /** Overrides the instruction-budget setting (tests, diagnostics). */
+  instructionBudgetEnabled?: boolean;
   /** Count the offers in `offerIds` even when code-gated (an offer about to switch to automatic). */
   forceInclude?: boolean;
   /** Overrides how the live automatic-discount budget is read (default: Redis-cached `automaticNodeBudget`). */
@@ -248,6 +276,15 @@ export async function loadAutomaticBudget(db: Db, shopId: string): Promise<Autom
   }
 }
 
+/** Drops the cached automatic-discount count (after Apply or Undo changed it) so the next preflight reads Shopify again. */
+export async function invalidateAutomaticBudgetCache(shopId: string): Promise<void> {
+  try {
+    await redisDelete(budgetKey(shopId));
+  } catch {
+    /* cache is best effort */
+  }
+}
+
 export { readPreviousAssignment };
 
 async function fallbackMaxSlots(db: Db, shopId: string): Promise<number> {
@@ -265,6 +302,8 @@ async function fallbackMaxSlots(db: Db, shopId: string): Promise<number> {
   }
   return Math.min(MAX_CART_SLOTS, Math.max(shards, await countShardNodes(db, shopId)) + 2);
 }
+
+const summaryOf = (summary: CombinationGroupsSummary | null) => (summary ? { combinationGroups: summary } : {});
 
 /**
  * Plans the cart shards in memory exactly as the publisher will and returns a structured, attributable
@@ -291,6 +330,23 @@ export async function preflightCapacity(
     return { ok: true, plan: { slots: 1, bytesPerSlot: [0], deliveryBytes: 0, maxSlots: 1, budget: null } };
   }
 
+  for (const entry of shared.codeCompiled) {
+    try {
+      assertCodeOfferListsWithinLimit(entry.offer, entry.conditions, entry.kind);
+    } catch (error) {
+      if (!(error instanceof ShardPlanBlockedError)) throw error;
+      return {
+        ok: false,
+        code: error.capacity.code,
+        offerIds: error.capacity.offerIds,
+        offerNames: [entry.name],
+        numbers: error.capacity.numbers,
+        reason: "lists",
+        message: error.message,
+      };
+    }
+  }
+
   const names = new Map(shared.compiled.map((entry) => [entry.offerId, entry.name]));
   const nameList = (ids: string[]) => ids.map((id) => names.get(id) ?? id);
   const fail = (
@@ -298,11 +354,21 @@ export async function preflightCapacity(
     ids: string[],
     numbers: Record<string, number>,
     message: (offerNames: string[]) => string,
-    reason?: "bytes" | "keys" | "tags" | "combination",
+    reason?: PlanBlockReason | "combination",
+    splitRefusal?: SplitRefusal,
   ): CapacityPreflight => {
     const unique = [...new Set(ids)];
     const offerNames = nameList(unique);
-    return { ok: false, code, offerIds: unique, offerNames, numbers, message: message(offerNames), ...(reason ? { reason } : {}) };
+    return {
+      ok: false,
+      code,
+      offerIds: unique,
+      offerNames,
+      numbers,
+      message: message(offerNames),
+      ...(reason ? { reason } : {}),
+      ...(splitRefusal ? { splitRefusal } : {}),
+    };
   };
 
   const conditions = shared.compiled.flatMap((entry) => entry.conditions);
@@ -324,16 +390,21 @@ export async function preflightCapacity(
     }
   }
 
-  const units = buildPlanUnits(shared.compiled, conditions, shared.policies);
+  const splitOptions = enabled ? await loadSplitOptions(db, shopId, shared.compiled.map((entry) => entry.offer)) : {};
+  const instructionBudget = enabled && (opts.instructionBudgetEnabled ?? (await isShardInstructionBudgetEnabled(db, shopId)));
+  const planOptions = { ...splitOptions, compactIds: shared.compactIds, instructions: instructionBudget };
+  const instructionLimits = instructionBudget ? INSTRUCTION_PLANNER_LIMITS : {};
+  const { units } = buildPlanUnitSet(shared.compiled, conditions, shared.policies, planOptions);
   const previous = await readPreviousAssignment(db, shopId);
-  const policy = compileDiscountCombinationPolicy(shared.compiled.map((entry) => entry.offer));
-  const plan = planShards(units, previous, { ...SLOT_LIMITS, maxSlots, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, policy);
+  const domains = enabled && (opts.domainsEnabled ?? (await isShardDomainsEnabled(db, shopId)));
+  const mode = domains ? "domains" : "uniform";
+  const plan = planShards(units, previous, { ...SLOT_LIMITS, maxSlots, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity, ...instructionLimits }, mode);
   const blockers = combinationBlockers(shared.compiled, units.some((unit) => unit.hasOrderRewards));
-  const combinationForcesSingle = enabled && maxSlots > 1 && blockers.length > 0;
+  const combinationForcesSingle = enabled && !domains && maxSlots > 1 && blockers.length > 0;
   let blocked = plan.blocked;
   if (blocked && enabled && maxSlots < MAX_CART_SLOTS && blocked.code !== "AUTOMATIC_DISCOUNT_LIMIT") {
     // The budget, not the offers, may be what is short: replan with every slot to learn how many are needed.
-    const wide = planShards(units, previous, { ...SLOT_LIMITS, maxSlots: MAX_CART_SLOTS, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity }, policy);
+    const wide = planShards(units, previous, { ...SLOT_LIMITS, maxSlots: MAX_CART_SLOTS, maxTags: enabled ? SLOT_LIMITS.maxTags : Infinity, ...instructionLimits }, mode);
     if (!wide.blocked) {
       blocked = {
         code: "AUTOMATIC_DISCOUNT_LIMIT",
@@ -383,6 +454,7 @@ export async function preflightCapacity(
           numbers,
           (n) => offerTooLargeMessage(n, blocked.reason ?? "bytes", numbers, blocked.code === "GROUP_TOO_LARGE"),
           blocked.reason,
+          enabled && blocked.code === "OFFER_TOO_LARGE" ? blocked.splitRefusal : undefined,
         );
     }
   }
@@ -425,6 +497,10 @@ export async function preflightCapacity(
           : maxSlots <= 1
             ? { singleShardReason: "budget" as const }
             : {}),
+      ...(domains ? { ...summaryOf(summarizeCombinationGroups(units, plan)), policyPerSlot: plan.slots.map((slot) => slot.policy) } : {}),
+      ...(instructionBudget
+        ? { instructionsPerSlot: plan.slots.map((slot) => slot.instructions ?? 0), ...(plan.warnings ? { warnings: plan.warnings } : {}) }
+        : {}),
     },
   };
 }

@@ -3,6 +3,7 @@ import { parseUuidParam } from "../lib/route-params.js";
 import { useState } from "react";
 import { SUPPORTED_CURRENCIES, validateConditionValue, validateRewardPayload, ConditionTypeSchema, ConditionScopeSchema, resolveOnlyMatchedLines, resolveRejectUnmatchedLines } from "@promo/shared-types";
 import { getShopContext } from "../lib/shop-context.server.js";
+import { formatStoredAmount, fromStoredAmount, isZeroDecimalCurrency, toStoredAmount } from "../lib/money.js";
 import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { cartLabelsFromForm, ok, parseJsonRecord, parseJsonStringArray, parseDateRange, toZonedLocalInput } from "../lib/offer-validation.server.js";
@@ -53,6 +54,8 @@ import { duplicateOffer } from "../lib/offer-duplicate.server.js";
 import { buildRewardRecord } from "../lib/reward-record.server.js";
 import { deriveGiftBlock, mergeFallbacks, parseFallbackByGift, planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.js";
 import { applyGiftRewardPlan, loadProductOf } from "../lib/gift-rewards.server.js";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
@@ -100,7 +103,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   };
 };
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   const { session, shopId, currencyCode: shopCurrencyCode, db, timezone: shopTimezone } = context;
   const offerId = parseUuidParam(params);
@@ -367,7 +370,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     case "save_subconditions": {
       const subResult = parseJsonRecord(formData, "subconditions");
       if (subResult.error) return { error: subResult.error };
-      const normalized = normalizeOfferSubconditions(subResult.data!);
+      const normalized = normalizeOfferSubconditions(subResult.data!, shopCurrencyCode);
       if (!normalized.success) return { error: normalized.error };
 
       // Replace every sub-condition atomically: this editor manages the whole
@@ -458,7 +461,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   return { success: true };
-};
+});
 
 
 /* ── Currency chips shown on monetary conditions ────────── */
@@ -784,6 +787,7 @@ function ConditionCard({
   initialValue,
   onDelete,
   isCodePromo,
+  shopCurrency,
 }: {
   conditionId: string;
   conditionType: string;
@@ -791,6 +795,7 @@ function ConditionCard({
   initialValue: ConditionValue;
   onDelete: () => void;
   isCodePromo: boolean;
+  shopCurrency: string;
 }) {
   const fetcher = useFetcher();
   const isSaving = fetcher.state !== "idle";
@@ -885,10 +890,10 @@ function ConditionCard({
                     className="b-input"
                     type="number"
                     style={{ paddingLeft: 22 }}
-                    value={String((val.thresholdCents as number ?? 50000) / 100)}
-                    onChange={(e) => update({ thresholdCents: Math.round(parseFloat(e.target.value || "0") * 100) })}
+                    value={String(fromStoredAmount(val.thresholdCents as number ?? 50000, shopCurrency))}
+                    onChange={(e) => update({ thresholdCents: toStoredAmount(parseFloat(e.target.value || "0"), shopCurrency) })}
                     onBlur={() => save()}
-                    step="0.01"
+                    step={isZeroDecimalCurrency(shopCurrency) ? "1" : "0.01"}
                   />
                 </div>
               </div>
@@ -902,10 +907,10 @@ function ConditionCard({
                     className="b-input"
                     type="number"
                     style={{ paddingLeft: 22 }}
-                    value={String((val.maxCents as number ?? 0) / 100)}
-                    onChange={(e) => update({ maxCents: Math.round(parseFloat(e.target.value || "0") * 100) })}
+                    value={String(fromStoredAmount(val.maxCents as number ?? 0, shopCurrency))}
+                    onChange={(e) => update({ maxCents: toStoredAmount(parseFloat(e.target.value || "0"), shopCurrency) })}
                     onBlur={() => save()}
-                    step="0.01"
+                    step={isZeroDecimalCurrency(shopCurrency) ? "1" : "0.01"}
                   />
                 </div>
               </div>
@@ -936,8 +941,8 @@ function ConditionCard({
                 className="b-input"
                 type="number"
                 style={{ paddingLeft: 22 }}
-                value={String((val.thresholdCents as number ?? 50000) / 100)}
-                onChange={(e) => update({ thresholdCents: Math.round(parseFloat(e.target.value || "0") * 100) })}
+                value={String(fromStoredAmount(val.thresholdCents as number ?? 50000, shopCurrency))}
+                onChange={(e) => update({ thresholdCents: toStoredAmount(parseFloat(e.target.value || "0"), shopCurrency) })}
                 onBlur={() => save()}
               />
             </div>
@@ -1260,9 +1265,9 @@ function conditionSummary(conditionType: string, value: ConditionValue, currency
   const conditionCurrency = (v.currencyCode as string | undefined) ?? currencyCode;
   const fmt = (cents: number) => {
     try {
-      return getConditionCurrencyFormatter(conditionCurrency).format(cents / 100);
+      return getConditionCurrencyFormatter(conditionCurrency).format(fromStoredAmount(cents, currencyCode));
     } catch {
-      return `${conditionCurrency} ${(cents / 100).toFixed(2)}`;
+      return `${conditionCurrency} ${formatStoredAmount(cents, currencyCode)}`;
     }
   };
   switch (conditionType) {
@@ -1439,7 +1444,7 @@ export default function OfferDetailPage() {
   const mainConditions = conditions.filter((c) => c.scope === "main");
   const subConditions = conditions.filter((c) => c.scope === "sub");
 
-  const initialSubs = subconditionsFromRows(subConditions);
+  const initialSubs = subconditionsFromRows(subConditions, shopCurrencyCode);
   const [subState, setSubField] = useObjectState(() => ({
     subModalOpen: false,
     activeSubs: initialSubs.activeSubs,
@@ -1507,9 +1512,9 @@ export default function OfferDetailPage() {
     const valueFirst = valueFirstType(newCondType);
     if (valueFirst && !validateConditionValue(valueFirst, newCondValue).success) return;
     const defaults: Record<string, object> = {
-      cart_value: { thresholdCents: 50000, currencyCode: "USD", appliesTo: "any_product" },
+      cart_value: { thresholdCents: 50000, currencyCode: shopCurrencyCode, appliesTo: "any_product" },
       cart_quantity: { minQuantity: 1, appliesTo: "any_product" },
-      cart_value_multiplier: { thresholdCents: 50000, currencyCode: "USD", appliesTo: "any_product" },
+      cart_value_multiplier: { thresholdCents: 50000, currencyCode: shopCurrencyCode, appliesTo: "any_product" },
       specific_product: { minQtyPerProduct: 1, multiplyGifts: false, giftsMatchProducts: false, trackMode: "variant", appliesTo: "specific_products", variantIds: [] },
       page_url: { patterns: [""], matchMode: "starts_with", caseSensitive: false },
       page_types: { pageTypes: ["home", "collection", "product"] },
@@ -1661,8 +1666,8 @@ export default function OfferDetailPage() {
                       {rewards.length > 0 ? rewards.filter((reward) => reward.id !== giftRewards[0]?.id ? reward.rewardType !== "product_gift" : true).map((reward) => (
                         <p key={reward.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>
                           {reward.id === giftRewards[0]?.id && giftRewards.length > 1
-                            ? `${rewardSummary(reward)} (${giftRewards.length} gift products)`
-                            : rewardSummary(reward)}
+                            ? `${rewardSummary(reward, shopCurrencyCode)} (${giftRewards.length} gift products)`
+                            : rewardSummary(reward, shopCurrencyCode)}
                         </p>
                       )) : <p className="b-text-sm b-text-sub" style={{ margin: 0 }}>No rewards configured.</p>}
                     </div>
@@ -1673,6 +1678,7 @@ export default function OfferDetailPage() {
 
             <CodeNoticeBanners offerId={offer.id} notices={codeNotices} />
 {publishWarningsDialog}
+            <CapacityLimitModal data={actionData?.capacity} />
             {actionData && "error" in actionData && actionData.error && (
               <div className="b-banner b-banner-red" style={{ marginBottom: 12 }}>
                 <span className="b-banner-icon">!</span>
@@ -1796,6 +1802,7 @@ export default function OfferDetailPage() {
                   initialValue={c.value as ConditionValue}
                   onDelete={() => deleteCondition(c.id)}
                   isCodePromo={isCodePromo}
+                  shopCurrency={shopCurrencyCode}
                 />
               ))}
 
@@ -1912,7 +1919,7 @@ export default function OfferDetailPage() {
               <p className="b-editor-section-title">Select gifts</p>
               <div className="b-editor-section-body">
                 {giftRewards.map((reward) => (
-                  <p key={reward.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>{rewardSummary(reward)}</p>
+                  <p key={reward.id} className="b-text-sm" style={{ margin: "0 0 6px" }}>{rewardSummary(reward, shopCurrencyCode)}</p>
                 ))}
                 <p className="b-help">This offer gives a different gift at each cart subtotal. Edit the tiers, their gifts and how they combine on the rewards page.</p>
                 <button type="button" className="b-btn b-btn-secondary" onClick={() => void navigate(`/app/offers/${offer.id}/rewards`)}>Edit gift tiers</button>

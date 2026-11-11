@@ -22,6 +22,7 @@ Operational procedures for the Promo Engine. Release steps live in `docs/DEPLOY.
 16. [Live-store E2E](#live-store-e2e)
 17. [Offer limits: review and usage backfill](#offer-limits-review-and-usage-backfill)
 18. [Template / Section / Test group conditions](#template--section--test-group-conditions)
+19. [Removing gifts Shopify did not discount](#removing-gifts-shopify-did-not-discount)
 
 ## Environments and ownership
 
@@ -241,6 +242,7 @@ User action U3. Create in Sentry (org → Alerts), project = shopify-admin:
 5. **Uptime**: any uptime monitor (Sentry Uptime, Better Stack, Vercel checks) on `https://freebies-app-ambrosia.vercel.app/api/health` and `https://freebies-app-shopify-admin.vercel.app/api/health`, 1-minute interval, alert after 2 failures.
 6. **Vercel**: Settings → Notifications → deployment failed, and Spend/usage alerts.
 7. **Neon**: Project → Settings → Notifications for storage/compute limits.
+8. **Unfunded gifts**: issue alert on the message "Gifts removed because Shopify did not discount them" (tag `reason:gift_not_discounted`, one issue per shop through the `shop` tag), "an issue is first seen" or "seen more than once in 1 hour", environment `production`, on-call channel. The app only sends it when one shop passes 20 removals in an hour (`UNFUNDED_GIFT_ALERT_PER_HOUR`), at most one message per shop per hour. See [Removing gifts Shopify did not discount](#removing-gifts-shopify-did-not-discount).
 
 Sentry is initialised with `sendDefaultPii: false` and a `beforeSend` scrubber (`app/lib/sentry-scrub.server.ts`) that strips cookies, auth headers, client IPs, proxy signatures, emails and Shopify tokens.
 
@@ -429,3 +431,43 @@ These three page conditions read stamps that the storefront runtime writes on ea
   - `_promo_exp`: `expId:variantKey` entries. Missing for visitors outside the test, or without analytics consent.
   - `@` means the line was added on a page where the condition held; no `@` means it was remembered from earlier in the visit (24 h). A condition with scope "page" needs the `@` entry.
   - Then check: the offer was published after the last theme or test change; the visitor is in the selected arm; the line was added after the stamp was set (existing lines are never re-stamped, so remove and re-add the item).
+
+## Removing gifts Shopify did not discount
+
+Shopify combines two discounts only when both allow it; otherwise it keeps the better set. When the set holding our gift loses (a bigger code, another app, a Function failure), the auto-added gift stays in the cart at full price. The storefront runtime can remove such a gift: a tagged gift line (`_promo_engine_*` properties) whose `original_line_price` equals `final_line_price` on a fresh cart read, with every line of that reward undiscounted. It then tells `/evaluate` not to re-add it while the paid lines, codes, login and market are unchanged. Gift lines without our properties (theme or other apps) are never touched.
+
+### Flag (default OFF)
+
+Per shop, app setting `storefront.remove_unfunded_gifts` (`"true"` enables), delivered to the theme as the app metafield `promo_engine.remove_unfunded_gifts` (boolean), which the app embed puts in `__promoEngineConfig.removeUnfundedGifts`. Only `true` enables it. When off the runtime behaves as before: no removal, no suppression keys sent, no 1.5 s re-check.
+
+```
+pnpm tsx scripts/set-remove-unfunded-gifts.ts <shop-domain> status|on|off
+```
+
+The metafield is written on publish, so **republish the shop after toggling** (MCP `promos_republish_shop` or any offer save).
+
+```
+pnpm tsx scripts/republish-shop.ts <shop-domain>... [--all] [--plan]
+```
+
+Republishes through the real publish flow and prints each shop's `discount_shards` (`slotN=<bytes>B/<units>u`). `--all` takes every shop; `--plan` is a dry run (preflightCapacity only, nothing written); unknown domains are refused. Use it after `set-function-shards`, `set-function-compact-ids` and `set-remove-unfunded-gifts`.
+
+### Customer notice
+
+When the runtime removes such a gift it shows a small non-blocking toast (`role="status"`, top-centre, auto-dismiss 8 s, paused on hover/focus, closes with its button or Escape, no motion under `prefers-reduced-motion`). Copy is the theme locale key `widgets.giftRemoved` (default "Your free gift was removed because it no longer applies to this cart."); merchants translate it in the theme editor like the other widget strings. The drawing code is the lazy asset `promo-engine-gift-notice.js`, requested on the first removal. The offer's Combination page shows a matching note to merchants when a gift offer does not combine with product discounts. The theme extension (with the new embed and runtime asset) must be deployed first.
+
+### Rollout order
+
+hpn-test-store, then HPN and TRU, then Ambrosia, then One Sol. Per shop: set `on`, republish, check the cart in the dev flow (a gift whose offer loses best-of disappears; a funded gift stays), watch the alert for a day, then the next shop. Turning it `off` and republishing returns the shop to the old behavior within the theme cache time.
+
+### Alert
+
+Removals reach the server as the analytics event `promo_engine:gift_removed` with `reason=gift_not_discounted` (sent by the web pixel, so only shoppers whose consent allows analytics are counted: the real number is higher). `apps.promo-engine.analytics` counts them per shop per hour (Redis fixed window, in-memory if Redis is down). Above 20 in an hour (`UNFUNDED_GIFT_ALERT_PER_HOUR`) it logs a structured warning and sends one Sentry message per shop per hour. A burst usually means a Function outage, deploy drift or a paused node: check Discounts in the Shopify admin and Function monitoring first. Isolated removals are normal (a bigger code won) and are not alerted.
+
+### Residual cases (not handled)
+
+- R1: the winning discount also covers the gift line, so the line is partly discounted and is not detected; the customer pays the remainder.
+- R2: a code entered in checkout (not in the cart) cannot be reacted to; the runtime only sees the cart.
+- R3: headless / Storefront API carts are not covered (the runtime reads the Ajax cart).
+
+No customer-facing notice is shown when a gift is removed yet.

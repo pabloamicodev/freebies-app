@@ -22,13 +22,15 @@ import type { DeliveryGroupType } from "@promo/shared-types";
 import { buildRewardRecord } from "../lib/reward-record.server.js";
 import { splitTextareaList } from "../lib/textarea-list.js";
 import { and, eq } from "drizzle-orm";
-import { fromStoredAmount } from "../lib/money.js";
+import { formatStoredAmount, fromStoredAmount, isZeroDecimalCurrency, toStoredAmount } from "../lib/money.js";
 import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { lowerMainThresholdToLowestTier } from "../lib/gift-tiered-offer.server.js";
 import { giftTierModeSchema } from "../lib/gift-tier-campaigns.js";
 import { readRewardTiers, rewardSummary, targetSummaryParts } from "../lib/offer-summaries.js";
 import { CartLabelsField } from "../components/CartLabelsField.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -107,7 +109,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db, currencyCode: shopCurrencyCode } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
@@ -240,7 +242,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   return { success: true };
-};
+});
 
 const REWARD_TYPES = [
   { label: "Product Gift — add a free or discounted product", value: "product_gift" },
@@ -335,6 +337,7 @@ export default function OfferRewardsPage() {
     discountType: "free",
     pickerOpen: false,
     selectedGiftGids: [] as string[],
+    wholeProductGids: [] as string[],
     fallbackPickerOpen: false,
     fallbackGids: [] as string[],
     currencyCode: shopCurrencyCode,
@@ -362,6 +365,7 @@ export default function OfferRewardsPage() {
     discountType,
     pickerOpen,
     selectedGiftGids,
+    wholeProductGids,
     fallbackPickerOpen,
     fallbackGids,
     currencyCode,
@@ -387,6 +391,7 @@ export default function OfferRewardsPage() {
   const setDiscountType = createFieldSetter(setRewardField, "discountType");
   const setPickerOpen = createFieldSetter(setRewardField, "pickerOpen");
   const setSelectedGiftGids = createFieldSetter(setRewardField, "selectedGiftGids");
+  const setWholeProductGids = createFieldSetter(setRewardField, "wholeProductGids");
   const setFallbackPickerOpen = createFieldSetter(setRewardField, "fallbackPickerOpen");
   const setFallbackGids = createFieldSetter(setRewardField, "fallbackGids");
   const setCurrencyCode = createFieldSetter(setRewardField, "currencyCode");
@@ -434,7 +439,7 @@ export default function OfferRewardsPage() {
     setDiscountType(r.discountType);
     setCurrencyCode(typeof value["currencyCode"] === "string" ? (value["currencyCode"] as string) : shopCurrencyCode);
     setGiftQuantity(r.quantity != null ? String(r.quantity) : "1");
-    setGiftMinSubtotal(r.minCartSubtotalCents ? String(r.minCartSubtotalCents / 100) : "");
+    setGiftMinSubtotal(r.minCartSubtotalCents ? String(fromStoredAmount(r.minCartSubtotalCents, shopCurrencyCode)) : "");
 
     const targetVariantIds = Array.isArray(target["variantIds"]) ? target["variantIds"] as string[] : [];
     const targetProductIds = Array.isArray(target["productIds"]) ? target["productIds"] as string[] : [];
@@ -486,8 +491,8 @@ export default function OfferRewardsPage() {
         tiers.length > 0
           ? tiers.map((tier, index) => ({
               key: `edit-shipping-tier-${index}`,
-              minimumSubtotal: typeof tier["minimumSubtotalCents"] === "number" ? (tier["minimumSubtotalCents"] / 100).toString() : "0",
-              maximumSubtotal: typeof tier["maximumSubtotalCents"] === "number" ? (tier["maximumSubtotalCents"] / 100).toString() : "",
+              minimumSubtotal: typeof tier["minimumSubtotalCents"] === "number" ? fromStoredAmount(tier["minimumSubtotalCents"], shopCurrencyCode).toString() : "0",
+              maximumSubtotal: typeof tier["maximumSubtotalCents"] === "number" ? fromStoredAmount(tier["maximumSubtotalCents"], shopCurrencyCode).toString() : "",
               discountType: tier["discountType"] === "fixed_amount" ? "fixed_amount" : "percentage",
               discountValue: String(tier["discountValue"] ?? 0),
               appliesWhen: tier["appliesWhen"] === "has_subscription" || tier["appliesWhen"] === "one_time_only" ? tier["appliesWhen"] : "",
@@ -511,6 +516,8 @@ export default function OfferRewardsPage() {
     rewardType !== "shipping_discount" &&
     discountType !== "free" &&
     discountType !== "cheapest_item_free";
+  const isWholeUnitAmount =
+    isZeroDecimalCurrency(shopCurrencyCode) && discountType !== "percentage" && discountType !== "most_expensive_item_discount";
 
   function updateShippingTier(
     index: number,
@@ -538,9 +545,9 @@ export default function OfferRewardsPage() {
 
   const serializedShippingTiers = JSON.stringify(
     shippingTiers.map((tier) => ({
-      minimumSubtotalCents: Math.round(Number(tier.minimumSubtotal || 0) * 100),
+      minimumSubtotalCents: toStoredAmount(Number(tier.minimumSubtotal || 0), shopCurrencyCode),
       ...(tier.maximumSubtotal
-        ? { maximumSubtotalCents: Math.round(Number(tier.maximumSubtotal) * 100) }
+        ? { maximumSubtotalCents: toStoredAmount(Number(tier.maximumSubtotal), shopCurrencyCode) }
         : {}),
       discountType: tier.discountType,
       discountValue: Number(tier.discountValue || 0),
@@ -591,7 +598,11 @@ export default function OfferRewardsPage() {
         allowMultiple={rewardType !== "product_gift"}
         availabilityPolicy={rewardType === "product_gift" ? "block" : "warn"}
         selectedIds={selectedGiftGids}
-        onSelect={setSelectedGiftGids}
+        selectedWholeProducts={wholeProductGids}
+        onSelect={(gids, wholeProducts) => {
+          setSelectedGiftGids(gids);
+          setWholeProductGids(wholeProducts);
+        }}
       />
       <ProductPicker
         open={fallbackPickerOpen}
@@ -605,6 +616,7 @@ export default function OfferRewardsPage() {
       />
 
       <div className="b-page">
+        <CapacityLimitModal data={actionData?.capacity} />
         {/* ── Page header ─────────────────────────────────── */}
         <PageHeader
           title="Rewards / Gifts"
@@ -687,14 +699,14 @@ export default function OfferRewardsPage() {
                         <span className="b-text-sm b-text-sub">Qty: {r.quantity}</span>
                       )}
                       {r.minCartSubtotalCents ? (
-                        <span className="b-badge b-badge-gray">Unlocks at {(r.minCartSubtotalCents / 100).toFixed(2)}</span>
+                        <span className="b-badge b-badge-gray">Unlocks at {formatStoredAmount(r.minCartSubtotalCents, shopCurrencyCode)}</span>
                       ) : null}
                       {r.isAutoAdd && <span className="b-badge b-badge-blue">Auto-add</span>}
                       {r.isCustomerSelectable && (
                         <span className="b-badge b-badge-orange">Customer selects</span>
                       )}
                       {r.rewardType === "product_discount" && readRewardTiers(r.value).length > 0 && (
-                        <span className="b-text-sm b-text-sub">{rewardSummary(r).split(" — ")[1]?.split(" · ")[0]}</span>
+                        <span className="b-text-sm b-text-sub">{rewardSummary(r, shopCurrencyCode).split(" — ")[1]?.split(" · ")[0]}</span>
                       )}
                       {targetSummaryParts(r.target).map((part) => (
                         <span key={part} className="b-text-sm b-text-sub">
@@ -860,15 +872,15 @@ export default function OfferRewardsPage() {
                           name="discountValue"
                           type="number"
                           className="b-input"
-                          min="0.01"
-                          step="0.01"
+                          min={isWholeUnitAmount ? "1" : "0.01"}
+                          step={isWholeUnitAmount ? "1" : "0.01"}
                           required
                           autoComplete="off"
                           defaultValue={
                             typeof editingRewardValue["amount"] === "number"
                               ? (discountType === "percentage" || discountType === "most_expensive_item_discount"
                                   ? editingRewardValue["amount"]
-                                  : fromStoredAmount(editingRewardValue["amount"] as number, typeof editingRewardValue["currencyCode"] === "string" ? editingRewardValue["currencyCode"] : shopCurrencyCode))
+                                  : fromStoredAmount(editingRewardValue["amount"] as number, shopCurrencyCode))
                               : undefined
                           }
                         />
@@ -1237,7 +1249,7 @@ export default function OfferRewardsPage() {
                                     type="number"
                                     className="b-input"
                                     min="0"
-                                    step="0.01"
+                                    step={isZeroDecimalCurrency(shopCurrencyCode) ? "1" : "0.01"}
                                     value={tier.minimumSubtotal}
                                     onChange={(event) =>
                                       updateShippingTier(
@@ -1259,7 +1271,7 @@ export default function OfferRewardsPage() {
                                     type="number"
                                     className="b-input"
                                     min={tier.minimumSubtotal || "0"}
-                                    step="0.01"
+                                    step={isZeroDecimalCurrency(shopCurrencyCode) ? "1" : "0.01"}
                                     placeholder="No maximum"
                                     value={tier.maximumSubtotal}
                                     onChange={(event) =>
@@ -1419,7 +1431,10 @@ export default function OfferRewardsPage() {
                         {/* Resolves real titles/thumbnails instead of showing raw GIDs */}
                         <SelectedProductsList
                           gids={selectedGiftGids}
-                          onRemove={(gid) => setSelectedGiftGids((prev) => prev.filter((g) => g !== gid))}
+                          onRemove={(gid) => {
+                            setSelectedGiftGids((prev) => prev.filter((g) => g !== gid));
+                            setWholeProductGids([]);
+                          }}
                           variantMode={
                             !(rewardType === "product_gift" || (rewardType === "product_discount" && productTargetType === "products"))
                           }
@@ -1429,6 +1444,7 @@ export default function OfferRewardsPage() {
                           name="variantGids"
                           value={selectedGiftGids.join("\n")}
                         />
+                        <input type="hidden" name="wholeProductGids" value={wholeProductGids.join("\n")} />
                       </div>
 
                       {rewardType === "product_gift" && (
@@ -1517,8 +1533,8 @@ export default function OfferRewardsPage() {
                             className="b-input"
                             value={giftMinSubtotal}
                             onChange={(e) => setGiftMinSubtotal(e.target.value)}
-                            min="0.01"
-                            step="0.01"
+                            min={isZeroDecimalCurrency(shopCurrencyCode) ? "1" : "0.01"}
+                            step={isZeroDecimalCurrency(shopCurrencyCode) ? "1" : "0.01"}
                             placeholder="No threshold"
                             autoComplete="off"
                           />

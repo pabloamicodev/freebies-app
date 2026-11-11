@@ -1,5 +1,5 @@
 import type { NormalizedCart, EligibilityReason, CurrencyContext } from "@promo/shared-types";
-import { ok, err, type Result } from "@promo/shared-types";
+import { ok, err, overrideToCartUnits, toCartUnits, type Result } from "@promo/shared-types";
 import { extractQualifyingLines, sumQualifyingValueNet } from "../cart-parser.js";
 
 export interface CartValueConditionValue {
@@ -51,21 +51,23 @@ export function evaluateCartValue(
   const cartValueCents = sumQualifyingValueNet(qualifyingLines);
 
   // Resolve threshold — prefer currency override, fallback to auto-conversion
-  let thresholdCents = condition.thresholdCents;
-  let maxCents = condition.maxCents;
   const activeCurrency = currency.activeCurrencyCode.toUpperCase();
   // Saved conditions may lack currencyCode; their thresholds are in the shop currency.
   const conditionCurrency = (condition.currencyCode ?? currency.shopCurrencyCode).toUpperCase();
+  // The stored unit is the shop currency's (what the Functions read); the free-text tag only decides whether to convert.
+  const unit = currency.shopCurrencyCode;
+  let thresholdCents = toCartUnits(condition.thresholdCents, unit);
+  let maxCents = condition.maxCents === undefined ? undefined : toCartUnits(condition.maxCents, unit);
   if (condition.currencyOverrides?.[activeCurrency] !== undefined) {
-    thresholdCents = condition.currencyOverrides[activeCurrency]!;
+    thresholdCents = overrideToCartUnits(condition.currencyOverrides[activeCurrency]!, activeCurrency, unit);
   } else if (
     activeCurrency !== conditionCurrency &&
     currency.exchangeRate
   ) {
-    thresholdCents = Math.ceil(condition.thresholdCents * currency.exchangeRate);
+    thresholdCents = Math.ceil(toCartUnits(condition.thresholdCents, unit) * currency.exchangeRate);
   }
   if (condition.maxCurrencyOverrides?.[activeCurrency] !== undefined) {
-    maxCents = condition.maxCurrencyOverrides[activeCurrency]!;
+    maxCents = overrideToCartUnits(condition.maxCurrencyOverrides[activeCurrency]!, activeCurrency, unit);
   } else if (
     maxCents !== undefined &&
     activeCurrency !== conditionCurrency &&

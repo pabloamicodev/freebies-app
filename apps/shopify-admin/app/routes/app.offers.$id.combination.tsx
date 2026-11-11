@@ -3,6 +3,8 @@
  * Controls stacking, combination with other discounts, max applications.
  */
 
+import { useState } from "react";
+import { GIFT_NOT_COMBINING_NOTE, showGiftRemovalNote } from "../lib/gift-combination-note.js";
 import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData, useActionData, useNavigation, Form, Link } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
@@ -16,6 +18,8 @@ import { republishIfActive } from "../lib/offer-publish-flow.server.js";
 import { offerCombinationPolicies, offerRewards, offers } from "@promo/db";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -75,7 +79,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   return { offer, policy, restricting, titleCollisions, help, missingCustomerScope };
 };
 
-export const action = async ({ request, params }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
   const { session, shopId, db } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
@@ -136,7 +140,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (publishError) return { error: publishError };
 
   return { success: true, warning: titleWarning };
-};
+});
 
 const RESTRICTION_LABELS = {
   orderDiscounts: "order discounts",
@@ -149,6 +153,7 @@ export default function OfferCombinationPage() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
+  const [combinesWithProducts, setCombinesWithProducts] = useState(policy?.combinesWithProductDiscounts ?? false);
   if (!offer) return <NotFound message="Not found." />;
 
   const restrictionEntries = (Object.keys(RESTRICTION_LABELS) as Array<keyof typeof RESTRICTION_LABELS>)
@@ -157,6 +162,7 @@ export default function OfferCombinationPage() {
 
   return (
     <div className="b-page">
+      <CapacityLimitModal data={actionData?.capacity} />
       {/* Header */}
       <PageHeader title="Combination Policy" subtitle={offer.internalName} backTo={`/app/offers/${offer.id}`} />
 
@@ -240,10 +246,12 @@ export default function OfferCombinationPage() {
                       type="checkbox"
                       name="product_discounts"
                       defaultChecked={policy?.combinesWithProductDiscounts ?? false}
+                      onChange={(e) => setCombinesWithProducts(e.target.checked)}
                     />
                     <div>
                       <div className="b-checkbox-label">Combines with product discounts</div>
                       <div className="b-checkbox-help">Allow this offer to stack with product-level discounts.</div>
+                      {showGiftRemovalNote(offer.type, combinesWithProducts) && <div className="b-checkbox-help" role="note">{GIFT_NOT_COMBINING_NOTE}</div>}
                     </div>
                   </label>
 

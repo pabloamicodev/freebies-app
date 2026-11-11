@@ -4,15 +4,31 @@
  * Accessible from admin navigation (Debug / Diagnostics).
  */
 
-import { useLoaderData } from "react-router";
+import { useFetcher, useLoaderData, useSearchParams } from "react-router";
 import { useState } from "react";
 import { authenticate } from "../shopify.server.js";
 import { getDb } from "@promo/db";
 import { shops, offers, productCache, variantCache, analyticsEvents, cartMutationLogs } from "@promo/db";
 import { eq, and, count, gte } from "drizzle-orm";
-import type { LoaderFunctionArgs } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { changeCombinationDomains } from "../lib/combination-domains-setting.server.js";
+import { publishShopConfig } from "../lib/offer-publish-flow.server.js";
+import { ShopifyLimitsCard } from "../components/ShopifyLimits.js";
+import { loadLimitsMeter } from "../lib/capacity-meter.server.js";
+import { CapacityIncidentsSection, type IncidentRow } from "../components/CapacityIncidentsSection.js";
+import { listOpenIncidents, listRecentlyResolved, recentActions } from "../lib/capacity-incidents.server.js";
+import { loadOfferRows } from "../lib/capacity-transforms.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
+
+/** Turns the combination-groups setting on or off and republishes; a failed publish puts the setting back. */
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { session } = await authenticate.admin(request);
+  const db = getDb();
+  const [shop] = await db.select({ id: shops.id }).from(shops).where(eq(shops.myshopifyDomain, session.shop)).limit(1);
+  if (!shop) return { error: "Shop not found." };
+  return changeCombinationDomains(db, shop.id, await request.formData(), () => publishShopConfig(shop.id, session.shop));
+};
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -25,7 +41,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     .limit(1);
 
   const shop = shopRows[0];
-  if (!shop) return { shop: null, diagnostics: null };
+  if (!shop) return { shop: null, diagnostics: null, limits: null, capacity: null };
 
   const since1h = new Date(Date.now() - 60 * 60 * 1000);
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -52,6 +68,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ),
   ]);
 
+  const limits = await loadLimitsMeter(db, shop.id);
+  const capacity = await loadCapacityIncidentRows(db, shop.id);
   const totalMutations = recentMutations[0]?.count ?? 0;
   const errorCount = errorMutations[0]?.count ?? 0;
   const errorRate = totalMutations > 0 ? ((errorCount / totalMutations) * 100).toFixed(1) : "0";
@@ -71,8 +89,26 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       errorMutationsLast24h: errorCount,
       errorRate,
     },
+    limits,
+    capacity,
   };
 };
+
+async function loadCapacityIncidentRows(db: ReturnType<typeof getDb>, shopId: string) {
+  const [open, resolved, actions] = await Promise.all([listOpenIncidents(db, shopId), listRecentlyResolved(db, shopId), recentActions(db, shopId)]);
+  const rows = await loadOfferRows(db, shopId, [...new Set([...open, ...resolved].flatMap((incident) => incident.offerIds))]);
+  const toRow = (incident: (typeof open)[number]): IncidentRow => ({
+    id: incident.id,
+    code: incident.code,
+    status: incident.status,
+    resolution: incident.resolution,
+    occurrences: incident.occurrences,
+    source: incident.source,
+    lastSeenAt: incident.lastSeenAt.toISOString(),
+    offers: incident.offerIds.map((id) => rows.get(id)?.offer.internalName ?? id),
+  });
+  return { open: open.map(toRow), resolved: resolved.map(toRow), actions };
+}
 
 // ── Icons ────────────────────────────────────────────────────
 
@@ -233,8 +269,10 @@ function HealthCard({ check }: { check: HealthCheck }) {
 // ── Main component ───────────────────────────────────────────
 
 export default function DiagnosticsPage() {
-  const { shop, diagnostics } = useLoaderData<typeof loader>();
+  const { shop, diagnostics, limits, capacity } = useLoaderData<typeof loader>();
   const [running, setRunning] = useState(false);
+  const domainsFetcher = useFetcher<typeof action>();
+  const [searchParams] = useSearchParams();
 
   if (!shop || !diagnostics) {
     return (
@@ -407,6 +445,35 @@ export default function DiagnosticsPage() {
           </div>
         </div>
       </div>
+
+      {domainsFetcher.data && "error" in domainsFetcher.data && domainsFetcher.data.error && (
+        <div className="b-banner b-banner-red" role="alert" style={{ marginTop: 16 }}>
+          <div className="b-banner-body">
+            <div className="b-banner-title">{domainsFetcher.data.error}</div>
+          </div>
+        </div>
+      )}
+      {domainsFetcher.data && "note" in domainsFetcher.data && domainsFetcher.data.note && (
+        <div className="b-banner b-banner-green" role="status" style={{ marginTop: 16 }}>
+          <div className="b-banner-body">
+            <div className="b-banner-title">{domainsFetcher.data.note}</div>
+          </div>
+        </div>
+      )}
+      <ShopifyLimitsCard
+        meter={limits}
+        domainsBusy={domainsFetcher.state !== "idle"}
+        initialConfirmOpen={searchParams.get("combination") === "allow"}
+        onSetDomains={(enabled) => domainsFetcher.submit({ intent: "set_combination_domains", enabled: String(enabled) }, { method: "post" })}
+      />
+
+      {capacity && (
+        <div className="b-card" style={{ marginTop: 16 }}>
+          <div className="b-card-body">
+            <CapacityIncidentsSection open={capacity.open} resolved={capacity.resolved} actions={capacity.actions} />
+          </div>
+        </div>
+      )}
 
       {/* Metrics table */}
       <div className="b-card" style={{ marginTop: 16 }}>

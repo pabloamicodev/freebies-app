@@ -42,7 +42,7 @@ describe("planner byte estimate vs the serialized cart value (flag off plans one
 
   it.each(fixtures.map((fixture) => [fixture.name, fixture] as const))("%s", (_name, fixture) => {
     const { config } = fixture;
-    const plan = planShards(unitsOf(config), new Map(), { ...SLOT_LIMITS, maxSlots: 1 }, { productDiscounts: true, orderDiscounts: true });
+    const plan = planShards(unitsOf(config), new Map(), { ...SLOT_LIMITS, maxSlots: 1 });
     expect(plan.blocked).toBeUndefined();
     expect(plan.slots[0]!.bytes).toBe(bytes(serializeFunctionConfig(config)));
   });
@@ -57,7 +57,7 @@ describe("planner byte estimate vs the serialized cart value (flag off plans one
       c3: "gamma",
       customerTags: ["vip", "wholesale"],
     };
-    const plan = planShards(unitsOf(config), new Map(), { ...SLOT_LIMITS, maxSlots: 1 }, { productDiscounts: true, orderDiscounts: true });
+    const plan = planShards(unitsOf(config), new Map(), { ...SLOT_LIMITS, maxSlots: 1 });
     expect(plan.slots[0]!.bytes).toBe(bytes(serializeFunctionConfig(config)));
   });
 });

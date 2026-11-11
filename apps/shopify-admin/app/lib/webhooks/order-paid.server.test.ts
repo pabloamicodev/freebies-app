@@ -73,6 +73,17 @@ describe("handleOrderPaid", () => {
     expect(dispatchIntegrationEvents).not.toHaveBeenCalled();
   });
 
+  it("records one analytics row for an offer whose split parts tagged several lines of the order", async () => {
+    const { db, inserted } = fakeDb([{ id: OFFER_A }]);
+    currentDb = db;
+    const tagged = (id: number) => ({ id, variant_id: id, product_id: id, properties: [{ name: "_promo_engine_offer_id", value: OFFER_A }] });
+
+    await handleOrderPaid(db, "shop-1", "shop.myshopify.com", makeOrder({ line_items: [tagged(1), tagged(2), tagged(3)] }));
+
+    expect(inserted).toHaveLength(1);
+    expect(dispatchIntegrationEvents).toHaveBeenLastCalledWith("shop-1", db, expect.objectContaining({ offerIds: [OFFER_A] }));
+  });
+
   it("attributes revenue to a claimed, shop-owned offer and builds the expected dedup key", async () => {
     const { db, inserted } = fakeDb([{ id: OFFER_A }]);
     currentDb = db;

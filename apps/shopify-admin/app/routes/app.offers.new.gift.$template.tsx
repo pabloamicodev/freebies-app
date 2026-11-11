@@ -49,6 +49,8 @@ import { createGiftTierCampaignOffers } from "../lib/gift-tier-campaigns.server.
 import { createTieredGiftOffer } from "../lib/gift-tiered-offer.server.js";
 import { giftTierCampaignNamePrefix } from "../lib/gift-tier-campaigns.js";
 import { finalizeCreatedOffer } from "../lib/offer-publish-flow.server.js";
+import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
+import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -175,12 +177,12 @@ function IInfo() {
 
 // ─── Loader ──────────────────────────────────────────────────────────────────
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { timezone } = await getShopContext(request);
-  return { timezone, nowLocal: nowInZone(timezone) };
+  const { timezone, currencyCode } = await getShopContext(request);
+  return { timezone, currencyCode, nowLocal: nowInZone(timezone) };
 };
 
 // ─── Action ──────────────────────────────────────────────────────────────────
-export const action = async ({ request }: ActionFunctionArgs) => {
+export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   const { shopId, db, session, timezone, currencyCode: shopCurrency } = context;
   if (!shopId) return { error: "Shop not found" };
@@ -262,8 +264,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     conditionValue = { minQuantity: minQty, appliesTo, includeGiftValues: false };
   } else {
     conditionValue = {
-      thresholdCents: Math.round(minAmount * 100),
-      maxAmountCents: Math.round(maxAmount * 100),
+      thresholdCents: toStoredAmount(minAmount, shopCurrency),
+      maxAmountCents: toStoredAmount(maxAmount, shopCurrency),
       appliesTo,
       includeGiftValues: false,
     };
@@ -324,7 +326,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const stopLowerPriority = formData.get("stopLower") === "true";
   const giftValueCountsForOther = formData.get("giftAppliesOther") === "true";
 
-  const normalizedSubconditions = normalizeGiftSubconditions(subconditions);
+  const normalizedSubconditions = normalizeGiftSubconditions(subconditions, shopCurrency);
   if (!normalizedSubconditions.success) return { error: normalizedSubconditions.error };
   const normalizedSubconditionRows = normalizedSubconditions.data;
 
@@ -437,11 +439,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (publishError) return { error: publishError };
 
   return redirect(`/app/offers/${newOffer.id}`);
-};
+});
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function NewGiftOfferPage() {
-  const { nowLocal } = useLoaderData<typeof loader>();
+  const { nowLocal, currencyCode } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const { state } = useNavigation();
@@ -628,7 +630,7 @@ export default function NewGiftOfferPage() {
             </svg>
           }
         />
-        <GiftTierCampaignBuilder />
+        <GiftTierCampaignBuilder currencyCode={currencyCode} />
         {actionData?.error && (
           <Toast message={actionData.error} type="error" onDismiss={() => setShowToast(false)} />
         )}
@@ -2041,6 +2043,7 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
         </div>
       </Form>
 
+      <CapacityLimitModal data={actionData?.capacity} />
       {(showToast || actionData?.error) && (
         <Toast
           message={actionData?.error ?? toastMsg}

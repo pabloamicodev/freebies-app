@@ -12,3 +12,4 @@ export * from "./sync-queue";
 export * from "./offer-usage";
 export * from "./mcp";
 export * from "./discount-shards";
+export * from "./capacity";

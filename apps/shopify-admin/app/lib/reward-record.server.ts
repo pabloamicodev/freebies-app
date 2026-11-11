@@ -11,6 +11,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { toStoredAmount } from "./money.js";
 import { parseSubscriptionMode, withSubscriptionMode } from "./purchase-type.js";
 import { splitTextareaList } from "./textarea-list.js";
+import { resolveSelection } from "./whole-product-selection.server.js";
 import { parseQuantityTiers, type QuantityTier } from "./quantity-tiers.js";
 import type { getShopContext } from "./shop-context.server.js";
 
@@ -124,10 +125,10 @@ export async function buildRewardRecord(
     const rawMinSubtotal = formData.get("minCartSubtotal");
     if (rewardType === "product_gift" && typeof rawMinSubtotal === "string") {
       const amount = rawMinSubtotal.trim() === "" ? null : Number(rawMinSubtotal);
-      if (amount !== null && (!Number.isFinite(amount) || amount <= 0 || Math.round(amount * 100) > 1_000_000_000)) {
+      if (amount !== null && (!Number.isFinite(amount) || amount <= 0 || toStoredAmount(amount, shopCurrencyCode) > 1_000_000_000)) {
         return { error: "Cart subtotal that unlocks this gift must be greater than 0." };
       }
-      minCartSubtotalCents = amount === null ? null : Math.round(amount * 100);
+      minCartSubtotalCents = amount === null ? null : toStoredAmount(amount, shopCurrencyCode);
     }
 
     const needsValue =
@@ -266,7 +267,16 @@ export async function buildRewardRecord(
         }
         const productTargetType = formData.get("productTargetType") === "products" ? "products" : "variants";
         if (variantGids.length > 0) {
-          target = productTargetType === "products" ? { productIds: variantGids } : { variantIds: variantGids };
+          if (productTargetType === "products") target = { productIds: variantGids, selectionLevel: "product" };
+          else {
+            // Products ticked as a whole in the variant picker go back to product ids (smaller config, same targets).
+            const picked = await resolveSelection(db, shopId, variantGids, splitTextareaList(formData.get("wholeProductGids") as string | null));
+            target = {
+              ...(picked.productIds.length > 0 ? { productIds: picked.productIds } : {}),
+              ...(picked.variantIds.length > 0 ? { variantIds: picked.variantIds } : {}),
+              ...(picked.selectionLevel ? { selectionLevel: picked.selectionLevel } : {}),
+            };
+          }
         }
         if (productScopeMode === "landing" && variantGids.length === 0) {
           return { error: "Choose the products this landing discount applies to." };
@@ -359,7 +369,7 @@ export async function buildRewardRecord(
         ? { amount: 0, currencyCode, tiers: postedTiers }
         : {
             ...(postedTiers ? null : keptTiers(rewardType, existing)),
-            amount: discountType === "percentage" ? discountValue : toStoredAmount(discountValue, currencyCode),
+            amount: discountType === "percentage" ? discountValue : toStoredAmount(discountValue, shopCurrencyCode),
             currencyCode,
           };
     }

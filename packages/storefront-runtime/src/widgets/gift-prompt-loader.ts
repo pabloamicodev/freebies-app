@@ -26,3 +26,27 @@ export function loadGiftPicker(): Promise<NonNullable<Window["__peGiftPicker"]>>
     document.head.appendChild(script);
   });
 }
+
+const noticeSrc = self.replace("promo-engine.js", "promo-engine-gift-notice.js");
+let noticeLoading = false;
+let latest: [string, string] | null = null;
+/** Shows the gift-removed notice; the drawing code is a separate asset requested on first use (once at a time, latest message wins). It is only a courtesy, so a failed request is dropped and a later removal retries. */
+export function showGiftNotice(message: string, closeLabel: string): void {
+  if (window.__peGiftNotice) return window.__peGiftNotice(message, closeLabel);
+  latest = [message, closeLabel];
+  if (noticeLoading || noticeSrc === self) return;
+  noticeLoading = true;
+  const script = document.createElement("script");
+  script.src = noticeSrc;
+  script.onload = () => {
+    noticeLoading = false;
+    if (latest) window.__peGiftNotice?.(...latest);
+    latest = null;
+  };
+  script.onerror = () => {
+    noticeLoading = false;
+    latest = null;
+    script.remove();
+  };
+  document.head.appendChild(script);
+}

@@ -19,7 +19,7 @@ export async function createGiftTierCampaignOffers(
     );
     const subconditionsResult = parseJsonRecord(formData, "subconditions");
     if (subconditionsResult.error) return { error: subconditionsResult.error };
-    const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!);
+    const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!, currencyCode);
     if (!normalizedSubconditions.success) return { error: normalizedSubconditions.error };
     const drafts = buildGiftTierOfferDrafts(campaign, currencyCode);
 

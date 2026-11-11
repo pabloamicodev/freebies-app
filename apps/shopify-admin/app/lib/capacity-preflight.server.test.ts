@@ -129,6 +129,57 @@ describe("limits", () => {
     if (!result.ok) expect(result.message).toContain('"huge-offer" is too large for one Shopify discount');
   });
 
+  describe("an offer bigger than one node", () => {
+    async function productOffer(shopId: string, products: number, overrides: Parameters<typeof seedOffer>[2] = {}, target: Record<string, unknown> = {}) {
+      const offerId = await seedOffer(db, shopId, overrides);
+      await db.insert(offerRewards).values({
+        shopId, offerId, rewardType: "product_discount", discountType: "percentage", value: { amount: 15, currencyCode: "USD" },
+        target: {
+          scopeMode: "sitewide",
+          productIds: Array.from({ length: products }, () => `gid://shopify/Product/${++variantSeq + 80000000000}`),
+          ...target,
+        },
+        sortOrder: 0,
+      });
+      return offerId;
+    }
+
+    it("is ok across several slots when it is splittable and sharding is on", async () => {
+      const shopId = await seedShop(db, "splittable.myshopify.com");
+      await productOffer(shopId, 900, { internalName: "catalog-sale" });
+      const result = await preflightCapacity(db, shopId, [], withBudget(11));
+      expect(result.ok ? null : JSON.stringify(result)).toBeNull();
+      if (!result.ok) return;
+      expect(result.plan.slots).toBeGreaterThanOrEqual(3);
+      expect(Math.max(...result.plan.bytesPerSlot)).toBeLessThanOrEqual(9500);
+      expect(result.plan.offersPerSlot).toEqual(result.plan.bytesPerSlot.map(() => 1));
+    });
+
+    it("keeps today's cap with the flag off, and names the budget when it leaves one slot", async () => {
+      const shopId = await seedShop(db, "splittable-off.myshopify.com");
+      const offerId = await productOffer(shopId, 900, { internalName: "catalog-sale" });
+      const off = await preflightCapacity(db, shopId, [], { shardsEnabled: false });
+      expect(off).toMatchObject({ ok: false, code: "SLOT_FULL", offerIds: [offerId] });
+      expect(off).not.toHaveProperty("splitRefusal");
+      const oneSlot = await preflightCapacity(db, shopId, [], withBudget(1));
+      expect(oneSlot).toMatchObject({ ok: false, code: "AUTOMATIC_DISCOUNT_LIMIT", offerIds: [offerId] });
+    });
+
+    it("needs more slots than the budget allows: AUTOMATIC_DISCOUNT_LIMIT, not OFFER_TOO_LARGE", async () => {
+      const shopId = await seedShop(db, "splittable-budget.myshopify.com");
+      await productOffer(shopId, 900, { internalName: "catalog-sale" });
+      const result = await preflightCapacity(db, shopId, [], withBudget(2));
+      expect(result).toMatchObject({ ok: false, code: "AUTOMATIC_DISCOUNT_LIMIT" });
+    });
+
+    it("still blocks an offer that cannot be split with OFFER_TOO_LARGE", async () => {
+      const shopId = await seedShop(db, "unsplittable.myshopify.com");
+      const offerId = await productOffer(shopId, 900, { internalName: "capped-sale" }, { maxUnitsTotal: 3 });
+      const result = await preflightCapacity(db, shopId, [], withBudget(11));
+      expect(result).toMatchObject({ ok: false, code: "OFFER_TOO_LARGE", offerIds: [offerId], offerNames: ["capped-sale"], reason: "bytes", splitRefusal: "AGGREGATING_REWARD" });
+    });
+  });
+
   it("keeps the 100-tag limit only when sharding is on", async () => {
     const shopId = await seedShop(db, "tags.myshopify.com");
     const offerId = await giftOffer(shopId, 2, { internalName: "taggy" });
@@ -169,6 +220,20 @@ describe("limits", () => {
     await db.insert(discountCodes).values({ shopId, offerId: coded, code: "FORCE-1" });
     expect((await preflightCapacity(db, shopId, [coded], { shardsEnabled: false })).ok).toBe(true);
     expect(await preflightCapacity(db, shopId, [coded], { shardsEnabled: false, forceInclude: true })).toMatchObject({ ok: false, code: "SLOT_FULL" });
+  });
+
+  it("is OFFER_TOO_LARGE for lists when a code offer's customer tags go over 100, even though it is not in the shared config", async () => {
+    const shopId = await seedShop(db, "code-tags.myshopify.com");
+    const coded = await giftOffer(shopId, 2, { internalName: "coded-taggy", requiresCode: true });
+    await db.insert(discountCodes).values({ shopId, offerId: coded, code: "TAGS-1" });
+    await db.insert(offerConditions).values({
+      shopId, offerId: coded, scope: "main", conditionType: "customer_tags", operator: "any",
+      value: { includeTags: Array.from({ length: 101 }, (_, i) => `tag-${i}`), excludeTags: [] }, sortOrder: 1, isEnabled: true,
+    });
+    for (const options of [{ shardsEnabled: false }, withBudget(11)]) {
+      const result = await preflightCapacity(db, shopId, [], options);
+      expect(result).toMatchObject({ ok: false, code: "OFFER_TOO_LARGE", reason: "lists", offerIds: [coded], offerNames: ["coded-taggy"] });
+    }
   });
 
   it("is OFFER_TOO_LARGE for keys when one offer checks more than 3 cart attributes", async () => {
@@ -237,7 +302,8 @@ describe("limits", () => {
   });
 });
 
-describe("combination policy forcing a single shard", () => {
+describe("combination policy forcing a single shard (combination groups off)", () => {
+  const withBudgetOff = (maxCartSlots: number): CapacityOptions => ({ ...withBudget(maxCartSlots), domainsEnabled: false });
   const noProductCombine = (shopId: string, offerId: string) =>
     db.insert(offerCombinationPolicies).values({ shopId, offerId, combinesWithProductDiscounts: false });
 
@@ -246,7 +312,7 @@ describe("combination policy forcing a single shard", () => {
     const sitewide = await giftOffer(shopId, 1, { internalName: "sitewide-no-combine", priority: 1 });
     await noProductCombine(shopId, sitewide);
     for (let i = 0; i < 12; i++) await giftOffer(shopId, 60, { internalName: `c-${i}`, priority: 10 + i });
-    const result = await preflightCapacity(db, shopId, [], withBudget(11));
+    const result = await preflightCapacity(db, shopId, [], withBudgetOff(11));
     expect(result).toMatchObject({
       ok: false,
       code: "COMBINATION_SINGLE_SHARD",
@@ -272,7 +338,7 @@ describe("combination policy forcing a single shard", () => {
   it("is not a combination failure when the policy combines and only one slot is allowed", async () => {
     const shopId = await seedShop(db, "combo-one-slot.myshopify.com");
     for (let i = 0; i < 12; i++) await giftOffer(shopId, 60, { internalName: `s-${i}`, priority: i });
-    expect(await preflightCapacity(db, shopId, [], withBudget(1))).toMatchObject({ ok: false, code: "AUTOMATIC_DISCOUNT_LIMIT" });
+    expect(await preflightCapacity(db, shopId, [], withBudgetOff(1))).toMatchObject({ ok: false, code: "AUTOMATIC_DISCOUNT_LIMIT" });
   });
 
   it("is ok and reports the cause and blockers when it fits on one node", async () => {
@@ -282,7 +348,7 @@ describe("combination policy forcing a single shard", () => {
     await giftOffer(shopId, 1, { internalName: "C", priority: 3 });
     await noProductCombine(shopId, a);
     await noProductCombine(shopId, b);
-    const result = await preflightCapacity(db, shopId, [], withBudget(11));
+    const result = await preflightCapacity(db, shopId, [], withBudgetOff(11));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.plan.slots).toBe(1);
@@ -298,9 +364,34 @@ describe("combination policy forcing a single shard", () => {
     await giftOffer(shopId, 1, { internalName: "X", priority: 1 });
     const off = await preflightCapacity(db, shopId, [], { shardsEnabled: false });
     expect(off.ok && off.plan.singleShardReason).toBe("flag_off");
-    const tight = await preflightCapacity(db, shopId, [], withBudget(1));
+    const tight = await preflightCapacity(db, shopId, [], withBudgetOff(1));
     expect(tight.ok && tight.plan.singleShardReason).toBe("budget");
-    const wide = await preflightCapacity(db, shopId, [], withBudget(11));
+    const wide = await preflightCapacity(db, shopId, [], withBudgetOff(11));
     expect(wide.ok && wide.plan.singleShardReason).toBeUndefined();
+  });
+});
+
+describe("Shopify's 100-element list limit", () => {
+  it("refuses an offer with more than 100 gift rewards with the Shopify-limit copy, in either sharding mode", async () => {
+    const shopId = await seedShop(db, "list-limit.myshopify.com");
+    const offerId = await giftOffer(shopId, 1, { internalName: "Gift wall", priority: 1 });
+    await db.insert(offerRewards).values(
+      Array.from({ length: 100 }, (_, i) => ({
+        shopId, offerId, rewardType: "product_gift" as const, discountType: "free" as const, value: {},
+        target: { variantIds: [`gid://shopify/ProductVariant/${9000 + i}`] }, quantity: 1, sortOrder: i + 1,
+      })),
+    );
+    for (const options of [{ shardsEnabled: false }, withBudget(11)]) {
+      const result = await preflightCapacity(db, shopId, [], options);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.code).toBe("OFFER_TOO_LARGE");
+      expect(result.reason).toBe("lists");
+      expect(result.offerNames).toEqual(["Gift wall"]);
+      expect(result.numbers).toMatchObject({ listCount: 101, listLimit: 100 });
+      expect(result.message).toBe(
+        `Shopify limit: a Promo Engine discount can't receive a list with more than 100 entries. "Gift wall" has 101 gift rewards. Reduce it to 100 or split the offer into two.`,
+      );
+    }
   });
 });

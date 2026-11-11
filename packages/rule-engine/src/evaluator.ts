@@ -6,7 +6,7 @@ import type {
   CartAction,
   EligibilityReason,
 } from "@promo/shared-types";
-import { err, type Result } from "@promo/shared-types";
+import { err, interpolate, toCartUnits, type Result } from "@promo/shared-types";
 import { buildCartHash, extractGiftLines, extractQualifyingLines, sumQualifyingValueNet } from "./cart-parser.js";
 import { evaluateCartValue, type CartValueConditionValue } from "./conditions/cart-value.js";
 import { cartQuantityCount, evaluateCartQuantity, type CartQuantityConditionValue } from "./conditions/cart-quantity.js";
@@ -137,7 +137,17 @@ export interface EvaluatorContext {
   now: Date;
   /** Shop's base currency code — used to determine if a currency conversion is needed. */
   shopCurrencyCode?: string;
+  /** Merchant-translated "spend more" bar templates (`{{remaining_amount}}`); English defaults apply when absent. */
+  progressMessages?: GiftTierProgressMessages;
 }
+
+export interface GiftTierProgressMessages {
+  giftTierBeforeGoal?: string;
+  giftTierAfterGoal?: string;
+}
+
+const DEFAULT_GIFT_TIER_BEFORE_GOAL = "Spend {{remaining_amount}} more to unlock your next gift.";
+const DEFAULT_GIFT_TIER_AFTER_GOAL = "All gifts unlocked.";
 
 /**
  * Main evaluation function.
@@ -536,7 +546,7 @@ export async function evaluate(
   ];
 
   const [giftSlider = null, ...additionalGiftSliders] = buildGiftSliderPayloads(finalQualified, ctx.offers, input.cart, giftTiersByOffer);
-  const progressBars = buildProgressBars([...finalQualified, ...disqualifiedOffers], ctx.offers, input.cart, giftTiersByOffer);
+  const progressBars = buildProgressBars([...finalQualified, ...disqualifiedOffers], ctx.offers, input.cart, giftTiersByOffer, ctx.progressMessages, ctx.shopCurrencyCode ?? input.cart.currencyCode);
   const cartMessages = progressBars.map((bar) => ({
     offerId: bar.offerId,
     widgetId: bar.offerId,
@@ -649,6 +659,7 @@ function giftTierProgressBar(
   offerId: string,
   tiers: GiftTierState,
   cart: EvaluationInput["cart"],
+  messages: GiftTierProgressMessages = {},
 ): EvaluationResult["progressBars"][number] {
   const targetCents = tiers.nextThresholdCents ?? tiers.topThresholdCents;
   const remaining = Math.max(0, targetCents - tiers.currentCents);
@@ -660,8 +671,8 @@ function giftTierProgressBar(
     currentQuantity: cart.totalQuantity,
     targetQuantity: null,
     progressPercent: targetCents > 0 ? Math.min(100, Math.round((tiers.currentCents / targetCents) * 100)) : 100,
-    messageBeforeGoal: `Spend ${formatMoney(remaining, cart.currencyCode)} more to unlock your next gift.`,
-    messageAfterGoal: "All gifts unlocked.",
+    messageBeforeGoal: interpolate(messages.giftTierBeforeGoal || DEFAULT_GIFT_TIER_BEFORE_GOAL, { remaining_amount: formatMoney(remaining, cart.currencyCode) }),
+    messageAfterGoal: messages.giftTierAfterGoal || DEFAULT_GIFT_TIER_AFTER_GOAL,
     isGoalReached: tiers.nextThresholdCents === null,
   };
 }
@@ -671,19 +682,21 @@ function buildProgressBars(
   offers: OfferDefinition[],
   cart: EvaluationInput["cart"],
   giftTiersByOffer: ReadonlyMap<string, GiftTierState>,
+  messages?: GiftTierProgressMessages,
+  shopCurrencyCode?: string,
 ): EvaluationResult["progressBars"] {
   return evaluatedOffers.flatMap((evaluated) => {
     const offer = offers.find((item) => item.id === evaluated.offerId);
     if (!offer) return [];
     const giftTiers = giftTiersByOffer.get(offer.id);
-    if (giftTiers) return [giftTierProgressBar(offer.id, giftTiers, cart)];
+    if (giftTiers) return [giftTierProgressBar(offer.id, giftTiers, cart, messages)];
     const condition = offer.conditions
       .filter((item) => item.scope === "main" && item.isEnabled)
       .find((item) => item.conditionType === "cart_value" || item.conditionType === "cart_quantity");
     if (!condition) return [];
 
     const value = condition.value as { thresholdCents?: number; minQuantity?: number };
-    const targetCents = condition.conditionType === "cart_value" ? Math.max(0, value.thresholdCents ?? 0) : 0;
+    const targetCents = condition.conditionType === "cart_value" ? Math.max(0, toCartUnits(value.thresholdCents ?? 0, shopCurrencyCode)) : 0;
     const targetQuantity = condition.conditionType === "cart_quantity" ? Math.max(1, value.minQuantity ?? 1) : null;
     // Same qualifying value the cart_value condition checks: gift lines out, net of volume discounts.
     const includeGifts = (condition.value as { includeGiftValues?: boolean }).includeGiftValues === true;
@@ -740,7 +753,7 @@ function evaluateCondition(
     case "order_history_total_spent":
     case "order_history_last_order_spent":
     case "order_history_total_orders":
-      return evaluateOrderHistory(input.customer, cond.value as OrderHistoryConditionValue);
+      return evaluateOrderHistory(input.customer, cond.value as OrderHistoryConditionValue, currency.shopCurrencyCode);
 
     case "markets":
       return evaluateMarket(input.market?.id ?? null, cond.value as { includeMarketIds?: string[]; excludeMarketIds?: string[] });

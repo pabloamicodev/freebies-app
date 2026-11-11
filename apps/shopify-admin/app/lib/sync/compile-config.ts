@@ -29,7 +29,7 @@ export interface CompileOfferOptions {
   /** Backend B: hashes of the offer's redeemable codes (see code-hash.ts); the code Function accepts them. */
   codeHashes?: string[];
   /**
-   * The shop's currency. Rewards that don't carry their own currency fall back to it, never to USD:
+   * The shop's currency. It sizes every fixed amount (a reward's own currency tag does not), and is the fallback instead of USD:
    * a zero-decimal shop (JPY, KRW) read as USD turns 500 yen into 5 and every fixed amount wrong.
    */
   shopCurrencyCode?: string;
@@ -39,12 +39,15 @@ export interface CompileOfferOptions {
 
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 
-/** The reward's own currency when it has a valid one, else the shop's, else USD (shop unknown, e.g. tests). */
+/**
+ * The currency that sizes a reward's amounts: the shop's when known, since the stored unit comes from it and not from the
+ * (typed, sometimes hard-coded) tag on the reward; the tag only when the shop is unknown (tests), else USD.
+ */
 function rewardCurrency(valueCurrency: unknown, shopCurrencyCode?: string): string {
-  const own = typeof valueCurrency === "string" ? valueCurrency.trim().toUpperCase() : "";
-  if (CURRENCY_PATTERN.test(own)) return own;
   const shop = (shopCurrencyCode ?? "").trim().toUpperCase();
-  return CURRENCY_PATTERN.test(shop) ? shop : "USD";
+  if (CURRENCY_PATTERN.test(shop)) return shop;
+  const own = typeof valueCurrency === "string" ? valueCurrency.trim().toUpperCase() : "";
+  return CURRENCY_PATTERN.test(own) ? own : "USD";
 }
 
 function onlyMatchedLines(
@@ -779,12 +782,16 @@ export function compileOfferConfig(
       if (reward.rewardType === "upsell_discount" && configuredAmount <= 0 && !hasConfiguredTiers) {
         continue;
       }
-      const targetVariantIds =
+      const savedVariantIds =
         (target["variantIds"] as string[]) ??
         (target["variantId"] ? [target["variantId"] as string] : []);
       const targetProductIds =
         (target["productIds"] as string[]) ??
         (target["productId"] ? [target["productId"] as string] : []);
+      // Only a selection the merchant saved as whole products ships product ids alone (a variant added later is covered, as
+      // the merchant chose the product). Never inferred from which variants are cached: older rows keep their variants.
+      const targetVariantIds =
+        target["selectionLevel"] === "product" && targetProductIds.length > 0 ? [] : savedVariantIds;
       const currencyCode = rewardCurrency(value["currencyCode"], options.shopCurrencyCode);
       const subscriptionMode =
         target["subscriptionMode"] === "subscription_only" || target["subscriptionMode"] === "one_time_only"
@@ -1317,13 +1324,117 @@ function omitDefaults(
   );
 }
 
-export function compactCompiledOffer(offer: CompiledOffer): Record<string, unknown> {
-  return omitDefaults(
+/**
+ * FIX-cap-10: numeric ids without the `gid://shopify/ProductVariant|Product/` prefix (about -29 B per
+ * list entry). The Functions rebuild the GID at deserialization and accept both forms, so this is only
+ * emitted per shop (`function_compact_ids.enabled`) once the Functions that understand it are
+ * deployed: Functions first, server second. Callers pass `compactIds`; off by default.
+ */
+const GID_TAIL = /^gid:\/\/shopify\/(?:ProductVariant|Product)\/(\d+)$/;
+export const compactId = (id: string) => GID_TAIL.exec(id)?.[1] ?? id;
+const compactIds = (ids: readonly string[]) => ids.map(compactId);
+
+function withCompactIds<T extends object>(value: T, keys: readonly string[]): T {
+  const out = { ...value } as Record<string, unknown>;
+  for (const key of keys) {
+    const entry = out[key];
+    if (Array.isArray(entry)) out[key] = compactIds(entry as string[]);
+    else if (typeof entry === "string") out[key] = compactId(entry);
+  }
+  return out as T;
+}
+
+const OFFER_ID_KEYS = [
+  "requiredProductIds",
+  "requiredVariantIds",
+  "anyRequiredProductIds",
+  "anyRequiredVariantIds",
+  "excludedProductIds",
+];
+const REWARD_ID_KEYS = ["targetProductIds", "targetVariantIds", "requiredAnchorVariantIds"];
+
+/**
+ * The metafield doubles as the Function's input-query variables, and Shopify documents: "Input query variables
+ * will return errors for any GraphQL list variable with a value that exceeds 100 elements." One JSON array over
+ * 100 anywhere in it makes input resolution fail, so the node runs nothing.
+ */
+export const SHOPIFY_VARIABLE_LIST_LIMIT = 100;
+
+/**
+ * Plain string lists the Functions also accept as one comma-joined string (discount-function/src/config.rs `[packed]`).
+ * giftVariantIds/giftProductIds are not read by the Functions, but they are still in the metafield, so they pack too.
+ */
+export const PACKED_OFFER_KEYS = [
+  ...OFFER_ID_KEYS,
+  "giftVariantIds",
+  "giftProductIds",
+  "requiredCustomerTags",
+  "excludedCustomerTags",
+  "includeCountryCodes",
+  "excludeCountryCodes",
+  "codeHashes",
+];
+export const PACKED_REWARD_KEYS = REWARD_ID_KEYS;
+
+/** Inverse of the serializer's packing: a live list is a JSON array or, over 100 entries, one comma-joined string. */
+export function unpackList(value: unknown): string[] {
+  if (Array.isArray(value)) return value as string[];
+  return typeof value === "string" && value !== "" ? value.split(",") : [];
+}
+
+import { UNPACKABLE_LISTS } from "./unpackable-lists.js";
+
+export { UNPACKABLE_LISTS };
+
+export const listKindOf = (key: string) => UNPACKABLE_LISTS.findIndex(([name]) => name === key);
+
+/** First list in the offer that cannot be packed and is over the limit, as an index into UNPACKABLE_LISTS. */
+export function findOversizeList(offer: CompiledOffer): { listKind: number; listCount: number } | null {
+  const over = (list: readonly unknown[] | undefined, key: string) =>
+    list && list.length > SHOPIFY_VARIABLE_LIST_LIMIT ? { listKind: listKindOf(key), listCount: list.length } : null;
+  return (
+    over(offer.requirements, "requirements") ??
+    over(offer.giftRewards, "giftRewards") ??
+    over(offer.productRewards, "productRewards") ??
+    over(offer.orderRewards, "orderRewards") ??
+    over(offer.pageUrlConditions, "pageUrlConditions") ??
+    over(offer.lineAttributeConditions, "lineAttributeConditions") ??
+    over(offer.cartAttributeConditions, "cartAttributeConditions") ??
+    offer.pageUrlConditions?.map((c) => over(c.patterns, "patterns")).find(Boolean) ??
+    offer.productRewards.flatMap((r) => [over(r.priceTiers, "priceTiers"), over(r.quantityTiers, "quantityTiers")]).find(Boolean) ??
+    offer.orderRewards.map((r) => over(r.subtotalTiers, "subtotalTiers")).find(Boolean) ??
+    null
+  );
+}
+
+function packLongLists<T extends object>(value: T, keys: readonly string[]): T {
+  const out = { ...value } as Record<string, unknown>;
+  for (const key of keys) {
+    const entry = out[key];
+    if (Array.isArray(entry) && entry.length > SHOPIFY_VARIABLE_LIST_LIMIT) out[key] = entry.join(",");
+  }
+  return out as T;
+}
+
+function withCompactOfferIds(offer: CompiledOffer): CompiledOffer {
+  return {
+    ...withCompactIds(offer, OFFER_ID_KEYS),
+    requirements: offer.requirements.map((r) => withCompactIds(r, ["productId", "variantId"])),
+    giftRewards: offer.giftRewards.map((r) => withCompactIds(r, REWARD_ID_KEYS)),
+    productRewards: offer.productRewards.map((r) => withCompactIds(r, REWARD_ID_KEYS)),
+  };
+}
+
+export function compactCompiledOffer(source: CompiledOffer, compactIds = false): Record<string, unknown> {
+  const offer = compactIds ? withCompactOfferIds(source) : source;
+  const compact = omitDefaults(
     {
       ...offer,
-      giftRewards: offer.giftRewards.map((reward) => omitDefaults(reward, GIFT_REWARD_DEFAULTS)),
+      giftRewards: offer.giftRewards.map((reward) =>
+        packLongLists(omitDefaults(reward, GIFT_REWARD_DEFAULTS), PACKED_REWARD_KEYS),
+      ),
       productRewards: offer.productRewards.map((reward) =>
-        omitDefaults(reward, PRODUCT_REWARD_DEFAULTS),
+        packLongLists(omitDefaults(reward, PRODUCT_REWARD_DEFAULTS), PACKED_REWARD_KEYS),
       ),
       orderRewards: offer.orderRewards.map((reward) => omitDefaults(reward, ORDER_REWARD_DEFAULTS)),
       pageUrlConditions: offer.pageUrlConditions?.map((condition) =>
@@ -1333,12 +1444,13 @@ export function compactCompiledOffer(offer: CompiledOffer): Record<string, unkno
     OFFER_DEFAULTS,
     OFFER_UNREAD_KEYS,
   );
+  return packLongLists(compact, PACKED_OFFER_KEYS);
 }
 
 /** The metafield value: Function metafield input is capped at 10,000 bytes. */
 export function serializeFunctionConfig(
   config: CompiledFunctionConfig,
-  options: { omitCartAttributeSlots?: boolean; omitQueryVariables?: boolean } = {},
+  options: { omitCartAttributeSlots?: boolean; omitQueryVariables?: boolean; compactIds?: boolean } = {},
 ): string {
   // The code Function's query has no c1-c3 slots (they cost complexity); only declared variables go in.
   const withoutSlots = options.omitCartAttributeSlots === true;
@@ -1353,11 +1465,11 @@ export function serializeFunctionConfig(
         ...queryVariables,
         ...config,
         ...(withoutSlots ? { c1: undefined, c2: undefined, c3: undefined } : {}),
-        offers: config.offers.map(compactCompiledOffer),
+        offers: config.offers.map((offer) => compactCompiledOffer(offer, options.compactIds)),
         shippingOffers: config.shippingOffers.map((offer) =>
           omitDefaults(
             {
-              ...offer,
+              ...(options.compactIds ? withCompactIds(offer, ["requiredAnchorVariantIds"]) : offer),
               pageUrlConditions: offer.pageUrlConditions?.map((condition) =>
                 omitDefaults(condition, PAGE_URL_CONDITION_DEFAULTS),
               ),

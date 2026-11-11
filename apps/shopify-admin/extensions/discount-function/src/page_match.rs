@@ -7,7 +7,7 @@
 //! modes read the `_promo_template`, `_promo_sections` and `_promo_exp` stamps.
 
 use serde::Deserialize;
-use std::collections::HashMap;
+use crate::de::HashMap;
 
 #[derive(Debug, Deserialize, Clone)]
 #[cfg_attr(test, derive(PartialEq))]
@@ -26,6 +26,16 @@ pub struct CompiledPageUrlCondition {
 
 pub type LineMetadata = HashMap<String, String>;
 
+const PAGE_URL_KEY: &str = "_promo_page_url";
+const LANDING_URL_KEY: &str = "_promo_landing_url";
+const TEMPLATE_KEY: &str = "_promo_template";
+const SECTIONS_KEY: &str = "_promo_sections";
+const EXPERIMENT_KEY: &str = "_promo_exp";
+
+/// Every metadata entry `metadata_matches` reads. Lines whose values for these keys are equal always match the same
+/// conditions (the Function groups lines by them), so a key read below must be listed here.
+pub const PAGE_STAMP_KEYS: [&str; 5] = [PAGE_URL_KEY, LANDING_URL_KEY, TEMPLATE_KEY, SECTIONS_KEY, EXPERIMENT_KEY];
+
 #[allow(dead_code)] // the delivery Function calls this; the discount Functions use `metadata_matches`
 pub fn line_matches(raw_metadata: Option<&str>, conds: &[CompiledPageUrlCondition]) -> bool {
     let map = raw_metadata.and_then(|raw| serde_json::from_str::<LineMetadata>(raw).ok());
@@ -36,16 +46,16 @@ pub fn metadata_matches(metadata: Option<&LineMetadata>, conds: &[CompiledPageUr
     let Some(metadata) = metadata else {
         return false;
     };
-    metadata.contains_key("_promo_page_url")
+    metadata.contains_key(PAGE_URL_KEY)
         && conds.iter().all(|cond| match cond.match_mode.as_str() {
-            "template" => stamp_matches(metadata.get("_promo_template"), cond),
-            "section" => stamp_matches(metadata.get("_promo_sections"), cond),
-            "experiment" => stamp_matches(metadata.get("_promo_exp"), cond),
+            "template" => stamp_matches(metadata.get(TEMPLATE_KEY), cond),
+            "section" => stamp_matches(metadata.get(SECTIONS_KEY), cond),
+            "experiment" => stamp_matches(metadata.get(EXPERIMENT_KEY), cond),
             _ => {
                 let key = if cond.source.is_some() {
-                    "_promo_landing_url"
+                    LANDING_URL_KEY
                 } else {
-                    "_promo_page_url"
+                    PAGE_URL_KEY
                 };
                 metadata
                     .get(key)
@@ -504,6 +514,56 @@ mod tests {
         assert!(line_matches(Some(&stamped("_promo_exp", "@clx9k2abcd:variant_a")), &with_url));
         let moved = serde_json::json!({ "_promo_page_url": "/other", "_promo_exp": "@clx9k2abcd:variant_a" }).to_string();
         assert!(!line_matches(Some(&moved), &with_url));
+    }
+
+    #[test]
+    fn only_the_stamp_keys_decide_a_match() {
+        let stamps = [
+            ("_promo_page_url", "/products/x?utm_source=a"),
+            ("_promo_landing_url", "/pages/lp?utm_source=a"),
+            ("_promo_template", "page.landing-nektar,@product"),
+            ("_promo_sections", "@hero_abc,footer_1"),
+            ("_promo_exp", "clx9k2abcd:variant_a"),
+        ];
+        assert_eq!(stamps.map(|(key, _)| key), PAGE_STAMP_KEYS);
+        let landing = CompiledPageUrlCondition { source: Some("landing".to_string()), ..cond("contains", &["/pages/lp"]) };
+        let conditions = [
+            cond("exact", &["/products/x"]),
+            cond("contains", &["products"]),
+            cond("starts_with", &["/products"]),
+            cond("page_type", &["product"]),
+            param("utm_source", Some("a")),
+            landing,
+            stamp_cond("template", &["page.landing-nektar", "product"], false),
+            stamp_cond("template", &["product"], true),
+            stamp_cond("section", &["hero_abc"], false),
+            stamp_cond("experiment", &["clx9k2abcd:variant_a"], false),
+        ];
+        let extras = [("_promo_engine_offer_id", "o1"), ("_promo_engine_line_type", "gift"), ("other", "/products/x")];
+        let to_map = |entries: &[(&str, &str)]| -> LineMetadata {
+            entries.iter().map(|(key, value)| (key.to_string(), value.to_string())).collect()
+        };
+        // Every subset of the stamps, so each key is read both present and absent.
+        for mask in 0..(1u32 << stamps.len()) {
+            let kept: Vec<(&str, &str)> = stamps
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1 << index) != 0)
+                .map(|(_, entry)| *entry)
+                .collect();
+            let stamps_only = to_map(&kept);
+            let with_extras = to_map(&[kept.clone(), extras.to_vec()].concat());
+            for condition in &conditions {
+                let one = std::slice::from_ref(condition);
+                assert_eq!(
+                    metadata_matches(Some(&stamps_only), one),
+                    metadata_matches(Some(&with_extras), one),
+                    "{} {:?} mask {mask}",
+                    condition.match_mode,
+                    condition.patterns
+                );
+            }
+        }
     }
 
     #[test]

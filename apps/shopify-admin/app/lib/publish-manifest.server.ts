@@ -20,6 +20,8 @@ export interface ManifestNode {
   /** What the node was last published with; absent means both (shared nodes always are). */
   appliesOnSubscription?: boolean;
   appliesOnOneTimePurchase?: boolean;
+  /** combinesWith the node was last published with (cart nodes), so drift can compare it with Shopify. */
+  combinesWith?: { orderDiscounts: boolean; productDiscounts: boolean; shippingDiscounts: boolean };
 }
 
 export interface PublishManifest {
@@ -63,13 +65,18 @@ export class ManifestCollector {
     id: string,
     kind: ManifestNodeKind,
     json: string,
-    extra: { active?: boolean; purchaseTypes?: { appliesOnSubscription: boolean; appliesOnOneTimePurchase: boolean } } = {},
+    extra: {
+      active?: boolean;
+      purchaseTypes?: { appliesOnSubscription: boolean; appliesOnOneTimePurchase: boolean };
+      combinesWith?: ManifestNode["combinesWith"];
+    } = {},
   ): void {
     this.nodes[id] = {
       kind,
       hash: configHash(json),
       active: extra.active ?? true,
       ...(extra.purchaseTypes ? extra.purchaseTypes : {}),
+      ...(extra.combinesWith ? { combinesWith: extra.combinesWith } : {}),
     };
   }
 

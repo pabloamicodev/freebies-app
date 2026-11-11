@@ -3,6 +3,7 @@ import { Form } from "react-router";
 import { ProductPicker } from "./ProductPicker.js";
 import { SelectedProductsList } from "./SelectedProductsList.js";
 import { OfferConditionsBuilder } from "./OfferConditionsBuilder.js";
+import { isZeroDecimalCurrency, toStoredAmount } from "../lib/money.js";
 
 interface TierDraft {
   id: string;
@@ -12,7 +13,7 @@ interface TierDraft {
   fallbackVariantIds: string[];
 }
 
-export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
+export function GiftTierCampaignBuilder({ action, currencyCode }: { action?: string; currencyCode?: string } = {}) {
   const [campaignId, setCampaignId] = useState("");
   const [name, setName] = useState("");
   const [stackingMode, setStackingMode] = useState<"highest_tier_only" | "cumulative">(
@@ -25,7 +26,7 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
   const [fallbackPickerIndex, setFallbackPickerIndex] = useState<number | null>(null);
 
   const slug = campaignId || name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "gift-tiers";
-  const thresholds = tiers.map((tier) => Math.round(Number(tier.minimumSubtotal) * 100));
+  const thresholds = tiers.map((tier) => toStoredAmount(Number(tier.minimumSubtotal), currencyCode));
   const tierError = thresholds.some((cents) => !(cents > 0))
     ? "Every tier needs a minimum subtotal greater than 0."
     : new Set(thresholds).size !== thresholds.length
@@ -41,13 +42,13 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
         stackingMode,
         tiers: tiers.map((tier) => ({
           id: tier.id,
-          minimumSubtotalCents: Math.round(Number(tier.minimumSubtotal) * 100),
+          minimumSubtotalCents: toStoredAmount(Number(tier.minimumSubtotal), currencyCode),
           quantity: Number(tier.quantity),
           variantIds: tier.variantIds,
           ...(tier.fallbackVariantIds.length ? { fallbackVariantIds: tier.fallbackVariantIds } : {}),
         })),
       }),
-    [slug, name, stackingMode, tiers],
+    [slug, name, stackingMode, tiers, currencyCode],
   );
 
   const updateTier = (index: number, patch: Partial<TierDraft>) =>
@@ -173,7 +174,7 @@ export function GiftTierCampaignBuilder({ action }: { action?: string } = {}) {
                     required
                     type="number"
                     min="0"
-                    step="0.01"
+                    step={isZeroDecimalCurrency(currencyCode) ? "1" : "0.01"}
                     value={tier.minimumSubtotal}
                     onChange={(event) => updateTier(index, { minimumSubtotal: event.target.value })}
                   />

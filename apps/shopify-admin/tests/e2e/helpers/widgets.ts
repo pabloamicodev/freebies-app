@@ -17,8 +17,47 @@ export type Evaluation = {
     messageBeforeGoal: string;
     isGoalReached: boolean;
   }>;
-  giftSlider: { offerId?: string } | null;
+  giftSlider: GiftSliderPayload | null;
+  additionalGiftSliders?: GiftSliderPayload[];
 };
+
+export type GiftSliderPayload = {
+  offerId: string;
+  selectableGifts: Array<{ productHandle?: string | null; variantId: string; isAvailable: boolean }>;
+};
+
+export const allGiftSliders = (evaluation: Evaluation): GiftSliderPayload[] =>
+  [evaluation.giftSlider, ...(evaluation.additionalGiftSliders ?? [])].filter(
+    (slider): slider is GiftSliderPayload => !!slider && Array.isArray(slider.selectableGifts),
+  );
+
+/**
+ * The hpn-test-store also carries merchant-like QA gift offers, so several pickers can queue up on one cart.
+ * Closes whatever picker is showing (dismissal only records a decline in this throwaway browser context) until
+ * none is left, so a spec can then ask for exactly the offer it owns.
+ */
+export async function dismissOpenGiftSliders(page: Page): Promise<void> {
+  const open = page.locator("dialog.pe-slider-overlay[open]");
+  for (let quiet = 0; quiet < 3; ) {
+    if (await open.count()) {
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(400);
+      quiet = 0;
+    } else {
+      await page.waitForTimeout(500);
+      quiet++;
+    }
+  }
+}
+
+/** Same request the gift icon and reminder emit; opens the picker of one offer. */
+export async function requestGiftSlider(page: Page, offerId: string): Promise<void> {
+  await page.evaluate((offerId) => {
+    window.dispatchEvent(
+      new CustomEvent("promo-engine:gift-slider-requested", { detail: { offerId }, bubbles: true }),
+    );
+  }, offerId);
+}
 
 const EVALUATE_ATTEMPTS = 4;
 const EVALUATE_PATH = "/apps/promo-engine/evaluate";

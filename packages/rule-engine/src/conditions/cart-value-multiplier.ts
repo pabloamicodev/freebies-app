@@ -1,5 +1,5 @@
 import type { NormalizedCart, EligibilityReason, CurrencyContext } from "@promo/shared-types";
-import { ok, err, type Result } from "@promo/shared-types";
+import { ok, err, overrideToCartUnits, toCartUnits, type Result } from "@promo/shared-types";
 import { extractQualifyingLines } from "../cart-parser.js";
 
 export interface CartValueMultiplierConditionValue {
@@ -49,16 +49,19 @@ export function evaluateCartValueMultiplier(
   );
 
   // Resolve threshold for active currency
-  let thresholdCents = condition.thresholdCents;
   const activeCurrency = currency.activeCurrencyCode.toUpperCase();
+  const conditionCurrency = (condition.currencyCode ?? currency.shopCurrencyCode).toUpperCase();
+  // The stored unit is the shop currency's; the tag only decides whether to convert.
+  const unit = currency.shopCurrencyCode;
+  let thresholdCents = toCartUnits(condition.thresholdCents, unit);
   if (condition.currencyOverrides?.[activeCurrency] !== undefined) {
-    thresholdCents = condition.currencyOverrides[activeCurrency]!;
+    thresholdCents = overrideToCartUnits(condition.currencyOverrides[activeCurrency]!, activeCurrency, unit);
   } else if (
     // Saved conditions may lack currencyCode; their thresholds are in the shop currency.
-    activeCurrency !== (condition.currencyCode ?? currency.shopCurrencyCode).toUpperCase() &&
+    activeCurrency !== conditionCurrency &&
     currency.exchangeRate
   ) {
-    thresholdCents = Math.ceil(condition.thresholdCents * currency.exchangeRate);
+    thresholdCents = Math.ceil(toCartUnits(condition.thresholdCents, unit) * currency.exchangeRate);
   }
 
   if (thresholdCents <= 0) {

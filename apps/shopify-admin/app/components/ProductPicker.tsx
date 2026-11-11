@@ -10,6 +10,7 @@ import { useEffect, useCallback, useRef } from "react";
 import { useDebouncedCallback } from "use-debounce";
 import { AccessibleModal } from "./AccessibleModal.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
+import { toggleProductSelection } from "../lib/picker-selection.js";
 import { variantEligibility, type AvailabilityPolicy } from "../lib/picker-eligibility.js";
 
 interface ProductVariant {
@@ -46,7 +47,10 @@ interface ProductPickerProps {
   title?: string;
   /** Already selected GIDs (shown as pre-checked). */
   selectedIds?: string[];
-  onSelect: (gids: string[]) => void;
+  /** Second argument: products the merchant ticked as a whole in variants mode (not hand-picked variants). */
+  onSelect: (gids: string[], wholeProducts: string[]) => void;
+  /** Products already ticked as a whole, so reopening the picker keeps them. */
+  selectedWholeProducts?: string[];
   /** "block": subscription-only variants can't be picked, sold-out ones can (gifts, upsells). "warn": everything pickable (discounts). Sold-out is always flagged. */
   availabilityPolicy?: AvailabilityPolicy;
 }
@@ -97,6 +101,7 @@ function ProductPickerContent({
   title = "Select Products",
   selectedIds = EMPTY_SELECTED_IDS,
   onSelect,
+  selectedWholeProducts = EMPTY_SELECTED_IDS,
   availabilityPolicy = "warn",
 }: ProductPickerProps) {
   const [pickerState, setPickerField] = useObjectState(() => ({
@@ -106,18 +111,23 @@ function ProductPickerContent({
     syncing: false,
     error: null as string | null,
     selected: new Set(selectedIds),
+    whole: new Set(selectedWholeProducts),
     expandedProducts: new Set<string>(),
     notice: null as string | null,
   }));
-  const { query, products, loading, syncing, error, selected, expandedProducts, notice } = pickerState;
+  const { query, products, loading, syncing, error, selected, whole, expandedProducts, notice } = pickerState;
   const setQuery = createFieldSetter(setPickerField, "query");
   const setSelected = createFieldSetter(setPickerField, "selected");
+  const setWhole = createFieldSetter(setPickerField, "whole");
   const setExpandedProducts = createFieldSetter(setPickerField, "expandedProducts");
   const fetchRequestId = useRef(0);
 
   // Sync selection from parent whenever the modal opens
   useEffect(() => {
-    if (open) setSelected(new Set(selectedIds));
+    if (open) {
+      setSelected(new Set(selectedIds));
+      setWhole(new Set(selectedWholeProducts));
+    }
   }, [open]);
 
   // Fetch products from search API. If the cache has never been synced, trigger sync first.
@@ -203,6 +213,8 @@ function ProductPickerContent({
   }, [debouncedFetch]);
 
   const toggleVariant = useCallback((variantGid: string) => {
+    const owner = products.find((product) => product.variants?.some((variant) => variant.id === variantGid));
+    if (owner) setWhole((prev) => { const next = new Set(prev); next.delete(owner.id); return next; });
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(variantGid)) {
@@ -213,27 +225,18 @@ function ProductPickerContent({
       }
       return next;
     });
-  }, [allowMultiple, setSelected]);
+  }, [allowMultiple, setSelected, setWhole, products]);
 
-  const toggleProduct = useCallback((productGid: string, allVariantGids: string[]) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (mode === "products") {
-        if (next.has(productGid)) next.delete(productGid);
-        else { if (!allowMultiple) next.clear(); next.add(productGid); }
-      } else {
-        const allSelected = allVariantGids.every((v) => next.has(v));
-        if (allSelected) allVariantGids.forEach((v) => next.delete(v));
-        else allVariantGids.forEach((v) => next.add(v));
-      }
-      return next;
-    });
-  }, [mode, allowMultiple, setSelected]);
+  const toggleProduct = useCallback((productGid: string, allVariantGids: string[], coversAll: boolean) => {
+    const result = toggleProductSelection(selected, whole, productGid, allVariantGids, mode, allowMultiple, coversAll);
+    if (mode !== "products") setWhole(result.whole);
+    setSelected(result.selected);
+  }, [mode, allowMultiple, selected, whole, setSelected, setWhole]);
 
   const handleConfirm = useCallback(() => {
-    onSelect([...selected]);
+    onSelect([...selected], mode === "variants" ? [...whole] : []);
     onClose();
-  }, [selected, onSelect, onClose]);
+  }, [selected, whole, mode, onSelect, onClose]);
 
   return (
     <AccessibleModal ariaLabel={title} className="b-modal-lg" onClose={onClose}>
@@ -349,11 +352,7 @@ function ProductPickerContent({
                   return;
                 }
                 setPickerField("notice", null);
-                if (product.variants?.length === 1 && mode === "variants") {
-                  toggleVariant(product.variants[0]!.id);
-                } else {
-                  toggleProduct(product.id, variantGids);
-                }
+                toggleProduct(product.id, variantGids, variantGids.length === (product.variants?.length ?? 0));
               };
 
               const rowOnClick = () => {

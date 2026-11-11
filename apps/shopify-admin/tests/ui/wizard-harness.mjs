@@ -23,18 +23,36 @@ const result = await build({
       import ${JSON.stringify(join(app, "app/styles/bogos.css"))};
       const router = createMemoryRouter([{
         path: '/app', Component: Shell,
-        loader: () => ({apiKey: 'test', graphqlConsoleEnabled: false}),
+        loader: ({request}) => {
+          const mode = new URL(request.url).searchParams.get('incidents');
+          const base = {apiKey: 'test', graphqlConsoleEnabled: false};
+          if (mode === 'missing') return base;
+          const n = Number(mode ?? 0);
+          return {...base, capacityIncidents: {open: n, unsnoozed: n}};
+        },
         children: [{
           path: 'offers/new/codes/:template', Component: Wizard,
           loader: () => ({nowLocal: '2026-10-02T10:00', currencyCode: 'USD'}),
-          action: async () => {
+          action: async ({request}) => {
             await new Promise(resolve => setTimeout(resolve, 400));
+            if ((await request.formData()).get('code') === 'LIMITTEST') {
+              return {
+                error: 'The shared automatic config would be 12000B, over the 9500B limit.',
+                capacity: {
+                  code: 'AUTOMATIC_DISCOUNT_LIMIT',
+                  offers: [{id: 'offer-1', name: 'Spring gift'}],
+                  numbers: {needed: 2, storeActive: 24, others: 20},
+                  discountsUrl: 'https://hpn-test-store.myshopify.com/admin/discounts',
+                },
+              };
+            }
             return {error: 'Test validation error'};
           },
         }, {
           path: 'offers/new', Component: NewOffer,
           loader: ({request}) => ({shopDomain: 'hpn-test-store.myshopify.com', initialType: new URL(request.url).searchParams.get('type') ?? 'type'}),
-        }, {path: 'offers/new/:type/:template', element: <h1>Wizard route</h1>},
+        }, {path: 'capacity-incidents', loader: () => ({incidents: []}), action: () => ({ok: true, code: 'applied', message: 'We will remind you tomorrow.'})},
+        {path: 'offers/new/:type/:template', element: <h1>Wizard route</h1>},
         {path: 'offers', element: <h1>All offers</h1>}],
       }], {initialEntries: [window.location.pathname + window.location.search]});
       createRoot(document.getElementById('root')).render(<RouterProvider router={router}/>);
