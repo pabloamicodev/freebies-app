@@ -553,7 +553,7 @@ mod tests {
 
     fn group(id: &str, group_type: &str, has_subscription_line: bool) -> String {
         let selling_plan_allocation = if has_subscription_line {
-            r#"{"sellingPlan": {"id": "gid://shopify/SellingPlan/1"}}"#
+            r#"{"__typename": "SellingPlanAllocation"}"#
         } else {
             "null"
         };
@@ -1099,7 +1099,7 @@ mod tests {
             "lineTypeAttribute":null,"cartGiftTierAttribute":null,
             "landingSourceAttribute":{"value":"tru-landing"},
             "quizBundleIdAttribute":null,"quizFreeGiftAttribute":null,"quizExpectedPaidCountAttribute":null,
-            "sellingPlanAllocation":{"sellingPlan":{"id":"gid://shopify/SellingPlan/1"}},
+            "sellingPlanAllocation":{"__typename":"SellingPlanAllocation"},
             "merchandise":{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/11"}
         }]"#;
         let complete_line = incomplete_line.replace("\"quantity\":1", "\"quantity\":2");
