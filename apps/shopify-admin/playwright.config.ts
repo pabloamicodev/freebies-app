@@ -45,7 +45,7 @@ const desktop = {
   launchOptions: { args: ["--disable-blink-features=AutomationControlled"] },
 };
 
-const storefrontSpecs = /(ambrosia-parity|gift-offer|bundle-offer|multi-currency)\.spec\.ts/;
+const storefrontSpecs = /(ambrosia-parity|gift-offer|bundle-offer|multi-currency|cap12-combination-groups|cap71-capacity-gift)\.spec\.ts/;
 
 export default defineConfig({
   testDir: "./tests/e2e",
