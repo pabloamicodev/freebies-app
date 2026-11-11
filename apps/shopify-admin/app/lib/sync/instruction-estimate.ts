@@ -13,8 +13,8 @@ import type { CompiledOffer } from "./compile-config.js";
  * never undershoots a measured live node (a vitest asserts it).
  */
 export const INSTRUCTION_LINES = 200;
-/** Shopify's limit is 11M; the planner aims lower so a 25% jump in the hot path still fits. */
-export const NODE_INSTRUCTION_BUDGET = 7_000_000;
+/** Shopify's limit is 11M; the planner aims lower so a 35% jump in the hot path still fits. */
+export const NODE_INSTRUCTION_BUDGET = 8_000_000;
 
 export type OfferShape = "discount" | "tiers" | "gift" | "landing" | "order" | "quiz";
 

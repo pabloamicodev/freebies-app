@@ -25,8 +25,8 @@ const measured = JSON.parse(readFileSync(resolve(__dirname, "instruction-estimat
 const specOffers = (name: string) => (JSON.parse(readFileSync(resolve(SPECS, `${name}.json`), "utf8")) as { config: { offers: Array<Record<string, unknown>> } }).config.offers;
 
 describe("instruction estimate", () => {
-  it("budgets 7M per node including the floor", () => {
-    expect(NODE_INSTRUCTION_BUDGET).toBe(7_000_000);
+  it("budgets 8M per node including the floor", () => {
+    expect(NODE_INSTRUCTION_BUDGET).toBe(8_000_000);
     expect(NODE_UNIT_INSTRUCTION_BUDGET).toBe(NODE_INSTRUCTION_BUDGET - NODE_INSTRUCTION_FLOOR);
     expect(NODE_UNIT_INSTRUCTION_BUDGET).toBeGreaterThan(0);
     expect(INSTRUCTION_LINES).toBe(200);

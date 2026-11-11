@@ -26,11 +26,10 @@ const unitsOf = (offers: SpecOffer[]): PlanUnit[] =>
 const NONE = new Map<string, number>();
 const limits = (maxSlots: number) => ({ ...SLOT_LIMITS, maxSlots, ...INSTRUCTION_PLANNER_LIMITS });
 
-describe("the live specs under the instruction budget (200 lines, 7M per node)", () => {
-  // The honest outcome of the calibrated model at 7M: TRU's tiered offer alone is estimated at 8.0M (it measures 7.9M with the
-  // node floor) and each of its gifts needs the cart-value read, so none of them can share a node; OneSol slot 0 is estimated at
-  // 7.02M for a measured 6.55M, 0.3% over the budget (it stays one node from a 7.1M budget on); TRU is two nodes from 8M.
-  const expected: Record<string, number> = { "tru-slot0": 3, "ambrosia-slot0": 2, "onesol-slot0": 2, "onesol-slot1": 1, "hpn-slot0": 1 };
+describe("the live specs under the instruction budget (200 lines, 8M per node)", () => {
+  // Owner-chosen budget of 8M: both OneSol nodes stay as they are (7.02M and 5.95M estimated), Ambrosia and TRU go to two nodes.
+  // (At 7M TRU needed three nodes and OneSol slot 0 two.)
+  const expected: Record<string, number> = { "tru-slot0": 2, "ambrosia-slot0": 2, "onesol-slot0": 1, "onesol-slot1": 1, "hpn-slot0": 1 };
 
   for (const [name, nodes] of Object.entries(expected)) {
     it(`${name} plans to ${nodes} node(s); every node is under the budget unless it holds one bundle`, () => {
@@ -40,7 +39,7 @@ describe("the live specs under the instruction budget (200 lines, 7M per node)",
       expect(plan.slots.length).toBe(nodes);
       for (const slot of plan.slots) {
         const members = offers.filter((offer) => slot.unitKeys.includes(offer.id));
-        if (slot.unitKeys.length > 1) expect(estimateNodeInstructions(members as never[])).toBeLessThanOrEqual(7_000_000);
+        if (slot.unitKeys.length > 1) expect(estimateNodeInstructions(members as never[])).toBeLessThanOrEqual(8_000_000);
       }
     });
   }
@@ -66,16 +65,16 @@ describe("the last automatic-discount slot", () => {
     expect(plan.warnings?.map((warning) => warning.code)).toContain("INSTRUCTION_BUDGET_EXCEEDED");
   });
 
-  it("with exactly the slots the budget needs it spreads, with one fewer it falls back with INSTRUCTION_BUDGET_UNREACHABLE", () => {
+  it("with exactly the slots the budget needs it spreads without warnings; with one fewer it keeps one node and only reports it", () => {
     const units = unitsOf(offersOf("tru-slot0"));
     const spread = planShards(units, NONE, limits(11), "domains");
-    expect(spread.slots.length).toBeGreaterThan(1);
-    const tight = planShards(units, NONE, limits(spread.slots.length), "domains");
-    expect(tight.slots.length).toBe(spread.slots.length);
-    // TRU's tiered offer is alone over the budget, so the only warning is that one bundle exceeds it.
-    expect(tight.warnings?.map((warning) => warning.code)).toEqual(["INSTRUCTION_BUDGET_EXCEEDED"]);
-    const short = planShards(units, NONE, limits(spread.slots.length - 1), "domains");
+    expect(spread.slots).toHaveLength(2);
+    const tight = planShards(units, NONE, limits(2), "domains");
+    expect(tight.slots).toHaveLength(2);
+    expect(tight.warnings).toBeUndefined();
+    const short = planShards(units, NONE, limits(1), "domains");
     expect(short.blocked).toBeUndefined();
-    expect(short.warnings?.map((warning) => warning.code)).toContain("INSTRUCTION_BUDGET_UNREACHABLE");
+    expect(short.slots).toHaveLength(1);
+    expect(short.warnings?.map((warning) => warning.code)).toEqual(["INSTRUCTION_BUDGET_EXCEEDED"]);
   });
 });
