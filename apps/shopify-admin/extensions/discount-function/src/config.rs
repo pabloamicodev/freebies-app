@@ -24,9 +24,17 @@ pub struct CompiledConfig {
     /// Discount classes this node was created with ("p" product, "o" order); absent means both.
     #[serde(default)]
     pub dc: Option<String>,
+    /// Fold adjacent identical percentage candidates into one (see `merge_adjacent_candidates`). Absent or anything but
+    /// the JSON boolean `true` means off, so a malformed value never invalidates the config.
+    #[serde(default, deserialize_with = "lenient_true")]
+    pub merge_candidates: bool,
     /// Not part of the payload: the buyer's per-offer use counts, filled from the customer metafield.
     #[serde(skip)]
     pub usage: crate::usage::Usage,
+}
+
+fn lenient_true<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(Option::<&'de RawValue>::deserialize(deserializer)?.is_some_and(|raw| raw.get() == "true"))
 }
 
 /// Offers are parsed one at a time: a malformed offer is skipped and the others still apply.

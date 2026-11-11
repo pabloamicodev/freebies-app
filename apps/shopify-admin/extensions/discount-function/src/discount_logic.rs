@@ -315,6 +315,7 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
     }
 
     let candidates = best_candidate_per_line(candidates, &input);
+    let candidates = if config.merge_candidates { merge_adjacent_candidates(candidates) } else { candidates };
 
     if !candidates.is_empty() {
         operations.push(schema::CartOperation::ProductDiscountsAdd(
@@ -1708,6 +1709,38 @@ fn best_candidate_per_line(
         .filter(|(position, (_, entry))| entry.is_none_or(|(index, _)| best[index].0 == *position))
         .map(|(_, (candidate, _))| candidate)
         .collect()
+}
+
+/// Folds each maximal run of adjacent percentage candidates that differ only in their targets into one candidate with
+/// the concatenated targets (each keeps its quantity): the discount every line gets is unchanged and the output, which
+/// is paid for per candidate, shrinks. Non-adjacent candidates are never merged (the order decides which candidate
+/// Shopify applies to a line) and neither are fixed amounts (a fixed amount is not equivalent across targets).
+fn merge_adjacent_candidates(
+    candidates: Vec<schema::ProductDiscountCandidate>,
+) -> Vec<schema::ProductDiscountCandidate> {
+    let mut merged: Vec<schema::ProductDiscountCandidate> = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        match merged.last_mut() {
+            Some(last) if same_percentage_candidate(last, &candidate) => last.targets.extend(candidate.targets),
+            _ => merged.push(candidate),
+        }
+    }
+    merged
+}
+
+fn same_percentage_candidate(a: &schema::ProductDiscountCandidate, b: &schema::ProductDiscountCandidate) -> bool {
+    let (
+        schema::ProductDiscountCandidateValue::Percentage(left),
+        schema::ProductDiscountCandidateValue::Percentage(right),
+    ) = (&a.value, &b.value)
+    else {
+        return false;
+    };
+    left.value.0.to_bits() == right.value.0.to_bits()
+        && a.message == b.message
+        && a.associated_discount_code.as_ref().map(|code| &code.code) == b.associated_discount_code.as_ref().map(|code| &code.code)
+        && a.prerequisites.is_none()
+        && b.prerequisites.is_none()
 }
 
 fn make_candidate(
@@ -3721,6 +3754,106 @@ mod tests {
         let result = product_percentages(&[paid("1", "meta", 3), free("2"), gift], "30.00", &config);
         assert_eq!(result[0].0, 25.0);
         assert_eq!(result[0].1, vec![("gid://shopify/CartLine/1".to_string(), Some(3))]);
+    }
+
+    fn with_merge_candidates(config: &str) -> String {
+        config.replacen(r#"{"offers""#, r#"{"mergeCandidates":true,"offers""#, 1)
+    }
+
+    #[test]
+    fn merge_candidates_folds_identical_percentages_into_one_candidate_and_keeps_quantities() {
+        let config = zero_cost_config(TRU_TIERS);
+        let lines = [paid("1", "a", 1), paid("2", "b", 2), paid("3", "c", 1)];
+        let off = product_percentages(&lines, "40.00", &config);
+        assert_eq!(off.len(), 3);
+
+        let on = product_percentages(&lines, "40.00", &with_merge_candidates(&config));
+        assert_eq!(on.len(), 1);
+        assert_eq!(on[0].0, 30.0);
+        assert_eq!(
+            on[0].1,
+            vec![
+                ("gid://shopify/CartLine/1".to_string(), Some(1)),
+                ("gid://shopify/CartLine/2".to_string(), Some(2)),
+                ("gid://shopify/CartLine/3".to_string(), Some(1)),
+            ]
+        );
+        let unmerged: Vec<_> = off.iter().flat_map(|(_, targets)| targets.clone()).collect();
+        assert_eq!(on[0].1, unmerged);
+    }
+
+    #[test]
+    fn merge_candidates_off_or_malformed_changes_nothing() {
+        let config = zero_cost_config(TRU_TIERS);
+        let lines = [paid("1", "a", 1), paid("2", "b", 1)];
+        let baseline = product_percentages(&lines, "20.00", &config);
+        assert_eq!(baseline.len(), 2);
+        for flag in [r#""mergeCandidates":false"#, r#""mergeCandidates":"true""#, r#""mergeCandidates":1"#, r#""mergeCandidates":null"#] {
+            let tolerant = config.replacen(r#"{"offers""#, &format!(r#"{{{flag},"offers""#), 1);
+            assert_eq!(product_percentages(&lines, "20.00", &tolerant), baseline, "{flag}");
+        }
+    }
+
+    #[test]
+    fn merge_candidates_with_200_lines_emits_one_candidate() {
+        let config = with_merge_candidates(&zero_cost_config(TRU_TIERS));
+        let lines: Vec<String> = (1..=200).map(|index| paid(&index.to_string(), &format!("p{index}"), 1)).collect();
+        let merged = product_percentages(&lines, "2000.00", &config);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].1.len(), 200);
+    }
+
+    fn percentage(line: &str, value: f64, message: &str) -> schema::ProductDiscountCandidate {
+        make_candidate(format!("gid://shopify/CartLine/{line}"), 1, "percentage", value, message)
+    }
+
+    fn targets_of(candidates: &[schema::ProductDiscountCandidate]) -> Vec<Vec<String>> {
+        candidates
+            .iter()
+            .map(|candidate| {
+                candidate
+                    .targets
+                    .iter()
+                    .map(|target| match target {
+                        schema::ProductDiscountCandidateTarget::CartLine(line) => line.id.clone(),
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn merge_only_joins_adjacent_runs_and_never_reorders() {
+        let merged = merge_adjacent_candidates(vec![
+            percentage("1", 10.0, "a"),
+            percentage("2", 10.0, "a"),
+            percentage("3", 20.0, "a"),
+            percentage("4", 10.0, "a"),
+            percentage("5", 10.0, "b"),
+            percentage("6", 10.0, "b"),
+        ]);
+        let ids = |lines: &[&str]| lines.iter().map(|line| format!("gid://shopify/CartLine/{line}")).collect::<Vec<_>>();
+        assert_eq!(targets_of(&merged), vec![ids(&["1", "2"]), ids(&["3"]), ids(&["4"]), ids(&["5", "6"])]);
+    }
+
+    #[test]
+    fn merge_never_joins_fixed_amounts_or_candidates_with_a_different_code_or_prerequisites() {
+        let fixed = |line: &str| make_candidate(format!("gid://shopify/CartLine/{line}"), 1, "fixed_amount", 5.0, "a");
+        assert_eq!(merge_adjacent_candidates(vec![fixed("1"), fixed("2")]).len(), 2);
+
+        let mut coded = percentage("2", 10.0, "a");
+        coded.associated_discount_code = Some(schema::AssociatedDiscountCode { code: "SAVE".to_string() });
+        assert_eq!(merge_adjacent_candidates(vec![percentage("1", 10.0, "a"), coded]).len(), 2);
+
+        let mut same_code = vec![percentage("1", 10.0, "a"), percentage("2", 10.0, "a")];
+        for candidate in &mut same_code {
+            candidate.associated_discount_code = Some(schema::AssociatedDiscountCode { code: "SAVE".to_string() });
+        }
+        assert_eq!(merge_adjacent_candidates(same_code).len(), 1);
+
+        let mut gated = percentage("2", 10.0, "a");
+        gated.prerequisites = Some(vec![]);
+        assert_eq!(merge_adjacent_candidates(vec![percentage("1", 10.0, "a"), gated]).len(), 2);
     }
 
     #[test]
