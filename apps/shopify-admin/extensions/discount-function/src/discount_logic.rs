@@ -662,7 +662,7 @@ fn landing_anchor_lines<'a>(reward: &CompiledProductReward, input: &'a Input) ->
         .cart()
         .lines()
         .iter()
-        .filter(|line| !is_gift_line(line))
+        .filter(|line| !is_gift_line(line) && !is_zero_cost(line))
         .filter(|line| landing_source(line).as_deref() == Some(required_source))
         .filter(|line| {
             if anchor_ids.is_empty() {
@@ -735,7 +735,7 @@ fn product_gift_anchors(offer: &CompiledOffer, input: &Input) -> Option<Anchors>
         .cart()
         .lines()
         .iter()
-        .filter(|line| quantity_of(line) > 0 && !is_gift_line(line))
+        .filter(|line| quantity_of(line) > 0 && !is_gift_line(line) && !is_zero_cost(line))
         .filter(|line| purchase.allows(line))
         .filter(|line| offer.page_url_conditions.is_empty() || added_from_matching_page(line, offer))
         .filter(|line| {
@@ -1425,6 +1425,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
     for condition in &offer.line_attribute_conditions {
         let matching_quantity: i64 = non_gift_lines
             .iter()
+            .filter(|line| !is_zero_cost(line))
             .filter(|line| {
                 line_attribute_value(line, &condition.key, config).as_deref()
                     == condition.value.as_deref()
@@ -1579,6 +1580,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         for requirement in &offer.requirements {
             let matching_quantity: i64 = non_gift_lines
                 .iter()
+                .filter(|line| !is_zero_cost(line))
                 .filter_map(|line| variant_and_product_id(line).map(|ids| (line, ids)))
                 .filter(|(_, (variant_id, product_id))| {
                     if requirement.track_mode == "variant" {
@@ -1611,7 +1613,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
             .map(String::as_str)
             .collect();
 
-        let has_required = input.cart().lines().iter().any(|line| {
+        let has_required = input.cart().lines().iter().filter(|line| !is_zero_cost(line)).any(|line| {
             variant_and_product_id(line)
                 .map(|(variant_id, product_id)| {
                     required_products.contains(product_id)
@@ -1637,7 +1639,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
             .iter()
             .map(String::as_str)
             .collect();
-        let has_any = input.cart().lines().iter().any(|line| {
+        let has_any = input.cart().lines().iter().filter(|line| !is_zero_cost(line)).any(|line| {
             variant_and_product_id(line)
                 .map(|(variant_id, product_id)| {
                     any_products.contains(product_id)
@@ -3759,6 +3761,173 @@ mod tests {
         assert!(product_percentages(&[paid("1", "a", 2)], "20.00", &config).is_empty());
         assert!(!product_percentages(&[paid("1", "a", 2), paid("2", "b", 1)], "30.00", &config).is_empty());
         assert!(product_percentages(&[paid("1", "a", 3), paid("2", "b", 2)], "50.00", &config).is_empty());
+    }
+
+    fn free_of(id: &str, product: &str) -> String {
+        regular_line(
+            &format!("gid://shopify/CartLine/{id}"),
+            &format!("gid://shopify/ProductVariant/{product}"),
+            &format!("gid://shopify/Product/{product}"),
+            "0.00",
+            1,
+        )
+    }
+
+    fn ten_percent_config() -> String {
+        zero_cost_config(r#""countRule":"total","quantityTiers":[]"#)
+            .replace(r#""discountType":"percentage","discountValue":0,"#, r#""discountType":"percentage","discountValue":10,"#)
+    }
+
+    fn requirement_config(requirement: &str) -> String {
+        ten_percent_config().replace(r#""requirements":[],"#, &format!(r#""requirements":[{requirement}],"#))
+    }
+
+    const NEEDS_TWO_X: &str = r#"{"variantId":"gid://shopify/ProductVariant/x","productId":"gid://shopify/Product/x","trackMode":"variant","minQuantity":2}"#;
+
+    #[test]
+    fn zero_cost_unit_does_not_meet_an_offer_requirement() {
+        let config = requirement_config(NEEDS_TWO_X);
+        assert!(product_percentages(&[paid("1", "x", 1), free_of("2", "x")], "10.00", &config).is_empty());
+    }
+
+    #[test]
+    fn paid_units_plus_a_zero_cost_line_meet_an_offer_requirement() {
+        let config = requirement_config(NEEDS_TWO_X);
+        assert_eq!(product_percentages(&[paid("1", "x", 2), free_of("2", "x")], "20.00", &config).len(), 1);
+    }
+
+    #[test]
+    fn zero_cost_unit_does_not_break_a_requirement_maximum() {
+        let config = requirement_config(
+            r#"{"variantId":"gid://shopify/ProductVariant/x","productId":"gid://shopify/Product/x","trackMode":"variant","minQuantity":1,"maxQuantity":2}"#,
+        );
+        assert_eq!(product_percentages(&[paid("1", "x", 2), free_of("2", "x")], "20.00", &config).len(), 1);
+    }
+
+    #[test]
+    fn requirement_without_a_zero_cost_line_is_unchanged() {
+        let config = requirement_config(NEEDS_TWO_X);
+        assert!(product_percentages(&[paid("1", "x", 1)], "10.00", &config).is_empty());
+        assert_eq!(product_percentages(&[paid("1", "x", 1), paid("2", "x", 1)], "20.00", &config).len(), 2);
+        assert_eq!(product_percentages(&[paid("1", "x", 2)], "20.00", &config).len(), 1);
+    }
+
+    #[test]
+    fn zero_cost_line_does_not_satisfy_a_presence_trigger() {
+        let required = ten_percent_config().replace(
+            r#""requiredProductIds":[],"#,
+            r#""requiredProductIds":["gid://shopify/Product/x"],"#,
+        );
+        assert!(product_percentages(&[paid("1", "y", 1), free_of("2", "x")], "10.00", &required).is_empty());
+        assert_eq!(product_percentages(&[paid("1", "y", 1), paid("2", "x", 1)], "20.00", &required).len(), 2);
+        let any_of = ten_percent_config().replace(
+            r#""requiredProductIds":[],"#,
+            r#""anyRequiredProductIds":["gid://shopify/Product/x"],"requiredProductIds":[],"#,
+        );
+        assert!(product_percentages(&[paid("1", "y", 1), free_of("2", "x")], "10.00", &any_of).is_empty());
+        assert_eq!(product_percentages(&[paid("1", "y", 1), paid("2", "x", 1)], "20.00", &any_of).len(), 2);
+    }
+
+    fn tagged_vip(line: String) -> String {
+        let mut value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        value["promoMetadata"] = serde_json::json!({ "value": serde_json::json!({ "vip": "yes" }).to_string() });
+        value.to_string()
+    }
+
+    #[test]
+    fn zero_cost_line_does_not_satisfy_a_line_attribute_condition() {
+        let config = ten_percent_config().replace(
+            r#""requirements":[],"#,
+            r#""requirements":[],"lineAttributeConditions":[{"key":"vip","value":"yes","matchMode":"equals","minMatchingQuantity":1}],"#,
+        );
+        let zero_tagged = tagged_vip(free_of("2", "x"));
+        assert!(product_percentages(&[paid("1", "y", 1), zero_tagged.clone()], "10.00", &config).is_empty());
+        let paid_tagged = tagged_vip(paid("3", "z", 1));
+        assert_eq!(product_percentages(&[paid("1", "y", 1), zero_tagged, paid_tagged], "20.00", &config).len(), 2);
+    }
+
+    const ATLAS_LANDING: &str = r#"{"offers":[{
+        "id":"offer-1","version":1,"offerType":"discount","priority":100,"stopLowerPriority":false,
+        "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+        "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+        "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+        "requirements":[],"orderRewards":[],"productRewards":[{
+            "id":"atlas-gifts","rewardType":"product_discount","targetProductIds":[],
+            "targetVariantIds":["gid://shopify/ProductVariant/gift"],"discountType":"free","discountValue":100,
+            "subscriptionMode":"any","scopeMode":"landing","requiredLineAttributeValue":"atlas-sk-otg",
+            "requiredAnchorVariantIds":[],"requiredAnchorMinQuantity":1,"requiresAnchorSubscription":false,
+            "priceTiers":[],"discountPercentageOnGifts":100
+        }]
+    }]}"#;
+
+    fn landing_ops(lines: &[String]) -> usize {
+        run_function_with_input(run, &cart_json(&format!("[{}]", lines.join(",")), "50.00", ATLAS_LANDING))
+            .expect("should not error")
+            .operations
+            .len()
+    }
+
+    fn atlas(id: &str, product: &str, price: &str) -> String {
+        scoped_line(
+            &format!("gid://shopify/CartLine/{id}"),
+            &format!("gid://shopify/ProductVariant/{product}"),
+            &format!("gid://shopify/Product/{product}"),
+            price,
+            1,
+            Some("atlas-sk-otg"),
+            None,
+        )
+    }
+
+    #[test]
+    fn zero_cost_line_does_not_unlock_a_landing_gift() {
+        assert_eq!(landing_ops(&[atlas("1", "gift", "20.00"), atlas("2", "kit", "0.00")]), 0);
+        assert_eq!(landing_ops(&[atlas("1", "gift", "20.00"), atlas("2", "kit", "30.00")]), 1);
+        assert_eq!(
+            landing_ops(&[atlas("1", "gift", "20.00"), atlas("2", "kit", "30.00"), atlas("3", "other", "0.00")]),
+            1
+        );
+    }
+
+    #[test]
+    fn zero_cost_line_is_not_a_consumable_gift_anchor() {
+        // Two stacking-off gift offers share the cart's only paid anchor: the second one stays locked
+        // even though a $0 line of the same product is present.
+        let offer = |id: &str, priority: i64, gift: &str| {
+            format!(
+                r#"{{"id":"{id}","version":1,"offerType":"gift","priority":{priority},"stopLowerPriority":false,
+                "canStackWithGiftOffers":false,
+                "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+                "giftVariantIds":["gid://shopify/ProductVariant/{gift}"],"giftProductIds":[],
+                "discountType":"free","discountValue":100.0,"currencyCode":"USD",
+                "combinesWithOrderDiscounts":true,"combinesWithShippingDiscounts":true,"combinesWithProductDiscounts":true,
+                "requirements":[{{"variantId":"gid://shopify/ProductVariant/x","productId":"gid://shopify/Product/x","trackMode":"variant","minQuantity":1}}],
+                "giftRewards":[{{"id":"reward-1","targetVariantIds":["gid://shopify/ProductVariant/{gift}"],"discountType":"free","discountValue":100.0,"maxQuantity":1}}]}}"#
+            )
+        };
+        let config = format!(r#"{{"offers":[{},{}]}}"#, offer("a", 10, "g1"), offer("b", 20, "g2"));
+        let gift_for = |id: &str, offer_id: &str, gift: &str| {
+            gift_line(
+                &format!("gid://shopify/CartLine/{id}"),
+                &format!("gid://shopify/ProductVariant/{gift}"),
+                &format!("gid://shopify/Product/{gift}"),
+                offer_id,
+                "5.00",
+                1,
+            )
+        };
+        let run_with = |anchors: Vec<String>| {
+            let mut lines = anchors;
+            lines.push(gift_for("g1", "a", "g1"));
+            lines.push(gift_for("g2", "b", "g2"));
+            let result = run_function_with_input(run, &cart_json(&format!("[{}]", lines.join(",")), "60.00", &config))
+                .expect("should not error");
+            free_units_by_line(&result).keys().cloned().collect::<Vec<_>>()
+        };
+        let one_paid = run_with(vec![paid("a1", "x", 1), free_of("a2", "x")]);
+        assert_eq!(one_paid, vec!["gid://shopify/CartLine/g1".to_string()]);
+        let two_paid = run_with(vec![paid("a1", "x", 1), paid("a2", "x", 1)]);
+        assert_eq!(two_paid.len(), 2);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import type { NormalizedCart, NormalizedCartLine } from "@promo/shared-types";
-import { extractQualifyingLines } from "./cart-parser.js";
+import { extractQualifyingLines, isZeroCostLine } from "./cart-parser.js";
 import type { ConditionDefinition, OfferDefinition, RewardDefinition } from "./evaluator.js";
 import { isPageConditionType, lineMatchesPageConditions } from "./page-match.js";
 
@@ -115,7 +115,7 @@ function landingAnchors(reward: RewardDefinition, lines: NormalizedCartLine[]): 
 
 /** Null when the offer is not a gift offer or has no identifiable anchor lines (it then never consumes or is gated). */
 export function giftAnchors(offer: OfferDefinition, cart: NormalizedCart, excluded: Set<string>): Anchors | null {
-  const lines = extractQualifyingLines(cart);
+  const lines = extractQualifyingLines(cart).filter((line) => !isZeroCostLine(line));
   if (offer.rewards.some((reward) => reward.rewardType === "product_gift")) return productGiftAnchors(offer, lines, excluded);
   const landing = offer.rewards.find(isFreeLandingGift);
   return landing ? landingAnchors(landing, lines) : null;

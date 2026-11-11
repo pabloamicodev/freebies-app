@@ -1,0 +1,121 @@
+{
+  "name": "zero-cost-unit-does-not-meet-a-product-requirement",
+  "description": "A requirement of 2 units of one variant is not met by 1 paid unit plus 1 unit at $0 from another app.",
+  "source": {
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "type": "discount",
+        "priority": 100,
+        "stopLowerPriority": false,
+        "conditions": [
+          {
+            "conditionType": "specific_product",
+            "value": {
+              "requirements": [
+                {
+                  "productId": "gid://shopify/Product/1",
+                  "variantId": "gid://shopify/ProductVariant/1",
+                  "trackMode": "variant",
+                  "minQuantity": 2
+                }
+              ],
+              "multiplyByGroups": false
+            },
+            "scope": "main",
+            "operator": "eq",
+            "sortOrder": 0
+          }
+        ],
+        "rewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "rewardType": "product_discount",
+            "discountType": "percentage",
+            "value": {
+              "amount": 10,
+              "currencyCode": "USD"
+            },
+            "target": {},
+            "quantity": null,
+            "isAutoAdd": false,
+            "isCustomerSelectable": false,
+            "trackMode": "variant",
+            "sortOrder": 0,
+            "label": null
+          }
+        ]
+      }
+    ]
+  },
+  "config": {
+    "c1": "_promo_engine_unused",
+    "c2": "_promo_engine_unused",
+    "c3": "_promo_engine_unused",
+    "customerTags": [],
+    "offers": [
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "offerType": "discount",
+        "priority": 100,
+        "requiredVariantIds": [
+          "gid://shopify/ProductVariant/1"
+        ],
+        "requirements": [
+          {
+            "productId": "gid://shopify/Product/1",
+            "variantId": "gid://shopify/ProductVariant/1",
+            "trackMode": "variant",
+            "minQuantity": 2
+          }
+        ],
+        "productRewards": [
+          {
+            "id": "aaaaaaaa-reward",
+            "discountType": "percentage",
+            "discountValue": 10
+          }
+        ]
+      }
+    ],
+    "version": "parity",
+    "compiledAt": "2026-01-01T00:00:00.000Z"
+  },
+  "cart": {
+    "currency": "USD",
+    "presentmentCurrencyRate": 1,
+    "country": "US",
+    "customerTags": [],
+    "enteredCodes": [],
+    "lines": [
+      {
+        "id": "l1",
+        "variantId": "gid://shopify/ProductVariant/1",
+        "productId": "gid://shopify/Product/1",
+        "quantity": 1,
+        "unitPrice": "10.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/products/l1"
+        }
+      },
+      {
+        "id": "l2",
+        "variantId": "gid://shopify/ProductVariant/1",
+        "productId": "gid://shopify/Product/1",
+        "quantity": 1,
+        "unitPrice": "0.00",
+        "lineType": null,
+        "metadata": {
+          "_promo_page_url": "/products/l2"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "qualifiedOfferIds": [],
+    "discountedLineIds": {}
+  }
+}

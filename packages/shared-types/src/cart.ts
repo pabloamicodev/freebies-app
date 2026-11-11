@@ -24,6 +24,8 @@ export const NormalizedCartLineSchema = z.object({
   priceCents: z.number().int().nonnegative(),
   /** Final line subtotal after line-level discounts, in store currency cents. */
   lineSubtotalCents: z.number().int().nonnegative().optional(),
+  /** Line subtotal before any discount (what the Functions see); absent on older storefront bundles. */
+  originalLineSubtotalCents: z.number().int().nonnegative().optional(),
   compareAtPriceCents: z.number().int().nonnegative().nullable(),
   /** All line item properties / attributes. */
   properties: z.record(z.string().max(128), coercedStringValue(2_048)).superRefine((properties, ctx) => {

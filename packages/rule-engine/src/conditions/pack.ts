@@ -1,6 +1,6 @@
 import type { NormalizedCart, EligibilityReason } from "@promo/shared-types";
 import { ok, err, type Result } from "@promo/shared-types";
-import { extractQualifyingLines } from "../cart-parser.js";
+import { extractQualifyingLines, isZeroCostLine } from "../cart-parser.js";
 
 export interface PackRequirement {
   /** "product" = any variant of the product counts; "variant" = exact variant only. */
@@ -29,7 +29,7 @@ export function evaluatePack(
   cart: NormalizedCart,
   condition: PackConditionValue,
 ): Result<EligibilityReason & { packCount: number }, EligibilityReason> {
-  const qualifyingLines = extractQualifyingLines(cart, { includeGiftValues: false });
+  const qualifyingLines = extractQualifyingLines(cart, { includeGiftValues: false }).filter((line) => !isZeroCostLine(line));
   const legacyVariantIds = (condition as unknown as { variantIds?: string[] }).variantIds;
   const requirements = condition.requirements ?? (
     Array.isArray(legacyVariantIds)

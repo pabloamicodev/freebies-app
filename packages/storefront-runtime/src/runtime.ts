@@ -933,6 +933,7 @@ export class PromoEngineRuntime {
         quantity: item.quantity,
         priceCents: item.final_price ?? item.price,
         lineSubtotalCents: item.final_line_price ?? item.line_price ?? item.price * item.quantity,
+        ...(item.original_line_price === undefined ? {} : { originalLineSubtotalCents: item.original_line_price }),
         compareAtPriceCents: null,
         properties: item.properties ?? {},
         requiresSellingPlan: item.requires_selling_plan ?? false,
