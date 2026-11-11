@@ -109,6 +109,19 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (cmd === "grow") {
+      const o = (await giftOffer())!;
+      const rw = await rewardOf(o.id);
+      const anchor = (rw.target as { variantIds: string[] }).variantIds;
+      const pool = await db.select({ v: variantCache.variantGid, av: variantCache.availableForSale, inv: variantCache.inventoryQuantity }).from(variantCache).where(eq(variantCache.shopId, shop.id));
+      const n = Number(flag("--n") ?? 100000);
+      const all = pool.filter((r) => r.v !== "gid://shopify/ProductVariant/45726993055827").sort((x, y) => Number(y.av) - Number(x.av) || (y.inv ?? 0) - (x.inv ?? 0)).slice(0, n).map((r) => r.v).reverse();
+      await db.update(offerRewards).set({ target: { variantIds: all } }).where(eq(offerRewards.id, rw.id));
+      await db.update(offers).set({ updatedAt: new Date() }).where(eq(offers.id, o.id));
+      out(`gift options ${anchor.length} -> ${all.length}`);
+      return;
+    }
+
     if (cmd === "block") {
       const o = (await giftOffer())!;
       const res = await src.runWithCapacitySource("background", false, () => flow.validateActivationWithPreflight(db, shop.id, [o.id]));
