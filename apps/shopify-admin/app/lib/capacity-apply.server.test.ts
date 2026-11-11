@@ -353,7 +353,7 @@ describe("applyWorkaround: Shopify discounts", () => {
     const incident = await incidentFrom(shopId, [], opts);
     return { shopId, domain, incident, opts };
   }
-  const candidates = Array.from({ length: 12 }, (_, i) => i + 1).map((n) => ({ id: `gid://shopify/DiscountAutomaticNode/${n}`, title: `Other ${n}`, type: "DiscountAutomaticApp", appTitle: "Other app" }));
+  const candidates = Array.from({ length: 12 }, (_, i) => i + 1).map((n) => ({ id: `gid://shopify/DiscountAutomaticNode/${n}`, title: `Other ${n}`, type: "DiscountAutomaticBasic", appTitle: null, native: true }));
   const makeOps = () => {
     const setActive = vi.fn(async () => undefined);
     const ops: DiscountOps = { list: async () => candidates, setActive };
@@ -375,6 +375,19 @@ describe("applyWorkaround: Shopify discounts", () => {
     const rolled = await applyWorkaround(db, shopRef(f.shopId, f.domain), { ...base, selected }, deps({ discounts: ops, capacity: f.opts, publish: failing }));
     expect(rolled).toMatchObject({ ok: false, code: "rolled_back" });
     expect(setActive.mock.calls.map((c) => (c as unknown as [unknown, string, boolean]).slice(1))).toEqual([...selected.map((id) => [id, false]), ...[...selected].reverse().map((id) => [id, true])]);
+  });
+
+  it("refuses an other-app discount even when it is posted, and never touches it", async () => {
+    const f = await limitFixture("deact-other-app.myshopify.com");
+    const p = await proposal(f.incident, "deactivate_discounts", f.opts);
+    const needed = p.params["needed"] as number;
+    const otherApp = { id: "gid://shopify/DiscountAutomaticNode/777", title: "Nektar", type: "DiscountAutomaticApp", appTitle: "Nektar", native: false };
+    const setActive = vi.fn(async () => undefined);
+    const ops: DiscountOps = { list: async () => [...candidates, otherApp], setActive };
+    const selected = [otherApp.id, ...candidates.slice(0, needed - 1).map((c) => c.id)];
+    const result = await applyWorkaround(db, shopRef(f.shopId, f.domain), { incidentId: f.incident.id, kind: "deactivate_discounts", selected, confirm: true, expectedVersions: p.offerVersions, performedBy: "t" }, deps({ discounts: ops, capacity: f.opts }));
+    expect(result).toMatchObject({ ok: false, code: "refused" });
+    expect(setActive).not.toHaveBeenCalled();
   });
 
   it("deactivates, publishes, and Undo reactivates the same discounts", async () => {

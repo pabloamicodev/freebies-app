@@ -54,7 +54,10 @@ export const workaroundCopy = {
     customerChange: (titles: readonly string[]) => `These Shopify discounts stop applying in your store: ${list(titles)}.`,
     customerChangeUnselected: "The Shopify discounts you select stop applying in your store.",
     optionsLabel: "Automatic discounts to deactivate",
-    note: "Includes discounts from other apps. Nothing is selected for you. Undo reactivates them.",
+    note: "Only Shopify's own automatic discounts are listed, because Promo Engine can switch those back on. Nothing is selected for you. Undo reactivates them.",
+    manualHeading: "Discounts from other apps",
+    manualGuidance: (title: string, appTitle: string | null) =>
+      `Turn off ${title} in ${appTitle ?? "the app that owns it"} or in Shopify admin → Discounts; Promo Engine can't turn it back on for you.`,
   },
   allowCombine: {
     title: "Let these offers combine with product discounts",

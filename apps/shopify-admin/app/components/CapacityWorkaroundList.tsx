@@ -1,11 +1,13 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { Link, useFetcher } from "react-router";
-import { confirmSemanticChangeLabel, incidentDialogCopy as copy } from "../lib/capacity-workaround-copy.js";
+import { confirmSemanticChangeLabel, incidentDialogCopy as copy, workaroundCopy } from "../lib/capacity-workaround-copy.js";
 import type { IncidentProposals, WorkaroundOption, WorkaroundProposal, WorkaroundResult } from "../lib/capacity-workarounds.js";
 
 export interface LazyOptions {
   state: "idle" | "loading" | "error" | "ready";
   items: WorkaroundOption[];
+  /** Other apps' discounts: shown as manual guidance, never selectable. */
+  manual?: Array<{ id: string; title: string; appTitle: string | null }>;
 }
 
 interface ListProps {
@@ -72,6 +74,16 @@ function Proposal({ proposal, incident, busyKind, lazyOptions, onLoadOptions, on
                 </li>
               ))}
             </ul>
+          )}
+          {options.lazy && lazyOptions?.state === "ready" && lazyOptions.manual && lazyOptions.manual.length > 0 && (
+            <div>
+              <h5 style={{ ...headStyle, fontSize: 12 }}>{workaroundCopy.deactivateDiscounts.manualHeading}</h5>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {lazyOptions.manual.map((entry) => (
+                  <li key={entry.id} style={{ ...textStyle, fontSize: 13 }}>{workaroundCopy.deactivateDiscounts.manualGuidance(entry.title, entry.appTitle)}</li>
+                ))}
+              </ul>
+            </div>
           )}
           {missing > 0 && (options.lazy ? lazyOptions?.state === "ready" : true) && <p id={`${uid}-min`} style={{ ...textStyle, fontSize: 13 }}>{copy.selectAtLeast(options.minSelected)}</p>}
         </fieldset>
@@ -166,6 +178,7 @@ interface LoaderResult {
   error?: true;
   incidents?: IncidentProposals[];
   candidates?: Array<{ id: string; title: string; type: string; appTitle: string | null }>;
+  manual?: Array<{ id: string; title: string; type: string; appTitle: string | null }>;
 }
 
 interface PanelProps {
@@ -208,7 +221,7 @@ export function IncidentWorkaroundsPanel({ incidentId, onLoaded }: PanelProps) {
   const lazy = useMemo<LazyOptions>(() => {
     if (discounts.state !== "idle") return { state: "loading", items: [] };
     if (!discounts.data?.candidates) return { state: lazyFor ? "error" : "idle", items: [] };
-    return { state: "ready", items: discounts.data.candidates.map((candidate) => ({ id: candidate.id, label: candidate.appTitle ? `${candidate.title} (${candidate.appTitle})` : candidate.title, checked: false })) };
+    return { state: "ready", items: discounts.data.candidates.map((candidate) => ({ id: candidate.id, label: candidate.appTitle ? `${candidate.title} (${candidate.appTitle})` : candidate.title, checked: false })), manual: discounts.data.manual ?? [] };
   }, [discounts.state, discounts.data, lazyFor]);
 
   const submit = (fields: Record<string, string>, forIncident: string, kind: string) => {

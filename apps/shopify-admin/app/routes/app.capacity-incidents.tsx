@@ -37,8 +37,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     if (query.data.discounts) {
       const incident = live.find((row) => row.id === query.data.incident);
       if (!incident) throw new Response("Not found", { status: 404 });
-      const candidates = await (await discountOps(db)).list({ id: shopId, domain: shopDomain });
-      return { candidates };
+      const all = await (await discountOps(db)).list({ id: shopId, domain: shopDomain });
+      return { candidates: all.filter((candidate) => candidate.native), manual: all.filter((candidate) => !candidate.native) };
     }
 
     const chosen = (query.data.incident ? live.filter((row) => row.id === query.data.incident) : live).slice(0, MAX_INCIDENTS);

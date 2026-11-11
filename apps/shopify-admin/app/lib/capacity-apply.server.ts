@@ -335,7 +335,7 @@ export async function applyWorkaround(db: Db, shop: ShopRef, input: ApplyInput, 
   }
   if (proposal.kind === "deactivate_discounts") {
     const needed = Number(proposal.params["needed"] ?? 1);
-    const candidates = new Set((await (await ops()).list(shop)).map((candidate) => candidate.id));
+    const candidates = new Set((await (await ops()).list(shop)).filter((candidate) => candidate.native).map((candidate) => candidate.id));
     if (selected.length < needed) return { ok: false, code: "refused", message: `Select at least ${needed}.` };
     if (selected.length > needed + MAX_EXTRA_DEACTIVATIONS || selected.some((id) => !candidates.has(id))) return { ok: false, code: "refused", message: workaroundCopy.stale };
   }
