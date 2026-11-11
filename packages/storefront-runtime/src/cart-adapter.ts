@@ -64,7 +64,6 @@ export interface CartItem {
   line_price?: number;
   original_line_price?: number;
   final_line_price?: number;
-  original_line_price?: number;
   properties: Record<string, string> | null;
   handle: string;
   title: string;
