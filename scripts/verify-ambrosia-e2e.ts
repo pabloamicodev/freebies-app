@@ -76,6 +76,7 @@ async function main(): Promise<void> {
     {
       appSettings,
       closeDb,
+      discountShards,
       getDb,
       offerCombinationPolicies,
       offerConditions,
@@ -291,6 +292,16 @@ async function main(): Promise<void> {
         );
     }
 
+    const shardNodeIds = (
+      await db
+        .select({ nodeId: discountShards.discountNodeId })
+        .from(discountShards)
+        .where(and(eq(discountShards.shopId, shop.id), eq(discountShards.kind, "cart")))
+        .orderBy(asc(discountShards.slot))
+    )
+      .map((row) => row.nodeId)
+      .filter((id): id is string => !!id && id !== shop.discountId);
+
     const remote = await admin<{
       nodes: Array<null | {
         id: string;
@@ -316,9 +327,9 @@ async function main(): Promise<void> {
         }
       }
     `,
-      { ids: [shop.discountId, shop.deliveryDiscountId] },
+      { ids: [shop.discountId, shop.deliveryDiscountId, ...shardNodeIds] },
     );
-    assert.equal(remote.nodes.length, 2);
+    assert.equal(remote.nodes.length, 2 + shardNodeIds.length);
     const configs = remote.nodes.map((node) => {
       assert.ok(
         node?.automaticDiscount,
@@ -333,8 +344,15 @@ async function main(): Promise<void> {
       return JSON.parse(node.metafield.value) as CompiledConfig;
     });
     // Since FIX-cap-01 the cart node holds `offers` and the delivery node holds `shippingOffers`.
-    const published = configs[0]!;
+    // Sharded shops spread cart offers over extra nodes ("Promo Engine 2"…); verify them as one config.
+    const published = {
+      ...configs[0]!,
+      offers: [configs[0]!, ...configs.slice(2)].flatMap((config) => config.offers ?? []),
+    };
     const delivery = configs[1]!;
+    for (const shard of configs.slice(2)) {
+      assert.equal(shard.compiledAt, configs[0]!.compiledAt, "Cart shard nodes were not published together.");
+    }
     assert.deepEqual(delivery.offers ?? [], [], "The delivery node must carry no cart offers.");
     assert.equal(delivery.compiledAt, published.compiledAt, "Cart and delivery nodes were not published together.");
     assert.equal(published.version, "1");
