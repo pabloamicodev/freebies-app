@@ -1397,9 +1397,13 @@ export interface AutomaticDiscountCandidate {
   type: string;
   /** Title of the app that owns an app discount, when Shopify says. */
   appTitle: string | null;
+  /** Native Shopify discount (no owning app): the only kind Promo Engine can both deactivate and reactivate. */
+  native: boolean;
 }
 
-/** Active automatic discounts of the store that Promo Engine does not own: what a merchant could deactivate to make room. */
+const NATIVE_AUTOMATIC_TYPES: ReadonlySet<string> = new Set(["DiscountAutomaticBasic", "DiscountAutomaticBxgy", "DiscountAutomaticFreeShipping"]);
+
+/** Active automatic discounts of the store that Promo Engine does not own, native or from another app. Only native ones may be deactivated. */
 export async function listAutomaticDiscountCandidates(
   shopId: string,
   shopDomain: string,
@@ -1445,6 +1449,7 @@ export async function listAutomaticDiscountCandidates(
       title: node.discount?.title ?? node.id,
       type: node.discount!.__typename,
       appTitle: node.discount?.appDiscountType?.app?.title ?? null,
+      native: NATIVE_AUTOMATIC_TYPES.has(node.discount!.__typename),
     }));
 }
 
