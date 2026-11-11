@@ -1,0 +1,718 @@
+{
+ "source": "tru slot 0, live config read 2026-11-10, ids and titles anonymized",
+ "currency": "USD",
+ "config": {
+  "c1": "_promo_engine_unused",
+  "c2": "_promo_engine_unused",
+  "c3": "_promo_engine_unused",
+  "customerTags": [],
+  "offers": [
+   {
+    "id": "00000000-0000-4000-8000-000000000003",
+    "version": 1,
+    "offerType": "discount",
+    "title": "tru offer 1",
+    "priority": 100,
+    "productRewards": [
+     {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "discountType": "percentage",
+      "discountValue": 0,
+      "quantityTiers": [
+       {
+        "minimumQuantity": 1,
+        "maximumQuantity": 1,
+        "discountType": "percentage",
+        "discountValue": 15,
+        "cartMessage": "15% OFF"
+       },
+       {
+        "minimumQuantity": 2,
+        "maximumQuantity": 2,
+        "discountType": "percentage",
+        "discountValue": 20,
+        "cartMessage": "20% OFF"
+       },
+       {
+        "minimumQuantity": 3,
+        "maximumQuantity": 3,
+        "discountType": "percentage",
+        "discountValue": 25,
+        "cartMessage": "25% OFF"
+       },
+       {
+        "minimumQuantity": 4,
+        "discountType": "percentage",
+        "discountValue": 30,
+        "cartMessage": "30% OFF"
+       }
+      ]
+     }
+    ],
+    "pageUrlConditions": [
+     {
+      "patterns": [
+       "home",
+       "collection",
+       "product",
+       "search",
+       "page",
+       "blog",
+       "cart",
+       "!/pages/bundle-builder"
+      ],
+      "matchMode": "page_type"
+     }
+    ],
+    "cartQuantityThreshold": 1
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000004",
+    "version": 2,
+    "offerType": "gift",
+    "title": "tru offer 2",
+    "priority": 200,
+    "giftVariantIds": [
+     "gid://shopify/ProductVariant/70000000000007"
+    ],
+    "giftRewards": [
+     {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "targetVariantIds": [
+       "70000000000007"
+      ],
+      "discountType": "free",
+      "discountValue": 100,
+      "maxQuantity": 1
+     }
+    ],
+    "cartValueThresholdCents": 7000,
+    "maxGiftQuantity": 1
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "version": 3,
+    "offerType": "gift",
+    "title": "tru offer 3",
+    "priority": 201,
+    "giftVariantIds": [
+     "gid://shopify/ProductVariant/70000000000008"
+    ],
+    "giftRewards": [
+     {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "targetVariantIds": [
+       "70000000000008"
+      ],
+      "discountType": "free",
+      "discountValue": 100,
+      "maxQuantity": 1
+     }
+    ],
+    "cartValueThresholdCents": 11000,
+    "maxGiftQuantity": 1
+   }
+  ],
+  "version": "1",
+  "compiledAt": "2026-11-10T19:14:02.233Z"
+ },
+ "sample": [
+  {
+   "v": "gid://shopify/ProductVariant/70000000000009",
+   "p": "gid://shopify/Product/70000000000010",
+   "price": 49.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000011",
+   "p": "gid://shopify/Product/70000000000010",
+   "price": 149.97,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000012",
+   "p": "gid://shopify/Product/70000000000013",
+   "price": 44.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000014",
+   "p": "gid://shopify/Product/70000000000013",
+   "price": 44.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000015",
+   "p": "gid://shopify/Product/70000000000016",
+   "price": 14.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000017",
+   "p": "gid://shopify/Product/70000000000018",
+   "price": 19.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000019",
+   "p": "gid://shopify/Product/70000000000018",
+   "price": 54.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000020",
+   "p": "gid://shopify/Product/70000000000021",
+   "price": 24.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000022",
+   "p": "gid://shopify/Product/70000000000023",
+   "price": 32.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000024",
+   "p": "gid://shopify/Product/70000000000023",
+   "price": 98.97,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000025",
+   "p": "gid://shopify/Product/70000000000026",
+   "price": 49.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000027",
+   "p": "gid://shopify/Product/70000000000026",
+   "price": 49.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000028",
+   "p": "gid://shopify/Product/70000000000029",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000030",
+   "p": "gid://shopify/Product/70000000000031",
+   "price": 28.49,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000032",
+   "p": "gid://shopify/Product/70000000000033",
+   "price": 49.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000034",
+   "p": "gid://shopify/Product/70000000000033",
+   "price": 149.97,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000035",
+   "p": "gid://shopify/Product/70000000000036",
+   "price": 23.74,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000037",
+   "p": "gid://shopify/Product/70000000000038",
+   "price": 9.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000039",
+   "p": "gid://shopify/Product/70000000000040",
+   "price": 39.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000041",
+   "p": "gid://shopify/Product/70000000000040",
+   "price": 39.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000042",
+   "p": "gid://shopify/Product/70000000000043",
+   "price": 19.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000044",
+   "p": "gid://shopify/Product/70000000000043",
+   "price": 19.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000045",
+   "p": "gid://shopify/Product/70000000000046",
+   "price": 16.14,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000047",
+   "p": "gid://shopify/Product/70000000000046",
+   "price": 48.42,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000048",
+   "p": "gid://shopify/Product/70000000000049",
+   "price": 47.49,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000050",
+   "p": "gid://shopify/Product/70000000000051",
+   "price": 47.49,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000052",
+   "p": "gid://shopify/Product/70000000000053",
+   "price": 10.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000054",
+   "p": "gid://shopify/Product/70000000000055",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000056",
+   "p": "gid://shopify/Product/70000000000057",
+   "price": 30,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000058",
+   "p": "gid://shopify/Product/70000000000057",
+   "price": 50,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000059",
+   "p": "gid://shopify/Product/70000000000060",
+   "price": 49.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000061",
+   "p": "gid://shopify/Product/70000000000060",
+   "price": 149.97,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000062",
+   "p": "gid://shopify/Product/70000000000063",
+   "price": 16.14,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000064",
+   "p": "gid://shopify/Product/70000000000063",
+   "price": 48.42,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000065",
+   "p": "gid://shopify/Product/70000000000066",
+   "price": 36.09,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000067",
+   "p": "gid://shopify/Product/70000000000066",
+   "price": 36.09,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000068",
+   "p": "gid://shopify/Product/70000000000069",
+   "price": 28.49,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000070",
+   "p": "gid://shopify/Product/70000000000071",
+   "price": 23.74,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000072",
+   "p": "gid://shopify/Product/70000000000073",
+   "price": 42.74,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000074",
+   "p": "gid://shopify/Product/70000000000073",
+   "price": 42.74,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000075",
+   "p": "gid://shopify/Product/70000000000076",
+   "price": 47.49,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000077",
+   "p": "gid://shopify/Product/70000000000076",
+   "price": 47.49,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000078",
+   "p": "gid://shopify/Product/70000000000079",
+   "price": 11.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000080",
+   "p": "gid://shopify/Product/70000000000081",
+   "price": 2.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000082",
+   "p": "gid://shopify/Product/70000000000081",
+   "price": 2.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000083",
+   "p": "gid://shopify/Product/70000000000084",
+   "price": 11.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000085",
+   "p": "gid://shopify/Product/70000000000086",
+   "price": 99.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000087",
+   "p": "gid://shopify/Product/70000000000088",
+   "price": 99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000089",
+   "p": "gid://shopify/Product/70000000000090",
+   "price": 29.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000091",
+   "p": "gid://shopify/Product/70000000000090",
+   "price": 29.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000092",
+   "p": "gid://shopify/Product/70000000000093",
+   "price": 99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000094",
+   "p": "gid://shopify/Product/70000000000095",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000096",
+   "p": "gid://shopify/Product/70000000000097",
+   "price": 29.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000098",
+   "p": "gid://shopify/Product/70000000000099",
+   "price": 149,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000008",
+   "p": "gid://shopify/Product/70000000000100",
+   "price": 49.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000101",
+   "p": "gid://shopify/Product/70000000000100",
+   "price": 99.98,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000102",
+   "p": "gid://shopify/Product/70000000000103",
+   "price": 121,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000104",
+   "p": "gid://shopify/Product/70000000000103",
+   "price": 121,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000105",
+   "p": "gid://shopify/Product/70000000000106",
+   "price": 50,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000107",
+   "p": "gid://shopify/Product/70000000000108",
+   "price": 173,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000109",
+   "p": "gid://shopify/Product/70000000000108",
+   "price": 173,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000110",
+   "p": "gid://shopify/Product/70000000000111",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000112",
+   "p": "gid://shopify/Product/70000000000113",
+   "price": 110,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000114",
+   "p": "gid://shopify/Product/70000000000113",
+   "price": 110,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000115",
+   "p": "gid://shopify/Product/70000000000116",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000117",
+   "p": "gid://shopify/Product/70000000000118",
+   "price": 110,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000119",
+   "p": "gid://shopify/Product/70000000000118",
+   "price": 110,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000120",
+   "p": "gid://shopify/Product/70000000000121",
+   "price": 9.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000122",
+   "p": "gid://shopify/Product/70000000000123",
+   "price": 132.97,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000124",
+   "p": "gid://shopify/Product/70000000000123",
+   "price": 132.97,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000125",
+   "p": "gid://shopify/Product/70000000000126",
+   "price": 3.49,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000127",
+   "p": "gid://shopify/Product/70000000000128",
+   "price": 39.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000129",
+   "p": "gid://shopify/Product/70000000000128",
+   "price": 39.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000130",
+   "p": "gid://shopify/Product/70000000000131",
+   "price": 2.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000132",
+   "p": "gid://shopify/Product/70000000000131",
+   "price": 2.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000133",
+   "p": "gid://shopify/Product/70000000000134",
+   "price": 29.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000135",
+   "p": "gid://shopify/Product/70000000000136",
+   "price": 174.98,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000137",
+   "p": "gid://shopify/Product/70000000000136",
+   "price": 174.98,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000138",
+   "p": "gid://shopify/Product/70000000000139",
+   "price": 111.25,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000140",
+   "p": "gid://shopify/Product/70000000000139",
+   "price": 111.25,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000141",
+   "p": "gid://shopify/Product/70000000000142",
+   "price": 9.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000143",
+   "p": "gid://shopify/Product/70000000000144",
+   "price": 11.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000145",
+   "p": "gid://shopify/Product/70000000000146",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000147",
+   "p": "gid://shopify/Product/70000000000146",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000148",
+   "p": "gid://shopify/Product/70000000000149",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000150",
+   "p": "gid://shopify/Product/70000000000151",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000152",
+   "p": "gid://shopify/Product/70000000000153",
+   "price": 49,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000154",
+   "p": "gid://shopify/Product/70000000000155",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000156",
+   "p": "gid://shopify/Product/70000000000157",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000158",
+   "p": "gid://shopify/Product/70000000000159",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000160",
+   "p": "gid://shopify/Product/70000000000161",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000162",
+   "p": "gid://shopify/Product/70000000000163",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000164",
+   "p": "gid://shopify/Product/70000000000165",
+   "price": 0,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000007",
+   "p": "gid://shopify/Product/70000000000166",
+   "price": 9.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000167",
+   "p": "gid://shopify/Product/70000000000168",
+   "price": 0.01,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000169",
+   "p": "gid://shopify/Product/70000000000170",
+   "price": 11.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000171",
+   "p": "gid://shopify/Product/70000000000172",
+   "price": 5,
+   "tiers": null
+  }
+ ],
+ "promo": [
+  {
+   "v": "gid://shopify/ProductVariant/70000000000007",
+   "p": "gid://shopify/Product/70000000000166",
+   "price": 9.99,
+   "tiers": null
+  },
+  {
+   "v": "gid://shopify/ProductVariant/70000000000008",
+   "p": "gid://shopify/Product/70000000000100",
+   "price": 49.99,
+   "tiers": "[{\"qty\":1,\"percent\":15,\"discount_label\":\"15% off\"},{\"qty\":2,\"percent\":20,\"tag\":\"Most popular\",\"discount_label\":\"20% off\"},{\"qty\":3,\"percent\":25,\"tag\":\"Best value\",\"discount_label\":\"25% off\"},{\"qty\":4,\"percent\":30,\"discount_label\":\"30% off\"}]"
+  }
+ ],
+ "landingValues": []
+}

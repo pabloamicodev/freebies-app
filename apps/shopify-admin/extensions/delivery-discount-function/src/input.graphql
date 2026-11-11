@@ -34,9 +34,7 @@ query Input {
       quizExpectedPaidCountAttribute: attribute(key: "_quiz_expected_paid_count") { value }
       promoMetadata: attribute(key: "_promo_engine_metadata") { value }
       sellingPlanAllocation {
-        sellingPlan {
-          id
-        }
+        __typename
       }
       merchandise {
         __typename
@@ -50,9 +48,7 @@ query Input {
       groupType
       cartLines {
         sellingPlanAllocation {
-          sellingPlan {
-            id
-          }
+          __typename
         }
       }
     }

@@ -1,27 +1,131 @@
 use crate::config::{
-    is_zero_decimal, minor_units, to_cents, CompiledConfig, CompiledGiftReward, CompiledOffer,
+    is_zero_decimal, minor_units, to_cents, to_cents_in, CompiledConfig, CompiledGiftReward, CompiledOffer,
     CompiledOrderReward, CompiledProductReward,
 };
-use crate::page_match::{metadata_matches, LineMetadata};
+use crate::page_match::{metadata_matches, LineMetadata, PAGE_STAMP_KEYS};
 use crate::schema;
 use schema::cart_lines_discounts_generate_run::input::cart::lines::Merchandise;
 use schema::cart_lines_discounts_generate_run::input::cart::Lines;
 use schema::cart_lines_discounts_generate_run::Input;
 use shopify_function::Result;
-use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::cell::{Cell, OnceCell, RefCell};
+use crate::de::{HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 const LINE_TYPE_GIFT: &str = "gift";
 const LINE_TYPE_UPSELL: &str = "upsell";
 
+/// Metadata-derived values of one line.
+struct PackedFacts {
+    metadata: Option<Rc<LineMetadata>>,
+    // Lines whose stamps that page conditions read are identical share a class (see `page_class`).
+    page_class: usize,
+    line_type: Option<String>,
+    gift: bool,
+}
+
+struct Merch {
+    tiers: Option<Rc<[VolumeDiscountTier]>>,
+}
+
+/// Per-line values every offer re-reads. Each is computed on first use (reading a line field is costly) and kept
+/// for the run; facts are indexed by the line's position in the cart.
+#[derive(Default)]
+struct LineFacts {
+    packed: OnceCell<PackedFacts>,
+    quantity: OnceCell<i32>,
+    subtotal: OnceCell<f64>,
+    merchandise: OnceCell<Merch>,
+    outside_tiers: OnceCell<bool>,
+    subscription: OnceCell<bool>,
+    landing_source: OnceCell<Option<String>>,
+    offer_id: OnceCell<Option<String>>,
+    reward_id: OnceCell<Option<String>>,
+}
+
+impl LineFacts {
+    fn packed(&self, line: &Lines) -> &PackedFacts {
+        self.packed.get_or_init(|| compute_packed_facts(line))
+    }
+
+    fn quantity(&self, line: &Lines) -> i32 {
+        *self.quantity.get_or_init(|| *line.quantity())
+    }
+
+    fn subtotal(&self, line: &Lines) -> f64 {
+        *self.subtotal.get_or_init(|| line.cost().subtotal_amount().amount().as_f64())
+    }
+
+    fn subscription(&self, line: &Lines) -> bool {
+        *self.subscription.get_or_init(|| line.selling_plan_allocation().is_some())
+    }
+
+    fn landing_source(&self, line: &Lines) -> Option<&String> {
+        self.landing_source
+            .get_or_init(|| {
+                line.landing_source()
+                    .and_then(|attribute| attribute.value())
+                    .or_else(|| self.packed(line).metadata.as_deref()?.get("__landing_source"))
+                    .cloned()
+            })
+            .as_ref()
+    }
+
+    fn merchandise(&self, line: &Lines) -> &Merch {
+        self.merchandise.get_or_init(|| match line.merchandise() {
+            Merchandise::ProductVariant(variant) => {
+                let product = variant.product();
+                Merch {
+                    tiers: product
+                        .volume_discount_tiers()
+                        .and_then(|metafield| parse_volume_tiers(metafield.value())),
+                }
+            }
+            Merchandise::Other => Merch { tiers: None },
+        })
+    }
+
+    /// The line's valid volume-discount tiers; None for bundle components and Nektar GLP-1 lines, which the projection skips.
+    fn volume_tiers(&self, line: &Lines) -> Option<&[VolumeDiscountTier]> {
+        let tiers = self.merchandise(line).tiers.as_deref()?;
+        let outside_tiers = *self.outside_tiers.get_or_init(|| {
+            let packed = self.packed(line).metadata.as_deref();
+            let packed = |key: &str| packed.and_then(|map| map.get(key));
+            let bundle_item = line
+                .volume_discount_bundle_item()
+                .and_then(|attribute| attribute.value())
+                .or_else(|| packed("_bundle_item"));
+            let nektar_glp1 = line
+                .volume_discount_nektar_glp_1()
+                .and_then(|attribute| attribute.value())
+                .or_else(|| packed("_nektar_glp1"));
+            bundle_item.map(String::as_str) == Some("true") || nektar_glp1.is_some()
+        });
+        (!outside_tiers).then_some(tiers)
+    }
+}
+
 thread_local! {
-    // Each line's packed metadata is parsed once per run (it used to be re-parsed on every lookup).
-    static LINE_METADATA: RefCell<HashMap<String, Option<Rc<LineMetadata>>>> = RefCell::new(HashMap::new());
-    // Page-match result per condition-set fingerprint, then line id, so offers sharing the same page
+    // Leaked once per run (the wasm instance ends right after) so borrowed ids can outlive the lookup.
+    static LINE_FACTS: Cell<&'static [LineFacts]> = const { Cell::new(&[]) };
+    // Address and length of this run's cart-lines slice: `line_slot` maps a `&Lines` to its position by pointer offset.
+    static LINES_SPAN: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+    // Page-match result per condition-set fingerprint, then line slot, so offers sharing the same page
     // conditions match each line once per run instead of once per offer.
-    static PAGE_MATCH: RefCell<HashMap<u64, HashMap<String, bool>>> = RefCell::new(HashMap::new());
+    static PAGE_MATCH: RefCell<HashMap<u64, Vec<Option<bool>>>> = RefCell::new(HashMap::default());
+    // Cart value and qualifying lines depend only on which lines are counted (and the excluded products), so offers
+    // that count the same lines share one computation. Keyed by line slots.
+    static METADATA_CACHE: RefCell<HashMap<String, (Option<Rc<LineMetadata>>, usize)>> = RefCell::new(HashMap::default());
+    static PAGE_CLASSES: RefCell<Vec<Option<PageStamps>>> = const { RefCell::new(Vec::new()) };
+    // CART_VALUES and QUALIFYING hold at most 8 entries (one per distinct set of counted lines / excluded products). Offers
+    // in one config share a handful of such sets (live configs: 1-3), and each lookup is a linear scan comparing the whole
+    // key (up to 200 slots), so past 8 entries a lookup would cost more than the recomputation it saves.
+    static CART_VALUES: RefCell<Vec<(Vec<usize>, i64)>> = const { RefCell::new(Vec::new()) };
+    static QUALIFYING: RefCell<Vec<(Vec<String>, Vec<usize>)>> = const { RefCell::new(Vec::new()) };
     static ZERO_DECIMAL_CURRENCY: Cell<bool> = const { Cell::new(false) };
+    static LAST_METADATA: RefCell<Option<(String, (Option<Rc<LineMetadata>>, usize))>> = const { RefCell::new(None) };
+    static VOLUME_TIERS: RefCell<HashMap<String, Option<Rc<[VolumeDiscountTier]>>>> = RefCell::new(HashMap::default());
 }
 
 #[derive(Debug, serde::Deserialize, Clone)]
@@ -30,15 +134,38 @@ struct VolumeDiscountTier {
     percent: f64,
 }
 
+/// Valid tiers of a product's volume-discount metafield. Products of one store usually share the same tier JSON, so each
+/// distinct value is parsed once per run.
+fn parse_volume_tiers(raw: &str) -> Option<Rc<[VolumeDiscountTier]>> {
+    if let Some(cached) = VOLUME_TIERS.with(|cache| cache.borrow().get(raw).cloned()) {
+        return cached;
+    }
+    let parsed: Option<Rc<[VolumeDiscountTier]>> = serde_json::from_str::<Vec<VolumeDiscountTier>>(raw)
+        .ok()
+        .map(|tiers| {
+            tiers
+                .into_iter()
+                .filter(|tier| tier.qty > 0 && tier.percent.is_finite() && tier.percent >= 0.0)
+                .collect::<Vec<_>>()
+        })
+        .filter(|tiers| !tiers.is_empty())
+        .map(Rc::from);
+    VOLUME_TIERS.with(|cache| cache.borrow_mut().insert(raw.to_string(), parsed.clone()));
+    parsed
+}
+
 struct VolumeDiscountGroup {
     quantity: i64,
     subtotal_cents: i64,
-    tiers: Vec<VolumeDiscountTier>,
+    // One entry per line of the product, in cart order.
+    tiers: Vec<&'static [VolumeDiscountTier]>,
 }
 
 pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> {
+    let input = std::mem::ManuallyDrop::new(input);
+    // Never dropped: the wasm instance ends right after this run, so freeing the compiled config only burns instructions.
     let mut config = match parse_config(&input) {
-        Some(c) => c,
+        Some(c) => std::mem::ManuallyDrop::new(c),
         None => return Ok(schema::CartLinesDiscountsGenerateRunResult { operations: vec![] }),
     };
     // The node's classes travel in the config (`dc`); absent means product + order.
@@ -57,13 +184,19 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
             .map(|metafield| metafield.value().as_str()),
     );
     let currency = input.cart().cost().subtotal_amount().currency_code().to_string();
-    LINE_METADATA.with(|cache| cache.borrow_mut().clear());
     PAGE_MATCH.with(|cache| cache.borrow_mut().clear());
+    CART_VALUES.with(|cache| cache.borrow_mut().clear());
+    QUALIFYING.with(|cache| cache.borrow_mut().clear());
+    METADATA_CACHE.with(|cache| cache.borrow_mut().clear());
+    PAGE_CLASSES.with(|classes| classes.borrow_mut().clear());
+    VOLUME_TIERS.with(|cache| cache.borrow_mut().clear());
+    LAST_METADATA.with(|last| *last.borrow_mut() = None);
+    let _line_facts = LineFactsGuard::new(&input);
     ZERO_DECIMAL_CURRENCY.with(|flag| flag.set(is_zero_decimal(&currency)));
     config.localize(input.presentment_currency_rate().as_f64(), &currency);
 
-    let mut offers = config.offers.clone();
-    offers.sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
+    let mut offers: Vec<&CompiledOffer> = config.offers.iter().collect();
+    crate::de::sort_by(&mut offers, |a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
 
     #[cfg(feature = "code_gate")]
     let (entered, entered_hashes) = entered_codes(&input);
@@ -75,7 +208,7 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
     // Only offers with a strictly lower priority (higher number) are blocked; equal-priority offers still apply.
     let mut stop_after_priority: Option<i32> = None;
     // Anchor units already used up by non-stacking gift offers, per cart line.
-    let mut consumed: HashMap<String, i64> = HashMap::new();
+    let mut consumed: HashMap<String, i64> = HashMap::default();
 
     for offer in &offers {
         let blocked = stop_after_priority.is_some_and(|stop_at| offer.priority > stop_at);
@@ -135,7 +268,13 @@ pub fn run(input: Input) -> Result<schema::CartLinesDiscountsGenerateRunResult> 
                 .and_then(|message| message.strip_prefix(TIER_MESSAGE_MARK))
                 .map(str::to_string);
             candidate.message = match (title, tier_message) {
-                (Some(title), Some(tier)) => Some(cap_message(format!("{title} \u{b7} {tier}"))),
+                (Some(title), Some(tier)) => {
+                    let mut message = String::with_capacity(title.len() + tier.len() + 3);
+                    message.push_str(title);
+                    message.push_str(" \u{b7} ");
+                    message.push_str(&tier);
+                    Some(cap_message(message))
+                }
                 (None, Some(tier)) => Some(cap_message(tier)),
                 (Some(title), None) => Some(cap_message(title.to_string())),
                 (None, None) => candidate.message.take(),
@@ -278,18 +417,21 @@ fn evaluate_product_reward(
         .iter()
         .map(String::as_str)
         .collect();
+    // Matched once, not per line.
+    let (landing_scope, tagged_scope) = (reward.scope_mode == "landing", reward.scope_mode == "tagged_offer");
+    let purchase = PurchaseType::of(Some(reward.subscription_mode.as_str()));
     let mut eligible: Vec<&Lines> = input
         .cart()
         .lines()
         .iter()
         .filter(|line| !is_gift_line(line) && !is_zero_cost(line) && !outside_matched_lines(offer, line))
         .filter(|line| {
-            reward.scope_mode != "landing"
+            !landing_scope
                 || landing_source(line).as_deref()
                     == reward.required_line_attribute_value.as_deref()
         })
         .filter(|line| {
-            reward.scope_mode != "tagged_offer"
+            !tagged_scope
                 || line_offer_id(line).as_deref() == reward.required_offer_id.as_deref()
         })
         .filter(|line| {
@@ -306,14 +448,10 @@ fn evaluate_product_reward(
         .filter(|line| {
             reward
                 .line_quantity_equals
-                .map(|quantity| i64::from(*line.quantity()) == quantity)
+                .map(|quantity| i64::from(quantity_of(line)) == quantity)
                 .unwrap_or(true)
         })
-        .filter(|line| match reward.subscription_mode.as_str() {
-            "subscription_only" => line.selling_plan_allocation().is_some(),
-            "one_time_only" => line.selling_plan_allocation().is_none(),
-            _ => true,
-        })
+        .filter(|line| purchase.allows(line))
         .filter(|line| {
             reward.required_line_attribute.as_ref().is_none_or(|attribute| {
                 metadata_value(line, &attribute.key).as_deref() == Some(attribute.value.as_str())
@@ -324,7 +462,7 @@ fn evaluate_product_reward(
     if eligible.is_empty() {
         return vec![];
     }
-    eligible.sort_by(|a, b| a.id().cmp(b.id()));
+    crate::de::sort_by(&mut eligible, |a, b| crate::de::cmp_str(a.id(), b.id()));
 
     let total_quantity: i64 = if reward.count_rule == "unique" {
         eligible
@@ -335,7 +473,7 @@ fn evaluate_product_reward(
     } else {
         eligible
             .iter()
-            .map(|line| i64::from(*line.quantity()))
+            .map(|line| i64::from(quantity_of(line)))
             .sum()
     };
     let quantity_tier = reward
@@ -370,11 +508,11 @@ fn evaluate_product_reward(
     let most_expensive_first = reward.selection_mode == "most_expensive"
         || reward.discount_type == "most_expensive_item_discount";
     if cheapest_first || most_expensive_first {
-        eligible.sort_by(|a, b| {
+        crate::de::sort_by(&mut eligible, |a, b| {
             let ordering = line_price(a)
                 .partial_cmp(&line_price(b))
                 .unwrap_or(std::cmp::Ordering::Equal);
-            (if cheapest_first { ordering } else { ordering.reverse() }).then(a.id().cmp(b.id()))
+            (if cheapest_first { ordering } else { ordering.reverse() }).then(crate::de::cmp_str(a.id(), b.id()))
         });
     }
 
@@ -402,22 +540,22 @@ fn evaluate_product_reward(
         remaining = remaining.min(max.saturating_mul(pack));
     }
     let mut candidates = Vec::new();
-    let mut applied_by_product: HashMap<String, i64> = HashMap::new();
-    let mut applied_by_variant: HashMap<String, i64> = HashMap::new();
+    let mut applied_by_product: HashMap<String, i64> = HashMap::default();
+    let mut applied_by_variant: HashMap<String, i64> = HashMap::default();
     for line in eligible {
         if remaining <= 0 {
             break;
         }
-        let mut quantity = i64::from(*line.quantity()).min(remaining);
+        let mut quantity = i64::from(quantity_of(line)).min(remaining);
         if let Some(per_line) = reward.max_units_per_line {
             quantity = quantity.min(per_line);
         }
         let (variant_id, product_id) = variant_and_product_id(line).unwrap_or_default();
         if let Some(per_product) = per_product_cap {
-            quantity = take_units(&mut applied_by_product, product_id, per_product, quantity);
+            quantity = take_units(&mut applied_by_product, product_id.to_string(), per_product, quantity);
         }
         if let Some(per_variant) = per_variant_cap {
-            quantity = take_units(&mut applied_by_variant, variant_id, per_variant, quantity);
+            quantity = take_units(&mut applied_by_variant, variant_id.to_string(), per_variant, quantity);
         }
         if quantity <= 0 {
             continue;
@@ -468,6 +606,10 @@ const TIER_MESSAGE_MARK: &str = "\u{1}";
 const MAX_MESSAGE_CHARS: usize = 64;
 
 fn cap_message(message: String) -> String {
+    // At most 64 bytes is at most 64 characters: nothing to cut, and no need to rebuild the string.
+    if message.len() <= MAX_MESSAGE_CHARS {
+        return message;
+    }
     message.chars().take(MAX_MESSAGE_CHARS).collect()
 }
 
@@ -494,7 +636,7 @@ fn is_free_landing_gift(reward: &CompiledProductReward) -> bool {
 
 fn landing_anchor_qualifies(reward: &CompiledProductReward, input: &Input) -> bool {
     landing_anchor_lines(reward, input).is_some_and(|lines| {
-        lines.iter().map(|line| i64::from(*line.quantity())).sum::<i64>()
+        lines.iter().map(|line| i64::from(quantity_of(line))).sum::<i64>()
             >= reward.required_anchor_min_quantity
     })
 }
@@ -530,11 +672,11 @@ fn landing_anchor_lines<'a>(reward: &CompiledProductReward, input: &'a Input) ->
                 return !is_one_of(line, &target_product_ids, &target_variant_ids);
             }
             variant_and_product_id(line)
-                .map(|(variant_id, _)| anchor_ids.contains(variant_id.as_str()))
+                .map(|(variant_id, _)| anchor_ids.contains(variant_id))
                 .unwrap_or(false)
         })
         .filter(|line| {
-            !reward.requires_anchor_subscription || line.selling_plan_allocation().is_some()
+            !reward.requires_anchor_subscription || has_selling_plan(line)
         })
         .collect())
 }
@@ -573,7 +715,7 @@ fn gift_anchors(offer: &CompiledOffer, input: &Input) -> Option<Anchors> {
     Some(Anchors {
         lines: landing_anchor_lines(reward, input)?
             .into_iter()
-            .map(|line| (line.id().clone(), i64::from(*line.quantity())))
+            .map(|line| (line.id().clone(), i64::from(quantity_of(line))))
             .collect(),
         needed: reward.required_anchor_min_quantity,
     })
@@ -588,34 +730,31 @@ fn product_gift_anchors(offer: &CompiledOffer, input: &Input) -> Option<Anchors>
     if !has_products && offer.page_url_conditions.is_empty() {
         return None;
     }
+    let purchase = PurchaseType::of(offer.subscription_mode.as_deref());
     let lines = input
         .cart()
         .lines()
         .iter()
-        .filter(|line| *line.quantity() > 0 && !is_gift_line(line))
-        .filter(|line| match offer.subscription_mode.as_deref() {
-            Some("subscription_only") => line.selling_plan_allocation().is_some(),
-            Some("one_time_only") => line.selling_plan_allocation().is_none(),
-            _ => true,
-        })
+        .filter(|line| quantity_of(line) > 0 && !is_gift_line(line))
+        .filter(|line| purchase.allows(line))
         .filter(|line| offer.page_url_conditions.is_empty() || added_from_matching_page(line, offer))
         .filter(|line| {
             let Some((variant_id, product_id)) = variant_and_product_id(line) else {
                 return false;
             };
-            !offer.excluded_product_ids.contains(&product_id)
+            !offer.excluded_product_ids.iter().any(|id| id == product_id)
                 && (!has_products
                     || offer.requirements.iter().any(|requirement| {
                         if requirement.track_mode == "variant" {
-                            requirement.variant_id.as_deref() == Some(variant_id.as_str())
+                            requirement.variant_id.as_deref() == Some(variant_id)
                         } else {
-                            requirement.product_id.as_deref() == Some(product_id.as_str())
+                            requirement.product_id.as_deref() == Some(product_id)
                         }
                     })
-                    || product_lists.iter().any(|ids| ids.contains(&product_id))
-                    || variant_lists.iter().any(|ids| ids.contains(&variant_id)))
+                    || product_lists.iter().any(|ids| ids.iter().any(|id| id == product_id))
+                    || variant_lists.iter().any(|ids| ids.iter().any(|id| id == variant_id)))
         })
-        .map(|line| (line.id().clone(), i64::from(*line.quantity())))
+        .map(|line| (line.id().clone(), i64::from(quantity_of(line))))
         .collect();
     Some(Anchors {
         lines,
@@ -649,6 +788,7 @@ fn evaluate_quiz_bundle_reward(
         .collect();
     let restrict_to_targets = !target_product_ids.is_empty() || !target_variant_ids.is_empty();
 
+    // Output order depends on this BTreeMap being ordered. Do not turn it into a HashMap (see de::tests::hash_collections_are_never_iterated).
     let mut groups: BTreeMap<String, QuizGroup<'_>> = BTreeMap::new();
     for line in input.cart().lines() {
         let Some(bundle_id) = quiz_bundle_id(line) else {
@@ -694,14 +834,14 @@ fn evaluate_quiz_bundle_reward(
         }
         bundles += 1;
         // Free gifts follow the same set rule: at most `maxQuantity` (default 1) units per gift product.
-        let mut gift_units_by_product: HashMap<String, i64> = HashMap::new();
+        let mut gift_units_by_product: HashMap<String, i64> = HashMap::default();
         for line in group.gifts {
             let product_id = variant_and_product_id(line).unwrap_or_default().1;
             let quantity = take_units(
                 &mut gift_units_by_product,
-                product_id,
+                product_id.to_string(),
                 cap_per_cart(offer, reward.max_quantity.unwrap_or(1)),
-                i64::from(*line.quantity()),
+                i64::from(quantity_of(line)),
             );
             if quantity <= 0 {
                 continue;
@@ -731,7 +871,7 @@ fn evaluate_quiz_bundle_reward(
         let current_total: f64 = group
             .paid
             .iter()
-            .map(|line| line.cost().subtotal_amount().amount().as_f64())
+            .map(|line| subtotal_of(line))
             .sum();
         let mut discount_needed = (current_total - target_price).min(current_total);
         // The client-set target can only ever shave a configured share off the paid lines.
@@ -774,11 +914,10 @@ fn evaluate_order_offer(
         .order_rewards
         .iter()
         .filter_map(|reward| {
+            let purchase = PurchaseType::of(Some(reward.subscription_mode.as_str()));
             let (eligible_lines, excluded_lines): (Vec<&Lines>, Vec<&Lines>) =
                 input.cart().lines().iter().partition(|line| {
-                    !is_gift_line(line)
-                        && !outside_matched_lines(offer, line)
-                        && purchase_type_allows(reward.subscription_mode.as_str(), line)
+                    !is_gift_line(line) && !outside_matched_lines(offer, line) && purchase.allows(line)
                 });
             if eligible_lines.is_empty() && reward.subscription_mode != "any" {
                 return None;
@@ -789,7 +928,7 @@ fn evaluate_order_offer(
                 .iter()
                 .map(|line| {
                     to_cents(
-                        line.cost().subtotal_amount().amount().as_f64(),
+                        subtotal_of(line),
                         &active_currency,
                     )
                 })
@@ -797,7 +936,7 @@ fn evaluate_order_offer(
             let qualifying_quantity: i64 = eligible_lines
                 .iter()
                 .filter(|line| !is_zero_cost(line))
-                .map(|line| i64::from(*line.quantity()))
+                .map(|line| i64::from(quantity_of(line)))
                 .sum();
             make_order_candidate(
                 reward,
@@ -809,11 +948,28 @@ fn evaluate_order_offer(
         .collect()
 }
 
-fn purchase_type_allows(mode: &str, line: &Lines) -> bool {
-    match mode {
-        "subscription_only" => line.selling_plan_allocation().is_some(),
-        "one_time_only" => line.selling_plan_allocation().is_none(),
-        _ => true,
+#[derive(Clone, Copy)]
+enum PurchaseType {
+    Any,
+    SubscriptionOnly,
+    OneTimeOnly,
+}
+
+impl PurchaseType {
+    fn of(mode: Option<&str>) -> Self {
+        match mode {
+            Some("subscription_only") => Self::SubscriptionOnly,
+            Some("one_time_only") => Self::OneTimeOnly,
+            _ => Self::Any,
+        }
+    }
+
+    fn allows(self, line: &Lines) -> bool {
+        match self {
+            Self::SubscriptionOnly => has_selling_plan(line),
+            Self::OneTimeOnly => !has_selling_plan(line),
+            Self::Any => true,
+        }
     }
 }
 
@@ -924,16 +1080,30 @@ fn evaluate_gift_offer(
     if !offer.gift_rewards.is_empty() {
         // The reward's limit is how many times its gift SET is granted: each gift product gets at
         // most `limit` discounted units, however high the buyer raises a gift line's quantity.
-        let mut applied_by_product: HashMap<String, i64> = HashMap::new();
-        let mut applied_by_reward: HashMap<String, i64> = HashMap::new();
+        let mut applied_by_product: HashMap<String, i64> = HashMap::default();
+        let mut applied_by_reward: HashMap<String, i64> = HashMap::default();
         let mut candidates = Vec::new();
         let tier_cut = gift_tier_cut(offer, input);
 
         // Tagged lines claim the quota first; untagged lines (a theme adding the gift itself) fill
         // what is left, so a variant only ever counts as a gift of an offer that qualifies.
+        // A line no reward targets never yields a candidate in either pass, so only the targeted lines are walked.
+        let targeted: Vec<(&Lines, &str, &str)> = input
+            .cart()
+            .lines()
+            .iter()
+            .filter_map(|line| {
+                let (variant_id, product_id) = variant_and_product_id(line)?;
+                offer
+                    .gift_rewards
+                    .iter()
+                    .any(|reward| gift_target_matches(reward, variant_id, product_id))
+                    .then_some((line, variant_id, product_id))
+            })
+            .collect();
         for tagged_pass in [true, false] {
-            for line in input.cart().lines().iter() {
-                let mut line_quantity = i64::from(*line.quantity());
+            for &(line, variant_id, product_id) in &targeted {
+                let mut line_quantity = i64::from(quantity_of(line));
                 let tagged = line_type(line).as_deref() == Some(LINE_TYPE_GIFT)
                     && line_offer_id(line).as_deref() == Some(offer.id.as_str());
                 if line_quantity <= 0
@@ -942,11 +1112,8 @@ fn evaluate_gift_offer(
                 {
                     continue;
                 }
-                let Some((variant_id, product_id)) = variant_and_product_id(line) else {
-                    continue;
-                };
                 if !tagged {
-                    line_quantity -= reserved_anchor_units(offer, &variant_id, &product_id);
+                    line_quantity -= reserved_anchor_units(offer, variant_id, product_id);
                 }
                 let reward_id = line_reward_id(line);
                 for reward in offer
@@ -955,18 +1122,13 @@ fn evaluate_gift_offer(
                     .filter(|reward| !tagged || reward_id.as_deref() == Some(reward.id.as_str()))
                     .filter(|reward| gift_tier_unlocked(reward, tier_cut))
                 {
-                    let target_matches = if !reward.target_variant_ids.is_empty() {
-                        reward.target_variant_ids.iter().any(|id| id == &variant_id)
-                    } else {
-                        reward.target_product_ids.iter().any(|id| id == &product_id)
-                    };
-                    if !target_matches {
+                    if !gift_target_matches(reward, variant_id, product_id) {
                         continue;
                     }
                     let limit = cap_per_cart(offer, reward.max_quantity);
                     let mut quantity = take_units(
                         &mut applied_by_product,
-                        reward.id.clone() + &product_id,
+                        reward.id.clone() + product_id,
                         limit,
                         line_quantity,
                     );
@@ -999,6 +1161,14 @@ fn evaluate_gift_offer(
     }
 
     vec![]
+}
+
+fn gift_target_matches(reward: &CompiledGiftReward, variant_id: &str, product_id: &str) -> bool {
+    if !reward.target_variant_ids.is_empty() {
+        reward.target_variant_ids.iter().any(|id| id == variant_id)
+    } else {
+        reward.target_product_ids.iter().any(|id| id == product_id)
+    }
 }
 
 /// (cart value, lowest threshold still granted). None when no gift reward has a tier: every reward is granted.
@@ -1089,7 +1259,7 @@ fn evaluate_discount_offer(
             match most_expensive {
                 Some(line) => vec![make_candidate(
                     line.id().clone(),
-                    cap_per_cart(offer, i64::from(*line.quantity())),
+                    cap_per_cart(offer, i64::from(quantity_of(line))),
                     &offer.discount_type,
                     offer.discount_value,
                     "Most expensive item discount",
@@ -1104,7 +1274,7 @@ fn evaluate_discount_offer(
                 if left <= 0 {
                     break;
                 }
-                let quantity = i64::from(*line.quantity()).min(left);
+                let quantity = i64::from(quantity_of(line)).min(left);
                 left -= quantity;
                 candidates.push(make_candidate(
                     line.id().clone(),
@@ -1131,12 +1301,37 @@ fn is_eligible_line(
     let Some((_, product_id)) = variant_and_product_id(line) else {
         return false;
     };
-    !excluded_set.contains(product_id.as_str())
-        && (required_set.is_empty() || required_set.contains(product_id.as_str()))
+    !excluded_set.contains(product_id)
+        && (required_set.is_empty() || required_set.contains(product_id))
 }
 
 /// The non-gift lines an offer's cart thresholds count (its excluded products never do).
 fn qualifying_lines<'a>(offer: &CompiledOffer, input: &'a Input) -> Vec<&'a Lines> {
+    let all_lines = input.cart().lines();
+    let cached = QUALIFYING.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|(excluded, _)| *excluded == offer.excluded_product_ids)
+            .map(|(_, slots)| slots.iter().map(|&slot| &all_lines[slot]).collect::<Vec<_>>())
+    });
+    if let Some(lines) = cached {
+        return lines;
+    }
+    let lines = compute_qualifying_lines(offer, input);
+    let slots: Option<Vec<usize>> = lines.iter().map(|line| line_slot(line)).collect();
+    if let Some(slots) = slots {
+        QUALIFYING.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.len() < 8 {
+                cache.push((offer.excluded_product_ids.clone(), slots));
+            }
+        });
+    }
+    lines
+}
+
+fn compute_qualifying_lines<'a>(offer: &CompiledOffer, input: &'a Input) -> Vec<&'a Lines> {
     let excluded_products: HashSet<&str> = offer
         .excluded_product_ids
         .iter()
@@ -1146,34 +1341,46 @@ fn qualifying_lines<'a>(offer: &CompiledOffer, input: &'a Input) -> Vec<&'a Line
         .cart()
         .lines()
         .iter()
-        .filter(|line| *line.quantity() > 0 && !is_gift_line(line))
+        .filter(|line| quantity_of(line) > 0 && !is_gift_line(line))
         .filter(|line| {
             variant_and_product_id(line)
-                .map(|(_, product_id)| !excluded_products.contains(product_id.as_str()))
+                .map(|(_, product_id)| !excluded_products.contains(product_id))
                 .unwrap_or(false)
         })
         .collect()
 }
 
 fn cart_value_cents(lines: &[&Lines], input: &Input) -> i64 {
-    let active_currency = input
-        .cart()
-        .cost()
-        .subtotal_amount()
-        .currency_code()
-        .to_string();
+    let slots: Option<Vec<usize>> = lines.iter().map(|line| line_slot(line)).collect();
+    let Some(slots) = slots else {
+        return compute_cart_value_cents(lines, input);
+    };
+    let cached = CART_VALUES.with(|cache| cache.borrow().iter().find(|(key, _)| *key == slots).map(|(_, cents)| *cents));
+    if let Some(cents) = cached {
+        return cents;
+    }
+    let cents = compute_cart_value_cents(lines, input);
+    CART_VALUES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() < 8 {
+            cache.push((slots, cents));
+        }
+    });
+    cents
+}
+
+fn compute_cart_value_cents(lines: &[&Lines], input: &Input) -> i64 {
+    let active_currency = input.cart().cost().subtotal_amount().currency_code();
+    let zero_decimal = is_zero_decimal(active_currency);
     let raw_cart_value_cents: i64 = lines
         .iter()
-        .map(|line| {
-            let amount = line.cost().subtotal_amount().amount().as_f64();
-            to_cents(amount, &active_currency)
-        })
+        .map(|line| to_cents_in(subtotal_of(line), zero_decimal))
         .sum();
     // Discount Functions execute concurrently, so the input does not
     // contain discounts emitted by the store's separate volume-discount
     // Function. Mirror only its qualification math here; this Function
     // still emits no volume-discount candidate of its own.
-    (raw_cart_value_cents - projected_volume_discount_cents(lines, &active_currency)).max(0)
+    (raw_cart_value_cents - projected_volume_discount_cents(lines, zero_decimal)).max(0)
 }
 
 /// Cart value / cart quantity / required-product checks, evaluated against the
@@ -1222,7 +1429,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
                 line_attribute_value(line, &condition.key, config).as_deref()
                     == condition.value.as_deref()
             })
-            .map(|line| i64::from(*line.quantity()))
+            .map(|line| i64::from(quantity_of(line)))
             .sum();
         let passes = if condition.match_mode == "not_equals" {
             matching_quantity == 0
@@ -1262,7 +1469,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         let cart_qty: i64 = non_gift_lines
             .iter()
             .filter(|line| !is_zero_cost(line))
-            .map(|line| *line.quantity() as i64)
+            .map(|line| quantity_of(line) as i64)
             .sum();
         if cart_qty < threshold_qty {
             return false;
@@ -1276,11 +1483,8 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
     }
 
     if let Some(subscription_mode) = offer.subscription_mode.as_deref() {
-        let has_matching_line = non_gift_lines.iter().any(|line| match subscription_mode {
-            "subscription_only" => line.selling_plan_allocation().is_some(),
-            "one_time_only" => line.selling_plan_allocation().is_none(),
-            _ => true,
-        });
+        let purchase = PurchaseType::of(Some(subscription_mode));
+        let has_matching_line = non_gift_lines.iter().any(|line| purchase.allows(line));
         if !has_matching_line {
             return false;
         }
@@ -1378,12 +1582,12 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
                 .filter_map(|line| variant_and_product_id(line).map(|ids| (line, ids)))
                 .filter(|(_, (variant_id, product_id))| {
                     if requirement.track_mode == "variant" {
-                        requirement.variant_id.as_deref() == Some(variant_id.as_str())
+                        requirement.variant_id.as_deref() == Some(variant_id)
                     } else {
-                        requirement.product_id.as_deref() == Some(product_id.as_str())
+                        requirement.product_id.as_deref() == Some(product_id)
                     }
                 })
-                .map(|(line, _)| i64::from(*line.quantity()))
+                .map(|(line, _)| i64::from(quantity_of(line)))
                 .sum();
             if matching_quantity < requirement.min_quantity {
                 return false;
@@ -1410,8 +1614,8 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         let has_required = input.cart().lines().iter().any(|line| {
             variant_and_product_id(line)
                 .map(|(variant_id, product_id)| {
-                    required_products.contains(product_id.as_str())
-                        || required_variants.contains(variant_id.as_str())
+                    required_products.contains(product_id)
+                        || required_variants.contains(variant_id)
                 })
                 .unwrap_or(false)
         });
@@ -1436,8 +1640,8 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
         let has_any = input.cart().lines().iter().any(|line| {
             variant_and_product_id(line)
                 .map(|(variant_id, product_id)| {
-                    any_products.contains(product_id.as_str())
-                        || any_variants.contains(variant_id.as_str())
+                    any_products.contains(product_id)
+                        || any_variants.contains(variant_id)
                 })
                 .unwrap_or(false)
         });
@@ -1456,6 +1660,21 @@ fn best_candidate_per_line(
     input: &Input,
 ) -> Vec<schema::ProductDiscountCandidate> {
     let lines = input.cart().lines();
+    // Index of the first line with an id. A handful of candidates is cheaper to scan than to hash every id.
+    let mut index_by_id: HashMap<&str, usize> = HashMap::default();
+    if candidates.len() >= 8 {
+        index_by_id.reserve(lines.len());
+        for (index, line) in lines.iter().enumerate() {
+            index_by_id.entry(line.id().as_str()).or_insert(index);
+        }
+    }
+    let line_index = |id: &str| {
+        if index_by_id.is_empty() {
+            lines.iter().position(|line| line.id() == id)
+        } else {
+            index_by_id.get(id).copied()
+        }
+    };
     // (line index, saving) for single-line candidates; None passes through untouched.
     let savings: Vec<Option<(usize, f64)>> = candidates
         .iter()
@@ -1463,7 +1682,7 @@ fn best_candidate_per_line(
             let [schema::ProductDiscountCandidateTarget::CartLine(target)] = candidate.targets.as_slice() else {
                 return None;
             };
-            let index = lines.iter().position(|line| line.id() == &target.id)?;
+            let index = line_index(target.id.as_str())?;
             let quantity = f64::from(target.quantity.unwrap_or(1));
             let saving = match &candidate.value {
                 schema::ProductDiscountCandidateValue::Percentage(pct) => {
@@ -1545,7 +1764,7 @@ fn make_multi_line_fixed_candidate(
             .map(|line| {
                 schema::ProductDiscountCandidateTarget::CartLine(schema::CartLineTarget {
                     id: line.id().clone(),
-                    quantity: Some(*line.quantity()),
+                    quantity: Some(quantity_of(line)),
                 })
             })
             .collect(),
@@ -1573,93 +1792,74 @@ fn round_to_cents(value: f64) -> f64 {
 /// exclusion, quiz-bundle restriction) — one shared body instead of a
 /// duplicated closure per call site matters for the wasm size budget.
 fn line_price(line: &Lines) -> f64 {
-    line.cost().subtotal_amount().amount().as_f64() / f64::from((*line.quantity()).max(1))
+    subtotal_of(line) / f64::from(quantity_of(line).max(1))
 }
 
 fn is_one_of(line: &Lines, product_ids: &HashSet<&str>, variant_ids: &HashSet<&str>) -> bool {
     variant_and_product_id(line)
         .map(|(variant_id, product_id)| {
-            variant_ids.contains(variant_id.as_str()) || product_ids.contains(product_id.as_str())
+            variant_ids.contains(variant_id) || product_ids.contains(product_id)
         })
         .unwrap_or(false)
 }
 
-fn variant_and_product_id(line: &Lines) -> Option<(String, String)> {
+fn variant_and_product_id(line: &Lines) -> Option<(&str, &str)> {
     match line.merchandise() {
-        Merchandise::ProductVariant(variant) => {
-            Some((variant.id().to_string(), variant.product().id().to_string()))
-        }
+        Merchandise::ProductVariant(variant) => Some((variant.id().as_str(), variant.product().id().as_str())),
         Merchandise::Other => None,
     }
 }
 
-fn line_type(line: &Lines) -> Option<String> {
-    line.line_type()
-        .as_ref()
-        .and_then(|attribute| attribute.value())
-        .cloned()
-        .or_else(|| metadata_value(line, "_promo_engine_line_type"))
+fn line_type(line: &Lines) -> Option<&str> {
+    facts(line).packed(line).line_type.as_deref()
 }
 
 // A $0 line (another app's free gift) is not a paid unit: it must not raise a quantity tier,
 // consume a unit cap or be picked as the cheapest item.
 fn is_zero_cost(line: &Lines) -> bool {
-    line.cost().subtotal_amount().amount().as_f64() <= 0.0
+    subtotal_of(line) <= 0.0
 }
 
 fn is_gift_line(line: &Lines) -> bool {
-    line_type(line).as_deref() == Some(LINE_TYPE_GIFT)
-        || cart_gift_tier(line).is_some()
-        || quiz_free_gift(line).as_deref() == Some("true")
+    with_facts(line, |facts| facts.packed(line).gift)
 }
 
-fn line_offer_id(line: &Lines) -> Option<String> {
-    metadata_value(line, "_promo_engine_offer_id")
+fn line_offer_id(line: &Lines) -> Option<&str> {
+    let facts = facts(line);
+    facts
+        .offer_id
+        .get_or_init(|| metadata_value(line, "_promo_engine_offer_id"))
+        .as_deref()
 }
 
-fn line_reward_id(line: &Lines) -> Option<String> {
-    metadata_value(line, "_promo_engine_reward_id")
+fn line_reward_id(line: &Lines) -> Option<&str> {
+    let facts = facts(line);
+    facts
+        .reward_id
+        .get_or_init(|| metadata_value(line, "_promo_engine_reward_id"))
+        .as_deref()
 }
 
-fn projected_volume_discount_cents(lines: &[&Lines], currency_code: &str) -> i64 {
-    let mut groups: BTreeMap<String, VolumeDiscountGroup> = BTreeMap::new();
+fn projected_volume_discount_cents(lines: &[&Lines], zero_decimal: bool) -> i64 {
+    // Ordered on purpose: keep BTreeMap (a HashMap here would make the result order-dependent).
+    let mut groups: BTreeMap<&str, VolumeDiscountGroup> = BTreeMap::new();
     for line in lines {
-        if bundle_item(line).as_deref() == Some("true") || nektar_glp1(line).is_some() {
-            continue;
-        }
-        let Merchandise::ProductVariant(variant) = line.merchandise() else {
+        let facts = facts(line);
+        let (Some((_, product_id)), Some(tiers)) = (variant_and_product_id(line), facts.volume_tiers(line)) else {
             continue;
         };
-        let Some(metafield) = variant.product().volume_discount_tiers() else {
-            continue;
-        };
-        let Ok(tiers) = serde_json::from_str::<Vec<VolumeDiscountTier>>(metafield.value()) else {
-            continue;
-        };
-        let tiers: Vec<_> = tiers
-            .into_iter()
-            .filter(|tier| tier.qty > 0 && tier.percent.is_finite() && tier.percent >= 0.0)
-            .collect();
-        if tiers.is_empty() {
-            continue;
-        }
-        let subtotal_cents = to_cents(
-            line.cost().subtotal_amount().amount().as_f64(),
-            currency_code,
-        );
+        let subtotal_cents = to_cents_in(facts.subtotal(line), zero_decimal);
         if subtotal_cents <= 0 {
             continue;
         }
-        let group = groups
-            .entry(variant.product().id().to_string())
-            .or_insert_with(|| VolumeDiscountGroup {
-                quantity: 0,
-                subtotal_cents: 0,
-                tiers: vec![],
-            });
-        group.quantity += i64::from(*line.quantity());
+        let group = groups.entry(product_id).or_insert_with(|| VolumeDiscountGroup {
+            quantity: 0,
+            subtotal_cents: 0,
+            tiers: vec![],
+        });
+        group.quantity += i64::from(facts.quantity(line));
         group.subtotal_cents += subtotal_cents;
-        group.tiers.extend(tiers);
+        group.tiers.push(tiers);
     }
 
     groups
@@ -1668,6 +1868,7 @@ fn projected_volume_discount_cents(lines: &[&Lines], currency_code: &str) -> i64
             group
                 .tiers
                 .iter()
+                .flat_map(|tiers| tiers.iter())
                 .filter(|tier| tier.percent > 0.0 && group.quantity >= tier.qty)
                 .max_by(|left, right| {
                     left.qty.cmp(&right.qty).then_with(|| {
@@ -1681,58 +1882,39 @@ fn projected_volume_discount_cents(lines: &[&Lines], currency_code: &str) -> i64
         .sum()
 }
 
-// Shared by every direct-attribute-with-packed-metadata-fallback lookup below —
-// keeping the `or_else` glue in one place instead of duplicated per field
-// matters for the discount function's wasm size budget.
-fn attr_or_metadata(direct: Option<&String>, line: &Lines, key: &str) -> Option<String> {
-    direct.cloned().or_else(|| metadata_value(line, key))
+fn landing_source(line: &Lines) -> Option<&str> {
+    facts(line).landing_source(line).map(String::as_str)
 }
 
-fn landing_source(line: &Lines) -> Option<String> {
-    attr_or_metadata(
-        line.landing_source().and_then(|attribute| attribute.value()),
-        line,
-        "__landing_source",
-    )
-}
-
-fn bundle_item(line: &Lines) -> Option<String> {
-    attr_or_metadata(
-        line.volume_discount_bundle_item()
-            .and_then(|attribute| attribute.value()),
-        line,
-        "_bundle_item",
-    )
-}
-
-fn nektar_glp1(line: &Lines) -> Option<String> {
-    attr_or_metadata(
-        line.volume_discount_nektar_glp_1()
-            .and_then(|attribute| attribute.value()),
-        line,
-        "_nektar_glp1",
-    )
+fn has_selling_plan(line: &Lines) -> bool {
+    with_facts(line, |facts| facts.subscription(line))
 }
 
 /// The storefront stamps each line with the page it was added from, plus the
 /// session's last UTM landing URL (`source: "landing"` conditions read that).
 fn added_from_matching_page(line: &Lines, offer: &CompiledOffer) -> bool {
+    let matches = || metadata_matches(metadata_map(line).as_deref(), &offer.page_url_conditions);
+    if line_slot(line).is_none() {
+        return matches();
+    }
+    let class = with_facts(line, |facts| facts.packed(line).page_class);
     let cached = PAGE_MATCH.with(|cache| {
         cache
             .borrow()
             .get(&offer.page_set_key)
-            .and_then(|lines| lines.get(line.id()).copied())
+            .and_then(|classes| classes.get(class).copied().flatten())
     });
     if let Some(matched) = cached {
         return matched;
     }
-    let matched = metadata_matches(metadata_map(line).as_deref(), &offer.page_url_conditions);
+    let matched = matches();
     PAGE_MATCH.with(|cache| {
-        cache
-            .borrow_mut()
-            .entry(offer.page_set_key)
-            .or_default()
-            .insert(line.id().clone(), matched)
+        let mut cache = cache.borrow_mut();
+        let classes = cache.entry(offer.page_set_key).or_default();
+        if classes.len() <= class {
+            classes.resize(class + 1, None);
+        }
+        classes[class] = Some(matched);
     });
     matched
 }
@@ -1798,28 +1980,124 @@ fn quiz_free_gift(line: &Lines) -> Option<String> {
     metadata_value(line, "_quiz_free_gift")
 }
 
-fn cart_gift_tier(line: &Lines) -> Option<String> {
-    metadata_value(line, "__cart_gift_tier")
-}
-
 fn metadata_value(line: &Lines, key: &str) -> Option<String> {
-    metadata_map(line)?.get(key).cloned()
+    with_facts(line, |facts| facts.packed(line).metadata.as_deref()?.get(key).cloned())
 }
 
 fn metadata_map(line: &Lines) -> Option<Rc<LineMetadata>> {
-    LINE_METADATA.with(|cache| {
-        if let Some(parsed) = cache.borrow().get(line.id()) {
-            return parsed.clone();
-        }
-        let parsed = line
-            .promo_metadata()
-            .as_ref()
-            .and_then(|attribute| attribute.value())
-            .and_then(|raw| serde_json::from_str::<LineMetadata>(raw).ok())
-            .map(Rc::new);
-        cache.borrow_mut().insert(line.id().clone(), parsed.clone());
-        parsed
-    })
+    with_facts(line, |facts| facts.packed(line).metadata.clone())
+}
+
+/// The values of `PAGE_STAMP_KEYS`: lines with equal stamps always match the same page conditions.
+type PageStamps = [Option<String>; PAGE_STAMP_KEYS.len()];
+
+/// Parses a line's packed metadata and classifies its page stamps; lines carrying the same raw metadata (the
+/// common case: every line added from one page) share one parse.
+fn parse_line_metadata(raw: Option<&String>) -> (Option<Rc<LineMetadata>>, usize) {
+    // Consecutive lines usually carry the identical string: comparing it is cheaper than hashing it.
+    let Some(raw) = raw else { return parse_line_metadata_shared(None) };
+    if let Some(hit) = LAST_METADATA.with(|last| last.borrow().as_ref().filter(|(known, _)| known == raw).map(|(_, parsed)| parsed.clone())) {
+        return hit;
+    }
+    let parsed = parse_line_metadata_shared(Some(raw));
+    LAST_METADATA.with(|last| *last.borrow_mut() = Some((raw.clone(), parsed.clone())));
+    parsed
+}
+
+fn parse_line_metadata_shared(raw: Option<&String>) -> (Option<Rc<LineMetadata>>, usize) {
+    if let Some(cached) = raw.and_then(|raw| METADATA_CACHE.with(|cache| cache.borrow().get(raw.as_str()).cloned())) {
+        return cached;
+    }
+    let metadata = raw.and_then(|raw| serde_json::from_str::<LineMetadata>(raw).ok()).map(Rc::new);
+    let stamps: Option<PageStamps> = metadata
+        .as_deref()
+        .map(|map| PAGE_STAMP_KEYS.map(|key| map.get(key).cloned()));
+    let class = PAGE_CLASSES.with(|classes| {
+        let mut classes = classes.borrow_mut();
+        classes.iter().position(|known| *known == stamps).unwrap_or_else(|| {
+            classes.push(stamps);
+            classes.len() - 1
+        })
+    });
+    if let Some(raw) = raw {
+        METADATA_CACHE.with(|cache| cache.borrow_mut().insert(raw.clone(), (metadata.clone(), class)));
+    }
+    (metadata, class)
+}
+
+fn compute_packed_facts(line: &Lines) -> PackedFacts {
+    let (metadata, page_class) = parse_line_metadata(
+        line.promo_metadata().as_ref().and_then(|attribute| attribute.value()),
+    );
+    let packed = |key: &str| metadata.as_deref().and_then(|map| map.get(key));
+    let line_type = line
+        .line_type()
+        .as_ref()
+        .and_then(|attribute| attribute.value())
+        .or_else(|| packed("_promo_engine_line_type"))
+        .cloned();
+    let gift = line_type.as_deref() == Some(LINE_TYPE_GIFT)
+        || packed("__cart_gift_tier").is_some()
+        || packed("_quiz_free_gift").map(String::as_str) == Some("true");
+    PackedFacts { metadata, page_class, line_type, gift }
+}
+
+/// Position of `line` in this run's cart lines, or None for a `Lines` that is not from it.
+fn line_slot(line: &Lines) -> Option<usize> {
+    let (base, len) = LINES_SPAN.with(Cell::get);
+    let offset = (std::ptr::from_ref(line) as usize).checked_sub(base)?;
+    let size = std::mem::size_of::<Lines>();
+    (offset % size == 0 && offset / size < len).then_some(offset / size)
+}
+
+/// The line's facts for the rest of the run. A `Lines` outside the run's slice (never in production) gets throwaway facts.
+fn facts(line: &Lines) -> &'static LineFacts {
+    match line_slot(line) {
+        Some(slot) => &LINE_FACTS.with(Cell::get)[slot],
+        None => Box::leak(Box::default()),
+    }
+}
+
+fn with_facts<R>(line: &Lines, read: impl FnOnce(&LineFacts) -> R) -> R {
+    match line_slot(line) {
+        Some(slot) => read(&LINE_FACTS.with(Cell::get)[slot]),
+        None => read(&LineFacts::default()),
+    }
+}
+
+fn quantity_of(line: &Lines) -> i32 {
+    with_facts(line, |facts| facts.quantity(line))
+}
+
+fn subtotal_of(line: &Lines) -> f64 {
+    with_facts(line, |facts| facts.subtotal(line))
+}
+
+/// Sizes the per-line facts for one run and forgets the lines' address when the run ends.
+struct LineFactsGuard;
+
+impl LineFactsGuard {
+    fn new(input: &Input) -> Self {
+        let lines = input.cart().lines();
+        let facts: Vec<LineFacts> = lines.iter().map(|_| LineFacts::default()).collect();
+        LINE_FACTS.with(|slot| slot.set(Box::leak(facts.into_boxed_slice())));
+        LINES_SPAN.with(|span| span.set((lines.as_ptr() as usize, lines.len())));
+        LineFactsGuard
+    }
+}
+
+impl Drop for LineFactsGuard {
+    fn drop(&mut self) {
+        LINES_SPAN.with(|span| span.set((0, 0)));
+        LINE_FACTS.with(|slot| slot.set(&[]));
+        PAGE_MATCH.with(|cache| cache.borrow_mut().clear());
+        CART_VALUES.with(|cache| cache.borrow_mut().clear());
+        QUALIFYING.with(|cache| cache.borrow_mut().clear());
+        METADATA_CACHE.with(|cache| cache.borrow_mut().clear());
+        PAGE_CLASSES.with(|classes| classes.borrow_mut().clear());
+        VOLUME_TIERS.with(|cache| cache.borrow_mut().clear());
+        LAST_METADATA.with(|last| *last.borrow_mut() = None);
+    }
 }
 
 /// Truncated FNV-1a-64 of the ASCII-uppercased code, 12 lowercase hex chars (mirrored by the TS publisher).
@@ -1866,7 +2144,7 @@ fn parse_config(input: &Input) -> Option<CompiledConfig> {
 mod tests {
     use super::*;
     use crate::config::CompiledPageUrlCondition;
-    use shopify_function::run_function_with_input;
+    use crate::de::run_function_with_input;
     use serde_json::Value;
 
     fn page_url_condition_matches(page_url: &str, condition: &CompiledPageUrlCondition) -> bool {
@@ -2435,6 +2713,35 @@ mod tests {
     }
 
     #[test]
+    fn line_facts_are_indexed_by_cart_position_and_scoped_to_the_run() {
+        let lines = format!(
+            "[{},{}]",
+            regular_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "60.00", 1),
+            gift_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+        );
+        let payload = cart_json(&lines, "80.00", &gift_offer_config(5000, 1));
+        run_function_with_input(
+            |input: Input| {
+                {
+                    let _facts = LineFactsGuard::new(&input);
+                    let lines = input.cart().lines();
+                    let slots: Vec<_> = lines.iter().map(line_slot).collect();
+                    assert_eq!(slots, vec![Some(0), Some(1)]);
+                    let gifts: Vec<_> = lines.iter().map(is_gift_line).collect();
+                    assert_eq!(gifts, vec![false, true]);
+                    assert!(compute_packed_facts(&lines[1]).gift);
+                    assert_eq!(LineFacts::default().quantity(&lines[1]), 1);
+                    assert_eq!(line_type(&lines[1]).as_deref(), Some(LINE_TYPE_GIFT));
+                }
+                assert_eq!(line_slot(&input.cart().lines()[0]), None);
+                Ok(schema::CartLinesDiscountsGenerateRunResult { operations: vec![] })
+            },
+            &payload,
+        )
+        .expect("should not error");
+    }
+
+    #[test]
     fn gift_discount_applies_to_valid_gift_line() {
         let lines = format!(
             "[{},{}]",
@@ -2569,6 +2876,55 @@ mod tests {
             result.operations.is_empty(),
             "$89.07 less 20% is $71.26 and must not unlock $85"
         );
+    }
+
+    #[test]
+    fn products_sharing_tier_json_are_projected_per_product() {
+        let tiers = r#"[{"qty":3,"percent":20}]"#;
+        let lines = format!(
+            "[{},{},{},{}]",
+            volume_discount_line("gid://shopify/CartLine/1", "gid://shopify/ProductVariant/v1", "gid://shopify/Product/p1", "29.69", "89.07", 3, tiers),
+            volume_discount_line("gid://shopify/CartLine/2", "gid://shopify/ProductVariant/v2", "gid://shopify/Product/p2", "29.69", "89.07", 3, tiers),
+            // Same product as line 1: its two lines form one group of 4 units.
+            volume_discount_line("gid://shopify/CartLine/3", "gid://shopify/ProductVariant/v3", "gid://shopify/Product/p1", "10.00", "10.00", 1, tiers),
+            gift_line("gid://shopify/CartLine/4", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift-p1", "offer-1", "20.00", 1),
+        );
+        // p1: 99.07 less 20% (19.81) + p2: 89.07 less 20% (17.81) = 150.52.
+        let granted = |threshold: i64| {
+            run_function_with_input(run, &cart_json(&lines, "208.14", &gift_offer_config(threshold, 1)))
+                .expect("should not error")
+                .operations
+                .len()
+        };
+        assert_eq!(granted(15052), 1);
+        assert_eq!(granted(15053), 0);
+    }
+
+    #[test]
+    fn volume_tiers_are_parsed_once_per_distinct_json() {
+        let first = parse_volume_tiers(r#"[{"qty":2,"percent":10},{"qty":0,"percent":5}]"#).expect("valid tiers");
+        let again = parse_volume_tiers(r#"[{"qty":2,"percent":10},{"qty":0,"percent":5}]"#).expect("valid tiers");
+        assert!(Rc::ptr_eq(&first, &again));
+        assert_eq!(first.len(), 1, "a tier without a positive quantity is dropped");
+        assert!(parse_volume_tiers("not json").is_none());
+        assert!(parse_volume_tiers("[]").is_none());
+        assert!(parse_volume_tiers("[]").is_none(), "a cached rejection stays a rejection");
+    }
+
+    #[test]
+    fn identical_line_metadata_shares_one_parse() {
+        let page_a = r#"{"_promo_page_url":"/a"}"#.to_string();
+        let page_b = r#"{"_promo_page_url":"/b"}"#.to_string();
+        let first = parse_line_metadata(Some(&page_a));
+        let again = parse_line_metadata(Some(&page_a));
+        assert!(Rc::ptr_eq(first.0.as_ref().unwrap(), again.0.as_ref().unwrap()));
+        let other = parse_line_metadata(Some(&page_b));
+        assert_ne!(other.1, first.1, "different page stamps are different classes");
+        // `page_a` is no longer the most recent string: it is found through the shared cache.
+        let back = parse_line_metadata(Some(&page_a));
+        assert!(Rc::ptr_eq(first.0.as_ref().unwrap(), back.0.as_ref().unwrap()));
+        assert_eq!(back.1, first.1);
+        assert!(parse_line_metadata(None).0.is_none());
     }
 
     #[test]

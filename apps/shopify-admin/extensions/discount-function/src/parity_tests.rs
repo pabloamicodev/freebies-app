@@ -5,7 +5,7 @@
 use crate::discount_logic::run;
 use crate::schema::{CartLinesDiscountsGenerateRunResult, CartOperation, ProductDiscountCandidateTarget};
 use serde_json::{json, Value};
-use shopify_function::run_function_with_input;
+use crate::de::run_function_with_input;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -200,6 +200,70 @@ fn golden_parity_fixtures_match_the_function() {
     }
     println!("parity: {ran} fixture(s) checked");
     assert!(failures.is_empty(), "parity mismatches:\n{}", failures.join("\n"));
+}
+
+/// ~120 offers over a ~100-line cart (every plain parity fixture merged, then padded) with long packed id lists:
+/// the heaviest realistic input. Committed as `fixtures/stress-120-offers-100-lines.input.json` so the wasm
+/// comparison (`scripts/compare-function-outputs.mjs`) always has it; regenerate with UPDATE_STRESS_FIXTURE=1.
+#[cfg(not(feature = "code_gate"))]
+#[test]
+fn stress_input_matches_the_committed_fixture_and_runs() {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(fixture_dir())
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .collect();
+    paths.sort();
+    let (mut offers, mut lines, mut template) = (Vec::<Value>::new(), Vec::<Value>::new(), None);
+    for (index, path) in paths.iter().enumerate() {
+        let fixture: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        if !string_set(&fixture["cart"]["enteredCodes"]).is_empty() {
+            continue;
+        }
+        for offer in fixture["config"]["offers"].as_array().into_iter().flatten() {
+            let mut offer = offer.clone();
+            offer["id"] = json!(format!("f{index}-{}", offer["id"].as_str().unwrap_or("offer")));
+            offers.push(offer);
+        }
+        for line in fixture["cart"]["lines"].as_array().into_iter().flatten() {
+            let mut line = line.clone();
+            line["id"] = json!(format!("f{index}-{}", line["id"].as_str().unwrap_or("line")));
+            lines.push(line);
+        }
+        template.get_or_insert(fixture);
+    }
+    let mut template = template.expect("plain parity fixtures");
+    let (base_offers, base_lines) = (offers.clone(), lines.clone());
+    let mut copy = 0;
+    while offers.len() < 120 {
+        let mut offer = base_offers[copy % base_offers.len()].clone();
+        offer["id"] = json!(format!("{}-dup{copy}", offer["id"].as_str().unwrap()));
+        offers.push(offer);
+        copy += 1;
+    }
+    while lines.len() < 100 {
+        let mut line = base_lines[copy % base_lines.len()].clone();
+        line["id"] = json!(format!("{}-dup{copy}", line["id"].as_str().unwrap()));
+        lines.push(line);
+        copy += 1;
+    }
+    for (position, offer) in offers.iter_mut().enumerate().filter(|(position, _)| position % 5 == 0) {
+        let packed: Vec<String> = (1..=400).map(|id| (9_000_000 + position * 1000 + id).to_string()).collect();
+        offer["excludedProductIds"] = json!(packed.join(","));
+    }
+    template["config"]["offers"] = json!(offers);
+    template["cart"]["lines"] = json!(lines);
+    template["cart"]["enteredCodes"] = json!([]);
+    let input = function_input(&template);
+
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/stress-120-offers-100-lines.input.json");
+    if std::env::var_os("UPDATE_STRESS_FIXTURE").is_some() {
+        std::fs::write(&path, format!("{input}
+")).unwrap();
+    }
+    let committed: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(committed, input, "stress fixture is stale: run with UPDATE_STRESS_FIXTURE=1");
+    run_function_with_input(run, &input.to_string()).expect("stress input runs");
 }
 
 #[cfg(not(feature = "code_gate"))]
