@@ -1,42 +1,131 @@
 import { z } from "zod";
-import { ConditionOperatorSchema, ConditionTypeSchema, validateConditionValue } from "@promo/shared-types";
-import { AuthoringDiscountRewardSchema, mainConditionForRewards, toStoredDiscountRewards } from "./rewards.js";
-import type { AuthoringDeps, AuthoringResult, StoredCondition, StoredReward, ToStored } from "./types.js";
+import { AuthoringBundleRewardSchema, bundleAfterInsert, bundleCombinationPolicy, bundleMainCondition, toStoredBundleRewards, type AuthoringBundleReward } from "./bundles.js";
+import { AuthoringGiftRewardSchema, giftMainCondition, toStoredGiftRewards, type AuthoringGiftReward, type AuthoringGiftTrigger } from "./gifts.js";
+import { AuthoringDiscountRewardSchema, mainConditionForRewards, toStoredDiscountRewards, type AuthoringDiscountReward } from "./rewards.js";
+import {
+  SHIPPING_COMBINATION_POLICY,
+  AuthoringShippingRewardSchema,
+  shippingMainConditionFromAuthoring,
+  toStoredShippingRewards,
+  type AuthoringShippingReward,
+} from "./shipping.js";
+import {
+  AuthoringUpsellRewardSchema,
+  toStoredUpsellConditions,
+  toStoredUpsellRewards,
+  upsellAfterInsert,
+  upsellCombinationPolicy,
+  type AuthoringUpsellReward,
+} from "./upsells.js";
+import type { AuthoringDeps, AuthoringResult, StoredCombinationPolicy, StoredCondition, StoredReward, ToStored } from "./types.js";
 
 export * from "./types.js";
 export { mainConditionForRewards, AuthoringDiscountRewardSchema, toStoredDiscountRewards, type AuthoringDiscountReward } from "./rewards.js";
 export { AuthoringOfferFields, OFFER_TYPES, parseOfferDates, resolveOfferText, statusFor } from "./offer.js";
+export { AuthoringConditionSchema, toStoredConditions, type AuthoringCondition } from "./conditions.js";
+export { AuthoringCodesSchema, createCodesForOffer, type AuthoringCodes } from "./codes.js";
+export { AuthoringGiftTriggerSchema, type AuthoringGiftTrigger } from "./gifts.js";
 
-/**
- * Reward families. To plug a family in once its module is merged, add ONE line to REWARD_FAMILIES, e.g.
- *   gifts:     { schema: AuthoringGiftRewardSchema, toStored: toStoredGiftRewards }       from "./gifts.js"
- *   bundles:   { schema: AuthoringBundleRewardSchema, toStored: toStoredBundleRewards }   from "./bundles.js"
- *   upsells:   { schema: AuthoringUpsellRewardSchema, toStored: toStoredUpsellRewards }   from "./upsells.js"
- *   shipping:  { schema: AuthoringShippingRewardSchema, toStored: toStoredShippingRewards } from "./shipping.js"
- * Each schema is a zod object (or discriminated union) whose `kind` is the stored rewardType.
- */
+/** Inputs a family may need besides its own rewards. */
+export type FamilyContext = {
+  /** What the offer is requested as: bundles and upsells apply their publish-time checks only for "active". */
+  status: "draft" | "active";
+  /** Gift offers: the explicit trigger (main condition). */
+  trigger?: AuthoringGiftTrigger | undefined;
+};
+
+type AfterInsertTx = Parameters<Parameters<AuthoringDeps["db"]["transaction"]>[0]>[0];
+
 type RewardFamily = {
   /** Reward kinds (stored rewardType) this family owns. */
   kinds: readonly string[];
-  schema: z.ZodType<{ kind: string }>;
+  schema: z.core.$ZodTypeDiscriminable;
   // The family's input type is private to its module; the schema validates it before toStored runs.
   toStored: ToStored<any[], StoredReward[]>;
-  /** Optional: the main condition the wizard derives from these rewards when the caller gives none. */
-  mainCondition?: (items: any[], deps: Pick<AuthoringDeps, "shopCurrency">) => AuthoringResult<StoredCondition>;
+  /** The main condition the wizard derives from these rewards when the caller gives none. */
+  mainCondition?: (items: any[], deps: AuthoringDeps, ctx: FamilyContext) => AuthoringResult<StoredCondition>;
+  /** Combination policy the family's wizard stores (applied under the caller's explicit `combinations`). */
+  combinationPolicy?: (items: any[]) => StoredCombinationPolicy;
+  /** Extra rows the wizard writes inside the create transaction (bundle definitions/steps/tiers; swaps the offer-id placeholder). MANDATORY for bundles. */
+  afterInsert?: (items: any[], deps: AuthoringDeps) => (tx: AfterInsertTx, offerId: string) => Promise<void>;
+  /** Builds the family's COMPLETE condition list from the caller's non-main conditions (upsell: main + visibility + subconditions + exclude). Replaces the derived main condition. */
+  extraConditions?: (items: any[], deps: AuthoringDeps, given: StoredCondition[]) => AuthoringResult<StoredCondition[]>;
+  /** The reward input has a `forPublish` flag that turns on the wizard's publish-time checks; set when the offer is requested active. */
+  forPublish?: boolean;
 };
+
 export const REWARD_FAMILIES: Record<string, RewardFamily> = {
   discounts: { kinds: ["product_discount", "order_discount"], schema: AuthoringDiscountRewardSchema, toStored: toStoredDiscountRewards, mainCondition: mainConditionForRewards },
+  gifts: {
+    kinds: ["product_gift"],
+    schema: AuthoringGiftRewardSchema,
+    toStored: toStoredGiftRewards,
+    mainCondition: (items: AuthoringGiftReward[], deps, ctx) => giftMainCondition(items, ctx.trigger, deps),
+  },
+  bundles: {
+    kinds: ["bundle_discount"],
+    schema: AuthoringBundleRewardSchema,
+    toStored: toStoredBundleRewards,
+    mainCondition: (items: AuthoringBundleReward[], deps) => bundleMainCondition(items, deps),
+    combinationPolicy: (items: AuthoringBundleReward[]) => bundleCombinationPolicy({ combinesWithOrderDiscounts: items[0]?.combinesWithOrderDiscounts ?? false, combinesWithShippingDiscounts: items[0]?.combinesWithShippingDiscounts ?? false }),
+    afterInsert: (items: AuthoringBundleReward[], deps) => bundleAfterInsert(items, deps),
+    forPublish: true,
+  },
+  upsells: {
+    kinds: ["upsell_discount"],
+    schema: AuthoringUpsellRewardSchema,
+    toStored: toStoredUpsellRewards,
+    extraConditions: (items: AuthoringUpsellReward[], deps, given) =>
+      toStoredUpsellConditions(items, deps, given.filter((condition) => condition.scope === "sub" || condition.scope === "quantity_limit")),
+    combinationPolicy: (items: AuthoringUpsellReward[]) => upsellCombinationPolicy({ combinesWithOrderDiscounts: items[0]?.combinesWithOrderDiscounts ?? true, combinesWithShippingDiscounts: items[0]?.combinesWithShippingDiscounts ?? true }),
+    afterInsert: (items: AuthoringUpsellReward[], deps) => upsellAfterInsert(items, deps) as (tx: AfterInsertTx, offerId: string) => Promise<void>,
+    forPublish: true,
+  },
+  shipping: {
+    kinds: ["shipping_discount"],
+    schema: AuthoringShippingRewardSchema,
+    toStored: (items: AuthoringShippingReward[], deps) =>
+      items.length === 1 ? toStoredShippingRewards(items[0]!, deps) : Promise.resolve({ ok: false as const, error: "A shipping offer has exactly one shipping_discount reward.", path: "rewards" }),
+    mainCondition: (items: AuthoringShippingReward[], deps) => ({ ok: true, value: shippingMainConditionFromAuthoring(items[0]!, deps.shopCurrency) }),
+    combinationPolicy: () => SHIPPING_COMBINATION_POLICY,
+  },
 };
 
-const familySchemas = Object.values(REWARD_FAMILIES).map((family) => family.schema);
-export const AuthoringRewardSchema = z.discriminatedUnion("kind", familySchemas as unknown as [z.ZodTypeAny, ...z.ZodTypeAny[]]);
-export type AuthoringReward = z.input<typeof AuthoringDiscountRewardSchema>;
+const familySchemas = Object.values(REWARD_FAMILIES).map((family) => family.schema) as [z.core.$ZodTypeDiscriminable, ...z.core.$ZodTypeDiscriminable[]];
+const rewardUnion = z.discriminatedUnion("kind", familySchemas);
+export type AuthoringReward =
+  | AuthoringDiscountReward
+  | z.input<typeof AuthoringGiftRewardSchema>
+  | z.input<typeof AuthoringBundleRewardSchema>
+  | z.input<typeof AuthoringUpsellRewardSchema>
+  | z.input<typeof AuthoringShippingRewardSchema>;
+export type ParsedAuthoringReward =
+  | z.output<typeof AuthoringDiscountRewardSchema>
+  | z.output<typeof AuthoringGiftRewardSchema>
+  | z.output<typeof AuthoringBundleRewardSchema>
+  | z.output<typeof AuthoringUpsellRewardSchema>
+  | z.output<typeof AuthoringShippingRewardSchema>;
+// The union is built from the family registry, so its static type is erased; restore the precise one.
+export const AuthoringRewardSchema = rewardUnion as unknown as z.ZodType<ParsedAuthoringReward, AuthoringReward>;
+
+const familyOf = (kind: string): RewardFamily | undefined => Object.values(REWARD_FAMILIES).find((candidate) => candidate.kinds.includes(kind));
+
+/** The family that owns the first reward (an offer's rewards are always of one family). */
+export function familyOfRewards(inputs: Array<{ kind: string }>): RewardFamily | undefined {
+  const first = inputs[0];
+  return first ? familyOf(first.kind) : undefined;
+}
+
+/** Turns on the wizard's publish-time checks (`forPublish`) for the families that have them when the offer is requested active. */
+export function withPublishIntent<T extends { kind: string }>(inputs: T[], status: "draft" | "active"): T[] {
+  if (status !== "active") return inputs;
+  return inputs.map((item) => (familyOf(item.kind)?.forPublish ? { ...item, forPublish: true } : item));
+}
 
 /** The main condition derived from the first reward by the family that owns it; null when that family derives none. */
-export function deriveMainCondition(inputs: Array<{ kind: string }>, deps: Pick<AuthoringDeps, "shopCurrency">): AuthoringResult<StoredCondition> | null {
-  const first = inputs[0];
-  const family = first ? Object.values(REWARD_FAMILIES).find((candidate) => candidate.kinds.includes(first.kind)) : undefined;
-  return family?.mainCondition ? family.mainCondition(inputs, deps) : null;
+export function deriveMainCondition(inputs: Array<{ kind: string }>, deps: AuthoringDeps, ctx: FamilyContext = { status: "draft" }): AuthoringResult<StoredCondition> | null {
+  const family = familyOfRewards(inputs);
+  return family?.mainCondition ? family.mainCondition(inputs, deps, ctx) : null;
 }
 
 /** Validates and converts every authoring reward to its stored rows: families in order of first appearance, sortOrder = position. */
@@ -54,32 +143,4 @@ export const toStoredRewards: ToStored<Array<{ kind: string }>, StoredReward[]> 
     stored.push(...result.value);
   }
   return { ok: true, value: stored.map((reward, position) => ({ ...reward, sortOrder: position })) };
-};
-
-/**
- * Conditions: generic fallback until conditions.ts (package 04) is merged. At integration replace this block with
- *   export { AuthoringConditionSchema, toStoredConditions } from "./conditions.js";
- * and the same for codes (package 08):
- *   export { AuthoringCodesSchema, createCodesForOffer } from "./codes.js";
- */
-export const AuthoringConditionSchema = z.strictObject({
-  type: ConditionTypeSchema.describe("Condition type, e.g. cart_value, cart_quantity, customer_tags, markets, page_types, specific_product."),
-  scope: z.enum(["main", "sub"]).default("sub").describe("main: the eligibility gate (an offer needs at least one to publish; one is derived from the rewards when omitted). sub: an additional restriction."),
-  operator: ConditionOperatorSchema.default("eq").describe("Comparison operator; most conditions use eq, thresholds use gte."),
-  value: z.record(z.string(), z.unknown()).describe("The condition's value object, validated against the type's schema (money fields in stored minor units, e.g. thresholdCents)."),
-  enabled: z.boolean().default(true),
-});
-export type AuthoringCondition = z.input<typeof AuthoringConditionSchema>;
-
-export const toStoredConditions: ToStored<AuthoringCondition[], StoredCondition[]> = async (inputs) => {
-  const out: StoredCondition[] = [];
-  for (const [index, raw] of inputs.entries()) {
-    const parsed = AuthoringConditionSchema.safeParse(raw);
-    if (!parsed.success) return { ok: false, error: `conditions[${index}]: ${parsed.error.issues[0]?.message ?? "invalid condition"}`, path: `conditions[${index}]` };
-    const condition = parsed.data;
-    const valid = validateConditionValue(condition.type, condition.value);
-    if (!valid.success) return { ok: false, error: `conditions[${index}] (${condition.type}): ${valid.error.issues[0]?.message ?? "invalid value"}`, path: `conditions[${index}]` };
-    out.push({ scope: condition.scope, conditionType: condition.type, operator: condition.operator, value: condition.value, sortOrder: index, isEnabled: condition.enabled });
-  }
-  return { ok: true, value: out };
 };

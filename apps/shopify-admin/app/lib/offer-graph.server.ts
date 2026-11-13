@@ -6,9 +6,11 @@ import { buildCapacityModalData } from "./capacity-capture.server.js";
 import { describeCapacityModal } from "./capacity-modal-copy.js";
 import { preflightCapacity } from "./capacity-preflight.server.js";
 import { proposeForIncident } from "./capacity-workarounds.server.js";
+import type { WorkaroundKind } from "./capacity-workarounds.js";
 import type { OfferStatus } from "./offer-scheduling.server.js";
 import { statusForScheduleSave } from "./offer-scheduling.server.js";
 import { statusFor } from "./offer-authoring/offer.js";
+import { SHIPPING_OFFER_TYPE } from "./offer-authoring/shipping.js";
 import type { AuthoringDeps, StoredCombinationPolicy, StoredCondition, StoredReward, WriteServiceOptions } from "./offer-authoring/types.js";
 import {
   finalizeCreatedOffer,
@@ -27,7 +29,7 @@ export type CapacityBlock = CapacityDetails & {
   limit?: string;
   fix?: string;
   incidentId?: string;
-  workarounds?: Array<{ kind: string; title: string; summary: string; customerChange: string; semanticChange: boolean }>;
+  workarounds?: Array<{ kind: WorkaroundKind; title: string; summary: string; customerChange: string; semanticChange: boolean }>;
 };
 
 export type OfferGraphFailure = {
@@ -115,8 +117,17 @@ class DryRunRollback extends Error {
   }
 }
 
+/**
+ * Rows the wizards store in a shape shared-types does not describe: the upsell widget settings (a `visibility` sales_channels
+ * row) and the gift wizard's specific_product trigger (minQtyPerProduct/variantIds, read by product-condition.ts).
+ * Their family modules own the shape, so the generic validator must not reject them.
+ */
+const isWizardMetadata = (condition: StoredCondition): boolean =>
+  condition.scope === "visibility" || (condition.conditionType === "specific_product" && !("requirements" in condition.value));
+
 function validateRows(conditions: readonly StoredCondition[], rewards: readonly StoredReward[]): OfferGraphFailure | null {
   for (const [index, condition] of conditions.entries()) {
+    if (isWizardMetadata(condition)) continue;
     const valid = validateConditionValue(condition.conditionType, condition.value);
     if (!valid.success) return fail("validation", `conditions[${index}] (${condition.conditionType}): ${valid.error.issues[0]?.message ?? "invalid value"}`, { path: `conditions[${index}]` });
   }
@@ -206,7 +217,7 @@ async function insertGraph(tx: Tx, deps: AuthoringDeps, input: CreateOfferGraphI
     .insert(offers)
     .values({
       shopId: deps.shopId,
-      type: offer.type,
+      type: offer.type === "shipping" ? SHIPPING_OFFER_TYPE : offer.type,
       status,
       internalName: name,
       publicTitle: offer.publicTitle,

@@ -1,29 +1,38 @@
 import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
+  AuthoringCodesSchema,
   AuthoringConditionSchema,
+  AuthoringGiftTriggerSchema,
   AuthoringOfferFields,
   AuthoringRewardSchema,
   OFFER_TYPES,
+  createCodesForOffer,
   deriveMainCondition,
+  familyOfRewards,
   parseOfferDates,
   resolveOfferText,
   toStoredConditions,
   toStoredRewards,
+  withPublishIntent,
   type AuthoringDeps,
   type StoredCondition,
 } from "../../offer-authoring/index.js";
 import {
+  OfferGraphRejection,
   createOfferGraph,
   updateOfferGraph,
+  type AfterInsertHook,
   type OfferFields,
   type OfferGraphFailure,
   type OfferGraphSuccess,
 } from "../../offer-graph.server.js";
 import { parseLocalDateTimeInZone } from "../../offer-validation.server.js";
 import { logCall, shopsFromArgs } from "../call-log.server.js";
-import { ToolError, promoRef, shopHandle, type ErrorCode, type Warning } from "../result.server.js";
+import { ToolError, capacityToolError, promoRef, shopHandle, type Warning } from "../result.server.js";
 import { toErrorCallToolResult, type McpContext } from "../server.server.js";
+import { offerConditions } from "@promo/db";
+import { and, asc, eq } from "drizzle-orm";
 import { selectShops, visibleShops, type VisibleShop } from "../shops.server.js";
 import { runWrite, type ApplyContext, type CallInfo, type WriteBody, type WritePreview } from "../write-runner.server.js";
 import { adminLink, resolvePromoRef } from "./catalog-shared.server.js";
@@ -56,8 +65,10 @@ export const promoCreateInput = {
   type: z.enum(OFFER_TYPES).describe("Offer family. Its rewards must be of that family (discount: product_discount / order_discount)."),
   ...AuthoringOfferFields,
   status: z.enum(["draft", "active"]).default("draft").describe("draft saves it unpublished. active validates and publishes to Shopify now (scheduled instead when startsAt is in the future); a failed publish leaves it as a draft and reports why."),
-  conditions: z.array(AuthoringConditionSchema).max(50).optional().describe("Extra eligibility conditions. The main condition is derived from the rewards (e.g. cart_quantity gte the lowest tier) unless you give a scope 'main' one."),
-  rewards: z.array(AuthoringRewardSchema).min(1).max(20).describe("What the customer gets, discriminated by `kind`. Money in shop-currency major units, ids numeric or GID."),
+  conditions: z.array(AuthoringConditionSchema).max(50).optional().describe("Extra eligibility conditions. The main condition is derived from the rewards (e.g. cart_quantity gte the lowest tier) unless you give a scope 'main' one. Upsell offers derive their own main/visibility conditions; yours become sub-conditions."),
+  rewards: z.array(AuthoringRewardSchema).min(1).max(20).describe("What the customer gets, discriminated by `kind`: product_discount / order_discount (discount), product_gift (gift), bundle_discount (bundle), upsell_discount (upsell), shipping_discount (shipping). Money in shop-currency major units, ids numeric or GID."),
+  trigger: AuthoringGiftTriggerSchema.optional().describe("Gift offers only: what triggers the gift (cart_value, cart_quantity or specific_product). Omit it for tiered gifts (or gifts with minCartSubtotal): the lowest tier is used."),
+  codes: AuthoringCodesSchema.optional().describe("Make it a code offer: { code: 'SUMMER10' } or { batch: { count: 100, prefix: 'VIP-' } } (customers enter the code at checkout), plus optional discountMessage, usageLimit, oncePerCustomer, codeStartsAt/codeEndsAt. { redemption: 'automatic' } keeps it a no-code offer. The offer and its codes are created together: an invalid or taken code creates nothing."),
   combinations: combinations.optional(),
   ...controls,
 };
@@ -74,7 +85,7 @@ export const promoUpdateInput = {
   endsAt: AuthoringOfferFields.endsAt,
   tierMode: AuthoringOfferFields.tierMode,
   conditions: z.array(AuthoringConditionSchema).max(50).optional().describe("REPLACES every condition of the offer (include the main condition). Omit to keep them."),
-  rewards: z.array(AuthoringRewardSchema).min(1).max(20).optional().describe("REPLACES every reward of the offer. The main condition is not re-derived: send `conditions` too when the tier minimums change. Omit to keep them."),
+  rewards: z.array(AuthoringRewardSchema).min(1).max(20).optional().describe("REPLACES every reward of the offer. When `conditions` is omitted, the main condition is re-derived from the new rewards if it still has the derived shape (e.g. cart_quantity gte the lowest tier); a hand-made main condition is kept and a warning says so. Bundle offers cannot have rewards replaced. Omit to keep them."),
   expectedUpdatedAt: z.string().max(40).optional().describe("The `updatedAt` you last read (from promo_detail or a previous result). The call fails with STATE_CONFLICT when the offer changed since."),
   ...controls,
 };
@@ -82,16 +93,16 @@ export const promoUpdateInput = {
 type CreateArgs = { [K in keyof typeof promoCreateInput]: z.input<(typeof promoCreateInput)[K]> };
 type UpdateArgs = { [K in keyof typeof promoUpdateInput]: z.input<(typeof promoUpdateInput)[K]> };
 
-const CAPACITY_LIMIT = "CAPACITY_LIMIT" as ErrorCode;
-
 /** Maps a service failure to the MCP error; a Shopify limit becomes CAPACITY_LIMIT with the limit, numbers and workarounds. */
 export function graphToolError(failure: OfferGraphFailure, offerRef?: string): ToolError {
   const saved = failure.offerId ? ` The offer was saved (${offerRef ?? failure.offerId}, status ${failure.status ?? "draft"}).` : "";
   const message = `${failure.error.replace(/\s+/g, " ").slice(0, 600)}${failure.path ? ` (at ${failure.path})` : ""}${saved}`;
   if (failure.capacity) {
-    const { code, offerIds, numbers, limit, fix, incidentId, workarounds } = failure.capacity;
-    return new ToolError(CAPACITY_LIMIT, message, {
-      details: { capacity: { code, offerIds, numbers }, limit, fix, ...(incidentId ? { incidentId } : {}), workarounds: workarounds ?? [], ...(failure.offerId ? { offerId: failure.offerId } : {}) } as never,
+    const { code, offerIds, numbers, incidentId, workarounds } = failure.capacity;
+    return capacityToolError({ code, offerIds, numbers }, message, {
+      ...(incidentId ? { incidentId } : {}),
+      ...(failure.offerId ? { offerId: failure.offerId } : {}),
+      ...(workarounds ? { workarounds } : {}),
       ...(failure.offerId && offerRef ? { suggestedAction: { mcp: "promo-engine", tool: "promo_detail", args: { ref: offerRef }, why: "Review the saved draft, then apply a workaround and activate it again." } } : {}),
     });
   }
@@ -174,19 +185,42 @@ export function promoCreateTool(ctx: McpContext, call: CallInfo, args: CreateArg
     const wrong = allowed ? input.rewards.find((reward) => !allowed.includes((reward as { kind: string }).kind)) : undefined;
     if (wrong) throw toolError(`A ${input.type} offer takes ${allowed!.join(" / ")} rewards, not "${(wrong as { kind: string }).kind}".`, "rewards");
 
+    if (input.trigger && input.type !== "gift") throw toolError("`trigger` is only for gift offers.", "trigger");
+
     const text = resolveOfferText(input);
     if (!text.ok) throw toolError(text.error, text.path);
     const dates = parseOfferDates(input, deps.timezone);
     if (!dates.ok) throw toolError(dates.error, dates.path);
-    const rewards = await toStoredRewards(input.rewards as Array<{ kind: string }>, deps);
+    // Bundles and upsells run the wizard's publish-time checks (products picked, positive discount) only for an offer going live.
+    const rewardInputs = withPublishIntent(input.rewards as Array<{ kind: string }>, input.status);
+    const rewards = await toStoredRewards(rewardInputs, deps);
     if (!rewards.ok) throw toolError(rewards.error, rewards.path);
     const given = input.conditions ? await toStoredConditions(input.conditions, deps) : { ok: true as const, value: [] as StoredCondition[] };
     if (!given.ok) throw toolError(given.error, given.path);
-    const conditions = [...given.value];
-    if (!conditions.some((condition) => condition.scope === "main")) {
-      const derived = deriveMainCondition(input.rewards as Array<{ kind: string }>, deps);
+    const family = familyOfRewards(rewardInputs);
+    let conditions = [...given.value];
+    if (input.trigger && conditions.some((condition) => condition.scope === "main")) throw toolError("Pass either `trigger` or a scope 'main' condition, not both.", "trigger");
+    if (family?.extraConditions) {
+      const built = family.extraConditions(rewardInputs, deps, conditions);
+      if (!built.ok) throw toolError(built.error, built.path);
+      conditions = built.value;
+    } else if (!conditions.some((condition) => condition.scope === "main")) {
+      const derived = deriveMainCondition(rewardInputs, deps, { status: input.status, trigger: input.trigger });
       if (derived && !derived.ok) throw toolError(derived.error, derived.path);
       if (derived) conditions.unshift(derived.value);
+    }
+    const withCodes = input.codes !== undefined && input.codes.redemption !== "automatic";
+    const tierMode = input.tierMode ?? (input.type === "gift" && input.rewards.some((reward) => (reward as { tiers?: unknown }).tiers) ? "cumulative" : undefined);
+    const codeWarnings: Warning[] = [];
+    const afterInsert: AfterInsertHook[] = [];
+    if (family?.afterInsert) afterInsert.push(family.afterInsert(rewardInputs, deps));
+    if (input.codes) {
+      const codes = input.codes;
+      afterInsert.push(async (tx, offerId) => {
+        const made = await createCodesForOffer(tx as unknown as AuthoringDeps["db"], deps, offerId, codes);
+        if (!made.ok) throw new OfferGraphRejection(`${made.error}${made.path ? ` (at codes.${made.path})` : ""}`);
+        if (made.value.warning) codeWarnings.push({ code: "CODE_WARNING", severity: "warn", message: made.value.warning });
+      });
     }
     const offer: OfferFields = {
       type: input.type,
@@ -197,9 +231,17 @@ export function promoCreateTool(ctx: McpContext, call: CallInfo, args: CreateArg
       priority: input.priority,
       startsAt: dates.value.startsAt,
       endsAt: dates.value.endsAt,
-      tierMode: input.tierMode,
+      tierMode,
+      requiresCode: withCodes,
     };
-    const graph = { offer, status: input.status, conditions, rewards: rewards.value, policy: input.combinations ?? {} };
+    const graph = {
+      offer,
+      status: input.status,
+      conditions,
+      rewards: rewards.value,
+      policy: { ...(family?.combinationPolicy?.(rewardInputs) ?? {}), ...definedOnly(input.combinations ?? {}) },
+      afterInsert,
+    };
 
     return {
       shop: shop!,
@@ -217,15 +259,17 @@ export function promoCreateTool(ctx: McpContext, call: CallInfo, args: CreateArg
       apply: async (a) => {
         const result = await createOfferGraph(deps, graph, { performedBy: a.performedBy, auditExtra: a.auditExtra, publish: a.publish });
         if (!result.ok) throw graphToolError(result, result.offerId ? promoRef(shop!.myshopifyDomain, result.offerId) : undefined);
-        return created(ctx, visible, shop!, result, input.status);
+        return created(ctx, visible, shop!, result, input.status, codeWarnings);
       },
     };
   }, call);
 }
 
-async function created(ctx: McpContext, visible: VisibleShop[], shop: VisibleShop, result: OfferGraphSuccess, requested: "draft" | "active"): Promise<WriteBody> {
+const definedOnly = <T extends Record<string, unknown>>(value: T): Partial<T> => Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as Partial<T>;
+
+async function created(ctx: McpContext, visible: VisibleShop[], shop: VisibleShop, result: OfferGraphSuccess, requested: "draft" | "active", extra: Warning[] = []): Promise<WriteBody> {
   const ref = promoRef(shop.myshopifyDomain, result.offerId!);
-  const warnings: Warning[] = [];
+  const warnings: Warning[] = [...extra];
   if (requested === "active" && result.status === "scheduled") warnings.push({ code: "SCHEDULED", severity: "info", message: "startsAt is in the future: the offer is scheduled and goes live automatically at that time." });
   const detail = await promoDetail(ctx.db, visible, { ref }, ctx.now);
   return {
@@ -235,6 +279,42 @@ async function created(ctx: McpContext, visible: VisibleShop[], shop: VisibleSho
     links: [adminLink(shopHandle(shop.myshopifyDomain), `${shop.myshopifyDomain} admin (offer ${result.offerId})`)],
     nextActions: [{ mcp: "promo-engine", tool: "promo_detail", args: { ref }, why: "Review the offer as stored.", risk: "read" }],
   };
+}
+
+const sameKeys = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+  const left = Object.keys(a).sort().join(",");
+  return left === Object.keys(b).sort().join(",");
+};
+
+/**
+ * Replacing rewards changes the tier minimums the main condition was derived from. When the stored main condition has exactly
+ * the derived shape (same type, operator and fields) it is re-derived from the new rewards; otherwise (a hand-made main
+ * condition) it is kept and the caller is warned. Returns the full condition list to store, or none when nothing changes.
+ */
+async function rederiveMainCondition(
+  db: AuthoringDeps["db"],
+  deps: AuthoringDeps,
+  offerId: string,
+  rewardInputs: Array<{ kind: string }>,
+): Promise<{ conditions?: StoredCondition[]; warning?: Warning }> {
+  const rows = await db
+    .select()
+    .from(offerConditions)
+    .where(and(eq(offerConditions.shopId, deps.shopId), eq(offerConditions.offerId, offerId)))
+    .orderBy(asc(offerConditions.sortOrder));
+  const stored: StoredCondition[] = rows.map((row) => ({ scope: row.scope, conditionType: row.conditionType as StoredCondition["conditionType"], operator: row.operator, value: row.value as Record<string, unknown>, sortOrder: row.sortOrder, isEnabled: row.isEnabled }));
+  const mainIndex = stored.findIndex((condition) => condition.scope === "main");
+  const kept = (why: string): { warning: Warning } => ({ warning: { code: "MAIN_CONDITION_KEPT", severity: "warn", message: `Rewards replaced; the main condition was kept as stored (${why}). Send \`conditions\` too if its threshold must follow the new tiers.` } });
+  if (familyOfRewards(rewardInputs)?.extraConditions) return kept("this offer type derives its conditions at creation");
+  const derived = deriveMainCondition(rewardInputs, deps, { status: "draft" });
+  if (!derived || !derived.ok) return mainIndex >= 0 ? kept("it cannot be derived from these rewards") : {};
+  const next = derived.value;
+  if (mainIndex < 0) return { conditions: [next, ...stored] };
+  const current = stored[mainIndex]!;
+  if (JSON.stringify([current.conditionType, current.operator, current.value]) === JSON.stringify([next.conditionType, next.operator, next.value])) return {};
+  const wasDerived = current.conditionType === next.conditionType && current.operator === next.operator && sameKeys(current.value, next.value);
+  if (!wasDerived) return kept("it is not the derived one");
+  return { conditions: stored.map((condition, index) => (index === mainIndex ? { ...condition, value: next.value } : condition)) };
 }
 
 export function promoUpdateTool(ctx: McpContext, call: CallInfo, args: UpdateArgs): Promise<CallToolResult> {
@@ -254,8 +334,18 @@ export function promoUpdateTool(ctx: McpContext, call: CallInfo, args: UpdateArg
     if (text && !text.ok) throw toolError(text.error, text.path);
     const rewards = input.rewards ? await toStoredRewards(input.rewards as Array<{ kind: string }>, deps) : null;
     if (rewards && !rewards.ok) throw toolError(rewards.error, rewards.path);
-    const conditions = input.conditions ? await toStoredConditions(input.conditions, deps) : null;
+    let conditions = input.conditions ? await toStoredConditions(input.conditions, deps) : null;
     if (conditions && !conditions.ok) throw toolError(conditions.error, conditions.path);
+    const warnings: Warning[] = [];
+    if (input.rewards) {
+      const rewardInputs = input.rewards as Array<{ kind: string }>;
+      if (familyOfRewards(rewardInputs)?.afterInsert) throw toolError("Bundle offers keep their steps and tiers in separate tables: recreate the bundle with promo_create instead of replacing its rewards.", "rewards");
+      if (!conditions) {
+        const rederived = await rederiveMainCondition(ctx.db, deps, offerId, rewardInputs);
+        if (rederived.conditions) conditions = { ok: true, value: rederived.conditions };
+        if (rederived.warning) warnings.push(rederived.warning);
+      }
+    }
 
     const patch = {
       offer: {
@@ -282,6 +372,7 @@ export function promoUpdateTool(ctx: McpContext, call: CallInfo, args: UpdateArg
           summary: `Update ${ref} (${result.statusBefore} -> ${result.status}): ${Object.keys(patch.offer).join(", ") || "no offer fields"}${rewards ? `, ${rewards.ok ? rewards.value.length : 0} reward(s) replaced` : ""}${conditions ? `, conditions replaced` : ""}.`,
           data: { promoRef: ref, offerId, statusBefore: result.statusBefore, statusAfter: result.status, fields: Object.keys(patch.offer), rewardsReplaced: Boolean(rewards), conditionsReplaced: Boolean(conditions) },
           links: [adminLink(shopHandle(shop.myshopifyDomain))],
+          warnings,
           offerUpdatedAt: result.updatedAt,
         };
       },
@@ -292,7 +383,7 @@ export function promoUpdateTool(ctx: McpContext, call: CallInfo, args: UpdateArg
         return {
           summary: `Updated ${ref}: ${result.statusBefore} -> ${result.status}${result.status === "active" ? "; the shop config was republished" : ""}.`,
           data: { promoRef: ref, offerId, statusBefore: result.statusBefore, status: result.status, updatedAt: result.updatedAt?.toISOString() ?? null, offer: detail.data },
-          warnings: detail.warnings,
+          warnings: [...warnings, ...detail.warnings],
           links: [adminLink(shopHandle(shop.myshopifyDomain), `${shop.myshopifyDomain} admin (offer ${offerId})`)],
           nextActions: [{ mcp: "promo-engine", tool: "promo_detail", args: { ref }, why: "Review the offer as stored.", risk: "read" }],
         };
