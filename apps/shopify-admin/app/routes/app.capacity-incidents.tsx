@@ -1,8 +1,9 @@
 import * as Sentry from "@sentry/node";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { z } from "zod";
-import { applyWorkaround, discountOps, undoWorkaround } from "../lib/capacity-apply.server.js";
-import { dismissIncident, listOpenIncidents, snoozeIncidents } from "../lib/capacity-incidents.server.js";
+import { discountOps } from "../lib/capacity-apply.server.js";
+import { runIncidentIntent } from "../lib/capacity-incident-actions.server.js";
+import { listOpenIncidents } from "../lib/capacity-incidents.server.js";
 import { runWithCapacitySource } from "../lib/capacity-source.server.js";
 import { proposeForIncident } from "../lib/capacity-workarounds.server.js";
 import { WORKAROUND_KINDS, type IncidentProposals, type WorkaroundResult } from "../lib/capacity-workarounds.js";
@@ -94,25 +95,6 @@ export async function action({ request }: ActionFunctionArgs): Promise<Workaroun
   });
 
   async function run(input: z.infer<typeof actionSchema>): Promise<WorkaroundResult> {
-    switch (input.intent) {
-      case "apply":
-        return applyWorkaround(db, shop, {
-          incidentId: input.incidentId,
-          kind: input.kind,
-          ...(input.selected ? { selected: input.selected } : {}),
-          confirm: input.confirm === "true",
-          expectedVersions: input.expectedVersions,
-          performedBy: shopDomain,
-        });
-      case "undo":
-        return undoWorkaround(db, shop, input.actionId, shopDomain);
-      case "snooze":
-        await snoozeIncidents(db, shopId);
-        return { ok: true, code: "applied", message: "We will remind you tomorrow." };
-      case "dismiss": {
-        const done = await dismissIncident(db, shopId, input.incidentId);
-        return done ? { ok: true, code: "applied", message: "Dismissed." } : { ok: false, code: "not_found", message: "This incident is no longer open." };
-      }
-    }
+    return runIncidentIntent(db, shop, input.intent === "apply" ? { ...input, confirm: input.confirm === "true" } : input, shopDomain);
   }
 }
