@@ -2,7 +2,7 @@ import { discountShards, offerCombinationPolicies, offerRewards, offers, shops, 
 import { and, count, eq } from "drizzle-orm";
 import { SHOPIFY_AUTOMATIC_LIMIT } from "./capacity-copy.js";
 import { deriveCombinationGroups, limitsLevel, type CombinationGroupsView, type LimitsMeter } from "./capacity-meter.js";
-import { loadAutomaticBudget } from "./capacity-preflight.server.js";
+import { loadAutomaticBudget, type CapacityOptions } from "./capacity-preflight.server.js";
 import { isFunctionShardsEnabled, isShardDomainsEnabled } from "./function-shards-flag.server.js";
 import { baseOfferId } from "./sync/plan-units.js";
 
@@ -54,10 +54,10 @@ export async function loadCombinationGroups(db: Db, shopId: string): Promise<Com
 }
 
 /** Shop-level "Shopify limits" numbers for Diagnostics and the offers-list banner. Never throws. */
-export async function loadLimitsMeter(db: Db, shopId: string): Promise<LimitsMeter | null> {
+export async function loadLimitsMeter(db: Db, shopId: string, readBudget: NonNullable<CapacityOptions["loadBudget"]> = loadAutomaticBudget): Promise<LimitsMeter | null> {
   try {
     const [budget, shardsEnabled, domainsEnabled, combinationGroups, [slots], [shop]] = await Promise.all([
-      loadAutomaticBudget(db, shopId),
+      readBudget(db, shopId),
       isFunctionShardsEnabled(db, shopId),
       isShardDomainsEnabled(db, shopId),
       loadCombinationGroups(db, shopId),
