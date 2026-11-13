@@ -1,4 +1,4 @@
-import { and, eq, isNull, inArray } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { appSettings, shops, type Db } from "@promo/db";
 import { canSeeShop, type Operator } from "./auth.server.js";
 import { ToolError, shopHandle } from "./result.server.js";
@@ -54,34 +54,9 @@ export function selectShops(visible: VisibleShop[], requested?: string[]): Visib
   });
 }
 
-export function writeShopsFromEnv(env: NodeJS.ProcessEnv): Set<string> {
-  return new Set(
-    (env["MCP_WRITE_SHOPS"] ?? "")
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean),
-  );
-}
-
-/** Both locks must allow: the env list AND the per-shop app_settings `mcp.writeMode` = "write". */
-export async function resolveWriteModes(
-  db: Db,
-  shopList: ShopRef[],
-  env: NodeJS.ProcessEnv,
-): Promise<Map<string, WriteMode>> {
-  const allowed = writeShopsFromEnv(env);
-  const modes = new Map<string, WriteMode>();
-  if (shopList.length === 0) return modes;
-  const rows = await db
-    .select({ shopId: appSettings.shopId, value: appSettings.value })
-    .from(appSettings)
-    .where(and(eq(appSettings.key, WRITE_MODE_SETTING_KEY), inArray(appSettings.shopId, shopList.map((s) => s.id))));
-  const setting = new Map(rows.map((r) => [r.shopId, parseSetting(r.value)]));
-  for (const shop of shopList) {
-    const envOk = allowed.has(shop.myshopifyDomain.toLowerCase());
-    modes.set(shop.id, envOk && setting.get(shop.id) === "write" ? "write" : "read_only");
-  }
-  return modes;
+/** Owner 2026-11-13: every shop is writable for every authenticated operator; the stored per-shop setting no longer gates anything. */
+export function resolveWriteModes(shopList: ShopRef[]): Map<string, WriteMode> {
+  return new Map(shopList.map((shop) => [shop.id, "write" as const]));
 }
 
 function parseSetting(raw: string): string | null {
@@ -93,7 +68,7 @@ function parseSetting(raw: string): string | null {
   }
 }
 
-/** CLI side of the per-shop lock: `shop` is a myshopify domain or its handle. Does not touch the MCP_WRITE_SHOPS env lock. */
+/** CLI side of the legacy per-shop setting (informational since 2026-11-13, no tool reads it): `shop` is a myshopify domain or its handle. */
 export async function setShopWriteMode(db: Db, shop: string, mode: WriteMode): Promise<{ myshopifyDomain: string; mode: WriteMode }> {
   const key = shop.trim().toLowerCase();
   const domain = key.includes(".") ? key : `${key}.myshopify.com`;
@@ -107,7 +82,7 @@ export async function setShopWriteMode(db: Db, shop: string, mode: WriteMode): P
   return { myshopifyDomain: row.myshopifyDomain, mode };
 }
 
-/** Stored per-shop setting only (a missing or unknown value reads as read_only); the env lock is separate. */
+/** Stored per-shop setting only (a missing or unknown value reads as read_only); informational, writes never check it. */
 export async function listShopWriteModes(db: Db): Promise<{ myshopifyDomain: string; mode: WriteMode }[]> {
   const rows = await db
     .select({ myshopifyDomain: shops.myshopifyDomain, value: appSettings.value })

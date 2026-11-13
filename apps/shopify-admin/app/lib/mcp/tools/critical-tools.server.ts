@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { and, eq, inArray } from "drizzle-orm";
@@ -13,12 +12,12 @@ import { activateDraftOffer, bulkPauseOffers } from "../../offer-lifecycle.serve
 import { republishIfActive, tryPublishShop } from "../../offer-publish-flow.server.js";
 import { listLimitedTitleCollisions } from "../../offer-usage.server.js";
 import { publishOffersForShop } from "../../sync/offer-publisher.server.js";
-import { ToolError, promoRef, publishAdvisories, shopHandle, type Warning } from "../result.server.js";
+import { ToolError, capacityToolError, promoRef, publishAdvisories, shopHandle, type Warning } from "../result.server.js";
 import { selectShops } from "../shops.server.js";
 import { lifecycleToolError, type ApplyContext, type CallInfo } from "../write-runner.server.js";
 import type { McpContext } from "../server.server.js";
 import { adminLink, resolvePromoRef } from "./catalog-shared.server.js";
-import { expectOk, guarded, iso, label, offerBasics, writeControls, type Controls } from "./write-tools.server.js";
+import { expectOk, guarded, iso, label, offerBasics, offerWriteControls, writeControls, type Controls } from "./write-tools.server.js";
 
 const refFields = {
   ref: z.string().max(200).optional().describe("promo:<shopHandle>:<offerId>, or a bare offerId together with `shop`."),
@@ -32,22 +31,22 @@ const LIST_CAP = 50;
 export const promosPauseAllInput = {
   shop: z.string().max(200).describe("Shop domain or handle."),
   reason: z.string().trim().min(3).max(300).describe("Why (stored in the audit log)."),
-  ...writeControls,
+  ...offerWriteControls,
 };
-export const promoActivateDraftInput = { ...refFields, ...writeControls };
+export const promoActivateDraftInput = { ...refFields, ...offerWriteControls };
 export const codesCreateBatchInput = {
   ...refFields,
   count: z.number().int().min(1).max(MAX_CODES_PER_BATCH_CALL).describe(`How many codes, 1-${MAX_CODES_PER_BATCH_CALL}.`),
   prefix: z.string().trim().max(32).optional().describe("Optional prefix (letters, digits, - and _ are kept)."),
   length: z.number().int().min(4).max(32).optional().describe("Random part length, 4-32 (default 8)."),
-  ...writeControls,
+  ...offerWriteControls,
 };
 export const codesDeleteInput = {
   ...refFields,
   ids: z.array(z.string().uuid()).min(1).max(MAX_CODES_PER_DELETE_CALL).optional().describe("Specific code ids (from codes_list)."),
   batchId: z.string().uuid().optional(),
   onlyUnused: z.boolean().optional().describe("Default true: codes that were ever redeemed are never deleted. false also deletes redeemed codes."),
-  ...writeControls,
+  ...offerWriteControls,
 };
 export const shopSetLimitsEnforcedInput = {
   shop: z.string().max(200).describe("Shop domain or handle."),
@@ -57,13 +56,18 @@ export const shopSetLimitsEnforcedInput = {
 
 export const driftRepairSettingsInput = {
   shop: z.string().max(200).describe("Shop domain or handle."),
+  expectedDiffHash: z
+    .string()
+    .max(128)
+    .optional()
+    .describe("Optional: the data.diffHash a dryRun:true returned. The repair answers STATE_CONFLICT if what is out of sync changed since. Omit to repair whatever is out of sync now."),
   ...writeControls,
 };
 
 const withReason = (a: ApplyContext, why?: string) => (why ? { _mcp: { ...(a.auditExtra["_mcp"] as object), reason: why } } : a.auditExtra);
 
 export function promosPauseAllTool(ctx: McpContext, call: CallInfo, args: Controls & { shop: string; reason: string }): Promise<CallToolResult> {
-  return guarded(ctx, call, "promos_pause_all", "admin", args, async (visible) => {
+  return guarded(ctx, call, "promos_pause_all", args, async (visible) => {
     const [shop] = selectShops(visible, [args.shop]);
     const live = async () =>
       ctx.db
@@ -79,8 +83,6 @@ export function promosPauseAllTool(ctx: McpContext, call: CallInfo, args: Contro
     });
     return {
       tool: "promos_pause_all",
-      minRole: "admin",
-      critical: true,
       shops: [shop!],
       preview: async () => {
         const rows = await live();
@@ -97,8 +99,8 @@ export function promosPauseAllTool(ctx: McpContext, call: CallInfo, args: Contro
       apply: async (a) => {
         const rows = await live();
         const seen = newest(rows);
-        if ((a.expectedUpdatedAt?.getTime() ?? null) !== (seen?.getTime() ?? null)) {
-          throw new ToolError("STATE_CONFLICT", "The shop's live offers changed since the dry run; run it again.");
+        if (a.expectedUpdatedAt && a.expectedUpdatedAt.getTime() !== (seen?.getTime() ?? null)) {
+          throw new ToolError("STATE_CONFLICT", "The shop's live offers changed since your expectedUpdatedAt; read them again.");
         }
         if (rows.length === 0) return { summary: `Nothing to pause in ${shop!.myshopifyDomain}.`, data: describeRows(rows) };
         const result = await bulkPauseOffers(
@@ -111,14 +113,10 @@ export function promosPauseAllTool(ctx: McpContext, call: CallInfo, args: Contro
           // Every offer went back to the status it had; say which, per status.
           const restored = rows.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.status]: (acc[r.status] ?? 0) + 1 }), {});
           const summary = Object.entries(restored).map(([status, n]) => `${n} ${status}`).join(", ");
-          throw new ToolError(
-            "PUBLISH_FAILED",
-            `Publishing to Shopify failed and the change was rolled back; ${summary} offer(s) kept their status (${result.error.replace(/\s+/g, " ").slice(0, 300)}).`,
-            {
-              suggestedAction: { mcp: "promo-engine", tool: "promo_health", args: { shops: [shop!.myshopifyDomain] }, why: "Check publish errors, then retry." },
-              ...(result.capacity ? { details: { capacity: result.capacity } } : {}),
-            },
-          );
+          const message = `Publishing to Shopify failed and the change was rolled back; ${summary} offer(s) kept their status (${result.error.replace(/\s+/g, " ").slice(0, 300)}).`;
+          const suggestedAction = { mcp: "promo-engine" as const, tool: "promo_health", args: { shops: [shop!.myshopifyDomain] }, why: "Check publish errors, then retry." };
+          if (result.capacity) throw capacityToolError(result.capacity, message, { suggestedAction });
+          throw new ToolError("PUBLISH_FAILED", message, { suggestedAction });
         }
         return {
           summary: `Paused ${result.offers.length} offer(s) of ${shop!.myshopifyDomain}. Shopify config republished.`,
@@ -132,14 +130,12 @@ export function promosPauseAllTool(ctx: McpContext, call: CallInfo, args: Contro
 }
 
 export function promoActivateDraftTool(ctx: McpContext, call: CallInfo, args: Controls & { ref?: string; shop?: string }): Promise<CallToolResult> {
-  return guarded(ctx, call, "promo_activate_draft", "admin", args, async (visible) => {
+  return guarded(ctx, call, "promo_activate_draft", args, async (visible) => {
     const { shop, offerId } = resolvePromoRef(visible, args);
     const ref = promoRef(shop.myshopifyDomain, offerId);
     const lifecycle = { shopId: shop.id, shopDomain: shop.myshopifyDomain, offerId };
     return {
       tool: "promo_activate_draft",
-      minRole: "admin",
-      critical: true,
       shops: [shop],
       preview: async () => {
         const basics = await offerBasics(ctx.db, shop, offerId);
@@ -184,7 +180,7 @@ export function codesCreateBatchTool(
   call: CallInfo,
   args: Controls & { ref?: string; shop?: string; count: number; prefix?: string; length?: number },
 ): Promise<CallToolResult> {
-  return guarded(ctx, call, "codes_create_batch", "admin", args, async (visible) => {
+  return guarded(ctx, call, "codes_create_batch", args, async (visible) => {
     const { shop, offerId } = resolvePromoRef(visible, args);
     const ref = promoRef(shop.myshopifyDomain, offerId);
     const spec: BatchSpec = { prefix: args.prefix ?? "", length: args.length ?? 8, charset: "unambiguous", count: args.count };
@@ -197,8 +193,6 @@ export function codesCreateBatchTool(
 
     return {
       tool: "codes_create_batch",
-      minRole: "admin",
-      critical: true,
       shops: [shop],
       preview: async () => {
         const basics = await offerBasics(ctx.db, shop, offerId);
@@ -219,7 +213,7 @@ export function codesCreateBatchTool(
         if (!basics) throw new ToolError("NOT_FOUND", "Offer not found in that shop.");
         assertUsable(basics.status);
         if (a.expectedUpdatedAt && basics.updatedAt.getTime() !== a.expectedUpdatedAt.getTime()) {
-          throw new ToolError("STATE_CONFLICT", "The offer changed since the dry run; run it again.");
+          throw new ToolError("STATE_CONFLICT", "The offer changed since your expectedUpdatedAt; read it again.");
         }
         const created = await createDiscountCodeBatch(ctx.db, { shopId: shop.id, offerId, spec });
         if (!created.ok) throw new ToolError("VALIDATION", created.error.replace(/\s+/g, " ").slice(0, 300));
@@ -279,7 +273,7 @@ export function codesDeleteTool(
   call: CallInfo,
   args: Controls & { ref?: string; shop?: string; ids?: string[]; batchId?: string; onlyUnused?: boolean },
 ): Promise<CallToolResult> {
-  return guarded(ctx, call, "codes_delete", "admin", args, async (visible) => {
+  return guarded(ctx, call, "codes_delete", args, async (visible) => {
     const { shop, offerId } = resolvePromoRef(visible, args);
     const ref = promoRef(shop.myshopifyDomain, offerId);
     if ((args.ids ? 1 : 0) + (args.batchId ? 1 : 0) !== 1) throw new ToolError("VALIDATION", "Pass exactly one of ids or batchId.");
@@ -309,7 +303,6 @@ export function codesDeleteTool(
       const ids = deletable.map((r) => r.id).sort();
       return {
         deletable: ids,
-        setHash: createHash("sha256").update(ids.join(",")).digest("hex"),
         counts: {
           matched: rows.length,
           deletable: deletable.length,
@@ -320,21 +313,23 @@ export function codesDeleteTool(
       };
     };
 
+    const assertDeletable = (counts: { matched: number; deletable: number; skippedUsed: number; skippedOnShopify: number }) => {
+      if (counts.matched === 0) throw new ToolError("NOT_FOUND", "No codes match in that offer.");
+      if (counts.deletable === 0) {
+        throw new ToolError(
+          "VALIDATION",
+          `Nothing can be deleted: ${counts.skippedUsed} redeemed code(s) are protected by onlyUnused, ${counts.skippedOnShopify} still exist on Shopify (disable them with codes_set_status and let the publish remove them first).`,
+        );
+      }
+    };
+
     return {
       tool: "codes_delete",
-      minRole: "admin",
-      critical: true,
       shops: [shop],
       preview: async () => {
         const basics = await offerBasics(ctx.db, shop, offerId);
-        const { counts, setHash } = await classify();
-        if (counts.matched === 0) throw new ToolError("NOT_FOUND", "No codes match in that offer.");
-        if (counts.deletable === 0) {
-          throw new ToolError(
-            "VALIDATION",
-            `Nothing can be deleted: ${counts.skippedUsed} redeemed code(s) are protected by onlyUnused, ${counts.skippedOnShopify} still exist on Shopify (disable them with codes_set_status and let the publish remove them first).`,
-          );
-        }
+        const { counts } = await classify();
+        assertDeletable(counts);
         const warnings: Warning[] = [];
         if (counts.redeemedAmongDeletable > 0) {
           warnings.push({ code: "DELETES_REDEEMED_CODES", severity: "warn", message: `${counts.redeemedAmongDeletable} code(s) that were redeemed will be deleted (onlyUnused=false).` });
@@ -348,18 +343,15 @@ export function codesDeleteTool(
           warnings,
           links: [adminLink(shopHandle(shop.myshopifyDomain))],
           offerUpdatedAt: basics.updatedAt,
-          setHash,
         };
       },
       apply: async (a) => {
         const basics = await offerBasics(ctx.db, shop, offerId);
         if (a.expectedUpdatedAt && basics.updatedAt.getTime() !== a.expectedUpdatedAt.getTime()) {
-          throw new ToolError("STATE_CONFLICT", "The offer changed since the dry run; run it again.");
+          throw new ToolError("STATE_CONFLICT", "The offer changed since your expectedUpdatedAt; read it again.");
         }
-        const { deletable, counts, setHash } = await classify();
-        if (deletable.length === 0) throw new ToolError("STATE_CONFLICT", "Nothing deletable any more; run the dry run again.");
-        // The token pins the exact codes the dry run showed: a redemption, sync or new code since then changes the set.
-        if (a.expectedSetHash !== setHash) throw new ToolError("STATE_CONFLICT", "The codes to delete changed since the dry run; run it again.");
+        const { deletable, counts } = await classify();
+        assertDeletable(counts);
         const deleted = await deleteDiscountCodes(ctx.db, shop.id, offerId, deletable, { onlyUnused });
         await insertAuditLog(ctx.db, {
           shopId: shop.id,
@@ -380,7 +372,7 @@ export function codesDeleteTool(
 }
 
 export function shopSetLimitsEnforcedTool(ctx: McpContext, call: CallInfo, args: Controls & { shop: string; enforced: boolean }): Promise<CallToolResult> {
-  return guarded(ctx, call, "shop_set_limits_enforced", "admin", args, async (visible) => {
+  return guarded(ctx, call, "shop_set_limits_enforced", args, async (visible) => {
     const [shop] = selectShops(visible, [args.shop]);
     const domain = shop!.myshopifyDomain;
     // The same gates as Settings -> Limits: the LIMITS_TOGGLE_SHOPS allow-list and, to turn it on, no shared-title collisions.
@@ -398,8 +390,6 @@ export function shopSetLimitsEnforcedTool(ctx: McpContext, call: CallInfo, args:
     };
     return {
       tool: "shop_set_limits_enforced",
-      minRole: "admin",
-      critical: true,
       shops: [shop!],
       preview: async () => {
         await assertPreconditions();
@@ -446,10 +436,10 @@ const ITEM_CAP = 50;
 export function driftRepairSettingsTool(
   ctx: McpContext,
   call: CallInfo,
-  args: Controls & { shop: string },
+  args: Controls & { shop: string; expectedDiffHash?: string },
   deps: DriftRepairContext = {},
 ): Promise<CallToolResult> {
-  return guarded(ctx, call, "drift_repair_settings", "admin", args, async (visible) => {
+  return guarded(ctx, call, "drift_repair_settings", args, async (visible) => {
     const [shop] = selectShops(visible, [args.shop]);
     const domain = shop!.myshopifyDomain;
     const driftDeps: DriftRepairContext = {
@@ -484,8 +474,6 @@ export function driftRepairSettingsTool(
     };
     return {
       tool: "drift_repair_settings",
-      minRole: "admin",
-      critical: true,
       shops: [shop!],
       preview: async () => {
         const result = await repairShopDrift(ctx.db, driftDeps, { shopId: shop!.id, dryRun: true });
@@ -504,7 +492,6 @@ export function driftRepairSettingsTool(
           warnings,
           links: [adminLink(shopHandle(domain))],
           offerUpdatedAt: null,
-          setHash: result.diffHash,
         };
       },
       apply: async (a) => {
@@ -513,11 +500,11 @@ export function driftRepairSettingsTool(
           dryRun: false,
           performedBy: a.performedBy,
           auditExtra: a.auditExtra,
-          expectedDiffHash: a.expectedSetHash,
+          expectedDiffHash: args.expectedDiffHash ?? null,
         });
         const error = blocked(result.outcome);
         if (error) throw error;
-        if (result.outcome === "diff_changed") throw new ToolError("STATE_CONFLICT", "What is out of sync changed since the dry run; run it again.");
+        if (result.outcome === "diff_changed") throw new ToolError("STATE_CONFLICT", "What is out of sync changed since the preview; run it again.");
         if (result.outcome === "paused") throw new ToolError("INVALID_STATE", "Drift repair is paused for this shop (drift_repair.paused or DRIFT_REPAIR_DISABLED).");
         const warnings: Warning[] =
           result.outcome === "unresolved"

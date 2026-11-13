@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   EXPERIMENT_TYPES,
   ToolError,
+  ERROR_CODES,
   buildResult,
+  capacityToolError,
   moneyFromMinor,
   parsePromoRef,
   promoRef,
@@ -36,12 +38,36 @@ describe("buildResult", () => {
   });
 });
 
+describe("capacityToolError", () => {
+  it("is a CAPACITY_LIMIT error naming the Shopify cap and the workarounds, like the admin modal", () => {
+    expect(ERROR_CODES).toContain("CAPACITY_LIMIT");
+    const e = capacityToolError(
+      { code: "AUTOMATIC_DISCOUNT_LIMIT", offerIds: ["o1"], numbers: { needed: 2, storeActive: 24, others: 20 }, offerNames: { o1: "Protein" } },
+      "Activation blocked.",
+    );
+    expect(e.payload).toMatchObject({ code: "CAPACITY_LIMIT", retryable: false });
+    expect(e.payload.message).toContain("Activation blocked.");
+    expect(e.payload.message).toMatch(/25 active automatic discounts/);
+    expect(e.payload.details?.capacity).toEqual({ code: "AUTOMATIC_DISCOUNT_LIMIT", offerIds: ["o1"], numbers: { needed: 2, storeActive: 24, others: 20 } });
+    expect(e.payload.details?.limit).toMatch(/25 active automatic discounts per store/);
+    expect(e.payload.details?.workarounds?.map((w) => w.kind)).toEqual(["deactivate_discounts"]);
+  });
+  it("offers whole-products and split for an oversized offer, pause for a full slot, and survives unknown codes", () => {
+    const large = capacityToolError({ code: "OFFER_TOO_LARGE", offerIds: ["o1"], numbers: { bytes: 90000, slotBytes: 60000 } }, "x");
+    expect(large.payload.details?.workarounds?.map((w) => w.kind)).toEqual(["use_whole_products", "sync_products", "split_offer", "reduce_gift_options"]);
+    expect(capacityToolError({ code: "SLOT_FULL", offerIds: [], numbers: {} }, "x").payload.details?.workarounds?.map((w) => w.kind)).toEqual(["pause_offers"]);
+    const unknown = capacityToolError({ code: "SOMETHING_NEW", offerIds: [], numbers: {} }, "x");
+    expect(unknown.payload).toMatchObject({ code: "CAPACITY_LIMIT", message: "x" });
+    expect(unknown.payload.details?.workarounds).toEqual([]);
+  });
+});
+
 describe("ToolError", () => {
   it("carries code, suggestedAction (nullable), mcp and retryable", () => {
-    const e = new ToolError("SHOP_READ_ONLY", "nope", {
+    const e = new ToolError("STATE_CONFLICT", "nope", {
       suggestedAction: { mcp: "promo-engine", tool: "shops_list", args: {}, why: "see write shops" },
     });
-    expect(e.payload).toMatchObject({ code: "SHOP_READ_ONLY", mcp: "promo-engine", retryable: false });
+    expect(e.payload).toMatchObject({ code: "STATE_CONFLICT", mcp: "promo-engine", retryable: false });
     expect(e.payload.suggestedAction?.tool).toBe("shops_list");
     expect(new ToolError("VALIDATION", "x").payload.suggestedAction).toBeNull();
     expect(new ToolError("RATE_LIMITED", "x", { retryAfterSeconds: 3 }).payload).toMatchObject({ retryable: true, retryAfterSeconds: 3 });

@@ -2,7 +2,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { and, eq } from "drizzle-orm";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
-  appSettings,
   auditLogs,
   bundleDefinitions,
   bundleSteps,
@@ -31,8 +30,8 @@ vi.mock("../../publish-pending.server.js", () => ({ markPublishPending: async ()
 
 const SRC = "hpn-test-store.myshopify.com";
 const DST = "second-test.myshopify.com";
-const LOCKED = "hpn.myshopify.com";
-const ENV = { MCP_WRITE_SHOPS: `${SRC}, ${DST}`, MCP_CONFIRM_SECRET: "x".repeat(40) } as unknown as NodeJS.ProcessEnv;
+const NO_SETTING = "hpn.myshopify.com";
+const ENV = {} as unknown as NodeJS.ProcessEnv;
 const P = (n: number) => `gid://shopify/Product/${n}`;
 const V = (n: number) => `gid://shopify/ProductVariant/${n}`;
 const C = (n: number) => `gid://shopify/Collection/${n}`;
@@ -48,14 +47,16 @@ const resetCatalogs = () => {
       { id: V(3), sku: "NOPE", options: ["x"], product: "gone" },
     ],
   });
-  catalogs.set(DST, {
-    products: { whey: P(101), creatine: P(102) },
-    collections: { sale: C(110) },
-    variants: [
-      { id: V(1001), sku: "WHEY-1KG", options: ["1kg"], product: "whey" },
-      { id: V(1002), sku: "CRE-B", options: ["Berry"], product: "creatine" },
-    ],
-  });
+  for (const domain of [DST, NO_SETTING]) {
+    catalogs.set(domain, {
+      products: { whey: P(101), creatine: P(102) },
+      collections: { sale: C(110) },
+      variants: [
+        { id: V(1001), sku: "WHEY-1KG", options: ["1kg"], product: "whey" },
+        { id: V(1002), sku: "CRE-B", options: ["Berry"], product: "creatine" },
+      ],
+    });
+  }
 };
 
 function fakeShopify({ shopDomain, query, variables }: Call) {
@@ -91,7 +92,7 @@ function fakeShopify({ shopDomain, query, variables }: Call) {
   return out;
 }
 
-type Body = { code?: string; message?: string; data: Record<string, any>; meta: { confirmToken?: string }; warnings: { code: string; message: string }[] };
+type Body = { code?: string; message?: string; data: Record<string, any>; meta: { confirmToken?: string }; nextActions: { args: Record<string, unknown> }[]; warnings: { code: string; message: string }[] };
 const body = (r: CallToolResult) => r.structuredContent as unknown as Body;
 
 let db: Db;
@@ -128,21 +129,23 @@ const copyOf = async (id: string) => {
   return { offer: offer!, cond: cond!, reward: reward!, bundle: bundle!, step: step! };
 };
 
+/** Optional preview (dryRun:true), then the direct execute: no token is involved. */
 async function twoStep(args: Record<string, unknown>) {
-  const dry = await run(args);
+  const dry = await run({ ...args, dryRun: true });
   expect(dry.isError, JSON.stringify(dry.structuredContent)).toBeFalsy();
-  return { dry, done: await run({ ...args, dryRun: false, confirmToken: body(dry).meta.confirmToken }) };
+  expect(body(dry).meta.confirmToken).toBeUndefined();
+  return { dry, done: await run(args) };
 }
 const offerCount = async () => (await db.select().from(offers)).length;
 
 beforeAll(async () => {
   ({ db, close } = await createTestDb());
-  for (const [key, domain] of [["src", SRC], ["dst", DST], ["locked", LOCKED]] as const) shopIds[key] = await seedShop(db, domain);
-  for (const key of ["src", "dst", "locked"]) await db.insert(appSettings).values({ shopId: shopIds[key]!, key: "mcp.writeMode", value: JSON.stringify("write") });
-  const make = async (name: string, role: "editor" | "admin", shopAllowList: string[]) => {
+  for (const [key, domain] of [["src", SRC], ["dst", DST], ["locked", NO_SETTING]] as const) shopIds[key] = await seedShop(db, domain);
+  const make = async (name: string, role: "viewer" | "editor" | "admin", shopAllowList: string[]) => {
     const [op] = await db.insert(mcpOperators).values({ email: `${name}@example.com`, name, role, shopAllowList }).returning();
     operators[name] = { id: op!.id, email: op!.email, name, role, shopAllowList };
   };
+  await make("viewer", "viewer", ["*"]);
   await make("editor", "editor", ["*"]);
   await make("admin", "admin", ["*"]);
   await make("narrow", "admin", [SRC]);
@@ -157,7 +160,7 @@ beforeEach(() => {
 });
 
 describe("promo_duplicate across shops", () => {
-  it("full match: the dry run reports the mapping and the copy points at the target shop's resources", async () => {
+  it("full match: dryRun:true reports the mapping and the copy points at the target shop's resources", async () => {
     const id = await sourceOffer();
     const { dry, done } = await twoStep({ ref: refOf(id), targetShop: DST });
     const report = body(dry).data["resourceMapping"];
@@ -230,20 +233,22 @@ describe("promo_duplicate across shops", () => {
     expect(await db.select().from(giftCloneProducts).where(eq(giftCloneProducts.shopId, shopIds["dst"]!))).toHaveLength(0);
   });
 
-  it("an editor is FORBIDDEN cross-shop and nothing is created", async () => {
+  it("viewers and editors copy across shops like an admin (no role tiers)", async () => {
     const id = await sourceOffer();
-    const before = await offerCount();
-    for (const args of [{ ref: refOf(id), targetShop: DST }, { ref: refOf(id), targetShop: DST, dryRun: false, confirmToken: "x.y" }]) {
-      expect(body(await run(args, operators["editor"]!)).code).toBe("FORBIDDEN");
+    for (const role of ["viewer", "editor"] as const) {
+      const before = await offerCount();
+      const res = await run({ ref: refOf(id), targetShop: DST }, operators[role]!);
+      expect(res.isError, `${role}: ${JSON.stringify(res.structuredContent)}`).toBeFalsy();
+      expect(await offerCount()).toBe(before + 1);
     }
-    expect(await offerCount()).toBe(before);
   });
 
-  it("the target shop must pass the write locks (SHOP_READ_ONLY), even for an admin", async () => {
+  it("a target shop with no write setting and no env entry is a valid target (no write lock)", async () => {
     const id = await sourceOffer();
-    const before = await offerCount();
-    expect(body(await run({ ref: refOf(id), targetShop: LOCKED })).code).toBe("SHOP_READ_ONLY");
-    expect(await offerCount()).toBe(before);
+    const { done } = await twoStep({ ref: refOf(id), targetShop: NO_SETTING });
+    expect(done.isError, JSON.stringify(done.structuredContent)).toBeFalsy();
+    const [copy] = await db.select().from(offers).where(eq(offers.id, body(done).data["offerId"] as string));
+    expect(copy).toMatchObject({ shopId: shopIds["locked"], status: "draft" });
   });
 
   it("both shops must be visible to the operator (SHOP_NOT_FOUND)", async () => {
@@ -251,14 +256,26 @@ describe("promo_duplicate across shops", () => {
     expect(body(await run({ ref: refOf(id), targetShop: DST }, operators["narrow"]!)).code).toBe("SHOP_NOT_FOUND");
   });
 
-  it("a mapping that changed after the dry run is STATE_CONFLICT and nothing is created", async () => {
+  it("the mapping is recomputed at execute time, so the copy follows the target's current catalog", async () => {
     const id = await sourceOffer();
     const args = { ref: refOf(id), targetShop: DST };
-    const dry = await run(args);
-    const before = await offerCount();
+    await run({ ...args, dryRun: true });
     catalogs.get(DST)!.products["whey"] = P(555);
-    const res = await run({ ...args, dryRun: false, confirmToken: body(dry).meta.confirmToken });
-    expect(body(res).code).toBe("STATE_CONFLICT");
+    const res = await run(args);
+    expect(res.isError, JSON.stringify(res.structuredContent)).toBeFalsy();
+    const copy = await copyOf(body(res).data["offerId"] as string);
+    expect(copy.cond.value).toMatchObject({ productIds: [P(555)] });
+  });
+
+  it("a source edited after the preview is STATE_CONFLICT when expectedUpdatedAt is sent, and nothing is created", async () => {
+    const id = await sourceOffer();
+    const args = { ref: refOf(id), targetShop: DST };
+    const dry = await run({ ...args, dryRun: true });
+    const seen = body(dry).nextActions.at(-1)!.args["expectedUpdatedAt"] as string;
+    expect(seen).toBeTruthy();
+    await db.update(offers).set({ updatedAt: new Date(Date.now() + 60_000) }).where(eq(offers.id, id));
+    const before = await offerCount();
+    expect(body(await run({ ...args, expectedUpdatedAt: seen })).code).toBe("STATE_CONFLICT");
     expect(await offerCount()).toBe(before);
   });
 

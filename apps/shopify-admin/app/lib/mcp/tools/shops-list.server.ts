@@ -26,11 +26,11 @@ export async function shopsList(
   db: Db,
   visible: VisibleShop[],
   args: { shops?: string[] },
-  env: NodeJS.ProcessEnv,
+  _env: NodeJS.ProcessEnv,
   now: () => Date = () => new Date(),
 ): Promise<ToolResult<{ shops: ShopsListRow[] }>> {
   const selected = selectShops(visible, args.shops);
-  const modes = await resolveWriteModes(db, selected, env);
+  const modes = resolveWriteModes(selected);
   const { perShop, results } = await fanOut(
     selected,
     async (shop) => {
@@ -50,18 +50,17 @@ export async function shopsList(
     name: shop.name,
     currency: shop.currencyCode,
     timezone: shop.timezone,
-    writeMode: modes.get(shop.id) ?? "read_only",
+    writeMode: modes.get(shop.id) ?? "write",
     planName: shop.planName,
     installedAt: shop.installedAt.toISOString(),
     activeOffers: activeByShop.get(shop.id) ?? 0,
     publishPendingAt: shop.publishPendingAt ? shop.publishPendingAt.toISOString() : null,
   }));
 
-  const writable = rows.filter((r) => r.writeMode === "write").map((r) => r.shopDomain);
   const summary = [
     `${rows.length} shop${rows.length === 1 ? "" : "s"} visible.`,
     ...rows.map((r) => `- ${r.shopDomain}: ${r.currency}, ${r.timezone}, ${r.activeOffers} active offers, ${r.writeMode}`),
-    writable.length ? `Write enabled: ${writable.join(", ")}.` : "No shop is write-enabled; everything is read-only.",
+    "Every listed shop accepts writes from any authenticated operator (full access): no per-shop write lock, no role tiers, dryRun is an optional preview.",
   ].join("\n");
 
   return buildResult(

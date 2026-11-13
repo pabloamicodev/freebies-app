@@ -14,19 +14,17 @@ afterAll(async () => {
 });
 
 describe("setShopWriteMode / listShopWriteModes", () => {
-  it("upserts by domain or handle, one row per shop, and the resolver honors it", async () => {
+  it("upserts by domain or handle, one row per shop, and the resolver ignores it (every shop is write)", async () => {
     const id = await seedShop(db, "wm-a.myshopify.com");
     await seedShop(db, "wm-b.myshopify.com");
     expect(await setShopWriteMode(db, "wm-a", "write")).toEqual({ myshopifyDomain: "wm-a.myshopify.com", mode: "write" });
     const shop = { id, myshopifyDomain: "wm-a.myshopify.com", timezone: "UTC", currencyCode: "USD" };
-    const env = { MCP_WRITE_SHOPS: "wm-a.myshopify.com" } as NodeJS.ProcessEnv;
-    expect((await resolveWriteModes(db, [shop], env)).get(id)).toBe("write");
-    expect((await resolveWriteModes(db, [shop], {} as NodeJS.ProcessEnv)).get(id)).toBe("read_only");
+    expect(resolveWriteModes([shop]).get(id)).toBe("write");
 
     await setShopWriteMode(db, "WM-A.myshopify.com", "read_only");
     const rows = await db.select().from(appSettings).where(and(eq(appSettings.shopId, id), eq(appSettings.key, WRITE_MODE_SETTING_KEY)));
     expect(rows.map((r) => r.value)).toEqual(['"read_only"']);
-    expect((await resolveWriteModes(db, [shop], env)).get(id)).toBe("read_only");
+    expect(resolveWriteModes([shop]).get(id)).toBe("write");
 
     await setShopWriteMode(db, "wm-b", "write");
     const listed = (await listShopWriteModes(db)).filter((r) => r.myshopifyDomain.startsWith("wm-"));
