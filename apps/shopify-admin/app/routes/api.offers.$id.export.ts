@@ -6,10 +6,9 @@
 
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server.js";
-import { getDb, type Offer } from "@promo/db";
-import { offers, offerConditions, offerRewards, shops } from "@promo/db";
-import { eq, and, inArray } from "drizzle-orm";
-import { rowToCSV } from "../lib/csv.js";
+import { getDb, shops } from "@promo/db";
+import { eq } from "drizzle-orm";
+import { exportOffersCsv } from "../lib/offer-csv-export.server.js";
 import { apiError, getRequestId, handleApiError } from "../lib/api-response.server.js";
 import { parseUuidParam } from "../lib/route-params.js";
 
@@ -36,96 +35,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const shopId = shopRows[0].id;
   const shopCurrency = shopRows[0].currencyCode ?? "USD";
 
-  const offerRows: Offer[] = offerId
-    ? await db.select().from(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
-    : await db.select().from(offers).where(eq(offers.shopId, shopId));
+  const { csv, matchedOffers } = await exportOffersCsv(db, { shopId, shopCurrency }, { offerIds: offerId ? [offerId] : undefined });
 
-  if (offerId && offerRows.length === 0) {
+  if (offerId && matchedOffers === 0) {
     return apiError(request, { status: 404, code: "OFFER_NOT_FOUND", message: "Offer not found." });
   }
 
-  const offerIds = offerRows.map((offer) => offer.id);
-  const [allConditions, allRewards] = offerIds.length > 0
-    ? await Promise.all([
-        db.select().from(offerConditions).where(and(eq(offerConditions.shopId, shopId), inArray(offerConditions.offerId, offerIds))),
-        db.select().from(offerRewards).where(and(eq(offerRewards.shopId, shopId), inArray(offerRewards.offerId, offerIds))),
-      ])
-    : [[], []];
-  const conditionsByOfferId = new Map<string, typeof allConditions>();
-  const rewardsByOfferId = new Map<string, typeof allRewards>();
-  const mainConditionByOfferId = new Map<string, typeof allConditions[number]>();
-
-  for (const condition of allConditions) {
-    const group = conditionsByOfferId.get(condition.offerId);
-    if (group) group.push(condition);
-    else conditionsByOfferId.set(condition.offerId, [condition]);
-
-    if (condition.scope === "main" && !mainConditionByOfferId.has(condition.offerId)) {
-      mainConditionByOfferId.set(condition.offerId, condition);
-    }
-  }
-
-  for (const reward of allRewards) {
-    const group = rewardsByOfferId.get(reward.offerId);
-    if (group) group.push(reward);
-    else rewardsByOfferId.set(reward.offerId, [reward]);
-  }
-
-  const headers = [
-    "offer_id", "internal_name", "public_title", "type", "status",
-    "priority", "starts_at", "ends_at", "discount_tags", "requires_code", "code_redemption",
-    "condition_type", "condition_value_threshold_cents",
-    "reward_type", "discount_type", "reward_value",
-    "gift_variant_gids", "gift_quantity", "is_auto_add", "track_mode",
-    "gift_tier_mode", "gift_min_cart_subtotal_cents", "gift_fallback_variant_gids", "shop_currency_code",
-    "created_at", "updated_at",
-  ];
-
-  const rows: string[] = [rowToCSV(headers)];
-
-  for (const offer of offerRows) {
-    const rewards = rewardsByOfferId.get(offer.id) ?? [];
-
-    const mainCondition = mainConditionByOfferId.get(offer.id);
-    const condValue = (mainCondition?.value ?? {}) as Record<string, unknown>;
-
-    for (const reward of rewards.length > 0 ? rewards : [null]) {
-      const rewardTarget = (reward?.target ?? {}) as Record<string, unknown>;
-      const rewardValue = (reward?.value ?? {}) as Record<string, unknown>;
-      const giftVariantIds = (rewardTarget["variantIds"] as string[]) ?? [];
-
-      rows.push(rowToCSV([
-        offer.id,
-        offer.internalName,
-        offer.publicTitle,
-        offer.type,
-        offer.status,
-        offer.priority,
-        offer.startsAt?.toISOString() ?? "",
-        offer.endsAt?.toISOString() ?? "",
-        (offer.discountTags ?? []).join("|"),
-        offer.requiresCode || Boolean(offer.requiredDiscountCode),
-        offer.codeRedemption,
-        mainCondition?.conditionType ?? "",
-        condValue["thresholdCents"] ?? "",
-        reward?.rewardType ?? "",
-        reward?.discountType ?? "",
-        rewardValue["amount"] ?? rewardValue["percentage"] ?? "",
-        giftVariantIds.join("|"),
-        reward?.quantity ?? "",
-        reward?.isAutoAdd ?? "",
-        reward?.trackMode ?? "",
-        reward?.minCartSubtotalCents != null ? (offer.tierMode ?? "cumulative") : "",
-        reward?.minCartSubtotalCents ?? "",
-        ((rewardTarget["fallbackVariantIds"] as string[] | undefined) ?? []).join("|"),
-        shopCurrency,
-        offer.createdAt.toISOString(),
-        offer.updatedAt.toISOString(),
-      ]));
-    }
-  }
-
-  const csv = rows.join("\n");
   const filename = offerId ? `offer-${offerId.slice(0, 8)}.csv` : `all-offers-${new Date().toISOString().slice(0, 10)}.csv`;
 
   return new Response(csv, {
