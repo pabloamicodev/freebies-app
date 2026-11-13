@@ -4,11 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { safeErrorMessage } from "../lib/safe-error.js";
 import { Form, redirect, useActionData, useLoaderData, useNavigate, useNavigation, useParams } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { isPageConditionType, type ShippingDiscountTier } from "@promo/shared-types";
 import {
-  isPageConditionType,
-  ShippingDiscountRewardPayloadSchema,
-  type ShippingDiscountTier,
-} from "@promo/shared-types";
+  buildShippingStoredReward,
+  SHIPPING_COMBINATION_POLICY,
+  SHIPPING_TEMPLATE_SCOPE as TEMPLATE_SCOPE,
+  shippingMainCondition,
+  type ShippingTemplate,
+} from "../lib/offer-authoring/shipping.js";
 import { offerCombinationPolicies, offerConditions, offerRewards, offers } from "@promo/db";
 import { Toast } from "../components/Toast.js";
 import { getShopContext } from "../lib/shop-context.server.js";
@@ -26,13 +29,6 @@ import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
-const TEMPLATE_SCOPE = {
-  global: "sitewide",
-  landing: "landing",
-  quiz: "quiz_bundle",
-} as const;
-
-type ShippingTemplate = keyof typeof TEMPLATE_SCOPE;
 type TierDraft = {
   id: string;
   minimum: string;
@@ -116,32 +112,20 @@ export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) 
     1,
     Number.parseInt(String(formData.get("anchorMinimum") ?? "1"), 10) || 1,
   );
-  const target = {
+  const rewardResult = buildShippingStoredReward({
+    tiers: tiersResult.tiers,
     deliveryGroupTypes,
     scopeMode,
-    ...(scopeMode === "landing"
-      ? {
-          requiredLineAttributeKey: "__landing_source" as const,
-          requiredLineAttributeValue,
-          requiredAnchorVariantIds,
-          requiredAnchorMinQuantity,
-          requiresAnchorSubscription: formData.get("anchorSubscription") === "on",
-        }
-      : {}),
-  };
-  const payloadResult = ShippingDiscountRewardPayloadSchema.safeParse({
-    discountType: tiersResult.tiers[0]?.discountType ?? "percentage",
-    value: {
-      amount: tiersResult.tiers[0]?.discountValue ?? 0,
-      currencyCode: shopCurrency,
-      tiers: tiersResult.tiers,
+    landing: {
+      source: requiredLineAttributeValue,
+      anchorVariantIds: requiredAnchorVariantIds,
+      anchorMinimum: requiredAnchorMinQuantity,
+      anchorSubscription: formData.get("anchorSubscription") === "on",
     },
-    target,
+    currency: shopCurrency,
   });
-  if (!payloadResult.success) {
-    return { error: payloadResult.error.issues[0]?.message ?? "Invalid shipping configuration." };
-  }
-  const validatedPayload = payloadResult.data;
+  if (!rewardResult.ok) return { error: rewardResult.error };
+  const storedReward = rewardResult.value;
   const subconditionsResult = parseJsonRecord(formData, "subconditions");
   if (subconditionsResult.error) return { error: subconditionsResult.error };
   const normalizedSubconditions = normalizeOfferSubconditions(subconditionsResult.data!, shopCurrency);
@@ -161,7 +145,7 @@ export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) 
     String(formData.get("intent") ?? "draft"),
     dateRange.data!.startsAt,
   );
-  const minimumThreshold = Math.min(...tiersResult.tiers.map((tier) => tier.minimumSubtotalCents));
+  const mainCondition = shippingMainCondition(tiersResult.tiers, shopCurrency);
 
   async function createOffer(candidateName: string) {
     return db.transaction(async (tx) => {
@@ -183,20 +167,7 @@ export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) 
         .returning({ id: offers.id });
       if (!offer) throw new Error("Failed to create shipping offer.");
       await Promise.all([
-        tx.insert(offerConditions).values({
-          shopId,
-          offerId: offer.id,
-          scope: "main",
-          conditionType: "cart_value",
-          operator: "gte",
-          value: {
-            thresholdCents: minimumThreshold,
-            currencyCode: shopCurrency,
-            includeGiftValues: false,
-          },
-          sortOrder: 0,
-          isEnabled: true,
-        }),
+        tx.insert(offerConditions).values({ shopId, offerId: offer.id, ...mainCondition } as typeof offerConditions.$inferInsert),
         ...subconditionRows.map((subcondition, index) =>
           tx.insert(offerConditions).values({
             shopId,
@@ -212,24 +183,12 @@ export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) 
         tx.insert(offerRewards).values({
           shopId,
           offerId: offer.id,
-          rewardType: "shipping_discount",
-          discountType: validatedPayload.discountType,
-          value: validatedPayload.value,
-          target: validatedPayload.target,
-          isAutoAdd: false,
-          isCustomerSelectable: false,
-          trackMode: "product",
-          sortOrder: 0,
-        }),
+          ...storedReward,
+        } as typeof offerRewards.$inferInsert),
         tx.insert(offerCombinationPolicies).values({
           shopId,
           offerId: offer.id,
-          combinesWithOrderDiscounts: true,
-          combinesWithProductDiscounts: true,
-          combinesWithShippingDiscounts: false,
-          combinesWithOtherAppOffers: true,
-          stopLowerPriority: false,
-          giftValueCountsForOtherOffers: false,
+          ...SHIPPING_COMBINATION_POLICY,
         }),
       ]);
       return offer;
