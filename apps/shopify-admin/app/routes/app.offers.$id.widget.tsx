@@ -11,9 +11,9 @@ import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
-import { widgets, widgetPlacements } from "@promo/db";
+import { widgets } from "@promo/db";
 import { and, eq } from "drizzle-orm";
-import { republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { addOfferWidget, deleteOfferWidget, setOfferWidgetEnabled } from "../lib/offer-widgets.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
 import { withCapacityModal } from "../lib/capacity-capture.server.js";
@@ -38,102 +38,46 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
-  const { session, shopId, db } = await getShopContext(request);
+  const { session, shopId, db, currencyCode, timezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
-  const offer = await loadOwnedOffer(db, shopId, offerId);
+  await loadOwnedOffer(db, shopId, offerId);
 
-  const isValidHex = (c: string) => /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(c);
+  const deps = { db, shopId, shopDomain: session.shop, shopCurrency: currencyCode, timezone };
+  const opts = { performedBy: session.shop };
+  const str = (name: string) => formData.get(name) as string | null;
+  const reply = (result: { ok: true } | { ok: false; error: string }) => (result.ok ? { success: true, intent } : { error: result.error });
 
   if (intent === "add_widget") {
-    const VALID_WIDGET_TYPES = ["gift_slider", "gift_popup", "cart_message", "today_offer_widget", "today_offer_block", "progress_bar", "gift_icon", "gift_thumbnail", "classic_bundle", "mix_match_bundle", "bundle_page", "checkout_upsell", "fbt", "thank_you_upsell", "volume_discount"] as const;
-    const VALID_PLACEMENT_TYPES = ["cart_drawer", "cart_page", "product_page", "global", "product_page_inline", "checkout"] as const;
-
-    const widgetType = formData.get("widgetType") as string;
-    const title = formData.get("widgetTitle") as string;
-    const subtitle = formData.get("widgetSubtitle") as string;
-    const primaryColor = (formData.get("primaryColor") as string) || "#111111";
-    const buttonText = (formData.get("buttonText") as string) || "Add to Cart";
-    const placementType = formData.get("placementType") as string;
-
-    if (!VALID_WIDGET_TYPES.includes(widgetType as typeof VALID_WIDGET_TYPES[number])) {
-      return { error: `Invalid widget type: ${widgetType}` };
-    }
-    if (placementType && !VALID_PLACEMENT_TYPES.includes(placementType as typeof VALID_PLACEMENT_TYPES[number])) {
-      return { error: `Invalid placement type: ${placementType}` };
-    }
-
-    const colorFields = [
-      ["primaryColor", primaryColor],
-      ["buttonColor", (formData.get("buttonColor") as string) || primaryColor],
-      ["textColor", (formData.get("textColor") as string) || "#ffffff"],
-      ["backgroundColor", (formData.get("backgroundColor") as string) || "#ffffff"],
-    ];
-    for (const [field, val] of colorFields) {
-      if (val && !isValidHex(val)) return { error: `${field} must be a valid hex color (e.g. #ff0000).` };
-    }
-
-    // Widget + its first placement must be atomic — an orphaned widget with no
-    // placement would be invisible in the storefront but still appear in the list.
-    await db.transaction(async (tx) => {
-      const [newWidget] = await tx.insert(widgets).values({
-        shopId, offerId,
-        type: widgetType as typeof VALID_WIDGET_TYPES[number],
-        internalName: `${widgetType}-${offerId.slice(0, 8)}`,
-        title: title || null,
-        subtitle: subtitle || null,
-        config: {
-          buttonText,
-          maxSelectableCount: parseInt(formData.get("maxSelectable") as string, 10) || 1,
-          layout: (formData.get("layout") as string) || "popup",
-          showPrice: formData.get("showPrice") === "on",
-          showOutOfStock: formData.get("showOutOfStock") === "on",
-        },
-        theme: {
-          primaryColor,
-          buttonColor: (formData.get("buttonColor") as string) || primaryColor,
-          textColor: (formData.get("textColor") as string) || "#ffffff",
-          backgroundColor: (formData.get("backgroundColor") as string) || "#ffffff",
-        },
-        isEnabled: true,
-      }).returning({ id: widgets.id });
-
-      if (newWidget && placementType) {
-        await tx.insert(widgetPlacements).values({
-          shopId, widgetId: newWidget.id,
-          placementType,
-          selector: (formData.get("cssSelector") as string) || null,
-          pageRule: {
-            pageType: (formData.get("pageType") as string) || "all",
-            urlPattern: (formData.get("urlPattern") as string) || undefined,
-          },
-          sortOrder: 0, isEnabled: true,
-        });
-      }
-    });
-
-    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
-    if (publishError) return { error: publishError };
-    return { success: true, intent: "add_widget" };
+    return reply(await addOfferWidget(deps, {
+      offerId,
+      widgetType: str("widgetType") as string,
+      title: str("widgetTitle"),
+      subtitle: str("widgetSubtitle"),
+      primaryColor: str("primaryColor"),
+      buttonColor: str("buttonColor"),
+      textColor: str("textColor"),
+      backgroundColor: str("backgroundColor"),
+      buttonText: str("buttonText"),
+      maxSelectable: parseInt(str("maxSelectable") as string, 10) || 1,
+      layout: str("layout"),
+      showPrice: formData.get("showPrice") === "on",
+      showOutOfStock: formData.get("showOutOfStock") === "on",
+      placementType: str("placementType"),
+      cssSelector: str("cssSelector"),
+      pageType: str("pageType"),
+      urlPattern: str("urlPattern"),
+    }, opts));
   }
 
   if (intent === "toggle_widget") {
-    const widgetId = formData.get("widgetId") as string;
     const isEnabled = formData.get("isEnabled") === "true";
-    await db.update(widgets).set({ isEnabled: !isEnabled }).where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId), eq(widgets.id, widgetId)));
-    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
-    if (publishError) return { error: publishError };
-    return { success: true, intent: "toggle_widget" };
+    return reply(await setOfferWidgetEnabled(deps, { offerId, widgetId: str("widgetId") as string, enabled: !isEnabled }, opts));
   }
 
   if (intent === "delete_widget") {
-    const widgetId = formData.get("widgetId") as string;
-    if (!widgetId) return { error: "Widget ID missing." };
-    await db.delete(widgets).where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId), eq(widgets.id, widgetId)));
-    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
-    if (publishError) return { error: publishError };
-    return { success: true, intent: "delete_widget" };
+    return reply(await deleteOfferWidget(deps, { offerId, widgetId: str("widgetId") as string }, opts));
   }
 
   return { error: "Unknown intent." };

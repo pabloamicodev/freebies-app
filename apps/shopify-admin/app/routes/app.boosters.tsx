@@ -10,6 +10,7 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
 import { offers, widgets } from "@promo/db";
 import { and, eq } from "drizzle-orm";
+import { setBoosterWidgetEnabled } from "../lib/offer-widgets.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -57,14 +58,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
-  const { shopId, db } = context;
+  const { session, shopId, db, currencyCode, timezone } = context;
   const intent = formData.get("intent") as string;
   const widgetId = formData.get("widgetId") as string;
 
   if (intent === "toggle_widget") {
     const enabled = formData.get("enabled") === "true";
-    await db.update(widgets).set({ isEnabled: enabled, updatedAt: new Date() })
-      .where(and(eq(widgets.shopId, shopId), eq(widgets.id, widgetId)));
+    const deps = { db, shopId, shopDomain: session.shop, shopCurrency: currencyCode, timezone };
+    await setBoosterWidgetEnabled(deps, { widgetId, enabled }, { performedBy: session.shop });
   }
   return null;
 };
