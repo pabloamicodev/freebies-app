@@ -8,50 +8,15 @@ import { useLoaderData, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { useState, useCallback } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
-import { appSettings } from "@promo/db";
-import { and, eq } from "drizzle-orm";
-import { parseStoredJson } from "../lib/offer-validation.server.js";
+import { getCustomizeSettings, setCustomizeSettings } from "../lib/customize-settings.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
-const THEME_SETTINGS_KEY = "widget.global_theme";
-
-const DEFAULTS = {
-  primaryColor: "#111111",
-  accentColor: "#059669",
-  buttonColor: "#111111",
-  buttonTextColor: "#ffffff",
-  backgroundColor: "#ffffff",
-  textColor: "#111111",
-  borderRadius: "8",
-  fontFamily: "inherit",
-  giftsLabel: "Free Gift",
-  sliderTitle: "Choose Your Gift",
-  progressBeforeGoal: "Spend {{remaining_amount}} more for a free gift!",
-  progressAfterGoal: "🎁 You've unlocked your free gift!",
-  todayOfferTitle: "Today's Deals",
-  addToCartText: "Add to Cart",
-  noThanksText: "No thanks",
-};
-
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
-
-  const [settingRow] = await db.select({ value: appSettings.value })
-    .from(appSettings)
-    .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, THEME_SETTINGS_KEY)))
-    .limit(1);
-
-  let theme = DEFAULTS;
-  if (settingRow?.value) {
-    const parsedTheme = parseStoredJson(settingRow.value);
-    if (parsedTheme && typeof parsedTheme === "object" && !Array.isArray(parsedTheme)) {
-      theme = { ...DEFAULTS, ...(parsedTheme as Partial<typeof DEFAULTS>) };
-    }
-  }
-
+  const { theme } = await getCustomizeSettings(db, shopId);
   return { shopId, theme };
 };
 
@@ -59,18 +24,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   const { shopId, db } = context;
 
-  const theme: Record<string, string> = {};
+  const values: Record<string, string> = {};
   for (const [key, value] of formData.entries()) {
-    theme[key] = value as string;
+    values[key] = value as string;
   }
 
-  await db.insert(appSettings)
-    .values({ shopId, key: THEME_SETTINGS_KEY, value: JSON.stringify(theme) })
-    .onConflictDoUpdate({
-      target: [appSettings.shopId, appSettings.key],
-      set: { value: JSON.stringify(theme), updatedAt: new Date() },
-    });
-
+  await setCustomizeSettings({ db, shopId }, { values, mode: "replace" });
   return { success: true };
 };
 
