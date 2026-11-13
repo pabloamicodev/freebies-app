@@ -6,16 +6,9 @@ import { PageHeader } from "../components/PageHeader.js";
 import { SkioShippingManager } from "../components/SkioShippingManager.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
-import { deleteSkioApiKey, getSkioApiKey, saveSkioApiKey } from "../lib/skio-credentials.server.js";
-import { makeSkioGraphQLProxy, validateSkioApiKey } from "../lib/skio-api.server.js";
-import {
-  deleteSkioShippingTier,
-  loadSkioShippingConfig,
-  saveSkioShippingConfig,
-  upsertSkioShippingTier,
-} from "../lib/skio-shipping-config.server.js";
-import { runSkioShippingSync } from "../lib/skio-shipping-runner.server.js";
-import { skioShippingTierSchema } from "../lib/skio-shipping-tiers.js";
+import { getSkioApiKey } from "../lib/skio-credentials.server.js";
+import { loadSkioShippingConfig } from "../lib/skio-shipping-config.server.js";
+import { connectSkio, deleteSkioTier, disconnectSkio, saveSkioTier, syncSkio } from "../lib/subscription-admin.server.js";
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 function adminClient(session: { shop: string; accessToken?: string }) {
@@ -46,48 +39,30 @@ export async function action({ request }: ActionFunctionArgs) {
 
   try {
     if (intent === "connect") {
-      const apiKey = String(formData.get("apiKey") ?? "").trim();
-      if (!apiKey) return { error: "Enter a Skio API key." };
-      if (apiKey.length > 4_096) return { error: "Skio API key is too large." };
-      const validation = await validateSkioApiKey(apiKey);
-      if (!validation.ok) return { error: validation.error ?? "Skio rejected the API key." };
-      await saveSkioApiKey(db, shopId, apiKey);
-      return { success: "Skio connected." };
+      const result = await connectSkio(db, shopId, String(formData.get("apiKey") ?? ""));
+      return result.ok ? { success: "Skio connected." } : { error: result.error };
     }
 
     if (intent === "disconnect") {
-      await deleteSkioApiKey(db, shopId);
+      await disconnectSkio(db, shopId);
       return { success: "Skio disconnected." };
     }
 
-    const loaded = await loadSkioShippingConfig(client);
-    if (!loaded.configValid) return { error: "Repair the stored Skio configuration before making changes." };
-
     if (intent === "save-tier") {
-      const raw = JSON.parse(String(formData.get("tier") ?? "{}")) as unknown;
-      const parsed = skioShippingTierSchema.safeParse(raw);
-      if (!parsed.success) return { error: parsed.error.issues.map((issue) => issue.message).join(" ") };
-      const next = upsertSkioShippingTier(loaded.config, parsed.data);
-      const result = await saveSkioShippingConfig(client, next);
-      if (result.userErrors.length) return { error: result.userErrors.map((issue) => issue.message).join(" ") };
-      return { success: "Shipping tier saved." };
+      const result = await saveSkioTier(client, JSON.parse(String(formData.get("tier") ?? "{}")) as unknown, "upsert");
+      return result.ok ? { success: "Shipping tier saved." } : { error: result.error };
     }
 
     if (intent === "delete-tier") {
-      const tierId = String(formData.get("tierId") ?? "");
-      const next = deleteSkioShippingTier(loaded.config, tierId);
-      const result = await saveSkioShippingConfig(client, next);
-      if (result.userErrors.length) return { error: result.userErrors.map((issue) => issue.message).join(" ") };
-      return { success: "Shipping tier deleted." };
+      const result = await deleteSkioTier(client, String(formData.get("tierId") ?? ""));
+      return result.ok ? { success: "Shipping tier deleted." } : { error: result.error };
     }
 
     if (intent === "sync") {
-      const apiKey = await getSkioApiKey(db, shopId);
-      if (!apiKey) return { error: "Connect Skio before running a sync." };
-      const results = await runSkioShippingSync(makeSkioGraphQLProxy(apiKey), loaded.config);
-      return {
-        success: `Sync complete: ${results.filter((result) => result.applied).length} updated, ${results.length} evaluated.`,
-      };
+      const result = await syncSkio(db, shopId, client);
+      return result.ok
+        ? { success: `Sync complete: ${result.value.updated} updated, ${result.value.evaluated} evaluated.` }
+        : { error: result.error };
     }
 
     return { error: "Unsupported action." };

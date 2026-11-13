@@ -9,13 +9,9 @@ import { Toast } from "../components/Toast.js";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { getSkioApiKey } from "../lib/skio-credentials.server.js";
-import {
-  addSkioShippingTier,
-  loadSkioShippingConfig,
-  saveSkioShippingConfig,
-} from "../lib/skio-shipping-config.server.js";
-import { skioShippingTierSchema } from "../lib/skio-shipping-tiers.js";
-import { createCyclePricingPlan, parseCyclePricingFormData } from "../lib/subscription-cycle-pricing.server.js";
+import { loadSkioShippingConfig } from "../lib/skio-shipping-config.server.js";
+import { applyCyclePricingPlan, saveSkioTier } from "../lib/subscription-admin.server.js";
+import { parseCyclePricingFormData } from "../lib/subscription-cycle-pricing.server.js";
 import { resolveSubscriptionTemplate } from "../lib/subscription-offer-templates.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -65,21 +61,14 @@ export async function action({ request, params }: ActionFunctionArgs) {
   try {
     if (template.slug === "cycle-pricing") {
       const parsed = parseCyclePricingFormData(formData);
-      if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid plan." };
-      const result = await createCyclePricingPlan(client, parsed.data);
-      if (result.userErrors.length) return { error: result.userErrors.map((issue) => issue.message).join(" ") };
-      return redirect(result.id ? `/app/subscription-pricing/${encodeURIComponent(result.id)}` : template.manageTo);
+      const result = await applyCyclePricingPlan(client, undefined, parsed);
+      if (!result.ok) return { error: result.error };
+      return redirect(result.value.planId ? `/app/subscription-pricing/${encodeURIComponent(result.value.planId)}` : template.manageTo);
     }
 
     if (formData.get("intent") !== "save-tier") return { error: "Unsupported action." };
-    const parsed = skioShippingTierSchema.safeParse(JSON.parse(String(formData.get("tier") ?? "{}")) as unknown);
-    if (!parsed.success) return { error: parsed.error.issues.map((issue) => issue.message).join(" ") };
-    const loaded = await loadSkioShippingConfig(client);
-    if (!loaded.configValid) return { error: "Repair the stored Skio configuration before adding tiers." };
-    const next = addSkioShippingTier(loaded.config, parsed.data);
-    if ("error" in next) return { error: next.error };
-    const result = await saveSkioShippingConfig(client, next.config);
-    if (result.userErrors.length) return { error: result.userErrors.map((issue) => issue.message).join(" ") };
+    const result = await saveSkioTier(client, JSON.parse(String(formData.get("tier") ?? "{}")) as unknown, "create");
+    if (!result.ok) return { error: result.error };
     return redirect(template.manageTo);
   } catch (error) {
     return { error: safeErrorMessage(error, "Could not create the subscription offer.") };
