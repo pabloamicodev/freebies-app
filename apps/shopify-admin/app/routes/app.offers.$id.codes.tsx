@@ -10,28 +10,18 @@ import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { waitUntil } from "@vercel/functions";
 import { and, eq, sql } from "drizzle-orm";
 import { PAGE_TYPES } from "@promo/shared-types";
-import { discountCodes, offerCombinationPolicies, offerConditions, offers } from "@promo/db";
+import { discountCodes, offerCombinationPolicies, offerConditions } from "@promo/db";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { parseDateRange, parseInteger } from "../lib/offer-validation.server.js";
-import { publishShopConfig, republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { publishShopConfig } from "../lib/offer-publish-flow.server.js";
 import { isPublishPending } from "../lib/publish-pending.server.js";
-import {
-  createDiscountCode,
-  createDiscountCodeBatch,
-  deleteDiscountCodes,
-  getCodeNotices,
-  listDiscountCodes,
-  setDiscountCodesStatus,
-  type CodeSettings,
-} from "../lib/discount-codes.server.js";
+import { getCodeNotices, listDiscountCodes, type CodeSettings } from "../lib/discount-codes.server.js";
+import { runOfferCodesCommand, type OfferCodesCommand } from "../lib/offer-codes.server.js";
 import { DiscountMessageField } from "../components/DiscountMessageField.js";
-import { resolveDiscountMessage } from "../lib/discount-message.js";
 import { automaticModeWarnings, type CodeRedemptionMode } from "../lib/code-redemption.js";
-import { preflightCapacity } from "../lib/capacity-preflight.server.js";
-import { retryOriginalCode } from "../lib/code-retry.server.js";
 import { CODE_CHARSETS, isCodeRedeemable, type CodeCharset } from "../lib/discount-code-generation.js";
 import "../styles/bogos.css";
 import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
@@ -41,9 +31,6 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
 
 const PAGE_SIZE = 50;
-// Above this many new codes, publishing inline could outlive the request; the
-// publish continues in the background and the cron retries anything unsynced.
-const INLINE_PUBLISH_LIMIT = 500;
 const STATUS_FILTERS = ["active", "disabled", "exhausted"] as const;
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
@@ -146,110 +133,61 @@ function parseSettings(formData: FormData, timeZone: string): { error: string } 
 }
 
 export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
-  const { session, shopId, db, timezone: shopTimezone } = await getShopContext(request);
+  const { session, shopId, db, timezone: shopTimezone, currencyCode } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
   const offer = await loadOwnedOffer(db, shopId, offerId);
-  const wasActive = offer.status === "active";
-  let publishLarge = false;
-  let message = "";
-  let warning = "";
+  const deps = { db, shopId, shopDomain: session.shop, shopCurrency: currencyCode, timezone: offer.timezone ?? shopTimezone };
+  const command = formToCommand(intent, formData, deps.timezone);
+  if ("error" in command) return { error: command.error };
 
+  const result = await runOfferCodesCommand(deps, offerId, command.command, { performedBy: "admin", allowDeferredPublish: true });
+  if (!result.ok) {
+    if (result.kind === "not_found") throw new Response("Not found", { status: 404 });
+    return { error: result.error };
+  }
+  if (result.deferredPublish) waitUntil(publishShopConfig(shopId, session.shop));
+  return { success: result.message, ...(result.warning ? { warning: result.warning } : {}) };
+});
+
+function formToCommand(intent: string, formData: FormData, timeZone: string): { command: OfferCodesCommand } | { error: string } {
   if (intent === "add_code" || intent === "generate_batch") {
-    const parsed = parseSettings(formData, offer.timezone ?? shopTimezone);
+    const parsed = parseSettings(formData, timeZone);
     if ("error" in parsed) return { error: parsed.error };
-    if (intent === "add_code") {
-      const result = await createDiscountCode(db, { shopId, offerId, code: formData.get("code"), ...parsed.settings });
-      if (!result.ok) return { error: result.error };
-      message = `Code ${result.code.code} created.`;
-      warning = result.warning ?? "";
-    } else {
-      const count = parseInteger(formData, "count", 0, { min: 1, label: "Number of codes" });
-      const length = parseInteger(formData, "length", 8, { min: 4, max: 32, label: "Code length" });
-      if (count.error) return { error: count.error };
-      if (length.error) return { error: length.error };
-      const charset = String(formData.get("charset") ?? "unambiguous") as CodeCharset;
-      const result = await createDiscountCodeBatch(db, {
-        shopId,
-        offerId,
+    if (intent === "add_code") return { command: { intent, code: formData.get("code"), settings: parsed.settings } };
+    const count = parseInteger(formData, "count", 0, { min: 1, label: "Number of codes" });
+    const length = parseInteger(formData, "length", 8, { min: 4, max: 32, label: "Code length" });
+    if (count.error) return { error: count.error };
+    if (length.error) return { error: length.error };
+    const charset = String(formData.get("charset") ?? "unambiguous") as CodeCharset;
+    return {
+      command: {
+        intent,
         spec: { prefix: String(formData.get("prefix") ?? ""), length: length.data!, charset, count: count.data! },
-        ...parsed.settings,
-      });
-      if (!result.ok) return { error: result.error };
-      publishLarge = result.created > INLINE_PUBLISH_LIMIT;
-      message = `${result.created.toLocaleString("en-US")} codes generated.`;
-    }
-  } else if (intent === "activate" || intent === "deactivate") {
+        settings: parsed.settings,
+      },
+    };
+  }
+  if (intent === "activate" || intent === "deactivate") {
     const ids = formData.getAll("ids").map(String);
     const batchId = String(formData.get("batchId") ?? "");
     const all = formData.get("all") === "1";
     if (ids.length === 0 && !batchId && !all) return { error: "Select at least one code." };
-    const changed = await setDiscountCodesStatus(
-      db,
-      shopId,
-      offerId,
-      { ids: ids.length > 0 ? ids : undefined, batchId: batchId || undefined, all },
-      intent === "activate" ? "active" : "disabled",
-    );
-    publishLarge = changed > INLINE_PUBLISH_LIMIT;
-    message = `${changed.toLocaleString("en-US")} code${changed === 1 ? "" : "s"} ${intent === "activate" ? "activated" : "deactivated"}.`;
-  } else if (intent === "set_discount_message") {
-    const result = resolveDiscountMessage(formData.get("publicTitle"), offer.internalName);
-    if (!result.ok) return { error: result.error };
-    await db
-      .update(offers)
-      .set({ publicTitle: result.value, updatedAt: new Date() })
-      .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-    message = "Discount message saved.";
-  } else if (intent === "set_redemption_mode") {
-    const mode = String(formData.get("mode") ?? "") as CodeRedemptionMode;
-    if (mode !== "checkout_code" && mode !== "automatic") return { error: "Unknown redemption mode." };
-    if (mode === offer.codeRedemption) return { success: "Already set." };
-    if (mode === "automatic") {
-      // Without a code the conditions are the only gate: an offer with none would apply to every cart.
-      const [mainCondition] = await db
-        .select({ id: offerConditions.id })
-        .from(offerConditions)
-        .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.scope, "main"), eq(offerConditions.isEnabled, true)))
-        .limit(1);
-      if (!mainCondition) return { error: "Add at least one enabled condition first; without a code it would apply to every cart." };
-      const capacity = await preflightCapacity(db, shopId, [offerId], { forceInclude: true });
-      if (!capacity.ok) return { error: capacity.message };
-    }
-    await db
-      .update(offers)
-      .set({ codeRedemption: mode, updatedAt: new Date() })
-      .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-    message = mode === "automatic" ? "Offer now applies automatically. Its codes are paused." : "Customers now enter a code at checkout again.";
-  } else if (intent === "retry_original") {
-    const result = await retryOriginalCode(db, shopId, session.shop, String(formData.get("codeId") ?? ""));
-    if (!result.ok) return { error: result.error };
-    message = `Switched back to ${result.code}.`;
-  } else if (intent === "delete") {
-    const ids = formData.getAll("ids").map(String);
-    const deleted = await deleteDiscountCodes(db, shopId, offerId, ids);
-    if (deleted < ids.length) {
-      return {
-        error:
-          deleted === 0
-            ? "Deactivate a code first; it can be deleted once it has been removed from Shopify."
-            : `Deleted ${deleted} of ${ids.length}. The rest are still on Shopify; deactivate them first.`,
-      };
-    }
-    return { success: `${deleted} code${deleted === 1 ? "" : "s"} deleted.` };
-  } else {
-    return { error: "Unknown action." };
+    return {
+      command: {
+        intent: "set_status",
+        status: intent === "activate" ? "active" : "disabled",
+        target: { ids: ids.length > 0 ? ids : undefined, batchId: batchId || undefined, all },
+      },
+    };
   }
-
-  if (publishLarge && wasActive) {
-    waitUntil(publishShopConfig(shopId, session.shop));
-    return { success: `${message} They are being added to Shopify and will work in a few minutes.`, ...(warning ? { warning } : {}) };
-  }
-  const publishError = await republishIfActive(db, shopId, session.shop, offerId, wasActive);
-  if (publishError) return { error: publishError };
-  return { success: wasActive ? message : `${message} They go live when the offer is published.`, ...(warning ? { warning } : {}) };
-});
+  if (intent === "set_discount_message") return { command: { intent, message: formData.get("publicTitle") } };
+  if (intent === "set_redemption_mode") return { command: { intent, mode: String(formData.get("mode") ?? "") as CodeRedemptionMode } };
+  if (intent === "retry_original") return { command: { intent, codeId: String(formData.get("codeId") ?? "") } };
+  if (intent === "delete") return { command: { intent, ids: formData.getAll("ids").map(String) } };
+  return { error: "Unknown action." };
+}
 
 function CopyLinkButton({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);

@@ -287,7 +287,7 @@ export interface CodeListQuery {
   pageSize?: number;
 }
 
-function codeFilter(shopId: string, offerId: string, query: CodeListQuery) {
+export function codeFilter(shopId: string, offerId: string, query: CodeListQuery) {
   const filters = [eq(discountCodes.shopId, shopId), eq(discountCodes.offerId, offerId)];
   if (query.status) filters.push(eq(discountCodes.status, query.status));
   if (query.batchId) filters.push(eq(discountCodes.batchId, query.batchId));

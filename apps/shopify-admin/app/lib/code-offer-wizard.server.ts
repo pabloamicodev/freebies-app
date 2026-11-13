@@ -5,7 +5,7 @@
  * in one transaction.
  */
 
-import { parseSubscriptionMode, withSubscriptionMode } from "./purchase-type.js";
+import { parseSubscriptionMode, withSubscriptionMode, type SubscriptionMode } from "./purchase-type.js";
 import {
   offerCombinationPolicies,
   offerConditions,
@@ -23,7 +23,7 @@ import {
 import { toStoredAmount } from "./money.js";
 import type { CodeRedemptionMode } from "./code-redemption.js";
 import { compileOfferConfig, serializeFunctionConfig } from "./sync/compile-config.js";
-import { createDiscountCode, createDiscountCodeBatch, validateBatchEntropy, type CodeSettings } from "./discount-codes.server.js";
+import { createDiscountCode, createDiscountCodeBatch, normalizeTypedCode, validateBatchEntropy, type CodeSettings } from "./discount-codes.server.js";
 import { CODE_CHARSETS, type BatchSpec, type CodeCharset } from "./discount-code-generation.js";
 import { normalizeOfferSubconditions, type NormalizedOfferSubcondition } from "./gift-subconditions.js";
 import {
@@ -35,6 +35,7 @@ import {
   discountMessageText,
 } from "./offer-validation.server.js";
 import { statusForSubmit } from "./offer-scheduling.server.js";
+import { resolveDiscountMessage } from "./discount-message.js";
 import { isUniqueViolation, withUniqueOfferSuffix } from "./unique-offer-name.server.js";
 
 export type DiscountTarget = "order" | "products" | "shipping";
@@ -172,34 +173,42 @@ function parseCodes(formData: FormData, timezone: string): Result<CodeOfferDraft
   return { ok: true, data: { mode: "single", code, settings: settings.data } };
 }
 
-function parseReward(formData: FormData, currencyCode: string): Result<{ target: DiscountTarget; reward: RewardDraft; productIds: string[]; collectionIds: string[] }> {
-  const target = String(formData.get("discountTarget") ?? "order");
-  if (target !== "order" && target !== "products" && target !== "shipping") return fail("Choose what the code discounts.");
+type RewardParts = { target: DiscountTarget; reward: RewardDraft; productIds: string[]; collectionIds: string[] };
 
-  if (target === "shipping") {
-    const payload = ShippingDiscountRewardPayloadSchema.safeParse({
-      discountType: "free",
-      value: {
-        amount: 100,
-        currencyCode,
-        tiers: [{ minimumSubtotalCents: 0, discountType: "percentage", discountValue: 100 }],
-      },
-      target: { deliveryGroupTypes: ["ONE_TIME_PURCHASE", "SUBSCRIPTION"], scopeMode: "sitewide" },
-    });
-    if (!payload.success) return fail(payload.error.issues[0]?.message ?? "Invalid free shipping setup.");
-    return {
-      ok: true,
-      data: {
-        target,
-        reward: { rewardType: "shipping_discount", ...payload.data } as RewardDraft,
-        productIds: [],
-        collectionIds: [],
-      },
-    };
-  }
+function freeShippingReward(currencyCode: string): Result<RewardParts> {
+  const payload = ShippingDiscountRewardPayloadSchema.safeParse({
+    discountType: "free",
+    value: {
+      amount: 100,
+      currencyCode,
+      tiers: [{ minimumSubtotalCents: 0, discountType: "percentage", discountValue: 100 }],
+    },
+    target: { deliveryGroupTypes: ["ONE_TIME_PURCHASE", "SUBSCRIPTION"], scopeMode: "sitewide" },
+  });
+  if (!payload.success) return fail(payload.error.issues[0]?.message ?? "Invalid free shipping setup.");
+  return {
+    ok: true,
+    data: {
+      target: "shipping",
+      reward: { rewardType: "shipping_discount", ...payload.data } as RewardDraft,
+      productIds: [],
+      collectionIds: [],
+    },
+  };
+}
 
-  const discountType = formData.get("discountType") === "fixed_amount" ? "fixed_amount" : "percentage";
-  const amount = Number.parseFloat(String(formData.get("discountValue") ?? ""));
+/** Typed core of the reward step, shared by the wizard form and the MCP code-offer tool. `amount` is in major units. */
+function buildReward(input: {
+  target: DiscountTarget;
+  discountType: "percentage" | "fixed_amount";
+  amount: number;
+  productIds: string[];
+  collectionIds: string[];
+  subscriptionMode: SubscriptionMode;
+  currencyCode: string;
+}): Result<RewardParts> {
+  const { target, discountType, amount, currencyCode } = input;
+  if (target === "shipping") return freeShippingReward(currencyCode);
   if (!Number.isFinite(amount) || amount <= 0) return fail("Enter a discount greater than zero.");
   if (discountType === "percentage" && amount > 100) return fail("A percentage discount can't be more than 100%.");
   const value = {
@@ -212,19 +221,15 @@ function parseReward(formData: FormData, currencyCode: string): Result<{ target:
       ok: true,
       data: {
         target,
-        reward: { rewardType: "order_discount", discountType, value, target: withSubscriptionMode({ scope: "cart" }, parseSubscriptionMode(formData)) },
+        reward: { rewardType: "order_discount", discountType, value, target: withSubscriptionMode({ scope: "cart" }, input.subscriptionMode) },
         productIds: [],
         collectionIds: [],
       },
     };
   }
 
-  const productIds = parseJsonStringArray(formData, "productIds");
-  if (productIds.error) return fail(productIds.error);
-  const collectionIds = parseJsonStringArray(formData, "collectionIds");
-  if (collectionIds.error) return fail(collectionIds.error);
-  const products = productIds.data!.filter((id) => id.startsWith("gid://shopify/Product/"));
-  const collections = collectionIds.data!.filter((id) => id.startsWith("gid://shopify/Collection/"));
+  const products = input.productIds.filter((id) => id.startsWith("gid://shopify/Product/"));
+  const collections = input.collectionIds.filter((id) => id.startsWith("gid://shopify/Collection/"));
   if (products.length === 0 && collections.length === 0) {
     return fail("Select at least one product or collection to discount.");
   }
@@ -236,7 +241,7 @@ function parseReward(formData: FormData, currencyCode: string): Result<{ target:
         rewardType: "product_discount",
         discountType,
         value,
-        target: withSubscriptionMode({ scopeMode: "sitewide", productIds: products }, parseSubscriptionMode(formData)),
+        target: withSubscriptionMode({ scopeMode: "sitewide", productIds: products }, input.subscriptionMode),
       },
       productIds: products,
       collectionIds: collections,
@@ -244,37 +249,53 @@ function parseReward(formData: FormData, currencyCode: string): Result<{ target:
   };
 }
 
-function parseConditions(formData: FormData, currencyCode: string): Result<CodeOfferDraft["conditions"]> {
-  const pageTypes = formData
-    .getAll("pageTypes")
-    .map(String)
-    .filter((type): type is PageType => (PAGE_TYPES as readonly string[]).includes(type));
-  if (pageTypes.length === 0) return fail("Choose at least one kind of page where the code works.");
+function parseReward(formData: FormData, currencyCode: string): Result<RewardParts> {
+  const target = String(formData.get("discountTarget") ?? "order");
+  if (target !== "order" && target !== "products" && target !== "shipping") return fail("Choose what the code discounts.");
+  if (target === "shipping") return freeShippingReward(currencyCode);
+
+  const discountType = formData.get("discountType") === "fixed_amount" ? "fixed_amount" : "percentage";
+  const amount = Number.parseFloat(String(formData.get("discountValue") ?? ""));
+  let productIds: string[] = [];
+  let collectionIds: string[] = [];
+  if (target === "products" && Number.isFinite(amount) && amount > 0 && !(discountType === "percentage" && amount > 100)) {
+    const products = parseJsonStringArray(formData, "productIds");
+    if (products.error) return fail(products.error);
+    const collections = parseJsonStringArray(formData, "collectionIds");
+    if (collections.error) return fail(collections.error);
+    productIds = products.data!;
+    collectionIds = collections.data!;
+  }
+  return buildReward({ target, discountType, amount, productIds, collectionIds, subscriptionMode: parseSubscriptionMode(formData), currencyCode });
+}
+
+/** Typed core of the conditions step: the page-types main condition, optional UTM, and any extra sub-conditions. */
+function buildConditions(input: {
+  pageTypes: PageType[];
+  rejectUnmatchedLines: boolean;
+  extras: Record<string, unknown>;
+  utm: { fields: Record<string, string>; scope: "page" | "visit" } | null;
+  currencyCode: string;
+}): Result<CodeOfferDraft["conditions"]> {
+  if (input.pageTypes.length === 0) return fail("Choose at least one kind of page where the code works.");
 
   // Written onto every page-matching condition so they all agree on mixed carts.
-  const flags = { onlyMatchedLines: true, rejectUnmatchedLines: formData.get("mixedCart") === "reject" };
+  const flags = { onlyMatchedLines: true, rejectUnmatchedLines: input.rejectUnmatchedLines };
 
-  const extras = parseJsonRecord(formData, "subconditions");
-  if (extras.error) return fail(extras.error);
   // The dedicated steps own these two; never let a stray builder value override them.
-  const payload: Record<string, unknown> = { ...extras.data! };
+  const payload: Record<string, unknown> = { ...input.extras };
   delete payload["page_types"];
   delete payload["utm_parameters"];
-  payload["page_types"] = { pageTypes, ...flags };
+  payload["page_types"] = { pageTypes: input.pageTypes, ...flags };
 
-  if (formData.get("utmEnabled") === "on") {
-    const fields = Object.fromEntries(UTM_FIELDS.map((key) => [key, String(formData.get(key) ?? "").trim()]));
-    if (!Object.values(fields).some(Boolean)) {
+  if (input.utm) {
+    if (!Object.values(input.utm.fields).some(Boolean)) {
       return fail("Fill in at least one UTM parameter, or turn off UTM validation.");
     }
-    payload["utm_parameters"] = {
-      ...fields,
-      scope: formData.get("utmScope") === "page" ? "page" : "visit",
-      ...flags,
-    };
+    payload["utm_parameters"] = { ...input.utm.fields, scope: input.utm.scope, ...flags };
   }
 
-  const normalized = normalizeOfferSubconditions(payload, currencyCode);
+  const normalized = normalizeOfferSubconditions(payload, input.currencyCode);
   if (!normalized.success) return fail(normalized.error);
   return {
     ok: true,
@@ -286,6 +307,30 @@ function parseConditions(formData: FormData, currencyCode: string): Result<CodeO
       scope: condition.conditionType === "page_types" ? "main" : "sub",
     })),
   };
+}
+
+function parseConditions(formData: FormData, currencyCode: string): Result<CodeOfferDraft["conditions"]> {
+  const pageTypes = formData
+    .getAll("pageTypes")
+    .map(String)
+    .filter((type): type is PageType => (PAGE_TYPES as readonly string[]).includes(type));
+  if (pageTypes.length === 0) return fail("Choose at least one kind of page where the code works.");
+
+  const extras = parseJsonRecord(formData, "subconditions");
+  if (extras.error) return fail(extras.error);
+  return buildConditions({
+    pageTypes,
+    rejectUnmatchedLines: formData.get("mixedCart") === "reject",
+    extras: extras.data!,
+    utm:
+      formData.get("utmEnabled") === "on"
+        ? {
+            fields: Object.fromEntries(UTM_FIELDS.map((key) => [key, String(formData.get(key) ?? "").trim()])),
+            scope: formData.get("utmScope") === "page" ? "page" : "visit",
+          }
+        : null,
+    currencyCode,
+  });
 }
 
 export function parseCodeOfferForm(
@@ -340,6 +385,105 @@ export function parseCodeOfferForm(
   };
 }
 
+/** Everything the wizard form carries, already typed. The MCP code-offer tool and `parseCodeOfferForm` both end in a CodeOfferDraft. */
+export interface CodeOfferTypedInput {
+  internalName: string;
+  /** The discount message shown to customers; defaults to the internal name. */
+  publicTitle?: string | null;
+  /** "publish" makes the offer active (or scheduled when it starts later); anything else saves a draft. */
+  intent: "draft" | "publish";
+  startsAt: Date | null;
+  endsAt: Date | null;
+  redemption: CodeRedemptionMode;
+  /** Typed single code (checkout_code redemption). Exactly one of `code` / `batch`. */
+  code?: string;
+  batch?: BatchSpec;
+  codeSettings: CodeSettings;
+  target: DiscountTarget;
+  discountType: "percentage" | "fixed_amount";
+  /** Percentage points, or major currency units for fixed_amount. Ignored for shipping. */
+  value: number;
+  productIds: string[];
+  subscriptionMode: SubscriptionMode;
+  pageTypes: PageType[];
+  rejectUnmatchedLines: boolean;
+  utm: { fields: Record<string, string>; scope: "page" | "visit" } | null;
+  /** Extra sub-conditions keyed by condition type, normalized like the wizard's builder. */
+  subconditions: Record<string, unknown>;
+  combines: { order: boolean; product: boolean; shipping: boolean };
+}
+
+export function buildCodeOfferDraft(
+  input: CodeOfferTypedInput,
+  context: { currencyCode: string; now?: Date },
+): Result<CodeOfferDraft> {
+  const internalName = input.internalName.trim();
+  if (!internalName) return fail("Offer name is required.");
+  const publicTitle = resolveDiscountMessage(input.publicTitle ?? "", internalName);
+  if (!publicTitle.ok) return fail(publicTitle.error);
+  if (input.startsAt && input.endsAt && input.endsAt <= input.startsAt) return fail("End date must be after start date.");
+  if (input.endsAt && !input.startsAt) return fail("Set a start date before setting an end date.");
+
+  let codes: CodeOfferDraft["codes"] = null;
+  if (input.redemption !== "automatic") {
+    if (input.batch && input.code) return fail("Pass either a typed code or a generated batch, not both.");
+    if (input.batch) {
+      const length = input.batch.length;
+      if (!Number.isInteger(input.batch.count) || input.batch.count < 1) return fail("Enter how many codes to generate.");
+      if (!Number.isInteger(length) || length < 4 || length > 32) return fail("Code length must be between 4 and 32.");
+      if (!(input.batch.charset in CODE_CHARSETS)) return fail("Choose a valid character set.");
+      const entropyError = validateBatchEntropy(input.batch);
+      if (entropyError) return fail(entropyError);
+      codes = { mode: "bulk", spec: input.batch, settings: input.codeSettings };
+    } else {
+      const code = (input.code ?? "").trim();
+      if (!code) return fail("Enter the discount code customers will type.");
+      const normalized = normalizeTypedCode(code);
+      if (!normalized.ok) return fail(normalized.error);
+      codes = { mode: "single", code, settings: input.codeSettings };
+    }
+  } else if (input.code || input.batch) {
+    return fail("Automatic redemption creates no codes: remove the code or batch, or use checkout_code redemption.");
+  }
+
+  const reward = buildReward({
+    target: input.target,
+    discountType: input.discountType,
+    amount: input.value,
+    productIds: input.productIds,
+    collectionIds: [],
+    subscriptionMode: input.subscriptionMode,
+    currencyCode: context.currencyCode,
+  });
+  if (!reward.ok) return reward;
+  const conditions = buildConditions({
+    pageTypes: input.pageTypes,
+    rejectUnmatchedLines: input.rejectUnmatchedLines,
+    extras: input.subconditions,
+    utm: input.utm,
+    currencyCode: context.currencyCode,
+  });
+  if (!conditions.ok) return conditions;
+
+  return {
+    ok: true,
+    data: {
+      internalName,
+      publicTitle: publicTitle.value,
+      status: statusForSubmit(input.intent, input.startsAt, context.now),
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      redemption: input.redemption,
+      codes,
+      target: reward.data.target,
+      reward: reward.data.reward,
+      collectionIds: [],
+      conditions: conditions.data,
+      combines: input.combines,
+    },
+  };
+}
+
 class CodeCreationError extends Error {}
 
 /**
@@ -353,6 +497,8 @@ export async function insertCodeOffer(
   timezone: string,
   draft: CodeOfferDraft,
   resolveCollectionProducts: (collectionIds: string[]) => Promise<string[]> = async () => [],
+  /** `dryRun` runs every validation and writes nothing (offerId comes back empty, codesCreated is what would be created). */
+  options: { dryRun?: boolean } = {},
 ): Promise<Result<{ offerId: string; codesCreated: number }>> {
   let reward = draft.reward;
   if (draft.collectionIds.length > 0) {
@@ -372,6 +518,10 @@ export async function insertCodeOffer(
   }
   const rewardCheck = validateRewardPayload(reward.rewardType, reward.discountType, reward.value, reward.target);
   if (!rewardCheck.success) return fail(rewardCheck.error.issues[0]?.message ?? "The discount setup is invalid.");
+  if (options.dryRun) {
+    const planned = draft.codes ? (draft.codes.mode === "single" ? 1 : draft.codes.spec.count) : 0;
+    return { ok: true, data: { offerId: "", codesCreated: planned } };
+  }
 
   const create = (internalName: string) =>
     db.transaction(async (tx) => {
