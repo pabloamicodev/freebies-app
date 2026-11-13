@@ -23,6 +23,7 @@ Operational procedures for the Promo Engine. Release steps live in `docs/DEPLOY.
 17. [Offer limits: review and usage backfill](#offer-limits-review-and-usage-backfill)
 18. [Template / Section / Test group conditions](#template--section--test-group-conditions)
 19. [Removing gifts Shopify did not discount](#removing-gifts-shopify-did-not-discount)
+20. [MCP (Promo Engine): full access](#mcp-promo-engine-full-access)
 
 ## Environments and ownership
 
@@ -471,3 +472,52 @@ Removals reach the server as the analytics event `promo_engine:gift_removed` wit
 - R3: headless / Storefront API carts are not covered (the runtime reads the Ajax cart).
 
 No customer-facing notice is shown when a gift is removed yet.
+
+## MCP (Promo Engine): full access
+
+Reference: `docs/MCP.md`. Tool list by area: the `docs://tool-catalog` MCP resource.
+
+### Model (owner decision 2026-11-13)
+
+- Every authenticated operator (PAT or claude.ai OAuth) can call every tool on every shop in their allow list. No viewer/editor/admin tiers on tools, no per-shop write lock, no `confirmToken`. The `role` stored on an operator is a legacy label and gates nothing.
+- Writes execute directly. `dryRun:true` is an optional preview. `idempotencyKey` makes a retry safe (24 h replay). `expectedUpdatedAt` refuses a write if the offer changed meanwhile (`STATE_CONFLICT`).
+- A Shopify cap (config size, 25 automatic discounts, 100 ids per list) answers `CAPACITY_LIMIT` with the cap and the workarounds; the offer stays saved as a draft.
+- Audit and call log stay: `audit_logs.performed_by = mcp:<operatorId>` with `after._mcp = { operator, client, tool, requestId }`, and every call (reads too) in `mcp_call_log` (redacted args, 90 days).
+- Rate limits per operator per minute: 60 reads, 10 writes (dry runs count), 3 critical executions (`MCP_RATE_READS`, `MCP_RATE_WRITES`, `MCP_RATE_CRITICAL`, integer 1-600); 120 per minute per IP.
+- The blast radius of a leaked token is every shop in its allow list: create operators with an explicit `--shops` list unless they really need `'*'`, and keep PATs short-lived (`--ttl-days`, max 90).
+
+### Revoke or rotate an operator
+
+Run from a trusted terminal against the database that serves the endpoint, with the same `MCP_TOKEN_PEPPER` (`--env <file>`):
+
+```
+pnpm mcp:operator list                                            # PAT prefix, allow list, last used, expiry
+pnpm mcp:operator revoke --email you@example.com                  # disables the operator; claude.ai grants bound to its PATs stop working
+pnpm mcp:operator rotate --email you@example.com --grace-minutes 60   # new PAT printed once; the old one (and its claude.ai grants) expires after the grace (default 60, max 1440)
+```
+
+`revoke` keeps the row (and the email), so create a replacement with a new email. Rotating `MCP_TOKEN_PEPPER` invalidates every PAT and OAuth token at once (emergency stop): re-issue each operator afterwards. Setting `MCP_ENABLED` to anything but `true` on the HPN Vercel project makes the endpoint answer 404 (kill switch, redeploy needed).
+
+### Env vars
+
+| Var | State |
+|---|---|
+| `MCP_ENABLED`, `MCP_TOKEN_PEPPER`, `MCP_PUBLIC_URL` | In use. |
+| `MCP_RATE_READS`, `MCP_RATE_WRITES`, `MCP_RATE_CRITICAL` | In use (optional overrides). |
+| `MCP_WRITE_SHOPS`, `MCP_CONFIRM_SECRET` | Unused since full access. Safe to delete from Vercel. `mcp.writeMode` rows in `app_settings` and `pnpm mcp:operator write-mode` are ignored too. |
+
+### Not exposed, and why
+
+- GDPR data-request downloads: customer personal data exports stay in the admin.
+- GraphiQL: an arbitrary Admin API passthrough with the shop token.
+- Platform plumbing (OAuth install, webhooks, app proxy, crons): not merchant capabilities; their effects are reachable with `catalog_sync`, `promos_republish_shop` and `drift_repair_settings`.
+- Integration and Skio secrets are write-only: never returned by any tool. `codes_export` returns codes unmasked (the admin CSV does too); `codes_list` stays masked.
+- Deploys (`shopify app deploy`, Vercel), tokens, `TOKEN_ENCRYPTION_KEY`, deleting shops.
+
+### Roll back a bad MCP write
+
+1. Find it: `promo_audit_log` (filter by ref or shop; entries with `_mcp` are MCP writes, with before and after) or, from SQL, `audit_logs` where `performed_by like 'mcp:%'`. `mcp_call_log_query` shows who called which tool and the outcome.
+2. Stop the damage first: `promo_set_status` `paused` on the offer, or `promos_pause_all` for a whole shop (one publish, rolled back if the publish fails).
+3. Undo: `promo_update` / `promo_reward_upsert` / `promo_condition_upsert` with the `before` values (send `expectedUpdatedAt`), or `promo_set_status` `archived`. Many offers: `promos_bulk` (pause, activate, archive, delete up to 200, per-offer results). A deleted offer cannot be restored (`promo_delete` is irreversible): recreate it from the audit `before` or from a duplicate.
+4. Re-sync Shopify: `promos_republish_shop` (or `scripts/republish-shop.ts`), then check `promo_health` and `discount_capacity`.
+5. A `CAPACITY_LIMIT` during the rollback: `capacity_incidents_list` then `capacity_incident_apply` (undo with `capacity_incident_undo`).
