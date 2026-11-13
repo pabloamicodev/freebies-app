@@ -4,7 +4,7 @@ import type { Db } from "@promo/db";
 import { setTierMode } from "../../offer-rewards.server.js";
 import type { AuthoringDeps } from "../../offer-authoring/types.js";
 import { giftTierModeSchema } from "../../gift-tier-campaigns.js";
-import { buildResult, moneyFromMinor, shopHandle, ToolError, promoRef, type ErrorCode, type Money, type ToolResult } from "../result.server.js";
+import { buildResult, capacityToolError, moneyFromMinor, shopHandle, ToolError, promoRef, type CapacityLike, type Money, type ToolResult } from "../result.server.js";
 import { fanOut } from "../multi-shop.server.js";
 import { selectShops, visibleShops, type VisibleShop } from "../shops.server.js";
 import { toErrorCallToolResult, type McpContext } from "../server.server.js";
@@ -49,14 +49,13 @@ const deps = (shop: VisibleShop, db: Db): AuthoringDeps => ({
   timezone: shop.timezone,
 });
 
-type TierModeResult = { ok: boolean; error?: string; code?: string; capacity?: unknown; publishError?: string; value?: Record<string, unknown> };
+type TierModeResult = { ok: boolean; error?: string; code?: string; capacity?: CapacityLike; publishError?: string; value?: Record<string, unknown> };
 
 function failure(result: TierModeResult): ToolError {
   const message = (result.error ?? "Could not change the tier mode.").replace(/\s+/g, " ").slice(0, 300);
   if (result.code === "not_found") return new ToolError("NOT_FOUND", "Offer not found in that shop.");
   if (result.capacity) {
-    // CAPACITY_LIMIT is added to ERROR_CODES by package 01; the string is the contract.
-    return new ToolError("CAPACITY_LIMIT" as unknown as ErrorCode, message, { details: { capacity: result.capacity as never } });
+    return capacityToolError(result.capacity, message);
   }
   if (result.code === "stale") return new ToolError("STATE_CONFLICT", message);
   if (result.code === "publish_failed") return new ToolError("PUBLISH_FAILED", message);

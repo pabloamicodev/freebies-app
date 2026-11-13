@@ -18,7 +18,7 @@ import { shopifyGraphQL } from "../../shopify-fetch.server.js";
 import { listThemeEmbedStatus, type ThemeEmbedStatus, type ThemeQueryResult } from "../../theme-installation.server.js";
 import { decryptToken } from "../../token-crypto.server.js";
 import { logCall, shopsFromArgs } from "../call-log.server.js";
-import { fanOut } from "../multi-shop.server.js";
+import { fanOut, type ShopRef } from "../multi-shop.server.js";
 import { ToolError, buildResult, moneyFromMinor, promoRef, shopHandle, type Money, type PerShop, type ToolResult, type Warning } from "../result.server.js";
 import { toErrorCallToolResult, type McpContext } from "../server.server.js";
 import { selectShops, visibleShops, type VisibleShop } from "../shops.server.js";
@@ -360,7 +360,7 @@ export async function promoDebugClearLogs(
   });
 }
 
-export type ThemeFetcher = (shop: VisibleShop, roles: readonly string[]) => Promise<ThemeEmbedStatus[]>;
+export type ThemeFetcher = (shop: ShopRef, roles: readonly string[]) => Promise<ThemeEmbedStatus[]>;
 
 /** Reads the themes' settings through the shop's offline token (the same query the Installation page runs). */
 export function themeFetcherFor(db: Db): ThemeFetcher {

@@ -13,7 +13,7 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { findTitleCollisions } from "../lib/offer-usage.server.js";
 import { setCombinationPolicy } from "../lib/offer-combination.server.js";
-import { REQUIRE_CUSTOMER_HELP, hasWriteCustomersScope, limitHelp, parseLimit } from "../lib/limit-help.js";
+import { MAX_LIMIT, REQUIRE_CUSTOMER_HELP, hasWriteCustomersScope, limitHelp, parseLimit } from "../lib/limit-help.js";
 import { offerCombinationPolicies, offerRewards, offers } from "@promo/db";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";

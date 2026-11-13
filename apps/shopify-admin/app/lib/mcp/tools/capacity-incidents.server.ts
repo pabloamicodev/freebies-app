@@ -10,14 +10,11 @@ import { proposeForIncident } from "../../capacity-workarounds.server.js";
 import { WORKAROUND_KINDS, type IncidentProposals, type WorkaroundProposal, type WorkaroundResult } from "../../capacity-workarounds.js";
 import { workaroundCopy } from "../../capacity-workaround-copy.js";
 import { logCall, shopsFromArgs } from "../call-log.server.js";
-import { ToolError, buildResult, shopHandle, type ErrorCode, type ToolResult, type Warning } from "../result.server.js";
+import { ToolError, buildResult, capacityToolError, shopHandle, type ToolResult, type Warning } from "../result.server.js";
 import { toErrorCallToolResult, type McpContext } from "../server.server.js";
 import { selectShops, visibleShops, type VisibleShop } from "../shops.server.js";
 import { runWrite, type ApplyContext, type CallInfo, type WriteBody, type WritePreview } from "../write-runner.server.js";
 import { adminLink, ref } from "./catalog-shared.server.js";
-
-/** Added to ERROR_CODES by FIX-mcpfa-01; typed here so this package compiles on its own branch. */
-const CAPACITY_LIMIT = "CAPACITY_LIMIT" as unknown as ErrorCode;
 
 const MAX_INCIDENTS = 10;
 const STATUSES = ["open", "snoozed", "dismissed", "resolved"] as const;
@@ -153,6 +150,7 @@ export async function capacityIncidentsList(
   const offerRows = await loadOfferRows(ctx.db, shop!.id, [...new Set(rows.flatMap((row) => row.offerIds))]);
 
   const incidents = [];
+  let anyProposals = false;
   for (const row of rows) {
     const status = incidentStatus(row, now);
     const base = {
@@ -178,6 +176,7 @@ export async function capacityIncidentsList(
     const proposed: IncidentProposals = await proposeForIncident(ctx.db, row, { ...(deps.capacity ? { capacity: deps.capacity } : {}), env: ctx.env });
     let proposals = proposed.proposals.map(listProposal);
     if (args.includeDiscountCandidates) proposals = await Promise.all(proposals.map((proposal) => discountSelection(ctx.db, shop!, proposal, deps)));
+    if (proposals.length > 0) anyProposals = true;
     incidents.push({
       ...base,
       shopifyLimit: { title: proposed.title, limit: proposed.limit, whatHappened: proposed.body, howToFix: proposed.fix },
@@ -195,7 +194,7 @@ export async function capacityIncidentsList(
         : `No ${wanted} capacity incidents on ${shop!.myshopifyDomain}.`,
       data: { shopDomain: shop!.myshopifyDomain, status: wanted, incidents, undoableActions: undoable },
       links: [adminLink(shopHandle(shop!.myshopifyDomain))],
-      nextActions: incidents.some((i) => "proposals" in i && i.proposals.length > 0)
+      nextActions: anyProposals
         ? [{ mcp: "promo-engine", tool: "capacity_incident_apply", args: { shop: shop!.myshopifyDomain, dryRun: true }, why: "Preview a proposed fix.", risk: "write" }]
         : [],
     },
@@ -242,9 +241,7 @@ function resultError(result: WorkaroundResult, incident: Pick<CapacityIncident, 
     case "refused":
       return new ToolError("VALIDATION", result.message);
     case "still_blocked":
-      return new ToolError(CAPACITY_LIMIT, result.message, {
-        details: { capacity: { code: incident?.code ?? "UNKNOWN", offerIds: incident?.offerIds ?? [], numbers: incident?.numbers ?? {} } },
-      });
+      return capacityToolError({ code: incident?.code ?? "UNKNOWN", offerIds: incident?.offerIds ?? [], numbers: incident?.numbers ?? {} }, result.message);
     case "rolled_back":
       return new ToolError("PUBLISH_FAILED", `${result.message} Nothing was changed: the fix was rolled back.`);
     case "undo_failed":

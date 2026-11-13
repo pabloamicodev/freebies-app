@@ -24,7 +24,7 @@ export function legacyGatedOfferIds(conditions: readonly Pick<OfferCondition, "o
 }
 
 /** Who compiles: tags the logs and Sentry events of a skipped gift reward. */
-export type CartOffersCaller = "offer-publisher" | "capacity-preflight";
+export type CartOffersCaller = "offer-publisher" | "capacity-preflight" | "mcp-preview";
 
 export interface CartOfferEntry {
   source: Offer;
@@ -131,10 +131,13 @@ export async function resolveLegacyGiftVariants(
         console.error(
           `[${caller}] Skipping gift reward ${reward.id} in offer ${offer.id}: no eligible one-time-purchase variants.`,
         );
-        Sentry.captureMessage("Gift reward skipped: no eligible variants", {
-          level: "warning",
-          tags: { offerId: offer.id, rewardId: reward.id, caller },
-        });
+        // An MCP preview is read-only: it must not page anyone about a reward the real publish would also report.
+        if (caller !== "mcp-preview") {
+          Sentry.captureMessage("Gift reward skipped: no eligible variants", {
+            level: "warning",
+            tags: { offerId: offer.id, rewardId: reward.id, caller },
+          });
+        }
         return [];
       }
       return [{ ...reward, targetVariantIds }];

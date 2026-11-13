@@ -155,11 +155,11 @@ describe("promo_set_status", () => {
     publish = vi.fn<ShopPublishFn>(async () => ({
       message: "Config too large",
       scope: "shop",
-      capacity: { code: "config_bytes", offerIds: [id], numbers: { bytes: 11000, limit: 10000 } },
+      capacity: { code: "OFFER_TOO_LARGE" as const, offerIds: [id], numbers: { bytes: 11000, limit: 10000 } },
     }));
     const r = await status({ ref: ref(id), status: "active" });
     expect(body(r).code).toBe("CAPACITY_LIMIT");
-    expect(JSON.stringify(r.structuredContent)).toContain("config_bytes");
+    expect(JSON.stringify(r.structuredContent)).toContain("OFFER_TOO_LARGE");
     expect(await statusOf(id)).toBe("paused");
   });
 

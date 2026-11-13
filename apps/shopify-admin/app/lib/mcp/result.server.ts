@@ -118,10 +118,16 @@ export type ToolErrorPayload = {
     limit?: string;
     /** CAPACITY_LIMIT: fixes the merchant can apply (admin: Diagnostics > capacity incidents). */
     workarounds?: CapacityWorkaround[];
+    /** CAPACITY_LIMIT: what to do about the limit, in the admin modal's words. */
+    fix?: string;
+    /** CAPACITY_LIMIT: the capacity incident recorded for this block (apply a proposal with capacity_incident_apply). */
+    incidentId?: string;
+    /** The offer that was saved even though the call failed. */
+    offerId?: string;
   };
 };
 
-export type CapacityWorkaround = { kind: WorkaroundKind; title: string; summary: string };
+export type CapacityWorkaround = { kind: WorkaroundKind; title: string; summary: string; customerChange?: string; semanticChange?: boolean };
 export type CapacityLike = { code: string; offerIds: string[]; numbers: Record<string, number>; offerNames?: Record<string, string> };
 
 const RETRYABLE: ReadonlySet<ErrorCode> = new Set(["RATE_LIMITED", "UPSTREAM_UNAVAILABLE"]);
@@ -242,8 +248,12 @@ function workaroundKinds(capacity: CapacityLike): WorkaroundKind[] {
 }
 
 /** Same copy as the admin capacity modal (FIX-cap-08): which Shopify cap was hit, why, and the fixes on offer. */
-export function capacityToolError(capacity: CapacityLike, message: string, opts: { suggestedAction?: SuggestedAction } = {}): ToolError {
-  const workarounds = workaroundKinds(capacity).map((kind) => ({ kind, ...WORKAROUND_TEXT[kind] }));
+export function capacityToolError(
+  capacity: CapacityLike,
+  message: string,
+  opts: { suggestedAction?: SuggestedAction; incidentId?: string; offerId?: string; workarounds?: CapacityWorkaround[] } = {},
+): ToolError {
+  const workarounds = opts.workarounds ?? workaroundKinds(capacity).map((kind) => ({ kind, ...WORKAROUND_TEXT[kind] }));
   let limit = "A Shopify limit was reached.";
   let fix = "";
   if (isCapacityModalCode(capacity.code)) {
@@ -257,7 +267,14 @@ export function capacityToolError(capacity: CapacityLike, message: string, opts:
   }
   const full = fix ? `${message} Limit: ${limit} ${fix}` : message;
   return new ToolError("CAPACITY_LIMIT", full, {
-    ...opts,
-    details: { capacity: { code: capacity.code, offerIds: capacity.offerIds, numbers: capacity.numbers }, limit, workarounds },
+    ...(opts.suggestedAction ? { suggestedAction: opts.suggestedAction } : {}),
+    details: {
+      capacity: { code: capacity.code, offerIds: capacity.offerIds, numbers: capacity.numbers },
+      limit,
+      ...(fix ? { fix } : {}),
+      workarounds,
+      ...(opts.incidentId ? { incidentId: opts.incidentId } : {}),
+      ...(opts.offerId ? { offerId: opts.offerId } : {}),
+    },
   });
 }

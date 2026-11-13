@@ -336,7 +336,7 @@ describe("full access: no write lock, no roles", () => {
 });
 
 describe("lifecycleToolError and Shopify capacity", () => {
-  const capacity = { code: "AUTOMATIC_DISCOUNT_LIMIT", offerIds: ["o1"], numbers: { needed: 1, storeActive: 25, others: 24 } };
+  const capacity = { code: "AUTOMATIC_DISCOUNT_LIMIT" as const, offerIds: ["o1"], numbers: { needed: 1, storeActive: 25, others: 24 } };
   it("a capacity block is CAPACITY_LIMIT naming the cap and the workarounds, on validation and publish failures", () => {
     for (const failure of [
       { ok: false as const, code: "validation" as const, error: "Too many discounts", capacity },

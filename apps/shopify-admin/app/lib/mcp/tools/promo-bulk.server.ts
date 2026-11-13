@@ -17,7 +17,7 @@ import type { OfferLifecycleFailure, OfferLifecycleResult, OfferLifecycleSuccess
 import { getRestorableOffers, restoreArchivedOffers } from "../../restore-archived-offers.server.js";
 import { tryPublishShop } from "../../offer-publish-flow.server.js";
 import { logCall, shopsFromArgs } from "../call-log.server.js";
-import { ToolError, promoRef, publishAdvisories, shopHandle, type ErrorCode, type Warning } from "../result.server.js";
+import { ToolError, capacityToolError, promoRef, publishAdvisories, shopHandle, type Warning } from "../result.server.js";
 import { toErrorCallToolResult, type McpContext } from "../server.server.js";
 import { selectShops, visibleShops, type VisibleShop } from "../shops.server.js";
 import { lifecycleToolError, runWrite, type ApplyContext, type CallInfo, type WriteBody, type WritePreview } from "../write-runner.server.js";
@@ -91,13 +91,11 @@ async function guarded(
   });
 }
 
-/** CAPACITY_LIMIT (package 01 adds it to ERROR_CODES) for a Shopify capacity block, else the lifecycle mapping. */
+/** CAPACITY_LIMIT for a Shopify capacity block, else the lifecycle mapping. */
 export function bulkToolError(failure: OfferLifecycleFailure, ref?: string): ToolError {
   const capacity = "capacity" in failure ? failure.capacity : undefined;
   if (capacity && (failure.code === "validation" || failure.code === "publish_failed")) {
-    return new ToolError("CAPACITY_LIMIT" as ErrorCode, failure.error.replace(/\s+/g, " ").slice(0, 300), {
-      details: { capacity, limit: capacity.numbers } as never,
-    });
+    return capacityToolError(capacity, failure.error.replace(/\s+/g, " ").slice(0, 300));
   }
   return lifecycleToolError(failure, ref);
 }

@@ -155,8 +155,8 @@ describe("settings registry", () => {
     const r = await call("settings_get", { shop: SHOP, keys: ["drift_repair.paused", "function_shards.instruction_budget", "app.embed_verified"] });
     const rows = body(r).data["settings"] as Record<string, any>[];
     expect(rows[0]).toMatchObject({ key: "drift_repair.paused", value: true, default: false, republishAfterChange: false });
-    expect(rows[0].description).toContain("drift repair");
-    expect(rows[0].lastChangedAt).toEqual(expect.any(String));
+    expect(rows[0]!.description).toContain("drift repair");
+    expect(rows[0]!.lastChangedAt).toEqual(expect.any(String));
     expect(rows[1]).toMatchObject({ key: "function_shards.instruction_budget", republishAfterChange: true });
     expect(rows[2]).toMatchObject({ key: "app.embed_verified", readOnly: true, value: null });
   });

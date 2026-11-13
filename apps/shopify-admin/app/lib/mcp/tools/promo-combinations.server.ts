@@ -1,13 +1,13 @@
 import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { captureCapacity } from "../../capacity-capture.server.js";
-import { describeCapacityModal, type CapacityModalData } from "../../capacity-modal-copy.js";
+import type { CapacityModalData } from "../../capacity-modal-copy.js";
 import { setCombinationPolicy, type SetCombinationFailure, type SetCombinationSuccess } from "../../offer-combination.server.js";
 import { setPriority, type SetPriorityFailure } from "../../offer-priority.server.js";
 import type { StoredCombinationPolicy } from "../../offer-authoring/types.js";
 import { MAX_LIMIT } from "../../limit-help.js";
 import { logCall, shopsFromArgs } from "../call-log.server.js";
-import { ToolError, promoRef, shopHandle, type ToolErrorPayload, type Warning } from "../result.server.js";
+import { ToolError, capacityToolError, promoRef, shopHandle, type Warning } from "../result.server.js";
 import { toErrorCallToolResult, type McpContext } from "../server.server.js";
 import { visibleShops, type VisibleShop } from "../shops.server.js";
 import { runWrite, type ApplyContext, type CallInfo, type WriteBody, type WritePreview } from "../write-runner.server.js";
@@ -68,15 +68,7 @@ const safe = (text: string) => text.replace(/\s+/g, " ").slice(0, 300);
 const label = (name: string) => name.replace(/\s+/g, " ").trim().slice(0, 80);
 
 function capacityError(failure: { error: string }, capacity: CapacityModalData): ToolError {
-  const copy = describeCapacityModal(capacity);
-  const details = {
-    capacity: { code: capacity.code, offerIds: capacity.offers.map((o) => o.id), numbers: capacity.numbers },
-    limit: copy.limit,
-    explanation: copy.body,
-    workarounds: copy.fix,
-    ...(capacity.incidentId ? { incidentId: capacity.incidentId } : {}),
-  } as ToolErrorPayload["details"];
-  return new ToolError("CAPACITY_LIMIT" as ConstructorParameters<typeof ToolError>[0], safe(`${failure.error} ${copy.limit}`), { details });
+  return capacityToolError({ code: capacity.code, offerIds: capacity.offers.map((o) => o.id), numbers: capacity.numbers }, safe(failure.error), capacity.incidentId ? { incidentId: capacity.incidentId } : {});
 }
 
 function failureError(failure: SetCombinationFailure | SetPriorityFailure, capacity: CapacityModalData | null, ref: string): ToolError {

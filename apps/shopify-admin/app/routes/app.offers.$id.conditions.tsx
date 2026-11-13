@@ -231,7 +231,7 @@ export const action = withCapacityModal(async ({ request, params }: ActionFuncti
     if (!conditionTypeResult.success) return { error: "Condition type is invalid." };
     const scope: ConditionScope = formData.get("scope") === "sub" ? "sub" : "main";
     const condition = formToCondition(conditionType, formData);
-    if ("error" in condition) return { error: condition.error };
+    if ("error" in condition) return { error: String(condition.error) };
 
     const conditionId = intent === "update_condition" ? (formData.get("conditionId") as string | null) ?? "" : "";
     const failed = outcome(

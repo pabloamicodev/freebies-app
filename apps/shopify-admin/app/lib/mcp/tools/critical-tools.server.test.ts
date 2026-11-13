@@ -56,6 +56,7 @@ type Body = {
   data: Record<string, any>;
   meta: { confirmToken?: string; dryRun?: boolean };
   warnings: { code: string }[];
+  nextActions: { args: Record<string, unknown> }[];
 };
 const body = (r: CallToolResult) => r.structuredContent as unknown as Body;
 

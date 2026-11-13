@@ -73,7 +73,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs): Promise<ActionResult> => {
-  const { session, shopId, db, currencyCode: shopCurrency, timezone } = await getShopContext(request);
+  const { session, shopId, db, currencyCode: shopCurrency } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   await loadOwnedOffer(db, shopId, offerId);
@@ -90,7 +90,7 @@ export const action = withCapacityModal(async ({ request, params }: ActionFuncti
   }));
 
   const result = await setMulticurrency(
-    { db, shopId, shopDomain: session.shop, shopCurrency, timezone },
+    { db, shopId, shopDomain: session.shop, shopCurrency },
     offerId,
     { overrides, mode: "replace" },
   );

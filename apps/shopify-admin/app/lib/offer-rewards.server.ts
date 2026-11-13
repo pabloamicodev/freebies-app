@@ -55,7 +55,7 @@ async function build(
 ): Promise<{ data: RewardRecordData } | OfferRewardFailure> {
   if ("input" in reward) {
     const built = await buildRewardRecordFromInput(reward.input, deps.db, deps.shopId, deps.shopCurrency, existing);
-    return "error" in built ? fail("validation", built.error) : { data: built.data };
+    return built.error !== undefined ? fail("validation", built.error) : { data: built.data };
   }
   const data = reward.record;
   const payload = validateRewardPayload(data.rewardType, data.discountType, data.value, data.target);

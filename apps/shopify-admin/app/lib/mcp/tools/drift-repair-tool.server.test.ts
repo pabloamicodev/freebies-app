@@ -30,7 +30,7 @@ const ENV = {} as unknown as NodeJS.ProcessEnv;
 const GOOD = JSON.stringify({ offers: [{ id: "o1" }], version: "1" });
 const TAMPERED = '{"offers":[]}';
 
-type Body = { code?: string; summary: string; data: Record<string, any>; meta: { confirmToken?: string }; details?: { reason?: string }; warnings: { code: string }[] };
+type Body = { code?: string; summary: string; data: Record<string, any>; meta: { confirmToken?: string; dryRun?: boolean }; details?: { reason?: string }; warnings: { code: string }[] };
 const body = (r: CallToolResult) => r.structuredContent as unknown as Body;
 
 let db: Db;

@@ -16,14 +16,17 @@ import type { AuthoringDeps } from "../../offer-authoring/types.js";
 import type { OfferLifecycleFailure } from "../../offer-lifecycle.server.js";
 import { parseLocalDateTimeInZone } from "../../offer-validation.server.js";
 import { logCall, shopsFromArgs } from "../call-log.server.js";
-import { ToolError, buildResult, promoRef, shopHandle, type ErrorCode, type ToolResult } from "../result.server.js";
+import { ToolError, buildResult, capacityToolError, promoRef, shopHandle, type ErrorCode, type ToolResult } from "../result.server.js";
 import { runTool, toErrorCallToolResult, type McpContext } from "../server.server.js";
 import { selectShops, visibleShops, type VisibleShop } from "../shops.server.js";
 import { runWrite, type ApplyContext, type CallInfo, type WriteBody, type WritePreview } from "../write-runner.server.js";
 import { adminLink, resolvePromoRef } from "./catalog-shared.server.js";
 
-// Package 01 adds CAPACITY_LIMIT to ERROR_CODES; the cast keeps this file compiling before that merge.
-const CAPACITY_LIMIT = "CAPACITY_LIMIT" as ErrorCode;
+/** A Shopify capacity block is CAPACITY_LIMIT (limit, numbers, workarounds); anything else keeps its own code. */
+function failureWith(capacity: Parameters<typeof capacityToolError>[0] | undefined, code: ErrorCode, message: string, opts: { suggestedAction?: ToolErrorSuggestion } = {}): ToolError {
+  return capacity ? capacityToolError(capacity, message, opts) : new ToolError(code, message, opts);
+}
+type ToolErrorSuggestion = NonNullable<ConstructorParameters<typeof ToolError>[2]>["suggestedAction"];
 
 const controls = {
   dryRun: z.boolean().optional().describe("true previews the outcome (validation, counts) and writes nothing. Default false: executes."),
@@ -44,7 +47,7 @@ function failureToError(failure: OfferCodesFailure, ref?: string): ToolError {
   if (failure.kind === "publish_failed") {
     return new ToolError("PUBLISH_FAILED", `The change was saved but publishing to Shopify failed (${safeText(failure.error)}). The offer may have been paused so the shop stays consistent.`, { suggestedAction });
   }
-  return new ToolError(failure.capacity ? CAPACITY_LIMIT : "VALIDATION", safeText(failure.error), failure.capacity ? { details: { capacity: failure.capacity } } : {});
+  return failureWith(failure.capacity, "VALIDATION", safeText(failure.error));
 }
 
 function lifecycleFailureToError(failure: OfferLifecycleFailure, saved?: { ref: string }): ToolError {
@@ -54,11 +57,11 @@ function lifecycleFailureToError(failure: OfferLifecycleFailure, saved?: { ref: 
     case "not_found":
       return new ToolError("NOT_FOUND", "Offer not found in that shop.");
     case "validation":
-      return new ToolError(failure.capacity ? CAPACITY_LIMIT : "VALIDATION", safeText(failure.error) + note, { ...(failure.capacity ? { details: { capacity: failure.capacity } } : {}), suggestedAction });
+      return failureWith(failure.capacity, "VALIDATION", safeText(failure.error) + note, { suggestedAction });
     case "state":
       return new ToolError(failure.reason === "stale" ? "STATE_CONFLICT" : "INVALID_STATE", safeText(failure.error) + note, { suggestedAction });
     case "publish_failed":
-      return new ToolError(failure.capacity ? CAPACITY_LIMIT : "PUBLISH_FAILED", `Publishing to Shopify failed (${safeText(failure.error)}) and the status was rolled back.${note}`, { ...(failure.capacity ? { details: { capacity: failure.capacity } } : {}), suggestedAction });
+      return failureWith(failure.capacity, "PUBLISH_FAILED", `Publishing to Shopify failed (${safeText(failure.error)}) and the status was rolled back.${note}`, { suggestedAction });
   }
 }
 

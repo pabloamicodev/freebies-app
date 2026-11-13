@@ -521,14 +521,14 @@ export async function promoPreviewCart(
     let compiled: Awaited<ReturnType<typeof compileCartOffers>>[number] | null = null;
     let compileError: string | null = null;
     try {
-      [compiled] = await compileCartOffers(db, shop.id, [source.offer], {
+      compiled = (await compileCartOffers(db, shop.id, [source.offer], {
         conditions: source.conditions as OfferCondition[],
         rewards: source.rewards as OfferReward[],
         policies: (source.policy ? [source.policy] : []) as OfferCombinationPolicy[],
         shopCurrencyCode: shop.currencyCode,
         limitsEnforced,
-        caller: "capacity-preflight",
-      });
+        caller: "mcp-preview",
+      }))[0] ?? null;
     } catch (error) {
       compileError = error instanceof Error ? error.message : String(error);
     }

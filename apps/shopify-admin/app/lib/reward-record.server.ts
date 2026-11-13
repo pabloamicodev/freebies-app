@@ -117,7 +117,7 @@ export async function buildRewardRecord(
   existing?: { rewardType: string; value: unknown } | null,
 ): Promise<RewardRecordResult> {
   const parsed = rewardInputFromFormData(formData);
-  if ("error" in parsed) return { error: parsed.error };
+  if (parsed.error !== undefined) return { error: parsed.error };
   return buildRewardRecordFromInput(parsed.input, db, shopId, shopCurrencyCode, existing);
 }
 

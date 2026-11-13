@@ -105,7 +105,7 @@ export function buildConditionValue(conditionType: string, input: ConditionInput
     case "order_history_total_spent":
     case "order_history_last_order_spent":
     case "order_history_total_orders": {
-      const i = c as Extract<ConditionInput, { type: "order_history_total_orders" }>;
+      const i = c as Extract<ConditionInput, { type: "order_history_total_spent" | "order_history_last_order_spent" | "order_history_total_orders" }>;
       if (!Number.isFinite(i.value) || i.value < 0) return fail("Order value must be a valid positive number.");
       operator = ["eq", "gt", "gte", "lt", "lte"].includes(String(i.operator ?? "gte")) ? ((i.operator ?? "gte") as OrderHistoryOperator) : "gte";
       const historyType =
@@ -174,7 +174,7 @@ export function buildConditionValue(conditionType: string, input: ConditionInput
     }
     case "specific_product":
     case "pack_of_products": {
-      const i = c as Extract<ConditionInput, { type: "specific_product" }>;
+      const i = c as Extract<ConditionInput, { type: "specific_product" | "pack_of_products" }>;
       const matchBy: MatchBy = i.matchBy === "product" ? "product" : "variant";
       const gids = list(i.ids);
       // An empty requirement list would insert a condition that can never match.
