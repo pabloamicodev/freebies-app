@@ -9,8 +9,7 @@ import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { publishShopConfig } from "../lib/offer-publish-flow.server.js";
-import { cartMutationLogs, analyticsEvents } from "@promo/db";
-import { eq, and, desc, count, gte } from "drizzle-orm";
+import { clearOfferDebugLogs, loadOfferDebug } from "../lib/offer-debug.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import "../styles/bogos.css";
 
@@ -19,88 +18,9 @@ export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = parseUuidParam(params);
-  const offer = await loadOwnedOffer(db, shopId, offerId);
-
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-
-  const [recentErrors, mutationErrors, statsViewed, statsAdded, statsErrors] = await Promise.all([
-    db.select().from(analyticsEvents)
-      .where(and(
-        eq(analyticsEvents.shopId, shopId),
-        eq(analyticsEvents.offerId, offerId),
-        eq(analyticsEvents.eventName, "promo_engine:cart_mutation_error"),
-      ))
-      .orderBy(desc(analyticsEvents.occurredAt))
-      .limit(10),
-    db.select().from(cartMutationLogs)
-      .where(and(
-        eq(cartMutationLogs.shopId, shopId),
-        eq(cartMutationLogs.offerId, offerId),
-        eq(cartMutationLogs.status, "error"),
-      ))
-      .orderBy(desc(cartMutationLogs.createdAt))
-      .limit(10),
-    db.select({ value: count() }).from(analyticsEvents)
-      .where(and(
-        eq(analyticsEvents.shopId, shopId),
-        eq(analyticsEvents.offerId, offerId),
-        eq(analyticsEvents.eventName, "widget_viewed"),
-        gte(analyticsEvents.occurredAt, sevenDaysAgo),
-      )),
-    db.select({ value: count() }).from(analyticsEvents)
-      .where(and(
-        eq(analyticsEvents.shopId, shopId),
-        eq(analyticsEvents.offerId, offerId),
-        eq(analyticsEvents.eventName, "gift_auto_added"),
-        gte(analyticsEvents.occurredAt, sevenDaysAgo),
-      )),
-    db.select({ value: count() }).from(analyticsEvents)
-      .where(and(
-        eq(analyticsEvents.shopId, shopId),
-        eq(analyticsEvents.offerId, offerId),
-        eq(analyticsEvents.eventName, "promo_engine:cart_mutation_error"),
-        gte(analyticsEvents.occurredAt, sevenDaysAgo),
-      )),
-  ]);
-
-  const compiledConfig = offer.compiledConfig;
-  const hasCompiledConfig = !!compiledConfig;
-  const configSize = compiledConfig ? JSON.stringify(compiledConfig).length : 0;
-
-  const metafieldStatus = offer.functionMetafieldGid
-    ? (hasCompiledConfig ? "synced" : "pending")
-    : "error";
-
-  return {
-    offer: {
-      id: offer.id,
-      internalName: offer.internalName,
-      status: offer.status,
-      functionMetafieldGid: offer.functionMetafieldGid,
-      hasCompiledConfig,
-      configSize,
-      compiledConfigJson: hasCompiledConfig ? JSON.stringify(compiledConfig, null, 2) : null,
-      metafieldStatus,
-      lastSyncTime: offer.updatedAt ? new Date(offer.updatedAt).toISOString() : null,
-    },
-    recentErrors: recentErrors.map((e) => ({
-      occurred: e.occurredAt.toISOString(),
-      eventName: e.eventName,
-      sessionId: e.sessionId ?? "—",
-      properties: JSON.stringify(e.properties).slice(0, 120),
-    })),
-    mutationErrors: mutationErrors.map((e) => ({
-      created: e.createdAt.toISOString(),
-      type: e.mutationType,
-      error: e.errorMessage ?? "—",
-      source: e.source,
-    })),
-    eventStats: {
-      widgetViewed: statsViewed[0]?.value ?? 0,
-      giftAutoAdded: statsAdded[0]?.value ?? 0,
-      errors: statsErrors[0]?.value ?? 0,
-    },
-  };
+  const debug = await loadOfferDebug(db, shopId, offerId);
+  if (!debug) throw new Response("Not found", { status: 404 });
+  return debug;
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
@@ -114,18 +34,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     return error ? { ok: false, message: error } : { ok: true, message: "Configuration republished to Shopify." };
   }
   if (intent === "clear_logs") {
-    await Promise.all([
-      db.delete(cartMutationLogs).where(and(
-        eq(cartMutationLogs.shopId, shopId),
-        eq(cartMutationLogs.offerId, offerId),
-        eq(cartMutationLogs.status, "error"),
-      )),
-      db.delete(analyticsEvents).where(and(
-        eq(analyticsEvents.shopId, shopId),
-        eq(analyticsEvents.offerId, offerId),
-        eq(analyticsEvents.eventName, "promo_engine:cart_mutation_error"),
-      )),
-    ]);
+    await clearOfferDebugLogs(db, shopId, offerId);
     return { ok: true, message: "Error logs cleared." };
   }
   return { ok: false, message: "Unsupported action." };

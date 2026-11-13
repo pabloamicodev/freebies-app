@@ -2,8 +2,7 @@ import { useLoaderData, useSearchParams } from "react-router";
 import { useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
-import { analyticsEvents, offers } from "@promo/db";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { emptyAnalyticsOverview, loadAnalyticsOverview, parseAnalyticsDays } from "../lib/analytics-queries.server.js";
 import type { LoaderFunctionArgs } from "react-router";
 import {
   IconChevronDown, IconChevronLeft, IconChevronRight,
@@ -17,145 +16,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const timer = createRouteTimer("app.analytics._index");
   const { shopId, db } = await timer.time("shop_context", () => getShopContext(request));
 
-  const url = new URL(request.url);
-  const rawDays = parseInt(url.searchParams.get("days") ?? "7", 10);
-  const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(rawDays, 365) : 7;
-  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const days = parseAnalyticsDays(new URL(request.url).searchParams.get("days"));
 
   if (!shopId) {
     timer.done({ shopFound: false, days });
-    return {
-      orders: [],
-      totalSalesCents: 0,
-      avgOrderCents: 0,
-      orderCount: 0,
-      salesChartData: [],
-      ordersChartData: [],
-      days,
-    };
+    return emptyAnalyticsOverview(days);
   }
 
-  // "order_placed_attributed" is the event reconcileOrderAttribution actually
-  // writes (webhooks.$.tsx handleOrderPaid) — this previously read a
-  // different, never-written event name, so the page always showed zeros.
-  const ORDER_EVENT_NAME = "order_placed_attributed";
-
-  const [recentOrderEvents, offerRows, dailyTotals] = await timer.time("analytics.parallel_queries", () =>
-    Promise.all([
-      db
-        .select({
-          id: analyticsEvents.id,
-          offerId: analyticsEvents.offerId,
-          orderId: analyticsEvents.orderId,
-          properties: analyticsEvents.properties,
-          occurredAt: analyticsEvents.occurredAt,
-        })
-        .from(analyticsEvents)
-        .where(
-          and(
-            eq(analyticsEvents.shopId, shopId),
-            eq(analyticsEvents.eventName, ORDER_EVENT_NAME),
-            gte(analyticsEvents.occurredAt, since),
-          ),
-        )
-        .orderBy(desc(analyticsEvents.occurredAt))
-        .limit(50),
-      db
-        .select({ id: offers.id, internalName: offers.internalName })
-        .from(offers)
-        .where(eq(offers.shopId, shopId)),
-      // Totals/chart come from a SQL aggregate over the whole window, not the
-      // 50-row page above — an order with several attributed offers writes
-      // one row per offer, so this dedupes to one row per order before
-      // summing (otherwise a multi-offer order inflates its own total).
-      db.execute<{ day: string; sales_cents: string | null; order_count: number }>(sql`
-        WITH deduped_orders AS (
-          SELECT DISTINCT ON (order_id)
-            order_id,
-            to_char(occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
-            COALESCE((properties->>'subtotalCents')::bigint, 0) AS subtotal_cents
-          FROM analytics_events
-          WHERE shop_id = ${shopId}
-            AND event_name = ${ORDER_EVENT_NAME}
-            AND occurred_at >= ${since.toISOString()}
-            AND order_id IS NOT NULL
-          ORDER BY order_id, occurred_at DESC
-        )
-        SELECT day, SUM(subtotal_cents)::bigint AS sales_cents, COUNT(*)::int AS order_count
-        FROM deduped_orders
-        GROUP BY day
-      `),
-    ]),
+  const { offerCount, orderEventCount, ...overview } = await timer.time("analytics.parallel_queries", () =>
+    loadAnalyticsOverview(db, shopId, days),
   );
-  const offerNames: Record<string, string> = {};
-  offerRows.forEach((o) => { offerNames[o.id] = o.internalName; });
 
-  // Pre-seed every calendar day in the window (UTC) so the chart shows zeros
-  // instead of gaps, keyed by plain ISO date — matches to_char(..., 'UTC',
-  // 'YYYY-MM-DD') above exactly, with no locale/timezone parsing involved.
-  const dayBuckets: Record<string, { sales: number; orders: number }> = {};
-  for (let i = days - 1; i >= 0; i--) {
-    const isoDay = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
-    dayBuckets[isoDay] = { sales: 0, orders: 0 };
-  }
+  timer.done({ shopFound: true, days, orderEventCount, offerCount });
 
-  let totalSalesCents = 0;
-  let orderCount = 0;
-  for (const row of dailyTotals) {
-    const salesCents = Number(row.sales_cents ?? 0);
-    const rowOrderCount = Number(row.order_count ?? 0);
-    totalSalesCents += salesCents;
-    orderCount += rowOrderCount;
-    if (dayBuckets[row.day]) {
-      dayBuckets[row.day]!.sales += salesCents;
-      dayBuckets[row.day]!.orders += rowOrderCount;
-    }
-  }
-  const avgOrderCents = orderCount > 0 ? Math.round(totalSalesCents / orderCount) : 0;
-
-  const orders = recentOrderEvents.flatMap((ev) => {
-    if (!ev.orderId) return [];
-    const props = ev.properties as Record<string, unknown> | null;
-    const subtotalCents = typeof props?.subtotalCents === "number" ? props.subtotalCents : 0;
-    const giftName = ev.offerId ? (offerNames[ev.offerId] ?? "Gift Offer") : "Gift Offer";
-    return [{
-        id: ev.id,
-        orderId: ev.orderId!,
-        date: ev.occurredAt.toISOString(),
-        giftName,
-        totalCents: subtotalCents,
-    }];
-  });
-
-  const salesChartData = Object.entries(dayBuckets).map(([iso, v]) => ({ x: formatIsoDayLabel(iso), y: v.sales / 100 }));
-  const ordersChartData = Object.entries(dayBuckets).map(([iso, v]) => ({ x: formatIsoDayLabel(iso), y: v.orders }));
-
-  timer.done({
-    shopFound: true,
-    days,
-    orderEventCount: recentOrderEvents.length,
-    offerCount: offerRows.length,
-  });
-
-  return {
-    orders,
-    totalSalesCents,
-    avgOrderCents,
-    orderCount,
-    salesChartData,
-    ordersChartData,
-    days,
-  };
+  return overview;
 };
-
-const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-/** Formats a plain 'YYYY-MM-DD' string without going through Date/timezone
- * parsing, so the label always matches the UTC calendar day it was grouped by. */
-function formatIsoDayLabel(iso: string): string {
-  const [, month, day] = iso.split("-").map(Number);
-  return `${MONTH_ABBR[(month ?? 1) - 1]} ${day}`;
-}
 
 const LINE_CHART_PAD = { top: 20, right: 16, bottom: 32, left: 44 };
 

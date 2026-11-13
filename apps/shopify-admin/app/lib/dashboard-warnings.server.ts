@@ -11,6 +11,7 @@ import {
   productCache,
   appSettings,
   variantCache,
+  type Db,
   type Offer,
   type OfferReward,
   type VariantCache,
@@ -35,11 +36,11 @@ export function invalidateDashboardWarningsCache(shopId: string) {
 export async function getDashboardWarnings(
   shopId: string,
   _shopDomain: string,
+  db: Db = getDb(),
 ): Promise<DashboardWarning[]> {
   const cached = warningsCache.get(shopId);
   if (cached && cached.expiresAt > Date.now()) return cached.warnings;
 
-  const db = getDb();
   const warnings: DashboardWarning[] = [];
 
   // ── 1. App embed disabled check ───────────────────────────────────────────────
