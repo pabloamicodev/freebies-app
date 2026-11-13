@@ -911,6 +911,13 @@ export async function importLegacyPreset(db: Db, shopId: string, preset: LegacyS
   return { created, skipped: inspected.length - created, total: inspected.length };
 }
 
+/** Migration console import: the preset registered for the shop domain, as draft offers. Re-running skips existing names. */
+export async function importLegacyPresetForShop(db: Db, shopId: string, shopDomain: string): Promise<{ ok: true; created: number; skipped: number; total: number } | { ok: false; error: string }> {
+  const preset = getLegacyStorePreset(shopDomain);
+  if (!preset) return { ok: false, error: "No legacy store preset is registered for this shop." };
+  return { ok: true, ...(await importLegacyPreset(db, shopId, preset)) };
+}
+
 export const LEGACY_IMPORTER = "legacy-preset-importer";
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 

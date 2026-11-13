@@ -13,10 +13,10 @@ import { useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { offers } from "@promo/db";
 import { and, count, eq } from "drizzle-orm";
-import { isShadowModeEnabled, setShadowMode } from "../lib/shadow-mode.server.js";
-import { publishShopConfig } from "../lib/offer-publish-flow.server.js";
+import { isShadowModeEnabled } from "../lib/shadow-mode.server.js";
+import { changeShadowMode } from "../lib/shop-settings.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
-import { getLegacyStorePreset, importLegacyPreset, inspectLegacyPreset } from "../lib/legacy-store-presets.server.js";
+import { getLegacyStorePreset, importLegacyPresetForShop, inspectLegacyPreset } from "../lib/legacy-store-presets.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
@@ -119,15 +119,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   switch (intent) {
     case "enable_shadow":
     case "disable_shadow": {
-      await setShadowMode(shopId, intent === "enable_shadow");
-      const publishError = await publishShopConfig(shopId, shopDomain);
-      if (publishError) return { error: `Shadow mode saved, but republishing to Shopify failed: ${publishError}` };
+      const result = await changeShadowMode({ db, shopId, shopDomain }, intent === "enable_shadow");
+      if (!result.ok) return { error: result.error };
       break;
     }
     case "import_legacy_preset": {
-      const preset = getLegacyStorePreset(shopDomain);
-      if (!preset) return { error: "No legacy store preset is registered for this shop." };
-      const result = await importLegacyPreset(db, shopId, preset);
+      const result = await importLegacyPresetForShop(db, shopId, shopDomain);
+      if (!result.ok) return { error: result.error };
       return { success: `Imported ${result.created} draft offer(s); ${result.skipped} already existed.` };
     }
   }

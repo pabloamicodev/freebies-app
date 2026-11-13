@@ -8,10 +8,10 @@
 import { useLoaderData, useActionData, Form } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
-import { canToggleLimits, isLimitsEnforced, setLimitsEnforced } from "../lib/limits-enforced.server.js";
-import { listLimitedTitleCollisions } from "../lib/offer-usage.server.js";
-import { invalidateOfferDefinitions } from "../lib/offer-definitions.server.js";
+import { canToggleLimits, isLimitsEnforced } from "../lib/limits-enforced.server.js";
+import { changeLimitsEnforced } from "../lib/shop-settings.server.js";
 import { publishShopConfig } from "../lib/offer-publish-flow.server.js";
+import type { ShopPublishFn } from "../lib/offer-publish-flow.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -21,31 +21,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return { enforced: await isLimitsEnforced(db, shopId), canToggle: canToggleLimits(shopDomain) };
 };
 
+const publishAsFailure: ShopPublishFn = async (id, domain) => {
+  const message = await publishShopConfig(id, domain);
+  return message ? { message, scope: "shop" } : null;
+};
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   const [context, formData] = await Promise.all([getShopContext(request), request.formData()]);
   const { shopId, shopDomain, db, session } = context;
-  if (!canToggleLimits(shopDomain)) return { error: "This setting is not available for this shop." };
   const enabled = formData.get("limits_enforced") === "on";
-  const previous = await isLimitsEnforced(db, shopId);
-  if (enabled === previous) return { success: true };
   const performedBy = session.onlineAccessInfo?.associated_user?.email ?? session.id;
-  if (enabled) {
-    const collisions = await listLimitedTitleCollisions(db, shopId);
-    if (collisions.length > 0) {
-      const list = collisions.map((c) => `"${c.title}": ${c.offers.join(", ")}`).join("; ");
-      return { error: `Limits cannot be enforced yet: limited automatic offers share a discount title (${list}). Give each a unique public title first.` };
-    }
-  }
-  await setLimitsEnforced(db, shopId, enabled, performedBy);
-  await invalidateOfferDefinitions(shopId);
-  const publishError = await publishShopConfig(shopId, shopDomain);
-  if (publishError) {
-    // The Function config is still the old one: put the flag back so the evaluator keeps matching it.
-    await setLimitsEnforced(db, shopId, previous, performedBy);
-    await invalidateOfferDefinitions(shopId);
-    return { error: `Republishing to Shopify failed, so the setting was reverted: ${publishError}` };
-  }
-  return { success: true };
+  const result = await changeLimitsEnforced({ db, shopId, shopDomain, performedBy, publish: publishAsFailure }, enabled);
+  return result.ok ? { success: true } : { error: result.error };
 };
 
 export default function LimitsSettingsPage() {
