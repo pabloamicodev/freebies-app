@@ -5,6 +5,9 @@ import { createOperatorWithPat } from "./auth.server.js";
 import { clearFanOutCache } from "./multi-shop.server.js";
 import { createTestDb, seedOffer } from "../test-support/pglite-db.js";
 import { seedWorld } from "./tools/insights-test-fixtures.js";
+import { z } from "zod";
+import { CREATE_OFFER_ARGS } from "./resources.server.js";
+import { promoCreateInput } from "./tools/promo-authoring.server.js";
 
 const env = { MCP_ENABLED: "true", MCP_TOKEN_PEPPER: "test-pepper-0123456789" } as NodeJS.ProcessEnv;
 const allowAll: RateLimiter = async () => ({ ok: true });
@@ -45,7 +48,7 @@ const read = (uri: string, pat?: string) => rpc("resources/read", { uri }, pat);
 describe("MCP resources", () => {
   it("lists static docs and only visible shop capacity resources", async () => {
     const all = (await rpc("resources/list")).result.resources.map((r: { uri: string }) => r.uri);
-    expect(all).toEqual(expect.arrayContaining(["docs://offer-types", "docs://page-conditions", "shop://alpha.myshopify.com/capacity", "shop://beta.myshopify.com/capacity"]));
+    expect(all).toEqual(expect.arrayContaining(["docs://offer-types", "docs://page-conditions", "docs://tool-catalog", "docs://full-access", "docs://authoring","shop://alpha.myshopify.com/capacity", "shop://beta.myshopify.com/capacity"]));
     expect(all.join()).not.toContain("gone.myshopify.com");
     const scoped = (await rpc("resources/list", {}, scopedPat)).result.resources.map((r: { uri: string }) => r.uri);
     expect(scoped).toContain("shop://beta.myshopify.com/capacity");
@@ -77,6 +80,39 @@ describe("MCP resources", () => {
     expect(page).toContain("test group");
   });
 
+  it("tool catalog lists every registered tool exactly once and nothing else", async () => {
+    const registered = (await rpc("tools/list")).result.tools.map((t: { name: string }) => t.name) as string[];
+    const catalog = (await read("docs://tool-catalog")).result.contents[0].text as string;
+    const listed = [...catalog.matchAll(/^- `([a-z0-9_]+)` \((?:read|write)\)/gm)].map((m) => m[1]!);
+    expect(new Set(listed).size).toBe(listed.length);
+    expect(registered.filter((n) => !listed.includes(n))).toEqual([]);
+    expect(listed.filter((n) => !registered.includes(n))).toEqual([]);
+    for (const area of ["Catalog", "Authoring", "Conditions", "Rewards", "Gifts", "Codes", "Shipping and subscription", "Combinations and priority", "Widgets and boosters", "Lifecycle and bulk", "Translations", "Preview", "Settings", "Capacity and diagnostics", "Analytics, logs and debug", "CSV"]) {
+      expect(catalog).toContain(`## ${area}`);
+    }
+  });
+
+  it("describes full access and never the old gating", async () => {
+    const texts: string[] = [];
+    for (const uri of ["docs://tool-catalog", "docs://full-access", "docs://authoring", "docs://offer-types", "docs://page-conditions"]) {
+      texts.push((await read(uri)).result.contents[0].text as string);
+    }
+    const access = texts[1]!;
+    for (const s of ["every authenticated operator", "dryRun", "idempotencyKey", "expectedUpdatedAt", "CAPACITY_LIMIT", "workarounds", "audit", "GraphiQL", "promo_audit_log"]) {
+      expect(access.toLowerCase()).toContain(s.toLowerCase());
+    }
+    const all = texts.join("\n");
+    expect(all).not.toMatch(/SHOP_READ_ONLY|MCP_WRITE_SHOPS|MCP_CONFIRM_SECRET|read-only shop/i);
+    expect(all).not.toMatch(/confirmToken[^\n]*(required|must|then execute)/i);
+  });
+
+  it("the worked example is a valid promo_create input", async () => {
+    const parsed = z.strictObject(promoCreateInput).safeParse(CREATE_OFFER_ARGS);
+    expect(parsed.success).toBe(true);
+    const doc = (await read("docs://authoring")).result.contents[0].text as string;
+    for (const s of ["9208279269615", "quantityTiers", "catalog_search", "promo_preview_cart", "promo_set_status", "promo_detail"]) expect(doc).toContain(s);
+  });
+
   it("rejects invisible or unknown shops and never returns their data", async () => {
     for (const uri of [
       "shop://alpha.myshopify.com/capacity",
@@ -95,9 +131,23 @@ describe("MCP resources", () => {
 });
 
 describe("MCP prompts", () => {
-  it("lists the three prompts", async () => {
+  it("lists the prompts", async () => {
     const names = (await rpc("prompts/list")).result.prompts.map((p: { name: string }) => p.name);
-    expect(names).toEqual(expect.arrayContaining(["promo_weekly_readout", "promo_test_ideas", "why_not_applying"]));
+    expect(names).toEqual(expect.arrayContaining(["promo_weekly_readout", "promo_test_ideas", "why_not_applying", "create_offer", "rollback_mcp_change"]));
+  });
+
+  it("create_offer walks catalog_search, promo_create, preview, activate, detail in order, with the OneSol example", async () => {
+    const t = await prompt("create_offer", { shop: "onesolsupps", request: "Protein bundle 1x 20%, 2x 30%" });
+    const order = ["catalog_search", "promo_create", "promo_preview_cart", "promo_set_status", "promo_detail"].map((s) => t.indexOf(s));
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    for (const s of ["9208279269615", "quantityTiers", "CAPACITY_LIMIT", "idempotencyKey"]) expect(t).toContain(s);
+    expect(t).not.toContain("confirmToken");
+  });
+
+  it("rollback_mcp_change reads the audit log and pauses first", async () => {
+    const t = await prompt("rollback_mcp_change", { ref: "promo:alpha:abc" });
+    for (const s of ["promo_audit_log", "paused", "promo_update", "promo:alpha:abc"]) expect(t).toContain(s);
   });
 
   const prompt = async (name: string, args: Record<string, string>) =>
