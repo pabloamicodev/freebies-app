@@ -11,10 +11,9 @@ import { PageHeader } from "../components/PageHeader.js";
 import { NotFound } from "../components/NotFound.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
-import { findTitleCollisions, limitedTitleError } from "../lib/offer-usage.server.js";
-import { isLimitsEnforced } from "../lib/limits-enforced.server.js";
-import { MAX_LIMIT, REQUIRE_CUSTOMER_HELP, hasWriteCustomersScope, isOrderLevelOnly, limitHelp, parseLimit } from "../lib/limit-help.js";
-import { republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { findTitleCollisions } from "../lib/offer-usage.server.js";
+import { setCombinationPolicy } from "../lib/offer-combination.server.js";
+import { MAX_LIMIT, REQUIRE_CUSTOMER_HELP, hasWriteCustomersScope, limitHelp, parseLimit } from "../lib/limit-help.js";
 import { offerCombinationPolicies, offerRewards, offers } from "@promo/db";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
@@ -83,63 +82,32 @@ export const action = withCapacityModal(async ({ request, params }: ActionFuncti
   const { session, shopId, db } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
-  const offer = await loadOwnedOffer(db, shopId, offerId);
+  await loadOwnedOffer(db, shopId, offerId);
 
-  const rewardRows = await db.select({ rewardType: offerRewards.rewardType }).from(offerRewards).where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
-  // The per-cart field is hidden for order/shipping-only offers (DL5); ignore anything posted for it.
-  const perCart = isOrderLevelOnly(rewardRows.map((x) => x.rewardType)) ? undefined : parseLimit(formData.get("max_per_cart"));
-  const perCustomer = parseLimit(formData.get("max_per_customer"));
-  if (perCart === null || perCustomer === null) {
-    return { error: `Limits must be whole numbers between 1 and ${MAX_LIMIT}, or blank for unlimited.` };
-  }
-  // The unique-title rule only matters once limits are enforced for the shop; until then it is a warning.
-  let titleWarning: string | null = null;
-  if (perCustomer !== undefined) {
-    const titleError = await limitedTitleError(db, shopId, offerId);
-    if (titleError) {
-      if (await isLimitsEnforced(db, shopId)) return { error: titleError };
-      titleWarning = titleError;
-    }
-  }
-
-  const policy = {
-    shopId,
-    offerId,
-    combinesWithOrderDiscounts: formData.get("order_discounts") === "on",
-    combinesWithProductDiscounts: formData.get("product_discounts") === "on",
-    combinesWithShippingDiscounts: formData.get("shipping_discounts") === "on",
-    combinesWithOtherAppOffers: formData.get("other_app_offers") === "on",
-    stopLowerPriority: formData.get("stop_lower_priority") === "on",
-    giftValueCountsForOtherOffers: formData.get("gift_value_counts") === "on",
-    canStackWithGiftOffers: formData.get("can_stack_gift_offers") === "on",
-    maxApplicationsPerCart: perCart ?? null,
-    maxApplicationsPerCustomer: perCustomer ?? null,
-    requireIdentifiedCustomer: formData.get("require_identified_customer") === "on",
+  // parseLimit: undefined = blank (unlimited), null = invalid (NaN fails the service's limit check).
+  const limit = (name: string) => {
+    const parsed = parseLimit(formData.get(name));
+    return parsed === undefined ? null : parsed === null ? Number.NaN : parsed;
   };
-
-  await db.insert(offerCombinationPolicies)
-    .values(policy)
-    .onConflictDoUpdate({
-      target: [offerCombinationPolicies.offerId],
-      set: {
-        combinesWithOrderDiscounts: policy.combinesWithOrderDiscounts,
-        combinesWithProductDiscounts: policy.combinesWithProductDiscounts,
-        combinesWithShippingDiscounts: policy.combinesWithShippingDiscounts,
-        combinesWithOtherAppOffers: policy.combinesWithOtherAppOffers,
-        stopLowerPriority: policy.stopLowerPriority,
-        giftValueCountsForOtherOffers: policy.giftValueCountsForOtherOffers,
-        canStackWithGiftOffers: policy.canStackWithGiftOffers,
-        maxApplicationsPerCart: policy.maxApplicationsPerCart,
-        maxApplicationsPerCustomer: policy.maxApplicationsPerCustomer,
-        requireIdentifiedCustomer: policy.requireIdentifiedCustomer,
-        updatedAt: new Date(),
-      },
-    });
-
-  const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
-  if (publishError) return { error: publishError };
-
-  return { success: true, warning: titleWarning };
+  const result = await setCombinationPolicy(
+    { db, shopId, shopDomain: session.shop },
+    offerId,
+    {
+      combinesWithOrderDiscounts: formData.get("order_discounts") === "on",
+      combinesWithProductDiscounts: formData.get("product_discounts") === "on",
+      combinesWithShippingDiscounts: formData.get("shipping_discounts") === "on",
+      combinesWithOtherAppOffers: formData.get("other_app_offers") === "on",
+      stopLowerPriority: formData.get("stop_lower_priority") === "on",
+      giftValueCountsForOtherOffers: formData.get("gift_value_counts") === "on",
+      canStackWithGiftOffers: formData.get("can_stack_gift_offers") === "on",
+      maxApplicationsPerCart: limit("max_per_cart"),
+      maxApplicationsPerCustomer: limit("max_per_customer"),
+      requireIdentifiedCustomer: formData.get("require_identified_customer") === "on",
+    },
+    { performedBy: session.shop },
+  );
+  if (!result.ok) return { error: result.error };
+  return { success: true, warning: result.warning };
 });
 
 const RESTRICTION_LABELS = {

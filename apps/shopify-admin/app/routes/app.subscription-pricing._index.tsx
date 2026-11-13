@@ -4,11 +4,8 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
-import {
-  deleteCyclePricingPlan,
-  getCyclePricingPlan,
-  listCyclePricingPlans,
-} from "../lib/subscription-cycle-pricing.server.js";
+import { listCyclePricingPlans } from "../lib/subscription-cycle-pricing.server.js";
+import { deleteOwnedCyclePricingPlan } from "../lib/subscription-admin.server.js";
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
 function client(session: { shop: string; accessToken?: string }) {
@@ -25,17 +22,8 @@ export async function action({ request }: ActionFunctionArgs) {
   const { session } = await getShopContext(request);
   const formData = await request.formData();
   if (formData.get("intent") !== "delete") return { error: "Unsupported action." };
-  const planId = String(formData.get("planId") ?? "");
-  if (!planId.startsWith("gid://shopify/SellingPlanGroup/")) return { error: "Invalid Selling Plan Group ID." };
-  const cycleClient = client(session);
-  // getCyclePricingPlan only returns plans whose merchantCode carries this
-  // app's (or the legacy app's) prefix — without this check, any Selling
-  // Plan Group ID on the shop (including other apps' subscription plans)
-  // could be deleted via this form.
-  const owned = await getCyclePricingPlan(cycleClient, planId);
-  if (!owned) return { error: "That plan was not created by this app and cannot be deleted here." };
-  const result = await deleteCyclePricingPlan(cycleClient, planId);
-  if (result.userErrors.length) return { error: result.userErrors.map((issue) => issue.message).join(" ") };
+  const result = await deleteOwnedCyclePricingPlan(client(session), String(formData.get("planId") ?? ""));
+  if (!result.ok) return { error: result.error };
   return { success: true };
 }
 

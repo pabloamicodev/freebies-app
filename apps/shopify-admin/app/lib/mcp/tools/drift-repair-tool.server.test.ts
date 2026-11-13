@@ -2,7 +2,7 @@ import type * as PromoDb from "@promo/db";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { appSettings, auditLogs, mcpCallLog, mcpOperators, shops, type Db } from "@promo/db";
+import { auditLogs, mcpCallLog, mcpOperators, shops, type Db } from "@promo/db";
 import { createTestDb, seedShop } from "../../test-support/pglite-db.js";
 import { resetMemoryRateLimits } from "../../rate-limit.server.js";
 import type { ShopPublishFn } from "../../offer-lifecycle.server.js";
@@ -26,11 +26,11 @@ const { runDiscountDriftRepair } = await import("../../discount-reconciliation.s
 
 const TEST = "drift-mcp-test.myshopify.com";
 const LIVE = "drift-mcp-live.myshopify.com";
-const ENV = { MCP_WRITE_SHOPS: TEST, MCP_CONFIRM_SECRET: "x".repeat(40) } as unknown as NodeJS.ProcessEnv;
+const ENV = {} as unknown as NodeJS.ProcessEnv;
 const GOOD = JSON.stringify({ offers: [{ id: "o1" }], version: "1" });
 const TAMPERED = '{"offers":[]}';
 
-type Body = { code?: string; summary: string; data: Record<string, any>; meta: { confirmToken?: string }; details?: { reason?: string }; warnings: { code: string }[] };
+type Body = { code?: string; summary: string; data: Record<string, any>; meta: { confirmToken?: string; dryRun?: boolean }; details?: { reason?: string }; warnings: { code: string }[] };
 const body = (r: CallToolResult) => r.structuredContent as unknown as Body;
 
 let db: Db;
@@ -89,12 +89,13 @@ const ctxFor = (op: Operator): McpContext => ({ db, env: ENV, operator: op, now:
 const run = (args: Record<string, unknown>, op = operators["admin"]!) =>
   driftRepairSettingsTool(ctxFor(op), info, args as never, { graphQL: graphQL as never, settleMs: 0 });
 
+/** Optional preview (dryRun:true), then the direct execute bound to the preview's diffHash only if the caller wants it. */
 async function twoStep(args: Record<string, unknown> = { shop: TEST }) {
-  const dry = await run(args);
+  const dry = await run({ ...args, dryRun: true });
   expect(dry.isError, JSON.stringify(dry.structuredContent)).toBeFalsy();
-  const token = body(dry).meta.confirmToken!;
-  const done = await run({ ...args, dryRun: false, confirmToken: token });
-  return { dry, done, token };
+  expect(body(dry).meta.confirmToken).toBeUndefined();
+  const done = await run(args);
+  return { dry, done };
 }
 
 const audits = async () => (await db.select().from(auditLogs).where(and(eq(auditLogs.shopId, shopId), eq(auditLogs.action, "drift_repair")))).length;
@@ -104,7 +105,6 @@ beforeAll(async () => {
   currentDb = db;
   shopId = await seedShop(db, TEST);
   liveId = await seedShop(db, LIVE);
-  for (const id of [shopId, liveId]) await db.insert(appSettings).values({ shopId: id, key: "mcp.writeMode", value: JSON.stringify("write") });
   cart = "gid://shopify/DiscountAutomaticNode/cart-1";
   delivery = "gid://shopify/DiscountAutomaticNode/delivery-1";
   await db.update(shops).set({ discountId: cart, deliveryDiscountId: delivery }).where(eq(shops.id, shopId));
@@ -127,12 +127,13 @@ beforeEach(() => {
 });
 
 describe("drift_repair_settings", () => {
-  it("dry run shows the per-item diff and writes nothing", async () => {
+  it("dryRun:true shows the per-item diff and writes nothing", async () => {
     const before = await audits();
-    const dry = await run({ shop: TEST });
+    const dry = await run({ shop: TEST, dryRun: true });
     expect(dry.isError, JSON.stringify(dry.structuredContent)).toBeFalsy();
     expect(body(dry).summary).toMatch(/^DRY RUN/);
-    expect(body(dry).meta.confirmToken).toBeTruthy();
+    expect(body(dry).meta.confirmToken).toBeUndefined();
+    expect(body(dry).data["diffHash"]).toEqual(expect.any(String));
     const items = body(dry).data["items"] as any[];
     expect(items.map((i) => i.issue)).toEqual(["config_mismatch"]);
     expect(items[0]).toMatchObject({
@@ -151,9 +152,9 @@ describe("drift_repair_settings", () => {
     expect(await audits()).toBe(before);
   });
 
-  it("dry run reports an inactive automatic node with current vs expected and the write it would do", async () => {
+  it("dryRun:true reports an inactive automatic node with current vs expected and the write it would do", async () => {
     fake.nodes[delivery]!.status = "INACTIVE";
-    const dry = await run({ shop: TEST });
+    const dry = await run({ shop: TEST, dryRun: true });
     const item = (body(dry).data["items"] as any[]).find((i) => i.issue === "inactive_node");
     expect(item).toMatchObject({ target: "discount_node", nodeId: delivery, current: { status: "INACTIVE" }, expected: { status: "ACTIVE" } });
     expect(body(dry).data["wouldWrite"]).toContain(`discountAutomaticActivate ${delivery}`);
@@ -161,7 +162,7 @@ describe("drift_repair_settings", () => {
     expect(fake.queries).not.toContain("mutation");
   });
 
-  it("confirm executes the repair, audits as mcp:<operator> with _mcp, and logs the call", async () => {
+  it("executing needs no token: it repairs, audits as mcp:<operator> with _mcp, and logs the call", async () => {
     const { done } = await twoStep();
     expect(done.isError, JSON.stringify(done.structuredContent)).toBeFalsy();
     expect(await audits()).toBe(1);
@@ -176,29 +177,33 @@ describe("drift_repair_settings", () => {
     expect(calls.map((c) => c.outcome)).toContain("ok");
   });
 
-  it("a confirmToken is single use", async () => {
-    const { done, token } = await twoStep();
-    expect(done.isError).toBeFalsy();
-    resetFake();
-    const again = await run({ shop: TEST, dryRun: false, confirmToken: token });
-    expect(body(again).code).toBe("CONFIRM_INVALID");
+  it("executes directly (no preview, no token) and a second run on a repaired shop changes nothing", async () => {
+    const done = await run({ shop: TEST });
+    expect(done.isError, JSON.stringify(done.structuredContent)).toBeFalsy();
+    expect(body(done).meta.dryRun).toBe(false);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(fake.nodes[cart]!.value).toBe(GOOD);
+    const again = await run({ shop: TEST });
+    expect(body(again).data["outcome"]).toBe("clean");
     expect(publish).toHaveBeenCalledTimes(1);
   });
 
-  it("a diff that changed since the dry run is STATE_CONFLICT and nothing is published", async () => {
+  it("an optional expectedDiffHash from the preview: a diff that changed since is STATE_CONFLICT and nothing is published", async () => {
     const before = await audits();
-    const dry = await run({ shop: TEST });
+    const dry = await run({ shop: TEST, dryRun: true });
     fake.nodes[delivery]!.value = TAMPERED;
-    const done = await run({ shop: TEST, dryRun: false, confirmToken: body(dry).meta.confirmToken });
+    const done = await run({ shop: TEST, expectedDiffHash: body(dry).data["diffHash"] });
     expect(body(done).code).toBe("STATE_CONFLICT");
     expect(publish).not.toHaveBeenCalled();
     expect(await audits()).toBe(before);
+    // Without the hash the same state is simply repaired.
+    expect((await run({ shop: TEST })).isError).toBeFalsy();
+    expect(publish).toHaveBeenCalledTimes(1);
   });
 
   it("an idempotencyKey replays the stored result without publishing again", async () => {
     const key = "drift-repair-key-1";
-    const dry = await run({ shop: TEST, idempotencyKey: key });
-    const args = { shop: TEST, dryRun: false, confirmToken: body(dry).meta.confirmToken, idempotencyKey: key };
+    const args = { shop: TEST, idempotencyKey: key };
     expect((await run(args)).isError).toBeFalsy();
     const replay = await run(args);
     expect(replay.isError).toBeFalsy();
@@ -209,9 +214,9 @@ describe("drift_repair_settings", () => {
   it("is refused while drift repair is paused for the shop", async () => {
     await setDriftRepairPaused(shopId, true);
     try {
-      const dry = await run({ shop: TEST });
+      const dry = await run({ shop: TEST, dryRun: true });
       expect(body(dry).warnings.map((w) => w.code)).toContain("REPAIR_PAUSED");
-      const done = await run({ shop: TEST, dryRun: false, confirmToken: body(dry).meta.confirmToken });
+      const done = await run({ shop: TEST });
       expect(body(done).code).toBe("INVALID_STATE");
       expect(publish).not.toHaveBeenCalled();
     } finally {
@@ -227,18 +232,21 @@ describe("drift_repair_settings", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it("viewer and editor are FORBIDDEN (reason ROLE)", async () => {
+  it("viewer and editor repair like an admin (no role tiers)", async () => {
     for (const role of ["viewer", "editor"] as const) {
+      resetFake();
+      publish = restoreOnPublish();
       const result = await run({ shop: TEST }, operators[role]);
-      expect(body(result).code).toBe("FORBIDDEN");
-      expect(body(result).details?.reason).toBe("ROLE");
+      expect(result.isError, `${role}: ${JSON.stringify(result.structuredContent)}`).toBeFalsy();
+      expect(body(result).data["outcome"]).toBe("repaired");
+      expect(publish).toHaveBeenCalledTimes(1);
     }
-    expect(publish).not.toHaveBeenCalled();
   });
 
-  it("an admin on a shop that is not write-enabled gets SHOP_READ_ONLY on dry run and execute", async () => {
-    expect(body(await run({ shop: LIVE })).code).toBe("SHOP_READ_ONLY");
-    expect(body(await run({ shop: LIVE, dryRun: false, confirmToken: "a.b" })).code).toBe("SHOP_READ_ONLY");
+  it("a shop with no write setting or env entry is never SHOP_READ_ONLY (it answers on its own state)", async () => {
+    const dry = await run({ shop: LIVE, dryRun: true });
+    expect(body(dry).code).toBe("INVALID_STATE");
+    expect(body(await run({ shop: LIVE })).code).toBe("INVALID_STATE");
     expect(publish).not.toHaveBeenCalled();
   });
 });

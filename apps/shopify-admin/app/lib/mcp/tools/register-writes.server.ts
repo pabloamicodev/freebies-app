@@ -25,9 +25,9 @@ import {
 const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } as const;
 const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true } as const;
 const FLOW =
-  " dryRun defaults to true: it returns the diff and a confirmToken (5 min, single use, bound to these exact arguments); call again with dryRun:false and that token to apply. Only write-enabled shops (see mcp_whoami); other shops answer SHOP_READ_ONLY.";
+  " Applies immediately (any authenticated operator, any visible shop). dryRun:true is an optional preview that writes nothing; idempotencyKey makes a retry return the stored result; expectedUpdatedAt (ISO, from the preview) refuses with STATE_CONFLICT if the offer moved.";
 
-/** Phase 3 write tools (editor; archive and republish need admin). They call the offer-lifecycle service, never SQL. */
+/** Write tools: any authenticated operator. They call the offer-lifecycle service, never SQL. */
 export function registerWriteTools(server: McpServer, ctx: McpContext): void {
   const call = (extra: { requestId?: string | number }): CallInfo => ({
     client: server.server.getClientVersion()?.name,
@@ -60,7 +60,7 @@ export function registerWriteTools(server: McpServer, ctx: McpContext): void {
     "promo_archive",
     {
       title: "Archive a promotion",
-      description: `Archives an offer (admin role) and republishes the shop. Limited to 3 executions a minute.${FLOW}`,
+      description: `Archives an offer and republishes the shop.${FLOW}`,
       inputSchema: promoArchiveInput,
       annotations: DESTRUCTIVE,
     },
@@ -71,7 +71,7 @@ export function registerWriteTools(server: McpServer, ctx: McpContext): void {
     "promos_republish_shop",
     {
       title: "Republish a shop's config",
-      description: `Re-publishes the shop's Function config to Shopify without changing any offer (admin role).${FLOW}`,
+      description: `Re-publishes the shop's Function config to Shopify without changing any offer.${FLOW}`,
       inputSchema: promosRepublishShopInput,
       annotations: WRITE,
     },
@@ -82,7 +82,7 @@ export function registerWriteTools(server: McpServer, ctx: McpContext): void {
     "promo_duplicate",
     {
       title: "Duplicate a promotion as a draft",
-      description: `Copies an offer with its conditions, rewards and bundle definition as a DRAFT with a unique name; discount codes and widgets are not copied. targetShop copies into another write-enabled shop of this app.${FLOW}`,
+      description: `Copies an offer with its conditions, rewards and bundle definition as a DRAFT with a unique name; discount codes and widgets are not copied. targetShop copies into another shop you can see.${FLOW}`,
       inputSchema: promoDuplicateInput,
       annotations: WRITE,
     },

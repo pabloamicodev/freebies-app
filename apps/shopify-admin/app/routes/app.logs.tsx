@@ -1,24 +1,10 @@
 import { useLoaderData } from "react-router";
-import { safeErrorMessage } from "../lib/safe-error.js";
+import { fetchShopSentryIssues } from "../lib/logs-queries.server.js";
 import { authenticate } from "../shopify.server.js";
 import { PageHeader } from "../components/PageHeader.js";
 import type { LoaderFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
-
-interface SentryIssue {
-  id: string;
-  shortId: string;
-  title: string;
-  level: "error" | "warning" | "info" | "debug" | "fatal";
-  count: string;
-  userCount: number;
-  lastSeen: string;
-  firstSeen: string;
-  status: "unresolved" | "resolved" | "ignored";
-  permalink: string;
-  metadata: { type?: string; value?: string };
-}
 
 function formatRelative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -32,37 +18,7 @@ function formatRelative(iso: string): string {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-
-  const authToken = process.env["SENTRY_AUTH_TOKEN"];
-  const org = process.env["SENTRY_ORG"];
-  const project = process.env["SENTRY_PROJECT"];
-
-  if (!authToken || !org || !project) {
-    return { issues: [] as SentryIssue[], configured: false, error: null as string | null };
-  }
-
-  try {
-    // Sentry aggregates issues per-project across every installed shop — most
-    // capture sites tag events with `shop` (webhooks, sync/cron routes), so
-    // scoping the query to this shop's tag keeps one merchant from seeing
-    // every other merchant's errors. An event that predates shop-tagging (or
-    // whose capture site doesn't set it) just won't surface here.
-    const query = `is:unresolved shop:${session.shop}`;
-    const res = await fetch(
-      `https://sentry.io/api/0/projects/${org}/${project}/issues/?query=${encodeURIComponent(query)}&limit=50&sort=date`,
-      { headers: { Authorization: `Bearer ${authToken}` }, signal: AbortSignal.timeout(8000) },
-    );
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      return { issues: [] as SentryIssue[], configured: true, error: `Sentry API ${res.status}: ${text.slice(0, 200)}` };
-    }
-
-    const issues = await res.json() as SentryIssue[];
-    return { issues, configured: true, error: null as string | null };
-  } catch (err) {
-    return { issues: [] as SentryIssue[], configured: true, error: safeErrorMessage(err, "Failed to fetch from Sentry") };
-  }
+  return fetchShopSentryIssues(session.shop);
 };
 
 const LEVEL_STYLE: Record<string, { bg: string; color: string; label: string }> = {

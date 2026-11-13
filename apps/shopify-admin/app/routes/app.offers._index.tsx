@@ -6,15 +6,7 @@ import { CapacityIncidentsBanner } from "../components/CapacityIncidentsDialog.j
 import { loadLimitsMeter } from "../lib/capacity-meter.server.js";
 import { Await, Link, useLoaderData, useNavigate, useRouteLoaderData, useSearchParams, useFetcher, redirect } from "react-router";
 import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
-import {
-  analyticsEvents,
-  appSettings,
-  bundleDefinitions,
-  cartMutationLogs,
-  giftCloneProducts,
-  offers,
-  widgets,
-} from "@promo/db";
+import { offers } from "@promo/db";
 import { eq, and, like, desc, count, inArray } from "drizzle-orm";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import {
@@ -34,7 +26,6 @@ import { StatusBadge } from "../components/StatusBadge.js";
 import { OfferToggle } from "../components/BogosSwitch.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { getOfferPublishErrors } from "../lib/offer-publish-errors.server.js";
-import { insertAuditLog } from "../lib/audit-log.server.js";
 import {
   archiveOffer,
   bulkPauseOffers,
@@ -42,8 +33,7 @@ import {
   toggleOfferStatus,
 } from "../lib/offer-lifecycle.server.js";
 import { createRouteTimer } from "../lib/route-timing.server.js";
-import { publishShopConfig as publishShopConfigToShopify } from "../lib/offer-publish-flow.server.js";
-import { neutralizeCodeDiscountNode } from "../lib/sync/offer-publisher.server.js";
+import { deleteOffer } from "../lib/offer-bulk.server.js";
 import { duplicateOffer } from "../lib/offer-duplicate.server.js";
 import * as Sentry from "@sentry/node";
 import type { OfferCreateModalType } from "../components/offers/OfferCreateModalFlow.js";
@@ -168,70 +158,18 @@ export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) 
 
   const intent = formData.get("intent") as string;
   const offerIds = formData.getAll("offerIds[]") as string[];
-  const publishShopConfig = async () => {
-    return publishShopConfigToShopify(shopId, session.shop);
-  };
 
   if (request.method.toUpperCase() === "DELETE" || intent === "delete") {
     const offerId = formData.get("offerId") as string | null;
     if (!offerId) throw new Response("Missing offerId", { status: 400 });
 
-    const [toDelete] = await db
-      .select({ codeDiscountId: offers.codeDiscountId })
-      .from(offers)
-      .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)))
-      .limit(1);
-
-    await db.transaction(async (tx) => {
-      await Promise.all([
-        tx
-          .delete(analyticsEvents)
-          .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.offerId, offerId))),
-        tx
-          .delete(cartMutationLogs)
-          .where(and(eq(cartMutationLogs.shopId, shopId), eq(cartMutationLogs.offerId, offerId))),
-        tx
-          .delete(giftCloneProducts)
-          .where(and(eq(giftCloneProducts.shopId, shopId), eq(giftCloneProducts.offerId, offerId))),
-        tx
-          .delete(appSettings)
-          .where(
-            and(
-              eq(appSettings.shopId, shopId),
-              eq(appSettings.key, `widget.market_overrides.${offerId}`),
-            ),
-          ),
-        tx.delete(widgets).where(and(eq(widgets.shopId, shopId), eq(widgets.offerId, offerId))),
-        tx
-          .delete(bundleDefinitions)
-          .where(and(eq(bundleDefinitions.shopId, shopId), eq(bundleDefinitions.offerId, offerId))),
-      ]);
-      await tx.delete(offers).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-    });
-
-    // Once the row is gone, the regular publish below can never find this
-    // offer again to neutralize its dedicated node — do it explicitly here,
-    // best-effort, so a deleted checkout-code promo doesn't keep discounting
-    // real orders forever with its last-known config.
-    if (toDelete?.codeDiscountId) {
-      try {
-        await neutralizeCodeDiscountNode(shopId, session.shop, toDelete.codeDiscountId);
-      } catch (err) {
-        Sentry.captureException(err, {
-          tags: { route: "app.offers._index", action: "delete-neutralize-code-discount", offerId },
-        });
-      }
+    const result = await deleteOffer(db, { shopId, shopDomain: session.shop, offerId }, { performedBy: session.shop });
+    if (result.ok && result.neutralizeError) {
+      Sentry.captureException(result.neutralizeError, {
+        tags: { route: "app.offers._index", action: "delete-neutralize-code-discount", offerId },
+      });
     }
-
-    const publishError = await publishShopConfig();
-    if (publishError) return { error: publishError };
-    void insertAuditLog(db, {
-      shopId,
-      entityType: "offer",
-      entityId: offerId,
-      action: "delete",
-      performedBy: session.shop,
-    });
+    if (!result.ok && result.code === "publish_failed") return { error: result.error };
     return null;
   }
 

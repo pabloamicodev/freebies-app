@@ -12,7 +12,6 @@ import { createTestDb, seedOffer, seedShop } from "../test-support/pglite-db.js"
 const env = {
   MCP_ENABLED: "true",
   MCP_TOKEN_PEPPER: "test-pepper-0123456789",
-  MCP_WRITE_SHOPS: "hpn-test-store.myshopify.com",
 } as NodeJS.ProcessEnv;
 const allowAll: RateLimiter = async () => ({ ok: true });
 
@@ -28,7 +27,6 @@ beforeAll(async () => {
   const uninstalled = await seedShop(db, "gone.myshopify.com");
   await db.update(shops).set({ uninstalledAt: new Date() }).where(eq(shops.id, uninstalled));
   await db.update(shops).set({ currencyCode: "EUR", timezone: "Europe/Madrid" }).where(eq(shops.myshopifyDomain, "hpn.myshopify.com"));
-  await db.insert(appSettings).values({ shopId: testShop, key: "mcp.writeMode", value: JSON.stringify("write") });
   await seedOffer(db, testShop, { status: "active" });
   await seedOffer(db, testShop, { status: "draft" });
 }, 60_000);
@@ -160,29 +158,25 @@ describe("MCP protocol over the route (pglite)", () => {
       writeMode: "write",
       activeOffers: 1,
     });
-    expect(byDomain["hpn.myshopify.com"]).toMatchObject({ currency: "EUR", timezone: "Europe/Madrid", writeMode: "read_only" });
+    expect(byDomain["hpn.myshopify.com"]).toMatchObject({ currency: "EUR", timezone: "Europe/Madrid", writeMode: "write" });
     expect(JSON.stringify(out)).not.toMatch(/access_token|accessToken/i);
     expect(out.perShop.every((p: { status: string }) => p.status === "ok")).toBe(true);
     expect(json.result.content[0].text).toContain("2 shops visible");
   });
 
-  it("the env lock wins over the per-shop setting, and vice versa", async () => {
+  it("every shop is write mode, whatever the stored per-shop setting or the old env lock say", async () => {
     const hpn = await db.select().from(shops).where(eq(shops.myshopifyDomain, "hpn.myshopify.com"));
-    await db.insert(appSettings).values({ shopId: hpn[0]!.id, key: "mcp.writeMode", value: JSON.stringify("write") });
-    const res = await call({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "shops_list", arguments: {} } });
-    const modes = Object.fromEntries(
-      (await res.json()).result.structuredContent.data.shops.map((s: { shopDomain: string; writeMode: string }) => [s.shopDomain, s.writeMode]),
-    );
-    expect(modes["hpn.myshopify.com"]).toBe("read_only");
-
+    await db.insert(appSettings).values({ shopId: hpn[0]!.id, key: "mcp.writeMode", value: JSON.stringify("read_only") });
     clearFanOutCache();
-    const noSetting = await call(
-      { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "shops_list", arguments: {} } },
+    const res = await call(
+      { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "shops_list", arguments: {} } },
       undefined,
       { ...env, MCP_WRITE_SHOPS: "" },
     );
-    const m2 = (await noSetting.json()).result.structuredContent.data.shops.map((s: { writeMode: string }) => s.writeMode);
-    expect(m2).toEqual(["read_only", "read_only"]);
+    const out = (await res.json()).result.structuredContent;
+    expect(out.data.shops.map((s: { writeMode: string }) => s.writeMode)).toEqual(["write", "write"]);
+    expect(out.summary).toContain("full access");
+    await db.delete(appSettings).where(eq(appSettings.shopId, hpn[0]!.id));
   });
 
   it("an allow-listed operator sees only its shops and asking for another is SHOP_NOT_FOUND", async () => {

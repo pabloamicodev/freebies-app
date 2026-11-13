@@ -1564,6 +1564,8 @@ function build(scenario: Scenario) {
   };
 }
 
+/** `mcp-*` fixtures are generated from promo_create output by mcp/tools/promo-authoring.server.test.ts, not by this table. */
+const isMcpFixture = (file: string) => file.startsWith("mcp-");
 const fileOf = (name: string) => `${DIR}${name}.json`;
 const serialize = (fixture: ReturnType<typeof build>) => `${JSON.stringify(fixture, null, 2)}\n`;
 
@@ -1587,7 +1589,7 @@ describe("TS/Rust parity fixtures", () => {
     it("writes the fixtures", () => {
       mkdirSync(DIR, { recursive: true });
       const names = new Set(SCENARIOS.map((scenario) => `${scenario.name}.json`));
-      for (const file of readdirSync(DIR)) if (file.endsWith(".json") && !names.has(file)) unlinkSync(`${DIR}${file}`);
+      for (const file of readdirSync(DIR)) if (file.endsWith(".json") && !names.has(file) && !isMcpFixture(file)) unlinkSync(`${DIR}${file}`);
       for (const scenario of SCENARIOS) writeFileSync(fileOf(scenario.name), serialize(build(scenario)));
     });
   } else {
@@ -1601,7 +1603,7 @@ describe("TS/Rust parity fixtures", () => {
 
     it("has no stray fixture files", () => {
       const names = new Set(SCENARIOS.map((scenario) => `${scenario.name}.json`));
-      expect(readdirSync(DIR).filter((file) => !names.has(file))).toEqual([]);
+      expect(readdirSync(DIR).filter((file) => !names.has(file) && !isMcpFixture(file))).toEqual([]);
     });
   }
 });

@@ -19,9 +19,9 @@ import {
 
 const CRITICAL = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true } as const;
 const FLOW =
-  " Admin only, 3 executions a minute. dryRun defaults to true: it returns the preview and a confirmToken (5 min, single use, bound to these exact arguments); call again with dryRun:false and that token to apply. Only write-enabled shops (see mcp_whoami); other shops answer SHOP_READ_ONLY.";
+  " Applies immediately (any authenticated operator, any visible shop); there is no confirmation step. dryRun:true is an optional preview that writes nothing; idempotencyKey makes a retry return the stored result.";
 
-/** Phase 4.1 critical tools: admin role, confirmToken, same write locks as the Phase 3 tools. */
+/** Phase 4.1 high-impact tools. Same full-access semantics as the other write tools: no role, no token, no write lock. */
 export function registerCriticalTools(server: McpServer, ctx: McpContext): void {
   const call = (extra: { requestId?: string | number }): CallInfo => ({
     client: server.server.getClientVersion()?.name,
@@ -32,7 +32,7 @@ export function registerCriticalTools(server: McpServer, ctx: McpContext): void 
     "promos_pause_all",
     {
       title: "Pause every live promotion of a shop",
-      description: `Pauses all active and scheduled offers of one shop in a single publish (rolled back if it fails). The dry run lists them.${FLOW}`,
+      description: `Pauses all active and scheduled offers of one shop in a single publish (rolled back if it fails). dryRun:true lists them.${FLOW}`,
       inputSchema: promosPauseAllInput,
       annotations: CRITICAL,
     },
@@ -87,7 +87,7 @@ export function registerCriticalTools(server: McpServer, ctx: McpContext): void 
     "drift_repair_settings",
     {
       title: "Repair Shopify drift of one shop",
-      description: `Compares everything the last publish put on Shopify (discount nodes, function_config metafields, purchase-type flags, code counts, cart-validation config) with what is there now. The dry run lists every out-of-sync item with current vs expected, bytes before/after and what would be written; nothing is written. Executing reactivates switched-off automatic nodes, re-queues codes deleted on Shopify and republishes the shop config, bound to that exact diff (STATE_CONFLICT if it changed). Refused while drift repair is paused for the shop. One shop per call.${FLOW}`,
+      description: `Compares everything the last publish put on Shopify (discount nodes, function_config metafields, purchase-type flags, code counts, cart-validation config) with what is there now. dryRun:true lists every out-of-sync item with current vs expected, bytes before/after and what would be written; nothing is written. Executing reactivates switched-off automatic nodes, re-queues codes deleted on Shopify and republishes the shop config, Refused while drift repair is paused for the shop. One shop per call.${FLOW}`,
       inputSchema: driftRepairSettingsInput,
       annotations: CRITICAL,
     },

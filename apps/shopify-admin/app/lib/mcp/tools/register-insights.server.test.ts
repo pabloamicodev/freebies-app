@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { appSettings, type Db } from "@promo/db";
+import type { Db } from "@promo/db";
 import { handleMcpRequest, type RateLimiter } from "../handler.server.js";
 import { createOperatorWithPat } from "../auth.server.js";
 import { clearFanOutCache } from "../multi-shop.server.js";
 import { createTestDb, seedOffer } from "../../test-support/pglite-db.js";
 import { insertEvents, seedWorld } from "./insights-test-fixtures.js";
 
-const env = { MCP_ENABLED: "true", MCP_TOKEN_PEPPER: "test-pepper-0123456789", MCP_WRITE_SHOPS: "alpha.myshopify.com" } as NodeJS.ProcessEnv;
+const env = { MCP_ENABLED: "true", MCP_TOKEN_PEPPER: "test-pepper-0123456789" } as NodeJS.ProcessEnv;
 const allowAll: RateLimiter = async () => ({ ok: true });
 
 let db: Db;
@@ -17,7 +17,6 @@ let scopedPat: string;
 beforeAll(async () => {
   ({ db, close } = await createTestDb());
   const world = await seedWorld(db);
-  await db.insert(appSettings).values({ shopId: world.alpha, key: "mcp.writeMode", value: JSON.stringify("write") });
   const offer = await seedOffer(db, world.alpha, { internalName: "Alpha gift" });
   await insertEvents(db, { shopId: world.alpha, offerId: offer, name: "promo_engine:widget_viewed", at: new Date().toISOString(), n: 3 });
   ({ pat: adminPat } = await createOperatorWithPat(db, { email: "admin@example.com", name: "Admin", role: "admin", shopAllowList: ["*"] }, env));
@@ -56,9 +55,9 @@ describe("insights tools over the MCP endpoint", () => {
     expect(out.data.operator).toMatchObject({ email: "admin@example.com", role: "admin", shopAccess: "all" });
     expect(out.data.shops.map((s: { shopDomain: string; writeMode: string }) => [s.shopDomain, s.writeMode])).toEqual([
       ["alpha.myshopify.com", "write"],
-      ["beta.myshopify.com", "read_only"],
+      ["beta.myshopify.com", "write"],
     ]);
-    expect(out.data.server).toMatchObject({ phase: 4, writeEnabledShops: ["alpha.myshopify.com"] });
+    expect(out.data.server).toMatchObject({ phase: 4, writeEnabledShops: ["alpha.myshopify.com", "beta.myshopify.com"] });
     expect(JSON.stringify(out)).not.toMatch(/pemcp_|pepper|token_hash/i);
   });
 
@@ -66,7 +65,7 @@ describe("insights tools over the MCP endpoint", () => {
     const out = (await callTool("mcp_whoami", {}, scopedPat)).structuredContent;
     expect(out.data.operator).toMatchObject({ role: "viewer", shopAccess: "list" });
     expect(out.data.shops.map((s: { shopDomain: string }) => s.shopDomain)).toEqual(["beta.myshopify.com"]);
-    expect(out.data.server.writeEnabledShops).toEqual([]);
+    expect(out.data.server.writeEnabledShops).toEqual(["beta.myshopify.com"]);
   });
 
   it("promo_performance answers with the contract and validates input", async () => {

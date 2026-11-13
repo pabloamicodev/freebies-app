@@ -42,9 +42,10 @@ afterAll(async () => {
 });
 
 describe("mcpCallLogQuery", () => {
-  it("is admin only", async () => {
-    for (const role of ["viewer", "editor"] as const) {
-      await expect(mcpCallLogQuery(db, { ...admin, role }, {})).rejects.toMatchObject({ payload: { code: "FORBIDDEN", details: { reason: "ROLE" } } });
+  it("answers every role (no role tiers)", async () => {
+    for (const role of ["viewer", "editor", "admin"] as const) {
+      const result = await mcpCallLogQuery(db, { ...admin, role }, { limit: 1 });
+      expect(result.data.calls).toHaveLength(1);
     }
   });
 
@@ -103,16 +104,15 @@ describe("mcp_call_log_query over the MCP endpoint", () => {
     return (await res.json()).result;
   };
 
-  it("is registered read-only, answers admins and refuses viewers; the call itself is logged", async () => {
+  it("is registered read-only, answers admins and viewers alike; the calls themselves are logged", async () => {
     const { tools } = await rpc(adminPat, "tools/list", {});
     expect(tools.find((t: { name: string }) => t.name === "mcp_call_log_query")?.annotations.readOnlyHint).toBe(true);
     const ok = await rpc(adminPat, "tools/call", { name: "mcp_call_log_query", arguments: { tool: "promos_pause_all", limit: 2 } });
     expect(ok.isError).toBeFalsy();
     expect(ok.structuredContent.data.calls).toHaveLength(2);
-    const denied = await rpc(viewerPat, "tools/call", { name: "mcp_call_log_query", arguments: {} });
-    expect(denied.isError).toBe(true);
-    expect(denied.structuredContent.code).toBe("FORBIDDEN");
+    const viewerCall = await rpc(viewerPat, "tools/call", { name: "mcp_call_log_query", arguments: {} });
+    expect(viewerCall.isError).toBeFalsy();
     const own = await mcpCallLogQuery(db, admin, { tool: "mcp_call_log_query" });
-    expect(own.data.calls.map((c) => c.outcome).sort()).toEqual(["FORBIDDEN", "ok"]);
+    expect(own.data.calls.map((c) => c.outcome).sort()).toEqual(["ok", "ok"]);
   });
 });

@@ -1,5 +1,5 @@
+import { randomUUID } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { McpRole } from "./auth.server.js";
 import {
   claimWrite,
   enforceOperatorRate,
@@ -10,12 +10,11 @@ import {
   shopsFromArgs,
   type StoredResult,
 } from "./call-log.server.js";
-import { assertConfirmConfigured, hashArgs, issueConfirmToken, stripControlArgs, verifyConfirmToken } from "./confirm.server.js";
+import { hashArgs } from "./confirm.server.js";
 import type { ShopRef } from "./multi-shop.server.js";
-import { ToolError, buildResult, type Link, type NextAction, type ToolResult, type Warning } from "./result.server.js";
+import { ToolError, buildResult, capacityToolError, type Link, type NextAction, type ToolResult, type Warning } from "./result.server.js";
 import { toCallToolResult, toErrorCallToolResult, type McpContext } from "./server.server.js";
 import { runWithCapacitySource } from "../capacity-source.server.js";
-import { assertWriteAllowed } from "./write-guard.server.js";
 import type { OfferLifecycleFailure, ShopPublishFn } from "../offer-lifecycle.server.js";
 
 export type WriteBody = {
@@ -25,14 +24,12 @@ export type WriteBody = {
   links?: Link[];
   nextActions?: NextAction[];
 };
-/** `setHash`: optional digest of the exact set of rows the dry run would touch, bound into the confirm token. */
-export type WritePreview = WriteBody & { offerUpdatedAt: Date | null; setHash?: string | null };
+/** `offerUpdatedAt`: the offer's updated_at the preview saw; returned as `expectedUpdatedAt` in the apply nextAction. */
+export type WritePreview = WriteBody & { offerUpdatedAt: Date | null };
 
 export type ApplyContext = {
-  /** The offer's updated_at the operator saw in the dry run; the write refuses (STATE_CONFLICT) if it moved. */
+  /** The optional `expectedUpdatedAt` the caller sent (null = no check); the write refuses (STATE_CONFLICT) if the offer moved. */
   expectedUpdatedAt: Date | null;
-  /** The setHash the dry run bound into the token, if any; the write refuses (STATE_CONFLICT) when the set differs. */
-  expectedSetHash: string | null;
   performedBy: string;
   auditExtra: Record<string, unknown>;
   publish: ShopPublishFn | undefined;
@@ -40,15 +37,13 @@ export type ApplyContext = {
 
 export type WriteSpec = {
   tool: string;
-  minRole: McpRole;
-  /** Admin-only tools: also limited to 3 executions a minute. */
-  critical: boolean;
-  /** The tool's raw arguments, including dryRun / confirmToken / idempotencyKey. */
+  /** The tool's raw arguments, including dryRun / idempotencyKey / expectedUpdatedAt. */
   args: Record<string, unknown>;
   dryRun: boolean;
-  confirmToken?: string;
+  /** Optional optimistic concurrency (the offer's updated_at the caller saw); the write refuses with STATE_CONFLICT if it moved. */
+  expectedUpdatedAt?: Date | null;
   idempotencyKey?: string;
-  /** Every shop the call touches (all must be write-enabled); the first one binds the confirm token. */
+  /** Every shop the call touches; logged with the call. */
   shops: ShopRef[];
   preview: () => Promise<WritePreview>;
   apply: (apply: ApplyContext) => Promise<WriteBody>;
@@ -70,29 +65,26 @@ export function lifecycleToolError(failure: OfferLifecycleFailure, refForAction?
     case "not_found":
       return new ToolError("NOT_FOUND", "Offer not found in that shop.");
     case "validation":
-      return new ToolError("VALIDATION", safeText(failure.error), failure.capacity ? { details: { capacity: failure.capacity } } : {});
+      return failure.capacity ? capacityToolError(failure.capacity, safeText(failure.error)) : new ToolError("VALIDATION", safeText(failure.error));
     case "state":
       return new ToolError(failure.reason === "stale" ? "STATE_CONFLICT" : "INVALID_STATE", safeText(failure.error));
-    case "publish_failed":
-      return new ToolError(
-        "PUBLISH_FAILED",
-        failure.rolledBack
-          ? `Publishing to Shopify failed and the change was rolled back (${safeText(failure.error)}).`
-          : `The change was saved but publishing to Shopify failed (${safeText(failure.error)}). The offer may have been paused so the shop stays consistent.`,
-        {
-          ...(failure.capacity ? { details: { capacity: failure.capacity } } : {}),
-          suggestedAction: refForAction
-            ? { mcp: "promo-engine", tool: "promo_detail", args: { ref: refForAction }, why: "Check the offer's current status and publish errors, then retry." }
-            : { mcp: "promo-engine", tool: "promo_health", args: {}, why: "Check publish errors, then retry." },
-        },
-      );
+    case "publish_failed": {
+      const suggestedAction = refForAction
+        ? { mcp: "promo-engine" as const, tool: "promo_detail", args: { ref: refForAction }, why: "Check the offer's current status and publish errors, then retry." }
+        : { mcp: "promo-engine" as const, tool: "promo_health", args: {}, why: "Check publish errors, then retry." };
+      const message = failure.rolledBack
+        ? `Publishing to Shopify failed and the change was rolled back (${safeText(failure.error)}).`
+        : `The change was saved but publishing to Shopify failed (${safeText(failure.error)}). The offer may have been paused so the shop stays consistent.`;
+      if (failure.capacity) return capacityToolError(failure.capacity, message, { suggestedAction });
+      return new ToolError("PUBLISH_FAILED", message, { suggestedAction });
+    }
   }
 }
 
 /**
- * The shared write path: rate limit, role, both write locks, then either a dry run that mints a confirmToken
- * or an execute that verifies it (HMAC, 5 min, args/operator/shop bound, single use), claims it in
- * mcp_call_log, runs the service and stores the result for idempotent replay. Every outcome is logged.
+ * The shared write path (owner 2026-11-13, full access): rate limit, then either an optional dry run (preview only)
+ * or a direct execute that claims a row in mcp_call_log, runs the service and stores the result for idempotent
+ * replay. Every outcome is logged and audited.
  */
 export async function runWrite(ctx: McpContext, call: CallInfo, spec: WriteSpec): Promise<CallToolResult> {
   const started = performance.now();
@@ -122,35 +114,34 @@ async function runInner(
   spec: WriteSpec,
   onClaim: (id: string) => void,
 ): Promise<{ value: ToolResult<unknown>; replayed: boolean }> {
+  // Owner 2026-11-13: no roles, no per-shop write lock, no mandatory dry run. dryRun:true is an optional preview.
   await enforceOperatorRate(ctx, "write");
-  await assertWriteAllowed(ctx.db, ctx.env, ctx.operator, spec.shops, spec.minRole);
-  assertConfirmConfigured(ctx.env);
-  const primary = spec.shops[0]!;
-  const binding = { tool: spec.tool, args: spec.args, operatorId: ctx.operator.id, shopDomain: primary.myshopifyDomain };
-  const risk = spec.critical ? "destructive" : "write";
-
   if (spec.dryRun) {
     const preview = await spec.preview();
-    const issued = issueConfirmToken(ctx.env, binding, preview.offerUpdatedAt, ctx.now(), preview.setHash);
-    const executeArgs = {
-      ...stripControlArgs(spec.args),
-      dryRun: false,
-      confirmToken: issued.token,
-      ...(spec.idempotencyKey ? { idempotencyKey: spec.idempotencyKey } : {}),
-    };
     return {
       replayed: false,
       value: buildResult(
         {
-          summary: `DRY RUN, nothing changed. ${preview.summary}\nTo apply, call ${spec.tool} again with dryRun:false and the confirmToken (valid 5 minutes, single use).`,
+          summary: `DRY RUN, nothing changed. ${preview.summary}
+Call ${spec.tool} again without dryRun (or dryRun:false) to apply.`,
           data: preview.data,
           links: preview.links,
           warnings: preview.warnings,
           nextActions: [
             ...(preview.nextActions ?? []),
-            { mcp: "promo-engine", tool: spec.tool, args: executeArgs, why: "Apply the previewed change.", risk },
+            {
+              mcp: "promo-engine",
+              tool: spec.tool,
+              args: {
+                ...withoutControls(spec.args),
+                dryRun: false,
+                ...(preview.offerUpdatedAt ? { expectedUpdatedAt: preview.offerUpdatedAt.toISOString() } : {}),
+              },
+              why: "Apply the previewed change.",
+              risk: "write",
+            },
           ],
-          meta: { dryRun: true, confirmToken: issued.token, confirmExpiresAt: issued.expiresAt.toISOString() },
+          meta: { dryRun: true },
         },
         ctx.now,
       ),
@@ -162,33 +153,23 @@ async function runInner(
     const earlier = await findIdempotent(ctx.db, ctx.operator.id, spec.tool, spec.idempotencyKey, ctx.now());
     if (earlier) return { value: replayOf(earlier, argsHash), replayed: true };
   }
-  if (!spec.confirmToken) {
-    throw new ToolError("CONFIRM_REQUIRED", "Executing needs the confirmToken from a dry run of the same call.", {
-      suggestedAction: { mcp: "promo-engine", tool: spec.tool, args: { ...stripControlArgs(spec.args), dryRun: true }, why: "Run the dry run to get a confirmToken." },
-    });
-  }
-  if (spec.critical) await enforceOperatorRate(ctx, "critical");
-  const verified = verifyConfirmToken(ctx.env, spec.confirmToken, binding, ctx.now());
-
   const claim = await claimWrite(ctx.db, {
     operatorId: ctx.operator.id,
     tool: spec.tool,
     shops: spec.shops.map((s) => s.myshopifyDomain),
     args: spec.args,
-    jti: verified.jti,
+    jti: randomUUID(),
     idempotencyKey: spec.idempotencyKey,
   });
   if (!claim.ok) {
-    if (claim.reason === "jti") throw new ToolError("CONFIRM_INVALID", "This confirmToken was already used. Run the dry run again.");
     const earlier = spec.idempotencyKey ? await findIdempotent(ctx.db, ctx.operator.id, spec.tool, spec.idempotencyKey, ctx.now()) : null;
     if (earlier?.stored) return { value: replayOf(earlier, argsHash), replayed: true };
-    throw new ToolError("STATE_CONFLICT", "A call with this idempotencyKey is still running or did not finish; use a new key after a new dry run.");
+    throw new ToolError("STATE_CONFLICT", "A call with this idempotencyKey is still running or did not finish; retry with a new key.");
   }
   onClaim(claim.id);
 
   const body = await runWithCapacitySource("mcp", true, () => spec.apply({
-    expectedUpdatedAt: verified.offerUpdatedAt,
-    expectedSetHash: verified.setHash,
+    expectedUpdatedAt: spec.expectedUpdatedAt ?? null,
     performedBy: `mcp:${ctx.operator.id}`,
     auditExtra: { _mcp: { operator: ctx.operator.id, client: call.client ?? null, tool: spec.tool, requestId: call.requestId } },
     publish: ctx.publish,
@@ -202,8 +183,13 @@ async function runInner(
   };
 }
 
+function withoutControls(args: Record<string, unknown>): Record<string, unknown> {
+  const { dryRun: _d, idempotencyKey: _i, expectedUpdatedAt: _e, expectedDiffHash: _h, ...rest } = args;
+  return rest;
+}
+
 function replayOf(earlier: { outcome: string; stored: StoredResult | null }, argsHash: string): ToolResult<unknown> {
-  if (!earlier.stored) throw new ToolError("STATE_CONFLICT", "A call with this idempotencyKey is still running or did not finish; use a new key after a new dry run.");
+  if (!earlier.stored) throw new ToolError("STATE_CONFLICT", "A call with this idempotencyKey is still running or did not finish; use a new key.");
   if (earlier.stored.argsHash !== argsHash) {
     throw new ToolError("VALIDATION", "This idempotencyKey was already used with different arguments.");
   }

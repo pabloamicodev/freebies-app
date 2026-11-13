@@ -16,3 +16,5 @@ export { evaluateCountry } from "./conditions/country.js";
 export { evaluateBogo } from "./conditions/bogo.js";
 export { classifyPageType, evaluatePageTypes, evaluateUtmParameters } from "./conditions/page-context.js";
 export { evaluatePageConditionGroup, lineMatchesPageConditions, isPageConditionType, PAGE_CONDITION_TYPES } from "./page-match.js";
+export { giftTierState } from "./gift-tiers.js";
+export { referenceDiscounts, propertiesOf as referenceLineProperties, type ReferenceLine, type ReferenceConfigOffer, type ReferenceReward, type ReferenceTier, type ReferenceTrace } from "./reference-discounts.js";

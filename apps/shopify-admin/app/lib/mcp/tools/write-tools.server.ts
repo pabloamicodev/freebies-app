@@ -1,9 +1,7 @@
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { and, eq, inArray, like, ne } from "drizzle-orm";
 import { discountCodes, offers, type Db } from "@promo/db";
-import { requireRole, type McpRole } from "../auth.server.js";
 import { insertAuditLog } from "../../audit-log.server.js";
 import { duplicateOffer } from "../../offer-duplicate.server.js";
 import { mapOfferResourcesToShop, type ResourceMapping } from "../../offer-resource-mapping.server.js";
@@ -22,7 +20,6 @@ import {
 import { sharedConfigBreakdown } from "../../shared-config-size.server.js";
 import { MAX_METAFIELD_BYTES } from "../../sync/offer-publisher.server.js";
 import { logCall, shopsFromArgs } from "../call-log.server.js";
-import { canonicalJson } from "../confirm.server.js";
 import { ToolError, promoRef, publishAdvisories, shopHandle, type Warning } from "../result.server.js";
 import { toErrorCallToolResult, type McpContext } from "../server.server.js";
 import { selectShops, visibleShops, type VisibleShop } from "../shops.server.js";
@@ -33,9 +30,19 @@ export const writeControls = {
   dryRun: z
     .boolean()
     .optional()
-    .describe("Default true: previews the change and returns a confirmToken, nothing is written. false executes and needs that confirmToken."),
-  confirmToken: z.string().max(2000).optional().describe("From the dry run of this exact call; valid 5 minutes, single use."),
+    .describe("Default false: the change is applied. true is an optional preview: it computes and returns the full outcome and writes nothing."),
   idempotencyKey: z.string().min(8).max(128).optional().describe("Optional. Re-sending an executed call with the same key within 24 h returns the stored result."),
+};
+
+/** Offer-scoped writes: optional optimistic concurrency on top of the shared controls. */
+export const offerWriteControls = {
+  ...writeControls,
+  expectedUpdatedAt: z
+    .string()
+    .trim()
+    .max(40)
+    .optional()
+    .describe("Optional ISO instant: the offer's updatedAt you last saw (dryRun:true returns it in its apply nextAction). The write answers STATE_CONFLICT if the offer changed since. Omit to skip the check."),
 };
 
 const refFields = {
@@ -45,15 +52,15 @@ const refFields = {
 const reason = z.string().trim().min(3).max(300);
 const url = z.string().trim().max(300);
 
-export const promoPauseInput = { ...refFields, reason: reason.describe("Why (stored in the audit log)."), ...writeControls };
-export const promoResumeInput = { ...refFields, ...writeControls };
-export const promoArchiveInput = { ...refFields, reason: reason.optional().describe("Why (stored in the audit log)."), ...writeControls };
+export const promoPauseInput = { ...refFields, reason: reason.describe("Why (stored in the audit log)."), ...offerWriteControls };
+export const promoResumeInput = { ...refFields, ...offerWriteControls };
+export const promoArchiveInput = { ...refFields, reason: reason.optional().describe("Why (stored in the audit log)."), ...offerWriteControls };
 export const promosRepublishShopInput = { shop: z.string().max(200).describe("Shop domain or handle."), ...writeControls };
 export const promoDuplicateInput = {
   ...refFields,
   name: z.string().trim().min(1).max(120).optional().describe("Name of the draft copy; made unique in the target shop. Default: '<name>-copy'."),
-  targetShop: z.string().max(200).optional().describe("Another shop to copy into (admin role; the target must be write-enabled). Products, variants and collections are matched by handle/SKU; unmatched references are stripped and listed. The dry run shows the mapping."),
-  ...writeControls,
+  targetShop: z.string().max(200).optional().describe("Another shop to copy into (the target shop must be visible to you). Products, variants and collections are matched by handle/SKU; unmatched references are stripped and listed. dryRun:true shows the mapping."),
+  ...offerWriteControls,
 };
 export const promoCreateDraftInput = {
   shop: z.string().max(200).describe("Shop that owns the template offer and receives the draft."),
@@ -68,19 +75,19 @@ export const promoCreateDraftInput = {
     })
     .optional()
     .describe("Bounded changes applied to the draft: schedule and Store pages URLs only."),
-  ...writeControls,
+  ...offerWriteControls,
 };
 export const promoSetPageExcludeUrlsInput = {
   ...refFields,
   excludeUrls: z.array(url).max(100).describe("Replaces the Store pages exclude list (max 100 paths of 300 chars); [] clears it."),
   pageUrls: z.array(url).max(50).optional().describe("Optional: replaces the specific page paths (needs the Pages kind selected)."),
-  ...writeControls,
+  ...offerWriteControls,
 };
 export const promoSetScheduleInput = {
   ...refFields,
   startsAt: z.string().trim().max(40).nullable().optional().describe("Shop-local 'YYYY-MM-DDTHH:mm' (or an ISO instant); null clears; omitted keeps."),
   endsAt: z.string().trim().max(40).nullable().optional(),
-  ...writeControls,
+  ...offerWriteControls,
 };
 export const MAX_CODES_PER_CALL = 2000;
 export const codesSetStatusInput = {
@@ -89,14 +96,12 @@ export const codesSetStatusInput = {
   ids: z.array(z.string().uuid()).min(1).max(MAX_CODES_PER_CALL).optional().describe("Specific code ids (from codes_list)."),
   batchId: z.string().uuid().optional(),
   all: z.boolean().optional().describe("Every code of the offer."),
-  ...writeControls,
+  ...offerWriteControls,
 };
 
-export type Controls = { dryRun?: boolean; confirmToken?: string; idempotencyKey?: string };
+export type Controls = { dryRun?: boolean; idempotencyKey?: string; expectedUpdatedAt?: string };
 type Built = {
   tool: string;
-  minRole: McpRole;
-  critical: boolean;
   shops: VisibleShop[];
   preview: () => Promise<WritePreview>;
   apply: (apply: ApplyContext) => Promise<WriteBody>;
@@ -107,14 +112,17 @@ export async function guarded(
   ctx: McpContext,
   call: CallInfo,
   tool: string,
-  minRole: McpRole,
   args: Controls & Record<string, unknown>,
   build: (visible: VisibleShop[]) => Promise<Built>,
 ): Promise<CallToolResult> {
   const started = performance.now();
   let built: Built;
+  let expectedUpdatedAt: Date | undefined;
   try {
-    requireRole(ctx.operator, minRole);
+    if (args.expectedUpdatedAt !== undefined) {
+      expectedUpdatedAt = new Date(args.expectedUpdatedAt);
+      if (Number.isNaN(expectedUpdatedAt.getTime())) throw new ToolError("VALIDATION", "expectedUpdatedAt must be an ISO 8601 date-time.");
+    }
     built = await build(await visibleShops(ctx.db, ctx.operator));
   } catch (error) {
     const response = toErrorCallToolResult(error);
@@ -124,11 +132,9 @@ export async function guarded(
   }
   return runWrite(ctx, call, {
     tool: built.tool,
-    minRole: built.minRole,
-    critical: built.critical,
     args,
-    dryRun: args.dryRun !== false,
-    confirmToken: args.confirmToken,
+    dryRun: args.dryRun === true,
+    expectedUpdatedAt,
     idempotencyKey: args.idempotencyKey,
     shops: built.shops,
     preview: built.preview,
@@ -162,17 +168,15 @@ export function plain(details: Record<string, unknown> | undefined): Record<stri
 
 type StatusTool = {
   tool: "promo_pause" | "promo_resume" | "promo_archive";
-  minRole: McpRole;
-  critical: boolean;
   run: typeof pauseOffer;
   verb: string;
   hasReason: boolean;
 };
 
 const STATUS_TOOLS: Record<StatusTool["tool"], StatusTool> = {
-  promo_pause: { tool: "promo_pause", minRole: "editor", critical: false, run: pauseOffer, verb: "Pause", hasReason: true },
-  promo_resume: { tool: "promo_resume", minRole: "editor", critical: false, run: resumeOffer, verb: "Resume", hasReason: false },
-  promo_archive: { tool: "promo_archive", minRole: "admin", critical: true, run: archiveOffer, verb: "Archive", hasReason: true },
+  promo_pause: { tool: "promo_pause", run: pauseOffer, verb: "Pause", hasReason: true },
+  promo_resume: { tool: "promo_resume", run: resumeOffer, verb: "Resume", hasReason: false },
+  promo_archive: { tool: "promo_archive", run: archiveOffer, verb: "Archive", hasReason: true },
 };
 
 export function statusChange(
@@ -182,14 +186,12 @@ export function statusChange(
   args: Controls & { ref?: string; shop?: string; reason?: string },
 ): Promise<CallToolResult> {
   const def = STATUS_TOOLS[which];
-  return guarded(ctx, call, def.tool, def.minRole, args, async (visible) => {
+  return guarded(ctx, call, def.tool, args, async (visible) => {
     const { shop, offerId } = resolvePromoRef(visible, args);
     const ref = promoRef(shop.myshopifyDomain, offerId);
     const lifecycle = { shopId: shop.id, shopDomain: shop.myshopifyDomain, offerId };
     return {
       tool: def.tool,
-      minRole: def.minRole,
-      critical: def.critical,
       shops: [shop],
       preview: async () => {
         const basics = await offerBasics(ctx.db, shop, offerId);
@@ -224,12 +226,10 @@ export function statusChange(
 }
 
 export function republishShopTool(ctx: McpContext, call: CallInfo, args: Controls & { shop: string }): Promise<CallToolResult> {
-  return guarded(ctx, call, "promos_republish_shop", "admin", args, async (visible) => {
+  return guarded(ctx, call, "promos_republish_shop", args, async (visible) => {
     const [shop] = selectShops(visible, [args.shop]);
     return {
       tool: "promos_republish_shop",
-      minRole: "admin",
-      critical: false,
       shops: [shop!],
       preview: async () => {
         const warnings: Warning[] = [];
@@ -299,14 +299,14 @@ async function cloneDraft(
 ): Promise<string> {
   const current = await offerBasics(ctx.db, source.shop, source.offerId);
   if (a.expectedUpdatedAt && current.updatedAt.getTime() !== a.expectedUpdatedAt.getTime()) {
-    throw new ToolError("STATE_CONFLICT", "The source offer changed since the dry run; run it again.");
+    throw new ToolError("STATE_CONFLICT", "The source offer changed since your expectedUpdatedAt; read it again.");
   }
   const finalName = await uniqueOfferName(ctx.db, target.id, name);
   let newId: string | null;
   try {
     newId = await duplicateOffer(ctx.db, source.shop.id, source.offerId, { name: finalName, targetShopId: target.id, resourceMapping: mapping });
   } catch (error) {
-    if (isUnique(error)) throw new ToolError("STATE_CONFLICT", "The name was taken meanwhile; run the dry run again.");
+    if (isUnique(error)) throw new ToolError("STATE_CONFLICT", "The name was taken meanwhile; retry.");
     throw error;
   }
   if (!newId) throw new ToolError("NOT_FOUND", "Offer not found in that shop.");
@@ -321,8 +321,6 @@ async function cloneDraft(
   });
   return newId;
 }
-
-const mappingHash = (m: ResourceMapping) => createHash("sha256").update(canonicalJson(m)).digest("hex");
 
 async function mapForTool(ctx: McpContext, source: { shop: VisibleShop; offerId: string }, target: VisibleShop): Promise<ResourceMapping> {
   try {
@@ -354,15 +352,13 @@ export function duplicateTool(
   call: CallInfo,
   args: Controls & { ref?: string; shop?: string; name?: string; targetShop?: string },
 ): Promise<CallToolResult> {
-  return guarded(ctx, call, "promo_duplicate", "editor", args, async (visible) => {
+  return guarded(ctx, call, "promo_duplicate", args, async (visible) => {
     const source = resolvePromoRef(visible, args);
     const target = args.targetShop ? selectShops(visible, [args.targetShop])[0]! : source.shop;
     const crossShop = target.id !== source.shop.id;
     const sourceRef = promoRef(source.shop.myshopifyDomain, source.offerId);
     return {
       tool: "promo_duplicate",
-      minRole: crossShop ? "admin" : "editor",
-      critical: false,
       shops: [target],
       preview: async () => {
         const basics = await offerBasics(ctx.db, source.shop, source.offerId);
@@ -378,7 +374,6 @@ export function duplicateTool(
           warnings,
           links: [adminLink(shopHandle(target.myshopifyDomain))],
           offerUpdatedAt: basics.updatedAt,
-          setHash: mapping ? mappingHash(mapping) : null,
         };
       },
       apply: async (a) => {
@@ -386,7 +381,6 @@ export function duplicateTool(
         let mapping: ResourceMapping | undefined;
         if (crossShop) {
           mapping = await mapForTool(ctx, source, target);
-          if (a.expectedSetHash !== mappingHash(mapping)) throw new ToolError("STATE_CONFLICT", "The product mapping to the target shop changed since the dry run; run it again.");
         }
         const extra = crossShop ? { sourceShop: source.shop.myshopifyDomain, sourceOfferId: source.offerId, mapped: mapping!.mapped.length, unmatched: mapping!.unmatched } : {};
         const newId = await cloneDraft(ctx, a, source, target, args.name ?? `${basics.name}-copy`, "promo_duplicate", extra, mapping);
@@ -410,7 +404,7 @@ export function createDraftFromTemplateTool(
   call: CallInfo,
   args: Controls & { shop: string; templateId: string; name: string; overrides?: Overrides },
 ): Promise<CallToolResult> {
-  return guarded(ctx, call, "promo_create_draft_from_template", "editor", args, async (visible) => {
+  return guarded(ctx, call, "promo_create_draft_from_template", args, async (visible) => {
     const source = args.templateId.startsWith("promo:")
       ? resolvePromoRef(visible, { ref: args.templateId })
       : resolvePromoRef(visible, { offerId: args.templateId, shop: args.shop });
@@ -421,24 +415,27 @@ export function createDraftFromTemplateTool(
     const hasUrls = o.excludeUrls !== undefined || o.pageUrls !== undefined;
     const lifecycle = { shopId: shop!.id, shopDomain: shop!.myshopifyDomain, offerId: source.offerId };
 
+    // The overrides are validated against the template itself, so a bad override fails before anything is created.
+    const probeOverrides = async () => {
+      const probe = { performedBy: `mcp:${ctx.operator.id}`, dryRun: true } as const;
+      let schedule: Record<string, unknown> | undefined;
+      let urls: Record<string, unknown> | undefined;
+      if (hasSchedule) {
+        schedule = plain(expectOk(await setOfferSchedule(ctx.db, { ...lifecycle, startsAt: o.startsAt, endsAt: o.endsAt, shopTimezone: shop!.timezone }, probe), "template").details);
+      }
+      if (hasUrls) {
+        urls = plain(expectOk(await setOfferPageUrls(ctx.db, { ...lifecycle, excludeUrls: o.excludeUrls, pageUrls: o.pageUrls }, probe), "template").details);
+      }
+      return { schedule, urls };
+    };
+
     return {
       tool: "promo_create_draft_from_template",
-      minRole: "editor",
-      critical: false,
       shops: [shop!],
       preview: async () => {
         const basics = await offerBasics(ctx.db, shop!, source.offerId);
         const name = await uniqueOfferName(ctx.db, shop!.id, args.name);
-        const probe = { performedBy: `mcp:${ctx.operator.id}`, dryRun: true } as const;
-        // The overrides are validated against the template itself, so a bad override fails before anything is created.
-        let schedule: Record<string, unknown> | undefined;
-        let urls: Record<string, unknown> | undefined;
-        if (hasSchedule) {
-          schedule = plain(expectOk(await setOfferSchedule(ctx.db, { ...lifecycle, startsAt: o.startsAt, endsAt: o.endsAt, shopTimezone: shop!.timezone }, probe), "template").details);
-        }
-        if (hasUrls) {
-          urls = plain(expectOk(await setOfferPageUrls(ctx.db, { ...lifecycle, excludeUrls: o.excludeUrls, pageUrls: o.pageUrls }, probe), "template").details);
-        }
+        const { schedule, urls } = await probeOverrides();
         return {
           summary: `Create the draft "${name}" in ${shop!.myshopifyDomain} as a copy of the template "${label(basics.name)}"${hasSchedule || hasUrls ? " with the given overrides" : ""}.`,
           data: { templateRef: promoRef(shop!.myshopifyDomain, source.offerId), name, resultingStatus: "draft", overrides: { schedule: schedule ?? null, pageUrls: urls ?? null } },
@@ -448,6 +445,7 @@ export function createDraftFromTemplateTool(
         };
       },
       apply: async (a) => {
+        await probeOverrides();
         const newId = await cloneDraft(ctx, a, source, shop!, args.name, "promo_create_draft_from_template", { overrides: o });
         const newRef = promoRef(shop!.myshopifyDomain, newId);
         const copy = { shopId: shop!.id, shopDomain: shop!.myshopifyDomain, offerId: newId };
@@ -482,14 +480,12 @@ export function setPageExcludeUrlsTool(
   call: CallInfo,
   args: Controls & { ref?: string; shop?: string; excludeUrls: string[]; pageUrls?: string[] },
 ): Promise<CallToolResult> {
-  return guarded(ctx, call, "promo_set_page_exclude_urls", "editor", args, async (visible) => {
+  return guarded(ctx, call, "promo_set_page_exclude_urls", args, async (visible) => {
     const { shop, offerId } = resolvePromoRef(visible, args);
     const ref = promoRef(shop.myshopifyDomain, offerId);
     const input = { shopId: shop.id, shopDomain: shop.myshopifyDomain, offerId, excludeUrls: args.excludeUrls, pageUrls: args.pageUrls };
     return {
       tool: "promo_set_page_exclude_urls",
-      minRole: "editor",
-      critical: false,
       shops: [shop],
       preview: async () => {
         const basics = await offerBasics(ctx.db, shop, offerId);
@@ -521,7 +517,7 @@ export function setScheduleTool(
   call: CallInfo,
   args: Controls & { ref?: string; shop?: string; startsAt?: string | null; endsAt?: string | null },
 ): Promise<CallToolResult> {
-  return guarded(ctx, call, "promo_set_schedule", "editor", args, async (visible) => {
+  return guarded(ctx, call, "promo_set_schedule", args, async (visible) => {
     const { shop, offerId } = resolvePromoRef(visible, args);
     const ref = promoRef(shop.myshopifyDomain, offerId);
     if (args.startsAt === undefined && args.endsAt === undefined) {
@@ -534,8 +530,6 @@ export function setScheduleTool(
     };
     return {
       tool: "promo_set_schedule",
-      minRole: "editor",
-      critical: false,
       shops: [shop],
       preview: async () => {
         const basics = await offerBasics(ctx.db, shop, offerId);
@@ -569,7 +563,7 @@ export function codesSetStatusTool(
   call: CallInfo,
   args: Controls & { ref?: string; shop?: string; status: "active" | "disabled"; ids?: string[]; batchId?: string; all?: boolean },
 ): Promise<CallToolResult> {
-  return guarded(ctx, call, "codes_set_status", "editor", args, async (visible) => {
+  return guarded(ctx, call, "codes_set_status", args, async (visible) => {
     const { shop, offerId } = resolvePromoRef(visible, args);
     const ref = promoRef(shop.myshopifyDomain, offerId);
     const targets = [args.ids ? 1 : 0, args.batchId ? 1 : 0, args.all ? 1 : 0].reduce((a, b) => a + b, 0);
@@ -592,8 +586,6 @@ export function codesSetStatusTool(
 
     return {
       tool: "codes_set_status",
-      minRole: "editor",
-      critical: false,
       shops: [shop],
       preview: async () => {
         const basics = await offerBasics(ctx.db, shop, offerId);
@@ -608,7 +600,7 @@ export function codesSetStatusTool(
       apply: async (a) => {
         const basics = await offerBasics(ctx.db, shop, offerId);
         if (a.expectedUpdatedAt && basics.updatedAt.getTime() !== a.expectedUpdatedAt.getTime()) {
-          throw new ToolError("STATE_CONFLICT", "The offer changed since the dry run; run it again.");
+          throw new ToolError("STATE_CONFLICT", "The offer changed since your expectedUpdatedAt; read it again.");
         }
         // Snapshot and update in one transaction so the restore below puts back exactly what this call changed.
         const { before, changed } = await ctx.db.transaction(async (tx) => {

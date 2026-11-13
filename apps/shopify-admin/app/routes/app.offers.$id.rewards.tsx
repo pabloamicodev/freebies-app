@@ -14,17 +14,15 @@ import { ProductPicker } from "../components/ProductPicker.js";
 import { SelectedProductsList } from "../components/SelectedProductsList.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
-import { insertAuditLog } from "../lib/audit-log.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
-import { offerRewards, offers } from "@promo/db";
+import { offerRewards } from "@promo/db";
 import type { DeliveryGroupType } from "@promo/shared-types";
-import { buildRewardRecord } from "../lib/reward-record.server.js";
+import { rewardInputFromFormData } from "../lib/reward-record.server.js";
+import { addReward, deleteReward, setTierMode, updateReward } from "../lib/offer-rewards.server.js";
 import { splitTextareaList } from "../lib/textarea-list.js";
 import { and, eq } from "drizzle-orm";
 import { formatStoredAmount, fromStoredAmount, isZeroDecimalCurrency, toStoredAmount } from "../lib/money.js";
-import { republishIfActive } from "../lib/offer-publish-flow.server.js";
-import { lowerMainThresholdToLowestTier } from "../lib/gift-tiered-offer.server.js";
 import { giftTierModeSchema } from "../lib/gift-tier-campaigns.js";
 import { readRewardTiers, rewardSummary, targetSummaryParts } from "../lib/offer-summaries.js";
 import { CartLabelsField } from "../components/CartLabelsField.js";
@@ -110,135 +108,34 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
 
 export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
-  const { session, shopId, db, currencyCode: shopCurrencyCode } = await getShopContext(request);
+  const { session, shopId, db, currencyCode: shopCurrencyCode, timezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
-  const offer = await loadOwnedOffer(db, shopId, offerId);
+  await loadOwnedOffer(db, shopId, offerId);
+  const deps = { db, shopId, shopDomain: session.shop, shopCurrency: shopCurrencyCode, timezone };
+  const opts = { performedBy: session.shop };
 
   if (intent === "add_reward" || intent === "update_reward") {
-    const editedId = intent === "update_reward" ? (formData.get("rewardId") as string) : "";
-    const [current] = editedId
-      ? await db.select({ rewardType: offerRewards.rewardType, value: offerRewards.value }).from(offerRewards)
-          .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, editedId))).limit(1)
-      : [];
-    const built = await buildRewardRecord(formData, db, shopId, shopCurrencyCode, current ?? null);
-    if ("error" in built) return { error: built.error };
-    const { rewardType, discountType, value, target, quantity, isAutoAdd, isCustomerSelectable, trackMode, label, minCartSubtotalCents } = built.data;
-    if (minCartSubtotalCents) {
-      const siblings = await db
-        .select({ id: offerRewards.id, min: offerRewards.minCartSubtotalCents })
-        .from(offerRewards)
-        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.rewardType, "product_gift")));
-      if (siblings.some((sibling) => sibling.id !== editedId && sibling.min === minCartSubtotalCents)) {
-        return { error: "Another gift in this offer already unlocks at that cart subtotal. Each tier needs its own amount." };
-      }
-    }
-    // Gift tier: posted blank clears it, an absent field keeps it, and a reward that stops being a gift loses it.
-    const tierColumn = rewardType !== "product_gift" ? { minCartSubtotalCents: null } : minCartSubtotalCents !== undefined ? { minCartSubtotalCents } : {};
-
-    const tierChanged = minCartSubtotalCents !== undefined && (intent === "add_reward" || minCartSubtotalCents !== ((await db
-      .select({ min: offerRewards.minCartSubtotalCents }).from(offerRewards)
-      .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, editedId))).limit(1))[0]?.min ?? null));
-    if (intent === "update_reward" && !editedId) return { error: "Reward ID missing." };
-
-    await db.transaction(async (tx) => {
-    if (intent === "add_reward") {
-      const existing = await tx
-        .select({ id: offerRewards.id })
-        .from(offerRewards)
-        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
-
-      await tx.insert(offerRewards).values({
-        shopId,
-        offerId,
-        rewardType,
-        discountType,
-        value,
-        target,
-        quantity,
-        isAutoAdd,
-        isCustomerSelectable,
-        trackMode,
-        sortOrder: existing.length,
-        label,
-        ...tierColumn,
-      });
-    } else {
-      await tx
-        .update(offerRewards)
-        .set({ rewardType, discountType, value, target, quantity, isAutoAdd, isCustomerSelectable, trackMode, label, ...tierColumn })
-        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId), eq(offerRewards.id, editedId)));
-    }
-    if (tierChanged) await lowerMainThresholdToLowestTier(tx as unknown as typeof db, shopId, offerId);
-    });
-    const publishError = await republishIfActive(
-      db,
-      shopId,
-      session.shop,
-      offerId,
-      offer.status === "active",
-    );
-    if (publishError) return { error: publishError };
-    void insertAuditLog(db, {
-      shopId,
-      entityType: "offer_reward",
-      entityId: offerId,
-      action: intent,
-      after: { rewardType, discountType },
-      performedBy: session.shop,
-    });
+    const parsed = rewardInputFromFormData(formData);
+    if ("error" in parsed) return { error: parsed.error };
+    const result =
+      intent === "add_reward"
+        ? await addReward(deps, offerId, { input: parsed.input }, opts)
+        : await updateReward(deps, offerId, formData.get("rewardId") as string, { input: parsed.input }, opts);
+    if (!result.ok) return { error: result.error };
   }
 
   if (intent === "set_tier_mode") {
     const mode = giftTierModeSchema.safeParse(formData.get("tierMode"));
     if (!mode.success) return { error: "Choose how several reached tiers combine." };
-    await db.update(offers).set({ tierMode: mode.data, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
-    if (publishError) return { error: publishError };
-    void insertAuditLog(db, { shopId, entityType: "offer", entityId: offerId, action: "set_tier_mode", after: { tierMode: mode.data }, performedBy: session.shop });
+    const result = await setTierMode(deps, offerId, mode.data, opts);
+    if (!result.ok) return { error: result.error };
   }
 
   if (intent === "delete_reward") {
-    const rewardId = formData.get("rewardId") as string;
-    if (!rewardId) return { error: "Reward ID missing." };
-    if (offer.status === "active") {
-      const rewards = await db
-        .select({ id: offerRewards.id })
-        .from(offerRewards)
-        .where(and(eq(offerRewards.shopId, shopId), eq(offerRewards.offerId, offerId)));
-      if (rewards.length <= 1) {
-        return {
-          error:
-            "Cannot delete the last reward from an active offer. Pause it first or add another reward.",
-        };
-      }
-    }
-    await db
-      .delete(offerRewards)
-      .where(
-        and(
-          eq(offerRewards.shopId, shopId),
-          eq(offerRewards.offerId, offerId),
-          eq(offerRewards.id, rewardId),
-        ),
-      );
-    const publishError = await republishIfActive(
-      db,
-      shopId,
-      session.shop,
-      offerId,
-      offer.status === "active",
-    );
-    if (publishError) return { error: publishError };
-    void insertAuditLog(db, {
-      shopId,
-      entityType: "offer_reward",
-      entityId: rewardId,
-      action: "delete_reward",
-      before: { offerId },
-      performedBy: session.shop,
-    });
+    const result = await deleteReward(deps, offerId, formData.get("rewardId") as string, opts);
+    if (!result.ok) return { error: result.error };
   }
 
   return { success: true };

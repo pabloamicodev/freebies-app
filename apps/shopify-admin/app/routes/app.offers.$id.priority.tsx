@@ -11,7 +11,7 @@ import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { offers, offerCombinationPolicies } from "@promo/db";
 import { eq, and, ne } from "drizzle-orm";
 import { detectConflicts } from "../lib/conflict-detection.server.js";
-import { republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { setPriority } from "../lib/offer-priority.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
 import { withCapacityModal } from "../lib/capacity-capture.server.js";
@@ -52,21 +52,22 @@ export const action = withCapacityModal(async ({ request, params }: ActionFuncti
   const { session, shopId, db } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
-  const offer = await loadOwnedOffer(db, shopId, offerId);
+  await loadOwnedOffer(db, shopId, offerId);
 
   const newPriority = parseInt(formData.get("priority") as string, 10);
   if (!Number.isInteger(newPriority)) {
     throw new Response("Invalid priority", { status: 400 });
   }
-  const stopLowerPriority = formData.get("stop_lower_priority") === "on";
-
-  await db.update(offers).set({ priority: newPriority, updatedAt: new Date() }).where(and(eq(offers.shopId, shopId), eq(offers.id, offerId)));
-  await db.update(offerCombinationPolicies)
-    .set({ stopLowerPriority, updatedAt: new Date() })
-    .where(and(eq(offerCombinationPolicies.shopId, shopId), eq(offerCombinationPolicies.offerId, offerId)));
-  const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
-  if (publishError) return { error: publishError };
-
+  const result = await setPriority(
+    { db, shopId, shopDomain: session.shop },
+    offerId,
+    { priority: newPriority, stopLowerPriority: formData.get("stop_lower_priority") === "on" },
+    { performedBy: session.shop },
+  );
+  if (!result.ok) {
+    if (result.code === "validation") throw new Response(result.error, { status: 400 });
+    return { error: result.error };
+  }
   return null;
 });
 

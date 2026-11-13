@@ -1,14 +1,14 @@
 import { z } from "zod";
 import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { mcpCallLog, mcpOperators, type Db } from "@promo/db";
-import { requireRole, type Operator } from "../auth.server.js";
+import type { Operator } from "../auth.server.js";
 import { buildResult, ToolError, type ToolResult } from "../result.server.js";
 import { decodeCursor, encodeCursor } from "./insights-common.server.js";
 
 export const mcpCallLogQueryInput = {
   operatorEmail: z.string().max(254).optional().describe("Only calls by this operator (exact email, case-insensitive). The email is never returned."),
   tool: z.string().max(80).optional().describe("Exact tool name, e.g. promos_pause_all."),
-  outcome: z.string().max(40).optional().describe('"ok", "pending" or an error code such as FORBIDDEN or SHOP_READ_ONLY.'),
+  outcome: z.string().max(40).optional().describe('"ok", "pending" or an error code such as VALIDATION or STATE_CONFLICT.'),
   since: z.string().optional().describe("ISO 8601 lower bound (inclusive)."),
   until: z.string().optional().describe("ISO 8601 upper bound (inclusive)."),
   limit: z.number().int().min(1).max(200).optional().describe("Default 50, max 200."),
@@ -40,11 +40,10 @@ function parseDate(value: string | undefined, field: string): Date | undefined {
 
 export async function mcpCallLogQuery(
   db: Db,
-  operator: Operator,
+  _operator: Operator,
   args: { operatorEmail?: string; tool?: string; outcome?: string; since?: string; until?: string; limit?: number; cursor?: string },
   now: () => Date = () => new Date(),
 ): Promise<ToolResult<{ calls: CallLogRow[] }>> {
-  requireRole(operator, "admin");
   const limit = args.limit ?? DEFAULT_LIMIT;
   const since = parseDate(args.since, "since");
   const until = parseDate(args.until, "until");

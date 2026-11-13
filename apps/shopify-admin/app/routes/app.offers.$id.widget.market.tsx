@@ -10,64 +10,28 @@ import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
 import { parseJsonArray } from "../lib/offer-validation.server.js";
-import { widgets, appSettings } from "@promo/db";
+import { widgets } from "@promo/db";
 import { eq, and } from "drizzle-orm";
 import { getMarketsForShop } from "../lib/markets.server.js";
+import { loadMarketOverrides, setMarketOverrides } from "../lib/offer-widgets.server.js";
 import { MarketWidgetConfig } from "../components/MarketWidgetConfig.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
-type StoredMarketOverride = {
-  marketId: string;
-  thresholdCents: number | null;
-  widgetTitle: string | null;
-  enabled: boolean;
-};
-
-function normalizeMarketOverrides(items: unknown[]): StoredMarketOverride[] {
-  return items.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const override = item as {
-      marketId?: unknown;
-      thresholdCents?: unknown;
-      widgetTitle?: unknown;
-      enabled?: unknown;
-    };
-    if (typeof override.marketId !== "string") return [];
-    const thresholdCents = typeof override.thresholdCents === "number" && Number.isFinite(override.thresholdCents)
-      ? override.thresholdCents
-      : null;
-    const widgetTitle = typeof override.widgetTitle === "string" && override.widgetTitle.trim()
-      ? override.widgetTitle.trim()
-      : null;
-    const enabled = typeof override.enabled === "boolean" ? override.enabled : true;
-    return [{ marketId: override.marketId, thresholdCents, widgetTitle, enabled }];
-  });
-}
-
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db, currencyCode: shopCurrencyCode } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   await loadOwnedOffer(db, shopId, offerId);
 
-  const [offerWidgets, markets, marketOverrideRow] = await Promise.all([
+  const [offerWidgets, markets, marketOverrides] = await Promise.all([
     db.select().from(widgets).where(and(eq(widgets.offerId, offerId), eq(widgets.shopId, shopId))).limit(1),
     getMarketsForShop(shopId),
-    db.select({ value: appSettings.value })
-      .from(appSettings)
-      .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, `widget.market_overrides.${offerId}`)))
-      .limit(1),
+    loadMarketOverrides({ db, shopId }, offerId),
   ]);
 
   const widget = offerWidgets[0];
-  const overridesForm = new FormData();
-  overridesForm.set("overrides", marketOverrideRow[0]?.value || "[]");
-  const marketOverridesResult = parseJsonArray(overridesForm, "overrides");
-  const marketOverrides = marketOverridesResult.error
-    ? []
-    : normalizeMarketOverrides(marketOverridesResult.data!);
 
   // Get base threshold from widget config
   const widgetConfig = (widget?.config ?? {}) as Record<string, unknown>;
@@ -85,7 +49,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { shopId, db } = await getShopContext(request);
+  const { session, shopId, db, currencyCode, timezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   await loadOwnedOffer(db, shopId, offerId);
@@ -95,16 +59,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   overridesForm.set("overrides", overridesJson || "[]");
   const overridesResult = parseJsonArray(overridesForm, "overrides");
   if (overridesResult.error) return { error: overridesResult.error };
-  const overrides = normalizeMarketOverrides(overridesResult.data!);
 
-  await db.insert(appSettings)
-    .values({ shopId, key: `widget.market_overrides.${offerId}`, value: JSON.stringify(overrides) })
-    .onConflictDoUpdate({
-      target: [appSettings.shopId, appSettings.key],
-      set: { value: JSON.stringify(overrides), updatedAt: new Date() },
-    });
-
-  return { success: true, savedCount: overrides.length };
+  const deps = { db, shopId, shopDomain: session.shop, shopCurrency: currencyCode, timezone };
+  const result = await setMarketOverrides(deps, { offerId, overrides: overridesResult.data! }, { performedBy: session.shop });
+  if (!result.ok) return { error: result.error };
+  return { success: true, savedCount: result.value.savedCount };
 };
 
 async function saveMarketOverrides(overrides: Array<{ marketId: string; thresholdCents: number | null }>) {

@@ -11,6 +11,7 @@ import { readCartLabels } from "../lib/cart-labels.js";
 import { normalizeConditionValue } from "../lib/offer-config-normalization.server.js";
 import { getPublishWarnings, publishShopConfig, republishIfActive, validateActivationWithPreflight } from "../lib/offer-publish-flow.server.js";
 import { activateDraftOffer } from "../lib/offer-lifecycle.server.js";
+import { setCombinationPolicy } from "../lib/offer-combination.server.js";
 import { statusForScheduleSave } from "../lib/offer-scheduling.server.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { offers, offerConditions, offerRewards, offerCombinationPolicies, discountCodes } from "@promo/db";
@@ -416,17 +417,18 @@ export const action = withCapacityModal(async ({ request, params }: ActionFuncti
       break;
     }
     case "set_combination": {
-      const flags = {
-        combinesWithOrderDiscounts: formData.get("order_discounts") === "on",
-        combinesWithProductDiscounts: formData.get("product_discounts") === "on",
-        combinesWithShippingDiscounts: formData.get("shipping_discounts") === "on",
-        canStackWithGiftOffers: formData.get("can_stack_gift_offers") === "on",
-      };
-      await db.insert(offerCombinationPolicies)
-        .values({ shopId, offerId, ...flags })
-        .onConflictDoUpdate({ target: [offerCombinationPolicies.offerId], set: { ...flags, updatedAt: new Date() } });
-      const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
-      if (publishError) return { error: publishError };
+      const result = await setCombinationPolicy(
+        { db, shopId, shopDomain: session.shop },
+        offerId,
+        {
+          combinesWithOrderDiscounts: formData.get("order_discounts") === "on",
+          combinesWithProductDiscounts: formData.get("product_discounts") === "on",
+          combinesWithShippingDiscounts: formData.get("shipping_discounts") === "on",
+          canStackWithGiftOffers: formData.get("can_stack_gift_offers") === "on",
+        },
+        { performedBy: session.shop },
+      );
+      if (!result.ok) return { error: result.error };
       break;
     }
     case "pause": {

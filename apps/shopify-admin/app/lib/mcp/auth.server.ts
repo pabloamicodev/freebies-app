@@ -3,6 +3,7 @@ import { and, eq, gt, isNull } from "drizzle-orm";
 import { mcpCredentials, mcpOperators, type Db } from "@promo/db";
 import { ToolError } from "./result.server.js";
 
+/** Informational since 2026-11-13: no tool checks it (every authenticated operator can call every tool). */
 export type McpRole = "viewer" | "editor" | "admin";
 export const PAT_PREFIX = "pemcp_";
 export const PAT_TTL_DAYS = 90;
@@ -26,8 +27,6 @@ export function canSeeShop(allowList: string[], myshopifyDomain: string): boolea
   return allowList.includes(ALL_SHOPS) || allowList.includes(myshopifyDomain.toLowerCase());
 }
 
-const ROLE_RANK: Record<McpRole, number> = { viewer: 1, editor: 2, admin: 3 };
-
 export type Operator = {
   id: string;
   email: string;
@@ -35,16 +34,6 @@ export type Operator = {
   role: McpRole;
   shopAllowList: string[];
 };
-
-export function roleAtLeast(role: McpRole, minimum: McpRole): boolean {
-  return ROLE_RANK[role] >= ROLE_RANK[minimum];
-}
-
-export function requireRole(operator: Operator, minimum: McpRole): void {
-  if (!roleAtLeast(operator.role, minimum)) {
-    throw new ToolError("FORBIDDEN", `This tool needs the ${minimum} role; your role is ${operator.role}.`, { details: { reason: "ROLE" } });
-  }
-}
 
 function pepper(env: NodeJS.ProcessEnv): string {
   const value = env["MCP_TOKEN_PEPPER"];

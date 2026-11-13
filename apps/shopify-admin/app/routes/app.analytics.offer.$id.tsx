@@ -6,91 +6,18 @@
 import { parseUuidParam } from "../lib/route-params.js";
 import { useLoaderData } from "react-router";
 import { getShopContext } from "../lib/shop-context.server.js";
-import { analyticsEvents, offers } from "@promo/db";
-import { and, count, eq, gte, sql } from "drizzle-orm";
+import { loadOfferAnalytics } from "../lib/analytics-queries.server.js";
 import type { LoaderFunctionArgs } from "react-router";
 import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
-const FUNNEL_EVENTS = [
-  { event: "promo_engine:widget_viewed", label: "Widget Viewed" },
-  { event: "promo_engine:offer_qualified", label: "Offer Qualified" },
-  { event: "promo_engine:gift_auto_added", label: "Gift Added" },
-  { event: "checkout_started", label: "Checkout Started" },
-  { event: "order_placed_attributed", label: "Order Placed" },
-];
-
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   const offerId = parseUuidParam(params);
-
-  const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-
-  const [offerRows, funnelData, errorCounts, recentEventRows] = await Promise.all([
-    db.select().from(offers)
-      .where(and(eq(offers.shopId, shopId), eq(offers.id, offerId))).limit(1),
-    Promise.all(
-      FUNNEL_EVENTS.map(async (step) => {
-        const res = await db.select({ count: count() }).from(analyticsEvents)
-          .where(and(
-            eq(analyticsEvents.shopId, shopId),
-            eq(analyticsEvents.eventName, step.event),
-            eq(analyticsEvents.offerId, offerId),
-            gte(analyticsEvents.occurredAt, since30d),
-          ));
-        return { label: step.label, count: res[0]?.count ?? 0 };
-      }),
-    ),
-    Promise.all([
-      db.select({ count: count() }).from(analyticsEvents)
-        .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.offerId, offerId), eq(analyticsEvents.eventName, "promo_engine:cart_mutation_error"), gte(analyticsEvents.occurredAt, since30d))),
-      db.select({ count: count() }).from(analyticsEvents)
-        .where(and(eq(analyticsEvents.shopId, shopId), eq(analyticsEvents.offerId, offerId), gte(analyticsEvents.occurredAt, since30d))),
-    ]),
-    db
-      .select({
-        id: analyticsEvents.id,
-        eventName: analyticsEvents.eventName,
-        occurredAt: analyticsEvents.occurredAt,
-      })
-      .from(analyticsEvents)
-      .where(and(
-        eq(analyticsEvents.shopId, shopId),
-        eq(analyticsEvents.offerId, offerId),
-      ))
-      .orderBy(sql`${analyticsEvents.occurredAt} desc`)
-      .limit(10),
-  ]);
-  const offer = offerRows[0];
-  if (!offer) throw new Response("Not found", { status: 404 });
-  const [errorCount, mutationCount] = errorCounts;
-
-  const totalEvents = mutationCount[0]?.count ?? 0;
-  const errorEvents = errorCount[0]?.count ?? 0;
-  const errorRate = totalEvents > 0 ? ((errorEvents / totalEvents) * 100).toFixed(1) : "0";
-
-  // Derive stat card values from funnel data
-  const impressions = funnelData[0]?.count ?? 0;
-  const giftAdds = funnelData[2]?.count ?? 0;
-  const addRate = impressions > 0 ? ((giftAdds / impressions) * 100).toFixed(1) : "0";
-
-  return {
-    offer: { id: offer.id, internalName: offer.internalName, type: offer.type, status: offer.status },
-    funnelData,
-    errorRate,
-    totalEvents,
-    impressions,
-    giftAdds,
-    addRate,
-    recentEvents: recentEventRows.map((r) => ({
-      id: r.id,
-      eventName: r.eventName,
-      occurredAt: r.occurredAt instanceof Date
-        ? r.occurredAt.toISOString()
-        : String(r.occurredAt),
-    })),
-  };
+  const analytics = await loadOfferAnalytics(db, shopId, offerId);
+  if (!analytics) throw new Response("Not found", { status: 404 });
+  return analytics;
 };
 
 function fmtEventName(raw: string) {

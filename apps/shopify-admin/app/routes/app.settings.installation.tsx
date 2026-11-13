@@ -6,7 +6,7 @@
 
 import { useLoaderData } from "react-router";
 import { PageHeader } from "../components/PageHeader.js";
-import { detectPromoEngineEmbedStatus } from "../lib/theme-app-embed.server.js";
+import { checkPublishedThemeEmbed, type ThemeQueryResult } from "../lib/theme-installation.server.js";
 import { authenticate } from "../shopify.server.js";
 import type { LoaderFunctionArgs } from "react-router";
 import "../styles/bogos.css";
@@ -15,66 +15,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
   const shopDomain = session.shop;
 
-  let appEmbedStatus: "enabled" | "disabled" | "unknown" = "unknown";
-  let activeThemeId = "";
-  let statusDetail = "Shopify did not return a verifiable app embed status.";
-
-  try {
-    // Query the active theme's settings_data.json to check if the app embed is enabled
-    const res = await admin.graphql(`
-      query CheckAppEmbed {
-        themes(first: 1, roles: [MAIN]) {
-          nodes {
-            id
-            name
-            files(filenames: ["config/settings_data.json"], first: 1) {
-              nodes {
-                body {
-                  ... on OnlineStoreThemeFileBodyText {
-                    content
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    `);
-
-    interface ThemeFileBody { content?: string }
-    interface ThemeFileNode { body?: ThemeFileBody }
-    interface ThemeNode {
-      id: string;
-      name: string;
-      files?: { nodes?: ThemeFileNode[] };
-    }
-    interface ThemeQueryResult {
-      data?: { themes?: { nodes?: ThemeNode[] } };
-      errors?: Array<{ message?: string }>;
-    }
-
-    const data = await res.json() as ThemeQueryResult;
-    if (data.errors?.length) {
-      throw new Error(data.errors.map((error) => error.message ?? "Theme query failed").join("; "));
-    }
-    const mainTheme = data.data?.themes?.nodes?.[0];
-    activeThemeId = mainTheme?.id ?? "";
-
-    const settingsContent = mainTheme?.files?.nodes?.[0]?.body?.content;
-    if (settingsContent) {
-      appEmbedStatus = detectPromoEngineEmbedStatus(settingsContent);
-      statusDetail = appEmbedStatus === "enabled"
-        ? "The published theme settings were read successfully."
-        : "The published theme settings confirm that the Promo Engine app embed is not active.";
-    } else {
-      statusDetail = "The published theme settings file was unavailable.";
-    }
-  } catch (error) {
-    console.warn("[installation] Unable to verify app embed status", {
-      shop: shopDomain,
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
+  const { appEmbedStatus, activeThemeId, statusDetail } = await checkPublishedThemeEmbed(
+    async (query) => (await admin.graphql(query)).json() as Promise<ThemeQueryResult>,
+    shopDomain,
+  );
 
   const shopHandle = shopDomain.replace(".myshopify.com", "");
   const themeId = activeThemeId.split("/").pop();

@@ -4,58 +4,20 @@
  */
 
 import { useLoaderData, useActionData, Form } from "react-router";
-import { placeholderError } from "../lib/translation-placeholders.js";
 import { useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
-import { appSettings } from "@promo/db";
-import { and, eq } from "drizzle-orm";
+import { loadTranslations, setTranslations } from "../lib/translations.server.js";
+import { TRANSLATION_KEYS } from "../lib/translation-keys.js";
 import { SUPPORTED_LOCALES, type WidgetTranslations } from "@promo/shared-types";
-import { parseStoredJson } from "../lib/offer-validation.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import "../styles/bogos.css";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 
-const TRANSLATION_KEYS: Array<{ key: keyof WidgetTranslations; label: string; hint?: string; vars?: readonly string[] }> = [
-  { key: "progress.before_goal", label: "Progress bar — before goal", hint: "Use {{remaining_amount}} for the amount, {{remaining_quantity}} for quantity.", vars: ["remaining_amount", "remaining_quantity", "current_amount", "target_amount"] },
-  { key: "progress.after_goal", label: "Progress bar — after goal" },
-  { key: "progress.gift_tier_before_goal", label: "Gift tiers bar — before next tier", hint: "Use {{remaining_amount}} for the amount left to the next gift tier.", vars: ["remaining_amount"] },
-  { key: "progress.gift_tier_after_goal", label: "Gift tiers bar — all gifts unlocked" },
-  { key: "gift_slider.title", label: "Gift slider title" },
-  { key: "gift_slider.confirm_button", label: "Gift slider confirm button" },
-  { key: "gift_slider.out_of_stock", label: "Gift out of stock label" },
-  { key: "gift_slider.free_label", label: "Free price label" },
-  { key: "gift_slider.choose_variant", label: "Gift picker — choose a variant prompt" },
-  { key: "gift_slider.limit_reached", label: "Gift picker — limit reached notice", hint: "Use {{max}} for the number of gifts.", vars: ["max"] },
-  { key: "today_offer.title", label: "Today Offer widget title" },
-  { key: "today_offer.button", label: "Today Offer button text" },
-  { key: "volume_discount.title", label: "Volume discount title" },
-  { key: "fbt.title", label: "FBT widget title" },
-  { key: "fbt.add_button", label: "FBT add button", hint: "Use {{count}} for number of items.", vars: ["count"] },
-  { key: "upsell.no_thanks", label: "Upsell dismiss text" },
-];
-
-/** Widget strings are one line of storefront text. */
-const MAX_STRING_LENGTH = 300;
-
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopId, db } = await getShopContext(request);
   if (!shopId) return { translations: {} as Record<string, Partial<WidgetTranslations>>, shopId: "" };
-
-  const settingRows = await db.select({ value: appSettings.value })
-    .from(appSettings)
-    .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, "translations.strings")))
-    .limit(1);
-
-  let translations: Record<string, Partial<WidgetTranslations>> = {};
-  if (settingRows[0]) {
-    const parsedTranslations = parseStoredJson(settingRows[0].value);
-    if (parsedTranslations && typeof parsedTranslations === "object" && !Array.isArray(parsedTranslations)) {
-      translations = parsedTranslations as Record<string, Partial<WidgetTranslations>>;
-    }
-  }
-
-  return { translations, shopId };
+  return { translations: await loadTranslations(db, shopId), shopId };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -65,41 +27,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const locale = formData.get("locale") as string;
 
-  if (!(SUPPORTED_LOCALES as readonly string[]).includes(locale)) return { error: "Choose a supported language." };
-
-  const strings: Partial<WidgetTranslations> = { locale };
-  for (const { key, label, vars } of TRANSLATION_KEYS) {
-    // The form names each field `<locale>.<key>`.
-    const val = (formData.get(`${locale}.${key}`) ?? formData.get(key)) as string | null;
-    if (!val?.trim()) continue;
-    if (val.trim().length > MAX_STRING_LENGTH) return { error: `${label}: keep it under ${MAX_STRING_LENGTH} characters.` };
-    const problem = placeholderError(label, val.trim(), vars ?? []);
-    if (problem) return { error: problem };
-    (strings as Partial<Record<keyof WidgetTranslations, string>>)[key] = val.trim();
+  // The form names each field `<locale>.<key>`.
+  const strings: Record<string, string | null> = {};
+  for (const { key } of TRANSLATION_KEYS) {
+    strings[key] = (formData.get(`${locale}.${key}`) ?? formData.get(key)) as string | null;
   }
-
-  // Load existing translations
-  const existing = await db.select({ value: appSettings.value })
-    .from(appSettings)
-    .where(and(eq(appSettings.shopId, shopId), eq(appSettings.key, "translations.strings")))
-    .limit(1);
-
-  let allTranslations: Record<string, Partial<WidgetTranslations>> = {};
-  if (existing[0]) {
-    const parsedTranslations = parseStoredJson(existing[0].value);
-    if (parsedTranslations && typeof parsedTranslations === "object" && !Array.isArray(parsedTranslations)) {
-      allTranslations = parsedTranslations as Record<string, Partial<WidgetTranslations>>;
-    }
-  }
-  allTranslations[locale] = strings;
-
-  await db.insert(appSettings)
-    .values({ shopId, key: "translations.strings", value: JSON.stringify(allTranslations) })
-    .onConflictDoUpdate({
-      target: [appSettings.shopId, appSettings.key],
-      set: { value: JSON.stringify(allTranslations), updatedAt: new Date() },
-    });
-
+  const result = await setTranslations({ db, shopId }, { locale, strings, mode: "replace" });
+  if (!result.ok) return { error: result.error };
   return { success: true, locale };
 };
 

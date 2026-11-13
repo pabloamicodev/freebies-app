@@ -13,26 +13,26 @@ export type WhoamiData = {
 
 /** Who is calling, with which role, which shops they see and which of them accept writes. No secrets. */
 export async function mcpWhoami(
-  db: Db,
+  _db: Db,
   operator: Operator,
   visible: VisibleShop[],
-  env: NodeJS.ProcessEnv,
+  _env: NodeJS.ProcessEnv,
   now: () => Date = () => new Date(),
 ): Promise<ToolResult<WhoamiData>> {
-  const modes = await resolveWriteModes(db, visible, env);
+  const modes = resolveWriteModes(visible);
   const rows = visible.map((s) => ({
     shopDomain: s.myshopifyDomain,
     shopHandle: shopHandle(s.myshopifyDomain),
     currency: s.currencyCode,
     timezone: s.timezone,
-    writeMode: modes.get(s.id) ?? ("read_only" as const),
+    writeMode: modes.get(s.id) ?? ("write" as const),
   }));
   const writable = rows.filter((r) => r.writeMode === "write").map((r) => r.shopDomain);
   const shopAccess = operator.shopAllowList.includes("*") ? "all" : operator.shopAllowList.length ? "list" : "none";
   const summary = [
-    `You are ${operator.name} <${operator.email}> with the ${operator.role} role.`,
+    `You are ${operator.name} <${operator.email}>. Every authenticated operator can call every tool; the stored role (${operator.role}) gates nothing.`,
     `${rows.length} shop(s) visible (${shopAccess === "all" ? "all-shops access" : shopAccess === "list" ? "allow list" : "no shop access"}).`,
-    writable.length ? `Write enabled on: ${writable.join(", ")}.` : "No visible shop is write-enabled; everything is read-only.",
+    writable.length ? `Writes are open on every visible shop (${writable.join(", ")}); dryRun:true previews a change without writing.` : "No shop is visible, so there is nothing to write to.",
   ].join("\n");
   return buildResult(
     {
