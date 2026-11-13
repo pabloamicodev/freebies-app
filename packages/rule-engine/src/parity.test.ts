@@ -10,19 +10,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { EvaluationInput, NormalizedCart, NormalizedCartLine } from "@promo/shared-types";
 import { evaluate, type ConditionDefinition, type OfferDefinition, type RewardDefinition } from "./evaluator.js";
-import { lineMatchesPageConditions } from "./page-match.js";
 import { giftTierState } from "./gift-tiers.js";
+import { propertiesOf, referenceDiscounts, type ReferenceConfigOffer, type ReferenceLine } from "./reference-discounts.js";
 
 const DIR = fileURLToPath(new URL("../test-fixtures/parity/", import.meta.url));
 
-interface FixtureLine {
-  id: string;
-  variantId: string;
-  productId: string;
-  quantity: number;
-  unitPrice: string;
-  lineType: "gift" | "upsell" | null;
-  metadata: Record<string, string> | null;
+interface FixtureLine extends ReferenceLine {
   volumeDiscountTiers?: Array<{ qty: number; percent: number }>;
 }
 interface SourceOffer {
@@ -50,35 +43,7 @@ interface Fixture {
     discountedQuantities?: Record<string, Record<string, number>>;
   };
 }
-interface ConfigReward {
-  id: string;
-  targetProductIds?: string[];
-  targetVariantIds?: string[];
-  maxQuantity?: number;
-  selectable?: boolean;
-  selectionCount?: number;
-  maxUnitsTotal?: number;
-  discountType?: string;
-  discountValue?: number;
-  quantityTiers?: Array<{ minimumQuantity: number; maximumQuantity?: number; discountedQuantity?: number }>;
-  priceTiers?: Array<{ quantity: number }>;
-  scopeMode?: string;
-  requiredLineAttributeValue?: string;
-  requiredAnchorVariantIds?: string[];
-  requiredAnchorMinQuantity?: number;
-  requiredOfferId?: string;
-}
-interface ConfigOffer {
-  id: string;
-  mpc?: number;
-  mpu?: number;
-  ri?: true;
-  requirements?: Array<{ productId?: string; variantId?: string; trackMode: string; minQuantity: number }>;
-  excludedProductIds?: string[];
-  restrictToMatchedLines?: boolean;
-  giftRewards?: ConfigReward[];
-  productRewards?: ConfigReward[];
-}
+type ConfigOffer = ReferenceConfigOffer;
 
 const fixtures: Fixture[] = readdirSync(DIR)
   .filter((file) => file.endsWith(".json"))
@@ -86,10 +51,6 @@ const fixtures: Fixture[] = readdirSync(DIR)
   .map((file) => JSON.parse(readFileSync(`${DIR}${file}`, "utf8")) as Fixture);
 
 const NOW = new Date("2026-06-01T12:00:00Z");
-
-function propertiesOf(line: FixtureLine): Record<string, string> {
-  return { ...(line.metadata ?? {}), ...(line.lineType ? { _promo_engine_line_type: line.lineType } : {}) };
-}
 
 function toCart(fixture: Fixture): NormalizedCart {
   const lines: NormalizedCartLine[] = fixture.cart.lines.map((line) => ({
@@ -190,144 +151,6 @@ function toOffers(fixture: Fixture): OfferDefinition[] {
 const usageStatesOf = (fixture: Fixture) =>
   Object.entries(fixture.cart.customer?.usage ?? {}).map(([offerId, usedCount]) => ({ offerId, usedCount }));
 
-const capByCart = (config: ConfigOffer, limit: number) => (config.mpc === undefined ? limit : Math.min(limit, config.mpc));
-
-/** Units of each line the offer discounts, following the Function's targeting rules. */
-/** Quiz bundles: complete groups in bundle-id order, at most mpc of them, every paid line of a group discounted. */
-function quizBundles(fixture: Fixture, config: ConfigOffer, reward: ConfigReward, result: Record<string, number>): void {
-  const groups = new Map<string, FixtureLine[]>();
-  for (const line of fixture.cart.lines) {
-    const id = line.metadata?.["_quiz_bundle_id"];
-    if (id) groups.set(id, [...(groups.get(id) ?? []), line]);
-  }
-  let bundles = 0;
-  for (const id of [...groups.keys()].sort()) {
-    const paid = groups.get(id)!.filter((line) => line.metadata?.["_quiz_free_gift"] !== "true");
-    const expected = Number(paid[0]?.metadata?.["_quiz_expected_paid_count"]);
-    if (!(paid.length >= expected)) continue;
-    if (config.mpc !== undefined && bundles >= config.mpc) break;
-    bundles += 1;
-    const current = paid.reduce((sum, line) => sum + Number(line.unitPrice) * line.quantity, 0);
-    if (current - (reward.discountValue ?? 0) <= 0) continue;
-    for (const line of paid) result[line.id] = line.quantity;
-  }
-}
-
-function referenceDiscounts(fixture: Fixture, offer: SourceOffer, lockedGiftRewards: ReadonlySet<string> = new Set()): Record<string, number> {
-  const config = fixture.config.offers.find((candidate) => candidate.id === offer.id)!;
-  const excluded = new Set(config.excludedProductIds ?? []);
-  const restrict = config.restrictToMatchedLines === true;
-  const pageConditions = offer.conditions;
-  const matches = (line: FixtureLine) => lineMatchesPageConditions(propertiesOf(line), pageConditions);
-  const result: Record<string, number> = {};
-  const nonGift = fixture.cart.lines.filter((line) => line.lineType !== "gift");
-
-  // Every limit is the number of times a reward's gift SET is granted: each target product (each
-  // target variant, for variant-targeted landing/tagged rewards) gets at most `limit` free units,
-  // however high the shopper raises a quantity or however many anchors are present.
-  const giftRewards = (config.giftRewards ?? []).filter((reward) => !lockedGiftRewards.has(reward.id));
-  const givenByProduct: Record<string, Record<string, number>> = {};
-  const remainingForReward: Record<string, number> = {};
-  for (const reward of giftRewards) {
-    givenByProduct[reward.id] = {};
-    // A picker (choose K of N) grants selectionCount x limit units across ALL its gifts; the lines
-    // the shopper added first (cart order) get them.
-    remainingForReward[reward.id] = reward.selectable
-      ? (reward.selectionCount ?? 1) * capByCart(config, reward.maxQuantity ?? 1)
-      : Number.POSITIVE_INFINITY;
-  }
-  const grant = (line: FixtureLine, reward: ConfigReward, quantity: number): boolean => {
-    const given = givenByProduct[reward.id]![line.productId] ?? 0;
-    const units = Math.min(quantity, capByCart(config, reward.maxQuantity ?? 1) - given, remainingForReward[reward.id]!);
-    if (units <= 0) return false;
-    givenByProduct[reward.id]![line.productId] = given + units;
-    remainingForReward[reward.id]! -= units;
-    result[line.id] = units;
-    return true;
-  };
-  const targetsVariant = (reward: ConfigReward, line: FixtureLine) =>
-    (reward.targetVariantIds ?? []).length === 0 || reward.targetVariantIds!.includes(line.variantId);
-  // Tagged lines claim the quota first, then untagged lines (a theme adding the gift itself) fill it.
-  // Units that qualify the offer (anchor) never count, and an untagged line serves one reward only.
-  for (const reward of giftRewards) {
-    for (const line of fixture.cart.lines) {
-      if (line.lineType !== "gift") continue;
-      const metadata = line.metadata ?? {};
-      if (metadata["_promo_engine_offer_id"] !== offer.id || metadata["_promo_engine_reward_id"] !== reward.id) continue;
-      if (targetsVariant(reward, line)) grant(line, reward, line.quantity);
-    }
-  }
-  for (const line of nonGift.filter((candidate) => !candidate.metadata?.["_promo_engine_offer_id"])) {
-    const reserved = Math.max(
-      0,
-      ...(config.requirements ?? [])
-        .filter((requirement) => (requirement.trackMode === "variant" ? requirement.variantId === line.variantId : requirement.productId === line.productId))
-        .map((requirement) => requirement.minQuantity),
-    );
-    for (const reward of giftRewards) {
-      if ((reward.targetVariantIds ?? []).includes(line.variantId) && grant(line, reward, line.quantity - reserved)) break;
-    }
-  }
-
-  for (const reward of config.productRewards ?? []) {
-    if (reward.scopeMode === "quiz_bundle") {
-      quizBundles(fixture, config, reward, result);
-      continue;
-    }
-    const landing = reward.scopeMode === "landing";
-    const setScoped = landing || reward.scopeMode === "tagged_offer";
-    if (landing) {
-      const anchorQuantity = nonGift
-        .filter((line) => Number(line.unitPrice) > 0)
-        .filter((line) => line.metadata?.["__landing_source"] === reward.requiredLineAttributeValue)
-        .filter((line) => (reward.requiredAnchorVariantIds ?? []).includes(line.variantId))
-        .reduce((sum, line) => sum + line.quantity, 0);
-      if (anchorQuantity < (reward.requiredAnchorMinQuantity ?? 1)) continue;
-    }
-    const eligible = nonGift
-      .filter((line) => Number(line.unitPrice) > 0) // a $0 line (another app's gift) is not a paid unit
-      .filter((line) => !excluded.has(line.productId))
-      .filter((line) => !restrict || matches(line))
-      .filter((line) => !landing || line.metadata?.["__landing_source"] === reward.requiredLineAttributeValue)
-      .filter((line) => reward.scopeMode !== "tagged_offer" || line.metadata?.["_promo_engine_offer_id"] === reward.requiredOfferId)
-      .filter((line) => {
-        const products = reward.targetProductIds ?? [];
-        const variants = reward.targetVariantIds ?? [];
-        return (products.length === 0 && variants.length === 0) || products.includes(line.productId) || variants.includes(line.variantId);
-      })
-      .sort((a, b) => (a.id < b.id ? -1 : 1));
-    const total = eligible.reduce((sum, line) => sum + line.quantity, 0);
-    const quantityTier = (reward.quantityTiers ?? [])
-      .filter((tier) => total >= tier.minimumQuantity && (tier.maximumQuantity === undefined || total <= tier.maximumQuantity))
-      .sort((a, b) => b.minimumQuantity - a.minimumQuantity)[0];
-    const priceTier = (reward.priceTiers ?? []).filter((tier) => total >= tier.quantity).sort((a, b) => b.quantity - a.quantity)[0];
-    if ((reward.quantityTiers ?? []).length > 0 && !quantityTier) continue;
-    if ((reward.priceTiers ?? []).length > 0 && !priceTier) continue;
-    const limit = capByCart(config, reward.maxQuantity ?? 1);
-    const byVariant = (reward.targetVariantIds ?? []).length > 0;
-    const given: Record<string, number> = {};
-    let remainingTotal =
-      quantityTier?.discountedQuantity ??
-      reward.maxUnitsTotal ??
-      (setScoped ? Number.POSITIVE_INFINITY : (reward.maxQuantity ?? Number.POSITIVE_INFINITY));
-    // Per cart: one application is a unit, or one pack of the matched tier; set-scoped limits were capped above.
-    if (config.mpc !== undefined && !setScoped) {
-      const pack = quantityTier ? (quantityTier.discountedQuantity ?? quantityTier.minimumQuantity) : (priceTier?.quantity ?? 1);
-      remainingTotal = Math.min(remainingTotal, config.mpc * pack);
-    }
-    for (const line of eligible) {
-      const key = byVariant ? line.variantId : line.productId;
-      let units = Math.min(line.quantity, remainingTotal);
-      if (setScoped) units = Math.min(units, limit - (given[key] ?? 0));
-      if (units <= 0) continue;
-      given[key] = (given[key] ?? 0) + units;
-      remainingTotal -= units;
-      result[line.id] = (result[line.id] ?? 0) + units;
-    }
-  }
-  return result;
-}
-
 describe("golden parity fixtures", () => {
   it("has at least 15 fixtures", () => {
     expect(fixtures.length).toBeGreaterThanOrEqual(15);
@@ -348,7 +171,7 @@ describe("golden parity fixtures", () => {
         { activeCurrencyCode: fixture.cart.currency, shopCurrencyCode: fixture.shopCurrency ?? fixture.cart.currency, exchangeRate: fixture.cart.presentmentCurrencyRate },
         new Set(fixture.config.offers.find((offer) => offer.id === offerId)?.excludedProductIds ?? []),
       );
-      const units = referenceDiscounts(fixture, source, tiers?.unmetRewardIds);
+      const units = referenceDiscounts(fixture.cart.lines, source, fixture.config.offers.find((offer) => offer.id === offerId)!, tiers?.unmetRewardIds);
       const lineIds = Object.keys(units).sort();
       if (lineIds.length > 0) discountedLineIds[offerId] = lineIds;
       discountedQuantities[offerId] = units;
