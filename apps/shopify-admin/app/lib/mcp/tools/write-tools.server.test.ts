@@ -4,7 +4,6 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
-  appSettings,
   auditLogs,
   discountCodes,
   mcpCallLog,
@@ -24,7 +23,8 @@ import type { ShopPublishFn } from "../../offer-lifecycle.server.js";
 import type { Operator } from "../auth.server.js";
 import { createMcpServer, type McpContext } from "../server.server.js";
 import { redactArgs } from "../call-log.server.js";
-import { hashArgs, issueConfirmToken, verifyConfirmToken } from "../confirm.server.js";
+import { canonicalJson, hashArgs } from "../confirm.server.js";
+import { lifecycleToolError } from "../write-runner.server.js";
 import {
   codesSetStatusTool,
   createDraftFromTemplateTool,
@@ -45,9 +45,7 @@ vi.mock("../../offer-lifecycle.server.js", async (importActual) => {
 const TEST = "hpn-test-store.myshopify.com";
 const SECOND = "second-test.myshopify.com";
 const LIVE = "hpn.myshopify.com";
-const NOT_UNLOCKED = "unlocked-in-db-only.myshopify.com";
-const SECRET = "x".repeat(40);
-const ENV = { MCP_WRITE_SHOPS: `${TEST}, ${SECOND}`, MCP_CONFIRM_SECRET: SECRET } as unknown as NodeJS.ProcessEnv;
+const ENV = {} as unknown as NodeJS.ProcessEnv;
 
 type Body = {
   code?: string;
@@ -88,14 +86,13 @@ const runners: Record<string, Runner> = {
 const run = (tool: string, args: Record<string, unknown>, op = operators["editor"]!, extra: Partial<McpContext> = {}) =>
   runners[tool]!(ctxFor(op, extra), args);
 
-/** Dry run, then execute with its token. Returns both results. */
+/** Optional preview (dryRun:true), then the direct execute: no token is involved. Returns both results. */
 async function twoStep(tool: string, args: Record<string, unknown>, op = operators["editor"]!, extra: Partial<McpContext> = {}) {
-  const dry = await run(tool, args, op, extra);
+  const dry = await run(tool, { ...args, dryRun: true }, op, extra);
   expect(dry.isError, JSON.stringify(dry.structuredContent)).toBeFalsy();
-  const token = body(dry).meta.confirmToken!;
-  expect(token).toBeTruthy();
-  const done = await run(tool, { ...args, dryRun: false, confirmToken: token }, op, extra);
-  return { dry, done, token };
+  expect(body(dry).meta.confirmToken).toBeUndefined();
+  const done = await run(tool, args, op, extra);
+  return { dry, done };
 }
 
 const row = async (id: string) => (await db.select().from(offers).where(eq(offers.id, id)))[0]!;
@@ -117,13 +114,9 @@ const callLogs = (tool?: string) => db.select().from(mcpCallLog).where(tool ? eq
 
 beforeAll(async () => {
   ({ db, close } = await createTestDb());
-  for (const [key, domain] of [["test", TEST], ["second", SECOND], ["live", LIVE], ["dbonly", NOT_UNLOCKED]] as const) {
+  // No per-shop write lock exists any more: no env list and no mcp.writeMode setting is seeded anywhere.
+  for (const [key, domain] of [["test", TEST], ["second", SECOND], ["live", LIVE]] as const) {
     shopIds[key] = await seedShop(db, domain);
-  }
-  // Locks: test and second are in the env list AND set to write; live is set to write in the DB but is NOT in the env list;
-  // dbonly is neither listed nor... (setting only); a fifth state (env only, no setting) is created per test.
-  for (const key of ["test", "second", "live", "dbonly"]) {
-    await db.insert(appSettings).values({ shopId: shopIds[key]!, key: "mcp.writeMode", value: JSON.stringify("write") });
   }
   for (const role of ["viewer", "editor", "admin"] as const) {
     const [op] = await db.insert(mcpOperators).values({ email: `${role}@example.com`, name: role, role, shopAllowList: ["*"] }).returning();
@@ -139,42 +132,13 @@ beforeEach(() => {
   resetMemoryRateLimits();
 });
 
-describe("confirm token", () => {
-  const binding: { tool: string; args: Record<string, unknown>; operatorId: string; shopDomain: string } = {
-    tool: "promo_pause", args: { ref: "promo:a:b", reason: "x", dryRun: true }, operatorId: "op", shopDomain: TEST,
-  };
-  const at = new Date("2026-11-01T00:00:00Z");
-
-  it("round-trips the offer updated_at and ignores control args and key order", () => {
-    const upd = new Date("2026-10-31T10:00:00.123Z");
-    const { token, jti } = issueConfirmToken(ENV, binding, upd, at);
-    const verified = verifyConfirmToken(ENV, token, { ...binding, args: { reason: "x", ref: "promo:a:b", dryRun: false, confirmToken: token } }, at);
-    expect(verified.jti).toBe(jti);
-    expect(verified.offerUpdatedAt?.toISOString()).toBe(upd.toISOString());
-    expect(hashArgs({ b: 1, a: [2, { d: 1, c: 2 }] })).toBe(hashArgs({ a: [2, { c: 2, d: 1 }], b: 1, idempotencyKey: "ignored" }));
-  });
-
-  it("rejects tampering with tool, args, operator, shop, payload and signature", () => {
-    const { token } = issueConfirmToken(ENV, binding, null, at);
-    const bad = (b: Partial<typeof binding>) => () => verifyConfirmToken(ENV, token, { ...binding, ...b }, at);
-    for (const change of [{ tool: "promo_archive" }, { args: { ref: "promo:a:b", reason: "y" } }, { operatorId: "other" }, { shopDomain: LIVE }]) {
-      expect(bad(change)).toThrowError(/not valid/);
-    }
-    const [payload, sig] = token.split(".");
-    const forged = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(payload!, "base64url").toString()), exp: at.getTime() + 9e9 })).toString("base64url");
-    expect(() => verifyConfirmToken(ENV, `${forged}.${sig}`, binding, at)).toThrowError(/not valid/);
-    expect(() => verifyConfirmToken(ENV, `${payload}.${sig}x`, binding, at)).toThrowError(/not valid/);
-    expect(() => verifyConfirmToken(ENV, "garbage", binding, at)).toThrowError(/not valid/);
-    expect(() => verifyConfirmToken({ ...ENV, MCP_CONFIRM_SECRET: "y".repeat(40) } as NodeJS.ProcessEnv, token, binding, at)).toThrowError(/not valid/);
-  });
-
-  it("expires after 5 minutes (CONFIRM_EXPIRED) and a missing or short secret is UPSTREAM_UNAVAILABLE", () => {
-    const { token } = issueConfirmToken(ENV, binding, null, at);
-    expect(() => verifyConfirmToken(ENV, token, binding, new Date(at.getTime() + 4 * 60_000))).not.toThrow();
-    expect(() => verifyConfirmToken(ENV, token, binding, new Date(at.getTime() + 5 * 60_000))).toThrowError(/expired/);
-    for (const env of [{}, { MCP_CONFIRM_SECRET: "short" }]) {
-      expect(() => issueConfirmToken(env as NodeJS.ProcessEnv, binding, null, at)).toThrowError(/MCP_CONFIRM_SECRET/);
-    }
+describe("argument hashing (idempotency binding)", () => {
+  it("ignores key order and the control fields, but not real arguments", () => {
+    expect(hashArgs({ b: 1, a: [2, { d: 1, c: 2 }] })).toBe(
+      hashArgs({ a: [2, { c: 2, d: 1 }], b: 1, idempotencyKey: "ignored", expectedUpdatedAt: "2026-11-01T00:00:00.000Z", dryRun: true, expectedDiffHash: "h" }),
+    );
+    expect(hashArgs({ a: 1 })).not.toBe(hashArgs({ a: 2 }));
+    expect(canonicalJson({ b: undefined, a: 1 })).toBe('{"a":1}');
   });
 });
 
@@ -201,20 +165,22 @@ describe("redactArgs", () => {
 });
 
 describe("pause / resume / archive", () => {
-  it("dry run changes nothing and issues a token; executing pauses, publishes once and audits as mcp:<operator>", async () => {
+  it("dryRun:true previews and changes nothing; executing without any token pauses, publishes once and audits as mcp:<operator>", async () => {
     const id = await seedOffer(db, shopIds["test"]!, { status: "active", internalName: "[MCP test] pause me" });
     const before = await row(id);
     const args = { ref: ref(TEST, id), reason: "testing the MCP" };
-    const dry = await run("promo_pause", args);
+    const dry = await run("promo_pause", { ...args, dryRun: true });
     expect(body(dry).meta.dryRun).toBe(true);
+    expect(body(dry).meta.confirmToken).toBeUndefined();
     expect(body(dry).data).toMatchObject({ statusBefore: "active", statusAfter: "paused", willPublish: true });
     expect(body(dry).summary).toContain("DRY RUN");
     expect((await row(id)).status).toBe("active");
     expect(publish).not.toHaveBeenCalled();
     expect(await audits(shopIds["test"]!, id)).toHaveLength(0);
 
-    const done = await run("promo_pause", { ...args, dryRun: false, confirmToken: body(dry).meta.confirmToken });
+    const done = await run("promo_pause", args);
     expect(done.isError).toBeFalsy();
+    expect(body(done).meta.dryRun).toBe(false);
     expect(body(done).data).toMatchObject({ statusBefore: "active", statusAfter: "paused" });
     expect((await row(id)).status).toBe("paused");
     expect((await row(id)).updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime() - 1);
@@ -224,7 +190,7 @@ describe("pause / resume / archive", () => {
     expect(entry!.after).toMatchObject({ status: "paused", _mcp: { operator: operators["editor"]!.id, client: "vitest", tool: "promo_pause", requestId: "req-1", reason: "testing the MCP" } });
   });
 
-  it("resume re-validates and archive (admin) archives", async () => {
+  it("resume re-validates and archive archives", async () => {
     const paused = await publishable(shopIds["test"]!, { status: "paused" });
     const resumed = await twoStep("promo_resume", { ref: ref(TEST, paused) });
     expect(resumed.done.isError).toBeFalsy();
@@ -262,113 +228,92 @@ describe("pause / resume / archive", () => {
   });
 });
 
-describe("confirmToken enforcement", () => {
+describe("no confirmation step", () => {
   async function fresh() {
     const id = await seedOffer(db, shopIds["test"]!, { status: "active" });
-    const args = { ref: ref(TEST, id), reason: "token test" };
-    const dry = await run("promo_pause", args);
-    return { id, args, token: body(dry).meta.confirmToken! };
+    return { id, args: { ref: ref(TEST, id), reason: "direct test" } };
   }
 
-  it("executing without a token is CONFIRM_REQUIRED and points to the dry run", async () => {
+  it("executes immediately without dryRun or any token (no MCP_CONFIRM_SECRET exists)", async () => {
     const { id, args } = await fresh();
-    const res = await run("promo_pause", { ...args, dryRun: false });
-    expect(body(res).code).toBe("CONFIRM_REQUIRED");
-    expect((res.structuredContent as { suggestedAction: { args: { dryRun: boolean } } }).suggestedAction.args.dryRun).toBe(true);
-    expect((await row(id)).status).toBe("active");
+    const res = await run("promo_pause", args);
+    expect(res.isError).toBeFalsy();
+    expect(body(res).meta.dryRun).toBe(false);
+    expect((await row(id)).status).toBe("paused");
   });
 
-  it("a token works once: reuse is CONFIRM_INVALID even after the offer is active again", async () => {
-    const { id, args, token } = await fresh();
-    expect((await run("promo_pause", { ...args, dryRun: false, confirmToken: token })).isError).toBeFalsy();
-    await db.update(offers).set({ status: "active" }).where(eq(offers.id, id));
-    const again = await run("promo_pause", { ...args, dryRun: false, confirmToken: token });
-    expect(body(again).code).toBe("CONFIRM_INVALID");
-    expect((await row(id)).status).toBe("active");
-  });
-
-  it("two concurrent executions with one token: exactly one wins", async () => {
-    const { args, token } = await fresh();
-    const results = await Promise.all([1, 2].map(() => run("promo_pause", { ...args, dryRun: false, confirmToken: token })));
-    expect(results.filter((r) => !r.isError)).toHaveLength(1);
-    expect(results.filter((r) => r.isError).map((r) => body(r).code)).toEqual(["CONFIRM_INVALID"]);
-    expect(publish).toHaveBeenCalledTimes(1);
-  });
-
-  it("an expired token is CONFIRM_EXPIRED", async () => {
-    const { id, args, token } = await fresh();
-    clock += 6 * 60_000;
-    expect(body(await run("promo_pause", { ...args, dryRun: false, confirmToken: token })).code).toBe("CONFIRM_EXPIRED");
-    expect((await row(id)).status).toBe("active");
-  });
-
-  it("changed arguments, another operator or another tool cannot use the token", async () => {
-    const { id, args, token } = await fresh();
-    expect(body(await run("promo_pause", { ...args, reason: "different reason", dryRun: false, confirmToken: token })).code).toBe("CONFIRM_INVALID");
-    expect(body(await run("promo_pause", { ...args, dryRun: false, confirmToken: token }, operators["admin"])).code).toBe("CONFIRM_INVALID");
-    expect(body(await run("promo_archive", { ref: args.ref, dryRun: false, confirmToken: token }, operators["admin"])).code).toBe("CONFIRM_INVALID");
-    expect(body(await run("promo_pause", { ...args, dryRun: false, confirmToken: `${token}0` })).code).toBe("CONFIRM_INVALID");
-    expect((await row(id)).status).toBe("active");
-    // A rejected attempt does not burn the token.
-    expect((await run("promo_pause", { ...args, dryRun: false, confirmToken: token })).isError).toBeFalsy();
-  });
-
-  it("an offer changed since the dry run is STATE_CONFLICT and nothing is written", async () => {
-    const { id, args, token } = await fresh();
-    await db.update(offers).set({ publicTitle: "edited by a merchant", updatedAt: new Date(Date.now() + 5_000) }).where(eq(offers.id, id));
-    const res = await run("promo_pause", { ...args, dryRun: false, confirmToken: token });
-    expect(body(res).code).toBe("STATE_CONFLICT");
+  it("dryRun:true never writes, and its apply nextAction carries the offer's updatedAt", async () => {
+    const { id, args } = await fresh();
+    const updatedAt = (await row(id)).updatedAt;
+    const dry = await run("promo_pause", { ...args, dryRun: true });
+    expect(body(dry).nextActions.at(-1)).toMatchObject({ tool: "promo_pause", args: { ref: args.ref, dryRun: false, expectedUpdatedAt: updatedAt.toISOString() } });
     expect((await row(id)).status).toBe("active");
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it("without MCP_CONFIRM_SECRET writes are UPSTREAM_UNAVAILABLE, dry runs included", async () => {
-    const id = await seedOffer(db, shopIds["test"]!, { status: "active" });
-    const res = await run("promo_pause", { ref: ref(TEST, id), reason: "no secret" }, operators["editor"], { env: { MCP_WRITE_SHOPS: TEST } as unknown as NodeJS.ProcessEnv });
-    expect(body(res).code).toBe("UPSTREAM_UNAVAILABLE");
+  it("expectedUpdatedAt is optional optimistic concurrency: a stale value is STATE_CONFLICT, the current one applies", async () => {
+    const { id, args } = await fresh();
+    const seen = (await row(id)).updatedAt;
+    await db.update(offers).set({ publicTitle: "edited by a merchant", updatedAt: new Date(seen.getTime() + 5_000) }).where(eq(offers.id, id));
+    const stale = await run("promo_pause", { ...args, expectedUpdatedAt: seen.toISOString() });
+    expect(body(stale).code).toBe("STATE_CONFLICT");
+    expect((await row(id)).status).toBe("active");
+    expect(publish).not.toHaveBeenCalled();
+    const current = (await row(id)).updatedAt.toISOString();
+    expect((await run("promo_pause", { ...args, expectedUpdatedAt: current })).isError).toBeFalsy();
+    expect((await row(id)).status).toBe("paused");
+  });
+
+  it("a malformed expectedUpdatedAt is VALIDATION and nothing is written", async () => {
+    const { id, args } = await fresh();
+    expect(body(await run("promo_pause", { ...args, expectedUpdatedAt: "yesterday-ish" })).code).toBe("VALIDATION");
+    expect((await row(id)).status).toBe("active");
   });
 });
 
-describe("write guard and roles", () => {
-  it("SHOP_READ_ONLY for shops outside the env list, even for admin and with the DB setting on", async () => {
-    for (const domain of [LIVE, NOT_UNLOCKED]) {
-      const id = await seedOffer(db, shopIds[domain === LIVE ? "live" : "dbonly"]!, { status: "active" });
-      for (const [tool, args] of [
-        ["promo_pause", { reason: "should be blocked" }],
-        ["promo_archive", {}],
-        ["promo_set_schedule", { endsAt: "2031-01-01T00:00" }],
-        ["promo_duplicate", {}],
-      ] as const) {
-        const dry = await run(tool, { ref: ref(domain, id), ...args }, operators["admin"]);
-        expect(body(dry).code, `${tool} ${domain}`).toBe("SHOP_READ_ONLY");
-        expect((dry.structuredContent as { suggestedAction: unknown }).suggestedAction).not.toBeNull();
-        const exec = await run(tool, { ref: ref(domain, id), ...args, dryRun: false, confirmToken: "x.y" }, operators["admin"]);
-        expect(body(exec).code).toBe("SHOP_READ_ONLY");
-      }
-      expect((await row(id)).status).toBe("active");
+describe("full access: no write lock, no roles", () => {
+  it("every role writes on every shop, with no per-shop setting or env list anywhere", async () => {
+    for (const role of ["viewer", "editor", "admin"] as const) {
+      const id = await seedOffer(db, shopIds["live"]!, { status: "active" });
+      const res = await run("promo_pause", { ref: ref(LIVE, id), reason: `as ${role}` }, operators[role]);
+      expect(res.isError, role).toBeFalsy();
+      expect((await row(id)).status).toBe("paused");
+      expect((await audits(shopIds["live"]!, id))[0]).toMatchObject({ performedBy: `mcp:${operators[role]!.id}` });
     }
-    const republish = await run("promos_republish_shop", { shop: LIVE }, operators["admin"]);
-    expect(body(republish).code).toBe("SHOP_READ_ONLY");
   });
 
-  it("the env list alone is not enough: the shop's mcp.writeMode setting must be write too", async () => {
-    const id = await seedShop(db, "env-only.myshopify.com");
-    const offerId = await seedOffer(db, id, { status: "active" });
-    const env = { ...ENV, MCP_WRITE_SHOPS: `${TEST},env-only.myshopify.com` } as NodeJS.ProcessEnv;
-    expect(body(await run("promo_pause", { ref: ref("env-only.myshopify.com", offerId), reason: "no setting" }, operators["editor"], { env })).code).toBe("SHOP_READ_ONLY");
-    await db.insert(appSettings).values({ shopId: id, key: "mcp.writeMode", value: JSON.stringify("read_only") });
-    expect(body(await run("promo_pause", { ref: ref("env-only.myshopify.com", offerId), reason: "read only" }, operators["editor"], { env })).code).toBe("SHOP_READ_ONLY");
-    await db.update(appSettings).set({ value: JSON.stringify("write") }).where(eq(appSettings.shopId, id));
-    expect(body(await run("promo_pause", { ref: ref("env-only.myshopify.com", offerId), reason: "now allowed" }, operators["editor"], { env })).meta.dryRun).toBe(true);
+  it("a viewer runs every write tool, including archive and republish", async () => {
+    const viewer = operators["viewer"]!;
+    const id = await publishable(shopIds["test"]!, { status: "active" });
+    await withPageCondition(shopIds["test"]!, id);
+    const archiveMe = await seedOffer(db, shopIds["test"]!, { status: "active" });
+    const codes = await db.insert(discountCodes).values({ shopId: shopIds["test"]!, offerId: id, code: `V-${id.slice(0, 6)}` }).returning({ id: discountCodes.id });
+    const calls: [string, Record<string, unknown>][] = [
+      ["promo_set_page_exclude_urls", { ref: ref(TEST, id), excludeUrls: ["/viewer"] }],
+      ["promo_set_schedule", { ref: ref(TEST, id), startsAt: "2020-01-01T00:00", endsAt: "2031-01-01T00:00" }],
+      ["codes_set_status", { ref: ref(TEST, id), status: "disabled", ids: [codes[0]!.id] }],
+      ["promo_duplicate", { ref: ref(TEST, id) }],
+      ["promo_create_draft_from_template", { shop: TEST, templateId: id, name: "[MCP test] viewer draft" }],
+      ["promos_republish_shop", { shop: LIVE }],
+      ["promo_pause", { ref: ref(TEST, id), reason: "viewer pause" }],
+      ["promo_resume", { ref: ref(TEST, id) }],
+      ["promo_archive", { ref: ref(TEST, archiveMe) }],
+    ];
+    for (const [tool, args] of calls) {
+      const res = await run(tool, args, viewer);
+      expect(res.isError, `${tool}: ${JSON.stringify(res.structuredContent)}`).toBeFalsy();
+    }
+    expect((await row(archiveMe)).status).toBe("archived");
+    expect(publish).toHaveBeenCalled();
   });
 
-  it("viewer is FORBIDDEN everywhere; editor cannot archive or republish", async () => {
+  it("no tool ever answers FORBIDDEN or SHOP_READ_ONLY", async () => {
     const id = await seedOffer(db, shopIds["test"]!, { status: "active" });
     const args: Record<string, Record<string, unknown>> = {
       promo_pause: { ref: ref(TEST, id), reason: "viewer try" },
       promo_resume: { ref: ref(TEST, id) },
       promo_archive: { ref: ref(TEST, id) },
-      promos_republish_shop: { shop: TEST },
+      promos_republish_shop: { shop: LIVE },
       promo_duplicate: { ref: ref(TEST, id) },
       promo_create_draft_from_template: { shop: TEST, templateId: id, name: "x" },
       promo_set_page_exclude_urls: { ref: ref(TEST, id), excludeUrls: [] },
@@ -376,18 +321,43 @@ describe("write guard and roles", () => {
       codes_set_status: { ref: ref(TEST, id), status: "disabled", all: true },
     };
     for (const [tool, a] of Object.entries(args)) {
-      expect(body(await run(tool, a, operators["viewer"])).code, tool).toBe("FORBIDDEN");
-    }
-    for (const tool of ["promo_archive", "promos_republish_shop"]) {
-      expect(body(await run(tool, args[tool]!, operators["editor"])).code, tool).toBe("FORBIDDEN");
+      const code = body(await run(tool, { ...a, dryRun: true }, operators["viewer"])).code;
+      expect(["FORBIDDEN", "SHOP_READ_ONLY"], tool).not.toContain(code);
     }
     expect((await row(id)).status).toBe("active");
   });
 
-  it("a shop outside the operator's allow list is SHOP_NOT_FOUND", async () => {
+  it("a shop outside the operator's allow list is still SHOP_NOT_FOUND (identity scoping stays)", async () => {
     const limited: Operator = { ...operators["editor"]!, shopAllowList: [SECOND] };
     const id = await seedOffer(db, shopIds["test"]!, { status: "active" });
     expect(body(await run("promo_pause", { ref: ref(TEST, id), reason: "not visible" }, limited)).code).toBe("SHOP_NOT_FOUND");
+    expect((await row(id)).status).toBe("active");
+  });
+});
+
+describe("lifecycleToolError and Shopify capacity", () => {
+  const capacity = { code: "AUTOMATIC_DISCOUNT_LIMIT", offerIds: ["o1"], numbers: { needed: 1, storeActive: 25, others: 24 } };
+  it("a capacity block is CAPACITY_LIMIT naming the cap and the workarounds, on validation and publish failures", () => {
+    for (const failure of [
+      { ok: false as const, code: "validation" as const, error: "Too many discounts", capacity },
+      { ok: false as const, code: "publish_failed" as const, error: "Too many discounts", capacity, rolledBack: true as const, statusBefore: "draft", statusAfter: "draft" },
+    ]) {
+      const e = lifecycleToolError(failure as never, "promo:x:y");
+      expect(e.payload.code).toBe("CAPACITY_LIMIT");
+      expect(e.payload.details?.capacity).toEqual(capacity);
+      expect(e.payload.details?.limit).toMatch(/25 active automatic discounts/);
+      expect(e.payload.details?.workarounds?.map((w) => w.kind)).toEqual(["deactivate_discounts"]);
+    }
+    expect(lifecycleToolError({ ok: false, code: "validation", error: "plain" }).payload.code).toBe("VALIDATION");
+  });
+
+  it("promo_resume surfaces the capacity block from the publish flow as CAPACITY_LIMIT and rolls back", async () => {
+    const paused = await publishable(shopIds["test"]!, { status: "paused" });
+    const blocked = vi.fn<ShopPublishFn>(async () => ({ message: "Shopify allows 25 automatic discounts", scope: "shop", capacity }));
+    const res = await run("promo_resume", { ref: ref(TEST, paused) }, operators["editor"], { publish: blocked });
+    expect(body(res).code).toBe("CAPACITY_LIMIT");
+    expect((res.structuredContent as { details: { workarounds: unknown[] } }).details.workarounds.length).toBeGreaterThan(0);
+    expect((await row(paused)).status).toBe("paused");
   });
 });
 
@@ -448,12 +418,12 @@ describe("promo_duplicate and promo_create_draft_from_template", () => {
   it("an override that fails after the draft exists returns the draft with a warning, and an idempotent retry replays it", async () => {
     const id = await source();
     const args = { shop: TEST, templateId: id, name: "[MCP test] partial", overrides: { startsAt: "2031-03-01T10:00" }, idempotencyKey: "idem-partial-1" };
-    // Call 1 is the dry run against the template (real, the default); call 2 is the override on the new draft (forced to fail).
+    // On a direct execute, call 1 is the override probe against the template (real, the default); call 2 is the override on the new draft (forced to fail).
     const real = vi.mocked(lifecycle.setOfferSchedule).getMockImplementation()!;
     vi.mocked(lifecycle.setOfferSchedule)
       .mockImplementationOnce(real)
       .mockResolvedValueOnce({ ok: false, code: "validation", error: "Override rejected" });
-    const { done, token } = await twoStep("promo_create_draft_from_template", args);
+    const done = await run("promo_create_draft_from_template", args);
     expect(done.isError).toBeFalsy();
     const first = body(done);
     expect(first.warnings.map((w) => w.code)).toContain("OVERRIDE_FAILED");
@@ -461,18 +431,20 @@ describe("promo_duplicate and promo_create_draft_from_template", () => {
     const drafts = async () => (await db.select().from(offers).where(eq(offers.internalName, "[MCP test] partial"))).length;
     expect(await drafts()).toBe(1);
 
-    const replay = await run("promo_create_draft_from_template", { ...args, dryRun: false, confirmToken: token });
+    const replay = await run("promo_create_draft_from_template", args);
     expect(body(replay).warnings.map((w) => w.code)).toEqual(expect.arrayContaining(["IDEMPOTENT_REPLAY", "OVERRIDE_FAILED"]));
     expect(body(replay).data["promoRef"]).toBe(first.data["promoRef"]);
     expect(await drafts()).toBe(1);
   });
 
-  it("a source changed since the dry run is STATE_CONFLICT and nothing is created", async () => {
+  it("a source changed since the expectedUpdatedAt the preview returned is STATE_CONFLICT and nothing is created", async () => {
     const id = await source();
-    const dry = await run("promo_duplicate", { ref: ref(TEST, id) });
+    const dry = await run("promo_duplicate", { ref: ref(TEST, id), dryRun: true });
+    const seen = body(dry).nextActions.at(-1)!.args["expectedUpdatedAt"] as string;
+    expect(seen).toBe((await row(id)).updatedAt.toISOString());
     await db.update(offers).set({ updatedAt: new Date(Date.now() + 9_000) }).where(eq(offers.id, id));
     const count = (await db.select().from(offers).where(eq(offers.shopId, shopIds["test"]!))).length;
-    const res = await run("promo_duplicate", { ref: ref(TEST, id), dryRun: false, confirmToken: body(dry).meta.confirmToken });
+    const res = await run("promo_duplicate", { ref: ref(TEST, id), expectedUpdatedAt: seen });
     expect(body(res).code).toBe("STATE_CONFLICT");
     expect((await db.select().from(offers).where(eq(offers.shopId, shopIds["test"]!))).length).toBe(count);
   });
@@ -499,7 +471,7 @@ describe("promo_duplicate and promo_create_draft_from_template", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it("an invalid override fails at the dry run and creates nothing", async () => {
+  it("an invalid override fails before anything is created, on a direct execute too", async () => {
     const id = await source();
     const before = (await db.select().from(offers).where(eq(offers.shopId, shopIds["test"]!))).length;
     const res = await run("promo_create_draft_from_template", {
@@ -621,71 +593,75 @@ describe("idempotency", () => {
     expect(first.done.isError).toBeFalsy();
     await db.update(offers).set({ status: "active" }).where(eq(offers.id, id));
 
-    // Same key, even without a (new) token: the stored result comes back and nothing runs.
-    const replay = await run("promo_pause", { ...args, dryRun: false, confirmToken: first.token });
+    // Same key: the stored result comes back and nothing runs.
+    const replay = await run("promo_pause", args);
     expect(replay.isError).toBeFalsy();
     expect(body(replay).warnings.map((w) => w.code)).toContain("IDEMPOTENT_REPLAY");
     expect(body(replay).data).toEqual(body(first.done).data);
     expect((await row(id)).status).toBe("active");
     expect(publish).toHaveBeenCalledTimes(1);
 
-    const other = await run("promo_pause", { ...args, reason: "a different reason", dryRun: false, confirmToken: first.token });
+    const other = await run("promo_pause", { ...args, reason: "a different reason" });
     expect(body(other).code).toBe("VALIDATION");
     // Another operator with the same key is not a replay.
     const rows = await db.select().from(mcpCallLog).where(eq(mcpCallLog.idempotencyKey, "idem-key-0001"));
     expect(rows).toHaveLength(1);
 
     clock += 25 * 3_600_000;
-    const expired = await run("promo_pause", { ...args, dryRun: false, confirmToken: first.token });
-    expect(body(expired).code).toBe("CONFIRM_EXPIRED");
+    // After 24 h the key is free again: the same call runs for real.
+    const expired = await run("promo_pause", args);
+    expect(expired.isError).toBeFalsy();
+    expect(body(expired).warnings.map((w) => w.code)).not.toContain("IDEMPOTENT_REPLAY");
+    expect((await row(id)).status).toBe("paused");
+    expect(publish).toHaveBeenCalledTimes(2);
   });
 
-  it("a failed execution frees the key so a retry after a new dry run can use it", async () => {
+  it("a failed execution frees the key so a retry can use it", async () => {
     const id = await seedOffer(db, shopIds["test"]!, { status: "active" });
     const args = { ref: ref(TEST, id), reason: "retry me", idempotencyKey: "idem-key-0002" };
     const failed = await twoStep("promo_pause", args, operators["editor"], { publish: failing() });
     expect(body(failed.done).code).toBe("PUBLISH_FAILED");
-    const retry = await twoStep("promo_pause", args);
-    expect(retry.done.isError).toBeFalsy();
+    const retry = await run("promo_pause", args);
+    expect(retry.isError).toBeFalsy();
     expect((await row(id)).status).toBe("paused");
   });
 });
 
 describe("mcp_call_log", () => {
-  it("logs dry runs, executions and refusals with redacted args and the outcome", async () => {
+  it("logs previews, executions and failures with redacted args and the outcome", async () => {
     const id = await seedOffer(db, shopIds["test"]!, { status: "active" });
     const args = { ref: ref(TEST, id), reason: "log me please" };
-    const { token } = await twoStep("promo_pause", args);
-    await run("promo_pause", { ...args, dryRun: false, confirmToken: token });
+    await run("promo_pause", { ...args, dryRun: true });
+    await run("promo_pause", args);
     await run("promo_pause", args, operators["viewer"]);
     const rows = (await callLogs("promo_pause")).filter((r) => (r.argsRedacted as { ref?: string } | null)?.ref === args.ref);
-    expect(rows.map((r) => r.outcome).sort()).toEqual(["CONFIRM_INVALID", "FORBIDDEN", "ok", "ok"]);
-    const executed = rows.find((r) => r.confirmJti)!;
+    expect(rows.map((r) => r.outcome).sort()).toEqual(["INVALID_STATE", "ok", "ok"]);
+    const executed = rows.find((r) => r.confirmJti && r.outcome === "ok")!;
     expect(executed).toMatchObject({ operatorId: operators["editor"]!.id, shops: [TEST], outcome: "ok" });
     expect(executed.durationMs).not.toBeNull();
-    expect(JSON.stringify(rows.map((r) => r.argsRedacted))).not.toContain(token);
     // Free text never reaches the table, in any column.
     const everything = JSON.stringify(await db.select().from(mcpCallLog));
     expect(everything).not.toContain("log me please");
-    expect(rows.find((r) => r.confirmJti)!.argsRedacted).toMatchObject({ ref: args.ref, _omitted: expect.arrayContaining(["reason", "confirmToken"]) });
+    expect(executed.argsRedacted).toMatchObject({ ref: args.ref, _omitted: expect.arrayContaining(["reason"]) });
     expect((executed.resultRef as { result: { data: unknown } }).result.data).toBeTruthy();
   });
 });
 
 describe("rate limits", () => {
-  it("writes: 10 a minute per operator (dry runs count), then RATE_LIMITED with retryAfterSeconds", async () => {
+  it("writes: 10 a minute per operator (previews count), then RATE_LIMITED with retryAfterSeconds", async () => {
     const [op] = await db.insert(mcpOperators).values({ email: "rate@example.com", name: "r", role: "editor", shopAllowList: ["*"] }).returning();
     const rate: Operator = { id: op!.id, email: op!.email, name: "r", role: "editor", shopAllowList: ["*"] };
     const id = await seedOffer(db, shopIds["test"]!, { status: "active" });
     const real = { rateLimit: undefined } as Partial<McpContext>;
-    for (let i = 0; i < 10; i++) expect((await run("promo_pause", { ref: ref(TEST, id), reason: "rate limit" }, rate, real)).isError).toBeFalsy();
-    const blocked = await run("promo_pause", { ref: ref(TEST, id), reason: "rate limit" }, rate, real);
+    const args = { ref: ref(TEST, id), reason: "rate limit", dryRun: true };
+    for (let i = 0; i < 10; i++) expect((await run("promo_pause", args, rate, real)).isError).toBeFalsy();
+    const blocked = await run("promo_pause", args, rate, real);
     expect(body(blocked).code).toBe("RATE_LIMITED");
     expect((blocked.structuredContent as { retryAfterSeconds: number; retryable: boolean }).retryAfterSeconds).toBeGreaterThan(0);
     expect((blocked.structuredContent as { retryable: boolean }).retryable).toBe(true);
   });
 
-  it("critical tools: 3 executions a minute, counted only on execute", async () => {
+  it("every write, high-impact ones included, uses the write class (no stricter critical class)", async () => {
     const calls: string[] = [];
     const limiter = async (key: string, limit: number) => {
       calls.push(`${key.split(":")[1]}:${limit}`);
@@ -693,12 +669,11 @@ describe("rate limits", () => {
     };
     const id = await seedOffer(db, shopIds["test"]!, { status: "active" });
     await twoStep("promo_archive", { ref: ref(TEST, id) }, operators["admin"], { rateLimit: limiter });
-    expect(calls).toEqual(["write:10", "write:10", "critical:3"]);
+    expect(calls).toEqual(["write:10", "write:10"]);
 
-    const deny = async (key: string) => (key.includes(":critical:") ? { ok: false as const, retryAfterSeconds: 30 } : { ok: true as const });
+    const deny = async (key: string) => (key.includes(":write:") ? { ok: false as const, retryAfterSeconds: 30 } : { ok: true as const });
     const other = await seedOffer(db, shopIds["test"]!, { status: "active" });
-    const dry = await run("promo_archive", { ref: ref(TEST, other) }, operators["admin"], { rateLimit: deny });
-    const res = await run("promo_archive", { ref: ref(TEST, other), dryRun: false, confirmToken: body(dry).meta.confirmToken }, operators["admin"], { rateLimit: deny });
+    const res = await run("promo_archive", { ref: ref(TEST, other) }, operators["admin"], { rateLimit: deny });
     expect(body(res).code).toBe("RATE_LIMITED");
     expect((await row(other)).status).toBe("active");
   });
@@ -725,14 +700,31 @@ describe("registered over MCP", () => {
     await stop();
   });
 
-  it("a full dry run then execute through the protocol, logging the client name in the audit row", async () => {
+  it("an optional preview then a direct execute through the protocol, logging the client name in the audit row", async () => {
     const id = await seedOffer(db, shopIds["test"]!, { status: "active", internalName: "[MCP test] over the wire" });
     const { client, stop } = await connect(operators["editor"]!);
-    const dry = (await client.callTool({ name: "promo_pause", arguments: { ref: ref(TEST, id), reason: "end to end" } })) as CallToolResult;
-    const token = body(dry).meta.confirmToken!;
-    const done = (await client.callTool({ name: "promo_pause", arguments: { ref: ref(TEST, id), reason: "end to end", dryRun: false, confirmToken: token } })) as CallToolResult;
+    const dry = (await client.callTool({ name: "promo_pause", arguments: { ref: ref(TEST, id), reason: "end to end", dryRun: true } })) as CallToolResult;
+    expect(body(dry).meta.dryRun).toBe(true);
+    expect((await row(id)).status).toBe("active");
+    const done = (await client.callTool({ name: "promo_pause", arguments: { ref: ref(TEST, id), reason: "end to end" } })) as CallToolResult;
     expect(done.isError).toBeFalsy();
+    expect((await row(id)).status).toBe("paused");
     expect((await audits(shopIds["test"]!, id))[0]!.after).toMatchObject({ _mcp: { client: "vitest-client", tool: "promo_pause" } });
+    await stop();
+  });
+
+  it("every write tool documents dryRun and has no confirmToken, role or write-lock wording", async () => {
+    const { client, stop } = await connect(operators["viewer"]!);
+    const writes = (await client.listTools()).tools.filter((t) => t.annotations?.readOnlyHint === false);
+    expect(writes.length).toBeGreaterThanOrEqual(14);
+    for (const t of writes) {
+      const props = Object.keys(t.inputSchema.properties ?? {});
+      expect(props, t.name).toContain("dryRun");
+      expect(props, t.name).toContain("idempotencyKey");
+      expect(props, t.name).not.toContain("confirmToken");
+      expect(t.description, t.name).not.toMatch(/confirmToken|SHOP_READ_ONLY|admin role|Admin only|write-enabled/i);
+      expect(t.description, t.name).toContain("dryRun:true");
+    }
     await stop();
   });
 

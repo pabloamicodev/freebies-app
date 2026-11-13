@@ -1,4 +1,7 @@
 /** Result contract shared with the Experiment Engine MCP (Brain: Shared/experiment-engines-sync). */
+import { describeCapacityModal, isCapacityModalCode, tooLargeReason } from "../capacity-modal-copy.js";
+import { workaroundCopy } from "../capacity-workaround-copy.js";
+import type { WorkaroundKind } from "../capacity-workarounds.js";
 
 export const MCP_NAME = "promo-engine" as const;
 export type McpName = "promo-engine" | "experiment-engine";
@@ -89,6 +92,7 @@ export const ERROR_CODES = [
   "INVALID_STATE",
   "STATE_CONFLICT",
   "PUBLISH_FAILED",
+  "CAPACITY_LIMIT",
   "VALIDATION",
   "RATE_LIMITED",
   "UPSTREAM_UNAVAILABLE",
@@ -107,8 +111,18 @@ export type ToolErrorPayload = {
   retryAfterSeconds?: number;
   confirmToken?: string;
   /** Shared with the EE: FORBIDDEN carries reason "ROLE" (insufficient operator role). */
-  details?: { reason?: string; capacity?: { code: string; offerIds: string[]; numbers: Record<string, number> } };
+  details?: {
+    reason?: string;
+    capacity?: { code: string; offerIds: string[]; numbers: Record<string, number> };
+    /** CAPACITY_LIMIT: the Shopify cap that was hit, in the admin capacity modal's words. */
+    limit?: string;
+    /** CAPACITY_LIMIT: fixes the merchant can apply (admin: Diagnostics > capacity incidents). */
+    workarounds?: CapacityWorkaround[];
+  };
 };
+
+export type CapacityWorkaround = { kind: WorkaroundKind; title: string; summary: string };
+export type CapacityLike = { code: string; offerIds: string[]; numbers: Record<string, number>; offerNames?: Record<string, string> };
 
 const RETRYABLE: ReadonlySet<ErrorCode> = new Set(["RATE_LIMITED", "UPSTREAM_UNAVAILABLE"]);
 
@@ -192,4 +206,58 @@ export function buildResult<T>(
     nextActions: input.nextActions ?? [],
     meta: { generatedAt: now().toISOString(), ...input.meta },
   };
+}
+
+const WORKAROUND_TEXT: Record<WorkaroundKind, { title: string; summary: string }> = {
+  use_whole_products: workaroundCopy.useWholeProducts,
+  require_any: { title: workaroundCopy.requireAny.title, summary: "Changes an 'all of these items in the cart' condition to 'any one of them'." },
+  reduce_gift_options: { title: workaroundCopy.reduceGiftOptions.title, summary: "Keeps fewer gift options, the most available first." },
+  split_offer: { title: workaroundCopy.splitOffer.title, summary: "Splits the offer into several smaller offers, each in its own Shopify discount." },
+  sync_products: workaroundCopy.syncProducts,
+  pause_offers: { title: workaroundCopy.pauseOffers.title, summary: "Pauses the lowest-priority offers so the rest fit." },
+  deactivate_discounts: workaroundCopy.deactivateDiscounts,
+  allow_combine: workaroundCopy.allowCombine,
+};
+
+function workaroundKinds(capacity: CapacityLike): WorkaroundKind[] {
+  switch (capacity.code) {
+    case "AUTOMATIC_DISCOUNT_LIMIT":
+      return ["deactivate_discounts"];
+    case "OFFER_TOO_LARGE":
+    case "GROUP_TOO_LARGE": {
+      const reason = tooLargeReason(capacity.numbers);
+      if (reason === "lists") return ["require_any", "reduce_gift_options", "use_whole_products"];
+      if (reason === "keys" || reason === "tags") return [];
+      if (reason === "offers") return ["pause_offers"];
+      return ["use_whole_products", "sync_products", "split_offer", "reduce_gift_options"];
+    }
+    case "SLOT0_GROUP_TOO_LARGE":
+    case "SLOT_FULL":
+      return ["pause_offers"];
+    case "COMBINATION_SINGLE_SHARD":
+      return ["allow_combine", "pause_offers"];
+    default:
+      return [];
+  }
+}
+
+/** Same copy as the admin capacity modal (FIX-cap-08): which Shopify cap was hit, why, and the fixes on offer. */
+export function capacityToolError(capacity: CapacityLike, message: string, opts: { suggestedAction?: SuggestedAction } = {}): ToolError {
+  const workarounds = workaroundKinds(capacity).map((kind) => ({ kind, ...WORKAROUND_TEXT[kind] }));
+  let limit = "A Shopify limit was reached.";
+  let fix = "";
+  if (isCapacityModalCode(capacity.code)) {
+    const copy = describeCapacityModal({
+      code: capacity.code,
+      numbers: capacity.numbers,
+      offers: capacity.offerIds.map((id) => ({ id, name: capacity.offerNames?.[id] ?? id })),
+    });
+    limit = copy.limit;
+    fix = copy.fix;
+  }
+  const full = fix ? `${message} Limit: ${limit} ${fix}` : message;
+  return new ToolError("CAPACITY_LIMIT", full, {
+    ...opts,
+    details: { capacity: { code: capacity.code, offerIds: capacity.offerIds, numbers: capacity.numbers }, limit, workarounds },
+  });
 }

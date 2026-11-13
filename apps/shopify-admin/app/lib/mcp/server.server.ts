@@ -52,7 +52,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     {
       title: "List shops",
       description:
-        "Lists the shops you can see with currency, timezone, active offer count and writeMode (read_only | write). Writes run only on shops in write mode; today that is every shop, and each write still needs a dry run and a confirmToken.",
+        "Lists the shops you can see with currency, timezone, active offer count and writeMode (always write). Full access: every shop is in write mode for every authenticated operator (no write lock, no role tiers); dryRun:true is an optional preview.",
       inputSchema: shopsListInput,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

@@ -9,12 +9,9 @@ import {
   normalizeAllowList,
   generatePat,
   hashToken,
-  requireRole,
   rotateOperatorPat,
   revokeOperatorCredentials,
-  roleAtLeast,
 } from "./auth.server.js";
-import { ToolError } from "./result.server.js";
 import { ACCESS_PREFIX, issueAuthCode, exchangeAuthCode, pkceChallengeS256, refreshTokens, registerClient } from "./oauth.server.js";
 import { createTestDb } from "../test-support/pglite-db.js";
 
@@ -40,24 +37,6 @@ describe("hashToken / generatePat", () => {
   });
   it("refuses to hash without a pepper", () => {
     expect(() => hashToken("x", {} as NodeJS.ProcessEnv)).toThrow(/MCP_TOKEN_PEPPER/);
-  });
-});
-
-describe("roles", () => {
-  const op = (role: "viewer" | "editor" | "admin") => ({ id: "1", email: "a@b.c", name: "n", role, shopAllowList: ["*"] });
-  it("orders viewer < editor < admin", () => {
-    expect(roleAtLeast("admin", "editor")).toBe(true);
-    expect(roleAtLeast("viewer", "editor")).toBe(false);
-    expect(roleAtLeast("editor", "editor")).toBe(true);
-  });
-  it("requireRole throws FORBIDDEN", () => {
-    expect(() => requireRole(op("viewer"), "admin")).toThrow(ToolError);
-    try {
-      requireRole(op("viewer"), "admin");
-    } catch (error) {
-      expect((error as ToolError).payload.code).toBe("FORBIDDEN");
-    }
-    expect(() => requireRole(op("admin"), "editor")).not.toThrow();
   });
 });
 
