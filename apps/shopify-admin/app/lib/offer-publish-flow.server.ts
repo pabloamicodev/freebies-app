@@ -625,6 +625,7 @@ export async function finalizeCreatedOffer(
   shopDomain: string,
   offerId: string,
   intendedStatus: string,
+  publish: ShopPublishFn = tryPublishShop,
 ): Promise<string | null> {
   if (intendedStatus !== "active") {
     await invalidateOfferDefinitions(shopId);
@@ -651,16 +652,16 @@ export async function finalizeCreatedOffer(
     await toDraft("validation_error", error);
     return error;
   }
-  const failure = await tryPublishShop(shopId, shopDomain);
+  const failure = await publish(shopId, shopDomain);
   if (!failure) {
     await recordPublishWarnings(db, { shopId, offerId }, await getShopPublishWarnings(db, shopId, shopDomain, offerId));
     return null;
   }
-  if (!isOwnFault(failure, offerId)) return resolveForeignFailure(db, shopId, shopDomain, offerId, failure);
+  if (!isOwnFault(failure, offerId)) return resolveForeignFailure(db, shopId, shopDomain, offerId, failure, publish);
 
   const publishError = failure.message;
   await toDraft("compile_error", publishError);
-  const rollbackError = await publishShopConfig(shopId, shopDomain);
+  const rollbackError = (await publish(shopId, shopDomain))?.message ?? null;
   return rollbackError
     ? `${publishError} The offer was restored to draft, but Shopify configuration rollback also failed: ${rollbackError}`
     : `${publishError} The offer was restored to draft and the previous Shopify configuration was re-published.`;
