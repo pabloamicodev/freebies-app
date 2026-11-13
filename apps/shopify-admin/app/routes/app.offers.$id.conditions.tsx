@@ -13,25 +13,20 @@ import { PageHeader } from "../components/PageHeader.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { SelectedProductsList, type SelectedProduct } from "../components/SelectedProductsList.js";
 import { MatchBySelect, MatchRuleField, ProductConditionNote, pickedItems } from "../components/ProductConditionFields.js";
-import { buildProductConditionValue, matchRuleOperator, readMatchBy, readMatchRule, requirementGids, type MatchBy, type MatchRule } from "../lib/product-condition.js";
-import { anyOfConflictError } from "../lib/any-of-guard.server.js";
+import { readMatchBy, readMatchRule, requirementGids, type MatchBy, type MatchRule } from "../lib/product-condition.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
-import { lowestGiftTier } from "../lib/gift-tiered-offer.server.js";
-import { formatStoredAmount, isZeroDecimalCurrency, toStoredAmount } from "../lib/money.js";
+import { formatStoredAmount, isZeroDecimalCurrency } from "../lib/money.js";
 import { createFieldSetter, useObjectState } from "../hooks/useObjectState.js";
 import { discountCodes, offerConditions } from "@promo/db";
 import {
   CART_ATTRIBUTE_KEYS,
   ConditionTypeSchema,
   LINE_ATTRIBUTE_KEYS,
-  normalizeExcludedPageUrls,
-  normalizeStorePageUrls,
   resolveOnlyMatchedLines,
   resolveRejectUnmatchedLines,
-  validateConditionValue,
-  type ConditionOperator,
+  type ConditionScope,
 } from "@promo/shared-types";
 import {
   OnlyMatchedLinesCheckbox,
@@ -41,10 +36,9 @@ import {
   UtmScopeChoice,
 } from "../components/subconditions/forms.js";
 import { DEFAULT_CODE_PAGE_TYPES, readExcludeUrls, readPageTypes, readPageUrls } from "../lib/page-types.js";
-import { normalizeOfferSubconditions } from "../lib/gift-subconditions.js";
 import { ExperimentForm, SectionShownForm, TemplateForm } from "../components/subconditions/forms.js";
 import { and, eq } from "drizzle-orm";
-import { getNewPublishWarningsForEdit, republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { addCondition, deleteCondition, updateCondition, type ConditionFailure, type ConditionInput } from "../lib/offer-conditions.server.js";
 import { getMarketsForShop } from "../lib/markets.server.js";
 import { isCheckoutCodeGated } from "../lib/code-redemption.js";
 import { conditionSummary, conditionTypeLabel } from "../lib/offer-summaries.js";
@@ -121,273 +115,136 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   };
 };
 
-function buildConditionValue(
-  conditionType: string,
-  formData: FormData,
-  shopCurrency: string,
-): { value: Record<string, unknown>; operator: ConditionOperator; error?: never } | { error: string; value?: never; operator?: never } {
-    let value: Record<string, unknown> = {};
-    let conditionOperator: ConditionOperator = "gte";
-    switch (conditionType) {
-      case "cart_value": {
-        const thresh = parseFloat(formData.get("threshold") as string);
-        if (!Number.isFinite(thresh) || thresh < 0) return { error: "Threshold must be a valid positive number." };
-        // The unit is the shop's, whatever tag is typed: a free-text "JPY" on a USD shop must not store whole units.
-        const currencyCode = String(formData.get("currencyCode") || shopCurrency);
-        value = {
-          thresholdCents: toStoredAmount(thresh, shopCurrency),
-          currencyCode,
-          includeGiftValues: formData.get("includeGiftValues") === "on",
-        };
-        break;
-      }
-      case "cart_quantity": {
-        const minQty = parseInt(formData.get("minQty") as string, 10);
-        if (!Number.isFinite(minQty) || minQty < 1) return { error: "Minimum quantity must be at least 1." };
-        const maxQtyRaw = formData.get("maxQty");
-        const maxQty = maxQtyRaw ? parseInt(maxQtyRaw as string, 10) : undefined;
-        value = {
-          minQuantity: minQty,
-          maxQuantity: maxQty !== undefined && Number.isFinite(maxQty) ? maxQty : undefined,
-          includeGiftValues: false,
-        };
-        break;
-      }
-      case "cart_value_multiplier": {
-        const multThresh = parseFloat(formData.get("threshold") as string);
-        if (!Number.isFinite(multThresh) || multThresh < 0) return { error: "Threshold must be a valid positive number." };
-        const multRaw = formData.get("maxMultiplier");
-        const maxMult = multRaw ? parseInt(multRaw as string, 10) : undefined;
-        const multCurrency = String(formData.get("currencyCode") || shopCurrency);
-        value = {
-          thresholdCents: toStoredAmount(multThresh, shopCurrency),
-          currencyCode: multCurrency,
-          maxMultiplier: maxMult !== undefined && Number.isFinite(maxMult) ? maxMult : undefined,
-          includeGiftValues: false,
-        };
-        break;
-      }
-      case "customer_tags":
-        value = {
-          includeTags: splitCsvList(formData.get("includeTags") as string | null),
-          excludeTags: splitCsvList(formData.get("excludeTags") as string | null),
-          treatGuestAsNoTags: formData.get("treatGuestAsNoTags") === "on",
-        };
-        break;
-      case "order_history_total_spent":
-      case "order_history_last_order_spent":
-      case "order_history_total_orders": {
-        const orderVal = parseFloat(formData.get("orderValue") as string);
-        if (!Number.isFinite(orderVal) || orderVal < 0) return { error: "Order value must be a valid positive number." };
-        const operatorValue = String(formData.get("operator") ?? "gte");
-        conditionOperator = ["eq", "gt", "gte", "lt", "lte"].includes(operatorValue)
-          ? operatorValue as ConditionOperator
-          : "gte";
-        const historyType = conditionType === "order_history_total_orders"
-          ? "total_orders"
-          : conditionType === "order_history_last_order_spent"
-            ? "last_order_spent"
-            : "total_spent";
-        value = {
-          type: historyType,
-          operator: conditionOperator,
-          ...(historyType === "total_orders" ? { value: Math.floor(orderVal) } : { valueCents: toStoredAmount(orderVal, shopCurrency) }),
-        };
-        break;
-      }
-      case "one_use_per_customer":
-        value = {};
-        break;
-      case "markets":
-        {
-          const includeMarketIds = splitCsvList(formData.get("includeMarkets") as string | null);
-          const excludeMarketIds = splitCsvList(formData.get("excludeMarkets") as string | null);
-          if (includeMarketIds.length === 0 && excludeMarketIds.length === 0) return { error: "Select at least one Shopify Market." };
-          value = { includeMarketIds, excludeMarketIds };
-        }
-        break;
-      case "customer_location":
-        value = {
-          includeCountryCodes: splitCountryCsv(formData.get("includeCountries") as string | null),
-          excludeCountryCodes: splitCountryCsv(formData.get("excludeCountries") as string | null),
-        };
-        break;
-      case "sales_channels":
-        value = { channels: formData.getAll("channels[]") as string[] };
-        break;
-      case "subscription_product_type":
-        value = { mode: formData.get("subscriptionMode") ?? "subscription_only" };
-        break;
-      case "specific_link": {
-        const requiredUrl = String(formData.get("requiredUrl") ?? "").trim();
-        const paramName = String(formData.get("paramName") ?? "").trim();
-        const paramValue = String(formData.get("paramValue") ?? "");
-        value = {
-          requiredUrl,
-          ...(paramName ? { paramName } : {}),
-          ...(paramValue ? { paramValue } : {}),
-          ...lineMatchFlags(formData),
-        };
-        break;
-      }
-      case "page_types": {
-        const pageTypes = formData.getAll("pageTypes").map(String);
-        if (pageTypes.length === 0) return { error: "Select at least one kind of store page." };
-        const pageUrls = pageTypes.includes("page") ? normalizeStorePageUrls(formData.getAll("pageUrls")) : [];
-        const excludeUrls = normalizeExcludedPageUrls(formData.getAll("excludeUrls"));
-        value = { pageTypes, ...(pageUrls.length ? { pageUrls } : {}), ...(excludeUrls.length ? { excludeUrls } : {}), ...lineMatchFlags(formData) };
-        break;
-      }
-      case "template":
-      case "section_shown":
-      case "experiment": {
-        let raw: unknown = {};
-        try {
-          raw = JSON.parse(String(formData.get("pageStampValue") ?? "{}"));
-        } catch {
-          return { error: "Condition value is invalid." };
-        }
-        const normalized = normalizeOfferSubconditions({ [conditionType]: raw });
-        if (!normalized.success) return { error: normalized.error };
-        value = normalized.data[0]?.value ?? {};
-        conditionOperator = normalized.data[0]?.operator ?? conditionOperator;
-        break;
-      }
-      case "page_url": {
-        const patternsRaw = formData.get("urlPatterns") as string | null;
-        const patterns = splitCsvList(patternsRaw).filter((p) => p.length > 0);
-        if (patterns.length === 0) return { error: "Enter at least one URL pattern." };
-        const matchMode = (formData.get("matchMode") as string | null) ?? "starts_with";
-        value = { patterns, matchMode, caseSensitive: false, ...lineMatchFlags(formData) };
-        break;
-      }
-      case "specific_product":
-      case "pack_of_products": {
-        const matchBy: MatchBy = formData.get("matchBy") === "product" ? "product" : "variant";
-        const gids = splitCsvList((formData.get(matchBy === "product" ? "requiredProductGids" : "requiredVariantGids") as string | null) ?? "");
-        if (gids.length === 0) {
-          // Return early with validation error rather than inserting an empty condition
-          return { error: "Select at least one product before adding this condition." };
-        }
-        const rule: MatchRule = conditionType === "specific_product" && formData.get("matchRule") === "any" ? "any" : "all";
-        // "any" is presence-only, so it never carries a min quantity.
-        const minQty = rule === "any" ? 1 : parseInt((formData.get("minQtyPerProduct") as string | null) ?? "1", 10) || 1;
-        value = buildProductConditionValue(conditionType, matchBy, gids, minQty);
-        conditionOperator = matchRuleOperator(rule);
-        break;
-      }
-      case "line_attribute":
-        value = {
-          key: String(formData.get("attributeKey") ?? ""),
-          value: String(formData.get("attributeValue") ?? "").trim(),
-          matchMode: formData.get("attributeMatchMode") === "not_equals" ? "not_equals" : "equals",
-          minMatchingQuantity: Math.max(1, parseInt(String(formData.get("attributeMinQuantity") ?? "1"), 10) || 1),
-        };
-        break;
-      case "cart_attribute":
-        value = {
-          key: String(formData.get("attributeKey") ?? ""),
-          value: String(formData.get("attributeValue") ?? "").trim(),
-          matchMode: formData.get("attributeMatchMode") === "not_equals" ? "not_equals" : "equals",
-        };
-        break;
-      case "discount_code":
-        return { error: "Discount codes are managed on the offer's Codes tab, not as a condition." };
-      case "utm_parameters":
-        value = {
-          utmSource: String(formData.get("utmSource") ?? "").trim(),
-          utmMedium: String(formData.get("utmMedium") ?? "").trim(),
-          utmCampaign: String(formData.get("utmCampaign") ?? "").trim(),
-          utmTerm: String(formData.get("utmTerm") ?? "").trim(),
-          utmContent: String(formData.get("utmContent") ?? "").trim(),
-          scope: formData.get("utmScope") === "visit" ? "visit" : "page",
-          ...lineMatchFlags(formData),
-        };
-        break;
+/** FormData -> typed service input. Numbers keep the form's parse (NaN included) so the service reports the same messages. */
+function formToCondition(conditionType: string, formData: FormData): ConditionInput | { error: string } {
+  const str = (name: string) => formData.get(name) as string | null;
+  switch (conditionType) {
+    case "cart_value":
+      return { type: conditionType, threshold: parseFloat(str("threshold") as string), currencyCode: String(formData.get("currencyCode") || "") || undefined, includeGiftValues: formData.get("includeGiftValues") === "on" };
+    case "cart_quantity": {
+      const maxQtyRaw = formData.get("maxQty");
+      return { type: conditionType, minQuantity: parseInt(str("minQty") as string, 10), maxQuantity: maxQtyRaw ? parseInt(maxQtyRaw as string, 10) : undefined };
     }
-
-    const valueResult = validateConditionValue(conditionType, value);
-    if (!valueResult.success) return { error: valueResult.error.issues[0]?.message ?? "Condition value is invalid." };
-
-    return { value, operator: conditionOperator };
+    case "cart_value_multiplier": {
+      const multRaw = formData.get("maxMultiplier");
+      return { type: conditionType, threshold: parseFloat(str("threshold") as string), maxMultiplier: multRaw ? parseInt(multRaw as string, 10) : undefined, currencyCode: String(formData.get("currencyCode") || "") || undefined };
+    }
+    case "customer_tags":
+      return { type: conditionType, includeTags: splitCsvList(str("includeTags")), excludeTags: splitCsvList(str("excludeTags")), treatGuestAsNoTags: formData.get("treatGuestAsNoTags") === "on" };
+    case "order_history_total_spent":
+    case "order_history_last_order_spent":
+    case "order_history_total_orders":
+      return { type: conditionType, value: parseFloat(str("orderValue") as string), operator: String(formData.get("operator") ?? "gte") };
+    case "one_use_per_customer":
+      return { type: conditionType };
+    case "markets":
+      return { type: conditionType, includeMarketIds: splitCsvList(str("includeMarkets")), excludeMarketIds: splitCsvList(str("excludeMarkets")) };
+    case "customer_location":
+      return { type: conditionType, includeCountryCodes: splitCountryCsv(str("includeCountries")), excludeCountryCodes: splitCountryCsv(str("excludeCountries")) };
+    case "sales_channels":
+      return { type: conditionType, channels: formData.getAll("channels[]") as string[] };
+    case "subscription_product_type":
+      return { type: conditionType, mode: str("subscriptionMode") ?? undefined };
+    case "specific_link":
+      return {
+        type: conditionType,
+        requiredUrl: String(formData.get("requiredUrl") ?? ""),
+        paramName: String(formData.get("paramName") ?? ""),
+        paramValue: String(formData.get("paramValue") ?? ""),
+        ...lineMatchFlags(formData),
+      };
+    case "page_types":
+      return { type: conditionType, pageTypes: formData.getAll("pageTypes").map(String), pageUrls: formData.getAll("pageUrls"), excludeUrls: formData.getAll("excludeUrls"), ...lineMatchFlags(formData) };
+    case "template":
+    case "section_shown":
+    case "experiment": {
+      let raw: unknown = {};
+      try {
+        raw = JSON.parse(String(formData.get("pageStampValue") ?? "{}"));
+      } catch {
+        return { error: "Condition value is invalid." };
+      }
+      return { ...(raw && typeof raw === "object" ? raw : {}), type: conditionType };
+    }
+    case "page_url":
+      return { type: conditionType, patterns: splitCsvList(str("urlPatterns")), matchMode: str("matchMode") ?? "starts_with", ...lineMatchFlags(formData) };
+    case "specific_product":
+    case "pack_of_products": {
+      const matchBy: MatchBy = formData.get("matchBy") === "product" ? "product" : "variant";
+      return {
+        type: conditionType,
+        matchBy,
+        ids: splitCsvList(str(matchBy === "product" ? "requiredProductGids" : "requiredVariantGids")),
+        matchRule: formData.get("matchRule") === "any" ? "any" : "all",
+        minQuantityPerProduct: parseInt(str("minQtyPerProduct") ?? "1", 10),
+      };
+    }
+    case "line_attribute":
+      return {
+        type: conditionType,
+        key: String(formData.get("attributeKey") ?? ""),
+        value: String(formData.get("attributeValue") ?? ""),
+        matchMode: formData.get("attributeMatchMode") === "not_equals" ? "not_equals" : "equals",
+        minMatchingQuantity: parseInt(String(formData.get("attributeMinQuantity") ?? "1"), 10),
+      };
+    case "cart_attribute":
+      return { type: conditionType, key: String(formData.get("attributeKey") ?? ""), value: String(formData.get("attributeValue") ?? ""), matchMode: formData.get("attributeMatchMode") === "not_equals" ? "not_equals" : "equals" };
+    case "discount_code":
+      return { type: conditionType };
+    case "utm_parameters":
+      return {
+        type: conditionType,
+        utmSource: String(formData.get("utmSource") ?? ""),
+        utmMedium: String(formData.get("utmMedium") ?? ""),
+        utmCampaign: String(formData.get("utmCampaign") ?? ""),
+        utmTerm: String(formData.get("utmTerm") ?? ""),
+        utmContent: String(formData.get("utmContent") ?? ""),
+        scope: formData.get("utmScope") === "visit" ? "visit" : "page",
+        ...lineMatchFlags(formData),
+      };
+    default:
+      return { type: conditionType } as ConditionInput;
+  }
 }
 
 export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs) => {
-  const { session, shopId, db, currencyCode: shopCurrencyCode } = await getShopContext(request);
+  const { session, shopId, db, currencyCode: shopCurrencyCode, timezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
-  const offer = await loadOwnedOffer(db, shopId, offerId);
+  await loadOwnedOffer(db, shopId, offerId);
+  const deps = { db, shopId, shopDomain: session.shop, shopCurrency: shopCurrencyCode, timezone };
+  const opts = {
+    performedBy: session.shop,
+    acknowledgeWarnings: formData.get("acknowledgeWarnings") === "1",
+    warningAuth: { shopDomain: session.shop, accessToken: session.accessToken ?? "" },
+  };
+  // A condition that vanished meanwhile (double click) was a silent no-op before the service existed.
+  const outcome = (result: { ok: true } | ConditionFailure) => {
+    if (result.ok || result.code === "condition_not_found") return null;
+    return result.code === "warnings" ? { warnings: result.warnings } : { error: result.error };
+  };
 
   if (intent === "add_condition" || intent === "update_condition") {
     const conditionType = formData.get("conditionType") as string;
     const conditionTypeResult = ConditionTypeSchema.safeParse(conditionType);
     if (!conditionTypeResult.success) return { error: "Condition type is invalid." };
-    const scopeRaw = formData.get("scope") as string | null;
-    const scope = scopeRaw === "sub" ? "sub" : "main";
-
-    const built = buildConditionValue(conditionType, formData, shopCurrencyCode);
-    if ("error" in built) return { error: built.error };
-    const { value, operator: conditionOperator } = built;
-    if (scope === "main" && conditionType === "cart_value" && typeof (value as { thresholdCents?: unknown }).thresholdCents === "number") {
-      const lowestTier = await lowestGiftTier(db, shopId, offerId);
-      if (lowestTier !== null && (value as { thresholdCents: number }).thresholdCents > lowestTier) {
-        return { error: `The minimum cart value cannot be above this offer's lowest gift tier (${formatStoredAmount(lowestTier, shopCurrencyCode)}), or that tier could never unlock. Lower it, or raise the tier on the rewards page.` };
-      }
-    }
-    if (conditionType === "specific_product" && conditionOperator === "any") {
-      const conflict = await anyOfConflictError(db, shopId, offerId, intent === "update_condition" ? (formData.get("conditionId") as string | null) ?? undefined : undefined);
-      if (conflict) return { error: conflict };
-    }
+    const scope: ConditionScope = formData.get("scope") === "sub" ? "sub" : "main";
+    const condition = formToCondition(conditionType, formData);
+    if ("error" in condition) return { error: condition.error };
 
     const conditionId = intent === "update_condition" ? (formData.get("conditionId") as string | null) ?? "" : "";
-    if (intent === "update_condition" && !conditionId) return { error: "Condition ID missing." };
-    if ((offer.status === "active" || offer.status === "scheduled") && formData.get("acknowledgeWarnings") !== "1") {
-      const warnings = await getNewPublishWarningsForEdit(db, shopId, offerId, { shopDomain: session.shop, accessToken: session.accessToken ?? "" }, { conditionId: conditionId || undefined, conditionType, value });
-      if (warnings.length > 0) return { warnings };
-    }
-
-    if (intent === "add_condition") {
-      const existingCount = await db.select({ id: offerConditions.id })
-        .from(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId)));
-
-      await db.insert(offerConditions).values({
-        shopId, offerId,
-        scope,
-        conditionType,
-        operator: conditionOperator,
-        value,
-        sortOrder: existingCount.length,
-        isEnabled: true,
-      });
-    } else {
-      await db.update(offerConditions)
-        .set({ scope, conditionType, operator: conditionOperator, value })
-        .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)));
-    }
-    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
-    if (publishError) return { error: publishError };
+    const failed = outcome(
+      intent === "add_condition"
+        ? await addCondition(deps, { offerId, scope, condition }, opts)
+        : await updateCondition(deps, { offerId, scope, condition, conditionId }, opts),
+    );
+    if (failed) return failed;
   }
 
   if (intent === "delete_condition") {
-    const conditionId = formData.get("conditionId") as string;
-    if (offer.status === "active") {
-      const [conditionToDelete, mainConditions] = await Promise.all([
-        db.select({ scope: offerConditions.scope, isEnabled: offerConditions.isEnabled })
-          .from(offerConditions)
-          .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)))
-          .limit(1),
-        db.select({ id: offerConditions.id })
-          .from(offerConditions)
-          .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.scope, "main"), eq(offerConditions.isEnabled, true))),
-      ]);
-      if (conditionToDelete[0]?.scope === "main" && conditionToDelete[0].isEnabled && mainConditions.length <= 1) {
-        return { error: "Cannot delete the last enabled main condition from an active offer. Pause it first or add another main condition." };
-      }
-    }
-    await db.delete(offerConditions).where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, conditionId)));
-    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
-    if (publishError) return { error: publishError };
+    const failed = outcome(await deleteCondition(deps, { offerId, conditionId: formData.get("conditionId") as string }, { performedBy: session.shop }));
+    if (failed) return failed;
   }
 
   return { success: true };
