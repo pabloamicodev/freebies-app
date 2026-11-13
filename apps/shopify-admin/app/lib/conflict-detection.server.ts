@@ -9,7 +9,7 @@
  * 4. Multiple offers with auto-add could add the same gift
  */
 
-import { getDb, offers, offerConditions, offerRewards, offerCombinationPolicies, type OfferReward, type OfferCombinationPolicy } from "@promo/db";
+import { getDb, offers, offerConditions, offerRewards, offerCombinationPolicies, type OfferReward, type OfferCombinationPolicy, type Db } from "@promo/db";
 import { eq, and, inArray } from "drizzle-orm";
 
 export interface OfferConflict {
@@ -19,8 +19,7 @@ export interface OfferConflict {
   message: string;
 }
 
-export async function detectConflicts(shopId: string): Promise<OfferConflict[]> {
-  const db = getDb();
+export async function detectConflicts(shopId: string, db: Db = getDb()): Promise<OfferConflict[]> {
   const conflicts: OfferConflict[] = [];
 
   // Load all active offers

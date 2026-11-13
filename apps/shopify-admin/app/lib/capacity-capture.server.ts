@@ -72,3 +72,18 @@ export function withCapacityModal<Args extends unknown[], Result>(
     }
   };
 }
+
+/**
+ * Runs `fn` as an attended MCP caller and returns the Shopify capacity block its publish recorded, if any, as the
+ * same modal payload the admin shows. Not for use inside `withCapacityModal` (it opens its own scope).
+ */
+export async function captureCapacity<T>(db: Db, fn: () => Promise<T>): Promise<{ result: T; capacity: CapacityModalData | null }> {
+  const scope: { captured?: CapturedCapacity } = {};
+  const result = await store.run(scope, () => runWithCapacitySource("mcp", true, fn));
+  if (!scope.captured) return { result, capacity: null };
+  try {
+    return { result, capacity: await buildCapacityModalData(db, scope.captured) };
+  } catch {
+    return { result, capacity: null };
+  }
+}
