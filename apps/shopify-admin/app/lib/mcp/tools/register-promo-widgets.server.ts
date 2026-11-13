@@ -39,22 +39,22 @@ export function registerPromoWidgetsTools(server: McpServer, ctx: McpContext): v
   );
   server.registerTool(
     "promo_widget_upsert",
-    { title: "Add a widget to an offer", description: WIDGET_TOOL_DOCS.upsert, inputSchema: promoWidgetUpsertInput, annotations: WRITE },
+    { title: "Add a widget to an offer", description: `${WIDGET_TOOL_DOCS.upsert} dryRun:true previews the outcome without writing anything.`, inputSchema: promoWidgetUpsertInput, annotations: WRITE },
     (args, extra) => promoWidgetUpsert(ctx, call(extra), args),
   );
   server.registerTool(
     "promo_widget_set_enabled",
-    { title: "Enable or disable a widget", description: WIDGET_TOOL_DOCS.setEnabled, inputSchema: promoWidgetSetEnabledInput, annotations: WRITE },
+    { title: "Enable or disable a widget", description: `${WIDGET_TOOL_DOCS.setEnabled} dryRun:true previews the outcome without writing anything.`, inputSchema: promoWidgetSetEnabledInput, annotations: WRITE },
     (args, extra) => promoWidgetSetEnabled(ctx, call(extra), args),
   );
   server.registerTool(
     "promo_widget_delete",
-    { title: "Delete a widget", description: WIDGET_TOOL_DOCS.delete, inputSchema: promoWidgetDeleteInput, annotations: DESTRUCTIVE },
+    { title: "Delete a widget", description: `${WIDGET_TOOL_DOCS.delete} dryRun:true previews the outcome without writing anything.`, inputSchema: promoWidgetDeleteInput, annotations: DESTRUCTIVE },
     (args, extra) => promoWidgetDelete(ctx, call(extra), args),
   );
   server.registerTool(
     "promo_widget_set_market_overrides",
-    { title: "Set per-market widget overrides", description: WIDGET_TOOL_DOCS.setMarketOverrides, inputSchema: promoWidgetSetMarketOverridesInput, annotations: WRITE },
+    { title: "Set per-market widget overrides", description: `${WIDGET_TOOL_DOCS.setMarketOverrides} dryRun:true previews the outcome without writing anything.`, inputSchema: promoWidgetSetMarketOverridesInput, annotations: WRITE },
     (args, extra) => promoWidgetSetMarketOverrides(ctx, call(extra), args),
   );
   server.registerTool(
@@ -64,7 +64,7 @@ export function registerPromoWidgetsTools(server: McpServer, ctx: McpContext): v
   );
   server.registerTool(
     "boosters_set",
-    { title: "Enable or disable a booster widget", description: WIDGET_TOOL_DOCS.boostersSet, inputSchema: boostersSetInput, annotations: WRITE },
+    { title: "Enable or disable a booster widget", description: `${WIDGET_TOOL_DOCS.boostersSet} dryRun:true previews the outcome without writing anything.`, inputSchema: boostersSetInput, annotations: WRITE },
     (args, extra) => boostersSet(ctx, call(extra), args),
   );
 }

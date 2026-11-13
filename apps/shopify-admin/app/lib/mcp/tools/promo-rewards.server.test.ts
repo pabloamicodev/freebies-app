@@ -10,15 +10,15 @@ import type { ShopPublishFn } from "../../offer-publish-flow.server.js";
 import { addReward, setTierMode } from "../../offer-rewards.server.js";
 import type { Operator } from "../auth.server.js";
 import { createMcpServer, type McpContext } from "../server.server.js";
-import { registerPromoRewardsTools } from "./register-promo-rewards.server.js";
 import { rewardDeleteTool, rewardUpsertTool } from "./promo-rewards.server.js";
 
 vi.mock("../../offer-definitions.server.js", () => ({ invalidateOfferDefinitions: async () => undefined }));
 vi.mock("../../publish-pending.server.js", () => ({ markPublishPending: async () => undefined }));
 // Package 03 owns the real authoring module; this stand-in pins the contract the tool relies on (schema + toStoredRewards).
-vi.mock("../../offer-authoring/index.js", async () => {
+vi.mock("../../offer-authoring/index.js", async (importOriginal) => {
   const { z } = await import("zod");
   return {
+    ...(await importOriginal<typeof import("../../offer-authoring/index.js")>()),
     AuthoringRewardSchema: z.object({ kind: z.literal("order_discount"), percent: z.number().min(1).max(100), copies: z.number().int().min(1).max(3).optional() }),
     toStoredRewards: async (rewards: Array<{ percent: number; copies?: number }>, deps: { shopCurrency: string }) => ({
       ok: true,
@@ -238,7 +238,6 @@ describe("offer-rewards service", () => {
 describe("registration", () => {
   it("registers promo_reward_upsert and promo_reward_delete with documented inputs", async () => {
     const server = createMcpServer(ctx());
-    registerPromoRewardsTools(server, ctx());
     const [a, b] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "test", version: "1" });
     await Promise.all([server.connect(a), client.connect(b)]);

@@ -60,7 +60,7 @@ describe("editor combination toggles", () => {
     ctx.republish.mockClear();
     await post(id, { [field]: "on" });
     expect((await policy(id))?.[column]).toBe(true);
-    expect(ctx.republish).toHaveBeenCalledWith(db, shopId, "combo-shop.myshopify.com", id, true);
+    expect(ctx.republish).toHaveBeenCalledWith(expect.anything(), shopId, "combo-shop.myshopify.com", id, true, undefined);
     await post(id, {});
     expect((await policy(id))?.[column]).toBe(false);
   });

@@ -53,10 +53,10 @@ describe("validateActivation capacity", () => {
     expect(toolError.payload.details?.capacity).toMatchObject({ code: "SLOT_FULL", offerIds: [huge] });
   });
 
-  it("surfaces a publish-time capacity failure as details.capacity on the MCP publish_failed error", () => {
+  it("surfaces a publish-time capacity failure as CAPACITY_LIMIT with details.capacity on the MCP error", () => {
     const capacity = { code: "SLOT_FULL" as const, offerIds: ["o1"], numbers: { neededBytes: 12000 } };
     const toolError = lifecycleToolError({ ok: false, code: "publish_failed", error: "too big", capacity, rolledBack: true, statusBefore: "active", statusAfter: "active" });
-    expect(toolError.payload.code).toBe("PUBLISH_FAILED");
+    expect(toolError.payload.code).toBe("CAPACITY_LIMIT");
     expect(toolError.payload.details?.capacity).toEqual(capacity);
   });
 

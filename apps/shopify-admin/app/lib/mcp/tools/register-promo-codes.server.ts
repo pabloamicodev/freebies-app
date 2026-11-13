@@ -48,7 +48,7 @@ export function registerPromoCodesTools(server: McpServer, ctx: McpContext): voi
       title: "Add a code or generate a batch",
       description:
         "Adds one typed code, or generates a batch of unique codes, on an existing offer (the Codes tab's Add code / Generate). A live offer is republished; above 500 new codes on a live offer the publish simply runs inline. Max 5000 codes per call; the batch's random part must be long enough that guessing is hopeless. " +
-        "Example: { ref: 'promo:hpn:<offerId>', code: 'WELCOME15', usageLimit: 100 } or { ref: '...', batch: { count: 200, prefix: 'VIP-', length: 8 }, oncePerCustomer: true }. Batch codes are not returned here: use codes_export with the returned batchId.",
+        "Example: { ref: 'promo:hpn:<offerId>', code: 'WELCOME15', usageLimit: 100 } or { ref: '...', batch: { count: 200, prefix: 'VIP-', length: 8 }, oncePerCustomer: true }. Batch codes are not returned here: use codes_export with the returned batchId. dryRun:true previews the outcome without writing.",
       inputSchema: codesAddInput,
       annotations: WRITE,
     },
@@ -59,7 +59,7 @@ export function registerPromoCodesTools(server: McpServer, ctx: McpContext): voi
     "codes_set_discount_message",
     {
       title: "Set the discount message",
-      description: "Sets the message customers see for the discount (offers.public_title, max 60 chars; empty = the offer's internal name). Example: { ref: 'promo:hpn:<offerId>', message: '10% off your order' }. A live offer is republished.",
+      description: "Sets the message customers see for the discount (offers.public_title, max 60 chars; empty = the offer's internal name). Example: { ref: 'promo:hpn:<offerId>', message: '10% off your order' }. A live offer is republished. dryRun:true previews the outcome without writing anything.",
       inputSchema: codesSetDiscountMessageInput,
       annotations: WRITE,
     },
@@ -71,7 +71,7 @@ export function registerPromoCodesTools(server: McpServer, ctx: McpContext): voi
     {
       title: "Set code redemption mode",
       description:
-        "Switches an offer between customers entering a code (checkout_code) and applying automatically (automatic; its codes are paused). Automatic needs at least one enabled main condition and free automatic-discount capacity in the shop (Shopify allows a limited number of automatic discounts): a capacity block returns CAPACITY_LIMIT with the numbers. Example: { ref: 'promo:hpn:<offerId>', mode: 'automatic' }.",
+        "Switches an offer between customers entering a code (checkout_code) and applying automatically (automatic; its codes are paused). Automatic needs at least one enabled main condition and free automatic-discount capacity in the shop (Shopify allows a limited number of automatic discounts): a capacity block returns CAPACITY_LIMIT with the numbers. Example: { ref: 'promo:hpn:<offerId>', mode: 'automatic' }. dryRun:true previews the outcome without writing anything.",
       inputSchema: codesSetRedemptionModeInput,
       annotations: WRITE,
     },
@@ -83,7 +83,7 @@ export function registerPromoCodesTools(server: McpServer, ctx: McpContext): voi
     {
       title: "Restore a code's original name",
       description:
-        "After a code collided with a discount already on Shopify and was saved with a suffix, switches it back to the original code if that code is free on Shopify now (never touches the merchant's own discount). Example: { ref: 'promo:hpn:<offerId>', codeId: '<code uuid from codes_list>' }.",
+        "After a code collided with a discount already on Shopify and was saved with a suffix, switches it back to the original code if that code is free on Shopify now (never touches the merchant's own discount). Example: { ref: 'promo:hpn:<offerId>', codeId: '<code uuid from codes_list>' }. dryRun:true previews the outcome without writing anything.",
       inputSchema: codesRetryOriginalInput,
       annotations: WRITE,
     },

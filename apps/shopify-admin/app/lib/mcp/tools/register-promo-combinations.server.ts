@@ -21,13 +21,13 @@ export function registerPromoCombinationsTools(server: McpServer, ctx: McpContex
 
   server.registerTool(
     "promo_set_combinations",
-    { title: "Set combinations and limits", description: COMBINATIONS_DESCRIPTION, inputSchema: promoSetCombinationsInput, annotations: WRITE },
+    { title: "Set combinations and limits", description: `${COMBINATIONS_DESCRIPTION} dryRun:true previews the outcome without writing anything.`, inputSchema: promoSetCombinationsInput, annotations: WRITE },
     (args, extra) => setCombinationsTool(ctx, call(extra), args),
   );
 
   server.registerTool(
     "promo_set_priority",
-    { title: "Set priority", description: PRIORITY_DESCRIPTION, inputSchema: promoSetPriorityInput, annotations: WRITE },
+    { title: "Set priority", description: `${PRIORITY_DESCRIPTION} dryRun:true previews the outcome without writing anything.`, inputSchema: promoSetPriorityInput, annotations: WRITE },
     (args, extra) => setPriorityTool(ctx, call(extra), args),
   );
 }
