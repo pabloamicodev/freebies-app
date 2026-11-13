@@ -1,3 +1,4 @@
+import type * as IndexTypeModule from "../../offer-authoring/index.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -18,7 +19,7 @@ vi.mock("../../publish-pending.server.js", () => ({ markPublishPending: async ()
 vi.mock("../../offer-authoring/index.js", async (importOriginal) => {
   const { z } = await import("zod");
   return {
-    ...(await importOriginal<typeof import("../../offer-authoring/index.js")>()),
+    ...(await importOriginal<typeof IndexTypeModule>()),
     AuthoringRewardSchema: z.object({ kind: z.literal("order_discount"), percent: z.number().min(1).max(100), copies: z.number().int().min(1).max(3).optional() }),
     toStoredRewards: async (rewards: Array<{ percent: number; copies?: number }>, deps: { shopCurrency: string }) => ({
       ok: true,

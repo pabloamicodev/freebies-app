@@ -1,3 +1,4 @@
+import type * as OfferDefinitionsTypeModule from "../../offer-definitions.server.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -12,7 +13,7 @@ import type { McpContext } from "../server.server.js";
 import { registerPromoAuthoringTools } from "./register-promo-authoring.server.js";
 
 vi.mock("../../offer-definitions.server.js", async (importActual) => {
-  const actual = await importActual<typeof import("../../offer-definitions.server.js")>();
+  const actual = await importActual<typeof OfferDefinitionsTypeModule>();
   return { ...actual, invalidateOfferDefinitions: async () => undefined };
 });
 vi.mock("../../publish-pending.server.js", () => ({ markPublishPending: async () => undefined }));

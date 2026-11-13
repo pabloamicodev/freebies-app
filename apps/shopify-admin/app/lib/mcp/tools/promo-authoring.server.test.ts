@@ -1,3 +1,5 @@
+import type * as OfferDefinitionsTypeModule from "../../offer-definitions.server.js";
+import type * as CapacityPreflightTypeModule from "../../capacity-preflight.server.js";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -30,12 +32,12 @@ import type { McpContext } from "../server.server.js";
 import { registerPromoAuthoringTools } from "./register-promo-authoring.server.js";
 
 vi.mock("../../offer-definitions.server.js", async (importActual) => {
-  const actual = await importActual<typeof import("../../offer-definitions.server.js")>();
+  const actual = await importActual<typeof OfferDefinitionsTypeModule>();
   return { ...actual, invalidateOfferDefinitions: async () => undefined };
 });
 vi.mock("../../publish-pending.server.js", () => ({ markPublishPending: async () => undefined }));
 vi.mock("../../capacity-preflight.server.js", async (importActual) => {
-  const actual = await importActual<typeof import("../../capacity-preflight.server.js")>();
+  const actual = await importActual<typeof CapacityPreflightTypeModule>();
   return { ...actual, preflightCapacity: vi.fn(actual.preflightCapacity) };
 });
 
@@ -104,7 +106,7 @@ beforeAll(async () => {
   await db.insert(variantCache).values({ shopId, productGid: PRODUCT_GID, variantGid: VARIANT_GID, title: "Default Title", price: "59.99", currencyCode: "USD", raw: {} });
   const [op] = await db.insert(mcpOperators).values({ email: "viewer@example.com", name: "viewer", role: "viewer", shopAllowList: ["*"] }).returning();
   operator = { id: op!.id, email: op!.email, name: op!.name, role: "viewer", shopAllowList: ["*"] };
-  actualPreflight = (await vi.importActual<typeof import("../../capacity-preflight.server.js")>("../../capacity-preflight.server.js")).preflightCapacity;
+  actualPreflight = (await vi.importActual<typeof CapacityPreflightTypeModule>("../../capacity-preflight.server.js")).preflightCapacity;
 }, 60_000);
 afterAll(async () => {
   await close();

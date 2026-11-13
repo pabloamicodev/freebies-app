@@ -1,3 +1,4 @@
+import type * as SkioShippingConfigTypeModule from "../../skio-shipping-config.server.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -42,7 +43,7 @@ vi.mock("../../subscription-cycle-pricing.server.js", () => {
   };
 });
 vi.mock("../../skio-shipping-config.server.js", async (importActual) => {
-  const actual = await importActual<typeof import("../../skio-shipping-config.server.js")>();
+  const actual = await importActual<typeof SkioShippingConfigTypeModule>();
   return {
     ...actual,
     loadSkioShippingConfig: async () => ({ config: (store.tiers as { tiers: unknown[] } | null) ?? { tiers: [] }, configValid: true, configError: null, importedFromLegacy: false }),
