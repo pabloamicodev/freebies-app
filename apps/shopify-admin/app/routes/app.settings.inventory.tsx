@@ -9,6 +9,7 @@ import { getShopContext } from "../lib/shop-context.server.js";
 import { appSettings } from "@promo/db";
 import { and, eq } from "drizzle-orm";
 import { parseStoredJson } from "../lib/offer-validation.server.js";
+import { upsertSettingsJson } from "../lib/shop-settings.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import bogosStyles from "../styles/bogos.css?url";
 
@@ -48,14 +49,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     "gift.hide_oos_gifts": formData.get("hide_oos") === "on",
   };
 
-  await Promise.all(Object.entries(updates).map(([key, value]) =>
-    db.insert(appSettings)
-      .values({ shopId, key, value: JSON.stringify(value) })
-      .onConflictDoUpdate({
-        target: [appSettings.shopId, appSettings.key],
-        set: { value: JSON.stringify(value), updatedAt: new Date() },
-      }),
-  ));
+  await upsertSettingsJson(db, shopId, updates);
 
   return { success: true };
 };

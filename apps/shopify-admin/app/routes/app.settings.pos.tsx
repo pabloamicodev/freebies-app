@@ -9,6 +9,7 @@ import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { appSettings } from "@promo/db";
 import { and, eq } from "drizzle-orm";
+import { upsertSettingRaw } from "../lib/shop-settings.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -30,12 +31,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { shopId, db } = context;
   const posEnabled = formData.get("pos_enabled") === "on";
 
-  await db.insert(appSettings)
-    .values({ shopId, key: "pos.enabled", value: String(posEnabled) })
-    .onConflictDoUpdate({
-      target: [appSettings.shopId, appSettings.key],
-      set: { value: String(posEnabled), updatedAt: new Date() },
-    });
+  await upsertSettingRaw(db, shopId, "pos.enabled", String(posEnabled));
 
   return { success: true };
 };

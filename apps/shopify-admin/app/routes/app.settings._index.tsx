@@ -7,6 +7,7 @@ import { getDb } from "@promo/db";
 import { shops, appSettings } from "@promo/db";
 import { eq } from "drizzle-orm";
 import { parseStoredJson } from "../lib/offer-validation.server.js";
+import { upsertSettingsJson } from "../lib/shop-settings.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -118,14 +119,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     "app.language": strField("language"),
   };
 
-  await Promise.all(Object.entries(updates).map(([key, value]) =>
-    db.insert(appSettings)
-      .values({ shopId, key, value: JSON.stringify(value) })
-      .onConflictDoUpdate({
-        target: [appSettings.shopId, appSettings.key],
-        set: { value: JSON.stringify(value), updatedAt: new Date() },
-      }),
-  ));
+  await upsertSettingsJson(db, shopId, updates);
 
   return { success: true };
 };

@@ -1,15 +1,8 @@
 import { useLoaderData, useFetcher } from "react-router";
-import { WEBHOOK_URL_ERRORS, safeErrorMessage } from "../lib/safe-error.js";
 import { useState } from "react";
 import { getShopContext } from "../lib/shop-context.server.js";
-import { validateKlaviyoApiKey } from "../lib/integration-dispatcher.server.js";
-import {
-  deleteIntegrationCredential,
-  isIntegrationId,
-  listConnectedIntegrations,
-  saveIntegrationCredential,
-} from "../lib/integration-credentials.server.js";
-import { assertSafeWebhookUrl } from "../lib/safe-webhook-url.server.js";
+import { listConnectedIntegrations } from "../lib/integration-credentials.server.js";
+import { connectIntegration, disconnectIntegration } from "../lib/integrations.server.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
@@ -97,36 +90,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent") as string;
 
   if (intent === "disconnect") {
-    const integrationId = String(formData.get("integrationId") ?? "");
-    if (!isIntegrationId(integrationId)) return { error: "Unknown integration" };
-    await deleteIntegrationCredential(db, shopId, integrationId);
-    return { ok: true, integrationId };
+    const result = await disconnectIntegration(db, shopId, String(formData.get("integrationId") ?? ""));
+    return result.ok ? { ok: true, integrationId: result.integrationId } : { error: result.error };
   }
 
   if (intent === "connect") {
-    const integrationId = String(formData.get("integrationId") ?? "");
-    const apiKey = String(formData.get("apiKey") ?? "").trim();
-    if (!integrationId || !apiKey) return { error: "API key / webhook URL is required" };
-    if (!isIntegrationId(integrationId)) return { error: "Unknown integration" };
-
-    const integration = INTEGRATIONS.find((i) => i.id === integrationId);
-    if (!integration) return { error: "Unknown integration" };
-
-    if (integrationId === "klaviyo" && integration.validates) {
-      const validation = await validateKlaviyoApiKey(apiKey);
-      if (!validation.ok) return { error: validation.error ?? "Invalid API key" };
-    }
-
-    if (!integration.validates) {
-      try {
-        await assertSafeWebhookUrl(apiKey);
-      } catch (error) {
-        return { error: safeErrorMessage(error, "Webhook URL is invalid", WEBHOOK_URL_ERRORS) };
-      }
-    }
-
-    await saveIntegrationCredential(db, shopId, integrationId, apiKey);
-    return { ok: true, integrationId };
+    const result = await connectIntegration(db, shopId, String(formData.get("integrationId") ?? ""), String(formData.get("apiKey") ?? ""));
+    return result.ok ? { ok: true, integrationId: result.integrationId } : { error: result.error };
   }
 
   return { error: "Unknown intent" };
