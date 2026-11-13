@@ -11,10 +11,10 @@ import { NotFound } from "../components/NotFound.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { getShopContext } from "../lib/shop-context.server.js";
 import { loadOwnedOffer } from "../lib/owned-offer.server.js";
-import { republishIfActive } from "../lib/offer-publish-flow.server.js";
+import { setMulticurrency, type CurrencyOverrideInput } from "../lib/offer-multicurrency.server.js";
 import { offerConditions } from "@promo/db";
 import { eq, and } from "drizzle-orm";
-import { fromStoredAmount, isZeroDecimalCurrency, overrideUnit, toStoredAmount } from "../lib/money.js";
+import { fromStoredAmount, isZeroDecimalCurrency, overrideUnit } from "../lib/money.js";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
 import { withCapacityModal } from "../lib/capacity-capture.server.js";
@@ -73,77 +73,32 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = withCapacityModal(async ({ request, params }: ActionFunctionArgs): Promise<ActionResult> => {
-  const { session, shopId, db, currencyCode: shopCurrency } = await getShopContext(request);
+  const { session, shopId, db, currencyCode: shopCurrency, timezone } = await getShopContext(request);
   const offerId = parseUuidParam(params);
   const formData = await request.formData();
-  const offer = await loadOwnedOffer(db, shopId, offerId);
+  await loadOwnedOffer(db, shopId, offerId);
 
-  // Build currency overrides from form
-  const overrides: Record<string, number> = {};
   const currencies = formData.getAll("currency[]") as string[];
   const thresholds = formData.getAll("threshold_cents[]") as string[];
   const maxThresholds = formData.getAll("max_threshold_cents[]") as string[];
   const fixedAmounts = formData.getAll("fixed_amount[]") as string[];
+  const overrides: CurrencyOverrideInput[] = currencies.map((currency, i) => ({
+    currency,
+    threshold: parseFloat(thresholds[i] ?? "0"),
+    max: parseFloat(maxThresholds[i] ?? "0"),
+    fixed: parseFloat(fixedAmounts[i] ?? "0"),
+  }));
 
-  for (let i = 0; i < currencies.length; i++) {
-    const currency = currencies[i]?.toUpperCase();
-    const raw = parseFloat(thresholds[i] ?? "0");
-    const cents = Number.isFinite(raw) && raw > 0 ? toStoredAmount(raw, overrideUnit(shopCurrency, currency ?? "")) : 0;
-    if (currency && cents > 0) {
-      overrides[currency] = cents;
-    }
+  const result = await setMulticurrency(
+    { db, shopId, shopDomain: session.shop, shopCurrency, timezone },
+    offerId,
+    { overrides, mode: "replace" },
+  );
+  if (!result.ok) {
+    if (result.code === "not_found") throw new Response("Not found", { status: 404 });
+    return { error: result.error };
   }
-
-  const maxOverrides: Record<string, number> = {};
-  for (let i = 0; i < currencies.length; i++) {
-    const currency = currencies[i]?.toUpperCase();
-    const raw = parseFloat(maxThresholds[i] ?? "0");
-    const cents = Number.isFinite(raw) && raw > 0 ? toStoredAmount(raw, overrideUnit(shopCurrency, currency ?? "")) : 0;
-    if (currency && cents > 0) {
-      const minimum = overrides[currency];
-      if (minimum !== undefined && cents < minimum) {
-        return { error: `${currency} maximum must be greater than or equal to its threshold.` };
-      }
-      maxOverrides[currency] = cents;
-    }
-  }
-
-  // Build fixed amount overrides
-  const fixedOverrides: Record<string, number> = {};
-  for (let i = 0; i < currencies.length; i++) {
-    const currency = currencies[i]?.toUpperCase();
-    const raw = parseFloat(fixedAmounts[i] ?? "0");
-    const fixed = Number.isFinite(raw) && raw > 0 ? toStoredAmount(raw, overrideUnit(shopCurrency, currency ?? "")) : 0;
-    if (currency && fixed > 0) {
-      fixedOverrides[currency] = fixed;
-    }
-  }
-
-  let updateResult: ActionResult = { success: true };
-
-  await db.transaction(async (tx) => {
-    const existing = await tx.select()
-      .from(offerConditions)
-      .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.conditionType, "cart_value")))
-      .limit(1);
-
-    if (!existing[0]) {
-      updateResult = { error: "No cart value condition found. Add a Cart Value condition on the Conditions page first." };
-      return;
-    }
-
-    const currentValue = existing[0].value as Record<string, unknown>;
-    await tx.update(offerConditions)
-      .set({ value: { ...currentValue, currencyOverrides: overrides, maxCurrencyOverrides: maxOverrides, fixedAmountOverrides: fixedOverrides }, updatedAt: new Date() })
-      .where(and(eq(offerConditions.shopId, shopId), eq(offerConditions.offerId, offerId), eq(offerConditions.id, existing[0].id)));
-  });
-
-  if ("success" in updateResult && updateResult.success) {
-    const publishError = await republishIfActive(db, shopId, session.shop, offerId, offer.status === "active");
-    if (publishError) return { error: publishError };
-  }
-
-  return updateResult;
+  return { success: true };
 });
 
 export default function MultiCurrencyPage() {
