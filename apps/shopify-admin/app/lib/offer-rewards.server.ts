@@ -57,7 +57,7 @@ async function build(
     const built = await buildRewardRecordFromInput(reward.input, deps.db, deps.shopId, deps.shopCurrency, existing);
     return "error" in built ? fail("validation", built.error) : { data: built.data };
   }
-  const { data } = reward.record;
+  const data = reward.record;
   const payload = validateRewardPayload(data.rewardType, data.discountType, data.value, data.target);
   if (!payload.success) return fail("validation", payload.error.issues[0]?.message ?? "Reward configuration is invalid.");
   return { data };
