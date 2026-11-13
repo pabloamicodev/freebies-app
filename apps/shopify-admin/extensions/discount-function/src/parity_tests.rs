@@ -202,6 +202,38 @@ fn golden_parity_fixtures_match_the_function() {
     assert!(failures.is_empty(), "parity mismatches:\n{}", failures.join("\n"));
 }
 
+/// MCP acceptance (2026-11-13): the offer built by promo_create for "Protein & Creatine Bundle 1x -> 20%, 2x -> 30%"
+/// must make the Function discount 1 unit at 20% and 2 units at 30% (the golden fixtures above check only lines/units).
+#[cfg(not(feature = "code_gate"))]
+#[test]
+fn mcp_quantity_tier_fixtures_discount_20_then_30_percent() {
+    for (file, expected_units, expected_percent) in [("mcp-quantity-tiers-single.json", 1, 20.0), ("mcp-quantity-tiers.json", 2, 30.0)] {
+        let fixture: Value = serde_json::from_str(&std::fs::read_to_string(fixture_dir().join(file)).unwrap()).unwrap();
+        let result = run_function_with_input(run, &function_input(&fixture).to_string()).expect("function runs");
+        let mut seen = Vec::new();
+        for operation in &result.operations {
+            if let CartOperation::ProductDiscountsAdd(add) = operation {
+                for candidate in &add.candidates {
+                    let units: i64 = candidate
+                        .targets
+                        .iter()
+                        .map(|target| {
+                            let ProductDiscountCandidateTarget::CartLine(line) = target;
+                            i64::from(line.quantity.unwrap_or(0))
+                        })
+                        .sum();
+                    let percent = match &candidate.value {
+                        crate::schema::ProductDiscountCandidateValue::Percentage(pct) => pct.value.0,
+                        _ => f64::NAN,
+                    };
+                    seen.push((units, percent));
+                }
+            }
+        }
+        assert_eq!(seen, vec![(expected_units, expected_percent)], "{file}");
+    }
+}
+
 /// ~120 offers over a ~100-line cart (every plain parity fixture merged, then padded) with long packed id lists:
 /// the heaviest realistic input. Committed as `fixtures/stress-120-offers-100-lines.input.json` so the wasm
 /// comparison (`scripts/compare-function-outputs.mjs`) always has it; regenerate with UPDATE_STRESS_FIXTURE=1.
