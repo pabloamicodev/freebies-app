@@ -62,7 +62,7 @@ function toCart(fixture: Fixture): NormalizedCart {
     compareAtPriceCents: null,
     properties: propertiesOf(line),
     requiresSellingPlan: false,
-    sellingPlanId: null,
+    sellingPlanId: line.sellingPlan === true ? "gid://shopify/SellingPlan/1" : null,
     productHandle: "p",
     productTitle: "P",
     variantTitle: null,
