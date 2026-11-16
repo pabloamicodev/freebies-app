@@ -14,6 +14,8 @@ export interface ReferenceLine {
   unitPrice: string;
   lineType: "gift" | "upsell" | null;
   metadata: Record<string, string> | null;
+  /** The line has a selling plan (subscription). */
+  sellingPlan?: boolean;
 }
 export interface ReferenceTier {
   minimumQuantity: number;
@@ -38,7 +40,12 @@ export interface ReferenceReward {
   requiredLineAttributeValue?: string;
   requiredAnchorVariantIds?: string[];
   requiredAnchorMinQuantity?: number;
+  requiresAnchorSubscription?: boolean;
   requiredOfferId?: string;
+  subscriptionMode?: string;
+  maxUnitsPerProduct?: number;
+  maxUnitsPerVariant?: number;
+  maxUnitsPerLine?: number;
 }
 export interface ReferenceConfigOffer {
   id: string;
@@ -159,11 +166,17 @@ export function referenceDiscounts(
     }
     const landing = reward.scopeMode === "landing";
     const setScoped = landing || reward.scopeMode === "tagged_offer";
+    const products = reward.targetProductIds ?? [];
+    const variants = reward.targetVariantIds ?? [];
+    const isTarget = (line: ReferenceLine) => products.includes(line.productId) || variants.includes(line.variantId);
     if (landing) {
+      const anchors = reward.requiredAnchorVariantIds ?? [];
       const anchorQuantity = nonGift
         .filter((line) => Number(line.unitPrice) > 0)
         .filter((line) => line.metadata?.["__landing_source"] === reward.requiredLineAttributeValue)
-        .filter((line) => (reward.requiredAnchorVariantIds ?? []).includes(line.variantId))
+        // No anchor configured: any tagged line except the reward's own targets (no self-unlock).
+        .filter((line) => (anchors.length === 0 ? !isTarget(line) : anchors.includes(line.variantId)))
+        .filter((line) => reward.requiresAnchorSubscription !== true || line.sellingPlan === true)
         .reduce((sum, line) => sum + line.quantity, 0);
       if (anchorQuantity < (reward.requiredAnchorMinQuantity ?? 1)) continue;
     }
@@ -173,11 +186,9 @@ export function referenceDiscounts(
       .filter((line) => !restrict || matches(line))
       .filter((line) => !landing || line.metadata?.["__landing_source"] === reward.requiredLineAttributeValue)
       .filter((line) => reward.scopeMode !== "tagged_offer" || line.metadata?.["_promo_engine_offer_id"] === reward.requiredOfferId)
-      .filter((line) => {
-        const products = reward.targetProductIds ?? [];
-        const variants = reward.targetVariantIds ?? [];
-        return (products.length === 0 && variants.length === 0) || products.includes(line.productId) || variants.includes(line.variantId);
-      })
+      .filter((line) => (products.length === 0 && variants.length === 0) || isTarget(line))
+      .filter((line) => reward.subscriptionMode !== "subscription_only" || line.sellingPlan === true)
+      .filter((line) => reward.subscriptionMode !== "one_time_only" || line.sellingPlan !== true)
       .sort((a, b) => (a.id < b.id ? -1 : 1));
     const total = eligible.reduce((sum, line) => sum + line.quantity, 0);
     const quantityTier = (reward.quantityTiers ?? [])
@@ -186,25 +197,44 @@ export function referenceDiscounts(
     const priceTier = (reward.priceTiers ?? []).filter((tier) => total >= tier.quantity).sort((a, b) => b.quantity - a.quantity)[0];
     if ((reward.quantityTiers ?? []).length > 0 && !quantityTier) continue;
     if ((reward.priceTiers ?? []).length > 0 && !priceTier) continue;
-    const limit = capByCart(config, reward.maxQuantity ?? 1);
-    const byVariant = (reward.targetVariantIds ?? []).length > 0;
-    const given: Record<string, number> = {};
+    // The default limit of 1 set applies only to free landing gifts: landing price/quantity tiers and tagged
+    // bundles discount every qualifying unit unless a limit is configured.
+    const freeLandingGift =
+      landing &&
+      (reward.priceTiers ?? []).length === 0 &&
+      (reward.quantityTiers ?? []).length === 0 &&
+      (reward.discountType === "free" || (reward.discountType === "percentage" && (reward.discountValue ?? 0) >= 100));
+    const setLimitRaw = freeLandingGift ? (reward.maxQuantity ?? 1) : setScoped ? reward.maxQuantity : undefined;
+    const setLimit = setLimitRaw === undefined ? undefined : capByCart(config, setLimitRaw);
+    const byVariant = variants.length > 0;
+    const perProductCap =
+      setLimit === undefined ? reward.maxUnitsPerProduct : byVariant ? reward.maxUnitsPerProduct : Math.min(reward.maxUnitsPerProduct ?? setLimit, setLimit);
+    const perVariantCap =
+      setLimit === undefined ? reward.maxUnitsPerVariant : byVariant ? Math.min(reward.maxUnitsPerVariant ?? setLimit, setLimit) : reward.maxUnitsPerVariant;
+    const byProduct: Record<string, number> = {};
+    const byVariantUnits: Record<string, number> = {};
+    const take = (applied: Record<string, number>, key: string, cap: number, wanted: number) => {
+      const units = Math.min(wanted, Math.max(0, cap - (applied[key] ?? 0)));
+      applied[key] = (applied[key] ?? 0) + units;
+      return units;
+    };
     let remainingTotal =
       quantityTier?.discountedQuantity ??
       reward.maxUnitsTotal ??
-      (setScoped ? Number.POSITIVE_INFINITY : (reward.maxQuantity ?? Number.POSITIVE_INFINITY));
-    // Per cart: one application is a unit, or one pack of the matched tier; set-scoped limits were capped above.
-    if (config.mpc !== undefined && !setScoped) {
+      (setLimit !== undefined ? Number.POSITIVE_INFINITY : (reward.maxQuantity ?? Number.POSITIVE_INFINITY));
+    // Per cart: one application is a unit, or one pack of the matched tier; set limits were capped above.
+    if (config.mpc !== undefined && setLimit === undefined) {
       const pack = quantityTier ? (quantityTier.discountedQuantity ?? quantityTier.minimumQuantity) : (priceTier?.quantity ?? 1);
       remainingTotal = Math.min(remainingTotal, config.mpc * pack);
     }
     const unitsByLine: Record<string, number> = {};
     for (const line of eligible) {
-      const key = byVariant ? line.variantId : line.productId;
+      if (remainingTotal <= 0) break;
       let units = Math.min(line.quantity, remainingTotal);
-      if (setScoped) units = Math.min(units, limit - (given[key] ?? 0));
+      if (reward.maxUnitsPerLine !== undefined) units = Math.min(units, reward.maxUnitsPerLine);
+      if (perProductCap !== undefined) units = take(byProduct, line.productId, perProductCap, units);
+      if (perVariantCap !== undefined) units = take(byVariantUnits, line.variantId, perVariantCap, units);
       if (units <= 0) continue;
-      given[key] = (given[key] ?? 0) + units;
       remainingTotal -= units;
       result[line.id] = (result[line.id] ?? 0) + units;
       unitsByLine[line.id] = units;

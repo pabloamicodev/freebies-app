@@ -41,6 +41,8 @@ interface LineSpec {
   metadata: Record<string, string> | null;
   /** The store volume-discount tiers of the line's product (the Function nets them out of cart-value thresholds). */
   volumeDiscountTiers?: Array<{ qty: number; percent: number }>;
+  /** A subscription line (the Rust harness gives it a selling plan allocation). */
+  sellingPlan?: boolean;
 }
 
 function line(id: string, n: number, metadata: Record<string, string> | null, extra: Partial<LineSpec> = {}): LineSpec {
@@ -258,6 +260,53 @@ function landingOffer(quantity: number | null): OfferSpec {
     },
   );
 }
+
+/** A landing bundle like TRU's Protein edu page: subscription price tiers on the bag plus a free gift at 3+ subscription bags. */
+function landingTiersOffer(): OfferSpec {
+  const landing = (minQuantity: number, subscriptionAnchors: boolean) => ({
+    scopeMode: "landing",
+    requiredLineAttributeKey: "__landing_source",
+    requiredLineAttributeValue: "tru-landing",
+    requiredAnchorVariantIds: [V(1)],
+    requiredAnchorMinQuantity: minQuantity,
+    requiresAnchorSubscription: subscriptionAnchors,
+  });
+  const reward = (id: string, discountType: string, target: Record<string, unknown>, sortOrder: number) => ({
+    id,
+    rewardType: "product_discount",
+    discountType,
+    value: { amount: discountType === "free" ? 100 : 0, currencyCode: "USD" },
+    target,
+    quantity: null,
+    isAutoAdd: false,
+    isCustomerSelectable: false,
+    trackMode: "variant",
+    sortOrder,
+    label: null,
+  });
+  return discountOffer(A, [["line_attribute", { key: "__landing_source", value: "tru-landing", matchMode: "equals", minMatchingQuantity: 1 }, "main"]], {}, {
+    rewards: [
+      reward(
+        "tiers",
+        "fixed_price",
+        {
+          variantIds: [V(1)],
+          subscriptionMode: "subscription_only",
+          priceTiers: [
+            { quantity: 1, targetPricePerUnit: 44.99 },
+            { quantity: 3, targetPricePerUnit: 35.99 },
+          ],
+          ...landing(1, false),
+        },
+        0,
+      ),
+      reward("gift", "free", { productIds: [P(2)], subscriptionMode: "any", maxUnitsPerProduct: 1, ...landing(3, true) }, 1),
+    ],
+  });
+}
+const bag = (id: string, quantity: number, sellingPlan: boolean): LineSpec =>
+  line(id, 1, { __landing_source: "tru-landing" }, { quantity, unitPrice: "49.99", ...(sellingPlan ? { sellingPlan: true } : {}) });
+const landingGift = (id: string): LineSpec => line(id, 2, { __landing_source: "tru-landing" }, { unitPrice: "12.00" });
 
 const anchorCondition: Cond = [
   "specific_product",
@@ -1246,6 +1295,33 @@ const SCENARIOS: Scenario[] = [
     qualified: [A],
     discounted: { [A]: ["target2", "target3"] },
     quantities: { [A]: { target2: 3, target3: 3 } },
+  },
+  {
+    name: "landing-price-tiers-every-subscription-unit",
+    description: "Landing price tiers discount EVERY subscription unit (no 1-set default, that is for free gifts only); a one-time bag of the same variant gets nothing; 3 subscription bags unlock the free gift.",
+    offers: [landingTiersOffer()],
+    lines: [bag("sub", 3, true), bag("onetime", 1, false), landingGift("gift")],
+    qualified: [A],
+    discounted: { [A]: ["sub", "gift"] },
+    quantities: { [A]: { sub: 3, gift: 1 } },
+  },
+  {
+    name: "landing-price-tiers-one-subscription-bag-no-gift",
+    description: "One subscription bag gets the 1-bag price; the gift needs 3 subscription bags, so it stays charged.",
+    offers: [landingTiersOffer()],
+    lines: [bag("sub", 1, true), landingGift("gift")],
+    qualified: [A],
+    discounted: { [A]: ["sub"] },
+    quantities: { [A]: { sub: 1 } },
+  },
+  {
+    name: "landing-gift-needs-subscription-anchors",
+    description: "3 one-time bags + 1 subscription bag: one-time bags neither reach the 3-bag tier nor unlock the gift (its anchors must be subscriptions), so only the subscription bag gets the 1-bag price.",
+    offers: [landingTiersOffer()],
+    lines: [bag("onetime", 3, false), bag("sub", 1, true), landingGift("gift")],
+    qualified: [A],
+    discounted: { [A]: ["sub"] },
+    quantities: { [A]: { sub: 1 } },
   },
   {
     name: "gift-manual-quantity-bump-limit-1",

@@ -491,6 +491,7 @@ export async function promoPreviewCart(
     unitPrice: (l.unitPriceCents / 100).toFixed(2),
     lineType: null,
     metadata: { ...l.line.properties },
+    sellingPlan: l.line.sellingPlanId !== null,
   }));
   const lineByKey = new Map(lines.map((l) => [l.key, l]));
   const unit = (stored: number): Money => moneyFromMinor(stored, currency);
