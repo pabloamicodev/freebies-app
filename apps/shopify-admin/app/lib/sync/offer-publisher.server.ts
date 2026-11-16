@@ -527,6 +527,11 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const budget = shardsEnabled ? await automaticNodeBudget(shopId, shopDomain, accessToken) : null;
     const persisted = shardMode ? await readShardState(db, shopId) : null;
     const combination = compileDiscountCombinationPolicy(compiledOffers);
+    // The delivery node serves only offers with a shipping reward: an order/product-only offer that combines with
+    // nothing must not stop free shipping from combining (Shopify already needs both sides to agree).
+    const deliveryCombination = compileDiscountCombinationPolicy(
+      compiledByOffer.filter((entry) => entry.shipping.length > 0).map((entry) => entry.offer),
+    );
     const { units: planUnits, splits } = buildPlanUnitSet(
       compiledOffers.map((offer) => ({ offerId: offer.id, offer })),
       conditionRows,
@@ -659,7 +664,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
     const slot0Node = cartNode(discountNodes.cartLinesDiscountId, CART_DISCOUNT_CLASSES, 0);
     await syncCombination([
       slot0Node,
-      { discountId: discountNodes.deliveryDiscountId, discountClasses: DELIVERY_DISCOUNT_CLASSES, policy: combination },
+      { discountId: discountNodes.deliveryDiscountId, discountClasses: DELIVERY_DISCOUNT_CLASSES, policy: deliveryCombination },
     ]);
     await persistTightened([slot0Node]);
     // Shard nodes come after the guardrails; a new one carries an inert config, so it grants nothing until the

@@ -128,6 +128,7 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
     /** Free at pre-flight, but taken by the time the bulk job runs (a race). */
     raceCodes: new Set<string>(),
     conditionRows: [] as Array<Record<string, unknown>>,
+    policyRows: [] as Array<Record<string, unknown>>,
     settings: [] as Array<{ shopId: string; key: string; value: string }>,
     nextAutoNodeId: "gid://shopify/DiscountAutomaticNode/codes",
     createdAutoNodes: [] as Array<{ handle: string; classes: string[] }>,
@@ -229,6 +230,9 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
   function isCodesTable(table: unknown): boolean {
     return Boolean(table) && typeof table === "object" && "oncePerCustomer" in (table as object);
   }
+  function isPoliciesTable(table: unknown): boolean {
+    return Boolean(table) && typeof table === "object" && "combinesWithShippingDiscounts" in (table as object);
+  }
   function isRewardsTable(table: unknown): boolean {
     return Boolean(table) && typeof table === "object" && "rewardType" in (table as object);
   }
@@ -239,6 +243,7 @@ const { state, getDbMock, shopifyGraphQLMock } = vi.hoisted(() => {
     if (isRewardsTable(table)) return state.rewardRows as unknown as Array<Record<string, unknown>>;
     if (isCodesTable(table)) return state.codeRows as unknown as Array<Record<string, unknown>>;
     if (isConditionsTable(table)) return state.conditionRows;
+    if (isPoliciesTable(table)) return state.policyRows;
     if (isBatchesTable(table)) return state.batchRows as unknown as Array<Record<string, unknown>>;
     if (isSettingsTable(table)) return state.settings as unknown as Array<Record<string, unknown>>;
     // offerConditions / offerCombinationPolicies / appSettings — this suite
@@ -1026,6 +1031,20 @@ const sharedShippingOffers = () => {
   return push ? shippingOffersOf(push.value) : [];
 };
 
+function orderRewardFor(offerId: string) {
+  return {
+    id: `order-${offerId}`,
+    shopId: SHOP_ID,
+    offerId,
+    rewardType: "order_discount",
+    discountType: "percentage",
+    value: { amount: 15, currencyCode: "USD" },
+    target: { scope: "cart" },
+    quantity: null,
+    sortOrder: 0,
+  };
+}
+
 function shippingRewardFor(offerId: string) {
   return {
     id: `ship-${offerId}`,
@@ -1572,6 +1591,21 @@ describe("publishOffersForShop — offers with their own discount codes", () => 
       // The shared delivery node must not also serve it, or the code would be bypassed.
       const sharedDelivery = state.metafieldPushes.find((p) => p.ownerIds.includes(DELIVERY_DISCOUNT_ID));
       expect((JSON.parse(sharedDelivery!.value) as { shippingOffers?: unknown[] }).shippingOffers ?? []).toEqual([]);
+    });
+
+    it("takes the shared delivery node's combinesWith only from offers with a shipping reward", async () => {
+      state.offers = [makeOffer({ id: "ship" }), makeOffer({ id: "strict" })];
+      state.rewardRows = [shippingRewardFor("ship"), orderRewardFor("strict")];
+      state.policyRows = [
+        { shopId: SHOP_ID, offerId: "strict", combinesWithOrderDiscounts: false, combinesWithProductDiscounts: false, combinesWithShippingDiscounts: false, combinesWithOtherAppOffers: false, stopLowerPriority: false },
+      ];
+      state.updatedAutomaticNodes = [];
+
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+
+      const delivery = state.updatedAutomaticNodes.filter((update) => update.id === DELIVERY_DISCOUNT_ID).at(-1)!;
+      expect(delivery.input["combinesWith"]).toEqual({ orderDiscounts: true, productDiscounts: true, shippingDiscounts: false });
+      state.policyRows = [];
     });
 
     it("keeps combinesWith consistent with automatic delivery offers (shipping can't combine with shipping)", async () => {
