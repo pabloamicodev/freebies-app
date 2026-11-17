@@ -2,7 +2,7 @@ use crate::config::{
     is_zero_decimal, minor_units, to_cents, to_cents_in, CompiledConfig, CompiledGiftReward, CompiledOffer,
     CompiledOrderReward, CompiledProductReward,
 };
-use crate::page_match::{metadata_matches, LineMetadata, PAGE_STAMP_KEYS};
+use crate::page_match::{exclusive_source, metadata_matches, LineMetadata, EXCLUSIVE_LANDING_SOURCES, PAGE_STAMP_KEYS};
 use crate::schema;
 use schema::cart_lines_discounts_generate_run::input::cart::lines::Merchandise;
 use schema::cart_lines_discounts_generate_run::input::cart::Lines;
@@ -118,11 +118,12 @@ thread_local! {
     // that count the same lines share one computation. Keyed by line slots.
     static METADATA_CACHE: RefCell<HashMap<String, (Option<Rc<LineMetadata>>, usize)>> = RefCell::new(HashMap::default());
     static PAGE_CLASSES: RefCell<Vec<Option<PageStamps>>> = const { RefCell::new(Vec::new()) };
-    // CART_VALUES and QUALIFYING hold at most 8 entries (one per distinct set of counted lines / excluded products). Offers
+    // CART_VALUES and QUALIFYING hold at most 8 entries (one per distinct set of counted lines / (exclusive tags seen,
+    // excluded products)). Offers
     // in one config share a handful of such sets (live configs: 1-3), and each lookup is a linear scan comparing the whole
     // key (up to 200 slots), so past 8 entries a lookup would cost more than the recomputation it saves.
     static CART_VALUES: RefCell<Vec<(Vec<usize>, i64)>> = const { RefCell::new(Vec::new()) };
-    static QUALIFYING: RefCell<Vec<(Vec<String>, Vec<usize>)>> = const { RefCell::new(Vec::new()) };
+    static QUALIFYING: RefCell<Vec<((u32, Vec<String>), Vec<usize>)>> = const { RefCell::new(Vec::new()) };
     static ZERO_DECIMAL_CURRENCY: Cell<bool> = const { Cell::new(false) };
     static LAST_METADATA: RefCell<Option<(String, (Option<Rc<LineMetadata>>, usize))>> = const { RefCell::new(None) };
     static VOLUME_TIERS: RefCell<HashMap<String, Option<Rc<[VolumeDiscountTier]>>>> = RefCell::new(HashMap::default());
@@ -424,7 +425,9 @@ fn evaluate_product_reward(
         .cart()
         .lines()
         .iter()
-        .filter(|line| !is_gift_line(line) && !is_zero_cost(line) && !outside_matched_lines(offer, line))
+        .filter(|line| {
+            !is_gift_line(line) && !is_zero_cost(line) && !outside_matched_lines(offer, line) && !hidden_from(offer, line)
+        })
         .filter(|line| {
             !landing_scope
                 || landing_source(line).as_deref()
@@ -735,7 +738,7 @@ fn product_gift_anchors(offer: &CompiledOffer, input: &Input) -> Option<Anchors>
         .cart()
         .lines()
         .iter()
-        .filter(|line| quantity_of(line) > 0 && !is_gift_line(line) && !is_zero_cost(line))
+        .filter(|line| quantity_of(line) > 0 && !is_gift_line(line) && !is_zero_cost(line) && !hidden_from(offer, line))
         .filter(|line| purchase.allows(line))
         .filter(|line| offer.page_url_conditions.is_empty() || added_from_matching_page(line, offer))
         .filter(|line| {
@@ -794,6 +797,9 @@ fn evaluate_quiz_bundle_reward(
         let Some(bundle_id) = quiz_bundle_id(line) else {
             continue;
         };
+        if hidden_from(offer, line) {
+            continue;
+        }
         if restrict_to_targets && !is_one_of(line, &target_product_ids, &target_variant_ids) {
             continue;
         }
@@ -917,9 +923,15 @@ fn evaluate_order_offer(
             let purchase = PurchaseType::of(Some(reward.subscription_mode.as_str()));
             let (eligible_lines, excluded_lines): (Vec<&Lines>, Vec<&Lines>) =
                 input.cart().lines().iter().partition(|line| {
-                    !is_gift_line(line) && !outside_matched_lines(offer, line) && purchase.allows(line)
+                    !is_gift_line(line)
+                        && !outside_matched_lines(offer, line)
+                        && !hidden_from(offer, line)
+                        && purchase.allows(line)
                 });
-            if eligible_lines.is_empty() && reward.subscription_mode != "any" {
+            // Nothing left to discount once the exclusive landing lines it does not see are out.
+            if eligible_lines.is_empty()
+                && (reward.subscription_mode != "any" || excluded_lines.iter().any(|line| hidden_from(offer, line)))
+            {
                 return None;
             }
             let excluded_line_ids: Vec<String> =
@@ -1092,6 +1104,7 @@ fn evaluate_gift_offer(
             .cart()
             .lines()
             .iter()
+            .filter(|line| !hidden_from(offer, line))
             .filter_map(|line| {
                 let (variant_id, product_id) = variant_and_product_id(line)?;
                 offer
@@ -1222,7 +1235,9 @@ fn evaluate_discount_offer(
         .lines()
         .iter()
         .filter(|line| {
-            is_eligible_line(line, &required_set, &excluded_set) && !outside_matched_lines(offer, line)
+            is_eligible_line(line, &required_set, &excluded_set)
+                && !outside_matched_lines(offer, line)
+                && !hidden_from(offer, line)
         })
         .collect();
 
@@ -1305,14 +1320,16 @@ fn is_eligible_line(
         && (required_set.is_empty() || required_set.contains(product_id))
 }
 
-/// The non-gift lines an offer's cart thresholds count (its excluded products never do).
+/// The non-gift lines an offer's cart thresholds count (its excluded products and the exclusive landing lines it is not
+/// scoped to never do).
 fn qualifying_lines<'a>(offer: &CompiledOffer, input: &'a Input) -> Vec<&'a Lines> {
     let all_lines = input.cart().lines();
+    let seen = exclusive_mask(offer);
     let cached = QUALIFYING.with(|cache| {
         cache
             .borrow()
             .iter()
-            .find(|(excluded, _)| *excluded == offer.excluded_product_ids)
+            .find(|((mask, excluded), _)| *mask == seen && *excluded == offer.excluded_product_ids)
             .map(|(_, slots)| slots.iter().map(|&slot| &all_lines[slot]).collect::<Vec<_>>())
     });
     if let Some(lines) = cached {
@@ -1324,7 +1341,7 @@ fn qualifying_lines<'a>(offer: &CompiledOffer, input: &'a Input) -> Vec<&'a Line
         QUALIFYING.with(|cache| {
             let mut cache = cache.borrow_mut();
             if cache.len() < 8 {
-                cache.push((offer.excluded_product_ids.clone(), slots));
+                cache.push(((seen, offer.excluded_product_ids.clone()), slots));
             }
         });
     }
@@ -1341,7 +1358,7 @@ fn compute_qualifying_lines<'a>(offer: &CompiledOffer, input: &'a Input) -> Vec<
         .cart()
         .lines()
         .iter()
-        .filter(|line| quantity_of(line) > 0 && !is_gift_line(line))
+        .filter(|line| quantity_of(line) > 0 && !is_gift_line(line) && !hidden_from(offer, line))
         .filter(|line| {
             variant_and_product_id(line)
                 .map(|(_, product_id)| !excluded_products.contains(product_id))
@@ -1613,7 +1630,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
             .map(String::as_str)
             .collect();
 
-        let has_required = input.cart().lines().iter().filter(|line| !is_zero_cost(line)).any(|line| {
+        let has_required = input.cart().lines().iter().filter(|line| !is_zero_cost(line) && !hidden_from(offer, line)).any(|line| {
             variant_and_product_id(line)
                 .map(|(variant_id, product_id)| {
                     required_products.contains(product_id)
@@ -1639,7 +1656,7 @@ fn check_main_condition(offer: &CompiledOffer, input: &Input, config: &CompiledC
             .iter()
             .map(String::as_str)
             .collect();
-        let has_any = input.cart().lines().iter().filter(|line| !is_zero_cost(line)).any(|line| {
+        let has_any = input.cart().lines().iter().filter(|line| !is_zero_cost(line) && !hidden_from(offer, line)).any(|line| {
             variant_and_product_id(line)
                 .map(|(variant_id, product_id)| {
                     any_products.contains(product_id)
@@ -1923,6 +1940,28 @@ fn added_from_matching_page(line: &Lines, offer: &CompiledOffer) -> bool {
 
 fn outside_matched_lines(offer: &CompiledOffer, line: &Lines) -> bool {
     offer.restrict_to_matched_lines && !added_from_matching_page(line, offer)
+}
+
+/// The line carries an exclusive landing tag the offer is not scoped to: the offer never sees it.
+fn hidden_from(offer: &CompiledOffer, line: &Lines) -> bool {
+    exclusive_source(landing_source(line)).is_some_and(|tag| !offer_sees(offer, tag))
+}
+
+/// The offer is scoped to `tag`: one of its landing rewards requires it.
+fn offer_sees(offer: &CompiledOffer, tag: &str) -> bool {
+    offer
+        .product_rewards
+        .iter()
+        .any(|reward| reward.scope_mode == "landing" && reward.required_line_attribute_value.as_deref() == Some(tag))
+}
+
+/// Bit i set: the offer sees the lines tagged EXCLUSIVE_LANDING_SOURCES[i].
+fn exclusive_mask(offer: &CompiledOffer) -> u32 {
+    EXCLUSIVE_LANDING_SOURCES
+        .iter()
+        .enumerate()
+        .filter(|(_, tag)| offer_sees(offer, tag))
+        .fold(0, |mask, (index, _)| mask | (1 << index))
 }
 
 // Line attributes other than the direct ones in the input query come from the packed
@@ -6279,5 +6318,195 @@ mod tests {
         let output = run_with(&with);
         assert!(output.contains("Add"), "fixture cart must exercise live offers");
         assert_eq!(output, run_with(&without));
+    }
+
+    mod exclusive_landing {
+        use super::*;
+
+        const EDU: &str = "protein-edu-lp";
+
+        fn offer(id: &str, priority: i32, extra: &str) -> String {
+            format!(
+                r#"{{"id":"{id}","version":1,"offerType":"discount","priority":{priority},"stopLowerPriority":false,
+                "requiredProductIds":[],"requiredVariantIds":[],"excludedProductIds":[],
+                "giftVariantIds":[],"giftProductIds":[],"discountType":"free","discountValue":100,"currencyCode":"USD",
+                "requirements":[],{extra}}}"#
+            )
+        }
+
+        fn bf_sitewide() -> String {
+            offer("bf", 10, &format!(
+                r#""title":"Black Friday Sale","productRewards":[{{"id":"bf-tiers","targetProductIds":[],"targetVariantIds":[],
+                "discountType":"percentage","discountValue":0,"subscriptionMode":"any","scopeMode":"sitewide","priceTiers":[],
+                "selectionMode":"all",{TRU_TIERS}}}]"#
+            ))
+        }
+
+        /// The edu bundle: $35.99 a unit with 3+ subscription bags added from the edu landings.
+        fn edu_bundle() -> String {
+            offer("edu", 5, &format!(
+                r#""productRewards":[{{"id":"edu-price","targetProductIds":[],"targetVariantIds":[],
+                "discountType":"fixed_price","discountValue":0,"subscriptionMode":"subscription_only","scopeMode":"landing",
+                "requiredLineAttributeValue":"{EDU}","requiredAnchorVariantIds":[],"requiredAnchorMinQuantity":1,
+                "priceTiers":[{{"quantity":3,"targetPricePerUnit":35.99}}]}}]"#
+            ))
+        }
+
+        fn config(offers: &[String]) -> String {
+            format!(r#"{{"offers":[{}]}}"#, offers.join(","))
+        }
+
+        fn protein(id: &str, qty: i64, landing: Option<&str>) -> String {
+            scoped_line(
+                &format!("gid://shopify/CartLine/{id}"),
+                "gid://shopify/ProductVariant/protein",
+                "gid://shopify/Product/protein",
+                "49.99",
+                qty,
+                landing,
+                None,
+            )
+        }
+
+        fn subscribed(line: String) -> String {
+            let mut value: Value = serde_json::from_str(&line).unwrap();
+            value["sellingPlanAllocation"] = serde_json::json!({ "sellingPlan": { "id": "gid://shopify/SellingPlan/monthly" } });
+            value.to_string()
+        }
+
+        fn payload(lines: &[String], config: &str, classes: &str) -> String {
+            let subtotal: f64 = lines
+                .iter()
+                .map(|line| {
+                    let value: Value = serde_json::from_str(line).unwrap();
+                    value["cost"]["subtotalAmount"]["amount"].as_str().unwrap().parse::<f64>().unwrap()
+                })
+                .sum();
+            cart_json_with_classes(&format!("[{}]", lines.join(",")), &format!("{subtotal:.2}"), config, classes)
+        }
+
+        /// (cart line, discount value) per product candidate target.
+        fn product_discounts(payload: &str) -> Vec<(String, String)> {
+            let result = run_function_with_input(run, payload).expect("should not error");
+            let mut out = vec![];
+            for operation in &result.operations {
+                if let schema::CartOperation::ProductDiscountsAdd(op) = operation {
+                    for candidate in &op.candidates {
+                        let value = match &candidate.value {
+                            schema::ProductDiscountCandidateValue::Percentage(pct) => format!("{}%", pct.value.0),
+                            schema::ProductDiscountCandidateValue::FixedAmount(fixed) => format!("${:.2}", fixed.amount.0),
+                        };
+                        for target in &candidate.targets {
+                            let schema::ProductDiscountCandidateTarget::CartLine(line) = target;
+                            out.push((line.id.trim_start_matches("gid://shopify/CartLine/").to_string(), value.clone()));
+                        }
+                    }
+                }
+            }
+            out.sort();
+            out
+        }
+
+        fn discounts(lines: &[String], offers: &[String]) -> Vec<(String, String)> {
+            product_discounts(&payload(lines, &config(offers), r#"["PRODUCT"]"#))
+        }
+
+        fn pair(line: &str, value: &str) -> (String, String) {
+            (line.to_string(), value.to_string())
+        }
+
+        #[test]
+        fn mixed_cart_gives_black_friday_only_to_the_line_outside_the_edu_landing() {
+            let lines = [protein("edu", 1, Some(EDU)), protein("pdp", 1, None)];
+            assert_eq!(discounts(&lines, &[bf_sitewide()]), vec![pair("pdp", "15%")]);
+            assert_eq!(discounts(&lines, &[bf_sitewide(), edu_bundle()]), vec![pair("pdp", "15%")]);
+        }
+
+        #[test]
+        fn the_direct_landing_property_hides_the_line_too() {
+            let lines = [protein("edu", 1, None), protein("pdp", 1, None)];
+            let mut value: Value = serde_json::from_str(&payload(&lines, &config(&[bf_sitewide()]), r#"["PRODUCT"]"#)).unwrap();
+            value["cart"]["lines"][0]["landingSource"] = serde_json::json!({ "value": EDU });
+            assert_eq!(product_discounts(&value.to_string()), vec![pair("pdp", "15%")]);
+        }
+
+        #[test]
+        fn edu_only_carts_keep_the_edu_bundle_and_get_no_black_friday() {
+            let offers = [bf_sitewide(), edu_bundle()];
+            assert_eq!(discounts(&[protein("edu", 1, Some(EDU))], &offers), vec![]);
+            let three = discounts(&[subscribed(protein("edu", 3, Some(EDU)))], &offers);
+            assert_eq!(three.len(), 1, "{three:?}");
+            assert_eq!(three[0].0, "edu");
+            assert!(three[0].1.starts_with('$'), "edu price tier: {three:?}");
+            // Mixed with a product-page line: the edu lines keep their bundle, the page line gets the 1-unit tier.
+            let mixed = discounts(&[subscribed(protein("edu", 3, Some(EDU))), protein("pdp", 1, None)], &offers);
+            assert_eq!(mixed, vec![three[0].clone(), pair("pdp", "15%")]);
+        }
+
+        #[test]
+        fn other_landing_tags_still_count_for_black_friday() {
+            let lines = [protein("lp", 1, Some("protein-complete-lp")), protein("pdp", 1, None)];
+            assert_eq!(discounts(&lines, &[bf_sitewide()]), vec![pair("lp", "20%"), pair("pdp", "20%")]);
+        }
+
+        fn gift_tier(threshold_cents: i64) -> String {
+            offer("gift-tier", 20, &format!(
+                r#""cartValueThresholdCents":{threshold_cents},
+                "giftRewards":[{{"id":"reward-1","targetVariantIds":["gid://shopify/ProductVariant/gift-v1"],"discountType":"free","discountValue":100.0,"maxQuantity":1}}]"#
+            ))
+            .replacen(r#""offerType":"discount""#, r#""offerType":"gift""#, 1)
+        }
+
+        fn bf_gift() -> String {
+            gift_line("gid://shopify/CartLine/gift", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift", "gift-tier", "10.00", 1)
+        }
+
+        #[test]
+        fn edu_value_does_not_lift_a_mixed_cart_to_a_gift_tier() {
+            let pdp = scoped_line("gid://shopify/CartLine/pdp", "gid://shopify/ProductVariant/p", "gid://shopify/Product/p", "40.00", 1, None, None);
+            let tagged = protein("edu", 1, Some(EDU));
+            assert_eq!(discounts(&[pdp.clone(), tagged.clone(), bf_gift()], &[gift_tier(7000)]), vec![]);
+            let untagged = protein("edu", 1, None);
+            assert_eq!(discounts(&[pdp.clone(), untagged, bf_gift()], &[gift_tier(7000)]), vec![pair("gift", "100%")]);
+            // An edu-scoped offer with the same (empty) exclusions runs first: its qualifying lines must not be reused.
+            let edu_threshold = edu_bundle().replacen(r#""requirements":[],"#, r#""requirements":[],"cartValueThresholdCents":1,"#, 1);
+            assert_eq!(discounts(&[pdp, tagged, bf_gift()], &[edu_threshold, gift_tier(7000)]), vec![]);
+        }
+
+        #[test]
+        fn edu_lines_cannot_be_another_offers_untagged_gift() {
+            let edu_gift = scoped_line("gid://shopify/CartLine/g", "gid://shopify/ProductVariant/gift-v1", "gid://shopify/Product/gift", "10.00", 1, Some(EDU), None);
+            assert_eq!(discounts(&[protein("pdp", 2, None), edu_gift.clone()], &[gift_tier(1)]), vec![]);
+            let page_gift = edu_gift.replace(EDU, "protein-complete-lp");
+            assert_eq!(discounts(&[protein("pdp", 2, None), page_gift], &[gift_tier(1)]), vec![pair("g", "100%")]);
+        }
+
+        fn order_offer(extra: &str) -> String {
+            offer("bf-order", 30, &format!(
+                r#""orderRewards":[{{"id":"order-1","discountType":"percentage","discountValue":15,"subscriptionMode":"any"}}]{extra}"#
+            ))
+        }
+
+        fn order_excluded(lines: &[String], offers: &[String]) -> Option<Vec<String>> {
+            let result = run_function_with_input(run, &payload(lines, &config(offers), r#"["ORDER"]"#)).expect("should not error");
+            result.operations.iter().find_map(|operation| match operation {
+                schema::CartOperation::OrderDiscountsAdd(op) => match &op.candidates[0].targets[0] {
+                    schema::OrderDiscountCandidateTarget::OrderSubtotal(target) => Some(target.excluded_cart_line_ids.clone()),
+                },
+                _ => None,
+            })
+        }
+
+        #[test]
+        fn order_offer_leaves_the_edu_lines_out_of_a_mixed_cart() {
+            let edu_id = || vec!["gid://shopify/CartLine/edu".to_string()];
+            let mixed = [protein("edu", 1, Some(EDU)), protein("pdp", 1, None)];
+            assert_eq!(order_excluded(&mixed, &[order_offer("")]), Some(edu_id()));
+            // A threshold only the edu value reaches stays locked; other tags still count.
+            let threshold = order_offer(r#","cartValueThresholdCents":9000"#);
+            assert_eq!(order_excluded(&mixed, std::slice::from_ref(&threshold)), None);
+            let other_tag = [protein("lp", 1, Some("protein-complete-lp")), protein("pdp", 1, None)];
+            assert_eq!(order_excluded(&other_tag, &[threshold]), Some(vec![]));
+        }
     }
 }

@@ -26,6 +26,17 @@ pub struct CompiledPageUrlCondition {
 
 pub type LineMetadata = HashMap<String, String>;
 
+/// `__landing_source` tags whose lines only offers scoped to that same tag (a `landing` reward requiring it) see:
+/// every other offer ignores them for thresholds, quantities, anchors and rewards. Mirrors
+/// EXCLUSIVE_LANDING_SOURCES (rule-engine, exclusive-landing.ts).
+pub const EXCLUSIVE_LANDING_SOURCES: [&str; 1] = ["protein-edu-lp"];
+
+/// The exclusive tag a line carries, if any.
+pub fn exclusive_source(source: Option<&str>) -> Option<&'static str> {
+    let source = source?;
+    EXCLUSIVE_LANDING_SOURCES.iter().copied().find(|tag| *tag == source)
+}
+
 const PAGE_URL_KEY: &str = "_promo_page_url";
 const LANDING_URL_KEY: &str = "_promo_landing_url";
 const TEMPLATE_KEY: &str = "_promo_template";

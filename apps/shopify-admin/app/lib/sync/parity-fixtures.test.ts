@@ -775,6 +775,111 @@ function limitsScenarios(): Scenario[] {
   ];
 }
 
+/** protein-edu-lp is an exclusive landing tag: its lines only exist for offers with a landing reward requiring it. */
+function exclusiveLandingScenarios(): Scenario[] {
+  const EDU = "protein-edu-lp";
+  const tiers = [
+    { minimumQuantity: 1, maximumQuantity: 1, discountType: "percentage", discountValue: 15 },
+    { minimumQuantity: 2, discountType: "percentage", discountValue: 20 },
+  ];
+  // Black Friday Sitewide: quantity tiers on every bag, 1 bag -> 15%, 2+ -> 20%.
+  const blackFriday: OfferSpec = {
+    ...discountOffer(B, [["cart_quantity", { minQuantity: 1, includeGiftValues: false }, "main"]], {}, {
+      rewards: [{
+        id: "bf-tiers",
+        rewardType: "product_discount",
+        discountType: "percentage",
+        value: { tiers, amount: 0, currencyCode: "USD" },
+        target: { scope: "cart", countRule: "all", scopeMode: "sitewide", productIds: [], variantIds: [], selectionMode: "all", selectionLevel: "product" },
+        quantity: null,
+        isAutoAdd: false,
+        isCustomerSelectable: false,
+        trackMode: "product",
+        sortOrder: 0,
+        label: null,
+      }],
+    }),
+    priority: 10,
+  };
+  const eduBundle: OfferSpec = {
+    ...discountOffer(A, [["line_attribute", { key: "__landing_source", value: EDU, matchMode: "equals", minMatchingQuantity: 1 }, "main"]], {}, {
+      rewards: [{
+        id: "edu-price",
+        rewardType: "product_discount",
+        discountType: "fixed_price",
+        value: { amount: 0, currencyCode: "USD" },
+        target: {
+          variantIds: [V(1)],
+          subscriptionMode: "subscription_only",
+          priceTiers: [{ quantity: 3, targetPricePerUnit: 35.99 }],
+          scopeMode: "landing",
+          requiredLineAttributeKey: "__landing_source",
+          requiredLineAttributeValue: EDU,
+          requiredAnchorVariantIds: [V(1)],
+          requiredAnchorMinQuantity: 1,
+          requiresAnchorSubscription: false,
+        },
+        quantity: null,
+        isAutoAdd: false,
+        isCustomerSelectable: false,
+        trackMode: "variant",
+        sortOrder: 0,
+        label: null,
+      }],
+    }),
+    priority: 5,
+  };
+  const eduBag = (id: string, quantity: number, sellingPlan = false): LineSpec =>
+    line(id, 1, { __landing_source: EDU, _promo_page_url: "/pages/protein-for-sweet-cravings" }, { quantity, unitPrice: "49.99", ...(sellingPlan ? { sellingPlan } : {}) });
+  const pdpBag = line("pdp", 1, null, { unitPrice: "49.99" });
+  return [
+    {
+      name: "exclusive-landing-mixed-cart-bf-skips-edu-line",
+      description: "A one-time bag from an edu landing plus one from the product page: Black Friday tiers see only the page bag (1 unit, the 15% tier); the edu bag is not discounted.",
+      offers: [blackFriday],
+      lines: [eduBag("edu", 1), pdpBag],
+      qualified: [B],
+      discounted: { [B]: ["pdp"] },
+      quantities: { [B]: { pdp: 1 } },
+    },
+    {
+      name: "exclusive-landing-edu-value-does-not-reach-a-gift-tier",
+      description: "A $70 gift tier: $40 from the product page plus a $49.99 edu-landing bag. The edu value does not count, so the gift line is not discounted.",
+      offers: [giftOffer(C, [cartValue(7000)])],
+      lines: [line("pdp", 2, null, { unitPrice: "40.00" }), eduBag("edu", 1), gift("g1", C)],
+      qualified: [],
+      discounted: {},
+    },
+    {
+      name: "exclusive-landing-edu-bundle-keeps-its-lines",
+      description: "Three edu subscription bags plus a product-page bag: the edu bundle prices its three bags, Black Friday discounts only the page bag (its 1-unit tier).",
+      offers: [blackFriday, eduBundle],
+      lines: [eduBag("edu", 3, true), pdpBag],
+      qualified: [A, B],
+      discounted: { [A]: ["edu"], [B]: ["pdp"] },
+      quantities: { [A]: { edu: 3 }, [B]: { pdp: 1 } },
+    },
+    {
+      name: "exclusive-landing-edu-only-cart-gets-no-black-friday",
+      description: "An edu-only cart: Black Friday sees no line, so it does not apply; the edu bundle still prices its bags.",
+      offers: [blackFriday, eduBundle],
+      lines: [eduBag("edu", 3, true)],
+      qualified: [A],
+      discounted: { [A]: ["edu"] },
+      quantities: { [A]: { edu: 3 } },
+    },
+    {
+      name: "exclusive-landing-other-tags-unchanged",
+      description: "protein-complete-lp is not exclusive: its bag still counts for Black Friday, so both bags reach the 2-unit tier.",
+      offers: [blackFriday],
+      lines: [line("lp", 1, { __landing_source: "protein-complete-lp" }, { unitPrice: "49.99" }), pdpBag],
+      qualified: [B],
+      discounted: { [B]: ["lp", "pdp"] },
+      quantities: { [B]: { lp: 1, pdp: 1 } },
+    },
+  ];
+}
+
 const SCENARIOS: Scenario[] = [
   {
     name: "page-types-product-restrict",
@@ -1566,6 +1671,7 @@ const SCENARIOS: Scenario[] = [
   ...stackingScenarios(),
   ...limitsScenarios(),
   ...tierScenarios(),
+  ...exclusiveLandingScenarios(),
 ];
 
 function build(scenario: Scenario) {
