@@ -1,0 +1,250 @@
+{
+  "name": "exclusive-landing-edu-bundle-keeps-its-lines",
+  "description": "Three edu subscription bags plus a product-page bag: the edu bundle prices its three bags, Black Friday discounts only the page bag (its 1-unit tier).",
+  "source": {
+    "offers": [
+      {
+        "id": "bbbbbbbb-0000-4000-8000-000000000002",
+        "version": 1,
+        "type": "discount",
+        "priority": 10,
+        "stopLowerPriority": false,
+        "conditions": [
+          {
+            "conditionType": "cart_quantity",
+            "value": {
+              "minQuantity": 1,
+              "includeGiftValues": false
+            },
+            "scope": "main",
+            "operator": "eq",
+            "sortOrder": 0
+          }
+        ],
+        "rewards": [
+          {
+            "id": "bf-tiers",
+            "rewardType": "product_discount",
+            "discountType": "percentage",
+            "value": {
+              "tiers": [
+                {
+                  "minimumQuantity": 1,
+                  "maximumQuantity": 1,
+                  "discountType": "percentage",
+                  "discountValue": 15
+                },
+                {
+                  "minimumQuantity": 2,
+                  "discountType": "percentage",
+                  "discountValue": 20
+                }
+              ],
+              "amount": 0,
+              "currencyCode": "USD"
+            },
+            "target": {
+              "scope": "cart",
+              "countRule": "all",
+              "scopeMode": "sitewide",
+              "productIds": [],
+              "variantIds": [],
+              "selectionMode": "all",
+              "selectionLevel": "product"
+            },
+            "quantity": null,
+            "isAutoAdd": false,
+            "isCustomerSelectable": false,
+            "trackMode": "product",
+            "sortOrder": 0,
+            "label": null
+          }
+        ]
+      },
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "type": "discount",
+        "priority": 5,
+        "stopLowerPriority": false,
+        "conditions": [
+          {
+            "conditionType": "line_attribute",
+            "value": {
+              "key": "__landing_source",
+              "value": "protein-edu-lp",
+              "matchMode": "equals",
+              "minMatchingQuantity": 1
+            },
+            "scope": "main",
+            "operator": "eq",
+            "sortOrder": 0
+          }
+        ],
+        "rewards": [
+          {
+            "id": "edu-price",
+            "rewardType": "product_discount",
+            "discountType": "fixed_price",
+            "value": {
+              "amount": 0,
+              "currencyCode": "USD"
+            },
+            "target": {
+              "variantIds": [
+                "gid://shopify/ProductVariant/1"
+              ],
+              "subscriptionMode": "subscription_only",
+              "priceTiers": [
+                {
+                  "quantity": 3,
+                  "targetPricePerUnit": 35.99
+                }
+              ],
+              "scopeMode": "landing",
+              "requiredLineAttributeKey": "__landing_source",
+              "requiredLineAttributeValue": "protein-edu-lp",
+              "requiredAnchorVariantIds": [
+                "gid://shopify/ProductVariant/1"
+              ],
+              "requiredAnchorMinQuantity": 1,
+              "requiresAnchorSubscription": false
+            },
+            "quantity": null,
+            "isAutoAdd": false,
+            "isCustomerSelectable": false,
+            "trackMode": "variant",
+            "sortOrder": 0,
+            "label": null
+          }
+        ]
+      }
+    ]
+  },
+  "config": {
+    "c1": "_promo_engine_unused",
+    "c2": "_promo_engine_unused",
+    "c3": "_promo_engine_unused",
+    "customerTags": [],
+    "offers": [
+      {
+        "id": "bbbbbbbb-0000-4000-8000-000000000002",
+        "version": 1,
+        "offerType": "discount",
+        "priority": 10,
+        "productRewards": [
+          {
+            "id": "bf-tiers",
+            "discountType": "percentage",
+            "discountValue": 0,
+            "quantityTiers": [
+              {
+                "minimumQuantity": 1,
+                "maximumQuantity": 1,
+                "discountType": "percentage",
+                "discountValue": 15
+              },
+              {
+                "minimumQuantity": 2,
+                "discountType": "percentage",
+                "discountValue": 20
+              }
+            ]
+          }
+        ],
+        "cartQuantityThreshold": 1
+      },
+      {
+        "id": "aaaaaaaa-0000-4000-8000-000000000001",
+        "version": 1,
+        "offerType": "discount",
+        "priority": 5,
+        "productRewards": [
+          {
+            "id": "edu-price",
+            "targetVariantIds": [
+              "gid://shopify/ProductVariant/1"
+            ],
+            "discountType": "fixed_price",
+            "discountValue": 0,
+            "subscriptionMode": "subscription_only",
+            "scopeMode": "landing",
+            "requiredLineAttributeValue": "protein-edu-lp",
+            "requiredAnchorVariantIds": [
+              "gid://shopify/ProductVariant/1"
+            ],
+            "priceTiers": [
+              {
+                "quantity": 3,
+                "targetPricePerUnit": 35.99
+              }
+            ]
+          }
+        ],
+        "lineAttributeConditions": [
+          {
+            "key": "__landing_source",
+            "value": "protein-edu-lp",
+            "matchMode": "equals",
+            "minMatchingQuantity": 1
+          }
+        ]
+      }
+    ],
+    "version": "parity",
+    "compiledAt": "2026-01-01T00:00:00.000Z"
+  },
+  "cart": {
+    "currency": "USD",
+    "presentmentCurrencyRate": 1,
+    "country": "US",
+    "customerTags": [],
+    "enteredCodes": [],
+    "lines": [
+      {
+        "id": "edu",
+        "variantId": "gid://shopify/ProductVariant/1",
+        "productId": "gid://shopify/Product/1",
+        "quantity": 3,
+        "unitPrice": "49.99",
+        "lineType": null,
+        "metadata": {
+          "__landing_source": "protein-edu-lp",
+          "_promo_page_url": "/pages/protein-for-sweet-cravings"
+        },
+        "sellingPlan": true
+      },
+      {
+        "id": "pdp",
+        "variantId": "gid://shopify/ProductVariant/1",
+        "productId": "gid://shopify/Product/1",
+        "quantity": 1,
+        "unitPrice": "49.99",
+        "lineType": null,
+        "metadata": null
+      }
+    ]
+  },
+  "expected": {
+    "qualifiedOfferIds": [
+      "aaaaaaaa-0000-4000-8000-000000000001",
+      "bbbbbbbb-0000-4000-8000-000000000002"
+    ],
+    "discountedLineIds": {
+      "aaaaaaaa-0000-4000-8000-000000000001": [
+        "edu"
+      ],
+      "bbbbbbbb-0000-4000-8000-000000000002": [
+        "pdp"
+      ]
+    },
+    "discountedQuantities": {
+      "aaaaaaaa-0000-4000-8000-000000000001": {
+        "edu": 3
+      },
+      "bbbbbbbb-0000-4000-8000-000000000002": {
+        "pdp": 1
+      }
+    }
+  }
+}
