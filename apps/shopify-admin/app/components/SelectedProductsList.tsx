@@ -12,6 +12,8 @@ export interface SelectedProduct {
   title: string;
   imageUrl: string | null;
   variants?: SelectedVariant[];
+  /** How many variants the product has (`variants` holds only the selected ones). */
+  variantCount?: number;
 }
 
 interface Props {

@@ -2,8 +2,8 @@ import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 import { variantCache } from "@promo/db";
 import { validateConditionValue, validateRewardPayload } from "@promo/shared-types";
-import { mergeFallbacks, planGiftRewards } from "../gift-rewards.js";
-import { loadProductOf } from "../gift-rewards.server.js";
+import { mergeFallbacks, planGiftRewards, type GiftVariantMode } from "../gift-rewards.js";
+import { loadProductOf, loadVariantCountOf } from "../gift-rewards.server.js";
 import { buildTieredGiftOffer, giftTieredOfferSchema, type GiftTierCampaign } from "../gift-tier-campaigns.js";
 import { toStoredAmount } from "../money.js";
 import { matchRuleOperator, presenceOnlyValue } from "../product-condition.js";
@@ -39,6 +39,10 @@ export const AuthoringGiftSourceSchema = z
       .max(5)
       .optional()
       .describe("'If sold out, give instead': ordered replacement variants (max 5) for this gift, used only while it is sold out."),
+    addEveryVariant: z
+      .boolean()
+      .optional()
+      .describe("Add-all only, for a gift with several variants: true = every one is added automatically (one reward per variant); false = the picker opens and the customer takes one. Default: the picker when the gift is every variant of its product, automatic when it is only some of them."),
   })
   .refine((g) => g.productId !== undefined || g.variantIds !== undefined, { message: "A gift needs productId and/or variantIds." });
 
@@ -59,7 +63,7 @@ export const AuthoringGiftRewardSchema = z
     customerSelectable: z
       .boolean()
       .optional()
-      .describe("true = 'customer selects' (picker over every gift variant, one reward). Default false = 'automatically add all gifts': one reward per gift PRODUCT; a product with several picked variants opens the picker for that product only. One gift variant is always auto-added."),
+      .describe("true = 'customer selects' (picker over every gift variant, one reward). Default false = 'automatically add all gifts': one reward per gift PRODUCT. A gift that is every variant of its product opens the picker for that product only; a gift that is only some variants of its product adds each of them (see gifts[].addEveryVariant). One gift variant is always auto-added."),
     quantity: z
       .number()
       .int()
@@ -101,11 +105,12 @@ export type AuthoringGiftReward = z.infer<typeof AuthoringGiftRewardSchema>;
 type Fail = { ok: false; error: string; path?: string };
 const fail = (error: string, path?: string): Fail => ({ ok: false, error, ...(path ? { path } : {}) });
 
-type Resolved = { variantIds: string[]; fallbackByVariant: Record<string, string[]> };
+type Resolved = { variantIds: string[]; fallbackByVariant: Record<string, string[]>; variantModes: Record<string, GiftVariantMode> };
 
 async function resolveGiftSources(deps: AuthoringDeps, sources: z.infer<typeof AuthoringGiftSourceSchema>[], path: string): Promise<AuthoringResult<Resolved>> {
   const variantIds: string[] = [];
   const fallbackByVariant: Record<string, string[]> = {};
+  const variantModes: Record<string, GiftVariantMode> = {};
   for (const [index, source] of sources.entries()) {
     const at = `${path}[${index}]`;
     let own: string[] = [];
@@ -138,12 +143,13 @@ async function resolveGiftSources(deps: AuthoringDeps, sources: z.infer<typeof A
       if (!gid) return fail(`"${raw}" is not a variant id or ProductVariant GID.`, `${at}.fallbackVariantIds`);
       fallbacks.push(gid);
     }
+    if (source.addEveryVariant !== undefined) for (const id of own) variantModes[id] = source.addEveryVariant ? "each" : "pick";
     for (const id of own) {
       if (!variantIds.includes(id)) variantIds.push(id);
       if (fallbacks.length > 0) fallbackByVariant[id] = fallbacks;
     }
   }
-  return { ok: true, value: { variantIds, fallbackByVariant } };
+  return { ok: true, value: { variantIds, fallbackByVariant, variantModes } };
 }
 
 function sharedFallbacks(raw: string[] | undefined, path: string): AuthoringResult<string[]> {
@@ -207,13 +213,16 @@ async function toStoredOne(g: AuthoringGiftReward, deps: AuthoringDeps, index: n
   if (autoAdd && variantIds.length >= 2) {
     const byVariant: Record<string, string[]> = {};
     for (const id of variantIds) byVariant[id] = fallbackByVariant[id] ?? sharedList;
+    const productOf = await loadProductOf(deps.db, deps.shopId, variantIds);
     const plan = planGiftRewards({
       existing: [],
       variantIds,
-      productOf: await loadProductOf(deps.db, deps.shopId, variantIds),
+      productOf,
       fallbackVariantIds: hasPerGift ? mergeFallbacks(byVariant, variantIds) : sharedList,
       ...(hasPerGift ? { fallbackByVariant: byVariant } : {}),
       autoAddAll: true,
+      variantModes: resolved.value.variantModes,
+      variantCountOf: await loadVariantCountOf(deps.db, deps.shopId, productOf),
       quantity: 1,
       discountType: discountType as never,
       value,

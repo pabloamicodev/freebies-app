@@ -80,11 +80,50 @@ export function deriveGiftBlock(rewards: Array<{ target: unknown; isAutoAdd: boo
   };
 }
 
+/** A gift product with 2+ picked variants: the customer picks one in the popup, or each one is added automatically. */
+export type GiftVariantMode = "each" | "pick";
+
+/** Parses a posted {giftVariantId: "each" | "pick"} map; null when malformed. */
+export function parseVariantModes(raw: string): Record<string, GiftVariantMode> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  if (Object.values(parsed).some((mode) => mode !== "each" && mode !== "pick")) return null;
+  return parsed as Record<string, GiftVariantMode>;
+}
+
+/**
+ * What the stored rewards already do, per gift variant: "pick" for the variants of a picker reward, "each" when 2+ variants
+ * of one product have an auto-add reward of their own. A product's lone variant has no mode.
+ */
+export function storedVariantModes(
+  rewards: Array<{ target: unknown; isAutoAdd: boolean }>,
+  productOf: ReadonlyMap<string, string>,
+): Record<string, GiftVariantMode> {
+  const modes: Record<string, GiftVariantMode> = {};
+  const soloByProduct = new Map<string, string[]>();
+  for (const reward of rewards) {
+    const ids = rewardVariantIds(reward.target);
+    if (ids.length > 1) for (const id of ids) modes[id] = "pick";
+    const product = ids.length === 1 && reward.isAutoAdd ? productOf.get(ids[0]!) : undefined;
+    if (product) soloByProduct.set(product, [...(soloByProduct.get(product) ?? []), ids[0]!]);
+  }
+  for (const ids of soloByProduct.values()) if (ids.length > 1) for (const id of ids) modes[id] = "each";
+  return modes;
+}
+
 /**
  * Plans the product_gift rewards for one gift block.
  * - autoAddAll: one reward per gift product, quantity 1, with its own fallbacks when
  *   `fallbackByVariant` is given (a product's picked variants share one list). A product with one picked variant is
- *   auto-added; a product with 2+ picked variants opens the picker for that product only.
+ *   auto-added. A product with 2+ picked variants follows `variantModes` (any of its variants): "pick" opens the
+ *   picker for that product only, "each" gives every picked variant its own auto-add reward. Without a mode: the
+ *   picker when every variant of the product is picked (the customer chooses), "each" when only some are (the
+ *   merchant named the exact gifts). Unknown variant count = picker.
  * - otherwise: one reward with every variant, quantity = how many the customer picks.
  * Existing reward ids are kept for gifts that stay (reward ids live in cart line properties and
  * gift usage keys); unmatched existing rewards are deleted.
@@ -97,6 +136,9 @@ export function planGiftRewards(input: {
   /** Per-gift fallbacks (gift variant id -> fallback variant ids). "Add all" uses these instead of the shared list. */
   fallbackByVariant?: Record<string, string[]>;
   autoAddAll: boolean;
+  variantModes?: Record<string, GiftVariantMode>;
+  /** Product id -> how many variants the product has. */
+  variantCountOf?: ReadonlyMap<string, number>;
   quantity: number;
   discountType: DiscountType;
   value: Record<string, unknown>;
@@ -131,7 +173,13 @@ export function planGiftRewards(input: {
       const key = input.productOf.get(variantId) ?? variantId;
       groups.set(key, [...(groups.get(key) ?? []), variantId]);
     }
-    specs = [...groups.values()].map((own, index) => {
+    const rewardsOf = ([product, own]: [string, string[]]) => {
+      const mode =
+        own.map((id) => input.variantModes?.[id]).find(Boolean) ??
+        (own.length < (input.variantCountOf?.get(product) ?? 0) ? "each" : "pick");
+      return mode === "each" ? own.map((id) => [id]) : [own];
+    };
+    specs = [...groups].flatMap(rewardsOf).map((own, index) => {
       const single = own.length === 1;
       return {
         ...common,

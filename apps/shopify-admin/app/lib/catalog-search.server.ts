@@ -108,6 +108,7 @@ export async function searchProductCache(
   const enriched = products.map((p) => ({
     ...p,
     variants: variantsByProduct[p.id] ?? [],
+    variantCount: allVariants.filter((v) => v.productGid === p.id).length,
   }));
 
   return { products: enriched, cache };
