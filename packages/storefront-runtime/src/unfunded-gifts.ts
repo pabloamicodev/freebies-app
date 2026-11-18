@@ -4,7 +4,7 @@ import { giftRewardKey } from "./declined-gifts.js";
 const STORAGE_KEY = "promo_engine_unfunded_gifts";
 
 /** Gift line properties to `offerId:rewardId`, or null for a non-gift line. */
-export function giftKeyOfItem(item: CartItem): string | null {
+export function giftKeyOfItem(item: { properties?: CartItem["properties"] }): string | null {
   const props = item.properties ?? {};
   if (props["_promo_engine_line_type"] !== "gift") return null;
   const offerId = props["_promo_engine_offer_id"];
