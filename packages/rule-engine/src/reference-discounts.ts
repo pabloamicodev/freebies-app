@@ -3,6 +3,7 @@
  * driven by the offer's compiled config. Shared by the parity fixtures (parity.test.ts, which the Rust side also
  * runs against the real Function) and the MCP cart preview, so both mirror the Function the same way.
  */
+import { hiddenFromScopes } from "./exclusive-landing.js";
 import { lineMatchesPageConditions } from "./page-match.js";
 
 export interface ReferenceLine {
@@ -98,12 +99,19 @@ function quizBundles(lines: readonly ReferenceLine[], config: ReferenceConfigOff
 
 /** Units of each line the offer discounts, following the Function's targeting rules. */
 export function referenceDiscounts(
-  lines: readonly ReferenceLine[],
+  cartLines: readonly ReferenceLine[],
   offer: { id: string; conditions: Array<{ conditionType: string; value: unknown }> },
   config: ReferenceConfigOffer,
   lockedGiftRewards: ReadonlySet<string> = new Set(),
   trace: ReferenceTrace = {},
 ): Record<string, number> {
+  // Exclusive landing lines the offer is not scoped to (one of its landing rewards requires the tag) do not exist for it.
+  const scopes = new Set(
+    (config.productRewards ?? []).flatMap((reward) =>
+      reward.scopeMode === "landing" && reward.requiredLineAttributeValue !== undefined ? [reward.requiredLineAttributeValue] : [],
+    ),
+  );
+  const lines = cartLines.filter((line) => !hiddenFromScopes(scopes, line.metadata?.["__landing_source"]));
   const excluded = new Set(config.excludedProductIds ?? []);
   const restrict = config.restrictToMatchedLines === true;
   const pageConditions = offer.conditions;

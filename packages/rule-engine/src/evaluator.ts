@@ -8,6 +8,7 @@ import type {
 } from "@promo/shared-types";
 import { err, interpolate, toCartUnits, type Result } from "@promo/shared-types";
 import { buildCartHash, extractGiftLines, extractQualifyingLines, sumQualifyingValueNet } from "./cart-parser.js";
+import { landingScopesOf, visibleCart } from "./exclusive-landing.js";
 import { evaluateCartValue, type CartValueConditionValue } from "./conditions/cart-value.js";
 import { cartQuantityCount, evaluateCartQuantity, type CartQuantityConditionValue } from "./conditions/cart-quantity.js";
 import { evaluateSpecificProduct, type SpecificProductConditionValue } from "./conditions/specific-product.js";
@@ -173,6 +174,9 @@ export async function evaluate(
   const orderedOffers = [...ctx.offers].sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   for (const offer of orderedOffers) {
+    // Exclusive landing lines outside the offer's landing scopes do not exist for it.
+    const cart = visibleCart(input.cart, landingScopesOf(offer.rewards));
+    const offerInput = cart === input.cart ? input : { ...input, cart };
     const reasons: EligibilityReason[] = [];
     let passed = true;
 
@@ -221,7 +225,7 @@ export async function evaluate(
 
     // Evaluate main conditions
     for (const cond of mainConditions) {
-      const result = evaluateCondition(cond, input, currency);
+      const result = evaluateCondition(cond, offerInput, currency);
       reasons.push(result.ok ? result.value : result.error);
       if (!result.ok) passed = false;
     }
@@ -229,7 +233,7 @@ export async function evaluate(
     // Only evaluate sub-conditions if main passed
     if (passed) {
       for (const cond of subConditions) {
-        const result = evaluateCondition(cond, input, currency);
+        const result = evaluateCondition(cond, offerInput, currency);
         reasons.push(result.ok ? result.value : result.error);
         if (!result.ok) passed = false;
       }
@@ -261,7 +265,7 @@ export async function evaluate(
     if (pageConditions.length > 0) {
       const pageResult = evaluatePageConditionGroup(
         pageConditions,
-        extractQualifyingLines(input.cart),
+        extractQualifyingLines(cart),
         offerExcludedProductIds(offer.conditions),
       );
       reasons.push(...pageResult.reasons);
@@ -271,7 +275,7 @@ export async function evaluate(
     if (passed) {
       const stacks = offer.combinationPolicy.canStackWithGiftOffers !== false;
       const anchors =
-        stacks && consumedAnchorUnits.size === 0 ? null : giftAnchors(offer, input.cart, offerExcludedProductIds(offer.conditions));
+        stacks && consumedAnchorUnits.size === 0 ? null : giftAnchors(offer, cart, offerExcludedProductIds(offer.conditions));
       if (anchors && freeUnits(anchors, consumedAnchorUnits) < anchors.needed) {
         reasons.push({
           conditionType: "gift_anchor_consumed",
@@ -289,10 +293,10 @@ export async function evaluate(
     const discountCodesToRemove: string[] = [];
 
     if (passed) {
-      const giftTiers = giftTierState(offer, input.cart, currency, offerExcludedProductIds(offer.conditions));
+      const giftTiers = giftTierState(offer, cart, currency, offerExcludedProductIds(offer.conditions));
       if (giftTiers) giftTiersByOffer.set(offer.id, giftTiers);
       const unmetRewardIds = giftTiers?.unmetRewardIds;
-      const existingOfferGifts = extractGiftLines(input.cart).filter((gift) => gift.offerId === offer.id);
+      const existingOfferGifts = extractGiftLines(cart).filter((gift) => gift.offerId === offer.id);
       const giftRewards = offer.rewards.filter((reward) => reward.rewardType === "product_gift");
       const giftRewardById = new Map(giftRewards.map((reward) => [reward.id, reward]));
       const declinedGiftRewards = new Set(input.declinedGiftRewards ?? []);
@@ -300,7 +304,7 @@ export async function evaluate(
       // untagged line, so it fulfils the reward and no duplicate is added. Units that qualify the
       // offer (anchor) never count, and a line serves one reward only.
       const untaggedUnits = new Map(
-        extractQualifyingLines(input.cart)
+        extractQualifyingLines(cart)
           .filter((line) => !line.properties["_promo_engine_offer_id"])
           .map((line) => [line, line.quantity - reservedAnchorUnits(offer.conditions, line)] as const),
       );
@@ -680,7 +684,7 @@ function giftTierProgressBar(
 function buildProgressBars(
   evaluatedOffers: EvaluatedOffer[],
   offers: OfferDefinition[],
-  cart: EvaluationInput["cart"],
+  fullCart: EvaluationInput["cart"],
   giftTiersByOffer: ReadonlyMap<string, GiftTierState>,
   messages?: GiftTierProgressMessages,
   shopCurrencyCode?: string,
@@ -688,6 +692,7 @@ function buildProgressBars(
   return evaluatedOffers.flatMap((evaluated) => {
     const offer = offers.find((item) => item.id === evaluated.offerId);
     if (!offer) return [];
+    const cart = visibleCart(fullCart, landingScopesOf(offer.rewards));
     const giftTiers = giftTiersByOffer.get(offer.id);
     if (giftTiers) return [giftTierProgressBar(offer.id, giftTiers, cart, messages)];
     const condition = offer.conditions

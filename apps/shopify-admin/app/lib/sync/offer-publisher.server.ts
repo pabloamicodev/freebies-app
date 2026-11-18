@@ -234,7 +234,7 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
   const discountNodes = await ensureDiscountNodes(shopId, shopDomain, accessToken);
   await migrateLegacyCartShardIds(shopId);
   const discountNodesWithClasses = [
-    { discountId: discountNodes.cartLinesDiscountId, discountClasses: CART_DISCOUNT_CLASSES },
+    { discountId: discountNodes.cartLinesDiscountId, discountClasses: CART_SHARD_CLASSES },
     { discountId: discountNodes.deliveryDiscountId, discountClasses: DELIVERY_DISCOUNT_CLASSES },
   ];
   const manifest = new ManifestCollector();
@@ -661,7 +661,11 @@ async function publishOffersForShopLocked(shopId: string, shopDomain: string): P
       if (policyKey(now) !== policyKey(wanted) && !liveReadFailed) loosenAfterSwap.push({ discountId, discountClasses, policy: wanted });
       return { discountId, discountClasses, policy: now };
     };
-    const slot0Node = cartNode(discountNodes.cartLinesDiscountId, CART_DISCOUNT_CLASSES, 0);
+    // Slot 0 declares ORDER only while an offer with order rewards lives there (they are pinned to it). Shopify treats
+    // any node with the ORDER class as an order discount, so a product discount that does not combine with order
+    // discounts (HPN's Bundle Builder) would otherwise drop every gift and product reward in this node.
+    const slot0Classes = planUnits.some((unit) => unit.hasOrderRewards) ? CART_DISCOUNT_CLASSES : CART_SHARD_CLASSES;
+    const slot0Node = cartNode(discountNodes.cartLinesDiscountId, slot0Classes, 0);
     await syncCombination([
       slot0Node,
       { discountId: discountNodes.deliveryDiscountId, discountClasses: DELIVERY_DISCOUNT_CLASSES, policy: deliveryCombination },

@@ -4,7 +4,9 @@ import { productCache, variantCache, type Db, type OfferCondition, type OfferCom
 import {
   evaluate,
   giftTierState,
+  landingScopesOf,
   referenceDiscounts,
+  visibleCart,
   type OfferDefinition,
   type ReferenceConfigOffer,
   type ReferenceLine,
@@ -540,9 +542,11 @@ export async function promoPreviewCart(
     if (compiled) {
       const config = compiled.offer as unknown as ReferenceConfigOffer;
       const compiledOffer = compiled.offer;
+      // Exclusive landing lines outside the offer's landing scopes do not count for it (as in the Functions).
+      const offerCart = visibleCart(input.cart, landingScopesOf(definition.rewards));
       const tiers = giftTierState(
         definition,
-        { ...input.cart },
+        { ...offerCart },
         { activeCurrencyCode: currency, shopCurrencyCode: shop.currencyCode, exchangeRate },
         new Set(compiledOffer.excludedProductIds ?? []),
       );
@@ -607,17 +611,17 @@ export async function promoPreviewCart(
       }
 
       for (const reward of compiledOffer.orderRewards) {
-        const pick = pickOrderTier(reward, subtotalCents, totalQuantity);
+        const pick = pickOrderTier(reward, offerCart.subtotalCents, offerCart.totalQuantity);
         if (!pick) {
-          offerWarnings.push(`Order discount tiers not reached at subtotal ${unit(subtotalCents).amount} ${currency}.`);
+          offerWarnings.push(`Order discount tiers not reached at subtotal ${unit(offerCart.subtotalCents).amount} ${currency}.`);
           continue;
         }
-        const d = describeOrderDiscount(pick.type, pick.value, subtotalCents, currency);
+        const d = describeOrderDiscount(pick.type, pick.value, offerCart.subtotalCents, currency);
         order = { rewardId: reward.id, discountType: pick.type, discountValue: pick.value, tier: pick.tier, discount: d.discount, summary: d.label, approximate: true };
       }
       const hasSubscription = cartLines.some((l) => l.sellingPlanId !== null);
       for (const ship of compiled.shipping) {
-        const match = shippingMatch(ship, subtotalCents, hasSubscription);
+        const match = shippingMatch(ship, offerCart.subtotalCents, hasSubscription);
         shipping.push(
           match
             ? { id: ship.id, discountType: match.tier.discountType, discountValue: match.tier.discountValue, tier: { ...match.tier }, approximate: true }

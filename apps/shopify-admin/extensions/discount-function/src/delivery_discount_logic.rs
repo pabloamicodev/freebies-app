@@ -1,5 +1,5 @@
 use crate::config::{minor_units, round_amount, to_cents, CompiledConfig, CompiledShippingOffer};
-use crate::page_match::line_matches;
+use crate::page_match::{exclusive_source, line_matches, LineMetadata, EXCLUSIVE_LANDING_SOURCES};
 use crate::schema;
 use schema::cart_delivery_options_discounts_generate_run::input::cart::{DeliveryGroups, Lines};
 use schema::cart_delivery_options_discounts_generate_run::Input;
@@ -134,11 +134,10 @@ fn apply_offers(
     // presentment currency. Thresholds are minor units, so the rate also has to absorb a
     // zero-decimal (JPY/KRW) currency on either side.
     let rate = input.presentment_currency_rate().as_f64();
-    let presentment_cents = qualifying_subtotal_cents(
-        input.cart().lines(),
-        input.cart().cost().subtotal_amount().amount().as_f64(),
-        &subtotal_currency,
-    );
+    let lines = input.cart().lines();
+    let fallback_subtotal = input.cart().cost().subtotal_amount().amount().as_f64();
+    let has_exclusive_line = lines.iter().any(|line| line_exclusive_source(line).is_some());
+    let all_lines_cents = qualifying_subtotal_cents(lines, fallback_subtotal, &subtotal_currency, None);
 
     let mut offers = config.shipping_offers.clone();
     crate::de::sort_by(&mut offers, |left, right| {
@@ -159,6 +158,11 @@ fn apply_offers(
             continue;
         }
         let is_scoped = offer.scope_mode != "sitewide";
+        let presentment_cents = if has_exclusive_line {
+            qualifying_subtotal_cents(lines, fallback_subtotal, &subtotal_currency, Some(offer))
+        } else {
+            all_lines_cents
+        };
         let subtotal_cents = (presentment_cents as f64
             / cents_rate(rate, &subtotal_currency, &offer.currency_code))
         .floor() as i64;
@@ -244,6 +248,26 @@ fn is_app_added_line(line: &Lines) -> bool {
 
 /// D2: exclude mode needs at least one matched non-gift line; reject mode needs every
 /// non-gift line matched (app-added gift/upsell lines are exempt from the reject check).
+/// The `__landing_source` exclusive tag of a line (direct property, else the packed metadata).
+fn line_exclusive_source(line: &Lines) -> Option<&'static str> {
+    if let Some(value) = line.landing_source_attribute().and_then(|attribute| attribute.value()) {
+        return exclusive_source(Some(value));
+    }
+    let raw = line.promo_metadata().and_then(|attribute| attribute.value())?;
+    if !EXCLUSIVE_LANDING_SOURCES.iter().any(|tag| raw.contains(tag)) {
+        return None;
+    }
+    let metadata: LineMetadata = serde_json::from_str(raw).ok()?;
+    exclusive_source(metadata.get("__landing_source").map(String::as_str))
+}
+
+/// The line carries an exclusive landing tag the offer is not scoped to: the offer never sees it.
+fn hidden_from(offer: &CompiledShippingOffer, line: &Lines) -> bool {
+    line_exclusive_source(line).is_some_and(|tag| {
+        offer.scope_mode != "landing" || offer.required_line_attribute_value.as_deref() != Some(tag)
+    })
+}
+
 fn page_conditions_pass(offer: &CompiledShippingOffer, lines: &[Lines]) -> bool {
     if offer.page_url_conditions.is_empty() {
         return true;
@@ -259,7 +283,7 @@ fn page_conditions_pass(offer: &CompiledShippingOffer, lines: &[Lines]) -> bool 
     let candidates = || {
         lines
             .iter()
-            .filter(|line| *line.quantity() > 0 && !is_gift_line(line))
+            .filter(|line| *line.quantity() > 0 && !is_gift_line(line) && !hidden_from(offer, line))
     };
     if !candidates().any(matches) {
         return false;
@@ -281,13 +305,20 @@ fn shipping_offer_qualifies(offer: &CompiledShippingOffer, lines: &[Lines]) -> b
     }
 }
 
-fn qualifying_subtotal_cents(lines: &[Lines], fallback_subtotal: f64, currency: &str) -> i64 {
+/// With `offer`, the lines it does not see (`hidden_from`) are left out.
+fn qualifying_subtotal_cents(
+    lines: &[Lines],
+    fallback_subtotal: f64,
+    currency: &str,
+    offer: Option<&CompiledShippingOffer>,
+) -> i64 {
     if lines.is_empty() {
         return to_cents(fallback_subtotal, currency);
     }
 
     lines
         .iter()
+        .filter(|line| offer.is_none_or(|offer| !hidden_from(offer, line)))
         .filter(|line| {
             let promo_gift = line
                 .line_type_attribute()
@@ -1646,5 +1677,55 @@ mod tests {
         let output = run_config(&with);
         assert!(output.contains("DeliveryDiscountsAdd"), "fixture shipping offers must apply");
         assert_eq!(output, run_config(&without));
+    }
+
+    #[test]
+    fn exclusive_landing_lines_only_count_for_their_own_shipping_offer() {
+        let sitewide = r#"{
+            "id":"bf-shipping","priority":1,"scopeMode":"sitewide","targetGroupTypes":null,
+            "tiers":[{"minimumSubtotalCents":7000,"discountType":"percentage","discountValue":100.0,"appliesWhen":null}]
+        }"#;
+        let edu = r#"{
+            "id":"edu-shipping","priority":5,"scopeMode":"landing",
+            "requiredLineAttributeValue":"protein-edu-lp","requiredAnchorVariantIds":[],"requiredAnchorMinQuantity":3,
+            "targetGroupTypes":null,
+            "tiers":[{"minimumSubtotalCents":0,"discountType":"percentage","discountValue":50.0,"appliesWhen":null}]
+        }"#;
+        let config = shipping_config(&format!("[{sitewide},{edu}]"));
+        let groups = format!("[{}]", group("gid://shopify/CartDeliveryGroup/1", "ONE_TIME_PURCHASE", false));
+        let line = |quantity: i64, amount: &str, source: Option<&str>, packed: bool| {
+            let (direct, metadata) = match source {
+                Some(source) if packed => (
+                    "null".to_string(),
+                    serde_json::json!({ "value": serde_json::json!({ "__landing_source": source, "_promo_page_url": "/pages/p" }).to_string() }).to_string(),
+                ),
+                Some(source) => (format!(r#"{{"value":"{source}"}}"#), "null".to_string()),
+                None => ("null".to_string(), "null".to_string()),
+            };
+            format!(
+                r#"{{"quantity":{quantity},"cost":{{"subtotalAmount":{{"amount":"{amount}","currencyCode":"USD"}}}},"lineTypeAttribute":null,"cartGiftTierAttribute":null,"landingSourceAttribute":{direct},"promoMetadata":{metadata},"quizBundleIdAttribute":null,"quizFreeGiftAttribute":null,"quizExpectedPaidCountAttribute":null,"sellingPlanAllocation":null,"merchandise":{{"__typename":"ProductVariant","id":"gid://shopify/ProductVariant/1"}}}}"#
+            )
+        };
+        let percentage = |lines: &[String]| -> Option<f64> {
+            let result = run_with_lines(r#"["SHIPPING"]"#, "100.00", &config, &groups, &format!("[{}]", lines.join(",")));
+            result.operations.first().map(|operation| {
+                let schema::DeliveryOperation::DeliveryDiscountsAdd(op) = operation else { panic!("expected a delivery discount") };
+                match &op.candidates[0].value {
+                    schema::DeliveryDiscountCandidateValue::Percentage(pct) => pct.value.0,
+                    other => panic!("expected percentage, got {other:?}"),
+                }
+            })
+        };
+        let pdp = line(1, "40.00", None, false);
+        // The edu value never lifts the rest of the cart over the sitewide threshold, read directly or from the packed metadata.
+        assert_eq!(percentage(&[pdp.clone(), line(1, "49.99", Some("protein-edu-lp"), false)]), None);
+        assert_eq!(percentage(&[pdp.clone(), line(1, "49.99", Some("protein-edu-lp"), true)]), None);
+        assert_eq!(percentage(&[line(2, "99.98", Some("protein-edu-lp"), false)]), None);
+        // Other tags and untagged lines count as before.
+        assert_eq!(percentage(&[pdp.clone(), line(1, "49.99", Some("protein-complete-lp"), false)]), Some(100.0));
+        assert_eq!(percentage(&[pdp.clone(), line(1, "49.99", None, false)]), Some(100.0));
+        // The edu offer still sees its lines (and wins as a scoped offer). Its anchor reads the direct property only.
+        assert_eq!(percentage(&[line(3, "149.97", Some("protein-edu-lp"), false)]), Some(50.0));
+        assert_eq!(percentage(&[pdp, line(3, "149.97", Some("protein-edu-lp"), false)]), Some(50.0));
     }
 }
