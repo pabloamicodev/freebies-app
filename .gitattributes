@@ -2,3 +2,4 @@
 packages/rule-engine/test-fixtures/** text eol=lf
 apps/shopify-admin/extensions/*/src/app-url.ts text eol=lf
 apps/shopify-admin/extensions/**/*.graphql text eol=lf
+apps/shopify-admin/extensions/*/src/fixtures/** text eol=lf
