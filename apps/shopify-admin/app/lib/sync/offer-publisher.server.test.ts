@@ -1608,6 +1608,23 @@ describe("publishOffersForShop — offers with their own discount codes", () => 
       state.policyRows = [];
     });
 
+    // HPN: a third-party product discount with orderDiscounts=false (Bundle Builder) dropped the whole shared node,
+    // gifts included, because the node declared ORDER without carrying any order offer.
+    it("declares ORDER on the shared cart node only while an offer has order rewards", async () => {
+      const cartClasses = () => state.updatedAutomaticNodes.filter((update) => update.id === CART_DISCOUNT_ID).at(-1)!.input["discountClasses"];
+      state.offers = [makeOffer({ id: "gift" })];
+      state.rewardRows = [];
+      state.updatedAutomaticNodes = [];
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+      expect(cartClasses()).toEqual(["PRODUCT"]);
+
+      state.rewardRows = [orderRewardFor("gift")];
+      state.updatedAutomaticNodes = [];
+      await publishOffersForShop(SHOP_ID, SHOP_DOMAIN);
+      expect(cartClasses()).toEqual(["PRODUCT", "ORDER"]);
+      state.rewardRows = [];
+    });
+
     it("keeps combinesWith consistent with automatic delivery offers (shipping can't combine with shipping)", async () => {
       state.offers = [makeOffer({ id: "ship" })];
       state.codeRows = [makeCode({ offerId: "ship", code: "FREESHIP" })];
