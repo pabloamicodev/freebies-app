@@ -18,7 +18,7 @@ import { expectedGiftKeys, hasOwnMarker, parseRetryAfter, withJitter, type GiftO
 import { debounce, AbortableRequest } from "./debounce.js";
 import { emit, on, PromoEvents, publishAnalytics } from "./event-bus.js";
 import { fetchFreshCart, findGiftLineByOfferId, resolveLineKey } from "./guards.js";
-import { giftRewardKey, loadDeclinedGiftRewards, saveDeclinedGiftRewards } from "./declined-gifts.js";
+import { loadDeclinedGiftRewards, saveDeclinedGiftRewards } from "./declined-gifts.js";
 import { cartFingerprint, giftKeyOfItem, loadUnfundedSuppressions, saveUnfundedSuppressions, unfundedGiftKeys } from "./unfunded-gifts.js";
 import { initGiftSlider, isSoldOutCartError } from "./widgets/gift-slider.js";
 import type { initFbtWidget } from "./widgets/fbt.js";
@@ -458,7 +458,7 @@ export class PromoEngineRuntime {
     // ── Tier 4: Standard cart events ──────────────────────────────────────
     // Note: avoid calling /cart/update.js here — it triggers extra evaluations
     // via shop_events_listener's async event dispatch even with the guard set.
-    this.log("refreshCartUI — falling back to DOM events");
+    this.log("refreshCartUI: DOM events");
     this.ownEventsUntil = Date.now() + OWN_EVENT_QUIET_MS;
     document.dispatchEvent(new CustomEvent("cart:refresh", { bubbles: true }));
     document.dispatchEvent(new CustomEvent("cart:updated", { bubbles: true }));
@@ -610,7 +610,7 @@ export class PromoEngineRuntime {
       return result;
     } catch (e: unknown) {
       if (signal.aborted) {
-        this.log("Evaluation aborted (superseded by newer request)");
+        this.log("Evaluation superseded");
         return null;
       }
       this.log("Evaluation error", e);
@@ -702,13 +702,13 @@ export class PromoEngineRuntime {
     options: { force?: boolean; emitResult?: boolean },
   ): void {
     if (this.rateLimitRetries >= MAX_RATE_LIMIT_RETRIES) {
-      this.log("Evaluation rate limited — giving up until the next cart change");
+      this.log("Rate limited, giving up");
       this.rateLimitRetries = 0;
       return;
     }
     const delay = withJitter(retryAfterMs ?? Math.min(30_000, 2_000 * 2 ** this.rateLimitRetries));
     this.rateLimitRetries++;
-    this.log(`Evaluation rate limited — retrying in ${delay} ms`);
+    this.log(`Rate limited, retry in ${delay} ms`);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       void this.triggerEvaluation(options);
@@ -774,11 +774,42 @@ export class PromoEngineRuntime {
     if (changed) saveDeclinedGiftRewards(this.declinedGiftRewards);
   }
 
+  /** Record a gift line this runtime just added. */
+  private giftAdded(outcome: GiftOutcome, action: CartAction, variantId: string): void {
+    const key = giftKeyOfItem(action);
+    if (key) outcome.added.add(key);
+    emit(PromoEvents.GiftAutoAdded, { variantId, quantity: action.quantity });
+    publishAnalytics("promo_engine:gift_auto_added", { variant_id: variantId, quantity: action.quantity, session_id: this.sessionId });
+  }
+
+  /** One /cart/add.js for a run of gift adds: a theme that redirects to checkout after its own add waits only
+   * GIFT_HOLD_MS, and one request per gift ran past it (HPN: 5 gifts, the last offer's never reached checkout). */
+  private async addGifts(run: CartAction[], outcome: GiftOutcome, done: Set<CartAction>): Promise<void> {
+    try {
+      await AjaxCartAdapter.addLines(run.map((a) => ({ variantId: a.variantId!, quantity: a.quantity ?? 1, properties: a.properties ?? {} })));
+      run.forEach((a) => done.add(a));
+    } catch {
+      // Shopify may keep part of a rejected batch: only the gifts still missing go one by one, with their fallbacks.
+      const inCart = new Set((await fetchFreshCart().catch(() => null))?.items.map(giftKeyOfItem));
+      run.forEach((a) => inCart.has(giftKeyOfItem(a)) && done.add(a));
+    }
+    run.forEach((a) => done.has(a) && this.giftAdded(outcome, a, a.variantId!));
+  }
+
   private async applyCartActions(actions: CartAction[]): Promise<GiftOutcome> {
     const outcome: GiftOutcome = { added: new Set(), removed: new Set() };
-    for (const action of actions) {
+    const done = new Set<CartAction>();
+    let runEnd = -1;
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i]!;
+      if (action.action === "add_line" && i > runEnd) {
+        for (runEnd = i; actions[runEnd + 1]?.action === "add_line"; runEnd++);
+        const run = actions.slice(i, runEnd + 1).filter((a) => a.variantId);
+        if (run.length > 1) await this.addGifts(run, outcome, done);
+      }
+      if (done.has(action)) continue;
       try {
-        this.log("[PromoEngine] →", action);
+        this.log("→", action);
         switch (action.action) {
           case "add_line": {
             if (!action.variantId) break;
@@ -798,26 +829,15 @@ export class PromoEngineRuntime {
                 break;
               } catch (e) {
                 if (!isSoldOutCartError(e)) throw e;
-                this.log(`[PromoEngine] gift ${variantId} sold out`);
+                this.log(`gift ${variantId} sold out`);
               }
             }
-            if (!addedVariantId) break;
-            const addedOffer = action.properties?.["_promo_engine_offer_id"];
-            const addedReward = action.properties?.["_promo_engine_reward_id"];
-            if (addedOffer && addedReward) outcome.added.add(giftRewardKey(addedOffer, addedReward));
-            emit(PromoEvents.GiftAutoAdded, {
-              variantId: addedVariantId,
-              quantity: action.quantity,
-            });
-            publishAnalytics("promo_engine:gift_auto_added", {
-              variant_id: addedVariantId,
-              quantity: action.quantity,
-              session_id: this.sessionId,
-            });
+            if (addedVariantId) this.giftAdded(outcome, action, addedVariantId);
             break;
           }
 
-          case "update_line": {
+          // update_line and remove_line
+          default: {
             const freshCart = await fetchFreshCart();
             const currentLine =
               freshCart.items.find((item) => item.key === action.lineKey) ??
@@ -832,50 +852,24 @@ export class PromoEngineRuntime {
                   )
                 : null);
             if (!lineKey) break;
-            if (action.quantity === 0) {
-              await AjaxCartAdapter.removeLine({ key: lineKey });
-              this.markRemoved(outcome, freshCart, lineKey);
-              emit(PromoEvents.GiftRemoved, { lineKey });
-              publishAnalytics("promo_engine:gift_removed", {
-                line_key: lineKey,
-                reason: "quantity_correction",
-                session_id: this.sessionId,
-              });
-            } else {
+            const update = action.action === "update_line";
+            if (update && action.quantity !== 0) {
               await AjaxCartAdapter.updateLine({
                 key: lineKey,
                 quantity: action.quantity ?? 1,
                 properties: action.properties,
               });
               emit(PromoEvents.GiftUpdated, { lineKey, quantity: action.quantity });
+              break;
             }
-            break;
-          }
-
-          case "remove_line": {
-            const freshCart = await fetchFreshCart();
-            const currentLine =
-              freshCart.items.find((item) => item.key === action.lineKey) ??
-              (action.offerId ? findGiftLineByOfferId(freshCart, action.offerId) : null);
-            const lineKey =
-              currentLine?.key ??
-              (action.variantId
-                ? resolveLineKey(
-                    freshCart,
-                    parseInt(action.variantId.split("/").pop() ?? action.variantId, 10),
-                    action.properties ?? {},
-                  )
-                : null);
-            if (!lineKey) break;
             await AjaxCartAdapter.removeLine({ key: lineKey });
             this.markRemoved(outcome, freshCart, lineKey);
             emit(PromoEvents.GiftRemoved, { lineKey });
             publishAnalytics("promo_engine:gift_removed", {
               line_key: lineKey,
-              reason: action.reason ?? "offer_disqualified",
+              reason: update ? "quantity_correction" : action.reason ?? "offer_disqualified",
               session_id: this.sessionId,
             });
-            break;
           }
         }
       } catch (e) {

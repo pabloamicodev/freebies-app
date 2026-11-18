@@ -588,6 +588,75 @@ describe("gift hold on theme add-to-cart", () => {
   });
 });
 
+describe("several auto-add gifts in one evaluation", () => {
+  // HPN NAD3 3-pack: 3 offers, 5 gifts. One request per gift ran past the 3 s hold and the theme's
+  // redirect to /checkout dropped the last offer's gifts.
+  const gift = (offer: string, reward: string, variant: number) => ({
+    action: "add_line",
+    variantId: `gid://shopify/ProductVariant/${variant}`,
+    quantity: 1,
+    properties: { _promo_engine_line_type: "gift", _promo_engine_offer_id: offer, _promo_engine_reward_id: reward },
+  });
+  const gifts = [gift("ebook", "a", 1), gift("ebook", "b", 2), gift("bottle", "c", 3), gift("shaker", "d", 4), gift("shaker", "e", 5)];
+  const addBodies = (h: ReturnType<typeof harness>) =>
+    h.calls.filter((c) => /cart\/add\.js/.test(c.url)).map((c) => (JSON.parse(String(c.init!.body)) as { items: Array<{ id: number }> }).items.map((i) => i.id));
+  const setup = (add: (ids: number[]) => Response, cartItems: unknown[] = []) =>
+    harness([
+      [/cart\/add\.js/, (init) => add((JSON.parse(String(init!.body)) as { items: Array<{ id: number }> }).items.map((i) => i.id))],
+      [/cart(\/change)?\.js/, () => json({ ...emptyCart, items: cartItems })],
+      [/evaluate/, () => json(okResult({ cartActions: gifts }))],
+    ]);
+
+  it("adds every gift of every offer in a single cart request", async () => {
+    const h = setup(() => json({ items: [] }));
+    await new PromoEngineRuntime(CONFIG).api.evaluate();
+    expect(addBodies(h)).toEqual([[1, 2, 3, 4, 5]]);
+    expect(h.win.dispatchEvent.mock.calls.filter((c) => (c[0] as Event).type === "promo-engine:gift-auto-added")).toHaveLength(5);
+  });
+
+  it("when the batch is rejected, re-adds one by one only the gifts the cart is still missing", async () => {
+    const kept = { key: "k3", variant_id: 3, quantity: 1, properties: gifts[2]!.properties };
+    const h = setup((ids) => (ids.length > 1 ? json({ description: "sold out" }, { status: 422 }) : json({ items: [] })), [kept]);
+    await new PromoEngineRuntime(CONFIG).api.evaluate();
+    expect(addBodies(h)).toEqual([[1, 2, 3, 4, 5], [1], [2], [4], [5]]);
+  });
+
+  it("keeps the order of adds around a removal", async () => {
+    const remove = { action: "remove_line", lineKey: "old", offerId: "x" };
+    const h = harness([
+      [/cart\/add\.js/, () => json({ items: [] })],
+      [/cart\/change\.js/, () => json(emptyCart)],
+      [/cart\.js/, () => json({ ...emptyCart, items: [{ key: "old", variant_id: 9, quantity: 1, properties: {} }] })],
+      [/evaluate/, () => json(okResult({ cartActions: [gifts[0], remove, gifts[1], gifts[2]] }))],
+    ]);
+    await new PromoEngineRuntime(CONFIG).api.evaluate();
+    expect(h.calls.filter((c) => /cart\/(add|change)\.js/.test(c.url)).map((c) => c.url.match(/add|change/)![0])).toEqual(["add", "change", "add"]);
+    expect(addBodies(h)).toEqual([[1], [2, 3]]);
+  });
+});
+
+describe("gift hold with slow cart requests", () => {
+  it("all gifts land before the hold releases even when each cart request is slow", async () => {
+    const isOwn = (init?: RequestInit) => Boolean((init?.headers as Record<string, string> | undefined)?.[OWN_REQUEST_HEADER]);
+    const actions = [1, 2, 3, 4, 5].map((v) => ({ action: "add_line", variantId: `gid://shopify/ProductVariant/${v}`, quantity: 1, properties: { ...GIFT_PROPS, _promo_engine_reward_id: `r${v}` } }));
+    let added = 0;
+    const slow = <T,>(v: T) => new Promise<T>((r) => setTimeout(() => r(v), 700));
+    const h = harness([
+      [/cart\/add/, (init) => (isOwn(init) ? slow(json({})).then((r) => ((added += (JSON.parse(String(init!.body)) as { items: unknown[] }).items.length), r)) : json({ items: [{ id: 1 }] }))],
+      [/cart\.js/, () => json({ ...emptyCart, total_price: ++cartVersion })],
+      [/evaluate/, () => json(okResult({ qualifiedOffers: [{ offerId: "o1", type: "gift" }], cartActions: actions }))],
+    ]);
+    initRuntime();
+    vi.stubGlobal("fetch", h.win.fetch);
+    let settled = false;
+    const themeAdd = h.win.fetch("/cart/add.js", { method: "POST", body: "{}" }).then(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).toBe(true);
+    expect(added).toBe(5);
+    await themeAdd;
+  });
+});
+
 describe("gift hold on XHR add-to-cart", () => {
   it("replays the completion events only after our gift add completed", async () => {
     vi.resetModules();
