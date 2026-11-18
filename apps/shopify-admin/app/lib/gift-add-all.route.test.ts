@@ -3,7 +3,7 @@ import { asc, eq } from "drizzle-orm";
 import { offerRewards, offers, productCache, variantCache, type Db } from "@promo/db";
 import type * as PromoDb from "@promo/db";
 import { createTestDb, seedOffer, seedShop } from "./test-support/pglite-db.js";
-import { deriveGiftBlock, planGiftRewards } from "./gift-rewards.js";
+import { deriveGiftBlock, planGiftRewards, storedVariantModes } from "./gift-rewards.js";
 
 const ctx = vi.hoisted(() => ({ db: null as unknown, shopId: "" }));
 
@@ -96,7 +96,7 @@ const createViaWizard = async (name: string, rewardProducts: string[], isAutoAdd
 const rewardsOf = (offerId: string) =>
   db.select().from(offerRewards).where(eq(offerRewards.offerId, offerId)).orderBy(asc(offerRewards.sortOrder));
 const variantsOf = (r: { target: unknown }) => (r.target as { variantIds: string[] }).variantIds;
-const edit = (id: string, rewardId: string, fields: { auto: boolean; variants: string[]; quantity?: string; fallback?: string[] }) =>
+const edit = (id: string, rewardId: string, fields: { auto: boolean; variants: string[]; quantity?: string; fallback?: string[]; modes?: Record<string, string> }) =>
   run(
     offerPage.action,
     post(`/app/offers/${id}`, {
@@ -104,6 +104,7 @@ const edit = (id: string, rewardId: string, fields: { auto: boolean; variants: s
       ...(fields.auto ? { isAutoAdd: "on" } : {}),
       targetVariantIds: JSON.stringify(fields.variants),
       targetFallbackVariantIds: JSON.stringify(fields.fallback ?? []),
+      ...(fields.modes ? { targetVariantModes: JSON.stringify(fields.modes) } : {}),
     }),
     { id },
   );
@@ -337,5 +338,104 @@ describe("planGiftRewards", () => {
     expect(plan.insert.map((v) => [(v.target as { variantIds: string[] }).variantIds, v.isAutoAdd])).toEqual([
       [[A], true], [[B[0], B[1]], false], [[C], true],
     ]);
+  });
+
+  const variantCountOf = new Map([["pA", 1], ["pB", 3], ["pC", 1]]);
+  const allOf = new Map([...productOf, [B[2]!, "pB"]]);
+  const shape = (plan: ReturnType<typeof planGiftRewards>) =>
+    plan.insert.map((v) => [(v.target as { variantIds: string[] }).variantIds, v.isAutoAdd, v.isCustomerSelectable, v.trackMode]);
+
+  it("default: every variant of a product picked = its picker, only some picked = one auto-add reward each", () => {
+    const some = planGiftRewards({
+      ...base, existing: [], variantIds: [A, B[0]!, B[1]!, C], productOf, variantCountOf, autoAddAll: true, fallbackByVariant: { [B[1]!]: [FB] },
+    });
+    expect(shape(some)).toEqual([
+      [[A], true, false, "variant"], [[B[0]], true, false, "variant"], [[B[1]], true, false, "variant"], [[C], true, false, "variant"],
+    ]);
+    expect(some.insert.map(fallbackOf)).toEqual([undefined, undefined, [FB], undefined]);
+    const every = planGiftRewards({ ...base, existing: [], variantIds: [A, ...B], productOf: allOf, variantCountOf, autoAddAll: true });
+    expect(shape(every)).toEqual([[[A], true, false, "variant"], [B, false, true, "product"]]);
+  });
+
+  it("a mode on any variant of the product wins over the default, either way", () => {
+    const pick = planGiftRewards({
+      ...base, existing: [], variantIds: [B[0]!, B[1]!], productOf, variantCountOf, autoAddAll: true, variantModes: { [B[1]!]: "pick" },
+    });
+    expect(shape(pick)).toEqual([[[B[0], B[1]], false, true, "product"]]);
+    const each = planGiftRewards({
+      ...base, existing: [], variantIds: B, productOf: allOf, variantCountOf, autoAddAll: true, variantModes: { [B[0]!]: "each" },
+    });
+    expect(shape(each).map((row) => row[1])).toEqual([true, true, true]);
+  });
+
+  it("storedVariantModes: picker variants are pick, 2+ own rewards of one product are each, a lone variant has none", () => {
+    const solo = (id: string) => ({ isAutoAdd: true, target: { variantIds: [id] } });
+    expect(storedVariantModes([solo(A), solo(B[0]!), solo(B[1]!), solo(C)], productOf)).toEqual({ [B[0]!]: "each", [B[1]!]: "each" });
+    expect(storedVariantModes([solo(A), { isAutoAdd: false, target: { variantIds: [B[0]!, B[1]!] } }], productOf)).toEqual({
+      [B[0]!]: "pick", [B[1]!]: "pick",
+    });
+    expect(storedVariantModes([solo(A), solo(B[0]!)], productOf)).toEqual({});
+  });
+});
+
+describe("gift product with several picked variants", () => {
+  it("wizard: 2 of the product's 3 variants are both auto-added, all 3 open its picker", async () => {
+    const some = await rewardsOf(await createViaWizard("variants-some", [A, B[0]!, B[1]!], true));
+    expect(some.map(variantsOf)).toEqual([[A], [B[0]], [B[1]]]);
+    expect(some.every((r) => r.isAutoAdd && !r.isCustomerSelectable && r.quantity === 1)).toBe(true);
+    const every = await rewardsOf(await createViaWizard("variants-every", [A, ...B], true));
+    expect(every.map(variantsOf)).toEqual([[A], B]);
+    expect(every[1]).toMatchObject({ isAutoAdd: false, isCustomerSelectable: true });
+  });
+
+  it("wizard: the posted choice wins over the default", async () => {
+    const result = await run(
+      wizard.action,
+      post("/app/offers/new/gift/cart_value", {
+        intent: "draft", internalName: "variants-wizard-pick", publicTitle: "variants-wizard-pick", conditionType: "cart_value", minAmount: "50",
+        appliesTo: "any_product", discountType: "free", giftCount: "1", rewardProducts: JSON.stringify([A, B[0]!, B[1]!]),
+        isAutoAdd: "true", variantModes: JSON.stringify({ [B[0]!]: "pick", [B[1]!]: "pick" }),
+      }),
+      { template: "cart_value" },
+    );
+    expect((result as { error?: string }).error).toBeUndefined();
+    const [offer] = await db.select().from(offers).where(eq(offers.internalName, "variants-wizard-pick"));
+    expect((await rewardsOf(offer!.id)).map(variantsOf)).toEqual([[A], [B[0], B[1]]]);
+  });
+
+  it("editor: what is stored stays through later saves, and the merchant can switch it per product", async () => {
+    const id = await createViaWizard("variants-editor", [A, B[0]!, B[1]!], true);
+    const [aId, b0Id] = (await rewardsOf(id)).map((r) => r.id);
+
+    // Adding the last variant would be the picker by default; the product already adds each one.
+    await edit(id, aId!, { auto: true, variants: [A, ...B] });
+    let rewards = await rewardsOf(id);
+    expect(rewards.map(variantsOf)).toEqual([[A], [B[0]], [B[1]], [B[2]]]);
+    expect(rewards.every((r) => r.isAutoAdd)).toBe(true);
+
+    await edit(id, aId!, { auto: true, variants: [A, ...B], modes: { [B[0]!]: "pick", [B[1]!]: "pick", [B[2]!]: "pick" } });
+    rewards = await rewardsOf(id);
+    expect(rewards.map(variantsOf)).toEqual([[A], B]);
+    expect(rewards[1]).toMatchObject({ id: b0Id, isAutoAdd: false, isCustomerSelectable: true });
+
+    // Dropping a variant would be "each" by default; the stored picker stays.
+    await edit(id, aId!, { auto: true, variants: [A, B[0]!, B[1]!] });
+    rewards = await rewardsOf(id);
+    expect(rewards.map(variantsOf)).toEqual([[A], [B[0], B[1]]]);
+
+    await edit(id, aId!, { auto: true, variants: [A, B[0]!, B[1]!], modes: { [B[0]!]: "each", [B[1]!]: "each" } });
+    rewards = await rewardsOf(id);
+    expect(rewards.map(variantsOf)).toEqual([[A], [B[0]], [B[1]]]);
+    expect(rewards.every((r) => r.isAutoAdd && !r.isCustomerSelectable)).toBe(true);
+    expect(rewards[1]!.id).toBe(b0Id);
+  });
+
+  it("editor: a second variant of a gift product is auto-added too while the product has more variants", async () => {
+    const id = await createViaWizard("variants-editor-lone", [A, B[0]!], true);
+    const [aId] = (await rewardsOf(id)).map((r) => r.id);
+    await edit(id, aId!, { auto: true, variants: [A, B[0]!, B[1]!] });
+    const rewards = await rewardsOf(id);
+    expect(rewards.map(variantsOf)).toEqual([[A], [B[0]], [B[1]]]);
+    expect(rewards.every((r) => r.isAutoAdd)).toBe(true);
   });
 });

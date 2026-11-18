@@ -129,6 +129,20 @@ describe("toStoredGiftRewards equals the gift wizard rows", () => {
     expect(rows.every((r) => r.isAutoAdd && !r.isCustomerSelectable && r.trackMode === "variant" && r.quantity === 1)).toBe(true);
   });
 
+  it("add-all with addEveryVariant: one auto-add reward per variant of that gift", async () => {
+    const rows = await stored([{ gifts: [{ productId: "3", addEveryVariant: true }, { variantIds: ["21"] }] }]);
+    expect(rows.map((r) => [(r.target as { variantIds: string[] }).variantIds, r.isAutoAdd, r.isCustomerSelectable, r.trackMode])).toEqual([
+      [[V(31)], true, false, "variant"],
+      [[V(32)], true, false, "variant"],
+      [[V(21)], true, false, "variant"],
+    ]);
+  });
+
+  it("add-all with addEveryVariant false: a single-source subset still opens the picker", async () => {
+    const rows = await stored([{ gifts: [{ productId: "3", variantIds: ["31", "32"], addEveryVariant: false }, { variantIds: ["21"] }] }]);
+    expect(rows.map((r) => [(r.target as { variantIds: string[] }).variantIds, r.isAutoAdd])).toEqual([[[V(31), V(32)], false], [[V(21)], true]]);
+  });
+
   it("add-all keeps a product with several picked variants as its own picker", async () => {
     const rows = await stored([{ gifts: [{ productId: "3" }, { variantIds: ["21"] }] }]);
     expect(rows.map((r) => [(r.target as { variantIds: string[] }).variantIds, r.isAutoAdd, r.isCustomerSelectable, r.trackMode])).toEqual([

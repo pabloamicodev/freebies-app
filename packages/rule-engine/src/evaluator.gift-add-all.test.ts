@@ -146,4 +146,16 @@ describe("add-all gifts stored one reward per gift product", () => {
     const result = await evaluate(inputOf(cart), { offers: [offer], usageStates: [], now: NOW });
     expect(adds(result).map((a) => (a as { variantId: string }).variantId)).toEqual([V("80")]);
   });
+
+  it("two variants of one product stored as two single-variant rewards are both added, with no picker", async () => {
+    const sameProduct = (key: string, variantId: string, rewardId: string) => ({ ...line(key, variantId, gift(rewardId)), productId: "gid://shopify/Product/packs" });
+    const offer = offerWith([reward("r-a", [A], 0), reward("r-b0", [B[0]!], 1), reward("r-b1", [B[1]!], 2)]);
+    const result = await evaluate(inputOf(cartOf(line("anchor", V("1")))), { offers: [offer], usageStates: [], now: NOW });
+    expect(adds(result).map((a) => (a as { variantId: string }).variantId)).toEqual([A, B[0], B[1]]);
+    expect(result.giftSlider).toBeNull();
+
+    const full = cartOf(line("anchor", V("1")), line("ga", A, gift("r-a")), sameProduct("g0", B[0]!, "r-b0"), sameProduct("g1", B[1]!, "r-b1"));
+    const settled = await evaluate(inputOf(full), { offers: [offer], usageStates: [], now: NOW });
+    expect(settled.cartActions).toHaveLength(0);
+  });
 });

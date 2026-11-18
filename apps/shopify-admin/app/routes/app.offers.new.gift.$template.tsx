@@ -4,10 +4,10 @@ import { DISCOUNT_MESSAGE_MAX_LENGTH } from "../lib/discount-message.js";
  * Routes: /app/offers/new/gift/bxgy  /bogo  /free-sample  /cart-value  /tiered  /scratch
  */
 
-import { mergeFallbacks, parseFallbackByGift, planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.js";
-import { loadProductOf } from "../lib/gift-rewards.server.js";
+import { mergeFallbacks, parseFallbackByGift, parseVariantModes, planGiftRewards, type GiftRewardValues, type GiftVariantMode } from "../lib/gift-rewards.js";
+import { loadProductOf, loadVariantCountOf } from "../lib/gift-rewards.server.js";
 import { Form, useActionData, useLoaderData, useNavigate, useNavigation, redirect, useParams } from "react-router";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard.js";
 import { Toast } from "../components/Toast.js";
 import { toStoredAmount } from "../lib/money.js";
@@ -31,8 +31,9 @@ import { offers, offerConditions, offerRewards, offerCombinationPolicies } from 
 import { and, eq } from "drizzle-orm";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { ProductPicker } from "../components/ProductPicker.js";
+import { GiftVariantModes } from "../components/GiftVariantModes.js";
 import { PerGiftFallbacks } from "../components/PerGiftFallbacks.js";
-import { SelectedProductsList } from "../components/SelectedProductsList.js";
+import { SelectedProductsList, type SelectedProduct } from "../components/SelectedProductsList.js";
 import { MatchRuleField } from "../components/ProductConditionFields.js";
 import { matchRuleOperator, presenceOnlyValue, type MatchRule } from "../lib/product-condition.js";
 import { SubconditionModal } from "../components/SubconditionModal.js";
@@ -300,6 +301,9 @@ export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) 
     fallbackByGift = parsed;
     fallbackProducts = mergeFallbacks(parsed, rewardProducts);
   }
+  const variantModesRaw = formData.get("variantModes");
+  const variantModes = typeof variantModesRaw === "string" ? parseVariantModes(variantModesRaw) : {};
+  if (!variantModes) return { error: "variantModes must be a map of gift IDs to each or pick." };
   if (
     intent === "publish" &&
     conditionType === "specific_product" &&
@@ -343,6 +347,8 @@ export const action = withCapacityModal(async ({ request }: ActionFunctionArgs) 
           fallbackVariantIds: fallbackProducts,
           ...(fallbackByGift ? { fallbackByVariant: fallbackByGift } : {}),
           autoAddAll: true,
+          variantModes,
+          variantCountOf: await loadVariantCountOf(db, shopId, await loadProductOf(db, shopId, rewardProducts)),
           quantity: 1,
           discountType: discountTypeValue,
           value: rewardValue,
@@ -491,6 +497,7 @@ export default function NewGiftOfferPage() {
     rewardProducts: [] as string[],
     fallbackProducts: [] as string[],
     fallbackByGift: {} as Record<string, string[]>,
+    variantModes: {} as Record<string, GiftVariantMode>,
     rewardPickerOpen: false,
     fallbackPickerOpen: false,
     advancedOpen: false,
@@ -533,6 +540,7 @@ export default function NewGiftOfferPage() {
     rewardProducts,
     fallbackProducts,
     fallbackByGift,
+    variantModes,
     rewardPickerOpen,
     fallbackPickerOpen,
     advancedOpen,
@@ -576,6 +584,8 @@ export default function NewGiftOfferPage() {
   const setRewardPickerOpen = createFieldSetter(setFormField, "rewardPickerOpen");
   const setFallbackProducts = createFieldSetter(setFormField, "fallbackProducts");
   const setFallbackByGift = createFieldSetter(setFormField, "fallbackByGift");
+  const setVariantModes = createFieldSetter(setFormField, "variantModes");
+  const [giftProducts, setGiftProducts] = useState<SelectedProduct[]>([]);
   const setFallbackPickerOpen =createFieldSetter(setFormField, "fallbackPickerOpen");
   const setAdvancedOpen = createFieldSetter(setFormField, "advancedOpen");
   const setPriority = createFieldSetter(setFormField, "priority");
@@ -718,6 +728,7 @@ export default function NewGiftOfferPage() {
         <input type="hidden" name="rewardProducts" value={JSON.stringify(rewardProducts)} />
         <input type="hidden" name="fallbackProducts" value={JSON.stringify(fallbackProducts)} />
         <input type="hidden" name="fallbackByGift" value={JSON.stringify(fallbackByGift)} />
+        <input type="hidden" name="variantModes" value={JSON.stringify(variantModes)} />
         <input type="hidden" name="isAutoAdd"value={String(isAutoAdd)} />
         <input type="hidden" name="minAmount" value={minAmount} />
         <input type="hidden" name="maxAmount" value={maxAmount} />
@@ -1754,8 +1765,12 @@ maxLength={DISCOUNT_MESSAGE_MAX_LENGTH}
                       onRemove={(gid) =>
                         setRewardProducts(rewardProducts.filter((id) => id !== gid))
                       }
+                      onLoaded={setGiftProducts}
                     />
                   </div>
+                  {isAutoAdd && (
+                    <GiftVariantModes giftIds={rewardProducts} products={giftProducts} value={variantModes} onChange={setVariantModes} />
+                  )}
 
                   {isAutoAdd ? (
                     <PerGiftFallbacks

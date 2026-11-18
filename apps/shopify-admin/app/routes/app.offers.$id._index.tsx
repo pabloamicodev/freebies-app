@@ -22,6 +22,7 @@ import {
   IconPlus, IconCheck, IconLink, IconCondition,
 } from "../components/Icons.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
+import { GiftVariantModes } from "../components/GiftVariantModes.js";
 import { PerGiftFallbacks } from "../components/PerGiftFallbacks.js";
 import { ProductPicker } from "../components/ProductPicker.js";
 import { OfferStepTabs } from "../components/OfferStepTabs.js";
@@ -53,13 +54,18 @@ import { isCheckoutCodeGated } from "../lib/code-redemption.js";
 import { countDiscountCodes, getCodeNotices, listDiscountCodes } from "../lib/discount-codes.server.js";
 import { duplicateOffer } from "../lib/offer-duplicate.server.js";
 import { buildRewardRecord } from "../lib/reward-record.server.js";
-import { deriveGiftBlock, mergeFallbacks, parseFallbackByGift, planGiftRewards, type GiftRewardValues } from "../lib/gift-rewards.js";
-import { applyGiftRewardPlan, loadProductOf } from "../lib/gift-rewards.server.js";
+import { deriveGiftBlock, mergeFallbacks, parseFallbackByGift, parseVariantModes, planGiftRewards, rewardVariantIds, storedVariantModes, type GiftRewardValues, type GiftVariantMode } from "../lib/gift-rewards.js";
+import { applyGiftRewardPlan, loadProductOf, loadVariantCountOf } from "../lib/gift-rewards.server.js";
 import { CapacityLimitModal } from "../components/CapacityLimitModal.js";
 import { withCapacityModal } from "../lib/capacity-capture.server.js";
 
 export { shopifyHeaders as headers } from "../lib/shopify-headers.js";
 export { RouteErrorBoundary as ErrorBoundary } from "../components/RouteErrorBoundary.js";
+
+async function loadGiftVariantModes(db: Parameters<typeof loadProductOf>[0], shopId: string, rewards: Array<{ rewardType: string; target: unknown; isAutoAdd: boolean }>) {
+  const gifts = rewards.filter((r) => r.rewardType === "product_gift");
+  return storedVariantModes(gifts, await loadProductOf(db, shopId, gifts.flatMap((r) => rewardVariantIds(r.target))));
+}
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { shopId, currencyCode: shopCurrencyCode, db, timezone: shopTimezone } = await getShopContext(request);
@@ -92,6 +98,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       value: c.value as Record<string, unknown>,
     })),
     rewards,
+    giftVariantModes: await loadGiftVariantModes(db, shopId, rewards),
     policy: policy[0] ?? null,
     shopCurrencyCode,
     isCodePromo: isCheckoutCodeGated(offer, Boolean(firstCode)),
@@ -279,13 +286,24 @@ export const action = withCapacityModal(async ({ request, params }: ActionFuncti
           fallbackByVariant = parsed;
           fallbackVariantIds = mergeFallbacks(parsed, variantIds);
         }
+        const productOf = await loadProductOf(db, shopId, [...new Set([...variantIds, ...current.variantIds])]);
+        // What is stored stays unless the merchant chose otherwise for that product.
+        const variantModes = storedVariantModes(giftRewards, productOf);
+        const modesRaw = formData.get("targetVariantModes");
+        if (typeof modesRaw === "string") {
+          const posted = parseVariantModes(modesRaw);
+          if (!posted) return { error: "targetVariantModes must be a map of gift IDs to each or pick." };
+          Object.assign(variantModes, posted);
+        }
         const plan = planGiftRewards({
           existing: giftRewards,
           variantIds,
-          productOf: await loadProductOf(db, shopId, variantIds),
+          productOf,
           fallbackVariantIds,
           ...(fallbackByVariant ? { fallbackByVariant } : {}),
           autoAddAll: isAutoAdd && variantIds.length >= 2,
+          variantModes,
+          variantCountOf: await loadVariantCountOf(db, shopId, productOf),
           quantity,
           discountType: discountType as GiftRewardValues["discountType"],
           value: { amount: discountValue, currencyCode: shopCurrencyCode },
@@ -1331,7 +1349,7 @@ function formatStartDate(iso: string | null, timeZone: string, status?: string):
    PAGE COMPONENT
    ═══════════════════════════════════════════════════════════ */
 export default function OfferDetailPage() {
-  const { offer, conditions, rewards, policy, shopCurrencyCode, isCodePromo, codeNotices, codes } = useLoaderData<typeof loader>();
+  const { offer, conditions, rewards, giftVariantModes, policy, shopCurrencyCode, isCodePromo, codeNotices, codes } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigate = useNavigate();
   const fetcher = useFetcher();
@@ -1385,6 +1403,8 @@ export default function OfferDetailPage() {
   const initialGiftIds = giftRewards.length > 0 ? giftBlock.variantIds : ((firstReward?.target as { variantIds?: string[] } | null)?.variantIds ?? []);
   const [giftProductIds, setGiftProductIds] = useState<string[]>(initialGiftIds);
   const [giftPickerOpen, setGiftPickerOpen] = useState(false);
+  const [giftProducts, setGiftProducts] = useState<SelectedProduct[]>([]);
+  const [variantModes, setVariantModes] = useState<Record<string, GiftVariantMode>>(giftVariantModes);
 
   const initialFallbackIds = giftRewards.length > 0 ? giftBlock.fallbackVariantIds : ((firstReward?.target as { fallbackVariantIds?: string[] } | null)?.fallbackVariantIds ?? []);
   const [fallbackProductIds, setFallbackProductIds] = useState<string[]>(initialFallbackIds);
@@ -1406,6 +1426,7 @@ export default function OfferDetailPage() {
     variantIds?: string[];
     fallbackVariantIds?: string[];
     fallbackByGift?: Record<string, string[]>;
+    variantModes?: Record<string, GiftVariantMode>;
   }) {
     if (!firstReward) {
       const gifts = overrides?.variantIds ?? giftProductIds;
@@ -1434,6 +1455,7 @@ export default function OfferDetailPage() {
     fd.append("targetVariantIds", JSON.stringify(overrides?.variantIds ?? giftProductIds));
     fd.append("targetFallbackVariantIds", JSON.stringify(overrides?.fallbackVariantIds ?? fallbackProductIds));
     fd.append("targetFallbackByGift", JSON.stringify(overrides?.fallbackByGift ?? fallbackByGift));
+    fd.append("targetVariantModes", JSON.stringify(overrides?.variantModes ?? variantModes));
     void fetcher.submit(fd, { method: "POST" });
   }
 
@@ -2027,7 +2049,16 @@ export default function OfferDetailPage() {
                   setGiftProductIds(next);
                   saveReward({ variantIds: next });
                 }}
+                onLoaded={setGiftProducts}
               />
+              {receivesAll && (
+                <GiftVariantModes
+                  giftIds={giftProductIds}
+                  products={giftProducts}
+                  value={variantModes}
+                  onChange={(next) => { setVariantModes(next); saveReward({ variantModes: next }); }}
+                />
+              )}
 
               <ProductPicker
                 open={giftPickerOpen}
