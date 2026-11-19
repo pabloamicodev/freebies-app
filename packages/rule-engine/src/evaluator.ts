@@ -305,7 +305,7 @@ export async function evaluate(
       // offer (anchor) never count, and a line serves one reward only.
       const untaggedUnits = new Map(
         extractQualifyingLines(cart)
-          .filter((line) => !line.properties["_promo_engine_offer_id"])
+          .filter((line) => !line.properties["_promo_engine_offer_id"] && line.properties["_bundle_item"] !== "true")
           .map((line) => [line, line.quantity - reservedAnchorUnits(offer.conditions, line)] as const),
       );
 
