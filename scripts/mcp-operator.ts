@@ -1,7 +1,7 @@
 /**
  * Manage MCP operators (docs/MCP.md).
  *
- *   tsx scripts/mcp-operator.ts create --email you@x.com --name "You" --shops a.myshopify.com,b.myshopify.com|'*' [--role viewer|editor|admin] [--ttl-days 1-90] [--env <file>]
+ *   tsx scripts/mcp-operator.ts create --email you@x.com --name "You" --shops a.myshopify.com,b.myshopify.com|'*' [--role viewer|editor|admin] [--ttl-days N (default: never expires)] [--env <file>]
  *   tsx scripts/mcp-operator.ts list   [--env <file>]
  *   tsx scripts/mcp-operator.ts revoke --email you@x.com [--env <file>]
  *   tsx scripts/mcp-operator.ts rotate --email you@x.com [--grace-minutes 0-1440, default 60] [--env <file>]   (prints a new PAT once; the old PAT and OAuth grants bound to it expire after the grace instead of being revoked)
@@ -60,12 +60,12 @@ async function main() {
     }
     const shopAllowList = auth.normalizeAllowList(shops.split(","));
     const ttlDays = flag("ttl-days") === undefined ? undefined : Number(flag("ttl-days"));
-    if (ttlDays !== undefined && (!Number.isInteger(ttlDays) || ttlDays < 1 || ttlDays > 90)) {
-      throw new Error("--ttl-days must be an integer from 1 to 90");
+    if (ttlDays !== undefined && (!Number.isInteger(ttlDays) || ttlDays < 1)) {
+      throw new Error("--ttl-days must be a positive integer");
     }
     const { operatorId, pat, expiresAt } = await auth.createOperatorWithPat(db, { email, name, role, shopAllowList, ttlDays });
     out(`Operator ${email} (${role}) created: ${operatorId}`);
-    out(`Expires: ${expiresAt.toISOString()}`);
+    out(`Expires: ${auth.formatExpiry(expiresAt)}`);
     out("PAT (shown once, store it now):");
     out(pat);
   } else if (command === "list") {
@@ -94,7 +94,7 @@ async function main() {
       const pat = creds.find((c) => c.operatorId === r.id);
       const iso = (d: Date | null | undefined) => (d ? d.toISOString() : "-");
       out(
-        [r.email, r.disabledAt ? "disabled" : "active", r.role, pat?.prefix ?? "-", r.shopAllowList.join(",") || "-", iso(pat?.lastUsedAt), iso(pat?.expiresAt), r.totpOn ? "on" : "off", r.id].join("\t"),
+        [r.email, r.disabledAt ? "disabled" : "active", r.role, pat?.prefix ?? "-", r.shopAllowList.join(",") || "-", iso(pat?.lastUsedAt), auth.formatExpiry(pat?.expiresAt), r.totpOn ? "on" : "off", r.id].join("\t"),
       );
     }
   } else if (command === "totp-enable") {
@@ -116,7 +116,7 @@ async function main() {
     if (!operator) throw new Error("no such operator");
     const { pat, expiresAt, graceEndsAt } = await auth.rotateOperatorPat(db, operator.id, grace);
     out(`PAT rotated for ${email}. Old PAT and its OAuth grants stop working at ${graceEndsAt.toISOString()}.`);
-    out(`Expires: ${expiresAt.toISOString()}`);
+    out(`Expires: ${auth.formatExpiry(expiresAt)}`);
     out("PAT (shown once, store it now):");
     out(pat);
   } else if (command === "write-mode") {

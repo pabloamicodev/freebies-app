@@ -6,7 +6,11 @@ import { ToolError } from "./result.server.js";
 /** Informational since 2026-11-13: no tool checks it (every authenticated operator can call every tool). */
 export type McpRole = "viewer" | "editor" | "admin";
 export const PAT_PREFIX = "pemcp_";
-export const PAT_TTL_DAYS = 90;
+/** PATs and OAuth refresh tokens never expire (owner decision 2026-11-19): they die only by revoke, rotation or a disabled operator. Sentinel instead of NULL so expiresAt stays NOT NULL and every `expiresAt > now` check keeps working. */
+export const NEVER_EXPIRES = new Date("9999-12-31T00:00:00.000Z");
+export const isNeverExpires = (expiresAt: Date | null | undefined): boolean => Boolean(expiresAt) && expiresAt!.getTime() >= NEVER_EXPIRES.getTime();
+/** Display helper: "never" for the sentinel, an ISO timestamp otherwise. */
+export const formatExpiry = (expiresAt: Date | null | undefined): string => (!expiresAt ? "-" : isNeverExpires(expiresAt) ? "never" : expiresAt.toISOString());
 export const ALL_SHOPS = "*";
 const LAST_USED_THROTTLE_MS = 60_000;
 const MYSHOPIFY_PATTERN = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
@@ -51,17 +55,15 @@ export function generatePat(): string {
 
 export async function createOperatorWithPat(
   db: Db,
-  input: { email: string; name: string; role: McpRole; shopAllowList: string[]; ttlDays?: number },
+  input: { email: string; name: string; role: McpRole; shopAllowList: string[]; ttlDays?: number /* optional explicit expiry; default never */ },
   env: NodeJS.ProcessEnv = process.env,
   now: Date = new Date(),
 ): Promise<{ operatorId: string; pat: string; expiresAt: Date }> {
-  const ttlDays = input.ttlDays ?? PAT_TTL_DAYS;
-  if (!Number.isInteger(ttlDays) || ttlDays < 1 || ttlDays > PAT_TTL_DAYS) {
-    throw new Error(`ttlDays must be an integer from 1 to ${PAT_TTL_DAYS}`);
-  }
+  const ttlDays = input.ttlDays;
+  if (ttlDays !== undefined && (!Number.isInteger(ttlDays) || ttlDays < 1)) throw new Error("ttlDays must be a positive integer");
   const shopAllowList = normalizeAllowList(input.shopAllowList);
   const pat = generatePat();
-  const expiresAt = new Date(now.getTime() + ttlDays * 86_400_000);
+  const expiresAt = ttlDays === undefined ? NEVER_EXPIRES : new Date(now.getTime() + ttlDays * 86_400_000);
   const tokenHash = hashToken(pat, env);
   const operatorId = await db.transaction(async (tx) => {
     const [operator] = await tx
@@ -106,7 +108,7 @@ export async function rotateOperatorPat(
     throw new Error(`graceMinutes must be an integer from 0 to ${MAX_ROTATE_GRACE_MINUTES}`);
   }
   const pat = generatePat();
-  const expiresAt = new Date(now.getTime() + PAT_TTL_DAYS * 86_400_000);
+  const expiresAt = NEVER_EXPIRES;
   const graceEndsAt = new Date(now.getTime() + graceMinutes * 60_000);
   const tokenHash = hashToken(pat, env);
   await db.transaction(async (tx) => {

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { mcpCredentials, mcpAuthCodes, mcpOauthClients, type Db } from "@promo/db";
-import { createOperatorWithPat, generatePat, hashToken, revokeOperatorCredentials } from "./auth.server.js";
+import { NEVER_EXPIRES, createOperatorWithPat, generatePat, hashToken, revokeOperatorCredentials } from "./auth.server.js";
 import { handleMcpRequest } from "./handler.server.js";
 import {
   handleAuthorize,
@@ -256,7 +256,7 @@ describe("authorization code exchange", () => {
     const access = rows.find((r) => r.kind === "access")!;
     const refreshRow = rows.find((r) => r.kind === "refresh")!;
     expect(access.expiresAt!.getTime() - clock.getTime()).toBe(3600_000);
-    expect(refreshRow.expiresAt!.getTime() - clock.getTime()).toBe(30 * 86_400_000);
+    expect(refreshRow.expiresAt).toEqual(NEVER_EXPIRES);
     expect(access.familyId).toBe(refreshRow.familyId);
 
     const mcp = await handleMcpRequest(
@@ -347,16 +347,24 @@ describe("refresh rotation", () => {
       clock = early;
     }
   });
-  it("a refresh token bound to another client, or expired, fails", async () => {
+  it("a refresh token bound to another client fails, but one 5 years old still works and a revoked PAT kills it", async () => {
     const clientId = await register();
     const other = await register();
     const { pat } = await newOperator();
     const t = (await (await exchange(clientId, await authorize(clientId, pat))).json()) as Tokens;
     expect((await refresh(other, t.refresh_token)).status).toBe(400);
     const early = clock;
-    clock = new Date(clock.getTime() + 31 * 86_400_000);
+    clock = new Date(clock.getTime() + 5 * 365 * 86_400_000);
     try {
-      expect((await refresh(clientId, t.refresh_token)).status).toBe(400);
+      const res = await refresh(clientId, t.refresh_token);
+      expect(res.status).toBe(200);
+      const next = (await res.json()) as Tokens;
+      const mcp = await handleMcpRequest(new Request(`${ORIGIN}/api/mcp`, { method: "POST", headers: { authorization: `Bearer ${next.access_token}` } }), { db, env, now: () => clock, rateLimit: ok });
+      expect(mcp.status).not.toBe(401);
+      const rows = await db.select().from(mcpCredentials).where(eq(mcpCredentials.tokenHash, hashToken(next.refresh_token, env)));
+      expect(rows[0]!.expiresAt).toEqual(NEVER_EXPIRES);
+      await revokeOperatorCredentials(db, rows[0]!.operatorId, clock);
+      expect((await refresh(clientId, next.refresh_token)).status).toBe(400);
     } finally {
       clock = early;
     }
