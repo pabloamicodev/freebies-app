@@ -47,7 +47,7 @@ export function OfferConditionsBuilder({
 
   return (
     <>
-      <input type="hidden" name={name} value={JSON.stringify(values)} />
+      <input type="hidden" name={name} value={JSON.stringify(Object.fromEntries(active.map((id) => [id, values[id] ?? {}])))} />
       <section className="b-card">
         <div className="b-card-header" style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
           <div style={{ fontWeight: 600 }}>{title}</div>

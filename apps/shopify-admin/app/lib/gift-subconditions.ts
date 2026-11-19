@@ -62,7 +62,9 @@ export function normalizeOfferSubconditions(input: Record<string, unknown>, curr
 
   for (const [id, raw] of Object.entries(input)) {
     const value = record(raw);
-    if (!value || Object.keys(value).length === 0) continue;
+    if (!value) continue;
+    // These two cards show a ready default, so an untouched one is a complete choice, not an empty draft.
+    if (Object.keys(value).length === 0 && id !== "subscription" && id !== "sales_channel") continue;
 
     switch (id) {
       case "link":
@@ -177,7 +179,7 @@ export function normalizeOfferSubconditions(input: Record<string, unknown>, curr
         const channels = Array.isArray(value["channels"])
           ? csv(value["channels"])
           : [
-              value["online"] ? "online_store" : null,
+              (value["online"] ?? true) ? "online_store" : null,
               value["mobile"] ? "mobile_app" : null,
               value["pos"] ? "pos" : null,
             ].filter((channel): channel is string => Boolean(channel));
