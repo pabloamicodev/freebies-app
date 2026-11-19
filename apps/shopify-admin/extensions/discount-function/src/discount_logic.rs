@@ -1121,7 +1121,7 @@ fn evaluate_gift_offer(
                     && line_offer_id(line).as_deref() == Some(offer.id.as_str());
                 if line_quantity <= 0
                     || tagged != tagged_pass
-                    || (!tagged && (line_offer_id(line).is_some() || is_gift_line(line)))
+                    || (!tagged && (line_offer_id(line).is_some() || is_gift_line(line) || is_bundle_item(line)))
                 {
                     continue;
                 }
@@ -1841,6 +1841,17 @@ fn is_zero_cost(line: &Lines) -> bool {
 
 fn is_gift_line(line: &Lines) -> bool {
     with_facts(line, |facts| facts.packed(line).gift)
+}
+
+/// A bundle-builder component is always a purchase: a theme-added gift never carries the marker, so the untagged
+/// gift pass must not mistake it for the gift (the offer's own tagged line is added next to it instead).
+fn is_bundle_item(line: &Lines) -> bool {
+    line.volume_discount_bundle_item()
+        .and_then(|attribute| attribute.value())
+        .cloned()
+        .or_else(|| metadata_value(line, "_bundle_item"))
+        .as_deref()
+        == Some("true")
 }
 
 fn line_offer_id(line: &Lines) -> Option<&str> {
@@ -5980,6 +5991,37 @@ mod tests {
             tagged_line("3", "frother", "frother-p", "offer-sk", "reward-frother", 1),
         ];
         assert_eq!(discounted_units(&lines, &theme_gift_config()), vec![("3".to_string(), 1)]);
+    }
+
+    fn bundle_item(line: String, via_packed_metadata: bool) -> String {
+        let mut value: Value = serde_json::from_str(&line).unwrap();
+        if via_packed_metadata {
+            let mut metadata: serde_json::Map<String, Value> = value["promoMetadata"]["value"]
+                .as_str()
+                .and_then(|raw| serde_json::from_str(raw).ok())
+                .unwrap_or_default();
+            metadata.insert("_bundle_item".into(), Value::String("true".into()));
+            value["promoMetadata"] = serde_json::json!({ "value": Value::Object(metadata).to_string() });
+        } else {
+            value["volumeDiscountBundleItem"] = serde_json::json!({ "value": "true" });
+        }
+        value.to_string()
+    }
+
+    #[test]
+    fn a_paid_bundle_builder_line_is_never_taken_as_the_gift() {
+        for packed in [false, true] {
+            let paid = bundle_item(theme_line("2", "frother", "frother-p", 1, false, SK_PAGE), packed);
+            // Alone it is a purchase: charged, however it was marked.
+            assert!(discounted_units(&[anchor(), paid.clone()], &theme_gift_config()).is_empty(), "packed={packed}");
+            // Next to the offer's own tagged gift line, only the gift line is free and the paid line is charged.
+            let gift = tagged_line("3", "frother", "frother-p", "offer-sk", "reward-frother", 1);
+            assert_eq!(
+                discounted_units(&[anchor(), paid, gift], &theme_gift_config()),
+                vec![("3".to_string(), 1)],
+                "packed={packed}"
+            );
+        }
     }
 
     #[test]

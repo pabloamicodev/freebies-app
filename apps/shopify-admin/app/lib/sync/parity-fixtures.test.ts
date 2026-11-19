@@ -1534,6 +1534,20 @@ const SCENARIOS: Scenario[] = [
     quantities: { [A]: { a1: 1 } },
   },
   {
+    name: "gift-bundle-builder-paid-line-is-never-the-gift",
+    description:
+      "A paid bundle-builder line of the gift variant is charged, untagged or not; only the offer's own tagged gift line of that variant is free.",
+    offers: [giftOffer(A, [anchorCondition], 1, [51], "set")],
+    lines: [
+      anchorLine,
+      line("b51", 51, { _bundle_item: "true", _bundle_id: "bb-1" }),
+      gift("g51", A, { _promo_engine_reward_id: setRewardId(51) }, { variantId: V(51), productId: P(51) }),
+    ],
+    qualified: [A],
+    discounted: { [A]: ["g51"] },
+    quantities: { [A]: { g51: 1 } },
+  },
+  {
     name: "template-visit-match",
     description: "template condition, visit scope: a remembered or current-page template ref matches (any of the list, case-insensitive); another template does not.",
     offers: [discountOffer(A, [template([LANDING, "index"], { onlyMatchedLines: true })])],

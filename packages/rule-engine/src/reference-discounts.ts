@@ -155,7 +155,7 @@ export function referenceDiscounts(
       if (targetsVariant(reward, line)) grant(line, reward, line.quantity);
     }
   }
-  for (const line of nonGift.filter((candidate) => !candidate.metadata?.["_promo_engine_offer_id"])) {
+  for (const line of nonGift.filter((candidate) => !candidate.metadata?.["_promo_engine_offer_id"] && candidate.metadata?.["_bundle_item"] !== "true")) {
     const reserved = Math.max(
       0,
       ...(config.requirements ?? [])
