@@ -1,0 +1,2 @@
+-- backfill-ok: data only (no schema change). Owner decision 2026-11-19: PATs and OAuth refresh tokens no longer expire. Bounded to live rows of two kinds in a tiny table; the sentinel is NEVER_EXPIRES in apps/shopify-admin/app/lib/mcp/auth.server.ts.
+UPDATE "mcp_credentials" SET "expires_at" = '9999-12-31T00:00:00.000Z' WHERE "kind" IN ('pat', 'refresh') AND "revoked_at" IS NULL AND "expires_at" > now() AND "expires_at" < '9999-12-31T00:00:00.000Z';

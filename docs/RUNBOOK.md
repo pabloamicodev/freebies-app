@@ -484,7 +484,7 @@ Reference: `docs/MCP.md`. Tool list by area: the `docs://tool-catalog` MCP resou
 - A Shopify cap (config size, 25 automatic discounts, 100 ids per list) answers `CAPACITY_LIMIT` with the cap and the workarounds; the offer stays saved as a draft.
 - Audit and call log stay: `audit_logs.performed_by = mcp:<operatorId>` with `after._mcp = { operator, client, tool, requestId }`, and every call (reads too) in `mcp_call_log` (redacted args, 90 days).
 - Rate limits per operator per minute: 60 reads, 10 writes (dry runs count), 3 critical executions (`MCP_RATE_READS`, `MCP_RATE_WRITES`, `MCP_RATE_CRITICAL`, integer 1-600); 120 per minute per IP.
-- The blast radius of a leaked token is every shop in its allow list: create operators with an explicit `--shops` list unless they really need `'*'`, and keep PATs short-lived (`--ttl-days`, max 90).
+- The blast radius of a leaked token is every shop in its allow list: create operators with an explicit `--shops` list unless they really need `'*'`, and revoke or rotate a PAT as soon as it may have leaked: PATs and refresh tokens never expire (owner decision 2026-11-19, accepted leak risk), so `pnpm mcp:operator revoke`/`rotate` is the only way a token dies. Use `--ttl-days N` only for a deliberately temporary operator.
 
 ### Revoke or rotate an operator
 

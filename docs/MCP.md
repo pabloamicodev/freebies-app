@@ -26,7 +26,7 @@ project (`freebies-app-shopify-admin`). Never add `alias` to a `vercel.json`.
 
 Bearer PAT (`pemcp_...`) or OAuth access token (`pemcp_at_...`), tied to an operator (`mcp_operators`) with a legacy role label (`viewer|editor|admin`, default `viewer`; it gates nothing, every operator can call every tool) and a
 shop allow list. Least privilege: an empty allow list sees NO shops; the explicit entry `*` sees all shops; otherwise a list
-of `<store>.myshopify.com` domains (lowercased and validated). 90-day maximum expiry (`--ttl-days` 1-90), revocable. Every
+of `<store>.myshopify.com` domains (lowercased and validated). PATs never expire (validate once, permanent; owner decision 2026-11-19): they stop working only when revoked, rotated (old PAT dies after the grace) or the operator is disabled. `--ttl-days N` is an optional explicit expiry. `expires_at` stores the sentinel `9999-12-31` for "never" and the CLI shows `never`. Every
 auth failure is the same 401. Without a usable `MCP_TOKEN_PEPPER` (16+ chars) the endpoint answers 503 `UPSTREAM_UNAVAILABLE`.
 Rate limits: 120/min per IP (`x-vercel-forwarded-for`, then `x-real-ip`, then `x-forwarded-for`), 60/min per operator.
 
@@ -56,7 +56,7 @@ Phase 2. claude.ai discovers everything from the 401 of `/api/mcp` (`WWW-Authent
 
 1. claude.ai: Settings > Connectors > Add custom connector, URL `https://freebies-app-shopify-admin.vercel.app/api/mcp`. Leave the OAuth client fields empty (dynamic client registration).
 2. claude.ai opens `/mcp/authorize`. Paste your operator PAT (`pemcp_...`, from `pnpm mcp:operator create`), press Continue, check the shops on the consent screen, press Allow.
-3. Claude gets an opaque access token (1 h) and a rotating refresh token (30 d). Nothing else to do; reconnect if the PAT is revoked or expires.
+3. Claude gets an opaque access token (1 h) and a rotating refresh token that never expires (reuse detection unchanged). Nothing else to do; reconnect only if the PAT is revoked or rotated.
 
 | Endpoint | Purpose |
 |---|---|
@@ -69,7 +69,7 @@ Phase 2. claude.ai discovers everything from the 401 of `/api/mcp` (`WWW-Authent
 
 Rules: codes live 2 minutes and are single use (replaying one revokes the tokens issued from it). Refresh tokens rotate on every
 use; presenting an already-used refresh token revokes the whole family. Access and refresh tokens are stored as `sha256(pepper + token)`
-in `mcp_credentials` (kind `access`/`refresh`). Each grant is bound to the exact PAT that was pasted: it stops working as soon as that PAT is revoked or expires (or the
+in `mcp_credentials` (kind `access`/`refresh`). Each grant is bound to the exact PAT that was pasted: it stops working as soon as that PAT is revoked or rotated away (or the
 operator is disabled), even if the operator has other PATs, so `pnpm mcp:operator revoke` cuts claude.ai off too. A refresh
 token replayed within 30 s of its rotation is refused without revoking the family (retry after a lost response); an older
 replay revokes it. The consent step keeps the PAT out of the page: it is swapped for a signed (HMAC with the pepper), HttpOnly,

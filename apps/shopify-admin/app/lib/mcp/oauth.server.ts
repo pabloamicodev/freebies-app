@@ -1,10 +1,9 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import { mcpAuthCodes, mcpCredentials, mcpOauthClients, type Db } from "@promo/db";
-import { hashToken, patIsLive } from "./auth.server.js";
+import { NEVER_EXPIRES, hashToken, patIsLive } from "./auth.server.js";
 
 export const ACCESS_TOKEN_TTL_SECONDS = 3600;
-export const REFRESH_TOKEN_TTL_SECONDS = 30 * 86_400;
 export const AUTH_CODE_TTL_SECONDS = 120;
 /** A refresh token rotated this recently is a benign retry (lost response, parallel tabs), not theft. */
 export const REFRESH_REUSE_GRACE_MS = 30_000;
@@ -131,7 +130,7 @@ async function mintTokens(tx: Tx, env: NodeJS.ProcessEnv, operatorId: string, pa
       familyId,
       clientId,
       patCredentialId,
-      expiresAt: new Date(now.getTime() + REFRESH_TOKEN_TTL_SECONDS * 1000),
+      expiresAt: NEVER_EXPIRES,
     },
   ]);
   return { access_token: access, token_type: "Bearer", expires_in: ACCESS_TOKEN_TTL_SECONDS, refresh_token: refresh, scope: "mcp" };

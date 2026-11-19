@@ -10,6 +10,8 @@ import {
   generatePat,
   hashToken,
   rotateOperatorPat,
+  NEVER_EXPIRES,
+  formatExpiry,
   revokeOperatorCredentials,
 } from "./auth.server.js";
 import { ACCESS_PREFIX, issueAuthCode, exchangeAuthCode, pkceChallengeS256, refreshTokens, registerClient } from "./oauth.server.js";
@@ -63,7 +65,7 @@ describe("allow list", () => {
     await expect(
       createOperatorWithPat(db, { email: "bad@example.com", name: "B", role: "viewer", shopAllowList: ["nope"] }, env),
     ).rejects.toThrow(/Invalid shop/);
-    for (const ttlDays of [0, 91, 1.5, Number.NaN]) {
+    for (const ttlDays of [0, -1, 1.5, Number.NaN]) {
       await expect(
         createOperatorWithPat(db, { email: "ttl@example.com", name: "T", role: "viewer", shopAllowList: [], ttlDays }, env),
       ).rejects.toThrow(/ttlDays/);
@@ -110,6 +112,26 @@ describe("authenticateBearer", () => {
     for (const header of [null, "", "Bearer ", "Basic abc", "Bearer nope", `Bearer ${generatePat()}`]) {
       await expect(authenticateBearer(db, header, env, now)).rejects.toMatchObject({ payload: { code: "UNAUTHENTICATED" } });
     }
+  });
+
+  it("a PAT without ttl never expires: accepted 5 years later, refused once revoked", async () => {
+    const { pat, operatorId, expiresAt } = await createOperatorWithPat(db, { email: "perm@example.com", name: "P", role: "viewer", shopAllowList: ["*"] }, env, now);
+    expect(expiresAt).toEqual(NEVER_EXPIRES);
+    expect(formatExpiry(expiresAt)).toBe("never");
+    const future = new Date(now.getTime() + 5 * 365 * 86_400_000);
+    await expect(authenticateBearer(db, `Bearer ${pat}`, env, future)).resolves.toMatchObject({ email: "perm@example.com" });
+    await revokeOperatorCredentials(db, operatorId, future);
+    await expect(authenticateBearer(db, `Bearer ${pat}`, env, future)).rejects.toMatchObject({ payload: { code: "UNAUTHENTICATED" } });
+  });
+
+  it("a rotated PAT never expires either, and a disabled operator is refused", async () => {
+    const old = await createOperatorWithPat(db, { email: "perm-rot@example.com", name: "P", role: "viewer", shopAllowList: ["*"] }, env, now);
+    const next = await rotateOperatorPat(db, old.operatorId, 0, env, now);
+    expect(next.expiresAt).toEqual(NEVER_EXPIRES);
+    const future = new Date(now.getTime() + 5 * 365 * 86_400_000);
+    await expect(authenticateBearer(db, `Bearer ${next.pat}`, env, future)).resolves.toMatchObject({ email: "perm-rot@example.com" });
+    await db.update(mcpOperators).set({ disabledAt: now }).where(eq(mcpOperators.id, old.operatorId));
+    await expect(authenticateBearer(db, `Bearer ${next.pat}`, env, future)).rejects.toMatchObject({ payload: { code: "UNAUTHENTICATED" } });
   });
 
   it("rejects an expired PAT", async () => {
