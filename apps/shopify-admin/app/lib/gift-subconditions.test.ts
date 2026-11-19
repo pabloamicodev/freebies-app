@@ -319,6 +319,16 @@ describe("normalizeOfferSubconditions template / section_shown / experiment", ()
     });
   });
 
+  it("keeps a card left on its shown default, and still skips other untouched cards", () => {
+    expect(normalizeOfferSubconditions({ subscription: {}, sales_channel: {}, link: {} })).toEqual({
+      success: true,
+      data: [
+        { conditionType: "subscription_product_type", operator: "eq", value: { mode: "subscription_only" } },
+        { conditionType: "sales_channels", operator: "eq", value: { channels: ["online_store"] } },
+      ],
+    });
+  });
+
   it("rejects empty or malformed selections", () => {
     expect(normalizeOfferSubconditions({ template: { templates: [] } }).success).toBe(false);
     expect(normalizeOfferSubconditions({ template: { templates: ["not valid!"] } }).success).toBe(false);
